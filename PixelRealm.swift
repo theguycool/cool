@@ -13440,6 +13440,60 @@ func vGradient(_ ctx: inout GraphicsContext, _ r: CGRect, _ colors: [Color], _ y
     ctx.fill(Path(r), with: sh)
 }
 
+/// Clouds placed in world space: a deterministic bank per 40-tile cell high above the sea, drifting
+/// slowly with the wind. They have no collision; anything can pass through them.
+enum CloudField {
+    static let cell: Double = 40.0
+    static let wind: Double = 0.6
+
+    struct Puff {
+        var x: Double
+        var y: Double
+        var rx: Double
+        var ry: Double
+    }
+
+    static func drift(_ clock: Double) -> Double { return clock * wind }
+
+    /// Puffs of every cloud overlapping the world x range [x0, x1]
+    static func puffs(_ seed: UInt64, _ clock: Double, _ x0: Double, _ x1: Double) -> [Puff] {
+        let d: Double = drift(clock)
+        let c0: Int = Int(floor((x0 - d - 20.0) / cell))
+        let c1: Int = Int(floor((x1 - d + 20.0) / cell))
+        var out: [Puff] = []
+        if c1 < c0 { return out }
+        for ci in c0...c1 {
+            if hash2(ci, 11, seed) < 0.42 { continue }
+            let cx: Double = Double(ci) * cell + cell * 0.5 + (hash2(ci, 12, seed) - 0.5) * 14.0 + d
+            let cy: Double = 44.0 + hash2(ci, 13, seed) * 26.0
+            let width: Double = 7.0 + hash2(ci, 14, seed) * 13.0
+            let n: Int = 4 + Int(hash2(ci, 15, seed) * 4.0)
+            for k in 0..<n {
+                let f: Double = n == 1 ? 0.5 : Double(k) / Double(n - 1)
+                let px: Double = cx - width * 0.5 + f * width
+                // taller in the middle, flat along the bottom
+                let hump: Double = sin(f * Double.pi)
+                let rx: Double = 2.2 + hash2(ci * 8 + k, 16, seed) * 2.0
+                let ry: Double = 1.1 + hump * (1.0 + hash2(ci * 8 + k, 17, seed) * 1.0)
+                out.append(Puff(x: px, y: cy - ry * 0.6, rx: rx, ry: ry))
+            }
+            // a flat base joining the puffs
+            out.append(Puff(x: cx, y: cy + 0.3, rx: width * 0.5 + 1.5, ry: 1.1))
+        }
+        return out
+    }
+
+    static func contains(_ seed: UInt64, _ clock: Double, _ x: Double, _ y: Double) -> Bool {
+        if y < 36.0 || y > 76.0 { return false }
+        for p in puffs(seed, clock, x - 1.0, x + 1.0) {
+            let dx: Double = (x - p.x) / p.rx
+            let dy: Double = (y - p.y) / p.ry
+            if dx * dx + dy * dy <= 1.0 { return true }
+        }
+        return false
+    }
+}
+
 struct View2D {
     var tp: Double
     var left: Double
@@ -13513,6 +13567,7 @@ enum WorldRenderer {
         drawPlayer(&ctx, g, v)
         drawProjectiles(&ctx, g, v)
         drawParticles(&ctx, g, v)
+        drawClouds(&ctx, W, H, g, v)
         drawLight(&ctx, g, v, cache)
         drawTrajectory(&ctx, g, v)
         drawOverlays(&ctx, W, H, g, v)
@@ -13635,21 +13690,7 @@ enum WorldRenderer {
             fillRect(&ctx, mkRect(bx - 8.0, by - 12.0, 10.0, 10.0), Color(hex: 0xC0C6D0))
             fillRect(&ctx, mkRect(bx + 6.0, by + 4.0, 8.0, 8.0), Color(hex: 0xC0C6D0))
         }
-        // clouds
-        let span: Double = W + 400.0
-        let cloudShade: Double = max(day, 0.15)
-        let cl: Color = rgbColor(mixRGB(0x4A5068, 0xFFFFFF, cloudShade), 0.85)
-        for i in 0..<6 {
-            let speed: Double = 6.0 + Double(i) * 2.0
-            let par: Double = v.left * v.tp * 0.08
-            var cx: Double = hash2(i, 3, 7) * span + g.clock * speed - par
-            cx = cx.truncatingRemainder(dividingBy: span)
-            if cx < 0 { cx += span }
-            cx -= 200.0
-            let cy: Double = 30.0 + hash2(i, 4, 7) * H * 0.28
-            fillRect(&ctx, mkRect(cx, cy, 128.0, 20.0), cl)
-            fillRect(&ctx, mkRect(cx + 24.0, cy - 16.0, 64.0, 16.0), cl)
-        }
+        // (clouds now live in the world itself: see CloudField / drawClouds)
         // parallax hills (two layers)
         let baseY: Double = v.sy(Double(WorldGen.sea) + 6.0)
         if baseY > -200.0 {
@@ -14169,6 +14210,33 @@ enum WorldRenderer {
         p.addLine(to: mkPoint(x - s * 0.55, y))
         p.closeSubpath()
         ctx.fill(p, with: .color(c))
+    }
+
+    /// World-space clouds, drawn over creatures and the player but translucent, so anything flying
+    /// or building up there stays visible. Each cloud is one path (puffs merge without dark overlaps).
+    static func drawClouds(_ ctx: inout GraphicsContext, _ W: Double, _ H: Double, _ g: Game, _ v: View2D) {
+        if g.world.dim != .overworld { return }
+        if v.top > 80.0 || v.top + v.hTiles < 30.0 { return }
+        let seed: UInt64 = g.gen.seed
+        let all: [CloudField.Puff] = CloudField.puffs(seed, g.clock, v.left, v.left + v.wTiles)
+        if all.isEmpty { return }
+        let day: Double = g.dayFactor
+        let shade: UInt32 = mixRGB(0x3A4058, 0xF4F6FA, max(day, 0.12))
+        var body: Path = Path()
+        var under: Path = Path()
+        for p in all {
+            let r: CGRect = mkRect(v.sx(p.x - p.rx), v.sy(p.y - p.ry), p.rx * 2.0 * v.tp, p.ry * 2.0 * v.tp)
+            body.addEllipse(in: r)
+            // a slightly darker belly gives the clouds some volume
+            under.addEllipse(in: mkRect(r.minX + r.width * 0.1, r.minY + r.height * 0.45, r.width * 0.8, r.height * 0.55))
+        }
+        ctx.fill(body, with: .color(rgbColor(shade, 0.5)))
+        ctx.fill(under, with: .color(rgbColor(mixRGB(shade, 0x8090A8, 0.5), 0.18)))
+        // standing inside a cloud: a soft haze over the view
+        let pyMid: Double = g.pb.y - g.pb.h * 0.5
+        if CloudField.contains(seed, g.clock, g.pb.x, pyMid) {
+            fillRect(&ctx, mkRect(0, 0, W, H), rgbColor(shade, 0.16))
+        }
     }
 
     /// Dotted flight path while drawing a bow (fades along its length; stops at the first block)

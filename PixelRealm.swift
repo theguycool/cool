@@ -401,6 +401,8 @@ enum Tile: UInt8, CaseIterable, Codable {
     /// logs placed by the player as building blocks: solid, unlike tree trunks (appended, so the raw
     /// values of every existing tile, and therefore old saves, are unchanged)
     case logBlock, jungleLogBlock, palmLogBlock
+    /// climbable: hold jump (or up) to climb, down to descend
+    case ladder
 
     static let defTable: [TileDef] = Tile.allCases.map { Tile.makeDef($0) }
     static let solidTable: [Bool] = Tile.allCases.map { Tile.makeDef($0).solid }
@@ -455,8 +457,9 @@ enum Tile: UInt8, CaseIterable, Codable {
             return TileDef(name: "Sand", hard: 0.4, colors: [0xE0D08A, 0xD2C078, 0xEBDDA0, 0xC4B268, 0xE0D08A])
         case .log:
             // tree trunks have no collision: everything walks (and flies, drives and shoots) through
-            // them. They still block light and can be chopped; see logBlock for the solid building block.
-            return TileDef(name: "Log", hard: 0.9, solid: false, opaque: true, style: .log, colors: [0x6B4A2A, 0x5A3C20, 0x7C5733, 0x4A3018, 0x6B4A2A])
+            // them, and they let skylight past like the canopy does (a trunk standing on the ground
+            // used to cast a dark shaft down through it). See logBlock for the solid building block.
+            return TileDef(name: "Log", hard: 0.9, solid: false, opaque: false, style: .log, colors: [0x6B4A2A, 0x5A3C20, 0x7C5733, 0x4A3018, 0x6B4A2A])
         case .leaves:
             // canopies are one-way: walk and shoot through them, land on top of them
             return TileDef(name: "Leaves", hard: 0.2, solid: false, opaque: false, platform: true, style: .leaves, colors: [0x3E8A2E, 0x2F7324, 0x56A83F, 0x225C1A, 0x3E8A2E], noDrop: true)
@@ -563,9 +566,9 @@ enum Tile: UInt8, CaseIterable, Codable {
         case .portalOn:
             return TileDef(name: "Open Rift", hard: 99999, tier: 99, solid: false, opaque: false, light: 13, style: .custom, noDrop: true)
         case .jungleLog:
-            return TileDef(name: "Jungle Log", hard: 1.0, solid: false, opaque: true, style: .log, colors: [0x5A4A2A, 0x4A3A20, 0x6C5C34, 0x3A2C14, 0x5A4A2A])
+            return TileDef(name: "Jungle Log", hard: 1.0, solid: false, opaque: false, style: .log, colors: [0x5A4A2A, 0x4A3A20, 0x6C5C34, 0x3A2C14, 0x5A4A2A])
         case .palmLog:
-            return TileDef(name: "Palm Log", hard: 0.8, solid: false, opaque: true, style: .log, colors: [0x9A7A4A, 0x826238, 0xB08C58, 0x6A4E2A, 0x9A7A4A])
+            return TileDef(name: "Palm Log", hard: 0.8, solid: false, opaque: false, style: .log, colors: [0x9A7A4A, 0x826238, 0xB08C58, 0x6A4E2A, 0x9A7A4A])
         case .cobweb:
             return TileDef(name: "Cobweb", hard: 0.1, solid: false, opaque: false, plant: true, style: .custom, noDrop: true)
         case .hay:
@@ -580,6 +583,8 @@ enum Tile: UInt8, CaseIterable, Codable {
             return TileDef(name: "Jungle Log", hard: 1.0, style: .log, colors: [0x5A4A2A, 0x4A3A20, 0x6C5C34, 0x3A2C14, 0x5A4A2A], drop: .block(.jungleLog))
         case .palmLogBlock:
             return TileDef(name: "Palm Log", hard: 0.8, style: .log, colors: [0x9A7A4A, 0x826238, 0xB08C58, 0x6A4E2A, 0x9A7A4A], drop: .block(.palmLog))
+        case .ladder:
+            return TileDef(name: "Ladder", hard: 0.3, solid: false, opaque: false, style: .custom, colors: [0x9A6E3A])
         }
     }
 }
@@ -667,6 +672,9 @@ func customTileRows(_ t: Tile) -> ([String], [Character: UInt32])? {
     case .cobweb:
         return (["w.....w.", ".w...w..", "..w.w...", "...w....", "..w.w...", ".w...w..", "w.....w.", "........"],
                 ["w": 0xE8E8F0])
+    case .ladder:
+        return ([".r....r.", ".rgggggr", ".r....r.", ".r....r.", ".r....r.", ".rgggggr", ".r....r.", ".r....r."].map { String($0.prefix(8)) },
+                ["r": 0x7A5428, "g": 0xB98A4E])
     default:
         return nil
     }
@@ -1453,6 +1461,7 @@ enum RecipeBook {
         add(.block(.campfire), 1, [(.block(.log), 3), (stick, 2)], .hand, .basic)
         add(.block(.furnace), 1, [(.block(.stone), 12)], .bench, .basic)
         add(.block(.platform), 4, [(planks, 2)], .hand, .basic)
+        add(.block(.ladder), 3, [(stick, 5)], .hand, .basic)
         add(.block(.chest), 1, [(planks, 8)], .bench, .basic)
         add(.block(.brick), 2, [(.block(.stone), 2)], .bench, .basic)
         add(.block(.lantern), 1, [(.mat(.ironBar), 1), (.block(.torch), 1)], .bench, .basic)
@@ -3642,6 +3651,13 @@ struct RareSite {
     var seed: UInt64
 }
 
+/// A flat world's pond: a bowl of water whose surface is level with the ground
+struct PondSite {
+    var cx: Int
+    var halfW: Int
+    var depth: Int
+}
+
 struct LairInfo {
     var kind: LairKind
     var cx: Int
@@ -3656,6 +3672,7 @@ final class GenCache {
     var cols: [Int: Col] = [:]
     var villages: [Int: VillageSite?] = [:]
     var rares: [Int: RareSite?] = [:]
+    var ponds: [Int: PondSite?] = [:]
     var hits: Int = 0
     var misses: Int = 0
 
@@ -3663,6 +3680,7 @@ final class GenCache {
         cols.removeAll(keepingCapacity: true)
         villages.removeAll(keepingCapacity: true)
         rares.removeAll(keepingCapacity: true)
+        ponds.removeAll(keepingCapacity: true)
     }
 
     /// Keeps memory bounded in infinite worlds
@@ -3670,6 +3688,7 @@ final class GenCache {
         if cols.count > 24_000 { cols.removeAll(keepingCapacity: true) }
         if villages.count > 4_000 { villages.removeAll(keepingCapacity: true) }
         if rares.count > 8_000 { rares.removeAll(keepingCapacity: true) }
+        if ponds.count > 8_000 { ponds.removeAll(keepingCapacity: true) }
     }
 }
 
@@ -3681,8 +3700,29 @@ struct WorldOptions: Codable, Equatable {
     var trees: Bool = true
     /// flat worlds only: villages, ruins and boss lairs (the buried portal chamber is always there)
     var structures: Bool = true
+    /// flat worlds only: caves, underground lakes and deep lava, all below an unbroken crust
+    var caves: Bool = false
+    /// flat worlds only: small ponds set into the ground, their water level with the surface
+    var ponds: Bool = false
 
     static let standard: WorldOptions = WorldOptions()
+
+    enum CodingKeys: String, CodingKey {
+        case flat, trees, structures, caves, ponds
+    }
+}
+
+extension WorldOptions {
+    /// Saves from earlier versions lack the newer keys. They decode with those features off, so the
+    /// terrain such a world has not generated yet still matches the terrain it already has.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        flat = try c.decodeIfPresent(Bool.self, forKey: .flat) ?? false
+        trees = try c.decodeIfPresent(Bool.self, forKey: .trees) ?? true
+        structures = try c.decodeIfPresent(Bool.self, forKey: .structures) ?? true
+        caves = try c.decodeIfPresent(Bool.self, forKey: .caves) ?? false
+        ponds = try c.decodeIfPresent(Bool.self, forKey: .ponds) ?? false
+    }
 }
 
 struct WorldGen {
@@ -3691,9 +3731,10 @@ struct WorldGen {
     let infinite: Bool
     let width: Int
     let spawnX: Int
-    /// 1 = original rules (kept for worlds saved before ocean basins), 2 = with ocean basins
+    /// 1 = original rules (kept for worlds saved before ocean basins), 2 = with ocean basins,
+    /// 3 = buildings and lairs that never wall off the way along the ground
     let genVersion: Int
-    static let currentVersion: Int = 2
+    static let currentVersion: Int = 3
     let options: WorldOptions
     let rareChance: Double
     let zones: [Int]
@@ -3705,10 +3746,17 @@ struct WorldGen {
     static let rareCell: Int = 192
     static let finiteWidth: Int = 4096
     static let edgeOcean: Int = 520
-    /// surface row of flat worlds: the height boss lairs are dug into, ten rows above sea level
+    /// surface row of flat worlds: the height boss lairs are built at, ten rows above sea level
     static let flatSurface: Int = WorldGen.sea - 10
+    /// rows of solid ground kept under a flat world's surface before any cave may open
+    static let flatCrust: Int = 16
 
     var hasTrees: Bool { return !options.flat || options.trees }
+    /// Structures built so the ground can always be walked through: doors at both ends, walk-through
+    /// posts, ruins with gateways, lair rims and ribs a jump clears. Worlds saved with older rules keep
+    /// their structures exactly (their unexplored ground must match what they already have), except
+    /// flat worlds, where a wall across the only way along is a dead end.
+    var passableStructures: Bool { return genVersion >= 3 || options.flat }
     var hasStructures: Bool { return !options.flat || options.structures }
 
     /// Finite worlds lay biome zones out in a seeded order so every biome is always present.
@@ -4152,6 +4200,59 @@ struct WorldGen {
         return out
     }
 
+    // MARK: ponds (flat worlds)
+
+    static let pondCell: Int = 260
+
+    func pondSite(cell c: Int) -> PondSite? {
+        if let p = cache.ponds[c] { return p }
+        let p: PondSite? = computePondSite(cell: c)
+        cache.ponds[c] = p
+        return p
+    }
+
+    func computePondSite(cell c: Int) -> PondSite? {
+        if !options.flat || !options.ponds { return nil }
+        if hash2(c, 501, seed) > 0.5 { return nil }
+        let cw: Int = WorldGen.pondCell
+        let cx: Int = c * cw + 50 + Int(hash2(c, 502, seed) * Double(cw - 100))
+        let hw: Int = 4 + Int(hash2(c, 503, seed) * 6.0)
+        let depth: Int = hash2(c, 504, seed) < 0.4 ? 3 : 2
+        if !infinite && (cx - hw < 40 || cx + hw > width - 40) { return nil }
+        // never where something else is built, or at the spawn point
+        if abs(cx - spawnX) < hw + 24 { return nil }
+        if abs(cx - portalX) < hw + 16 { return nil }
+        if lairAt(cx, radius: hw + 60) != nil { return nil }
+        for v in villages(overlapping: cx - hw - 20, cx + hw + 20) where abs(v.x - cx) < v.halfW + hw + 20 { return nil }
+        for r in rareSites(overlapping: cx - hw - 40, cx + hw + 40) where abs(r.x - cx) < hw + 40 { return nil }
+        return PondSite(cx: cx, halfW: hw, depth: depth)
+    }
+
+    /// Water depth of a flat world's pond at x (0 = dry ground); the bowl is deepest in the middle
+    func pondDepth(_ x: Int) -> Int {
+        if !options.flat || !options.ponds { return 0 }
+        let c: Int = floorDiv(x, WorldGen.pondCell)
+        for cc in (c - 1)...(c + 1) {
+            guard let p = pondSite(cell: cc) else { continue }
+            let dx: Int = abs(x - p.cx)
+            if dx > p.halfW { continue }
+            let f: Double = Double(dx) / (Double(p.halfW) + 0.5)
+            let d: Int = Int((Double(p.depth) * sqrt(max(0, 1.0 - f * f))).rounded(.up))
+            return clampI(d, 1, p.depth)
+        }
+        return 0
+    }
+
+    /// True within `pad` columns of a pond (its sandy banks, and where trees keep back)
+    func nearPond(_ x: Int, _ pad: Int) -> Bool {
+        if !options.flat || !options.ponds { return false }
+        let c: Int = floorDiv(x, WorldGen.pondCell)
+        for cc in (c - 1)...(c + 1) {
+            if let p = pondSite(cell: cc), abs(x - p.cx) <= p.halfW + pad { return true }
+        }
+        return false
+    }
+
     /// Full column info including village flattening
     func col(_ x: Int) -> Col {
         var c: Col = colBase(x)
@@ -4401,7 +4502,7 @@ func generateOverworldChunk(_ g: WorldGen, _ cx: Int) -> Chunk {
     for lx in 0..<chunkW {
         let x: Int = x0 + lx
         let c: Col = colAt(x)
-        samp.startColumn(x, c.h, caves: !g.options.flat)
+        samp.startColumn(x, c.h, caves: !g.options.flat || g.options.caves)
         let hj: Double = hash2(x, 1, g.seed &+ 61)
         let jd: Double = (hj - 0.5) * 10.0
         let jit: Int = Int(jd)
@@ -4418,54 +4519,8 @@ func generateOverworldChunk(_ g: WorldGen, _ cx: Int) -> Chunk {
         ch.surf[lx] = h
         if g.options.flat {
             fillFlatColumn(ch, g, &samp, lx, x, h, sb, c.biome)
-            continue
-        }
-        var topT: Tile = .grass
-        var fillT: Tile = .dirt
-        var fillD: Int = 5
-        switch sb {
-        case .plains, .forest: break
-        case .desert: topT = .sand; fillT = .sand; fillD = 9
-        case .tundra: topT = .snow; fillT = .snow; fillD = 3
-        case .jungle: topT = .jungleGrass; fillT = .mud; fillD = 7
-        case .savanna: topT = .dryGrass; fillD = 4
-        case .swamp: topT = .mossGrass; fillT = .mud; fillD = 6
-        case .ocean: topT = .sand; fillT = .sand; fillD = 5
-        case .mountain:
-            if h <= 72 { topT = .snow; fillT = .snow; fillD = 3 }
-            else if h <= 100 { topT = .stone; fillT = .stone; fillD = 4 }
-        case .umbral: break
-        }
-        if sb != .ocean && sb != .swamp && sb != .desert && h >= sea - 1 && h <= sea + 2 { topT = .sand; fillT = .sand; fillD = 4 }
-        if h > sea {
-            for y in sea..<h {
-                ch.tiles[base + y] = ((sb == .tundra && y == sea) ? Tile.ice : Tile.water).rawValue
-            }
-        }
-        ch.tiles.withUnsafeMutableBufferPointer { tb in
-            guard let tp = tb.baseAddress else { return }
-            var y: Int = h
-            while y < H {
-                let depth: Int = y - h
-                var t: Tile
-                if y >= H - 1 { t = .bedrock }
-                else if y >= H - 5 && hash2(x, y, g.seed &+ 3) < Double(y - (H - 6)) * 0.22 { t = .bedrock }
-                else if depth == 0 { t = topT }
-                else if depth < fillD { t = (sb == .tundra && depth >= 3) ? .dirt : fillT }
-                else if sb == .desert && depth < 24 { t = .sandstone }
-                else { t = samp.rockAt(x, y) }
-                if depth >= 4 && y < H - 5 {
-                    if samp.isCave(x, y, depth) {
-                        if y >= 500 { t = .lava }
-                        else if y > 200 && y < 430 && hash2(x / 60, y / 48, g.seed &+ 28) < 0.28 && (y % 48) > 28 { t = .water }
-                        else { t = .air }
-                    } else if depth > 8 && t != .sand && t != .snow {
-                        if let o = samp.oreAt(x, y, c.biome) { t = o }
-                    }
-                }
-                tp[base + y] = t.rawValue
-                y += 1
-            }
+        } else {
+            fillStandardColumn(ch, g, &samp, lx, x, h, sb, c.biome)
         }
         // underground decoration on cave floors / ceilings
         var y: Int = h + 8
@@ -4489,8 +4544,8 @@ func generateOverworldChunk(_ g: WorldGen, _ cx: Int) -> Chunk {
         for v in villages { if abs(x - v.x) < v.halfW + 6 { return true } }
         for r in rares { if abs(x - r.x) < 16 { return true } }
         if let l = g.lairAt(x, radius: 110) { _ = l; return true }
-        // flat worlds keep the spawn point clear of trees
-        if g.options.flat && abs(x - g.spawnX) < 5 { return true }
+        // flat worlds keep the spawn point clear of trees, and trees out of ponds
+        if g.options.flat && (abs(x - g.spawnX) < 5 || g.nearPond(x, 2)) { return true }
         return false
     }
     func isTree(_ x: Int) -> Bool {
@@ -4592,9 +4647,66 @@ func generateOverworldChunk(_ g: WorldGen, _ cx: Int) -> Chunk {
     return ch
 }
 
+/// One column of a standard world: the biome's surface and topsoil, sea water above low ground,
+/// rock layers, caves (with underground lakes and deep lava) and ores
+func fillStandardColumn(_ ch: Chunk, _ g: WorldGen, _ samp: inout GenSampler, _ lx: Int, _ x: Int, _ h: Int, _ sb: Biome, _ biome: Biome) {
+    let H: Int = WorldGen.H
+    let sea: Int = WorldGen.sea
+    let base: Int = lx * H
+    var topT: Tile = .grass
+    var fillT: Tile = .dirt
+    var fillD: Int = 5
+    switch sb {
+    case .plains, .forest: break
+    case .desert: topT = .sand; fillT = .sand; fillD = 9
+    case .tundra: topT = .snow; fillT = .snow; fillD = 3
+    case .jungle: topT = .jungleGrass; fillT = .mud; fillD = 7
+    case .savanna: topT = .dryGrass; fillD = 4
+    case .swamp: topT = .mossGrass; fillT = .mud; fillD = 6
+    case .ocean: topT = .sand; fillT = .sand; fillD = 5
+    case .mountain:
+        if h <= 72 { topT = .snow; fillT = .snow; fillD = 3 }
+        else if h <= 100 { topT = .stone; fillT = .stone; fillD = 4 }
+    case .umbral: break
+    }
+    if sb != .ocean && sb != .swamp && sb != .desert && h >= sea - 1 && h <= sea + 2 { topT = .sand; fillT = .sand; fillD = 4 }
+    if h > sea {
+        for y in sea..<h {
+            ch.tiles[base + y] = ((sb == .tundra && y == sea) ? Tile.ice : Tile.water).rawValue
+        }
+    }
+    ch.tiles.withUnsafeMutableBufferPointer { tb in
+        guard let tp = tb.baseAddress else { return }
+        var y: Int = h
+        while y < H {
+            let depth: Int = y - h
+            var t: Tile
+            if y >= H - 1 { t = .bedrock }
+            else if y >= H - 5 && hash2(x, y, g.seed &+ 3) < Double(y - (H - 6)) * 0.22 { t = .bedrock }
+            else if depth == 0 { t = topT }
+            else if depth < fillD { t = (sb == .tundra && depth >= 3) ? .dirt : fillT }
+            else if sb == .desert && depth < 24 { t = .sandstone }
+            else { t = samp.rockAt(x, y) }
+            if depth >= 4 && y < H - 5 {
+                if samp.isCave(x, y, depth) {
+                    if y >= 500 { t = .lava }
+                    else if y > 200 && y < 430 && hash2(x / 60, y / 48, g.seed &+ 28) < 0.28 && (y % 48) > 28 { t = .water }
+                    else { t = .air }
+                } else if depth > 8 && t != .sand && t != .snow {
+                    if let o = samp.oreAt(x, y, biome) { t = o }
+                }
+            }
+            tp[base + y] = t.rawValue
+            y += 1
+        }
+    }
+}
+
 /// One column of a flat world: the same layers everywhere. The surface block and four rows of
 /// topsoil follow the biome; below them stone to row 300, slate to 430, deep rock, and a three-row
-/// bedrock floor, with ores in the rock. No caves, water or lava.
+/// bedrock floor, with ores in the rock. With caves on, tunnels and chambers (and their lakes and deep
+/// lava) open up only below an unbroken crust, so nothing underground ever reaches the surface.
+/// Ponds sit in the ground with their water level with the surface, on a sandy bed with sandy banks.
 func fillFlatColumn(_ ch: Chunk, _ g: WorldGen, _ samp: inout GenSampler, _ lx: Int, _ x: Int, _ h: Int, _ surfBiome: Biome, _ biome: Biome) {
     let H: Int = WorldGen.H
     var topT: Tile = .grass
@@ -4607,18 +4719,29 @@ func fillFlatColumn(_ ch: Chunk, _ g: WorldGen, _ samp: inout GenSampler, _ lx: 
     case .swamp: topT = .mossGrass; fillT = .mud
     default: break
     }
+    let pond: Int = g.pondDepth(x)
+    if pond == 0 && g.nearPond(x, 1) { topT = .sand }
+    let caves: Bool = g.options.caves
     let base: Int = lx * H
     var y: Int = h
     while y < H {
         let depth: Int = y - h
         var t: Tile
         if y >= H - 3 { t = .bedrock }
+        else if depth < pond { t = (surfBiome == .tundra && depth == 0) ? .ice : .water }
+        else if depth == pond && pond > 0 { t = .sand }
         else if depth == 0 { t = topT }
         else if depth <= 4 { t = fillT }
         else if y < 300 { t = .stone }
         else if y < 430 { t = .slate }
         else { t = .deepRock }
-        if depth > 8 && y < H - 5, let o = samp.oreAt(x, y, biome) { t = o }
+        if y < H - 5 && depth >= WorldGen.flatCrust && caves && samp.isCave(x, y, depth) {
+            if y >= 500 { t = .lava }
+            else if y > 200 && y < 430 && hash2(x / 60, y / 48, g.seed &+ 28) < 0.28 && (y % 48) > 28 { t = .water }
+            else { t = .air }
+        } else if depth > 8 && y < H - 5, let o = samp.oreAt(x, y, biome) {
+            t = o
+        }
         ch.tiles[base + y] = t.rawValue
         y += 1
     }
@@ -4852,15 +4975,27 @@ struct Palette {
     var roof: Tile
     var floor: Tile
     var path: Tile
+    /// free-standing uprights (porch, smithy, stall and well posts): trunk tiles, which can be walked
+    /// through, so a building never walls off the way along the ground
+    var beam: Tile
+    /// see WorldGen.passableStructures
+    var passable: Bool = true
 }
 
-func villagePalette(_ b: Biome) -> Palette {
+func villagePalette(_ b: Biome, passable: Bool) -> Palette {
+    var p: Palette = villagePaletteBase(b)
+    p.passable = passable
+    if !passable { p.beam = p.post }
+    return p
+}
+
+func villagePaletteBase(_ b: Biome) -> Palette {
     switch b {
-    case .desert: return Palette(wall: .sandstone, post: .sandstone, roof: .sandstone, floor: .sandstone, path: .sandstone)
-    case .tundra: return Palette(wall: .planks, post: .log, roof: .snow, floor: .planks, path: .stone)
-    case .savanna: return Palette(wall: .planks, post: .log, roof: .hay, floor: .planks, path: .dirt)
-    case .jungle: return Palette(wall: .planks, post: .jungleLog, roof: .hay, floor: .planks, path: .mud)
-    default: return Palette(wall: .planks, post: .log, roof: .brick, floor: .planks, path: .dirt)
+    case .desert: return Palette(wall: .sandstone, post: .sandstone, roof: .sandstone, floor: .sandstone, path: .sandstone, beam: .palmLog)
+    case .tundra: return Palette(wall: .planks, post: .log, roof: .snow, floor: .planks, path: .stone, beam: .log)
+    case .savanna: return Palette(wall: .planks, post: .log, roof: .hay, floor: .planks, path: .dirt, beam: .log)
+    case .jungle: return Palette(wall: .planks, post: .jungleLog, roof: .hay, floor: .planks, path: .mud, beam: .jungleLog)
+    default: return Palette(wall: .planks, post: .log, roof: .brick, floor: .planks, path: .dirt, beam: .log)
     }
 }
 
@@ -4873,12 +5008,18 @@ func buildHouse(_ ch: Chunk, _ x: Int, _ gy: Int, _ w: Int, _ ht: Int, _ pal: Pa
     }
     ch.put(x, gy - 1, pal.post); ch.put(x, gy - ht, pal.post)
     ch.put(x + w - 1, gy - 1, pal.post); ch.put(x + w - 1, gy - ht, pal.post)
-    // doorway on one side, window on the other
+    // a door in each end wall (the way along the ground always goes through a house), and a
+    // window above one of them
     let doorLeft: Bool = hash2(x, 1, seed) < 0.5
-    let dx: Int = doorLeft ? x : x + w - 1
     let wx: Int = doorLeft ? x + w - 1 : x
-    ch.put(dx, gy - 1, .doorClosed); ch.put(dx, gy - 2, .doorClosed)
-    ch.put(wx, gy - 3, .glass)
+    if pal.passable {
+        for dx in [x, x + w - 1] { ch.put(dx, gy - 1, .doorClosed); ch.put(dx, gy - 2, .doorClosed) }
+        if ht >= 4 { ch.put(wx, gy - 3, .glass) }
+    } else {
+        let dx: Int = doorLeft ? x : x + w - 1
+        ch.put(dx, gy - 1, .doorClosed); ch.put(dx, gy - 2, .doorClosed)
+        ch.put(wx, gy - 3, .glass)
+    }
     // background wall inside the house
     let wk: UInt8 = pal.wall == .sandstone ? 7 : 5
     ch.fillWall(x + 1, gy - ht, x + w - 2, gy - 1, wk)
@@ -4911,8 +5052,11 @@ func buildWell(_ ch: Chunk, _ x: Int, _ gy: Int, _ pal: Palette) {
     ch.fill(x, gy, x, gy + 3, .brick)
     ch.fill(x + 4, gy, x + 4, gy + 3, .brick)
     ch.fill(x, gy + 4, x + 4, gy + 4, .brick)
-    ch.fill(x, gy - 4, x, gy - 2, pal.post)
-    ch.fill(x + 4, gy - 4, x + 4, gy - 2, pal.post)
+    ch.fill(x, gy - 4, x, gy - 2, pal.beam)
+    ch.fill(x + 4, gy - 4, x + 4, gy - 2, pal.beam)
+    // a plank cover level with the lip, so the way through the village walks straight over the well
+    // (drop through it to reach the water)
+    if pal.passable { ch.fill(x + 1, gy - 1, x + 3, gy - 1, .platform) }
     ch.fill(x - 1, gy - 5, x + 5, gy - 5, pal.wall)
     ch.fill(x, gy - 6, x + 4, gy - 6, pal.roof)
 }
@@ -4937,8 +5081,8 @@ func buildFarm(_ ch: Chunk, _ x: Int, _ gy: Int, _ w: Int, _ seed: UInt64) {
 func buildSmithy(_ ch: Chunk, _ x: Int, _ gy: Int, _ w: Int, _ pal: Palette) {
     ch.fill(x - 1, gy - 8, x + w, gy - 1, .air)
     ch.fill(x, gy, x + w - 1, gy, .stone)
-    ch.fill(x, gy - 4, x, gy - 1, pal.post)
-    ch.fill(x + w - 1, gy - 4, x + w - 1, gy - 1, pal.post)
+    ch.fill(x, gy - 4, x, gy - 1, pal.beam)
+    ch.fill(x + w - 1, gy - 4, x + w - 1, gy - 1, pal.beam)
     ch.fill(x - 1, gy - 5, x + w, gy - 5, pal.roof == .brick ? .planks : pal.roof)
     ch.put(x + 2, gy - 1, .furnace)
     ch.put(x + 4, gy - 1, .workbench)
@@ -4950,8 +5094,8 @@ func buildSmithy(_ ch: Chunk, _ x: Int, _ gy: Int, _ w: Int, _ pal: Palette) {
 
 func buildStall(_ ch: Chunk, _ x: Int, _ gy: Int, _ w: Int, _ pal: Palette) {
     ch.fill(x - 1, gy - 7, x + w, gy - 1, .air)
-    ch.fill(x, gy - 3, x, gy - 1, pal.post)
-    ch.fill(x + w - 1, gy - 3, x + w - 1, gy - 1, pal.post)
+    ch.fill(x, gy - 3, x, gy - 1, pal.beam)
+    ch.fill(x + w - 1, gy - 3, x + w - 1, gy - 1, pal.beam)
     ch.fill(x - 1, gy - 4, x + w, gy - 4, pal.roof == .brick ? .hay : pal.roof)
     ch.put(x + 1, gy - 1, .hay)
     ch.put(x + 2, gy - 1, .chest)
@@ -4979,6 +5123,7 @@ func buildTower(_ ch: Chunk, _ x: Int, _ gy: Int, _ w: Int, _ pal: Palette) {
         yy -= 2
     }
     ch.put(x, gy - 1, .doorClosed); ch.put(x, gy - 2, .doorClosed)
+    if pal.passable { ch.put(x + w - 1, gy - 1, .doorClosed); ch.put(x + w - 1, gy - 2, .doorClosed) }
     ch.fillWall(x + 1, gy - ht, x + w - 2, gy - 1, 6)
     ch.put(x + w / 2, gy - ht + 1, .lantern)
     ch.put(x + w / 2, gy - 1, .torch)
@@ -4995,7 +5140,7 @@ func buildVillage(_ g: WorldGen, _ ch: Chunk, _ v: VillageSite) {
     if v.x + v.halfW + 14 < x0 || v.x - v.halfW - 14 > x0 + chunkW { return }
     var rng = RNG(v.seed)
     let gy: Int = v.ground
-    let pal: Palette = villagePalette(v.biome)
+    let pal: Palette = villagePalette(v.biome, passable: g.passableStructures)
     let left: Int = v.x - v.halfW
     let right: Int = v.x + v.halfW
     ch.fill(left - 3, gy - 24, right + 3, gy - 1, .air)
@@ -5100,7 +5245,7 @@ func buildRuinHouse(_ g: WorldGen, _ ch: Chunk, _ cols: [Col], _ off: Int, _ s: 
     let x: Int = s.x - w / 2
     let gy: Int = groundAtX(g, cols, off, s.x)
     padGround(g, ch, cols, off, x - 2, x + w + 2, gy, 12)
-    buildHouse(ch, x, gy, w, 5, villagePalette(.plains), s.seed)
+    buildHouse(ch, x, gy, w, 5, villagePalette(.plains, passable: g.passableStructures), s.seed)
     decay(ch, x - 1, gy - 12, x + w, gy - 1, 0.28, s.seed &+ 1)
     scatterCobwebs(ch, x + 1, gy - 5, x + w - 2, gy - 1, 0.18, s.seed &+ 2)
     for k in 0..<4 { ch.putIfAir(x + 2 + k * 2, gy - 1, hash2(k, 1, s.seed) < 0.5 ? .tallGrass : .flowerY) }
@@ -5112,6 +5257,11 @@ func buildRuinHouse(_ g: WorldGen, _ ch: Chunk, _ cols: [Col], _ off: Int, _ s: 
     ch.fill(hx - 1, gy + 6, hx + 1, gy + 6, .spikes)
     ch.put(x + 2, gy + 6, .chest)
     ch.put(x + w - 3, gy + 6, .chest)
+    // the way back up: a ladder under a platform in the floor
+    if g.passableStructures {
+        ch.put(x + 3, gy, .platform)
+        ch.fill(x + 3, gy + 1, x + 3, gy + 6, .ladder)
+    }
     ch.put(x + w / 2 + 2, gy + 2, .lantern)
     ch.fill(x + 2, gy + 7, x + w - 3, gy + 7, .mossBrick)
 }
@@ -5132,7 +5282,11 @@ func buildRuinTower(_ g: WorldGen, _ ch: Chunk, _ cols: [Col], _ off: Int, _ s: 
         odd = !odd
         yy -= 3
     }
-    ch.put(x, gy - 1, .air); ch.put(x, gy - 2, .air); ch.put(x, gy - 3, .air)
+    if g.passableStructures {
+        for dx in [x, x + w - 1] { ch.fill(dx, gy - 3, dx, gy - 1, .air) }
+    } else {
+        ch.put(x, gy - 1, .air); ch.put(x, gy - 2, .air); ch.put(x, gy - 3, .air)
+    }
     ch.put(x + w - 1, gy - ht + 4, .glass)
     ch.put(x + w / 2, gy - 1, .chest)
     ch.put(x + 2, gy - 1, .torch)
@@ -5163,9 +5317,12 @@ func buildRuinFort(_ g: WorldGen, _ ch: Chunk, _ cols: [Col], _ off: Int, _ s: R
     // low connecting wall
     ch.fill(x + 10, gy - 2, x + 24, gy, .mossBrick)
     for k in 0...6 { ch.fill(x + 11 + k * 2, gy - 3, x + 11 + k * 2, gy - 3, .mossBrick) }
-    // rubble mounds
-    for dx in 8...14 { let hgt: Int = max(0, 4 - abs(dx - 11)); ch.fill(x + dx, gy - hgt, x + dx, gy - 1, .stone) }
+    // rubble mounds (no higher than a jump where structures are passable)
+    let capH: Int = g.passableStructures ? 3 : 4
+    for dx in 8...14 { let hgt: Int = min(capH, max(0, 4 - abs(dx - 11))); ch.fill(x + dx, gy - hgt, x + dx, gy - 1, .stone) }
     for dx in 22...28 { let hgt: Int = max(0, 3 - abs(dx - 25)); ch.fill(x + dx, gy - hgt, x + dx, gy - 1, .brick) }
+    // broken gateways through each wall block, so the fort can be walked through
+    if g.passableStructures { for wx in [x, x + 9, x + 25, x + 34] { ch.fill(wx, gy - 3, wx, gy - 1, .air) } }
     // courtyard camp inside
     ch.put(x + 17, gy - 1, .campfire)
     ch.put(x + 20, gy - 1, .chest)
@@ -5189,6 +5346,8 @@ func buildCamp(_ g: WorldGen, _ ch: Chunk, _ cols: [Col], _ off: Int, _ s: RareS
     }
     ch.put(x + 4, gy - 5, .planks); ch.put(x + 5, gy - 5, .planks)
     ch.fill(x + 1, gy - 1, x + 8, gy - 1, .air)
+    // the tent flap is open on the fire side
+    if g.passableStructures { ch.put(x + 9, gy - 1, .air); ch.put(x + 8, gy - 2, .air) }
     ch.put(x + 3, gy - 1, .hay)
     ch.put(x + 7, gy - 1, .chest)
     ch.put(x + 14, gy - 1, .campfire)
@@ -5207,7 +5366,14 @@ func buildOvergrown(_ g: WorldGen, _ ch: Chunk, _ cols: [Col], _ off: Int, _ s: 
     for p in 0..<5 {
         let px: Int = x + 1 + p * 6
         let ph: Int = 4 + Int(hash2(p, 1, s.seed) * 6.0)
-        ch.fill(px, gy - ph, px + 1, gy - 1, .mossBrick)
+        if g.passableStructures {
+            // the shafts are crumbled to their back walls; their capitals still stand overhead
+            ch.fillWall(px, gy - ph + 1, px + 1, gy - 1, 6)
+            ch.fill(px, gy - ph, px + 1, gy - ph, .mossBrick)
+            if hash2(p, 3, s.seed) < 0.5 { ch.put(px, gy - 1, .mossBrick) }
+        } else {
+            ch.fill(px, gy - ph, px + 1, gy - 1, .mossBrick)
+        }
         if hash2(p, 2, s.seed) < 0.6 && p < 4 { ch.fill(px + 2, gy - ph, px + 6, gy - ph, .mossBrick) }
         for lv in 0..<6 {
             let lx: Int = px - 1 + Int(hash2(lv, p, s.seed) * 4.0)
@@ -5259,9 +5425,14 @@ func buildRare(_ g: WorldGen, _ ch: Chunk, _ cols: [Col], _ off: Int, _ s: RareS
 
 // MARK: lairs
 
-func lairFloorRow() -> Int { return WorldGen.sea - 10 + 9 }
+/// Row the boss stands on: the floor of the pit, or the ground of a flat world's open arena
+func lairFloorRow(_ g: WorldGen) -> Int { return g.options.flat ? WorldGen.flatSurface : WorldGen.sea - 10 + 9 }
 
 func buildLair(_ g: WorldGen, _ ch: Chunk, _ L: LairInfo) {
+    if g.options.flat {
+        buildFlatLair(g, ch, L)
+        return
+    }
     let gy: Int = WorldGen.sea - 10
     let cx: Int = L.cx
     let kraw: UInt64 = UInt64(L.kind.rawValue + 1)
@@ -5287,23 +5458,32 @@ func buildLair(_ g: WorldGen, _ ch: Chunk, _ L: LairInfo) {
         if depth >= 8 && hash2(x, 2, seed) < 0.05 { ch.put(x, fy - 1, .cobweb) }
         if depth == 0 && hash2(x, 3, seed) < 0.12 { ch.put(x, gy - 1, isRex ? .tallGrass : .deadBush) }
     }
-    // rim decorations
+    // rim decorations: marker stones (low enough to jump where structures are passable; a full jump
+    // clears three blocks)
+    let rimH: Int = g.passableStructures ? 2 : 4
     for side in [-1, 1] {
         let rx: Int = cx + side * 44
-        ch.fill(rx, gy - 4, rx, gy - 1, .stone)
-        ch.put(rx, gy - 5, .torch)
+        ch.fill(rx, gy - rimH, rx, gy - 1, .stone)
+        ch.put(rx, gy - rimH - 1, .torch)
         let rx2: Int = cx + side * 36
         ch.put(rx2, gy - 1, .torch)
     }
     if isRex {
-        // giant rib bones arching over the nest
+        // the half-buried ribs of something enormous: two-block stubs curling over at the top, low
+        // enough that the nest floor can still be crossed with a jump
         for side in [-1, 1] {
             for rb in 0..<3 {
                 let bx: Int = cx + side * (14 + rb * 8)
-                let top: Int = gy + 9 - 10 - rb
-                ch.fill(bx, top, bx, gy + 8, .fossil)
-                ch.put(bx - side, top - 1, .fossil)
-                ch.put(bx - 2 * side, top - 1, .fossil)
+                if g.passableStructures {
+                    ch.fill(bx, gy + 7, bx, gy + 8, .fossil)
+                    ch.put(bx - side, gy + 7, .fossil)
+                } else {
+                    // older worlds: full ribs arching over the nest
+                    let top: Int = gy + 9 - 10 - rb
+                    ch.fill(bx, top, bx, gy + 8, .fossil)
+                    ch.put(bx - side, top - 1, .fossil)
+                    ch.put(bx - 2 * side, top - 1, .fossil)
+                }
             }
         }
         for k in 0..<10 { ch.putIfAir(cx - 24 + k * 5, gy + 7, .jungleLeaves) }
@@ -5315,6 +5495,53 @@ func buildLair(_ g: WorldGen, _ ch: Chunk, _ L: LairInfo) {
     }
     // treasure chest at the far edge of the pit floor
     ch.put(cx + (isRex ? -27 : 27), gy + 8, .chest)
+}
+
+/// A flat world's lair: an open arena on the surface instead of a pit, paved and ringed with low
+/// marker stones, so the ground stays level. The boss fights on the surface (see lairFloorRow).
+func buildFlatLair(_ g: WorldGen, _ ch: Chunk, _ L: LairInfo) {
+    let gy: Int = WorldGen.flatSurface
+    let cx: Int = L.cx
+    let kraw: UInt64 = UInt64(L.kind.rawValue + 1)
+    let seed: UInt64 = g.seed &+ (kraw &* 7777)
+    let isRex: Bool = L.kind == .rex
+    for x in (cx - 52)...(cx + 52) {
+        if x < ch.x0 || x >= ch.x0 + chunkW { continue }
+        let d: Int = abs(x - cx)
+        ch.fill(x, gy - 22, x, gy - 1, .air)
+        if d <= 39 {
+            // the trampled arena floor
+            let worn: Bool = hash2(x, 4, seed) < (isRex ? 0.25 : 0.35)
+            ch.put(x, gy, isRex ? (worn ? .mossGrass : .mud) : (worn ? .crackedBrick : .stone))
+            ch.put(x, gy + 1, isRex ? .mud : .stone)
+            if d >= 4 && hash2(x, 1, seed) < 0.07 { ch.put(x, gy, .fossil) }
+        } else {
+            ch.put(x, gy, isRex ? .jungleGrass : .grass)
+            if hash2(x, 3, seed) < 0.12 { ch.put(x, gy - 1, isRex ? .tallGrass : .deadBush) }
+        }
+    }
+    for side in [-1, 1] {
+        let rx: Int = cx + side * 44
+        ch.fill(rx, gy - 2, rx, gy - 1, .stone)
+        ch.put(rx, gy - 3, .torch)
+        ch.put(cx + side * 36, gy - 1, .torch)
+    }
+    if isRex {
+        for side in [-1, 1] {
+            for rb in 0..<3 {
+                let bx: Int = cx + side * (14 + rb * 8)
+                ch.fill(bx, gy - 2, bx, gy - 1, .fossil)
+                ch.put(bx - side, gy - 2, .fossil)
+            }
+        }
+        for k in 0..<10 { ch.putIfAir(cx - 24 + k * 5, gy - 1, .tallGrass) }
+    } else {
+        for side in [-1, 1] {
+            ch.put(cx + side * 18, gy - 1, .stone)
+            ch.put(cx + side * 18, gy - 2, .torch)
+        }
+    }
+    ch.put(cx + (isRex ? -27 : 27), gy - 1, .chest)
 }
 
 // MARK: portal chamber
@@ -7499,6 +7726,8 @@ final class Game: ObservableObject, @unchecked Sendable {
     var coyote: Double = 0
     var jumpBuf: Double = 0
     var dropT: Double = 0
+    /// time left in a vault out of water onto a ledge
+    var vaultT: Double = 0
     var starveT: Double = 0
     var regenT: Double = 0
     var lastVy: Double = 0
@@ -7896,7 +8125,35 @@ extension Game {
         }
         let inWater: Bool = pb.inWater
         let inLava: Bool = pb.inLava
-        let swimming: Bool = inWater || inLava
+        // climbing out of water: pushing against a bank or a ledge with jump held vaults onto it, if the
+        // top is within reach (water used to pin the player under any ledge above its surface). Decided
+        // before swimming, so the swim limits on rising speed do not cancel the vault.
+        if (inWater || inLava) && vaultT <= 0 && jumpHeld && ix != 0 && pb.hitWall && ledgeWithinReach(ix > 0 ? 1 : -1) {
+            vaultT = 0.32
+            pb.vy = -13.0
+        }
+        if vaultT > 0 { vaultT -= dt }
+        let swimming: Bool = (inWater || inLava) && vaultT <= 0
+        // ladders: while the body overlaps one the player climbs (jump or up to climb, down to descend)
+        if !swimming, let lc = ladderColumn() {
+            let climbUp: Bool = jumpHeld || stickY < -0.45
+            let climbDown: Bool = downHeld || stickY > 0.45
+            let vyT: Double = climbUp ? -5.2 : (climbDown ? 5.2 : 0.0)
+            pb.vy += (vyT - pb.vy) * min(1.0, dt * 16.0)
+            var tx: Double = ix * runMax * 0.7
+            // while climbing with no sideways input the body settles onto the rungs
+            if ix == 0 && (climbUp || climbDown) { tx = (Double(lc) + 0.5 - pb.x) * 8.0 }
+            pb.vx += (tx - pb.vx) * min(1.0, dt * 14.0)
+            world.moveBody(&pb, dt, stepUp: 1.0, dropThrough: climbDown, decks: allDecks())
+            coyote = 0.11
+            jumpBuf = 0
+            fallPeak = 0
+            walkAnim += (abs(pb.vy) + abs(pb.vx)) * dt * 0.55
+            lastVy = pb.vy
+            checkHazards(dt)
+            updateSurvival(dt, ix)
+            return
+        }
         let target: Double = ix * runMax * (swimming ? 0.55 : 1.0)
         let accel: Double = pb.onGround ? 72.0 : 40.0
         if ix != 0 {
@@ -7950,6 +8207,47 @@ extension Game {
         lastVy = pb.vy
         checkHazards(dt)
         updateSurvival(dt, ix)
+    }
+
+    /// Column of a ladder the body is on (its centre within a third of a block of the ladder), or nil.
+    /// The tile right under the feet counts too, so a climb carries on until the player stands at the
+    /// top, and a ladder going down a hole can be walked across.
+    func ladderColumn() -> Int? {
+        let cx: Int = Int(floor(pb.x))
+        let frac: Double = pb.x - Double(cx)
+        var cols: [Int] = [cx]
+        if frac < 0.34 { cols.append(cx - 1) } else if frac > 0.66 { cols.append(cx + 1) }
+        let y0: Int = Int(floor(pb.top + 0.1))
+        let y1: Int = Int(floor(pb.y + 0.05))
+        for tx in cols {
+            var y: Int = y0
+            while y <= y1 {
+                let t: Tile = world.tile(tx, y)
+                if t == .ladder { return tx }
+                // a platform laid over the top of a ladder (a hatch) is climbed through and stepped onto
+                if t == .platform && world.tile(tx, y + 1) == .ladder { return tx }
+                y += 1
+            }
+        }
+        return nil
+    }
+
+    func onLadder() -> Bool { return ladderColumn() != nil }
+
+    /// A ledge in front of the player whose top is at most about 2.5 blocks above the feet, with room
+    /// to stand on it
+    func ledgeWithinReach(_ dir: Int) -> Bool {
+        let fx: Int = Int(floor(pb.x + Double(dir) * (pb.w * 0.5 + 0.15)))
+        let feet: Int = Int(floor(pb.y - 0.05))
+        var k: Int = 0
+        while k <= 3 {
+            let row: Int = feet - k
+            if !world.solid(fx, row) && !world.solid(fx, row - 1) && world.solid(fx, row + 1) {
+                return pb.y - Double(row + 1) <= 2.6
+            }
+            k += 1
+        }
+        return false
     }
 
     func checkHazards(_ dt: Double) {
@@ -8837,7 +9135,7 @@ extension Game {
 
 func toolClass(_ t: Tile) -> ToolType {
     switch t {
-    case .log, .jungleLog, .palmLog, .logBlock, .jungleLogBlock, .palmLogBlock, .planks, .workbench, .chest, .platform, .leaves, .jungleLeaves, .cactus, .hay, .reed, .lantern, .torch:
+    case .log, .jungleLog, .palmLog, .logBlock, .jungleLogBlock, .palmLogBlock, .planks, .workbench, .chest, .platform, .leaves, .jungleLeaves, .cactus, .hay, .reed, .lantern, .torch, .ladder:
         return .axe
     case .dirt, .grass, .sand, .snow, .mud, .dryGrass, .jungleGrass, .mossGrass, .farmland:
         return .shovel
@@ -10297,16 +10595,39 @@ extension Game {
             if pick <= 0 { chosen = r; break }
         }
         let n: Int = 1 + Int.random(in: 0..<max(1, chosen.group))
+        let def: MobDef = mobDef(chosen.kind)
         for k in 0..<n {
             let ox: Double = Double(k) * 1.1 * side + Double.random(in: -0.4...0.4)
             let x: Double = sx + ox
             var y: Double = sy
-            if mobDef(chosen.kind).flying && eff != .ocean { y -= Double.random(in: 1...3) }
+            // every member finds its own footing: the ground in its own column on the surface, and
+            // nobody appears inside a wall or hanging over a drop
+            if eff == .surface && !def.flying {
+                let gyS: Int = world.surfaceY(Int(floor(x)))
+                if world.tile(Int(floor(x)), gyS).liquid || abs(gyS - Int(sy)) > 3 { continue }
+                y = Double(gyS)
+            }
+            if def.flying && eff != .ocean { y -= Double.random(in: 1...3) }
+            if eff != .ocean && !spawnSpotClear(def, x, y) { continue }
             let m: Mob = addMob(chosen.kind, x, y)
             m.homeX = x
             m.homeY = y
             if chosen.kind == .sheep && Double.random(in: 0...1) < 0.1 { m.sheared = true }
         }
+    }
+
+    /// Room for a creature of this size standing at (x, y): no solid tile inside its box, and (unless it
+    /// flies) something to stand on under its feet
+    func spawnSpotClear(_ d: MobDef, _ x: Double, _ y: Double) -> Bool {
+        let hw: Double = d.w * 0.5
+        if world.boxSolid(x - hw + 0.02, y - d.h, x + hw - 0.02, y - 0.05) { return false }
+        if d.flying { return true }
+        let gy: Int = Int(floor(y + 0.05))
+        let l: Int = Int(floor(x - hw + 0.05))
+        let r: Int = Int(floor(x + hw - 0.05))
+        var footing: Int = 0
+        for tx in l...r where world.solid(tx, gy) || world.tile(tx, gy).isPlatform { footing += 1 }
+        return footing * 2 >= (r - l + 1)
     }
 
     func ensureVillagers() {
@@ -10317,11 +10638,17 @@ extension Game {
             if !world.isLoaded(v.x) { continue }
             villagerCells.insert(v.cell)
             let n: Int = 3 + Int.random(in: 0...2)
+            let vdef: MobDef = mobDef(.villager)
             for _ in 0..<n {
-                let x: Double = Double(v.x) + Double.random(in: -Double(v.halfW - 6)...Double(v.halfW - 6))
-                let m: Mob = addMob(.villager, x, Double(v.ground))
-                m.homeX = x
-                m.persistent = false
+                // a few tries for a spot clear of walls and furniture
+                for _ in 0..<6 {
+                    let x: Double = Double(v.x) + Double.random(in: -Double(v.halfW - 6)...Double(v.halfW - 6))
+                    if !spawnSpotClear(vdef, x, Double(v.ground)) { continue }
+                    let m: Mob = addMob(.villager, x, Double(v.ground))
+                    m.homeX = x
+                    m.persistent = false
+                    break
+                }
             }
             let c: Mob = addMob(.cat, Double(v.x) + Double.random(in: -8...8), Double(v.ground))
             c.homeX = c.b.x
@@ -11306,7 +11633,7 @@ extension Game {
 
     func spawnBoss(_ L: LairInfo, _ key: Int) {
         let kind: MobKind = L.kind == .bear ? .bearBoss : .rex
-        let floorY: Double = Double(lairFloorRow())
+        let floorY: Double = Double(lairFloorRow(gen))
         let m: Mob = addMob(kind, Double(L.cx) + 0.5, floorY)
         m.lair = key
         m.homeX = Double(L.cx)
@@ -15416,13 +15743,15 @@ enum WorldRenderer {
             fillRect(&ctx, mkRect(bx + 6.0, by + 4.0, 8.0, 8.0), Color(hex: 0xC0C6D0))
         }
         // (clouds now live in the world itself: see CloudField / drawClouds)
-        // parallax hills (two layers)
-        let baseY: Double = v.sy(Double(WorldGen.sea) + 6.0)
+        // parallax background: two layers of hills, or in a flat world a level horizon of distant tree
+        // lines (it would be odd to see mountains behind ground that never rises)
+        let flat: Bool = g.gen.options.flat
+        let baseY: Double = flat ? v.sy(Double(WorldGen.flatSurface) + 1.0) : v.sy(Double(WorldGen.sea) + 6.0)
         if baseY > -200.0 {
             for k in 0..<2 {
                 let factor: Double = k == 0 ? 0.2 : 0.45
-                let amp: Double = k == 0 ? 36.0 : 22.0
-                let squash: Double = k == 0 ? 0.6 : 0.8
+                let amp: Double = flat ? (k == 0 ? 1.6 : 1.0) : (k == 0 ? 36.0 : 22.0)
+                let squash: Double = flat ? 1.0 : (k == 0 ? 0.6 : 0.8)
                 var colr: UInt32 = k == 0 ? 0x7FA0B8 : 0x5E8A6A
                 if biome == .desert { colr = k == 0 ? 0xC8B080 : 0xB09060 }
                 if biome == .tundra { colr = k == 0 ? 0xC0D0E0 : 0xA0B4C8 }
@@ -15431,13 +15760,14 @@ enum WorldRenderer {
                 let c: Color = rgbColor(colr)
                 let step: Double = v.tp * 0.5
                 let seed: UInt64 = UInt64(700 + k)
-                let drop: Double = Double(k) * 30.0
+                let drop: Double = flat ? Double(k) * v.tp * 0.6 : Double(k) * 30.0
                 var sx: Double = 0
                 var path: Path = Path()
                 while sx < W {
                     let wx: Double = v.left * factor + sx / v.tp
-                    let n: Double = fbm1(wx / 40.0, seed, 3)
-                    let h: Double = n * amp + 6.0
+                    // flat worlds: small, close-packed crowns instead of broad hills
+                    let n: Double = flat ? fbm1(wx / 3.0, seed, 2) : fbm1(wx / 40.0, seed, 3)
+                    let h: Double = flat ? (n * amp + (k == 0 ? 3.2 : 2.2)) : (n * amp + 6.0)
                     let lift: Double = h * v.tp * squash
                     let topY: Double = baseY - lift + drop
                     let snap: Double = floor(topY / 4.0) * 4.0
@@ -17844,6 +18174,7 @@ struct MenuView: View {
     @State var flat: Bool = false
     @State var flatTrees: Bool = true
     @State var flatStructures: Bool = true
+    @State var flatCaves: Bool = true
     @State var splash: String = ""
     @State var metas: [SaveMeta] = []
     let splashes: [String] = ["Now with pirates!", "Beware the Bear!", "Find the hidden gate!", "Ride a T-Rex!",
@@ -17938,7 +18269,15 @@ struct MenuView: View {
 
     var terrainBlurb: String {
         if !flat { return "Hills, mountains, caves and seas." }
-        return "Level ground everywhere: topsoil, then stone, slate and deep rock with ores, on bedrock. No caves or seas. The portal chamber is still buried deep below."
+        return "Level ground everywhere, the same layers below: topsoil, stone, slate and deep rock with ores, on bedrock. The portal chamber is still buried deep below."
+    }
+
+    var flatDetail: String {
+        var parts: [String] = []
+        parts.append(flatTrees ? "Trees, plants and ponds (water level with the ground)." : "Bare ground: no trees, plants or ponds.")
+        parts.append(flatStructures ? "Villages, ruins and the two boss lairs (open arenas)." : "No villages, ruins or boss lairs.")
+        parts.append(flatCaves ? "Caves open only deep below an unbroken crust." : "Solid underground: dig your own tunnels.")
+        return parts.joined(separator: " ")
     }
 
     var newWorldForm: some View {
@@ -17970,10 +18309,11 @@ struct MenuView: View {
                 .multilineTextAlignment(.center)
             if flat {
                 HStack(spacing: 6) {
-                    PixelButton(title: flatTrees ? "TREES: ON" : "TREES: OFF", color: pick(flatTrees, 0x4E7A3A, 0x555555)) { flatTrees.toggle() }
-                    PixelButton(title: flatStructures ? "STRUCTURES: ON" : "STRUCTURES: OFF", color: pick(flatStructures, 0x4E7A3A, 0x555555)) { flatStructures.toggle() }
+                    PixelButton(title: flatTrees ? "NATURE ON" : "NATURE OFF", color: pick(flatTrees, 0x4E7A3A, 0x555555)) { flatTrees.toggle() }
+                    PixelButton(title: flatStructures ? "BUILDINGS ON" : "BUILDINGS OFF", color: pick(flatStructures, 0x4E7A3A, 0x555555)) { flatStructures.toggle() }
+                    PixelButton(title: flatCaves ? "CAVES ON" : "CAVES OFF", color: pick(flatCaves, 0x4E7A3A, 0x555555)) { flatCaves.toggle() }
                 }
-                Text(verbatim: flatStructures ? "Structures: villages, ruins and the two boss lairs." : "No villages, ruins or boss lairs.")
+                Text(verbatim: flatDetail)
                     .font(.pixel(10, .bold)).foregroundColor(Color.white.opacity(0.85)).shadow(color: Color.black, radius: 0, x: 1, y: 1)
                     .multilineTextAlignment(.center)
             }
@@ -18049,7 +18389,9 @@ struct MenuView: View {
         if flat {
             opts.flat = true
             opts.trees = flatTrees
+            opts.ponds = flatTrees
             opts.structures = flatStructures
+            opts.caves = flatCaves
         }
         let g = Game(mode: mode, infinite: infinite, seed: seed, settings: settings, options: opts)
         g.worldName = nm

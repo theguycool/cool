@@ -14277,57 +14277,112 @@ func edgeVignette(_ ctx: inout GraphicsContext, _ W: Double, _ H: Double, _ c: U
     ctx.fill(Path(mkRect(W - band, 0, band, H)), with: .linearGradient(g, startPoint: mkPoint(W, 0), endPoint: mkPoint(W - band, 0)))
 }
 
-/// Clouds placed in world space: a deterministic bank per 40-tile cell high above the sea, drifting
-/// slowly with the wind. They have no collision; anything can pass through them.
+/// Clouds placed in world space: at most one cloud per 44-block cell, high above the sea, drifting
+/// slowly with the wind. They are drawn from a small set of hand-shaped pixel-art templates (see
+/// CloudArt) and have no collision; anything can pass through them.
 enum CloudField {
-    static let cell: Double = 40.0
-    static let wind: Double = 0.6
+    static let cell: Double = 38.0
+    /// blocks per second: slow enough not to pull the eye
+    static let wind: Double = 0.25
+    /// art pixels per block (the same grid as terrain, creatures and the player)
+    static let pxPerTile: Double = 8.0
 
-    struct Puff {
+    struct Cloud {
+        /// top-left corner in world blocks
         var x: Double
         var y: Double
-        var rx: Double
-        var ry: Double
+        var kind: Int
+        var flip: Bool
     }
 
     static func drift(_ clock: Double) -> Double { return clock * wind }
 
-    /// Puffs of every cloud overlapping the world x range [x0, x1]
-    static func puffs(_ seed: UInt64, _ clock: Double, _ x0: Double, _ x1: Double) -> [Puff] {
+    /// Every cloud overlapping the world x range [x0, x1]
+    static func clouds(_ seed: UInt64, _ clock: Double, _ x0: Double, _ x1: Double) -> [Cloud] {
         let d: Double = drift(clock)
-        let c0: Int = Int(floor((x0 - d - 20.0) / cell))
-        let c1: Int = Int(floor((x1 - d + 20.0) / cell))
-        var out: [Puff] = []
+        let maxW: Double = 16.0
+        let c0: Int = Int(floor((x0 - d - maxW) / cell))
+        let c1: Int = Int(floor((x1 - d) / cell))
+        var out: [Cloud] = []
         if c1 < c0 { return out }
+        let shapes: [PixelBuf] = CloudArt.shared.shapes
         for ci in c0...c1 {
             if hash2(ci, 11, seed) < 0.42 { continue }
-            let cx: Double = Double(ci) * cell + cell * 0.5 + (hash2(ci, 12, seed) - 0.5) * 14.0 + d
-            let cy: Double = 44.0 + hash2(ci, 13, seed) * 26.0
-            let width: Double = 7.0 + hash2(ci, 14, seed) * 13.0
-            let n: Int = 4 + Int(hash2(ci, 15, seed) * 4.0)
-            for k in 0..<n {
-                let f: Double = n == 1 ? 0.5 : Double(k) / Double(n - 1)
-                let px: Double = cx - width * 0.5 + f * width
-                // taller in the middle, flat along the bottom
-                let hump: Double = sin(f * Double.pi)
-                let rx: Double = 2.2 + hash2(ci * 8 + k, 16, seed) * 2.0
-                let ry: Double = 1.1 + hump * (1.0 + hash2(ci * 8 + k, 17, seed) * 1.0)
-                out.append(Puff(x: px, y: cy - ry * 0.6, rx: rx, ry: ry))
-            }
-            // a flat base joining the puffs
-            out.append(Puff(x: cx, y: cy + 0.3, rx: width * 0.5 + 1.5, ry: 1.1))
+            let kind: Int = Int(hash2(ci, 15, seed) * Double(shapes.count)) % shapes.count
+            let w: Double = Double(shapes[kind].w) / pxPerTile
+            // keep the cloud inside its cell so neighbours never overlap
+            let slack: Double = max(0, cell - w - 2.0)
+            let x: Double = Double(ci) * cell + 1.0 + hash2(ci, 12, seed) * slack + d
+            // low enough to be seen from the surface, high enough to clear most hills
+            let y: Double = 66.0 + floor(hash2(ci, 13, seed) * 20.0)
+            out.append(Cloud(x: x, y: y, kind: kind, flip: hash2(ci, 14, seed) < 0.5))
         }
         return out
     }
 
+    /// True when (x, y) is inside the visible shape of a cloud (pixel exact)
     static func contains(_ seed: UInt64, _ clock: Double, _ x: Double, _ y: Double) -> Bool {
-        if y < 36.0 || y > 76.0 { return false }
-        for p in puffs(seed, clock, x - 1.0, x + 1.0) {
-            let dx: Double = (x - p.x) / p.rx
-            let dy: Double = (y - p.y) / p.ry
-            if dx * dx + dy * dy <= 1.0 { return true }
+        if y < 64.0 || y > 92.0 { return false }
+        let shapes: [PixelBuf] = CloudArt.shared.shapes
+        for c in clouds(seed, clock, x - 1.0, x + 1.0) {
+            let b: PixelBuf = shapes[c.kind]
+            var px: Int = Int(floor((x - c.x) * pxPerTile))
+            let py: Int = Int(floor((y - c.y) * pxPerTile))
+            if c.flip { px = b.w - 1 - px }
+            if (b.get(px, py) >> 24) != 0 { return true }
         }
         return false
+    }
+}
+
+/// The cloud templates: soft cumulus silhouettes built from a few round lobes on a flat base,
+/// shaded with three restrained tones (bright top, body, cool underside) and no outline.
+final class CloudArt: @unchecked Sendable {
+    static let shared: CloudArt = CloudArt()
+    let shapes: [PixelBuf]
+    let images: [Image]
+    let flipped: [Image]
+
+    init() {
+        // (width, height, lobes as (centre x, centre y, radius x, radius y)); the first lobe is the
+        // flat base the others sit on
+        let specs: [(Int, Int, [(Double, Double, Double, Double)])] = [
+            (48, 18, [(24, 13, 17.5, 5), (14, 10, 7, 6), (25, 7.5, 9, 7), (35, 10.5, 7, 5)]),
+            (84, 26, [(42, 20, 34, 6), (16, 16, 9, 7), (32, 11.5, 12, 10), (50, 10, 11, 9.5), (66, 14.5, 10, 8)]),
+            (116, 22, [(58, 17, 50, 5), (16, 14, 8, 6), (32, 10.5, 10, 8), (52, 9.5, 12, 9), (72, 11.5, 10, 8), (90, 13.5, 9, 7), (104, 15.5, 6, 5)]),
+            (74, 32, [(37, 26, 29, 6), (17, 21, 10, 8), (35, 15, 13, 12.5), (51, 18.5, 11, 10), (62, 22, 8, 6.5)]),
+            (62, 14, [(31, 10, 24, 4), (16, 8.5, 8, 5), (31, 6.5, 10, 6), (46, 8.5, 8, 5)])
+        ]
+        var out: [PixelBuf] = []
+        for s in specs { out.append(CloudArt.makeShape(s.0, s.1, s.2)) }
+        shapes = out
+        images = out.map { pixImage($0) }
+        flipped = out.map { pixImage($0.flipped()) }
+    }
+
+    static func makeShape(_ w: Int, _ h: Int, _ lobes: [(Double, Double, Double, Double)]) -> PixelBuf {
+        var mask = PixelBuf(w: w, h: h)
+        for l in lobes { mask.ellipse(l.0, l.1, l.2, l.3, 0xFFFFFF) }
+        // nothing hangs below the base line: a flat bottom
+        for x in 0..<w { mask.clear(x, h - 1) }
+        // three soft bands, a one-pixel bright top edge and a cool underside, no outline
+        let edge: UInt32 = 0xFFFFFF
+        let body: UInt32 = 0xF6F9FC
+        let mid: UInt32 = 0xE7EEF6
+        let under: UInt32 = 0xD8E1EC
+        let rim: UInt32 = 0xC8D3E1
+        var b = PixelBuf(w: w, h: h)
+        func filled(_ x: Int, _ y: Int) -> Bool { return (mask.get(x, y) >> 24) != 0 }
+        let midRow: Int = Int(Double(h) * 0.62)
+        for y in 0..<h {
+            for x in 0..<w where filled(x, y) {
+                var c: UInt32 = y >= midRow ? mid : body
+                if !filled(x, y - 1) { c = edge }
+                if !filled(x, y + 1) { c = rim } else if !filled(x, y + 2) || !filled(x, y + 3) { c = under }
+                b.set(x, y, c)
+            }
+        }
+        return b
     }
 }
 
@@ -15092,30 +15147,47 @@ enum WorldRenderer {
         ctx.fill(p, with: .color(c))
     }
 
-    /// World-space clouds, drawn over creatures and the player but translucent, so anything flying
-    /// or building up there stays visible. Each cloud is one path (puffs merge without dark overlaps).
+    /// World-space clouds: one cached image per cloud, drawn over creatures and the player at partial
+    /// opacity, so anything inside or behind a cloud stays visible. Positions snap to the art pixel grid,
+    /// and the colour follows the time of day.
     static func drawClouds(_ ctx: inout GraphicsContext, _ W: Double, _ H: Double, _ g: Game, _ v: View2D) {
         if g.world.dim != .overworld { return }
-        if v.top > 80.0 || v.top + v.hTiles < 30.0 { return }
+        if v.top > 92.0 || v.top + v.hTiles < 64.0 { return }
         let seed: UInt64 = g.gen.seed
-        let all: [CloudField.Puff] = CloudField.puffs(seed, g.clock, v.left, v.left + v.wTiles)
-        if all.isEmpty { return }
+        let list: [CloudField.Cloud] = CloudField.clouds(seed, g.clock, v.left, v.left + v.wTiles)
+        if list.isEmpty { return }
+        let art: CloudArt = CloudArt.shared
         let day: Double = g.dayFactor
-        let shade: UInt32 = mixRGB(0x3A4058, 0xF4F6FA, max(day, 0.12))
-        var body: Path = Path()
-        var under: Path = Path()
-        for p in all {
-            let r: CGRect = mkRect(v.sx(p.x - p.rx), v.sy(p.y - p.ry), p.rx * 2.0 * v.tp, p.ry * 2.0 * v.tp)
-            body.addEllipse(in: r)
-            // a slightly darker belly gives the clouds some volume
-            under.addEllipse(in: mkRect(r.minX + r.width * 0.1, r.minY + r.height * 0.45, r.width * 0.8, r.height * 0.55))
+        // white by day, cool grey-blue at night, warm at dusk is left to the sky behind them
+        let tint: UInt32 = mixRGB(0x5A6480, 0xFFFFFF, max(day, 0.0))
+        let px: Double = v.tp / CloudField.pxPerTile
+        for cl in list {
+            let b: PixelBuf = art.shapes[cl.kind]
+            // where a hill or mountain reaches into a cloud it thins to a light fog instead of
+            // sitting on the terrain as a solid shape (eases in and out as the cloud drifts)
+            let wT: Double = Double(b.w) / CloudField.pxPerTile
+            let bottom: Double = cl.y + Double(b.h) / CloudField.pxPerTile
+            var ground: Double = 1e9
+            var k: Int = 0
+            while k <= 6 {
+                let gx: Int = Int(floor(cl.x + wT * Double(k) / 6.0))
+                ground = min(ground, Double(g.gen.col(gx).h))
+                k += 1
+            }
+            let clear: Double = clampD((ground - bottom) / 4.0, 0, 1)
+            var c: GraphicsContext = ctx
+            c.opacity = 0.85 * (0.3 + 0.7 * clear)
+            if tint != 0xFFFFFF { c.addFilter(.colorMultiply(rgbColor(tint))) }
+            // snap to the cloud's own pixel grid so its pixels line up with the terrain's
+            let sx: Double = (v.sx(cl.x) / px).rounded() * px
+            let sy: Double = (v.sy(cl.y) / px).rounded() * px
+            let img: Image = cl.flip ? art.flipped[cl.kind] : art.images[cl.kind]
+            c.draw(img, in: mkRect(sx, sy, Double(b.w) * px, Double(b.h) * px))
         }
-        ctx.fill(body, with: .color(rgbColor(shade, 0.5)))
-        ctx.fill(under, with: .color(rgbColor(mixRGB(shade, 0x8090A8, 0.5), 0.18)))
         // standing inside a cloud: a soft haze over the view
         let pyMid: Double = g.pb.y - g.pb.h * 0.5
         if CloudField.contains(seed, g.clock, g.pb.x, pyMid) {
-            fillRect(&ctx, mkRect(0, 0, W, H), rgbColor(shade, 0.16))
+            fillRect(&ctx, mkRect(0, 0, W, H), rgbColor(tint, 0.12))
         }
     }
 

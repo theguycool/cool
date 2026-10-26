@@ -3673,6 +3673,18 @@ final class GenCache {
     }
 }
 
+/// Choices made when a world is created; saved with the world so it keeps generating the same way
+struct WorldOptions: Codable, Equatable {
+    /// flat terrain: one surface height and the same layers everywhere (no caves, seas or mountains)
+    var flat: Bool = false
+    /// flat worlds only: trees and plants on the surface
+    var trees: Bool = true
+    /// flat worlds only: villages, ruins and boss lairs (the buried portal chamber is always there)
+    var structures: Bool = true
+
+    static let standard: WorldOptions = WorldOptions()
+}
+
 struct WorldGen {
     let cache: GenCache = GenCache()
     let seed: UInt64
@@ -3682,6 +3694,7 @@ struct WorldGen {
     /// 1 = original rules (kept for worlds saved before ocean basins), 2 = with ocean basins
     let genVersion: Int
     static let currentVersion: Int = 2
+    let options: WorldOptions
     let rareChance: Double
     let zones: [Int]
     var portalX: Int
@@ -3692,6 +3705,11 @@ struct WorldGen {
     static let rareCell: Int = 192
     static let finiteWidth: Int = 4096
     static let edgeOcean: Int = 520
+    /// surface row of flat worlds: the height boss lairs are dug into, ten rows above sea level
+    static let flatSurface: Int = WorldGen.sea - 10
+
+    var hasTrees: Bool { return !options.flat || options.trees }
+    var hasStructures: Bool { return !options.flat || options.structures }
 
     /// Finite worlds lay biome zones out in a seeded order so every biome is always present.
     /// climate ids: 0 tundra, 1 plains, 2 forest, 3 desert, 4 jungle, 5 savanna, 6 swamp
@@ -3716,8 +3734,9 @@ struct WorldGen {
         return z
     }
 
-    init(seed: UInt64, infinite: Bool, rareChance: Double, genVersion: Int = WorldGen.currentVersion) {
+    init(seed: UInt64, infinite: Bool, rareChance: Double, genVersion: Int = WorldGen.currentVersion, options: WorldOptions = .standard) {
         self.genVersion = genVersion
+        self.options = options
         self.seed = seed
         self.infinite = infinite
         self.width = infinite ? 2_000_000_000 : WorldGen.finiteWidth
@@ -3739,7 +3758,7 @@ struct WorldGen {
             while step < 400 && !ok {
                 let off: Int = ((step % 2 == 0) ? 1 : -1) * ((step + 1) / 2) * 5
                 let x: Int = spawnX + sd * dd + off
-                let c: Col = WorldGen.colBaseStatic(seed, infinite, width, spawnX, zones, x, basins: genVersion >= 2)
+                let c: Col = options.flat ? WorldGen.flatColStatic(seed, infinite, width, spawnX, zones, x, lairs: false) : WorldGen.colBaseStatic(seed, infinite, width, spawnX, zones, x, basins: genVersion >= 2)
                 if c.biome != .ocean && c.biome != .swamp && c.land > 0.5 && WorldGen.lairStatic(spawnX, infinite, x, 230) == nil && abs(x - spawnX) < 3800 && abs(x - spawnX) > 200 {
                     found = x
                     ok = true
@@ -3768,11 +3787,13 @@ struct WorldGen {
     }
 
     func lairAt(_ x: Int, radius: Int = 150) -> LairInfo? {
+        if !hasStructures { return nil }
         return WorldGen.lairStatic(spawnX, infinite, x, radius)
     }
 
     func lairCenters(near x: Int) -> [LairInfo] {
         var out: [LairInfo] = []
+        if !hasStructures { return out }
         let period: Int = 4096
         let bases: [Int] = [spawnX + 1000, spawnX - 1100]
         for i in 0..<2 {
@@ -3980,13 +4001,36 @@ struct WorldGen {
         return Col(h: hi, biome: biome, land: land, mtn: mtn, swamp: swamp)
     }
 
+    /// Flat worlds: every column has the same height; the biome comes from the climate alone (the
+    /// same temperature and humidity thresholds as colBaseStatic, without seas or mountains), and the
+    /// ground around a boss lair keeps its forest or jungle
+    static func flatColStatic(_ seed: UInt64, _ infinite: Bool, _ width: Int, _ spawnX: Int, _ zones: [Int], _ x: Int, lairs: Bool) -> Col {
+        let cl: (Double, Double) = WorldGen.climate(seed, infinite, width, zones, x)
+        let temp: Double = cl.0
+        let humid: Double = cl.1
+        let tundra: Double = smooth(clampD((0.31 - temp) / 0.06, 0, 1))
+        let hot: Double = smooth(clampD((temp - 0.64) / 0.06, 0, 1))
+        let desert: Double = hot * smooth(clampD((0.42 - humid) / 0.06, 0, 1))
+        let jungle: Double = hot * smooth(clampD((humid - 0.58) / 0.06, 0, 1))
+        let savanna: Double = hot * (1.0 - desert) * (1.0 - jungle)
+        let swamp: Double = smooth(clampD((humid - 0.68) / 0.06, 0, 1)) * (1.0 - tundra) * (1.0 - hot)
+        var biome: Biome = humid > 0.5 ? .forest : .plains
+        if tundra > 0.5 { biome = .tundra }
+        else if desert > 0.5 { biome = .desert }
+        else if jungle > 0.5 { biome = .jungle }
+        else if savanna > 0.5 { biome = .savanna }
+        else if swamp > 0.5 { biome = .swamp }
+        if lairs, let L = WorldGen.lairStatic(spawnX, infinite, x, 150), abs(x - L.cx) < 120 { biome = L.kind == .bear ? .forest : .jungle }
+        return Col(h: WorldGen.flatSurface, biome: biome, land: 0.7, mtn: 0, swamp: 0)
+    }
+
     func colBase(_ x: Int) -> Col {
         if let c = cache.cols[x] {
             cache.hits &+= 1
             return c
         }
         cache.misses &+= 1
-        let c: Col = WorldGen.colBaseStatic(seed, infinite, width, spawnX, zones, x, basins: genVersion >= 2)
+        let c: Col = options.flat ? WorldGen.flatColStatic(seed, infinite, width, spawnX, zones, x, lairs: hasStructures) : WorldGen.colBaseStatic(seed, infinite, width, spawnX, zones, x, basins: genVersion >= 2)
         cache.cols[x] = c
         return c
     }
@@ -4001,6 +4045,7 @@ struct WorldGen {
     }
 
     func computeVillageSite(cell c: Int) -> VillageSite? {
+        if !hasStructures { return nil }
         let cellW: Int = WorldGen.villageCell
         let spawnCell: Bool = floorDiv(spawnX, cellW) == c
         if !spawnCell && hash2(c, 99, seed) > 0.62 { return nil }
@@ -4060,6 +4105,7 @@ struct WorldGen {
     }
 
     func computeRareSite(cell c: Int) -> RareSite? {
+        if !hasStructures { return nil }
         if hash2(c, 71, seed) > rareChance { return nil }
         let cellW: Int = WorldGen.rareCell
         let sx: Int = c * cellW + 32 + Int(hash2(c, 72, seed) * Double(cellW - 64))
@@ -4069,6 +4115,8 @@ struct WorldGen {
         if abs(sx - portalX) < 90 { return nil }
         if !infinite && (sx < 300 || sx > width - 300) { return nil }
         if nearestVillageSimple(sx) { return nil }
+        // flat worlds keep the spawn point clear (in other worlds the terrain search does that)
+        if options.flat && abs(sx - spawnX) < 48 { return nil }
         let r: Double = hash2(c, 73, seed)
         var kind: RareKind = .house
         if r < 0.17 { kind = .house }
@@ -4353,7 +4401,7 @@ func generateOverworldChunk(_ g: WorldGen, _ cx: Int) -> Chunk {
     for lx in 0..<chunkW {
         let x: Int = x0 + lx
         let c: Col = colAt(x)
-        samp.startColumn(x, c.h)
+        samp.startColumn(x, c.h, caves: !g.options.flat)
         let hj: Double = hash2(x, 1, g.seed &+ 61)
         let jd: Double = (hj - 0.5) * 10.0
         let jit: Int = Int(jd)
@@ -4368,6 +4416,10 @@ func generateOverworldChunk(_ g: WorldGen, _ cx: Int) -> Chunk {
         }
         let h: Int = c.h
         ch.surf[lx] = h
+        if g.options.flat {
+            fillFlatColumn(ch, g, &samp, lx, x, h, sb, c.biome)
+            continue
+        }
         var topT: Tile = .grass
         var fillT: Tile = .dirt
         var fillD: Int = 5
@@ -4437,6 +4489,8 @@ func generateOverworldChunk(_ g: WorldGen, _ cx: Int) -> Chunk {
         for v in villages { if abs(x - v.x) < v.halfW + 6 { return true } }
         for r in rares { if abs(x - r.x) < 16 { return true } }
         if let l = g.lairAt(x, radius: 110) { _ = l; return true }
+        // flat worlds keep the spawn point clear of trees
+        if g.options.flat && abs(x - g.spawnX) < 5 { return true }
         return false
     }
     func isTree(_ x: Int) -> Bool {
@@ -4447,7 +4501,7 @@ func generateOverworldChunk(_ g: WorldGen, _ cx: Int) -> Chunk {
         if c.h > sea - 1 && c.biome != .swamp { return false }
         return true
     }
-    for lx in -6..<(chunkW + 6) {
+    for lx in -6..<(chunkW + 6) where g.hasTrees {
         let x: Int = x0 + lx
         if !g.infinite && (x < 4 || x > g.width - 5) { continue }
         let c: Col = colAt(x)
@@ -4523,7 +4577,7 @@ func generateOverworldChunk(_ g: WorldGen, _ cx: Int) -> Chunk {
         }
     }
     // palms on warm beaches
-    for lx in 0..<chunkW {
+    for lx in 0..<chunkW where g.hasTrees {
         let x: Int = x0 + lx
         let c: Col = colAt(x)
         if c.biome == .ocean || c.h < sea - 3 || c.h > sea + 1 { continue }
@@ -4536,6 +4590,38 @@ func generateOverworldChunk(_ g: WorldGen, _ cx: Int) -> Chunk {
     applyStructures(g, ch, cols, x0 - m)
     ch.rebuildSky()
     return ch
+}
+
+/// One column of a flat world: the same layers everywhere. The surface block and four rows of
+/// topsoil follow the biome; below them stone to row 300, slate to 430, deep rock, and a three-row
+/// bedrock floor, with ores in the rock. No caves, water or lava.
+func fillFlatColumn(_ ch: Chunk, _ g: WorldGen, _ samp: inout GenSampler, _ lx: Int, _ x: Int, _ h: Int, _ surfBiome: Biome, _ biome: Biome) {
+    let H: Int = WorldGen.H
+    var topT: Tile = .grass
+    var fillT: Tile = .dirt
+    switch surfBiome {
+    case .desert: topT = .sand; fillT = .sand
+    case .tundra: topT = .snow
+    case .jungle: topT = .jungleGrass; fillT = .mud
+    case .savanna: topT = .dryGrass
+    case .swamp: topT = .mossGrass; fillT = .mud
+    default: break
+    }
+    let base: Int = lx * H
+    var y: Int = h
+    while y < H {
+        let depth: Int = y - h
+        var t: Tile
+        if y >= H - 3 { t = .bedrock }
+        else if depth == 0 { t = topT }
+        else if depth <= 4 { t = fillT }
+        else if y < 300 { t = .stone }
+        else if y < 430 { t = .slate }
+        else { t = .deepRock }
+        if depth > 8 && y < H - 5, let o = samp.oreAt(x, y, biome) { t = o }
+        ch.tiles[base + y] = t.rawValue
+        y += 1
+    }
 }
 
 // MARK: - Column samplers for chunk generation
@@ -4661,9 +4747,24 @@ struct GenSampler {
         }
     }
 
-    /// Call once per column (h = surface row) before sampling it
-    mutating func startColumn(_ cx: Int, _ h: Int) {
+    /// Call once per column (h = surface row) before sampling it. Without caves only the ore fields
+    /// are prepared (isCave must not be called then).
+    mutating func startColumn(_ cx: Int, _ h: Int, caves: Bool = true) {
         rockY3 = Int.min
+        let fx: Double = Double(cx)
+        if caves { startCaves(cx, h) }
+        var k: Int = 0
+        while k < nOre {
+            let lo: Int = max(oreRules[k].minY, h + 9)
+            let hi: Int = min(oreRules[k].maxY, H - 6)
+            oreLo[k] = lo
+            oreHi[k] = hi
+            if hi >= lo { fill(ores + k * H, seed &+ oreSalt[k], fx * 0.22, 0.22, lo, hi) }
+            k += 1
+        }
+    }
+
+    private mutating func startCaves(_ cx: Int, _ h: Int) {
         let fx: Double = Double(cx)
         shaftN = noise1(fx / 18.0, seed &+ 26)
         top = h + 5
@@ -4685,15 +4786,6 @@ struct GenSampler {
             }
         }
         if shaftN > 0.90 { fill(shaft, seed &+ 27, fx * 0.2, 0.2, top, min(y1, h + 39)) }
-        var k: Int = 0
-        while k < nOre {
-            let lo: Int = max(oreRules[k].minY, h + 9)
-            let hi: Int = min(oreRules[k].maxY, H - 6)
-            oreLo[k] = lo
-            oreHi[k] = hi
-            if hi >= lo { fill(ores + k * H, seed &+ oreSalt[k], fx * 0.22, 0.22, lo, hi) }
-            k += 1
-        }
     }
 
     mutating func isCave(_ x: Int, _ y: Int, _ depth: Int) -> Bool {
@@ -7564,11 +7656,11 @@ final class Game: ObservableObject, @unchecked Sendable {
     var tickMs: Double = 0
     var tickWorstMs: Double = 0
 
-    init(mode: GameMode, infinite: Bool, seed: UInt64, settings: Settings, genVersion: Int = WorldGen.currentVersion) {
+    init(mode: GameMode, infinite: Bool, seed: UInt64, settings: Settings, genVersion: Int = WorldGen.currentVersion, options: WorldOptions = .standard) {
         self.mode = mode
         self.settings = settings
         self.seedValue = seed
-        let gen = WorldGen(seed: seed, infinite: infinite, rareChance: settings.rareChance, genVersion: genVersion)
+        let gen = WorldGen(seed: seed, infinite: infinite, rareChance: settings.rareChance, genVersion: genVersion, options: options)
         self.world = World(gen: gen)
         self.tilePx = settings.tilePx
         self.pb = Body(x: Double(gen.spawnX) + 0.5, y: 100, w: 0.7, h: 1.8)
@@ -12927,6 +13019,8 @@ struct SaveMeta: Codable {
     var dim: Int
     /// world generation rules the world was created with (nil in saves made before basins existed)
     var genVersion: Int? = nil
+    /// world type chosen at creation (nil in saves made before flat worlds existed: a standard world)
+    var options: WorldOptions? = nil
 }
 
 struct SaveData: Codable {
@@ -13061,7 +13155,7 @@ extension Game {
         var py: Double = pb.y
         if let r = mounted { px = r.b.x; py = r.b.y }
         if let v = inVehicle { px = v.b.x; py = v.b.y - v.b.h }
-        let meta = SaveMeta(slot: slot, name: worldName, mode: mode, infinite: gen.infinite, seed: seedValue, day: dayCount, playSeconds: playSeconds, dim: cur, genVersion: gen.genVersion)
+        let meta = SaveMeta(slot: slot, name: worldName, mode: mode, infinite: gen.infinite, seed: seedValue, day: dayCount, playSeconds: playSeconds, dim: cur, genVersion: gen.genVersion, options: gen.options)
         return SaveData(meta: meta, settings: settings, px: px, py: py, hp: max(1, hp), maxHP: maxHP, hunger: hunger, timeOfDay: timeOfDay, kills: kills, spawnX: spawnX, spawnY: spawnY, inv: inv, sel: sel, defeated: Array(defeated), gotMap: gotMap, portalOpened: portalOpened, chests: chestList, chunks: cs, vehicles: vs, pets: pets, rex: rs, nextID: nextID)
     }
 
@@ -13075,8 +13169,9 @@ extension Game {
     static func load(_ s: SaveData, settings: Settings) -> Game {
         var st: Settings = settings
         st.rareChance = s.settings.rareChance
-        // worlds saved before the generation changes keep generating exactly as they did
-        let g = Game(mode: s.meta.mode, infinite: s.meta.infinite, seed: s.meta.seed, settings: st, genVersion: s.meta.genVersion ?? 1)
+        // worlds saved before the generation changes keep generating exactly as they did, and
+        // worlds saved before world types existed are standard worlds
+        let g = Game(mode: s.meta.mode, infinite: s.meta.infinite, seed: s.meta.seed, settings: st, genVersion: s.meta.genVersion ?? 1, options: s.meta.options ?? .standard)
         g.slot = s.meta.slot
         g.worldName = s.meta.name
         g.dayCount = s.meta.day
@@ -13468,7 +13563,7 @@ extension Game {
     func debugWorldgenLines() -> [String] {
         let x: Int = Int(floor(pb.x))
         var out: [String] = []
-        out.append(joinText("Gen version ", String(gen.genVersion), "  sea ", String(WorldGen.sea)))
+        out.append(joinText("Gen version ", String(gen.genVersion), "  sea ", String(WorldGen.sea), gen.options.flat ? "  flat" : ""))
         out.append(joinText("Biome ", biomeHere.name, "  surface y ", String(world.surfaceY(x))))
         var nearest: Int = -1
         var d: Int = 0
@@ -17207,7 +17302,7 @@ struct PauseView: View {
     @ObservedObject var hud: HUDSignal
     var worldLine: String {
         let kind: String = game.gen.infinite ? " · Infinite" : " · Classic"
-        return joinText(game.worldName, " · ", game.mode.title, kind)
+        return joinText(game.worldName, " · ", game.mode.title, kind, game.gen.options.flat ? " · Flat" : "")
     }
     var quit: () -> Void
     @State var savedNote: String = ""
@@ -17518,7 +17613,7 @@ struct DebugPanel: View {
         let xs: String = String(format: "%.1f", game.pb.x)
         let ys: String = String(format: "%.1f", game.pb.y)
         out.append("XY \(xs), \(ys)  \(dimName)")
-        let kind: String = game.gen.infinite ? "Infinite" : "Classic"
+        let kind: String = joinText(game.gen.infinite ? "Infinite" : "Classic", game.gen.options.flat ? " flat" : "")
         let seedS: String = String(game.seedValue)
         out.append("Seed \(seedS)  \(kind)")
         let chunkN: Int = game.world.chunks.count
@@ -17746,6 +17841,9 @@ struct MenuView: View {
     @State var nameText: String = "My World"
     @State var mode: GameMode = .survival
     @State var infinite: Bool = false
+    @State var flat: Bool = false
+    @State var flatTrees: Bool = true
+    @State var flatStructures: Bool = true
     @State var splash: String = ""
     @State var metas: [SaveMeta] = []
     let splashes: [String] = ["Now with pirates!", "Beware the Bear!", "Find the hidden gate!", "Ride a T-Rex!",
@@ -17834,7 +17932,13 @@ struct MenuView: View {
 
     var worldBlurb: String {
         if infinite { return "Endless world that streams in as you explore." }
+        if flat { return "A large world (4096 wide) with every biome." }
         return "A large world (4096 wide) with every biome and ocean edges."
+    }
+
+    var terrainBlurb: String {
+        if !flat { return "Hills, mountains, caves and seas." }
+        return "Level ground everywhere: topsoil, then stone, slate and deep rock with ores, on bedrock. No caves or seas. The portal chamber is still buried deep below."
     }
 
     var newWorldForm: some View {
@@ -17857,6 +17961,22 @@ struct MenuView: View {
             Text(verbatim: worldBlurb)
                 .font(.pixel(11, .bold)).foregroundColor(Color.white).shadow(color: Color.black, radius: 0, x: 1, y: 1)
                 .multilineTextAlignment(.center)
+            HStack(spacing: 6) {
+                PixelButton(title: "NORMAL", color: pick(!flat, 0x4E7A3A, 0x555555)) { flat = false }
+                PixelButton(title: "FLAT", color: pick(flat, 0x4E7A3A, 0x555555)) { flat = true }
+            }
+            Text(verbatim: terrainBlurb)
+                .font(.pixel(11, .bold)).foregroundColor(Color.white).shadow(color: Color.black, radius: 0, x: 1, y: 1)
+                .multilineTextAlignment(.center)
+            if flat {
+                HStack(spacing: 6) {
+                    PixelButton(title: flatTrees ? "TREES: ON" : "TREES: OFF", color: pick(flatTrees, 0x4E7A3A, 0x555555)) { flatTrees.toggle() }
+                    PixelButton(title: flatStructures ? "STRUCTURES: ON" : "STRUCTURES: OFF", color: pick(flatStructures, 0x4E7A3A, 0x555555)) { flatStructures.toggle() }
+                }
+                Text(verbatim: flatStructures ? "Structures: villages, ruins and the two boss lairs." : "No villages, ruins or boss lairs.")
+                    .font(.pixel(10, .bold)).foregroundColor(Color.white.opacity(0.85)).shadow(color: Color.black, radius: 0, x: 1, y: 1)
+                    .multilineTextAlignment(.center)
+            }
             TextField("Seed (optional)", text: $seedText)
                 .font(.pixel(15, .bold))
                 .padding(10)
@@ -17885,7 +18005,8 @@ struct MenuView: View {
 
     func saveRow(_ m: SaveMeta) -> some View {
         let mins: Int = Int(m.playSeconds / 60.0)
-        let kindS: String = m.infinite ? "Infinite" : "Classic"
+        let flatS: String = (m.options?.flat ?? false) ? " Flat" : ""
+        let kindS: String = joinText(m.infinite ? "Infinite" : "Classic", flatS)
         let modeS: String = m.mode.title
         let dayS: Int = Int(m.day)
         let detail: String = "\(modeS) · \(kindS) · Day \(dayS) · \(mins) min"
@@ -17924,7 +18045,13 @@ struct MenuView: View {
     func create() {
         let seed: UInt64 = seedFrom(seedText)
         let nm: String = nameText.trimmingCharacters(in: .whitespaces).isEmpty ? "My World" : nameText
-        let g = Game(mode: mode, infinite: infinite, seed: seed, settings: settings)
+        var opts: WorldOptions = .standard
+        if flat {
+            opts.flat = true
+            opts.trees = flatTrees
+            opts.structures = flatStructures
+        }
+        let g = Game(mode: mode, infinite: infinite, seed: seed, settings: settings, options: opts)
         g.worldName = nm
         g.slot = SaveStore.freeSlot()
         _ = g.saveNow()

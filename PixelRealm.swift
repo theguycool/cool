@@ -6114,6 +6114,8 @@ final class Vehicle {
     var submerged: Double = 0
     var sleepT: Double = 0
     var asleep: Bool = false
+    /// physics time not yet simulated (vehicles step at a fixed rate)
+    var physAccum: Double = 0
     /// direction each drill faces in vehicle space, and its mining progress
     var drillDir: [PartCell: (Int, Int)] = [:]
     var drillWork: [PartCell: (Int, Int, Double)] = [:]
@@ -10800,12 +10802,45 @@ extension Game {
 
 // MARK: - Vehicle driving and rigid-body physics
 
-/// One collision sample on a vehicle part: where it is on the part (vehicle space) and whether it
-/// belongs to a wheel (wheels roll and push; everything else slides with friction)
+/// One collision sample on a vehicle part: where it is on the part (vehicle space), whether it
+/// belongs to a wheel (wheels roll and push), and whether block corners act as ramps for it
+/// (wheels and the underside of hulls, so cars climb steps and boats slide on and off beaches)
 struct VSample {
     var lx: Double
     var ly: Double
     var wheel: Bool
+    var ramp: Bool
+    var hull: Bool
+}
+
+/// Water a part displaces when fully under (in tiles of water). Every part floats a little; hulls a
+/// lot. Parts without displacement (the old model) made engines and propellers drag boats under.
+func partDisplacement(_ p: PartType) -> Double {
+    switch p {
+    case .hull: return 4.0
+    case .fuelTank: return 1.0
+    case .frame: return 0.8
+    case .seat: return 0.5
+    case .wheel: return 0.5
+    case .engine: return 0.7
+    case .steering: return 0.2
+    case .propeller: return 0.25
+    case .paddle: return 0.3
+    case .drill, .diamondDrill: return 0.3
+    }
+}
+
+/// Fixed physics step for vehicles (seconds). Simulating in fixed steps makes boats and cars behave
+/// the same at 30 and 60 frames per second.
+let vehicleStep: Double = 1.0 / 120.0
+
+/// Per-frame contact summary gathered over the fixed steps
+struct VStepStats {
+    var anyHits: Int = 0
+    var wheelHits: Int = 0
+    var wet: Double = 0
+    var nearWater: Bool = false
+    var rammed: [(Int, Int)] = []
 }
 
 extension Game {
@@ -10821,10 +10856,13 @@ extension Game {
         return nil
     }
 
-    /// Collision samples: the four corners and edge midpoints of square parts; a ring for wheels
+    /// Collision samples: the four corners and edge midpoints of square parts; a ring for wheels.
+    /// Hull samples follow the visible hull (its art leaves the top quarter of the cell empty).
     func vehicleSamples(_ v: Vehicle) -> [VSample] {
         var out: [VSample] = []
         out.reserveCapacity(v.parts.count * 8)
+        // on a boat every part slides like a hull (engine and propeller included)
+        let boat: Bool = v.buoyancy > 0 && v.wheels < 2
         for (c, t) in v.parts {
             let x0: Double = Double(c.dx)
             let y0: Double = Double(c.dy)
@@ -10832,18 +10870,23 @@ extension Game {
                 var k: Int = 0
                 while k < 10 {
                     let a: Double = Double(k) / 10.0 * 2.0 * Double.pi
-                    out.append(VSample(lx: x0 + 0.5 + cos(a) * 0.47, ly: y0 + 0.5 + sin(a) * 0.47, wheel: true))
+                    out.append(VSample(lx: x0 + 0.5 + cos(a) * 0.47, ly: y0 + 0.5 + sin(a) * 0.47, wheel: true, ramp: true, hull: false))
                     k += 1
                 }
             } else {
-                let pts: [(Double, Double)] = [(0.02, 0.02), (0.5, 0.0), (0.98, 0.02), (1.0, 0.5), (0.98, 0.98), (0.5, 1.0), (0.02, 0.98), (0.0, 0.5)]
+                let isHull: Bool = t == .hull
+                let top: Double = isHull ? 0.25 : 0.02
+                let mid: Double = isHull ? 0.6 : 0.5
+                let pts: [(Double, Double)] = [(0.02, top), (0.5, isHull ? 0.25 : 0.0), (0.98, top), (1.0, mid), (0.98, 0.98), (0.5, 1.0), (0.02, 0.98), (0.0, mid)]
                 for p in pts {
                     // only outer edges can touch the world
                     let nx: Int = p.0 < 0.25 ? -1 : (p.0 > 0.75 ? 1 : 0)
-                    let ny: Int = p.1 < 0.25 ? -1 : (p.1 > 0.75 ? 1 : 0)
+                    let ny: Int = p.1 < 0.3 ? -1 : (p.1 > 0.75 ? 1 : 0)
                     let openX: Bool = nx == 0 || v.parts[PartCell(dx: c.dx + nx, dy: c.dy)] == nil
                     let openY: Bool = ny == 0 || v.parts[PartCell(dx: c.dx, dy: c.dy + ny)] == nil
-                    if openX || openY { out.append(VSample(lx: x0 + p.0, ly: y0 + p.1, wheel: false)) }
+                    if openX || openY {
+                        out.append(VSample(lx: x0 + p.0, ly: y0 + p.1, wheel: false, ramp: (isHull || boat) && p.1 > 0.75, hull: isHull || boat))
+                    }
                 }
             }
         }
@@ -10851,8 +10894,8 @@ extension Game {
     }
 
     /// How far a point is inside solid ground and which way is out (the exposed face it is nearest).
-    /// For wheels, the top corner of a block with open space above acts like a ramp, so cars roll up
-    /// one-block steps and block "stairs" instead of jamming against them.
+    /// For ramp samples (wheels, hull bottoms), the top corner of a block with open space above acts
+    /// like a slope, so cars roll up one-block steps and boats slide over beach steps instead of jamming.
     func penetration(_ x: Double, _ y: Double, wheel: Bool = false) -> (Double, Double, Double)? {
         let tx: Int = Int(floor(x))
         let ty: Int = Int(floor(y))
@@ -10882,196 +10925,77 @@ extension Game {
         return (best, nx, ny)
     }
 
+    /// How much of a 1x1 part centred at (x, cy) is under water, 0...1, from the real water surface
+    /// in that column (continuous, so buoyancy changes smoothly instead of in jumps)
+    func submergedFraction(_ x: Double, _ cy: Double, reach: Double = 0) -> Double {
+        let tx: Int = Int(floor(x))
+        let bottom: Double = cy + 0.5 + reach
+        let start: Int = Int(floor(cy - 0.5))
+        let end: Int = Int(floor(bottom))
+        var y: Int = start
+        while y <= end {
+            if world.tile(tx, y) == .water {
+                var top: Int = y
+                if y == start {
+                    // already under water at the part's top: find the surface above
+                    var k: Int = 0
+                    while k < 6 && world.tile(tx, top - 1) == .water { top -= 1; k += 1 }
+                }
+                return clampD(bottom - Double(top), 0, 1)
+            }
+            y += 1
+        }
+        return 0
+    }
+
+    /// True when every chunk under (and next to) the vehicle is loaded. Otherwise the vehicle waits:
+    /// unloaded chunks read as stone, which used to shove boats and cars around at chunk edges.
+    func vehicleAreaLoaded(_ v: Vehicle) -> Bool {
+        let c0: Int = floorDiv(Int(floor(v.b.left)) - 2, chunkW)
+        let c1: Int = floorDiv(Int(floor(v.b.right)) + 2, chunkW)
+        var c: Int = c0
+        while c <= c1 {
+            if world.chunks[c] == nil && world.inRange(c) { return false }
+            c += 1
+        }
+        return true
+    }
+
     func stepVehicle(_ v: Vehicle, _ dt: Double) {
-        if !world.isLoaded(Int(floor(v.px))) { return }
+        if !vehicleAreaLoaded(v) { return }
         let throttle: Double = v.rider ? v.throttle : 0
         if v.asleep && abs(throttle) < 0.05 && !v.drilling {
             // resting vehicles cost nothing until something wakes them
             if world.boxSolid(v.b.left + 0.05, v.b.y + 0.02, v.b.right - 0.05, v.b.y + 0.2) || v.submerged > 0 { return }
         }
         v.asleep = false
-        let steerOK: Bool = v.hasSeat && v.hasSteering
-        let hasFuel: Bool = v.fuel > 0 || isCreative
         let samples: [VSample] = vehicleSamples(v)
-        let maxSpeed: Double = v.speed + abs(v.angVel) * 3.0
-        let steps: Int = clampI(Int(ceil(maxSpeed * dt / 0.22)), 2, 10)
-        let h: Double = dt / Double(steps)
-        let invM: Double = 1.0 / v.mass
-        let invI: Double = 1.0 / v.inertia
-        var wheelHits: Int = 0
-        var anyHits: Int = 0
-        var subFrac: Double = 0
-        var rammed: [(Int, Int)] = []
-        for _ in 0..<steps {
-            // gravity
-            v.vy += gravityG * h
-            let c: Double = v.cosA
-            let s: Double = v.sinA
-            // buoyancy and water drag, part by part (so boats tilt and settle naturally)
-            var wetParts: Int = 0
-            for (cell, t) in v.parts {
-                let lx: Double = Double(cell.dx) + 0.5 - v.comX
-                let ly: Double = Double(cell.dy) + 0.5 - v.comY
-                let wx: Double = v.px + lx * c - ly * s
-                let wy: Double = v.py + lx * s + ly * c
-                var wet: Double = 0
-                if world.tile(Int(floor(wx)), Int(floor(wy - 0.3))) == .water { wet += 0.5 }
-                if world.tile(Int(floor(wx)), Int(floor(wy + 0.3))) == .water { wet += 0.5 }
-                if wet <= 0 { continue }
-                wetParts += 1
-                let up: Double = gravityG * (partVolume(t) * 0.92 + 0.15) * wet
-                let rx: Double = wx - v.px
-                let ry: Double = wy - v.py
-                // buoyant force (upward) at the part, plus drag against the part's velocity
-                let pvx: Double = v.vx - v.angVel * ry
-                let pvy: Double = v.vy + v.angVel * rx
-                let fx: Double = -pvx * 1.6 * wet
-                let fy: Double = -up - pvy * 4.0 * wet
-                v.vx += fx * invM * h
-                v.vy += fy * invM * h
-                v.angVel += (rx * fy - ry * fx) * invI * h
+        // fixed steps: the same motion whatever the frame rate (leftover time carries to the next frame)
+        v.physAccum += min(dt, 0.1)
+        var n: Int = Int(v.physAccum / vehicleStep)
+        if n > 12 { n = 12; v.physAccum = 0 } else { v.physAccum -= Double(n) * vehicleStep }
+        var stats = VStepStats()
+        var k: Int = 0
+        while k < n {
+            // split a step when moving fast, so no sample moves more than ~0.2 blocks at once
+            let fast: Double = v.speed + abs(v.angVel) * 3.0
+            let split: Int = fast * vehicleStep > 0.2 ? 2 : 1
+            var s: Int = 0
+            while s < split {
+                vehicleSubstep(v, vehicleStep / Double(split), samples, throttle, &stats)
+                s += 1
             }
-            subFrac = Double(wetParts) / Double(max(1, v.parts.count))
-            // boat propulsion along the hull
-            if wetParts > 0 && steerOK && abs(throttle) > 0.1 {
-                var thrust: Double = 0
-                var vmax: Double = 0
-                if v.engines > 0 && v.propellers > 0 && hasFuel {
-                    thrust = Double(v.engines) * 18.0
-                    vmax = min(11.0, 4.5 + 2.0 * Double(v.engines))
-                } else if v.paddles > 0 {
-                    thrust = Double(v.paddles) * 5.0
-                    vmax = 3.4
-                }
-                let along: Double = v.vx * c + v.vy * s
-                if !(abs(along) > vmax && along * throttle > 0) {
-                    v.vx += c * thrust * throttle * invM * h
-                    v.vy += s * thrust * throttle * invM * h
-                }
-            }
-            // integrate
-            v.px += v.vx * h
-            v.py += v.vy * h
-            v.angle += v.angVel * h
-            // contacts
-            let c2: Double = v.cosA
-            let s2: Double = v.sinA
-            // deepest penetration per direction; pushing out by the maximum (not the sum) keeps many
-            // simultaneous contacts from launching the vehicle
-            var outUp: Double = 0
-            var outDown: Double = 0
-            var outLeft: Double = 0
-            var outRight: Double = 0
-            var stepWheel: Int = 0
-            let hitsBefore: Int = anyHits
-            for smp in samples {
-                let lx: Double = smp.lx - v.comX
-                let ly: Double = smp.ly - v.comY
-                let rx: Double = lx * c2 - ly * s2
-                let ry: Double = lx * s2 + ly * c2
-                let wx: Double = v.px + rx
-                let wy: Double = v.py + ry
-                guard let pen = penetration(wx, wy, wheel: smp.wheel) else { continue }
-                let depth: Double = pen.0
-                let nx: Double = pen.1
-                let ny: Double = pen.2
-                anyHits += 1
-                if smp.wheel && ny < -0.5 { stepWheel += 1 }
-                // velocity of the contact point
-                let pvx: Double = v.vx - v.angVel * ry
-                let pvy: Double = v.vy + v.angVel * rx
-                let vn: Double = pvx * nx + pvy * ny
-                // ramming: a hard hit knocks out weak wooden builds (planks, log blocks). Terrain (dirt,
-                // sand, stone) never gets dug out, and tree trunks have no collision, so they never get here.
-                if vn < -5.5 && v.mass * -vn > 25.0 {
-                    let tt: Tile = world.tile(Int(floor(wx)), Int(floor(wy)))
-                    if tt.hardness <= 1.0 && tt != .doorClosed && toolClass(tt) == .axe { rammed.append((Int(floor(wx)), Int(floor(wy)))) }
-                }
-                if vn < 0 {
-                    let rn: Double = rx * ny - ry * nx
-                    let kn: Double = invM + rn * rn * invI
-                    let jn: Double = -(1.0 + 0.04) * vn / kn
-                    v.vx += jn * nx * invM
-                    v.vy += jn * ny * invM
-                    v.angVel += rn * jn * invI
-                    // friction along the surface; wheels roll unless braking
-                    let tx: Double = -ny
-                    let ty: Double = nx
-                    let pvx2: Double = v.vx - v.angVel * ry
-                    let pvy2: Double = v.vy + v.angVel * rx
-                    let vt: Double = pvx2 * tx + pvy2 * ty
-                    let rt: Double = rx * ty - ry * tx
-                    let kt: Double = invM + rt * rt * invI
-                    var mu: Double = 0.7
-                    if smp.wheel {
-                        let braking: Bool = abs(throttle) < 0.1 || throttle * vt < 0
-                        mu = braking ? (v.rider ? 0.9 : 0.25) : 0.06
-                    }
-                    var jt: Double = -vt / kt
-                    let lim: Double = mu * jn
-                    jt = clampD(jt, -lim, lim)
-                    v.vx += jt * tx * invM
-                    v.vy += jt * ty * invM
-                    v.angVel += rt * jt * invI
-                }
-                let d: Double = max(0, depth - 0.01)
-                if ny < -0.5 { outUp = max(outUp, d) } else if ny > 0.5 { outDown = max(outDown, d) }
-                else if nx < -0.5 { outLeft = max(outLeft, d) } else { outRight = max(outRight, d) }
-            }
-            v.px += (outRight - outLeft) * 0.8
-            v.py += (outDown - outUp) * 0.8
-            wheelHits = max(wheelHits, stepWheel)
-            // grounded stability assist: a tilted vehicle resting on something is eased back toward
-            // upright, and rotation that would tip it further is damped. Flips stay possible in the air.
-            if anyHits > hitsBefore {
-                let a: Double = v.angle.truncatingRemainder(dividingBy: 2.0 * Double.pi)
-                let wrapped: Double = a > Double.pi ? a - 2.0 * Double.pi : (a < -Double.pi ? a + 2.0 * Double.pi : a)
-                if abs(wrapped) > 0.4 && abs(wrapped) < 2.5 {
-                    v.angVel -= sin(wrapped) * 11.0 * h
-                    if v.angVel * wrapped > 0 { v.angVel *= (1.0 - min(1.0, 8.0 * h)) }
-                }
-            }
-            // engine drive through wheels that are on the ground
-            // (only while roughly upright: a car on its nose or roof cannot push itself along)
-            if stepWheel > 0 && v.canDriveOnLand && steerOK && hasFuel && abs(throttle) > 0.1 && abs(remainder(v.angle, 2.0 * Double.pi)) < 1.0 {
-                let vmax: Double = min(17.0, 6.5 + 3.0 * Double(v.engines))
-                let along: Double = v.vx * c2 + v.vy * s2
-                if !(abs(along) > vmax && along * throttle > 0) {
-                    // heavier builds accelerate and climb slower; more engines help
-                    let power: Double = Double(v.engines) * 135.0 * min(1.0, Double(stepWheel) / 4.0 + 0.5)
-                    v.vx += c2 * power * throttle * invM * h
-                    v.vy += s2 * power * throttle * invM * h
-                }
-            }
-            // a little rolling drag and air resistance
-            v.vx *= (1.0 - min(1.0, 0.05 * h))
-            v.angVel *= (1.0 - min(1.0, (anyHits > 0 ? 1.2 : 0.3) * h))
-            // stability limits
-            v.vx = clampD(v.vx, -30, 30)
-            v.vy = clampD(v.vy, -30, 30)
-            v.angVel = clampD(v.angVel, -12, 12)
+            k += 1
         }
-        for r in rammed where world.tile(r.0, r.1).solid {
-            let t: Tile = world.tile(r.0, r.1)
+        for r in stats.rammed where world.tile(r.0, r.1).solid {
             breakTile(r.0, r.1, v.rider)
             addShake(0.25)
             v.vx *= 0.6
         }
-        v.wheelContacts = wheelHits
-        v.contacts = anyHits
-        v.submerged = subFrac
-        // in the air, the driver can pitch the vehicle (lean back / forward); flips are possible
-        if anyHits == 0 && subFrac == 0 && v.wheels > 0 {
-            // airborne wheeled vehicles slowly level out and shed spin (arcade suspension: driving off a
-            // ledge at speed no longer guarantees a nosedive)
-            let a: Double = remainder(v.angle, 2.0 * Double.pi)
-            if abs(a) < 2.0 { v.angVel -= sin(a) * 4.0 * dt }
-            v.angVel *= (1.0 - min(1.0, 1.5 * dt))
-        }
-        if anyHits == 0 && subFrac == 0 && v.rider && abs(throttle) > 0.1 {
-            // gentle and capped, so holding the throttle over a jump leans the car rather than spinning it
-            // (like most driving games: throttle leans the car back, reverse tips the nose down)
-            if abs(v.angVel) < 2.5 || v.angVel * throttle > 0 { v.angVel -= throttle * 2.5 * dt }
+        if n > 0 {
+            v.wheelContacts = stats.wheelHits
+            v.contacts = stats.anyHits
+            v.submerged = stats.wet / Double(n)
         }
         // fuel and exhaust
         let burning: Bool = v.engines > 0 && v.fuel > 0 && abs(throttle) > 0.1
@@ -11088,14 +11012,15 @@ extension Game {
         }
         if abs(throttle) > 0.2 { v.dir = throttle > 0 ? 1 : -1 }
         v.wheelRot += (v.vx * v.cosA + v.vy * v.sinA) * dt * 2.0
-        v.propRot += (abs(throttle) > 0.1 && subFrac > 0 ? 18.0 : 3.0) * dt
+        v.propRot += (abs(throttle) > 0.1 && v.submerged > 0 ? 18.0 : 3.0) * dt
         v.updateBox()
         if v.drills > 0 { runDrills(v, dt) }
         vehicleImpacts(v, dt)
-        // resting: let it sleep so it stops costing time (and cannot jitter)
-        if anyHits > 0 && v.speed < 0.08 && abs(v.angVel) < 0.03 && abs(throttle) < 0.05 && !v.drilling {
+        // resting (on the ground, or floating calmly): let it sleep so it stops costing time and cannot jitter
+        let calm: Bool = v.speed < 0.08 && abs(v.angVel) < 0.03 && abs(throttle) < 0.05 && !v.drilling
+        if calm && (v.contacts > 0 || v.submerged > 0) {
             v.sleepT += dt
-            if v.sleepT > 0.6 { v.asleep = true; v.vx = 0; v.vy = 0; v.angVel = 0 }
+            if v.sleepT > (v.submerged > 0 ? 1.5 : 0.6) { v.asleep = true; v.vx = 0; v.vy = 0; v.angVel = 0 }
         } else {
             v.sleepT = 0
         }
@@ -11103,6 +11028,194 @@ extension Game {
             v.py = Double(world.H) - 6
             v.vy = 0
         }
+    }
+
+    /// One fixed physics step: gravity, buoyancy and water drag per part, propulsion, contacts with
+    /// impulses and friction, positional correction, stability assists
+    func vehicleSubstep(_ v: Vehicle, _ h: Double, _ samples: [VSample], _ throttle: Double, _ stats: inout VStepStats) {
+        let steerOK: Bool = v.hasSeat && v.hasSteering
+        let hasFuel: Bool = v.fuel > 0 || isCreative
+        let invM: Double = 1.0 / v.mass
+        let invI: Double = 1.0 / v.inertia
+        v.vy += gravityG * h
+        let c: Double = v.cosA
+        let s: Double = v.sinA
+        // buoyancy and water drag, part by part, from how deep each part really is: boats settle at
+        // the waterline, tilt back level by themselves and stop bobbing quickly
+        var wetSum: Double = 0
+        var hullWet: Double = 0
+        var hullN: Int = 0
+        var nearWater: Bool = false
+        for (cell, t) in v.parts {
+            let lx: Double = Double(cell.dx) + 0.5 - v.comX
+            let ly: Double = Double(cell.dy) + 0.5 - v.comY
+            let wx: Double = v.px + lx * c - ly * s
+            let wy: Double = v.py + lx * s + ly * c
+            let f: Double = submergedFraction(wx, wy)
+            if t == .hull { hullN += 1; hullWet += f }
+            if f <= 0 {
+                if t == .hull && !nearWater && submergedFraction(wx, wy, reach: 1.5) > 0 { nearWater = true }
+                continue
+            }
+            nearWater = true
+            wetSum += f
+            let disp: Double = partDisplacement(t)
+            let rx: Double = wx - v.px
+            let ry: Double = wy - v.py
+            let pvx: Double = v.vx - v.angVel * ry
+            let pvy: Double = v.vy + v.angVel * rx
+            let fx: Double = -pvx * (0.35 + 0.3 * disp) * f
+            let fy: Double = -gravityG * disp * f - pvy * 4.5 * disp * f
+            v.vx += fx * invM * h
+            v.vy += fy * invM * h
+            v.angVel += (rx * fy - ry * fx) * invI * h
+        }
+        let sub: Double = wetSum / Double(max(1, v.parts.count))
+        // how deep the hulls sit: about 0.4 when floating freely, falling as a boat runs aground
+        let hullDepth: Double = hullN > 0 ? hullWet / Double(hullN) : sub
+        stats.wet += sub
+        if nearWater { stats.nearWater = true }
+        if sub > 0 {
+            // water resists rotation, and a keel keeps a floating hull level with the surface
+            let grip: Double = min(1.0, hullDepth * 4.0)
+            let a: Double = remainder(v.angle, 2.0 * Double.pi)
+            if abs(a) < 2.6 { v.angVel -= sin(a) * 36.0 * grip * h }
+            v.angVel *= (1.0 - min(1.0, 3.5 * grip * h))
+        }
+        // boat propulsion along the water (horizontal, so a tilted hull cannot dive or climb on thrust).
+        // A boat grounded at the edge of the water can still push itself back off.
+        if steerOK && abs(throttle) > 0.1 && v.buoyancy > 0 && (sub > 0 || (nearWater && stats.anyHits > 0)) {
+            var thrust: Double = 0
+            var vmax: Double = 0
+            if v.engines > 0 && v.propellers > 0 && hasFuel {
+                thrust = Double(v.engines) * 16.0
+                vmax = min(10.0, 5.0 + 2.0 * Double(v.engines))
+            } else if v.paddles > 0 {
+                thrust = Double(v.paddles) * 5.5
+                vmax = 3.4
+            }
+            if sub <= 0 { thrust *= 0.45 }
+            // touching the bottom: thrust fades as the hull comes out of the water, so a boat runs
+            // aground at the shoreline instead of motoring up the beach (reversing off still works)
+            if stats.anyHits > 0 && throttle * v.vx >= 0 {
+                let landward: Bool = submergedFraction(v.px + Double(throttle > 0 ? 1 : -1) * (v.b.w * 0.5 + 0.5), v.py) <= 0
+                if landward { thrust *= clampD((hullDepth - 0.12) / 0.25, 0, 1) }
+            }
+            if !(abs(v.vx) > vmax && v.vx * throttle > 0) { v.vx += thrust * throttle * invM * h }
+        }
+        // integrate
+        v.px += v.vx * h
+        v.py += v.vy * h
+        v.angle += v.angVel * h
+        // contacts
+        let c2: Double = v.cosA
+        let s2: Double = v.sinA
+        // deepest penetration per direction; pushing out by the maximum (not the sum) keeps many
+        // simultaneous contacts from launching the vehicle, and the push per step is capped so a
+        // vehicle never jumps when it ends up overlapping blocks (chunk loads, placed blocks)
+        var outUp: Double = 0
+        var outDown: Double = 0
+        var outLeft: Double = 0
+        var outRight: Double = 0
+        var stepWheel: Int = 0
+        var hits: Int = 0
+        for smp in samples {
+            let lx: Double = smp.lx - v.comX
+            let ly: Double = smp.ly - v.comY
+            let rx: Double = lx * c2 - ly * s2
+            let ry: Double = lx * s2 + ly * c2
+            let wx: Double = v.px + rx
+            let wy: Double = v.py + ry
+            guard let pen = penetration(wx, wy, wheel: smp.ramp) else { continue }
+            let depth: Double = pen.0
+            let nx: Double = pen.1
+            let ny: Double = pen.2
+            hits += 1
+            if smp.wheel && ny < -0.5 { stepWheel += 1 }
+            // velocity of the contact point
+            let pvx: Double = v.vx - v.angVel * ry
+            let pvy: Double = v.vy + v.angVel * rx
+            let vn: Double = pvx * nx + pvy * ny
+            // ramming: a hard hit knocks out weak wooden builds (planks, log blocks). Terrain (dirt,
+            // sand, stone) never gets dug out, and tree trunks have no collision, so they never get here.
+            if vn < -5.5 && v.mass * -vn > 25.0 {
+                let tt: Tile = world.tile(Int(floor(wx)), Int(floor(wy)))
+                if tt.hardness <= 1.0 && tt != .doorClosed && toolClass(tt) == .axe { stats.rammed.append((Int(floor(wx)), Int(floor(wy)))) }
+            }
+            if vn < 0 {
+                let rn: Double = rx * ny - ry * nx
+                let kn: Double = invM + rn * rn * invI
+                let jn: Double = -(1.0 + 0.04) * vn / kn
+                v.vx += jn * nx * invM
+                v.vy += jn * ny * invM
+                v.angVel += rn * jn * invI
+                // friction along the surface; wheels roll unless braking, hulls slide on sand and stone
+                let tx: Double = -ny
+                let ty: Double = nx
+                let pvx2: Double = v.vx - v.angVel * ry
+                let pvy2: Double = v.vy + v.angVel * rx
+                let vt: Double = pvx2 * tx + pvy2 * ty
+                let rt: Double = rx * ty - ry * tx
+                let kt: Double = invM + rt * rt * invI
+                // a boat's parts slide on sand and stone, very easily while it is still partly afloat (so it
+                // eases off a beach under its own power); car bodies grip
+                var mu: Double = smp.hull ? (sub > 0 ? 0.05 : 0.22) : 0.7
+                if smp.wheel {
+                    let braking: Bool = abs(throttle) < 0.1 || throttle * vt < 0
+                    mu = braking ? (v.rider ? 0.9 : 0.25) : 0.06
+                }
+                var jt: Double = -vt / kt
+                let lim: Double = mu * jn
+                jt = clampD(jt, -lim, lim)
+                v.vx += jt * tx * invM
+                v.vy += jt * ty * invM
+                v.angVel += rt * jt * invI
+            }
+            let d: Double = min(0.12, max(0, depth - 0.01))
+            if ny < -0.5 { outUp = max(outUp, d) } else if ny > 0.5 { outDown = max(outDown, d) }
+            else if nx < -0.5 { outLeft = max(outLeft, d) } else { outRight = max(outRight, d) }
+        }
+        v.px += (outRight - outLeft) * 0.8
+        v.py += (outDown - outUp) * 0.8
+        stats.anyHits += hits
+        stats.wheelHits = max(stats.wheelHits, stepWheel)
+        let wrapped: Double = remainder(v.angle, 2.0 * Double.pi)
+        // grounded stability assist: a tilted vehicle resting on something is eased back toward
+        // upright, and rotation that would tip it further is damped. Flips stay possible in the air.
+        if hits > 0 && abs(wrapped) > 0.4 && abs(wrapped) < 2.5 {
+            v.angVel -= sin(wrapped) * 11.0 * h
+            if v.angVel * wrapped > 0 { v.angVel *= (1.0 - min(1.0, 8.0 * h)) }
+        }
+        // engine drive through wheels that are on the ground
+        // (only while roughly upright: a car on its nose or roof cannot push itself along)
+        if stepWheel > 0 && v.canDriveOnLand && steerOK && hasFuel && abs(throttle) > 0.1 && abs(wrapped) < 1.0 {
+            let vmax: Double = min(17.0, 6.5 + 3.0 * Double(v.engines))
+            let along: Double = v.vx * c2 + v.vy * s2
+            if !(abs(along) > vmax && along * throttle > 0) {
+                // heavier builds accelerate and climb slower; more engines help
+                let power: Double = Double(v.engines) * 135.0 * min(1.0, Double(stepWheel) / 4.0 + 0.5)
+                v.vx += c2 * power * throttle * invM * h
+                v.vy += s2 * power * throttle * invM * h
+            }
+        }
+        if hits == 0 && sub <= 0 && v.wheels > 0 {
+            // airborne wheeled vehicles slowly level out and shed spin (arcade suspension: driving off a
+            // ledge at speed no longer guarantees a nosedive)
+            if abs(wrapped) < 2.0 { v.angVel -= sin(wrapped) * 4.0 * h }
+            v.angVel *= (1.0 - min(1.0, 1.5 * h))
+        }
+        if hits == 0 && sub <= 0 && v.rider && abs(throttle) > 0.1 {
+            // in the air the driver can lean the vehicle: gentle and capped, so holding the throttle over a
+            // jump leans the car rather than spinning it (throttle leans back, reverse tips the nose down)
+            if abs(v.angVel) < 2.5 || v.angVel * throttle > 0 { v.angVel -= throttle * 2.5 * h }
+        }
+        // a little rolling drag and air resistance
+        v.vx *= (1.0 - min(1.0, 0.05 * h))
+        v.angVel *= (1.0 - min(1.0, (hits > 0 ? 1.2 : 0.3) * h))
+        // stability limits
+        v.vx = clampD(v.vx, -30, 30)
+        v.vy = clampD(v.vy, -30, 30)
+        v.angVel = clampD(v.angVel, -12, 12)
     }
 
     /// Vehicles shove each other apart instead of overlapping
@@ -13257,11 +13370,21 @@ func kitLayout(_ g: Gadget) -> [KitPart] {
         return [KitPart(dx: 1, dy: 0, p: .seat), KitPart(dx: 2, dy: 0, p: .steering),
                 KitPart(dx: 0, dy: 1, p: .hull), KitPart(dx: 1, dy: 1, p: .hull), KitPart(dx: 2, dy: 1, p: .hull), KitPart(dx: 3, dy: 1, p: .paddle)]
     case .motorboatKit:
-        return [KitPart(dx: 1, dy: 0, p: .fuelTank), KitPart(dx: 2, dy: 0, p: .seat), KitPart(dx: 3, dy: 0, p: .steering),
-                KitPart(dx: 0, dy: 1, p: .propeller), KitPart(dx: 1, dy: 1, p: .engine), KitPart(dx: 2, dy: 1, p: .hull), KitPart(dx: 3, dy: 1, p: .hull), KitPart(dx: 4, dy: 1, p: .hull)]
+        // the engine sits on the hull (not out past its end, which tipped the old layout stern-down)
+        return [KitPart(dx: 1, dy: 0, p: .engine), KitPart(dx: 2, dy: 0, p: .seat), KitPart(dx: 3, dy: 0, p: .steering), KitPart(dx: 4, dy: 0, p: .fuelTank),
+                KitPart(dx: 0, dy: 1, p: .propeller), KitPart(dx: 1, dy: 1, p: .hull), KitPart(dx: 2, dy: 1, p: .hull), KitPart(dx: 3, dy: 1, p: .hull), KitPart(dx: 4, dy: 1, p: .hull)]
     default:
         return []
     }
+}
+
+/// Earlier layouts of a kit, so vehicles placed by older versions still pack back into their kit
+func legacyKitLayouts(_ g: Gadget) -> [[KitPart]] {
+    if g == .motorboatKit {
+        return [[KitPart(dx: 1, dy: 0, p: .fuelTank), KitPart(dx: 2, dy: 0, p: .seat), KitPart(dx: 3, dy: 0, p: .steering),
+                 KitPart(dx: 0, dy: 1, p: .propeller), KitPart(dx: 1, dy: 1, p: .engine), KitPart(dx: 2, dy: 1, p: .hull), KitPart(dx: 3, dy: 1, p: .hull), KitPart(dx: 4, dy: 1, p: .hull)]]
+    }
+    return []
 }
 
 func isKit(_ g: Gadget) -> Bool {
@@ -13578,12 +13701,13 @@ extension Game {
     }
 
     func kitMatches(_ v: Vehicle, _ g: Gadget) -> Bool {
-        let layout: [KitPart] = kitLayout(g)
-        if layout.count != v.parts.count { return false }
-        for k in layout {
-            if v.parts[PartCell(dx: k.dx, dy: k.dy)] != k.p { return false }
+        for layout in [kitLayout(g)] + legacyKitLayouts(g) {
+            if layout.count != v.parts.count { continue }
+            var same: Bool = true
+            for k in layout where v.parts[PartCell(dx: k.dx, dy: k.dy)] != k.p { same = false }
+            if same { return true }
         }
-        return true
+        return false
     }
 }
 

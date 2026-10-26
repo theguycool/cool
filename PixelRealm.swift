@@ -424,6 +424,9 @@ enum Tile: UInt8, CaseIterable, Codable {
     case portalFrame, portalOff, portalOn
     case jungleLog, palmLog, cobweb, hay
     case doorClosed, doorOpen
+    /// logs placed by the player as building blocks: solid, unlike tree trunks (appended, so the raw
+    /// values of every existing tile, and therefore old saves, are unchanged)
+    case logBlock, jungleLogBlock, palmLogBlock
 
     static let defTable: [TileDef] = Tile.allCases.map { Tile.makeDef($0) }
     static let solidTable: [Bool] = Tile.allCases.map { Tile.makeDef($0).solid }
@@ -435,6 +438,8 @@ enum Tile: UInt8, CaseIterable, Codable {
     static let plantTable: [Bool] = Tile.allCases.map { Tile.makeDef($0).plant }
     static let hardTable: [Double] = Tile.allCases.map { Tile.makeDef($0).hard }
     static let tierTable: [Int] = Tile.allCases.map { Tile.makeDef($0).tier }
+    /// things can rest on or hang from these (solid tiles, plus tree trunks, which have no collision)
+    static let supportTable: [Bool] = Tile.allCases.map { Tile.makeDef($0).solid || isLogTile($0) }
 
     var idx: Int { return i8(rawValue) }
     var def: TileDef { return Tile.defTable[i8(rawValue)] }
@@ -447,6 +452,17 @@ enum Tile: UInt8, CaseIterable, Codable {
     var hurts: Bool { return Tile.hurtTable[i8(rawValue)] }
     var isPlatform: Bool { return Tile.platformTable[i8(rawValue)] }
     var hardness: Double { return Tile.hardTable[i8(rawValue)] }
+    var supportsThings: Bool { return Tile.supportTable[i8(rawValue)] }
+
+    /// The tile a held block becomes when placed: a log item builds a solid log block, not a tree trunk
+    var placedForm: Tile {
+        switch self {
+        case .log: return .logBlock
+        case .jungleLog: return .jungleLogBlock
+        case .palmLog: return .palmLogBlock
+        default: return self
+        }
+    }
 
     static func make(_ raw: UInt8) -> Tile { return Tile(rawValue: raw) ?? .air }
 
@@ -464,7 +480,9 @@ enum Tile: UInt8, CaseIterable, Codable {
         case .sand:
             return TileDef(name: "Sand", hard: 0.4, colors: [0xE0D08A, 0xD2C078, 0xEBDDA0, 0xC4B268, 0xE0D08A])
         case .log:
-            return TileDef(name: "Log", hard: 0.9, opaque: true, style: .log, colors: [0x6B4A2A, 0x5A3C20, 0x7C5733, 0x4A3018, 0x6B4A2A])
+            // tree trunks have no collision: everything walks (and flies, drives and shoots) through
+            // them. They still block light and can be chopped; see logBlock for the solid building block.
+            return TileDef(name: "Log", hard: 0.9, solid: false, opaque: true, style: .log, colors: [0x6B4A2A, 0x5A3C20, 0x7C5733, 0x4A3018, 0x6B4A2A])
         case .leaves:
             // canopies are one-way: walk and shoot through them, land on top of them
             return TileDef(name: "Leaves", hard: 0.2, solid: false, opaque: false, platform: true, style: .leaves, colors: [0x3E8A2E, 0x2F7324, 0x56A83F, 0x225C1A, 0x3E8A2E], noDrop: true)
@@ -571,9 +589,9 @@ enum Tile: UInt8, CaseIterable, Codable {
         case .portalOn:
             return TileDef(name: "Open Rift", hard: 99999, tier: 99, solid: false, opaque: false, light: 13, style: .custom, noDrop: true)
         case .jungleLog:
-            return TileDef(name: "Jungle Log", hard: 1.0, style: .log, colors: [0x5A4A2A, 0x4A3A20, 0x6C5C34, 0x3A2C14, 0x5A4A2A])
+            return TileDef(name: "Jungle Log", hard: 1.0, solid: false, opaque: true, style: .log, colors: [0x5A4A2A, 0x4A3A20, 0x6C5C34, 0x3A2C14, 0x5A4A2A])
         case .palmLog:
-            return TileDef(name: "Palm Log", hard: 0.8, style: .log, colors: [0x9A7A4A, 0x826238, 0xB08C58, 0x6A4E2A, 0x9A7A4A])
+            return TileDef(name: "Palm Log", hard: 0.8, solid: false, opaque: true, style: .log, colors: [0x9A7A4A, 0x826238, 0xB08C58, 0x6A4E2A, 0x9A7A4A])
         case .cobweb:
             return TileDef(name: "Cobweb", hard: 0.1, solid: false, opaque: false, plant: true, style: .custom, noDrop: true)
         case .hay:
@@ -582,6 +600,12 @@ enum Tile: UInt8, CaseIterable, Codable {
             return TileDef(name: "Wooden Door", hard: 0.6, solid: true, opaque: false, style: .custom, colors: [0x8F6732], drop: .block(.doorClosed))
         case .doorOpen:
             return TileDef(name: "Open Door", hard: 0.6, solid: false, opaque: false, style: .custom, colors: [0x8F6732], drop: .block(.doorClosed))
+        case .logBlock:
+            return TileDef(name: "Log", hard: 0.9, style: .log, colors: [0x6B4A2A, 0x5A3C20, 0x7C5733, 0x4A3018, 0x6B4A2A], drop: .block(.log))
+        case .jungleLogBlock:
+            return TileDef(name: "Jungle Log", hard: 1.0, style: .log, colors: [0x5A4A2A, 0x4A3A20, 0x6C5C34, 0x3A2C14, 0x5A4A2A], drop: .block(.jungleLog))
+        case .palmLogBlock:
+            return TileDef(name: "Palm Log", hard: 0.8, style: .log, colors: [0x9A7A4A, 0x826238, 0xB08C58, 0x6A4E2A, 0x9A7A4A], drop: .block(.palmLog))
         }
     }
 }
@@ -4822,7 +4846,7 @@ final class World {
         switch t {
         case .wheat1, .wheat2, .wheat3, .carrot1, .carrot2, .carrot3: return below == .farmland
         case .doorClosed, .doorOpen: return below.solid || below == .doorClosed || below == .doorOpen
-        default: return below.solid || below == .platform
+        default: return below.supportsThings || below == .platform
         }
     }
 
@@ -7826,7 +7850,8 @@ extension Game {
         var out: [Item] = []
         for t in Tile.allCases {
             switch t {
-            case .air, .water, .lava, .bedrock, .portalFrame, .portalOff, .portalOn, .wheat1, .wheat2, .carrot1, .carrot2, .doorOpen: continue
+            case .air, .water, .lava, .bedrock, .portalFrame, .portalOff, .portalOn, .wheat1, .wheat2, .carrot1, .carrot2, .doorOpen,
+                 .logBlock, .jungleLogBlock, .palmLogBlock: continue
             default: out.append(.block(t))
             }
         }
@@ -7866,7 +7891,7 @@ extension Game {
 
 func toolClass(_ t: Tile) -> ToolType {
     switch t {
-    case .log, .jungleLog, .palmLog, .planks, .workbench, .chest, .platform, .leaves, .jungleLeaves, .cactus, .hay, .reed, .lantern, .torch:
+    case .log, .jungleLog, .palmLog, .logBlock, .jungleLogBlock, .palmLogBlock, .planks, .workbench, .chest, .platform, .leaves, .jungleLeaves, .cactus, .hay, .reed, .lantern, .torch:
         return .axe
     case .dirt, .grass, .sand, .snow, .mud, .dryGrass, .jungleGrass, .mossGrass, .farmland:
         return .shovel
@@ -8293,9 +8318,11 @@ extension Game {
             }
             return
         }
-        if !canPlaceAt(tx, ty, t) { return }
+        // a log item builds a solid log block (tree trunks themselves have no collision)
+        let placed: Tile = t.placedForm
+        if !canPlaceAt(tx, ty, placed) { return }
         // plants / crops need special support handled in canPlaceAt through needsSupport
-        world.set(tx, ty, t)
+        world.set(tx, ty, placed)
         if t == .chest { world.setChestItems(tx, ty, []) }
         if !isCreative { inv.removeAt(sel, 1) }
         placeCD = 0.11
@@ -10177,7 +10204,7 @@ extension Game {
         var n: Int = 0
         while n < 16 && world.tile(x, yy) == .sand {
             let below: Tile = world.tile(x, yy + 1)
-            if below.solid || below.isPlatform { break }
+            if below.supportsThings || below.isPlatform { break }
             world.set(x, yy, .air)
             fallingBlocks.append(FallingBlock(x: Double(x) + 0.5, y: Double(yy) + 1.0, vy: 0, tile: .sand, uid: newID()))
             yy -= 1
@@ -10203,7 +10230,7 @@ extension Game {
             }
             let tx: Int = Int(floor(fb.x))
             let landRow: Int = Int(floor(ny))
-            if world.tile(tx, landRow).solid || world.tile(tx, landRow).isPlatform || landRow >= world.H - 2 {
+            if world.tile(tx, landRow).supportsThings || world.tile(tx, landRow).isPlatform || landRow >= world.H - 2 {
                 let restY: Int = landRow - 1
                 let cur: Tile = world.tile(tx, restY)
                 if cur == .air || cur.liquid || cur.isPlant {
@@ -10954,12 +10981,11 @@ extension Game {
                 let pvx: Double = v.vx - v.angVel * ry
                 let pvy: Double = v.vy + v.angVel * rx
                 let vn: Double = pvx * nx + pvy * ny
-                // ramming: a hard hit knocks out weak blocks (trunks fell the whole tree)
-                if vn < -3.0 && v.mass * -vn > 25.0 {
+                // ramming: a hard hit knocks out weak wooden builds (planks, log blocks). Terrain (dirt,
+                // sand, stone) never gets dug out, and tree trunks have no collision, so they never get here.
+                if vn < -5.5 && v.mass * -vn > 25.0 {
                     let tt: Tile = world.tile(Int(floor(wx)), Int(floor(wy)))
-                    // tree trunks give way to a moderate hit; other wooden builds need a hard one
-                    // only free-standing wooden things break; terrain (dirt, sand, stone) never gets dug out
-                    if tt.hardness <= 1.0 && tt != .doorClosed && toolClass(tt) == .axe && (isLogTile(tt) || vn < -5.5) { rammed.append((Int(floor(wx)), Int(floor(wy)))) }
+                    if tt.hardness <= 1.0 && tt != .doorClosed && toolClass(tt) == .axe { rammed.append((Int(floor(wx)), Int(floor(wy)))) }
                 }
                 if vn < 0 {
                     let rn: Double = rx * ny - ry * nx
@@ -11027,7 +11053,7 @@ extension Game {
         }
         for r in rammed where world.tile(r.0, r.1).solid {
             let t: Tile = world.tile(r.0, r.1)
-            if isLogTile(t) { fellTree(r.0, r.1) } else { breakTile(r.0, r.1, v.rider) }
+            breakTile(r.0, r.1, v.rider)
             addShake(0.25)
             v.vx *= 0.6
         }
@@ -13035,7 +13061,8 @@ final class SectionPainter: @unchecked Sendable {
         let y0: Int = sy * 16
         let back: [UInt8] = world.backdrop(ch)
         let opT: [Bool] = Tile.opaqueTable
-        let soT: [Bool] = Tile.solidTable
+        // edge shading follows "solid or trunk", so trees look exactly as they did when trunks had collision
+        let soT: [Bool] = Tile.supportTable
         let wc: Int = wallCount
         buf.withUnsafeMutableBufferPointer { bb in
             ch.tiles.withUnsafeBufferPointer { tb in
@@ -15033,7 +15060,7 @@ enum WorldRenderer {
         if g.aimValid && !g.dead && g.inVehicle == nil, let it = g.heldItem, case .block(let t) = it, t != .doorClosed, t != .doorOpen {
             let tx: Int = Int(floor(g.aimX))
             let ty: Int = Int(floor(g.aimY))
-            let ok: Bool = g.canPlaceAt(tx, ty, t)
+            let ok: Bool = g.canPlaceAt(tx, ty, t.placedForm)
             var c: GraphicsContext = ctx
             c.opacity = ok ? 0.5 : 0.28
             c.draw(art.icon(it), in: v.rect(Double(tx), Double(ty), 1, 1))

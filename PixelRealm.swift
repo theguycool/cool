@@ -17,8 +17,60 @@ import SwiftUI
 // Fast conversions. Playgrounds builds in debug mode, where the generic integer
 // initialisers (Int(UInt8), UInt64(Int)...) are slow function calls. These avoid them.
 @inline(__always) func i8(_ v: UInt8) -> Int { return Int(Double(v)) }
-@inline(__always) func u64(_ v: Int) -> UInt64 { return UInt64(bitPattern: Int64(truncatingIfNeeded: v)) }
-@inline(__always) func iu64(_ v: UInt64) -> Int { return Int(truncatingIfNeeded: Int64(bitPattern: v)) }
+// unsafeBitCast is transparent (inlined even in debug builds) and is exactly a bit reinterpretation
+// between the two 64-bit types; the generic truncatingIfNeeded path was a large share of hashing time.
+@inline(__always) func u64(_ v: Int) -> UInt64 { return unsafeBitCast(v, to: UInt64.self) }
+@inline(__always) func iu64(_ v: UInt64) -> Int { return unsafeBitCast(v, to: Int.self) }
+
+// MARK: - Performance counters (shown in the debug menu)
+
+@inline(__always) func perfNow() -> Double { return Date().timeIntervalSinceReferenceDate }
+
+final class Perf: @unchecked Sendable {
+    static let shared: Perf = Perf()
+    /// smoothed milliseconds
+    var genMs: Double = 0
+    var genWorstMs: Double = 0
+    var chunksGenerated: Int = 0
+    var aiMs: Double = 0
+    var physMs: Double = 0
+    var lightMs: Double = 0
+    var renderMs: Double = 0
+    var frameMs: Double = 0
+    var frameWorstMs: Double = 0
+    /// per-frame counts (the last finished frame)
+    var moveCalls: Int = 0
+    var boxChecks: Int = 0
+    var damageQueries: Int = 0
+    var lightFull: Int = 0
+    var lightDyn: Int = 0
+    var aiSkipped: Int = 0
+    private var curMove: Int = 0
+    private var curBox: Int = 0
+    private var curDmg: Int = 0
+    private var curSkip: Int = 0
+
+    @inline(__always) func countMove() { curMove &+= 1 }
+    @inline(__always) func countBox() { curBox &+= 1 }
+    @inline(__always) func countDamage() { curDmg &+= 1 }
+    @inline(__always) func countSkip() { curSkip &+= 1 }
+
+    func endFrame() {
+        moveCalls = curMove; boxChecks = curBox; damageQueries = curDmg; aiSkipped = curSkip
+        curMove = 0; curBox = 0; curDmg = 0; curSkip = 0
+    }
+
+    func noteGen(_ secs: Double) {
+        let ms: Double = secs * 1000.0
+        chunksGenerated += 1
+        genMs = genMs == 0 ? ms : genMs * 0.8 + ms * 0.2
+        genWorstMs = max(genWorstMs * 0.999, ms)
+    }
+
+    static func smooth(_ old: Double, _ secs: Double) -> Double {
+        return old * 0.9 + secs * 1000.0 * 0.1
+    }
+}
 
 struct RNG {
     var s: UInt64
@@ -102,13 +154,13 @@ struct VNoiseCache {
     var b: Double = 0
     var c: Double = 0
     var d: Double = 0
+    /// smallest / largest corner of the current cell: the interpolated value always lies between
+    /// them, which lets callers skip work exactly (no change to the generated world)
+    var lo: Double = 0
+    var hi: Double = 0
     init(_ seed: UInt64) { s = seed }
 
-    mutating func at(_ x: Double, _ y: Double) -> Double {
-        let fx0: Double = floor(x)
-        let fy0: Double = floor(y)
-        let xi: Int = Int(fx0)
-        let yi: Int = Int(fy0)
+    @inline(__always) mutating func load(_ xi: Int, _ yi: Int) {
         if xi != cx || yi != cy {
             cx = xi
             cy = yi
@@ -116,7 +168,23 @@ struct VNoiseCache {
             b = hash2(xi + 1, yi, s)
             c = hash2(xi, yi + 1, s)
             d = hash2(xi + 1, yi + 1, s)
+            lo = min(min(a, b), min(c, d))
+            hi = max(max(a, b), max(c, d))
         }
+    }
+
+    /// Loads the cell containing (x, y) and returns its corner range
+    mutating func bounds(_ x: Double, _ y: Double) -> (Double, Double) {
+        load(Int(floor(x)), Int(floor(y)))
+        return (lo, hi)
+    }
+
+    mutating func at(_ x: Double, _ y: Double) -> Double {
+        let fx0: Double = floor(x)
+        let fy0: Double = floor(y)
+        let xi: Int = Int(fx0)
+        let yi: Int = Int(fy0)
+        load(xi, yi)
         let u: Double = smooth(x - fx0)
         let v: Double = smooth(y - fy0)
         let top: Double = a + (b - a) * u
@@ -362,6 +430,11 @@ enum Tile: UInt8, CaseIterable, Codable {
     static let opaqueTable: [Bool] = Tile.allCases.map { Tile.makeDef($0).opaque }
     static let lightTable: [Int] = Tile.allCases.map { Tile.makeDef($0).light }
     static let liquidTable: [Bool] = Tile.allCases.map { Tile.makeDef($0).liquid }
+    static let hurtTable: [Bool] = Tile.allCases.map { Tile.makeDef($0).hurt }
+    static let platformTable: [Bool] = Tile.allCases.map { Tile.makeDef($0).platform }
+    static let plantTable: [Bool] = Tile.allCases.map { Tile.makeDef($0).plant }
+    static let hardTable: [Double] = Tile.allCases.map { Tile.makeDef($0).hard }
+    static let tierTable: [Int] = Tile.allCases.map { Tile.makeDef($0).tier }
 
     var idx: Int { return i8(rawValue) }
     var def: TileDef { return Tile.defTable[i8(rawValue)] }
@@ -370,7 +443,10 @@ enum Tile: UInt8, CaseIterable, Codable {
     var light: Int { return Tile.lightTable[i8(rawValue)] }
     var liquid: Bool { return Tile.liquidTable[i8(rawValue)] }
     var name: String { return def.name }
-    var isPlant: Bool { return def.plant }
+    var isPlant: Bool { return Tile.plantTable[i8(rawValue)] }
+    var hurts: Bool { return Tile.hurtTable[i8(rawValue)] }
+    var isPlatform: Bool { return Tile.platformTable[i8(rawValue)] }
+    var hardness: Double { return Tile.hardTable[i8(rawValue)] }
 
     static func make(_ raw: UInt8) -> Tile { return Tile(rawValue: raw) ?? .air }
 
@@ -872,7 +948,7 @@ enum PartType: Int, Codable, CaseIterable {
 }
 
 enum Gadget: Int, Codable, CaseIterable {
-    case shears, wrench, treasureMap, portalKey, carKit, boatKit, motorboatKit
+    case shears, wrench, treasureMap, portalKey, carKit, boatKit, motorboatKit, bomb
     var name: String {
         switch self {
         case .shears: return "Shears"
@@ -882,6 +958,7 @@ enum Gadget: Int, Codable, CaseIterable {
         case .carKit: return "Car Kit"
         case .boatKit: return "Rowboat Kit"
         case .motorboatKit: return "Motorboat Kit"
+        case .bomb: return "Bomb"
         }
     }
 }
@@ -921,6 +998,7 @@ enum Item: Hashable, Codable {
         switch self {
         case .block, .mat, .food, .ammo, .wall: return 99
         case .part: return 20
+        case .gadget(let g): return g == .bomb ? 30 : 1
         default: return 1
         }
     }
@@ -1202,6 +1280,9 @@ func iconMisc(_ it: Item) -> PixelBuf {
         case .motorboatKit:
             b.rect(1, 6, 10, 2, 0xE8E8EC); b.rect(2, 8, 8, 1, 0x3A6AA8); b.rect(3, 9, 6, 1, 0x2A4A78); b.rect(5, 4, 4, 2, 0x9AD0F0)
             b.rect(0, 7, 1, 2, 0x6A6A74); b.rect(1, 10, 10, 1, 0x3A70C8)
+        case .bomb:
+            b.ellipse(5.5, 7.0, 3.8, 3.8, 0x3A3A44); b.ellipse(4.5, 6.0, 1.4, 1.2, 0x6A6A78)
+            b.rect(5, 2, 2, 2, 0x8A6A3A); b.line(7, 2, 9, 0, 0xC8A060); b.set(9, 0, 0xFFD040); b.set(10, 0, 0xFF8030)
         }
     default:
         break
@@ -1357,6 +1438,7 @@ enum RecipeBook {
         add(.ammo(.bullet), 8, [(.mat(.ironBar), 1), (.mat(.gunpowder), 1)], .bench, .weapons)
         add(.gadget(.shears), 1, [(.mat(.ironBar), 2)], .bench, .tools)
         add(.gadget(.wrench), 1, [(.mat(.ironBar), 3), (stick, 1)], .bench, .tools)
+        add(.gadget(.bomb), 3, [(.mat(.gunpowder), 2), (.mat(.ironBar), 1), (.mat(.string), 1)], .bench, .weapons)
         // Ready-made vehicles (place them in one tap) - easiest way to get driving
         add(.gadget(.carKit), 1, [(planks, 10), (.mat(.ironBar), 14), (.mat(.leather), 2), (.mat(.wool), 2)], .bench, .vehicle)
         add(.gadget(.boatKit), 1, [(planks, 20), (.mat(.string), 4), (.mat(.wool), 2)], .bench, .vehicle)
@@ -2507,7 +2589,33 @@ struct LairInfo {
     var k: Int
 }
 
+/// Memoised world-generation lookups. Column, village and ruin queries are pure functions of the
+/// seed, but chunk generation asked for the same ones thousands of times (every column checks three
+/// village cells, and every village check samples ~14 columns). A class so the value-type WorldGen
+/// can share it.
+final class GenCache {
+    var cols: [Int: Col] = [:]
+    var villages: [Int: VillageSite?] = [:]
+    var rares: [Int: RareSite?] = [:]
+    var hits: Int = 0
+    var misses: Int = 0
+
+    func clear() {
+        cols.removeAll(keepingCapacity: true)
+        villages.removeAll(keepingCapacity: true)
+        rares.removeAll(keepingCapacity: true)
+    }
+
+    /// Keeps memory bounded in infinite worlds
+    func trim() {
+        if cols.count > 24_000 { cols.removeAll(keepingCapacity: true) }
+        if villages.count > 4_000 { villages.removeAll(keepingCapacity: true) }
+        if rares.count > 8_000 { rares.removeAll(keepingCapacity: true) }
+    }
+}
+
 struct WorldGen {
+    let cache: GenCache = GenCache()
     let seed: UInt64
     let infinite: Bool
     let width: Int
@@ -2754,12 +2862,26 @@ struct WorldGen {
     }
 
     func colBase(_ x: Int) -> Col {
-        return WorldGen.colBaseStatic(seed, infinite, width, spawnX, zones, x)
+        if let c = cache.cols[x] {
+            cache.hits &+= 1
+            return c
+        }
+        cache.misses &+= 1
+        let c: Col = WorldGen.colBaseStatic(seed, infinite, width, spawnX, zones, x)
+        cache.cols[x] = c
+        return c
     }
 
     // MARK: village sites
 
     func villageSite(cell c: Int) -> VillageSite? {
+        if let v = cache.villages[c] { return v }
+        let v: VillageSite? = computeVillageSite(cell: c)
+        cache.villages[c] = v
+        return v
+    }
+
+    func computeVillageSite(cell c: Int) -> VillageSite? {
         let cellW: Int = WorldGen.villageCell
         let spawnCell: Bool = floorDiv(spawnX, cellW) == c
         if !spawnCell && hash2(c, 99, seed) > 0.62 { return nil }
@@ -2812,6 +2934,13 @@ struct WorldGen {
     // MARK: rare sites
 
     func rareSite(cell c: Int) -> RareSite? {
+        if let r = cache.rares[c] { return r }
+        let r: RareSite? = computeRareSite(cell: c)
+        cache.rares[c] = r
+        return r
+    }
+
+    func computeRareSite(cell c: Int) -> RareSite? {
         if hash2(c, 71, seed) > rareChance { return nil }
         let cellW: Int = WorldGen.rareCell
         let sx: Int = c * cellW + 32 + Int(hash2(c, 72, seed) * Double(cellW - 64))
@@ -3101,10 +3230,11 @@ func generateOverworldChunk(_ g: WorldGen, _ cx: Int) -> Chunk {
     func colAt(_ x: Int) -> Col { return cols[x - (x0 - m)] }
     var surfBiome: [Biome] = []
     var samp: GenSampler = GenSampler(g)
+    defer { samp.free() }
     for lx in 0..<chunkW {
         let x: Int = x0 + lx
         let c: Col = colAt(x)
-        samp.startColumn(x)
+        samp.startColumn(x, c.h)
         let hj: Double = hash2(x, 1, g.seed &+ 61)
         let jd: Double = (hj - 0.5) * 10.0
         let jit: Int = Int(jd)
@@ -3141,25 +3271,30 @@ func generateOverworldChunk(_ g: WorldGen, _ cx: Int) -> Chunk {
                 ch.tiles[base + y] = ((sb == .tundra && y == sea) ? Tile.ice : Tile.water).rawValue
             }
         }
-        for y in h..<H {
-            let depth: Int = y - h
-            var t: Tile
-            if y >= H - 1 { t = .bedrock }
-            else if y >= H - 5 && hash2(x, y, g.seed &+ 3) < Double(y - (H - 6)) * 0.22 { t = .bedrock }
-            else if depth == 0 { t = topT }
-            else if depth < fillD { t = (sb == .tundra && depth >= 3) ? .dirt : fillT }
-            else if sb == .desert && depth < 24 { t = .sandstone }
-            else { t = samp.rockAt(x, y) }
-            if depth >= 4 && y < H - 5 {
-                if samp.isCave(x, y, depth) {
-                    if y >= 500 { t = .lava }
-                    else if y > 200 && y < 430 && hash2(x / 60, y / 48, g.seed &+ 28) < 0.28 && (y % 48) > 28 { t = .water }
-                    else { t = .air }
-                } else if depth > 8 && t != .sand && t != .snow {
-                    if let o = samp.oreAt(x, y, c.biome) { t = o }
+        ch.tiles.withUnsafeMutableBufferPointer { tb in
+            guard let tp = tb.baseAddress else { return }
+            var y: Int = h
+            while y < H {
+                let depth: Int = y - h
+                var t: Tile
+                if y >= H - 1 { t = .bedrock }
+                else if y >= H - 5 && hash2(x, y, g.seed &+ 3) < Double(y - (H - 6)) * 0.22 { t = .bedrock }
+                else if depth == 0 { t = topT }
+                else if depth < fillD { t = (sb == .tundra && depth >= 3) ? .dirt : fillT }
+                else if sb == .desert && depth < 24 { t = .sandstone }
+                else { t = samp.rockAt(x, y) }
+                if depth >= 4 && y < H - 5 {
+                    if samp.isCave(x, y, depth) {
+                        if y >= 500 { t = .lava }
+                        else if y > 200 && y < 430 && hash2(x / 60, y / 48, g.seed &+ 28) < 0.28 && (y % 48) > 28 { t = .water }
+                        else { t = .air }
+                    } else if depth > 8 && t != .sand && t != .snow {
+                        if let o = samp.oreAt(x, y, c.biome) { t = o }
+                    }
                 }
+                tp[base + y] = t.rawValue
+                y += 1
             }
-            ch.tiles[base + y] = t.rawValue
         }
         // underground decoration on cave floors / ceilings
         var y: Int = h + 8
@@ -3284,73 +3419,197 @@ func generateOverworldChunk(_ g: WorldGen, _ cx: Int) -> Chunk {
     return ch
 }
 
-// MARK: - Cached samplers for chunk generation (same results as isCave/oreAt/rockAt, far fewer hashes)
+// MARK: - Column samplers for chunk generation
 
+/// Fills out[y - y0] with vnoise(fx, Double(y) * fyScale, seed) for y in y0...y1. Gives bit-identical
+/// values to vnoise(), but hashes each lattice row once instead of four hashes per sample, and makes
+/// no function calls per sample (in debug builds each call costs more than the maths).
+func columnNoise(_ seed: UInt64, _ fx: Double, _ fyScale: Double, _ y0: Int, _ y1: Int, _ out: inout [Double]) {
+    if y1 < y0 { return }
+    let n: Int = y1 - y0 + 1
+    if out.count < n { out = [Double](repeating: 0, count: n) }
+    let fx0: Double = floor(fx)
+    let xi: Int = Int(fx0)
+    let fu: Double = fx - fx0
+    let u: Double = fu * fu * (3.0 - 2.0 * fu)
+    var rowI: Int = Int.min
+    var a: Double = 0, b: Double = 0, c: Double = 0, d: Double = 0
+    var top: Double = 0
+    var bot: Double = 0
+    // fy0 tracks floor(fy) incrementally (samples only move forward), avoiding a libm call per sample
+    var fy0: Double = floor(Double(y0) * fyScale)
+    out.withUnsafeMutableBufferPointer { bp in
+        guard let p = bp.baseAddress else { return }
+        var y: Int = y0
+        var k: Int = 0
+        while k < n {
+            let fy: Double = Double(y) * fyScale
+            while fy >= fy0 + 1.0 { fy0 += 1.0 }
+            let yi: Int = Int(fy0)
+            if yi != rowI {
+                if yi == rowI &+ 1 {
+                    a = c
+                    b = d
+                } else {
+                    a = hash2(xi, yi, seed)
+                    b = hash2(xi + 1, yi, seed)
+                }
+                c = hash2(xi, yi + 1, seed)
+                d = hash2(xi + 1, yi + 1, seed)
+                top = a + (b - a) * u
+                bot = c + (d - c) * u
+                rowI = yi
+            }
+            let f: Double = fy - fy0
+            let v: Double = f * f * (3.0 - 2.0 * f)
+            p[k] = top + (bot - top) * v
+            y += 1
+            k += 1
+        }
+    }
+}
+
+/// Cave, ore and rock sampling for one column at a time. startColumn() precomputes every noise
+/// field the column needs; isCave/oreAt/rockAt then only read buffers. Same results as the
+/// per-tile WorldGen.isCave/oreAt/rockAt.
+/// Written for debug builds: a struct used as a local `var` with mutating methods (no copies and
+/// no runtime exclusivity checks), and raw buffers instead of arrays (no retain/release per read).
+/// Call free() when done.
 struct GenSampler {
-    var region: VNoiseCache
-    var tunnel: VNoiseCache
-    var width: VNoiseCache
-    var cham1: VNoiseCache
-    var cham2: VNoiseCache
-    var shaft: VNoiseCache
-    var ores: [VNoiseCache]
+    let seed: UInt64
+    let H: Int
+    var top: Int = 0
+    var chamTop: Int = 0
     var shaftN: Double = 0
+    var biasBiome: Int = -1
     var rockY3: Int = Int.min
     var rockH: Double = 0
-    let seed: UInt64
+    var scratch: [Double] = []
+    let region: UnsafeMutablePointer<Double>
+    let tunnel: UnsafeMutablePointer<Double>
+    let width: UnsafeMutablePointer<Double>
+    let cham: UnsafeMutablePointer<Double>
+    let shaft: UnsafeMutablePointer<Double>
+    let ores: UnsafeMutablePointer<Double>
+    /// per ore rule: [lo, hi] rows, threshold+bias, chance, salt, tile
+    let oreLo: UnsafeMutablePointer<Int>
+    let oreHi: UnsafeMutablePointer<Int>
+    let oreThr: UnsafeMutablePointer<Double>
+    let oreP: UnsafeMutablePointer<Double>
+    let oreSalt: UnsafeMutablePointer<UInt64>
+    let oreTile: UnsafeMutablePointer<UInt8>
+    let nOre: Int
 
     init(_ g: WorldGen) {
         seed = g.seed
-        region = VNoiseCache(g.seed &+ 25)
-        tunnel = VNoiseCache(g.seed &+ 21)
-        width = VNoiseCache(g.seed &+ 22)
-        cham1 = VNoiseCache(g.seed &+ 23)
-        cham2 = VNoiseCache(g.seed &+ 24)
-        shaft = VNoiseCache(g.seed &+ 27)
-        var o: [VNoiseCache] = []
-        for r in oreRules { o.append(VNoiseCache(g.seed &+ r.salt)) }
-        ores = o
+        H = WorldGen.H
+        nOre = oreRules.count
+        region = UnsafeMutablePointer<Double>.allocate(capacity: H)
+        tunnel = UnsafeMutablePointer<Double>.allocate(capacity: H)
+        width = UnsafeMutablePointer<Double>.allocate(capacity: H)
+        cham = UnsafeMutablePointer<Double>.allocate(capacity: H)
+        shaft = UnsafeMutablePointer<Double>.allocate(capacity: H)
+        ores = UnsafeMutablePointer<Double>.allocate(capacity: H * oreRules.count)
+        oreLo = UnsafeMutablePointer<Int>.allocate(capacity: oreRules.count)
+        oreHi = UnsafeMutablePointer<Int>.allocate(capacity: oreRules.count)
+        oreThr = UnsafeMutablePointer<Double>.allocate(capacity: oreRules.count)
+        oreP = UnsafeMutablePointer<Double>.allocate(capacity: oreRules.count)
+        oreSalt = UnsafeMutablePointer<UInt64>.allocate(capacity: oreRules.count)
+        oreTile = UnsafeMutablePointer<UInt8>.allocate(capacity: oreRules.count)
+        for k in 0..<oreRules.count {
+            oreP[k] = oreRules[k].p
+            oreSalt[k] = oreRules[k].salt
+            oreTile[k] = oreRules[k].tile.rawValue
+            oreThr[k] = oreRules[k].thr
+            oreLo[k] = 0
+            oreHi[k] = -1
+        }
     }
 
-    /// Call once per column before sampling it
-    mutating func startColumn(_ x: Int) {
-        shaftN = noise1(Double(x) / 18.0, seed &+ 26)
+    func free() {
+        region.deallocate(); tunnel.deallocate(); width.deallocate(); cham.deallocate(); shaft.deallocate()
+        ores.deallocate(); oreLo.deallocate(); oreHi.deallocate(); oreThr.deallocate(); oreP.deallocate()
+        oreSalt.deallocate(); oreTile.deallocate()
+    }
+
+    private mutating func fill(_ dst: UnsafeMutablePointer<Double>, _ s: UInt64, _ fx: Double, _ fyScale: Double, _ y0: Int, _ y1: Int) {
+        if y1 < y0 { return }
+        columnNoise(s, fx, fyScale, y0, y1, &scratch)
+        let n: Int = y1 - y0 + 1
+        scratch.withUnsafeBufferPointer { bp in
+            guard let src = bp.baseAddress else { return }
+            dst.update(from: src, count: n)
+        }
+    }
+
+    /// Call once per column (h = surface row) before sampling it
+    mutating func startColumn(_ cx: Int, _ h: Int) {
         rockY3 = Int.min
+        let fx: Double = Double(cx)
+        shaftN = noise1(fx / 18.0, seed &+ 26)
+        top = h + 5
+        chamTop = h + 27
+        let y1: Int = H - 1
+        fill(region, seed &+ 25, fx * 0.013, 0.013, top, y1)
+        fill(tunnel, seed &+ 21, fx * 0.045, 0.06, top, y1)
+        fill(width, seed &+ 22, fx * 0.02, 0.02, top, y1)
+        // chambers: keep the combined value
+        if chamTop <= y1 {
+            let n: Int = y1 - chamTop + 1
+            fill(cham, seed &+ 23, fx * 0.03, 0.045, chamTop, y1)
+            columnNoise(seed &+ 24, fx * 0.085, 0.1, chamTop, y1, &scratch)
+            let c: UnsafeMutablePointer<Double> = cham
+            scratch.withUnsafeBufferPointer { bp in
+                guard let src = bp.baseAddress else { return }
+                var k: Int = 0
+                while k < n { c[k] = c[k] * 0.65 + src[k] * 0.35; k += 1 }
+            }
+        }
+        if shaftN > 0.90 { fill(shaft, seed &+ 27, fx * 0.2, 0.2, top, min(y1, h + 39)) }
+        var k: Int = 0
+        while k < nOre {
+            let lo: Int = max(oreRules[k].minY, h + 9)
+            let hi: Int = min(oreRules[k].maxY, H - 6)
+            oreLo[k] = lo
+            oreHi[k] = hi
+            if hi >= lo { fill(ores + k * H, seed &+ oreSalt[k], fx * 0.22, 0.22, lo, hi) }
+            k += 1
+        }
     }
 
     mutating func isCave(_ x: Int, _ y: Int, _ depth: Int) -> Bool {
-        if depth < 5 { return false }
-        let fx: Double = Double(x)
-        let fy: Double = Double(y)
-        let rg: Double = region.at(fx * 0.013, fy * 0.013)
-        if rg > 0.34 {
-            let a: Double = tunnel.at(fx * 0.045, fy * 0.06)
-            let w: Double = 0.030 + 0.05 * width.at(fx * 0.02, fy * 0.02)
+        if depth < 5 || y < top { return false }
+        let i: Int = y - top
+        if region[i] > 0.34 {
+            let a: Double = tunnel[i]
+            let w: Double = 0.030 + 0.05 * width[i]
             if abs(a - 0.5) < w { return true }
         }
-        if depth > 26 {
-            let c1: Double = cham1.at(fx * 0.03, fy * 0.045)
-            let c2: Double = cham2.at(fx * 0.085, fy * 0.1)
-            let c: Double = c1 * 0.65 + c2 * 0.35
+        if depth > 26 && y >= chamTop {
             let bonus: Double = min(0.05, Double(max(0, y - 150)) * 0.00015)
-            if c > 0.715 - bonus { return true }
+            if cham[y - chamTop] > 0.715 - bonus { return true }
         }
-        if depth < 40 {
-            if shaftN > 0.90 && shaft.at(fx * 0.2, fy * 0.2) > 0.35 { return true }
+        if depth < 40 && shaftN > 0.90 {
+            if shaft[i] > 0.35 { return true }
         }
         return false
     }
 
     mutating func oreAt(_ x: Int, _ y: Int, _ biome: Biome) -> Tile? {
-        let fx: Double = Double(x)
-        let fy: Double = Double(y)
+        if biome.rawValue != biasBiome {
+            biasBiome = biome.rawValue
+            var k: Int = 0
+            while k < nOre {
+                oreThr[k] = oreRules[k].thr - oreBias(biome, oreRules[k].tile)
+                k += 1
+            }
+        }
         var k: Int = 0
-        while k < oreRules.count {
-            let r: OreRule = oreRules[k]
-            if y >= r.minY && y <= r.maxY {
-                let blob: Double = ores[k].at(fx * 0.22, fy * 0.22)
-                if blob + oreBias(biome, r.tile) > r.thr {
-                    if hash2(x, y, seed &+ 40 &+ r.salt) < r.p { return r.tile }
+        while k < nOre {
+            let lo: Int = oreLo[k]
+            if y >= lo && y <= oreHi[k] {
+                if ores[k * H + (y - lo)] > oreThr[k] {
+                    if hash2(x, y, seed &+ 40 &+ oreSalt[k]) < oreP[k] { return Tile.make(oreTile[k]) }
                 }
             }
             k += 1
@@ -4145,13 +4404,16 @@ final class World {
             c = p
             parked[dim.rawValue][cx] = nil
         } else {
+            let t0: Double = perfNow()
             c = generateChunk(gen, dim, cx)
+            Perf.shared.noteGen(perfNow() - t0)
         }
         chunks[cx] = c
         cacheCX = Int.min
         version += 1
         noteEdit(cx * chunkW, 0)
         noteEdit(cx * chunkW + chunkW - 1, H - 1)
+        gen.cache.trim()
         return c
     }
 
@@ -4484,6 +4746,8 @@ final class LightMap {
     var h: Int = 0
     var sky: [Int] = []
     var blk: [Int] = []
+    /// block light from tiles only; moving lights are layered on top by applyDynamic()
+    var blkBase: [Int] = []
     var opq: [Bool] = []
     var drawn: [Bool] = []
     var ambientFloor: Double = 0
@@ -4626,19 +4890,7 @@ final class LightMap {
             }
         }
         skyN = sn
-        for (dx, dy, lv) in dyn {
-            let lx: Int = dx - ox
-            let ly: Int = dy - oy
-            if lx < 0 || ly < 0 || lx >= w || ly >= h { continue }
-            let i: Int = ly * w + lx
-            let v: Int = clampI(lv, 0, 15)
-            if v > blk[i] {
-                blk[i] = v
-                queue[v * qCap + lens[v]] = i
-                lens[v] += 1
-            }
-        }
-        // block light pass
+        // block light pass (tiles only)
         blk.withUnsafeMutableBufferPointer { p in propagate(p) }
         // sky light pass
         var l1: Int = 0
@@ -4650,12 +4902,39 @@ final class LightMap {
             lens[sl] = skyN
         }
         sky.withUnsafeMutableBufferPointer { p in propagate(p) }
+        blkBase = blk
+        applyDynamic(dyn)
+        Perf.shared.lightFull += 1
         valid = true
         skyUsed = skyLevel
         dimUsed = world.dim.rawValue
         stamp = world.version
         layoutUsed = world.layoutVersion
         world.editAny = false
+    }
+
+    /// Re-lights only what moving light sources touch: starts from the cached tile light and floods
+    /// outward from each source. Far cheaper than a full recompute when only the player moved.
+    func applyDynamic(_ dyn: [(Int, Int, Int)]) {
+        if blkBase.count != w * h || blkBase.isEmpty { return }
+        blk = blkBase
+        var l: Int = 0
+        while l < 16 { lens[l] = 0; l += 1 }
+        var any: Bool = false
+        for (dx, dy, lv) in dyn {
+            let lx: Int = dx - ox
+            let ly: Int = dy - oy
+            if lx < 0 || ly < 0 || lx >= w || ly >= h { continue }
+            let i: Int = ly * w + lx
+            let v: Int = clampI(lv, 0, 15)
+            if v > blk[i] {
+                blk[i] = v
+                queue[v * qCap + lens[v]] = i
+                lens[v] += 1
+                any = true
+            }
+        }
+        if any { blk.withUnsafeMutableBufferPointer { p in propagate(p) } }
     }
 
     private func propagate(_ lvb: UnsafeMutableBufferPointer<Int>) {
@@ -4854,6 +5133,7 @@ let terminalV: Double = 26.0
 
 extension World {
     func boxSolid(_ x0: Double, _ y0: Double, _ x1: Double, _ y1: Double) -> Bool {
+        Perf.shared.countBox()
         let tx0: Int = Int(floor(x0))
         let tx1: Int = Int(floor(x1 - 0.0001))
         let ty0: Int = Int(floor(y0))
@@ -4876,7 +5156,7 @@ extension World {
         for ty in ty0...ty1 {
             for tx in tx0...tx1 {
                 let t: Tile = tile(tx, ty)
-                if t.def.hurt { return t }
+                if t.hurts { return t }
             }
         }
         return nil
@@ -4903,6 +5183,7 @@ extension World {
     /// Moves a body with gravity-free integration; the caller sets vx/vy. Collides with solid tiles,
     /// one-way platforms and decks. stepUp = max ledge height (tiles) climbed automatically.
     func moveBody(_ b: inout Body, _ dt: Double, stepUp: Double, dropThrough: Bool, decks: [Deck]) {
+        Perf.shared.countMove()
         b.wasOnGround = b.onGround
         b.hitWall = false
         b.hitCeil = false
@@ -4965,7 +5246,7 @@ extension World {
                             let tx1: Int = Int(floor(b.x + hw - 0.0001))
                             if tx1 >= tx0 {
                                 for tx in tx0...tx1 {
-                                    if tile(tx, rowF) == .platform && prevY <= Double(rowF) + 0.001 && ny >= Double(rowF) - 0.0001 {
+                                    if tile(tx, rowF).isPlatform && prevY <= Double(rowF) + 0.001 && ny >= Double(rowF) - 0.0001 {
                                         landed = true
                                         landY = Double(rowF)
                                     }
@@ -5030,7 +5311,7 @@ extension World {
 // MARK: - Projectiles
 
 enum ProjKind: Int, Codable {
-    case arrow, bullet, fireball, rock, shock, spit, bolt
+    case arrow, bullet, fireball, rock, shock, spit, bolt, bomb
 }
 
 struct Projectile {
@@ -5048,6 +5329,14 @@ struct Projectile {
     var pierce: Int = 0
     var hit: Bool = false
     var w: Double = 0.3
+    /// who fired it (decides what it may hurt and who gets the kill)
+    var source: DamageSource = DamageSource.environment
+    /// attack instance id for damage cooldowns
+    var uid: Int = 0
+    /// id of the last creature it passed through (piercing shots)
+    var lastHit: Int = -1
+    var stuckAngle: Double = 0
+    var trail: Int = 0
     var angle: Double { return atan2(vy, vx) }
 }
 
@@ -5115,7 +5404,13 @@ struct MobDef {
     var hostile: Bool = false
 }
 
-func mobDef(_ k: MobKind) -> MobDef {
+/// Mob definitions are built once into a table: building a MobDef (it holds a String) on every
+/// lookup was one of the hottest calls in the AI loop in debug builds.
+let mobDefTable: [MobDef] = MobKind.allCases.map { makeMobDef($0) }
+
+@inline(__always) func mobDef(_ k: MobKind) -> MobDef { return mobDefTable[k.rawValue] }
+
+func makeMobDef(_ k: MobKind) -> MobDef {
     switch k {
     case .pig: return MobDef(name: "Pig", w: 0.9, h: 0.7, hp: 10, speed: 1.6, dmg: 0, behavior: .passive)
     case .cow: return MobDef(name: "Cow", w: 1.3, h: 1.1, hp: 14, speed: 1.4, dmg: 0, behavior: .passive)
@@ -5180,7 +5475,7 @@ func mobDrops(_ k: MobKind, _ rng: inout RNG, _ sheared: Bool) -> [Stack] {
     case .scorpion: add(.mat(.claw), 1, 1, 0.5); add(.food(.rawMeat), 1, 1, 0.5)
     case .wraith: add(.mat(.mythrilOre), 1, 2, 0.4); add(.mat(.goldBar), 1, 2, 0.3)
     case .villager: break
-    case .pirate: add(.mat(.goldBar), 1, 2, 0.5); add(.ammo(.bullet), 2, 6, 0.4); add(.mat(.gunpowder), 1, 3, 0.5); add(.sword(.iron), 1, 1, 0.1)
+    case .pirate: add(.mat(.goldBar), 1, 2, 0.5); add(.ammo(.bullet), 2, 6, 0.4); add(.mat(.gunpowder), 1, 3, 0.5); add(.sword(.iron), 1, 1, 0.1); add(.gadget(.bomb), 1, 2, 0.15)
     case .pirateGunner: add(.mat(.goldBar), 1, 2, 0.5); add(.ammo(.bullet), 3, 8, 0.7); add(.mat(.gunpowder), 1, 4, 0.7); add(.gun(.pistol), 1, 1, 0.12)
     case .pirateCaptain: add(.mat(.goldBar), 4, 8, 1.0); add(.mat(.diamond), 1, 3, 0.8); add(.gun(.rifle), 1, 1, 0.4); add(.ammo(.bullet), 8, 16, 1.0)
     case .imp: add(.mat(.emberOre), 1, 2, 0.5); add(.mat(.coal), 2, 4, 0.6)
@@ -5287,6 +5582,21 @@ final class Mob {
     var ty: Double = 0
     var regrow: Double = 0
     var knock: Double = 0
+    /// time folded in while far-away AI updates were skipped
+    var aiAccum: Double = 0
+    /// set when the mob should leave the list at the end of the frame
+    var removed: Bool = false
+    /// white hit flash, death animation and knockback lean
+    var flash: Double = 0
+    var deathT: Double = -1
+    var lean: Double = 0
+    /// hazard and damage bookkeeping (see the damage system)
+    var hazardT: Double = 0
+    var lastAttacker: Int = 0
+    var lastHitByPlayer: Double = -100
+    var hitStamps: [Int: Double] = [:]
+    var fallPeak: Double = 0
+    var burnTick: Double = 0
 
     init(id: Int, kind: MobKind, x: Double, y: Double) {
         self.id = id
@@ -5602,6 +5912,31 @@ struct Settings: Codable {
     /// true = 60 frames per second, false = 30 (smoother on older iPads)
     var fps60: Bool = true
     var showFPS: Bool = false
+    // camera
+    var camSmoothOn: Bool = true
+    /// 0 = loose and floaty, 1 = tight
+    var camFollow: Double = 0.55
+    /// tiles the player can move before the camera starts to follow
+    var camDeadZone: Double = 0.8
+    var camLookAhead: Bool = true
+    var shakeOn: Bool = true
+    var shakeIntensity: Double = 0.5
+    var showTrajectory: Bool = true
+
+    var shakeScale: Double { return shakeOn ? shakeIntensity : 0 }
+
+    static let cameraDefaults: Settings = Settings()
+
+    mutating func resetCamera() {
+        let d: Settings = Settings.cameraDefaults
+        camSmoothOn = d.camSmoothOn
+        camFollow = d.camFollow
+        camDeadZone = d.camDeadZone
+        camLookAhead = d.camLookAhead
+        shakeOn = d.shakeOn
+        shakeIntensity = d.shakeIntensity
+        tilePx = d.tilePx
+    }
 
     init() {}
 
@@ -5618,6 +5953,13 @@ struct Settings: Codable {
         smoothLight = (try? c.decodeIfPresent(Bool.self, forKey: .smoothLight)) ?? true
         fps60 = (try? c.decodeIfPresent(Bool.self, forKey: .fps60)) ?? true
         showFPS = (try? c.decodeIfPresent(Bool.self, forKey: .showFPS)) ?? false
+        camSmoothOn = (try? c.decodeIfPresent(Bool.self, forKey: .camSmoothOn)) ?? true
+        camFollow = (try? c.decodeIfPresent(Double.self, forKey: .camFollow)) ?? 0.55
+        camDeadZone = (try? c.decodeIfPresent(Double.self, forKey: .camDeadZone)) ?? 0.8
+        camLookAhead = (try? c.decodeIfPresent(Bool.self, forKey: .camLookAhead)) ?? true
+        shakeOn = (try? c.decodeIfPresent(Bool.self, forKey: .shakeOn)) ?? true
+        shakeIntensity = (try? c.decodeIfPresent(Double.self, forKey: .shakeIntensity)) ?? 0.5
+        showTrajectory = (try? c.decodeIfPresent(Bool.self, forKey: .showTrajectory)) ?? true
     }
 }
 
@@ -5719,6 +6061,7 @@ final class Game: ObservableObject, @unchecked Sendable {
     var mining: Bool = false
     var muzzleT: Double = 0
     var recoilT: Double = 0
+    var bowRecoil: Double = 0
     var eatT: Double = 0
 
     // input state (set by the UI layer)
@@ -5772,6 +6115,17 @@ final class Game: ObservableObject, @unchecked Sendable {
     var spawnTimer: Double = 2.0
     var shipTimer: Double = 20.0
     var villagerCells: Set<Int> = []
+    var fallingBlocks: [FallingBlock] = []
+    let mobGrid: MobGrid = MobGrid()
+    var frameNo: Int = 0
+
+    // damage bookkeeping
+    var playerHitStamps: [Int: Double] = [:]
+    var playerBurn: Double = 0
+    var playerBurnTick: Double = 0
+    /// debug multipliers: damage the player deals / takes
+    var dmgOutMult: Double = 1.0
+    var dmgInMult: Double = 1.0
 
     // lighting
     var light: LightMap = LightMap()
@@ -5806,6 +6160,7 @@ final class Game: ObservableObject, @unchecked Sendable {
     var lastStreamCX: Int = Int.min
     var chunksLoadedLast: Int = 0
     var tickMs: Double = 0
+    var tickWorstMs: Double = 0
 
     init(mode: GameMode, infinite: Bool, seed: UInt64, settings: Settings) {
         self.mode = mode
@@ -5937,6 +6292,7 @@ extension Game {
             if messageT <= 0 { message = nil }
         }
         updateTime(dt)
+        mobGrid.rebuild(mobs)
         decksCache = (ships.isEmpty && vehicles.isEmpty) ? [] : buildDecks()
         updatePointerTimers(dt)
         updateInputEdges()
@@ -5946,6 +6302,7 @@ extension Game {
         updateBosses(dt)
         updateSpawning(dt)
         updateProjectiles(dt)
+        updateFallingBlocks(dt)
         updateDrops(dt)
         updateVehicles(dt)
         updateShips(dt)
@@ -5967,6 +6324,13 @@ extension Game {
         }
         let t1: Double = Date().timeIntervalSinceReferenceDate
         tickMs = tickMs * 0.9 + (t1 - t0) * 1000.0 * 0.1
+        tickWorstMs = max(tickWorstMs * 0.995, (t1 - t0) * 1000.0)
+        Perf.shared.endFrame()
+    }
+
+    /// Screen shake, scaled (or disabled) by the camera settings
+    func addShake(_ amount: Double) {
+        shake = max(shake, amount * settings.shakeScale)
     }
 
     func updateTime(_ dt: Double) {
@@ -6095,20 +6459,29 @@ extension Game {
 
     func checkHazards(_ dt: Double) {
         if mode == .creative || godMode { return }
-        if let t = world.boxHurts(pb.left + 0.05, pb.top + 0.1, pb.right - 0.05, pb.y - 0.02) {
+        // spikes underfoot, cactus touched from the side (cactus is solid, so test a slightly wider box)
+        if let t = world.boxHurts(pb.left + 0.05, pb.top + 0.1, pb.right - 0.05, pb.y - 0.02) ?? world.boxHurts(pb.left - 0.04, pb.top + 0.2, pb.right + 0.04, pb.y - 0.1) {
             if t == .spikes || t == .cactus {
-                damagePlayer(t == .spikes ? 6 : 3, from: pb.x + Double(-facing), knock: 5)
+                var info = DamageInfo(amount: t == .spikes ? 6 : 3, type: .hazard, source: .environment)
+                info.originX = pb.x + Double(-facing)
+                info.knock = 5
+                _ = hurtPlayer(info)
             }
         }
+        if world.tile(Int(floor(pb.x)), Int(floor(pb.y - 0.5))) == .campfire { playerBurn = max(playerBurn, 1.2) }
         if pb.inLava {
+            playerBurn = max(playerBurn, 2.5)
             lavaT += dt
             if lavaT > 0.35 {
                 lavaT = 0
-                damagePlayer(5, from: pb.x, knock: 0, ignoreArmor: true)
+                var info = DamageInfo(amount: 5, type: .lava, source: .environment)
+                info.originX = pb.x
+                _ = hurtPlayer(info)
             }
         } else {
             lavaT = 0
         }
+        updatePlayerBurn(dt)
     }
 
     func updateSurvival(_ dt: Double, _ ix: Double) {
@@ -6314,9 +6687,22 @@ extension Game {
             }
         }
         let layoutChanged: Bool = light.layoutUsed != world.layoutVersion
-        let needs: Bool = !light.valid || !covered || light.skyUsed != skyLevel || light.dimUsed != world.dim.rawValue || edited || layoutChanged || light.dynUsed != key
-        if !needs { return }
+        let needsStatic: Bool = !light.valid || !covered || light.skyUsed != skyLevel || light.dimUsed != world.dim.rawValue || edited || layoutChanged
+        let amb: Double = fullBright ? 1.0 : (world.dim == .umbral ? 0.2 : 0.07)
+        if !needsStatic {
+            // only moving lights changed: cheap partial relight
+            if light.dynUsed == key { return }
+            let t0: Double = perfNow()
+            light.applyDynamic(dyn)
+            light.dynUsed = key
+            light.buildPixels(&lightDark, &lightGlow, amb, 1.0 - dayFactor)
+            lightRev &+= 1
+            Perf.shared.lightDyn += 1
+            Perf.shared.lightMs = Perf.smooth(Perf.shared.lightMs, perfNow() - t0)
+            return
+        }
         if lightTimer > 0 && light.valid && covered && light.dimUsed == world.dim.rawValue { return }
+        let t0: Double = perfNow()
         lightTimer = 0.04
         let m: Int = 17
         var ox: Int = vx0 - m
@@ -6329,9 +6715,9 @@ extension Game {
         h = (h / 4 + 1) * 4
         light.compute(world, ox, oy, w, h, skyLevel, dyn)
         light.dynUsed = key
-        let amb: Double = fullBright ? 1.0 : (world.dim == .umbral ? 0.2 : 0.06)
         light.buildPixels(&lightDark, &lightGlow, amb, 1.0 - dayFactor)
         lightRev &+= 1
+        Perf.shared.lightMs = Perf.smooth(Perf.shared.lightMs, perfNow() - t0)
     }
 
     // MARK: random world ticks (crops, grass)
@@ -6857,6 +7243,7 @@ extension Game {
         if useCD > 0 { useCD -= dt }
         if swingT > 0 { swingT -= dt }
         if muzzleT > 0 { muzzleT -= dt }
+        if bowRecoil > 0 { bowRecoil -= dt }
         if eatT > 0 { eatT -= dt }
         if placeCD > 0 { placeCD -= dt }
         if dead || inVehicle != nil {
@@ -6988,7 +7375,8 @@ extension Game {
         let ox: Double = pb.x
         let oy: Double = pb.y - pb.h * 0.55
         var hitAny: Bool = false
-        for m in mobs {
+        let swingKey: Int = newID()
+        for m in mobsNear(ox - reach - 4, ox + reach + 4) {
             if m.hp <= 0 || m.tame || m.kind == .villager { continue }
             let dx: Double = m.b.x - ox
             let dy: Double = m.b.cy - oy
@@ -6999,8 +7387,13 @@ extension Game {
             if ex > reach || ey > 1.2 { continue }
             var d: Double = dmg
             if Double.random(in: 0...1) < 0.1 { d *= 1.5 }
-            hurtMob(m, d, Double(swingDir), 6.0, true)
-            hitAny = true
+            var info = DamageInfo(amount: d, type: .melee, source: .player)
+            info.dirX = Double(swingDir)
+            info.knock = 6.0
+            info.originX = ox
+            info.key = swingKey
+            info.cooldown = 0.3
+            if applyMobDamage(m, info) { hitAny = true }
         }
         // pirate ships
         for s in ships {
@@ -7012,7 +7405,7 @@ extension Game {
                 hitAny = true
             }
         }
-        if hitAny { shake = max(shake, 0.08) }
+        if hitAny { addShake(0.08) }
     }
 
     // MARK: mining & breaking
@@ -7111,9 +7504,9 @@ extension Game {
         return out
     }
 
-    func breakTile(_ x: Int, _ y: Int, _ byPlayer: Bool) {
+    func breakTile(_ x: Int, _ y: Int, _ byPlayer: Bool, dropChance: Double = 1.0) {
         let t: Tile = world.tile(x, y)
-        if t == .air || t.def.hard >= 9999 { return }
+        if t == .air || t.hardness >= 9999 { return }
         if isDoor(t) {
             // remove the other half quietly so a door only drops once
             if isDoor(world.tile(x, y - 1)) { world.set(x, y - 1, .air) }
@@ -7124,6 +7517,7 @@ extension Game {
         spawnParticles(Double(x) + 0.5, Double(y) + 0.5, col, 6, 3.5, 0.5, 16)
         if !(byPlayer && isCreative) {
             for s in tileDropStacks(t, x, y) {
+                if dropChance < 1.0 && Double.random(in: 0...1) > dropChance { continue }
                 spawnDrop(s, Double(x) + 0.5, Double(y) + 0.4, Double.random(in: -1.5...1.5), -3.0)
             }
         } else if t == .chest {
@@ -7138,6 +7532,8 @@ extension Game {
             let a2: Tile = world.tile(x, y - 1)
             if a2 == .wheat1 || a2 == .wheat2 || a2 == .wheat3 || a2 == .carrot1 || a2 == .carrot2 || a2 == .carrot3 { breakTile(x, y - 1, byPlayer) }
         }
+        // unsupported sand above falls
+        if world.tile(x, y - 1) == .sand { checkFalling(x, y - 1) }
         bumpHUD()
     }
 
@@ -7273,46 +7669,102 @@ extension Game {
 
     // MARK: bow
 
+    /// Bow stats live in one place so new bows only need a new entry here
+    struct BowStats {
+        var minSpeed: Double = 20
+        var maxSpeed: Double = 40
+        var baseDamage: Double = 5
+        var chargeDamage: Double = 9
+        var chargeTime: Double = 0.55
+        var useTime: Double = 0.32
+        var gravity: Double = 15
+    }
+
+    func bowStats(_ it: Item) -> BowStats { return BowStats() }
+
+    /// Hold to draw (aim with your finger, the dotted arc shows the flight path), release to shoot.
+    /// A quick tap still fires a useful shot, and holding at full draw keeps firing automatically.
     func handleBow(_ dt: Double, _ pressed: Bool, _ released: Bool) {
         let hasArrow: Bool = isCreative || inv.total(.ammo(.arrow)) > 0
+        let st: BowStats = bowStats(.bow)
         if useHeld {
             if !hasArrow {
                 if pressed { say("No arrows!", 1.2) }
                 bowCharge = 0
                 return
             }
-            bowCharge = min(1.0, bowCharge + dt / 0.6)
+            if useCD > 0 && bowCharge == 0 { return }
+            bowCharge = min(1.0, max(bowCharge, 0.01) + dt / st.chargeTime)
             facing = aimX >= pb.x ? 1 : -1
             if bowCharge >= 1.0 && useCD <= 0 {
                 fireArrow(1.0)
-                bowCharge = 0.35
+                bowCharge = 0.3
             }
-        } else if released && bowCharge > 0.2 && hasArrow && useCD <= 0 {
-            fireArrow(bowCharge)
+        } else if released && bowCharge > 0 && hasArrow {
+            fireArrow(max(0.45, bowCharge))
             bowCharge = 0
         } else {
             bowCharge = 0
         }
     }
 
-    func fireArrow(_ charge: Double) {
-        if !isCreative { _ = inv.remove(.ammo(.arrow), 1) }
-        let ox: Double = pb.x + Double(facing) * 0.4
-        let oy: Double = pb.y - 1.25
+    /// Where the arrow leaves the bow and its starting velocity for a given draw
+    func arrowLaunch(_ charge: Double) -> (Double, Double, Double, Double) {
+        let st: BowStats = bowStats(.bow)
+        let ox: Double = pb.x + Double(facing) * 0.35
+        let oy: Double = pb.y - 1.2
         var dx: Double = aimX - ox
         var dy: Double = aimY - oy
         let len: Double = max(0.001, sqrt(dx * dx + dy * dy))
         dx /= len
         dy /= len
-        let speed: Double = 14.0 + 20.0 * charge
-        let dmg: Double = 4.0 + 10.0 * charge
-        var p = Projectile(kind: .arrow, x: ox, y: oy, vx: dx * speed, vy: dy * speed, dmg: dmg, fromPlayer: true, gravity: 12.0)
+        let speed: Double = st.minSpeed + (st.maxSpeed - st.minSpeed) * charge
+        // a little of the archer's own motion carries into the arrow, so shots on the run still land
+        return (ox + dx * 0.4, oy + dy * 0.4, dx * speed + pb.vx * 0.3, dy * speed + min(0, pb.vy) * 0.2)
+    }
+
+    func fireArrow(_ charge: Double) {
+        if !isCreative { _ = inv.remove(.ammo(.arrow), 1) }
+        let st: BowStats = bowStats(.bow)
+        let l: (Double, Double, Double, Double) = arrowLaunch(charge)
+        var dmg: Double = st.baseDamage + st.chargeDamage * charge
+        if charge >= 0.99 && Double.random(in: 0...1) < 0.15 { dmg *= 1.5 }
+        var p = Projectile(kind: .arrow, x: l.0, y: l.1, vx: l.2, vy: l.3, dmg: dmg, fromPlayer: true, gravity: st.gravity)
         p.life = 6.0
+        p.w = 0.22
+        p.source = .player
+        p.uid = newID()
         projectiles.append(p)
-        useCD = 0.35
+        useCD = st.useTime
         swingT = 0.18
         swingDir = facing
+        bowRecoil = 0.12
         bumpHUD()
+    }
+
+    /// Sample points of the arrow's flight for the aiming arc
+    func arrowPreview() -> [(Double, Double)] {
+        if bowCharge <= 0 { return [] }
+        let st: BowStats = bowStats(.bow)
+        let l: (Double, Double, Double, Double) = arrowLaunch(max(0.45, bowCharge))
+        var x: Double = l.0
+        var y: Double = l.1
+        let vx: Double = l.2
+        var vy: Double = l.3
+        var out: [(Double, Double)] = []
+        let step: Double = 0.03
+        var i: Int = 0
+        while i < 40 {
+            vy = min(vy + st.gravity * step, 40)
+            let nx: Double = x + vx * step
+            let ny: Double = y + vy * step
+            if world.segmentSolidT(x, y, nx, ny) != nil { break }
+            x = nx
+            y = ny
+            if i % 2 == 1 { out.append((x, y)) }
+            i += 1
+        }
+        return out
     }
 
     // MARK: guns
@@ -7380,6 +7832,8 @@ extension Game {
         dy /= len
         var p = Projectile(kind: .bullet, x: ox, y: oy, vx: dx * g.speed, vy: dy * g.speed, dmg: g.damage, fromPlayer: true, gravity: 0)
         p.life = 1.6
+        p.source = .player
+        p.uid = newID()
         p.pierce = g == .rifle ? 1 : 0
         projectiles.append(p)
         useCD = g.cooldown
@@ -7422,6 +7876,8 @@ extension Game {
             if pressed { say("Use the key on the sealed portal.", 2.0) }
         case .carKit, .boatKit, .motorboatKit:
             if pressed && useCD <= 0 { placeKit(g) }
+        case .bomb:
+            if pressed { throwBomb() }
         }
     }
 
@@ -7601,45 +8057,71 @@ extension Game {
     func contactHurt(_ m: Mob, _ dmg: Double) {
         if m.cd > 0 { return }
         if playerOverlaps(m, -0.05) {
-            damagePlayer(dmg, from: m.b.x, knock: 6.5)
-            m.cd = 0.9
+            var info = DamageInfo(amount: dmg, type: .contact, source: .mob(m, faction(of: m)))
+            info.knock = 6.5
+            info.originX = m.b.x
+            if hurtPlayer(info) { m.cd = 0.9 }
         }
     }
 
+    /// A creature's swing: hits the player and any creature from another side inside the reach box
+    func mobStrike(_ m: Mob, reach: Double, height: Double, dmg: Double, knock: Double) {
+        let x0: Double = m.dir > 0 ? m.b.x - 0.3 : m.b.x - reach - 0.3
+        let x1: Double = m.dir > 0 ? m.b.x + reach + 0.3 : m.b.x + 0.3
+        var info = DamageInfo(amount: dmg, type: .melee, source: .mob(m, faction(of: m)))
+        info.dirX = Double(m.dir)
+        info.knock = knock
+        info.originX = m.b.x
+        info.key = newID()
+        damageBox(x0, m.b.y - height, x1, m.b.y + 0.1, info)
+    }
+
     func updateMobs(_ dt: Double) {
-        var i: Int = 0
+        let t0: Double = perfNow()
         let px: Double = pb.x
         let py: Double = pb.y
+        frameNo &+= 1
+        // iterated by index because AI code may append new mobs while it runs
+        var i: Int = 0
         while i < mobs.count {
             let m: Mob = mobs[i]
-            if m.hp <= 0 && !(m.kind == .rex && m.tame) {
-                mobs.remove(at: i)
-                continue
-            }
+            i += 1
+            if m.hp <= 0 || m.removed { continue }
             let dx: Double = abs(m.b.x - px)
             let dy: Double = abs(m.b.y - py)
             if !m.persistent && !m.tame && !m.isBoss && (dx > 115 || dy > 85) {
-                mobs.remove(at: i)
+                m.removed = true
                 continue
             }
             if m.hurtT > 0 { m.hurtT -= dt }
             if m.cd > 0 { m.cd -= dt }
+            if m.flash > 0 { m.flash -= dt }
             if m.regrow > 0 {
                 m.regrow -= dt
                 if m.regrow <= 0 { m.sheared = false }
             }
-            if !world.isLoaded(Int(floor(m.b.x))) {
-                i += 1
-                continue
-            }
+            if !world.isLoaded(Int(floor(m.b.x))) { continue }
             // creatures well off screen wait until the player comes closer (saves a lot of work)
-            if !m.isBoss && !m.tame && m.boat < 0 && (dx > 72 || dy > 56) {
-                i += 1
-                continue
+            if !m.isBoss && !m.tame && m.boat < 0 && (dx > 72 || dy > 56) { continue }
+            // mid-distance creatures think and move at a third of the rate, staggered by id, with the
+            // skipped time folded into their next step so they still cover the same ground
+            var step: Double = dt
+            if !m.isBoss && !m.tame && m.boat < 0 && (dx > 40 || dy > 30) {
+                m.aiAccum += dt
+                if (frameNo &+ m.id) % 3 != 0 {
+                    Perf.shared.countSkip()
+                    continue
+                }
+                step = min(0.1, m.aiAccum)
             }
-            updateMob(m, dt)
-            i += 1
+            m.aiAccum = 0
+            updateMob(m, step)
+            if m.hp > 0 { mobHazards(m, step) }
         }
+        updateDying(dt)
+        // compact once: drop removed mobs and finished death animations
+        if mobs.contains(where: { $0.removed }) { mobs.removeAll { $0.removed } }
+        Perf.shared.aiMs = Perf.smooth(Perf.shared.aiMs, perfNow() - t0)
     }
 
     func nearestHostileTo(_ x: Double, _ y: Double, _ r: Double) -> Mob? {
@@ -7745,15 +8227,6 @@ extension Game {
         if world.dim == .overworld && dayFactor > 0.7 && world.isSkyExposed(Int(floor(m.b.x)), Int(floor(m.b.y - 1))) && !m.b.inWater {
             m.burn = 2.0
         }
-        if m.burn > 0 {
-            m.burn -= dt
-            m.t2 += dt
-            if m.t2 >= 0.5 {
-                m.t2 = 0
-                hurtMob(m, 3, 0, 0, false)
-                spawnParticles(m.b.x, m.b.y - 1.2, 0xFF8030, 3, 1.5, 0.4, -4)
-            }
-        }
         if aggro {
             chase(m, pb.x, 1.0, dt)
             if abs(dyP) < 1.6 { contactHurt(m, d.dmg) }
@@ -7775,11 +8248,7 @@ extension Game {
                 m.st = 4
                 m.t3 = 0.22
                 // strike
-                let reach: Double = 2.2
-                let facingP: Bool = (pb.x - m.b.x) * Double(m.dir) >= -0.3
-                if facingP && dist < reach + pb.w * 0.5 && abs(dyP) < 1.6 && !dead {
-                    damagePlayer(d.dmg, from: m.b.x, knock: 7.0)
-                }
+                mobStrike(m, reach: 2.2, height: 1.9, dmg: d.dmg, knock: 7.0)
             }
         } else if m.st == 4 {
             m.t3 -= dt
@@ -7864,6 +8333,8 @@ extension Game {
         var p = Projectile(kind: fire ? .fireball : .bullet, x: ox, y: oy, vx: dx * sp, vy: dy * sp, dmg: m.def.dmg, fromPlayer: false, gravity: 0)
         p.life = 3.0
         p.owner = m.id
+        p.source = .mob(m, faction(of: m))
+        p.uid = newID()
         projectiles.append(p)
         spawnParticles(ox, oy, fire ? 0xFF7020 : 0xFFE080, 4, 2.5, 0.18, 0)
     }
@@ -8220,6 +8691,8 @@ extension Game {
         if d < 0.5 { d = 0.5 }
         m.hp -= d
         m.hurtT = 0.22
+        m.flash = 0.12
+        if dirX != 0 && kb > 0 { m.lean = clampD(dirX * kb / 9.0, -1, 1) }
         let resist: Double = m.isBoss ? 0.97 : (m.def.w > 2.0 ? 0.6 : 0.0)
         if dirX != 0 && kb > 0 {
             m.b.vx = dirX * kb * (1.0 - resist)
@@ -8232,6 +8705,8 @@ extension Game {
             m.t2 = 3.5
             m.tx = m.b.x - (dirX == 0 ? 1.0 : dirX) * 6.0
         case .defensive:
+            // animals only hold a grudge against the player; hurt by anything else they just bolt
+            if !byPlayer { break }
             m.angry = true
             m.t3 = 10.0
             if m.kind == .wolf {
@@ -8252,6 +8727,11 @@ extension Game {
             return
         }
         m.hp = 0
+        m.deathT = 0
+        m.burn = 0
+        // a creature the player hit recently still counts as the player's kill if lava, a fall or
+        // another creature finishes it off
+        let credit: Bool = byPlayer || clock - m.lastHitByPlayer < 6.0
         var rng = RNG(UInt64(truncatingIfNeeded: m.id) &* 6364136223846793005 &+ UInt64(truncatingIfNeeded: Int(clock * 1000)))
         for s in mobDrops(m.kind, &rng, m.sheared) {
             spawnDrop(s, m.b.x, m.b.y - m.b.h * 0.5, Double.random(in: -2...2), -4.5)
@@ -8261,7 +8741,7 @@ extension Game {
         if m.kind == .slime { col = 0x60C060 }
         if m.kind == .emberSlime { col = 0xFF8A20 }
         spawnParticles(m.b.x, m.b.cy, col, Int(10 + m.b.w * 4), 5.0, 0.7, 14)
-        if byPlayer { kills += 1 }
+        if credit { kills += 1 }
         if m.kind == .bearBoss { onBearDefeated(m) }
         if m.kind == .rex { onRexDefeated(m) }
         if m === activeBoss { activeBoss = nil }
@@ -8278,113 +8758,220 @@ extension Game {
 
     // MARK: projectiles
 
+    /// Steps every projectile. Collision is swept along the whole frame's movement, so fast arrows and
+    /// bullets cannot skip over a target between frames, and the first thing along the path is hit.
     func updateProjectiles(_ dt: Double) {
-        var i: Int = 0
-        while i < projectiles.count {
-            var p: Projectile = projectiles[i]
-            p.life -= dt
-            if p.life <= 0 {
-                projectiles.remove(at: i)
-                continue
+        if projectiles.isEmpty { return }
+        let list: [Projectile] = projectiles
+        // projectiles created while stepping (none today, but explosions could) land in the fresh array
+        projectiles = []
+        var keep: [Projectile] = []
+        keep.reserveCapacity(list.count)
+        for p0 in list {
+            var p: Projectile = p0
+            if stepProjectile(&p, dt) { keep.append(p) }
+        }
+        if !projectiles.isEmpty { keep.append(contentsOf: projectiles) }
+        projectiles = keep
+    }
+
+    /// Returns false when the projectile is used up
+    func stepProjectile(_ p: inout Projectile, _ dt: Double) -> Bool {
+        p.life -= dt
+        if p.life <= 0 {
+            if p.kind == .bomb { explode(p.x, p.y, radius: 3.4, power: p.dmg, source: p.source, breakBlocks: true) }
+            return false
+        }
+        if p.stuck > 0 {
+            p.stuck -= dt
+            if p.stuck <= 0 && p.kind == .arrow && p.source.kind == .player && !isCreative && Double.random(in: 0...1) < 0.35 {
+                // some arrows survive and can be picked back up
+                spawnDrop(Stack(item: .ammo(.arrow), count: 1), p.x, p.y, 0, -1)
             }
-            if p.stuck > 0 {
-                p.stuck -= dt
-                if p.stuck <= 0 {
-                    projectiles.remove(at: i)
-                    continue
-                }
-                projectiles[i] = p
-                i += 1
-                continue
-            }
-            var remove: Bool = false
-            if p.kind == .shock {
-                p.x += p.vx * dt
-                let gy: Int = world.groundBelow(Int(floor(p.x)), Int(floor(p.y)) - 3)
-                p.y = Double(gy) - 0.5
-                if world.solid(Int(floor(p.x)), Int(floor(p.y - 0.6))) && world.solid(Int(floor(p.x + p.vx * 0.1)), Int(floor(p.y - 0.4))) { remove = true }
-                if !dead && pb.right > p.x - 0.5 && pb.left < p.x + 0.5 && pb.y > p.y - 0.9 && pb.y - pb.h < p.y + 0.5 {
-                    damagePlayer(p.dmg, from: p.x - p.vx, knock: 7.0)
-                    remove = true
-                }
-                if Double.random(in: 0...1) < 0.5 { spawnParticles(p.x, p.y + 0.3, 0xA08860, 1, 1.5, 0.3, 6) }
-                if remove { projectiles.remove(at: i) } else { projectiles[i] = p; i += 1 }
-                continue
-            }
-            p.vy = min(p.vy + p.gravity * dt, 40.0)
-            let nx: Double = p.x + p.vx * dt
-            let ny: Double = p.y + p.vy * dt
-            if let hit = world.segmentHitsSolid(p.x, p.y, nx, ny) {
-                switch p.kind {
-                case .arrow:
-                    p.x = nx
-                    p.y = ny
-                    p.vx = 0
-                    p.vy = 0
-                    p.stuck = 4.0
-                    p.gravity = 0
-                    spawnParticles(nx, ny, 0xA0A0A0, 2, 1.5, 0.2, 8)
-                case .rock:
-                    remove = true
-                    rockImpact(p, hit.1)
-                default:
-                    remove = true
-                    spawnParticles(nx, ny, p.kind == .fireball ? 0xFF8030 : 0xFFE080, 5, 3.0, 0.25, 6)
-                }
-                if p.kind == .arrow {
-                    projectiles[i] = p
-                    i += 1
-                    continue
-                }
-            } else {
-                p.x = nx
-                p.y = ny
-            }
-            if !remove {
-                if p.fromPlayer {
-                    for m in mobs {
-                        if m.hp <= 0 || m.tame || m.kind == .villager { continue }
-                        let pad: Double = p.w
-                        if p.x > m.b.left - pad && p.x < m.b.right + pad && p.y > m.b.top - pad && p.y < m.b.y + pad {
-                            let dirx: Double = p.vx >= 0 ? 1.0 : -1.0
-                            hurtMob(m, p.dmg, dirx, p.kind == .bullet ? 4.0 : 3.0, true)
-                            if p.pierce > 0 { p.pierce -= 1; p.dmg *= 0.7; break } else { remove = true; break }
-                        }
+            return p.stuck > 0
+        }
+        if p.kind == .shock { return stepShock(&p, dt) }
+        p.vy = min(p.vy + p.gravity * dt, 40.0)
+        let nx: Double = p.x + p.vx * dt
+        let ny: Double = p.y + p.vy * dt
+        // first solid tile along the path
+        var wallT: Double = 2.0
+        var wallTile: (Int, Int) = (0, 0)
+        if let hit = world.segmentSolidT(p.x, p.y, nx, ny) {
+            wallT = hit.2
+            wallTile = (hit.0, hit.1)
+        }
+        // first creature (or the player) along the path, before the wall
+        if p.kind != .bomb {
+            if let target = firstEntityOnPath(p, nx, ny, maxT: wallT) {
+                let hx: Double = p.x + (nx - p.x) * target.t
+                let hy: Double = p.y + (ny - p.y) * target.t
+                let dirx: Double = p.vx >= 0 ? 1.0 : -1.0
+                var info = DamageInfo(amount: p.dmg, type: .projectile, source: p.source)
+                info.dirX = dirx
+                info.knock = p.kind == .bullet ? 4.0 : (p.kind == .arrow ? 3.5 : 3.0)
+                info.originX = p.x
+                info.originY = p.y
+                info.key = p.uid
+                info.cooldown = 1.0
+                if p.kind == .fireball { info.type = .fire }
+                if let m = target.mob {
+                    if applyMobDamage(m, info) {
+                        if p.kind == .fireball { m.burn = max(m.burn, 2.5) }
+                        spawnParticles(hx, hy, p.kind == .fireball ? 0xFF8030 : 0xE8E0D0, 3, 2.5, 0.25, 8)
                     }
-                    if !remove {
-                        for s in ships {
-                            let dy: Double = s.deckY(Double(WorldGen.sea))
-                            if abs(p.x - s.x) < 4.6 && p.y > dy - 3.0 && p.y < dy + 2.0 {
-                                s.hp -= p.dmg * 0.5
-                                s.hitT = 0.2
-                                remove = true
-                                spawnParticles(p.x, p.y, 0x8A5A2E, 4, 3.0, 0.3, 12)
-                                break
-                            }
-                        }
-                    }
-                } else if !dead {
-                    let pad: Double = max(0.1, p.w * 0.5)
-                    if p.x > pb.left - pad && p.x < pb.right + pad && p.y > pb.top - pad && p.y < pb.y + pad {
-                        damagePlayer(p.dmg, from: p.x - p.vx * 0.1, knock: 5.0)
-                        remove = true
-                        if p.kind == .fireball { spawnParticles(p.x, p.y, 0xFF8030, 8, 4.0, 0.4, 6) }
-                    } else if let r = rex, r.tame, !r.downed, p.x > r.b.left && p.x < r.b.right && p.y > r.b.top && p.y < r.b.y {
-                        hurtMob(r, p.dmg * 0.5, p.vx >= 0 ? 1 : -1, 0, false)
-                        remove = true
-                    }
+                    p.lastHit = m.id
+                } else {
+                    _ = hurtPlayer(info)
+                    if p.kind == .fireball { playerBurn = max(playerBurn, 1.5); spawnParticles(hx, hy, 0xFF8030, 8, 4.0, 0.4, 6) }
+                }
+                if p.pierce > 0 && target.mob != nil {
+                    p.pierce -= 1
+                    p.dmg *= 0.7
+                } else {
+                    return false
                 }
             }
-            if p.kind == .fireball && Double.random(in: 0...1) < 0.5 { spawnParticles(p.x, p.y, 0xFFB040, 1, 1.0, 0.25, -2) }
-            if remove { projectiles.remove(at: i) } else { projectiles[i] = p; i += 1 }
+        }
+        if wallT <= 1.0 {
+            let hx: Double = p.x + (nx - p.x) * wallT
+            let hy: Double = p.y + (ny - p.y) * wallT
+            switch p.kind {
+            case .arrow:
+                // stick into the block, nudged back out of it slightly so it reads as embedded
+                p.x = hx - p.vx * 0.004
+                p.y = hy - p.vy * 0.004
+                p.stuckAngle = atan2(p.vy, p.vx)
+                p.vx = 0
+                p.vy = 0
+                p.stuck = 4.0
+                p.gravity = 0
+                spawnParticles(hx, hy, 0xA0A0A0, 2, 1.5, 0.2, 8)
+                return true
+            case .rock:
+                rockImpact(p, hx, hy)
+                return false
+            case .bomb:
+                // bounce, losing energy
+                let solidLeftRight: Bool = Int(floor(hx - p.vx * 0.01)) != wallTile.0
+                if solidLeftRight { p.vx = -p.vx * 0.45 } else { p.vy = -p.vy * 0.4; p.vx *= 0.7 }
+                p.x = hx - (nx - p.x) * 0.02
+                p.y = hy - (ny - p.y) * 0.02
+                return true
+            default:
+                spawnParticles(hx, hy, p.kind == .fireball ? 0xFF8030 : 0xFFE080, 5, 3.0, 0.25, 6)
+                if p.kind == .fireball { igniteNear(hx, hy, p.source) }
+                return false
+            }
+        }
+        p.x = nx
+        p.y = ny
+        // player shots also damage pirate ships
+        if p.source.kind == .player {
+            for s in ships {
+                let dy: Double = s.deckY(Double(WorldGen.sea))
+                if abs(p.x - s.x) < 4.6 && p.y > dy - 3.0 && p.y < dy + 2.0 {
+                    s.hp -= p.dmg * 0.5
+                    s.hitT = 0.2
+                    spawnParticles(p.x, p.y, 0x8A5A2E, 4, 3.0, 0.3, 12)
+                    return false
+                }
+            }
+        }
+        if p.kind == .fireball && Double.random(in: 0...1) < 0.5 { spawnParticles(p.x, p.y, 0xFFB040, 1, 1.0, 0.25, -2) }
+        if p.kind == .arrow && p.source.kind == .player && p.trail < 6 { p.trail += 1 }
+        return true
+    }
+
+    struct PathHit {
+        var t: Double
+        var mob: Mob?
+    }
+
+    /// Nearest creature or player the segment passes through that this projectile is allowed to hurt
+    func firstEntityOnPath(_ p: Projectile, _ nx: Double, _ ny: Double, maxT: Double) -> PathHit? {
+        var best: PathHit? = nil
+        var bt: Double = min(1.0, maxT)
+        let pad: Double = max(0.08, p.w * 0.5)
+        if !dead && canHarm(p.source, targetFaction: .player, targetID: 0, area: false) {
+            if let t = segmentBoxT(p.x, p.y, nx, ny, pb.left - pad, pb.top - pad, pb.right + pad, pb.y + pad), t <= bt {
+                bt = t
+                best = PathHit(t: t, mob: nil)
+            }
+        }
+        let x0: Double = min(p.x, nx) - 4.0
+        let x1: Double = max(p.x, nx) + 4.0
+        for m in mobsNear(x0, x1) {
+            if m.hp <= 0 || m.id == p.lastHit || m.downed { continue }
+            if !canHarm(p.source, targetFaction: faction(of: m), targetID: m.id, area: false) { continue }
+            if let t = segmentBoxT(p.x, p.y, nx, ny, m.b.left - pad, m.b.top - pad, m.b.right + pad, m.b.y + pad), t <= bt {
+                bt = t
+                best = PathHit(t: t, mob: m)
+            }
+        }
+        return best
+    }
+
+    /// Boss shockwaves run along the ground and hurt anything standing in them
+    func stepShock(_ p: inout Projectile, _ dt: Double) -> Bool {
+        p.x += p.vx * dt
+        let gy: Int = world.groundBelow(Int(floor(p.x)), Int(floor(p.y)) - 3)
+        p.y = Double(gy) - 0.5
+        if world.solid(Int(floor(p.x)), Int(floor(p.y - 0.6))) && world.solid(Int(floor(p.x + p.vx * 0.1)), Int(floor(p.y - 0.4))) { return false }
+        var info = DamageInfo(amount: p.dmg, type: .stomp, source: p.source)
+        info.dirX = p.vx >= 0 ? 1 : -1
+        info.knock = 7.0
+        info.originX = p.x - p.vx
+        info.originY = p.y
+        info.key = p.uid
+        info.cooldown = 2.0
+        damageBox(p.x - 0.5, p.y - 0.9, p.x + 0.5, p.y + 0.5, info)
+        if Double.random(in: 0...1) < 0.5 { spawnParticles(p.x, p.y + 0.3, 0xA08860, 1, 1.5, 0.3, 6) }
+        return true
+    }
+
+    func rockImpact(_ p: Projectile, _ x: Double, _ y: Double) {
+        spawnParticles(x, y, 0x8A8A8A, 10, 5.0, 0.5, 16)
+        addShake(0.25)
+        var info = DamageInfo(amount: p.dmg, type: .impact, source: p.source)
+        info.knock = 5.0
+        info.originX = x
+        info.originY = y - 1.0
+        info.key = p.uid
+        info.cooldown = 1.0
+        damageArea(x, y - 0.8, radius: 1.8, info, falloff: false, lineOfSight: false)
+    }
+
+    /// Fireballs set fire to whatever stands where they burst
+    func igniteNear(_ x: Double, _ y: Double, _ src: DamageSource) {
+        for m in mobsNear(x - 1.5, x + 1.5) where m.hp > 0 && !isHeatImmune(m.kind) {
+            if abs(m.b.cy - y) < m.b.h * 0.5 + 1.0 && canHarm(src, targetFaction: faction(of: m), targetID: m.id, area: true) {
+                m.burn = max(m.burn, 2.0)
+            }
         }
     }
 
-    func rockImpact(_ p: Projectile, _ row: Int) {
-        spawnParticles(p.x, p.y, 0x8A8A8A, 12, 5.0, 0.5, 16)
-        shake = max(shake, 0.25)
-        let dx: Double = abs(pb.x - p.x)
-        if !dead && dx < 1.6 && abs(pb.y - p.y) < 2.5 { damagePlayer(p.dmg, from: p.x, knock: 5.0) }
+    func throwBomb() {
+        if useCD > 0 { return }
+        if !isCreative { inv.removeAt(sel, 1) }
+        let ox: Double = pb.x + Double(facing) * 0.4
+        let oy: Double = pb.y - 1.3
+        var dx: Double = aimX - ox
+        var dy: Double = aimY - oy
+        let len: Double = max(0.001, sqrt(dx * dx + dy * dy))
+        dx /= len
+        dy /= len
+        let speed: Double = min(16.0, 6.0 + len * 1.6)
+        var p = Projectile(kind: .bomb, x: ox, y: oy, vx: dx * speed + pb.vx * 0.5, vy: dy * speed - 2.0, dmg: 26, fromPlayer: true, gravity: 22.0)
+        p.life = 1.8
+        p.w = 0.4
+        p.source = DamageSource.player
+        p.uid = newID()
+        projectiles.append(p)
+        useCD = 0.45
+        swingT = 0.18
+        swingDir = facing
+        bumpHUD()
     }
 
     // MARK: drops
@@ -8450,18 +9037,25 @@ extension Game {
     // MARK: particles and floating text
 
     func updateParticles(_ dt: Double) {
-        var i: Int = 0
-        while i < particles.count {
-            particles[i].life -= dt
-            if particles[i].life <= 0 {
-                particles.remove(at: i)
-                continue
+        // compact in place: remove(at:) in a loop was O(n^2) when bursts of particles expired together
+        let n: Int = particles.count
+        var w: Int = 0
+        particles.withUnsafeMutableBufferPointer { bp in
+            var i: Int = 0
+            while i < n {
+                var p: Particle = bp[i]
+                p.life -= dt
+                if p.life > 0 {
+                    p.vy += p.gravity * dt
+                    p.x += p.vx * dt
+                    p.y += p.vy * dt
+                    bp[w] = p
+                    w += 1
+                }
+                i += 1
             }
-            particles[i].vy += particles[i].gravity * dt
-            particles[i].x += particles[i].vx * dt
-            particles[i].y += particles[i].vy * dt
-            i += 1
         }
+        if w < n { particles.removeLast(n - w) }
         var j: Int = 0
         while j < floats.count {
             floats[j].life -= dt
@@ -8470,6 +9064,486 @@ extension Game {
             j += 1
         }
     }
+}
+
+// ===== p16c_damage =====
+
+// MARK: - Unified damage system
+// Every source of harm (swings, projectiles, boss stomps, explosions, falling blocks, vehicles, lava,
+// fire, spikes) builds a DamageInfo and goes through the same few functions. They decide who can be
+// hurt (factions), stop one attack from hitting the same target every frame (per-attack cooldown
+// keys), apply armor and resistances, push targets back, and remember who to credit for a kill.
+
+enum DamageType: Int {
+    case melee, projectile, explosion, fire, lava, impact, stomp, contact, fall, drown, starve, hazard, crush
+
+    /// Armor does not help against these
+    var bypassesArmor: Bool {
+        switch self {
+        case .fire, .lava, .fall, .drown, .starve: return true
+        default: return false
+        }
+    }
+
+    /// Area attacks hit everything in range (except their owner), including members of the attacker's
+    /// own side. Aimed attacks never hurt the attacker's own side.
+    var isArea: Bool {
+        switch self {
+        case .explosion, .stomp, .impact, .crush, .fire, .lava, .hazard: return true
+        default: return false
+        }
+    }
+}
+
+enum Faction: Int {
+    case player, ally, wild, hostile, pirate, umbral, boss, environment
+}
+
+enum SourceKind: Int {
+    case player, mob, environment
+}
+
+struct DamageSource {
+    var kind: SourceKind
+    var id: Int
+    var faction: Faction
+
+    static let player: DamageSource = DamageSource(kind: .player, id: 0, faction: .player)
+    static let environment: DamageSource = DamageSource(kind: .environment, id: -1, faction: .environment)
+    static func mob(_ m: Mob, _ f: Faction) -> DamageSource { return DamageSource(kind: .mob, id: m.id, faction: f) }
+}
+
+struct DamageInfo {
+    var amount: Double
+    var type: DamageType
+    var source: DamageSource
+    /// knockback direction (-1 / 1); 0 = push away from the origin
+    var dirX: Double = 0
+    var knock: Double = 0
+    var originX: Double = 0
+    var originY: Double = 0
+    /// attack instance id: the same key never hits the same target twice within `cooldown` seconds
+    var key: Int = 0
+    var cooldown: Double = 0.5
+
+    init(amount: Double, type: DamageType, source: DamageSource) {
+        self.amount = amount
+        self.type = type
+        self.source = source
+    }
+}
+
+/// Bucketed mob positions, rebuilt once per frame, so area attacks and projectiles only look at
+/// creatures near them instead of every mob in the world.
+final class MobGrid {
+    static let cell: Int = 8
+    var buckets: [Int: [Mob]] = [:]
+
+    func rebuild(_ mobs: [Mob]) {
+        for k in buckets.keys { buckets[k]?.removeAll(keepingCapacity: true) }
+        for m in mobs where m.hp > 0 && !m.removed {
+            let k: Int = floorDiv(Int(floor(m.b.x)), MobGrid.cell)
+            if buckets[k] == nil { buckets[k] = [] }
+            buckets[k]?.append(m)
+        }
+        if buckets.count > 256 { buckets = buckets.filter { !$0.value.isEmpty } }
+    }
+}
+
+func isHeatImmune(_ k: MobKind) -> Bool {
+    switch k {
+    case .imp, .emberSlime, .cinderBat: return true
+    default: return false
+    }
+}
+
+/// Fraction of damage a creature takes from a damage type (1 = full)
+func damageResist(_ k: MobKind, _ t: DamageType) -> Double {
+    switch (k, t) {
+    case (.imp, .fire), (.emberSlime, .fire), (.cinderBat, .fire), (.imp, .lava), (.emberSlime, .lava), (.cinderBat, .lava): return 0
+    case (.wraith, .fall), (.bat, .fall), (.cinderBat, .fall), (.crow, .fall): return 0
+    case (.skeleton, .projectile): return 0.75
+    case (.bearBoss, .lava), (.rex, .lava): return 0.5
+    case (.bearBoss, .explosion), (.rex, .explosion): return 0.6
+    case (.slime, .fall), (.emberSlime, .fall), (.cat, .fall), (.frog, .fall): return 0.2
+    default: return 1
+    }
+}
+
+/// Segment/box intersection (slab method). Returns the entry fraction along the segment, or nil.
+func segmentBoxT(_ x0: Double, _ y0: Double, _ x1: Double, _ y1: Double, _ bx0: Double, _ by0: Double, _ bx1: Double, _ by1: Double) -> Double? {
+    let dx: Double = x1 - x0
+    let dy: Double = y1 - y0
+    var tmin: Double = 0
+    var tmax: Double = 1
+    if abs(dx) < 1e-9 {
+        if x0 < bx0 || x0 > bx1 { return nil }
+    } else {
+        var ta: Double = (bx0 - x0) / dx
+        var tb: Double = (bx1 - x0) / dx
+        if ta > tb { let s: Double = ta; ta = tb; tb = s }
+        tmin = max(tmin, ta)
+        tmax = min(tmax, tb)
+        if tmin > tmax { return nil }
+    }
+    if abs(dy) < 1e-9 {
+        if y0 < by0 || y0 > by1 { return nil }
+    } else {
+        var ta: Double = (by0 - y0) / dy
+        var tb: Double = (by1 - y0) / dy
+        if ta > tb { let s: Double = ta; ta = tb; tb = s }
+        tmin = max(tmin, ta)
+        tmax = min(tmax, tb)
+        if tmin > tmax { return nil }
+    }
+    return tmin
+}
+
+extension World {
+    /// First solid tile along a segment: (tile x, tile y, fraction along the segment)
+    func segmentSolidT(_ x0: Double, _ y0: Double, _ x1: Double, _ y1: Double) -> (Int, Int, Double)? {
+        let dx: Double = x1 - x0
+        let dy: Double = y1 - y0
+        let dist: Double = sqrt(dx * dx + dy * dy)
+        let n: Int = max(1, Int(ceil(dist / 0.2)))
+        var i: Int = 1
+        while i <= n {
+            let t: Double = Double(i) / Double(n)
+            let tx: Int = Int(floor(x0 + dx * t))
+            let ty: Int = Int(floor(y0 + dy * t))
+            if tile(tx, ty).solid {
+                // refine the entry point against the tile box
+                let et: Double = segmentBoxT(x0, y0, x1, y1, Double(tx), Double(ty), Double(tx + 1), Double(ty + 1)) ?? t
+                return (tx, ty, et)
+            }
+            i += 1
+        }
+        return nil
+    }
+
+    /// True when nothing solid blocks the straight line between two points
+    func lineClear(_ x0: Double, _ y0: Double, _ x1: Double, _ y1: Double) -> Bool {
+        return segmentSolidT(x0, y0, x1, y1) == nil
+    }
+}
+
+extension Game {
+    // MARK: sides
+
+    func faction(of m: Mob) -> Faction {
+        if m.tame || m.kind == .villager { return .ally }
+        switch m.kind {
+        case .pirate, .pirateGunner, .pirateCaptain: return .pirate
+        case .imp, .emberSlime, .cinderBat: return .umbral
+        case .bearBoss, .rex: return .boss
+        default: return m.def.hostile ? .hostile : .wild
+        }
+    }
+
+    /// May `src` hurt a target of `targetFaction`?
+    func canHarm(_ src: DamageSource, targetFaction tf: Faction, targetID: Int, area: Bool) -> Bool {
+        // nothing hurts itself (the player's own bombs are the exception, handled in explode())
+        if src.kind == .mob && src.id == targetID { return false }
+        if src.kind == .player && tf == .player { return false }
+        switch src.faction {
+        case .environment, .boss: return true
+        case .player: return tf != .ally
+        case .ally: return tf != .player && tf != .ally
+        default:
+            if area { return true }
+            return tf != src.faction
+        }
+    }
+
+    // MARK: queries
+
+    func mobsNear(_ x0: Double, _ x1: Double) -> [Mob] {
+        Perf.shared.countDamage()
+        let c0: Int = floorDiv(Int(floor(x0)), MobGrid.cell)
+        let c1: Int = floorDiv(Int(floor(x1)), MobGrid.cell)
+        if c1 - c0 > 64 { return mobs }
+        var out: [Mob] = []
+        var c: Int = c0
+        while c <= c1 {
+            if let b = mobGrid.buckets[c] { out.append(contentsOf: b) }
+            c += 1
+        }
+        return out
+    }
+
+    // MARK: applying damage
+
+    /// Damages a creature. Returns true if the hit landed.
+    @discardableResult
+    func applyMobDamage(_ m: Mob, _ info: DamageInfo) -> Bool {
+        if m.hp <= 0 || m.removed { return false }
+        if !canHarm(info.source, targetFaction: faction(of: m), targetID: m.id, area: info.type.isArea) { return false }
+        if info.key != 0 {
+            if let last = m.hitStamps[info.key], clock - last < info.cooldown { return false }
+            m.hitStamps[info.key] = clock
+            if m.hitStamps.count > 24 { m.hitStamps = m.hitStamps.filter { clock - $0.value < 4.0 } }
+        }
+        var amount: Double = info.amount * damageResist(m.kind, info.type)
+        if info.source.kind == .player { amount *= dmgOutMult }
+        if amount <= 0 { return false }
+        let byPlayer: Bool = info.source.kind == .player
+        if byPlayer { m.lastHitByPlayer = clock }
+        m.lastAttacker = info.source.id
+        var dir: Double = info.dirX
+        if dir == 0 && info.knock > 0 { dir = m.b.x >= info.originX ? 1.0 : -1.0 }
+        hurtMob(m, amount, dir, info.knock, byPlayer)
+        return true
+    }
+
+    /// Damages the player. Returns true if the hit landed.
+    @discardableResult
+    func hurtPlayer(_ info: DamageInfo) -> Bool {
+        if dead { return false }
+        if !canHarm(info.source, targetFaction: .player, targetID: 0, area: info.type.isArea) && info.source.kind != .player { return false }
+        if info.key != 0 {
+            if let last = playerHitStamps[info.key], clock - last < info.cooldown { return false }
+            playerHitStamps[info.key] = clock
+            if playerHitStamps.count > 24 { playerHitStamps = playerHitStamps.filter { clock - $0.value < 4.0 } }
+        }
+        let before: Double = hp
+        damagePlayer(info.amount * dmgInMult, from: info.originX, knock: info.knock, ignoreArmor: info.type.bypassesArmor)
+        return hp < before
+    }
+
+    /// Hits everything (player and creatures) inside a box
+    func damageBox(_ x0: Double, _ y0: Double, _ x1: Double, _ y1: Double, _ info: DamageInfo) {
+        if !dead && pb.right > x0 && pb.left < x1 && pb.y > y0 && pb.top < y1 { _ = hurtPlayer(info) }
+        for m in mobsNear(x0 - 4, x1 + 4) {
+            if m.hp <= 0 { continue }
+            if m.b.right > x0 && m.b.left < x1 && m.b.y > y0 && m.b.top < y1 { applyMobDamage(m, info) }
+        }
+    }
+
+    /// Hits everything within `radius` of a point. With falloff, damage drops to 35% at the edge;
+    /// with lineOfSight, targets behind solid blocks are spared.
+    func damageArea(_ cx: Double, _ cy: Double, radius: Double, _ info: DamageInfo, falloff: Bool, lineOfSight: Bool) {
+        func scaled(_ d: Double) -> DamageInfo {
+            var i: DamageInfo = info
+            if falloff { i.amount = info.amount * (1.0 - 0.65 * clampD(d / radius, 0, 1)) }
+            i.knock = info.knock * (falloff ? (1.0 - 0.5 * clampD(d / radius, 0, 1)) : 1.0)
+            i.originX = cx
+            i.originY = cy
+            return i
+        }
+        if !dead {
+            let d: Double = boxDistance(cx, cy, pb.left, pb.top, pb.right, pb.y)
+            if d <= radius && (!lineOfSight || world.lineClear(cx, cy, pb.x, pb.cy)) { _ = hurtPlayer(scaled(d)) }
+        }
+        for m in mobsNear(cx - radius - 4, cx + radius + 4) {
+            if m.hp <= 0 { continue }
+            let d: Double = boxDistance(cx, cy, m.b.left, m.b.top, m.b.right, m.b.y)
+            if d > radius { continue }
+            if lineOfSight && !world.lineClear(cx, cy, m.b.x, m.b.cy) { continue }
+            applyMobDamage(m, scaled(d))
+        }
+    }
+
+    func boxDistance(_ px: Double, _ py: Double, _ x0: Double, _ y0: Double, _ x1: Double, _ y1: Double) -> Double {
+        let dx: Double = max(0, max(x0 - px, px - x1))
+        let dy: Double = max(0, max(y0 - py, py - y1))
+        return sqrt(dx * dx + dy * dy)
+    }
+
+    // MARK: explosions
+
+    func explode(_ x: Double, _ y: Double, radius: Double, power: Double, source: DamageSource, breakBlocks: Bool) {
+        var info = DamageInfo(amount: power, type: .explosion, source: source)
+        info.knock = 11.0
+        info.key = newID()
+        info.cooldown = 1.0
+        damageArea(x, y, radius: radius, info, falloff: true, lineOfSight: true)
+        // the thrower is not immune to their own bomb, but takes less
+        if source.kind == .player && !dead {
+            let d: Double = boxDistance(x, y, pb.left, pb.top, pb.right, pb.y)
+            if d <= radius && world.lineClear(x, y, pb.x, pb.cy) {
+                damagePlayer(power * 0.45 * (1.0 - 0.65 * clampD(d / radius, 0, 1)), from: x, knock: 9.0)
+            }
+        }
+        if breakBlocks {
+            let r: Int = Int(ceil(radius * 0.7))
+            let tx: Int = Int(floor(x))
+            let ty: Int = Int(floor(y))
+            for dy in -r...r {
+                for dx in -r...r {
+                    let dd: Double = Double(dx * dx + dy * dy)
+                    if dd > radius * radius * 0.5 { continue }
+                    let t: Tile = world.tile(tx + dx, ty + dy)
+                    if t == .air || t.liquid || t.hardness > 2.7 || Tile.tierTable[t.idx] > 4 { continue }
+                    if t == .chest || t == .portalOff || t == .portalOn || t == .portalFrame { continue }
+                    breakTile(tx + dx, ty + dy, false, dropChance: 0.35)
+                }
+            }
+        }
+        for s in ships where abs(s.x - x) < radius + 4.5 && abs(s.deckY(Double(WorldGen.sea)) - y) < radius + 2 {
+            s.hp -= power
+            s.hitT = 0.3
+        }
+        spawnParticles(x, y, 0xFFC050, 18, 8.0, 0.5, 2)
+        spawnParticles(x, y, 0x606060, 12, 4.0, 1.0, -3)
+        addShake(0.6)
+    }
+
+    // MARK: hazards for creatures
+
+    /// Lava, fire, spikes, cactus and fall damage for every creature, through the same damage path
+    /// as everything else. Hazards are timed (not per frame) and resistances apply.
+    func mobHazards(_ m: Mob, _ dt: Double) {
+        if m.removed || m.downed { return }
+        if m.hazardT > 0 { m.hazardT -= dt }
+        let hw: Double = m.b.w * 0.5
+        let x0: Double = m.b.x - hw
+        let x1: Double = m.b.x + hw
+        let heatImmune: Bool = isHeatImmune(m.kind)
+        // lava: check the body and the feet row (fast movers can graze it in one frame)
+        let inLava: Bool = world.liquidFraction(x0, m.b.top, x1, m.b.y + 0.05, true) > 0.04 || m.b.inLava
+        if inLava && !heatImmune {
+            m.burn = max(m.burn, 3.0)
+            if m.hazardT <= 0 {
+                m.hazardT = 0.35
+                var info = DamageInfo(amount: m.isBoss ? 14 : 6, type: .lava, source: .environment)
+                info.originX = m.b.x
+                applyMobDamage(m, info)
+                if m.hp > 0 && !m.def.flying { m.b.vy = min(m.b.vy, -7.0) }
+            }
+        }
+        // burning
+        if m.burn > 0 {
+            if heatImmune || m.b.inWater {
+                m.burn = 0
+            } else {
+                m.burn -= dt
+                m.burnTick += dt
+                if m.burnTick >= 0.5 {
+                    m.burnTick = 0
+                    var info = DamageInfo(amount: m.isBoss ? 3 : 2, type: .fire, source: .environment)
+                    info.originX = m.b.x
+                    applyMobDamage(m, info)
+                    spawnParticles(m.b.x, m.b.y - m.b.h * 0.7, 0xFF8030, 2, 1.5, 0.4, -4)
+                }
+            }
+        }
+        // spikes, cactus, campfires
+        if !m.def.flying && m.hazardT <= 0 {
+            if let t = world.boxHurts(x0 + 0.05, m.b.y - 0.6, x1 - 0.05, m.b.y + 0.05) ?? world.boxHurts(x0 - 0.02, m.b.top + 0.1, x1 + 0.02, m.b.y - 0.1) {
+                if t == .spikes || t == .cactus {
+                    m.hazardT = 0.6
+                    var info = DamageInfo(amount: t == .spikes ? 5 : 2, type: .hazard, source: .environment)
+                    info.originX = m.b.x - Double(m.dir)
+                    info.knock = 3.0
+                    applyMobDamage(m, info)
+                }
+            }
+            let fx: Int = Int(floor(m.b.x))
+            let fy: Int = Int(floor(m.b.y - 0.5))
+            if world.tile(fx, fy) == .campfire && !heatImmune { m.burn = max(m.burn, 2.0) }
+        }
+        // falling (knockback off a ledge counts too)
+        if !m.def.flying && m.kind != .fish {
+            if !m.b.onGround && m.b.vy > 0 && !m.b.inWater { m.fallPeak = max(m.fallPeak, m.b.vy) }
+            if m.b.onGround || m.b.inWater {
+                if m.fallPeak > 23.0 && !m.b.inWater && !m.isBoss {
+                    var info = DamageInfo(amount: (m.fallPeak - 21.0) * 1.5, type: .fall, source: .environment)
+                    info.originX = m.b.x
+                    applyMobDamage(m, info)
+                }
+                m.fallPeak = 0
+            }
+        }
+    }
+
+    /// Dead creatures topple, fall and fade out for a moment before they are removed
+    func updateDying(_ dt: Double) {
+        for m in mobs where m.hp <= 0 && !m.removed {
+            if m.deathT < 0 { m.deathT = 0 }
+            m.deathT += dt
+            if !m.def.flying || m.deathT > 0.1 {
+                m.b.vy = min(m.b.vy + gravityG * dt, terminalV)
+                m.b.vx *= (1.0 - min(1.0, dt * 4.0))
+                if m.deathT < 0.8 { world.moveBody(&m.b, dt, stepUp: 0, dropThrough: false, decks: []) }
+            }
+            if m.deathT > 0.7 { m.removed = true }
+        }
+    }
+
+    // MARK: player fire
+
+    func updatePlayerBurn(_ dt: Double) {
+        if playerBurn <= 0 { return }
+        if pb.inWater || mode == .creative { playerBurn = 0; return }
+        playerBurn -= dt
+        playerBurnTick += dt
+        if playerBurnTick >= 0.6 {
+            playerBurnTick = 0
+            var info = DamageInfo(amount: 1, type: .fire, source: .environment)
+            info.originX = pb.x
+            _ = hurtPlayer(info)
+            spawnParticles(pb.x, pb.y - 1.2, 0xFF8030, 2, 1.5, 0.4, -4)
+        }
+    }
+
+    // MARK: falling blocks
+
+    /// Sand with nothing under it falls; it hurts whatever it lands on
+    func checkFalling(_ x: Int, _ y: Int) {
+        var yy: Int = y
+        var n: Int = 0
+        while n < 16 && world.tile(x, yy) == .sand {
+            let below: Tile = world.tile(x, yy + 1)
+            if below.solid || below.isPlatform { break }
+            world.set(x, yy, .air)
+            fallingBlocks.append(FallingBlock(x: Double(x) + 0.5, y: Double(yy) + 1.0, vy: 0, tile: .sand, uid: newID()))
+            yy -= 1
+            n += 1
+        }
+    }
+
+    func updateFallingBlocks(_ dt: Double) {
+        if fallingBlocks.isEmpty { return }
+        var keep: [FallingBlock] = []
+        for fb0 in fallingBlocks {
+            var fb: FallingBlock = fb0
+            fb.vy = min(fb.vy + gravityG * dt, terminalV)
+            let ny: Double = fb.y + fb.vy * dt
+            // crush whatever is underneath while moving fast enough
+            if fb.vy > 4.0 {
+                var info = DamageInfo(amount: 2.0 + fb.vy * 0.4, type: .crush, source: .environment)
+                info.originX = fb.x
+                info.originY = fb.y - 1.0
+                info.key = fb.uid
+                info.cooldown = 5.0
+                damageBox(fb.x - 0.45, fb.y - 1.0, fb.x + 0.45, ny, info)
+            }
+            let tx: Int = Int(floor(fb.x))
+            let landRow: Int = Int(floor(ny))
+            if world.tile(tx, landRow).solid || world.tile(tx, landRow).isPlatform || landRow >= world.H - 2 {
+                let restY: Int = landRow - 1
+                let cur: Tile = world.tile(tx, restY)
+                if cur == .air || cur.liquid || cur.isPlant {
+                    world.set(tx, restY, fb.tile)
+                } else {
+                    spawnDrop(Stack(item: .block(fb.tile), count: 1), fb.x, Double(restY), 0, -2)
+                }
+                spawnParticles(fb.x, Double(landRow), 0xE0D08A, 4, 2.0, 0.3, 10)
+                continue
+            }
+            fb.y = ny
+            keep.append(fb)
+        }
+        fallingBlocks = keep
+    }
+}
+
+struct FallingBlock {
+    var x: Double
+    var y: Double
+    var vy: Double
+    var tile: Tile
+    var uid: Int
 }
 
 // ===== p16b_bosses =====
@@ -8683,10 +9757,13 @@ extension Game {
                 let reach: Double = isBear ? 5.6 : 7.6
                 let fx0: Double = m.dir > 0 ? m.b.x - 0.5 : m.b.x - reach
                 let fx1: Double = m.dir > 0 ? m.b.x + reach : m.b.x + 0.5
-                if !dead && pb.right > fx0 && pb.left < fx1 && pb.y > m.b.top - 0.5 && pb.top < m.b.y + 0.2 {
-                    damagePlayer(m.def.dmg, from: m.b.x, knock: 10.0)
-                    shake = max(shake, 0.4)
-                }
+                var info = DamageInfo(amount: m.def.dmg, type: .melee, source: .mob(m, .boss))
+                info.dirX = Double(m.dir)
+                info.knock = 10.0
+                info.originX = m.b.x
+                info.key = newID()
+                damageBox(fx0, m.b.top - 0.5, fx1, m.b.y + 0.2, info)
+                addShake(0.3)
                 m.t3 = 1
                 spawnParticles(m.b.x + Double(m.dir) * (reach * 0.6), m.b.y - 1.6, 0xE8E0D0, 6, 5.0, 0.3, 4)
             }
@@ -8694,12 +9771,13 @@ extension Game {
         case .sweep:
             accelX(m, 0, 30, dt)
             if m.t3 == 0 {
-                let dx: Double = abs(pb.x - m.b.x)
-                if !dead && dx < 7.0 && pb.y > m.b.y - 2.0 {
-                    damagePlayer(m.def.dmg * 0.75, from: m.b.x, knock: 11.0)
-                }
+                var info = DamageInfo(amount: m.def.dmg * 0.75, type: .stomp, source: .mob(m, .boss))
+                info.knock = 11.0
+                info.originX = m.b.x
+                info.key = newID()
+                damageBox(m.b.x - 7.0, m.b.y - 2.0, m.b.x + 7.0, m.b.y + 0.3, info)
                 m.t3 = 1
-                shake = max(shake, 0.25)
+                addShake(0.25)
                 spawnParticles(m.b.x - Double(m.dir) * 4.5, m.b.y - 0.4, 0xA08860, 8, 5.0, 0.4, 6)
             }
             if m.t2 <= 0 { m.st = 3; m.t2 = 0.8 }
@@ -8707,10 +9785,14 @@ extension Game {
             let spd: Double = (isBear ? 13.0 : 11.5) * (m.phase == 2 ? 1.15 : 1.0)
             m.b.vx = Double(m.dir) * spd
             if Double.random(in: 0...1) < 0.7 { spawnParticles(m.b.x - Double(m.dir) * 2.0, m.b.y, 0xA08860, 1, 3.0, 0.4, 6) }
-            if playerOverlaps(m, 0.0) && m.cd <= 0 {
-                damagePlayer(m.def.dmg * 1.3, from: m.b.x, knock: 13.0)
-                m.cd = 1.0
-            }
+            // the charge tramples everything in its path, one hit per target
+            var info = DamageInfo(amount: m.def.dmg * 1.3, type: .impact, source: .mob(m, .boss))
+            info.dirX = Double(m.dir)
+            info.knock = 13.0
+            info.originX = m.b.x
+            info.key = m.id &* 1000 &+ Int(m.t2 > 0 ? 1 : 0) &+ m.atk
+            info.cooldown = 1.2
+            damageBox(m.b.left - 0.1, m.b.top, m.b.right + 0.1, m.b.y + 0.1, info)
             if m.b.hitWall {
                 m.st = 4
                 m.t2 = 1.8
@@ -8737,10 +9819,16 @@ extension Game {
                     var p = Projectile(kind: .shock, x: m.b.x + sgn * (m.b.w * 0.5), y: m.b.y - 0.5, vx: sgn * sp, vy: 0, dmg: m.def.dmg * 0.8, fromPlayer: false, gravity: 0)
                     p.life = 3.0
                     p.w = 0.6
+                    p.source = .mob(m, .boss)
+                    p.uid = newID()
                     projectiles.append(p)
                 }
-                // direct hit under the body
-                if !dead && playerOverlaps(m, 0.3) { damagePlayer(m.def.dmg, from: m.b.x, knock: 9.0) }
+                // the landing itself: everything under and right beside the body
+                var info = DamageInfo(amount: m.def.dmg, type: .stomp, source: .mob(m, .boss))
+                info.knock = 9.0
+                info.originX = m.b.x
+                info.key = newID()
+                damageArea(m.b.x, m.b.y - 0.5, radius: m.b.w * 0.5 + 1.2, info, falloff: true, lineOfSight: false)
                 m.st = 3
                 m.t2 = 1.0
                 m.b.vx = 0
@@ -8766,6 +9854,9 @@ extension Game {
             var p = Projectile(kind: .rock, x: rx, y: m.b.y - 17.0, vx: 0, vy: 0, dmg: 16, fromPlayer: false, gravity: 26)
             p.life = 5.0
             p.w = 0.9
+            // falling rocks hurt anyone underneath, the boss's own minions included
+            p.source = .mob(m, .boss)
+            p.uid = newID()
             projectiles.append(p)
             spawnParticles(rx, m.b.y - 0.3, 0x8A8A8A, 2, 1.0, 0.8, 0)
         }
@@ -9993,6 +11084,15 @@ extension Game {
             if let m = best {
                 tx = m.b.x
                 ty = m.b.cy
+                if case .bow? = it {
+                    // lead the target and aim above it so the arrow's drop carries it onto the target
+                    let st: BowStats = bowStats(.bow)
+                    let dx: Double = tx - pb.x
+                    let dy: Double = ty - (pb.y - 1.2)
+                    let t: Double = sqrt(dx * dx + dy * dy) / st.maxSpeed
+                    tx += m.b.vx * t
+                    ty -= 0.5 * st.gravity * t * t
+                }
                 aimed = true
             }
         }
@@ -12239,17 +13339,29 @@ enum WorldRenderer {
             let y: Double = v.sy(p.y)
             switch p.kind {
             case .arrow:
-                let sp: Double = max(0.01, sqrt(p.vx * p.vx + p.vy * p.vy))
-                var dx: Double = p.vx / sp
-                var dy: Double = p.vy / sp
-                if p.stuck > 0 {
-                    dx = p.vx >= 0 ? 1.0 : -1.0
-                    dy = 0.3
+                // the arrow points along its flight (or the angle it hit at, once stuck)
+                let ang: Double = p.stuck > 0 ? p.stuckAngle : atan2(p.vy, p.vx)
+                let dx: Double = cos(ang)
+                let dy: Double = sin(ang)
+                let hx: Double = dx * tp * 0.42
+                let hy: Double = dy * tp * 0.42
+                let lw: Double = max(2.0, tp / 11.0)
+                if p.stuck <= 0 && p.trail > 0 {
+                    let tl: Double = tp * 0.9
+                    strokeLine(&ctx, x - hx - dx * tl, y - hy - dy * tl, x - hx, y - hy, Color.white.opacity(0.18), lw)
                 }
-                let hx: Double = dx * tp * 0.45
-                let hy: Double = dy * tp * 0.45
-                strokeLine(&ctx, x - hx, y - hy, x + hx, y + hy, Color(hex: 0x8A5A2A), max(2.0, tp / 10.0))
-                fillRect(&ctx, mkRect(x + hx - 2.0, y + hy - 2.0, 4, 4), Color(hex: 0xD0D0D8))
+                strokeLine(&ctx, x - hx, y - hy, x + hx, y + hy, Color(hex: 0x8A5A2A), lw)
+                strokeLine(&ctx, x + hx * 0.6, y + hy * 0.6, x + hx * 1.05, y + hy * 1.05, Color(hex: 0xD0D0D8), lw + 1.0)
+                let nx: Double = -dy * tp * 0.12
+                let ny: Double = dx * tp * 0.12
+                strokeLine(&ctx, x - hx, y - hy, x - hx * 0.7 + nx, y - hy * 0.7 + ny, Color(hex: 0xF0F0F0), lw * 0.8)
+                strokeLine(&ctx, x - hx, y - hy, x - hx * 0.7 - nx, y - hy * 0.7 - ny, Color(hex: 0xF0F0F0), lw * 0.8)
+            case .bomb:
+                let r: Double = tp * 0.32
+                fillOval(&ctx, mkRect(x - r, y - r, r * 2.0, r * 2.0), Color(hex: 0x30303A))
+                fillOval(&ctx, mkRect(x - r * 0.6, y - r * 0.7, r * 0.6, r * 0.5), Color(hex: 0x6A6A78))
+                let blink: Bool = Int(p.life * 10.0) % 2 == 0
+                fillRect(&ctx, mkRect(x + r * 0.3, y - r * 1.4, 3, 3), blink ? Color(hex: 0xFFE040) : Color(hex: 0xFF6020))
             case .bullet:
                 fillRect(&ctx, mkRect(x - 3.0, y - 2.0, 6, 4), Color(hex: 0xFFE080))
             case .fireball:

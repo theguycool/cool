@@ -403,6 +403,10 @@ enum Tile: UInt8, CaseIterable, Codable {
     case logBlock, jungleLogBlock, palmLogBlock
     /// climbable: hold jump (or up) to climb, down to descend
     case ladder
+    /// workstations: metalwork from iron up, machinery and vehicles, and Umbral gear
+    case anvil, tinkerBench, riftForge
+    /// crystal deposits that line the walls of crystal grottos
+    case crystalOre
 
     static let defTable: [TileDef] = Tile.allCases.map { Tile.makeDef($0) }
     static let solidTable: [Bool] = Tile.allCases.map { Tile.makeDef($0).solid }
@@ -585,6 +589,14 @@ enum Tile: UInt8, CaseIterable, Codable {
             return TileDef(name: "Palm Log", hard: 0.8, style: .log, colors: [0x9A7A4A, 0x826238, 0xB08C58, 0x6A4E2A, 0x9A7A4A], drop: .block(.palmLog))
         case .ladder:
             return TileDef(name: "Ladder", hard: 0.3, solid: false, opaque: false, style: .custom, colors: [0x9A6E3A])
+        case .anvil:
+            return TileDef(name: "Anvil", hard: 1.6, tier: 1, solid: false, opaque: false, style: .custom, colors: [0x5A5E68])
+        case .tinkerBench:
+            return TileDef(name: "Tinker's Bench", hard: 0.8, solid: false, opaque: false, style: .custom, colors: [0x8F6732])
+        case .riftForge:
+            return TileDef(name: "Rift Forge", hard: 3.0, tier: 5, solid: false, opaque: false, light: 9, style: .custom, colors: [0x2A1A3A])
+        case .crystalOre:
+            return TileDef(name: "Crystal Vein", hard: 2.8, tier: 4, light: 6, style: .ore, colors: [0x5E6678, 0x4F5666, 0x6D7688, 0x40475A, 0x5E6678, 0x8AF0E8, 0xD8FFFA], drop: .mat(.crystalShard))
         }
     }
 }
@@ -675,6 +687,15 @@ func customTileRows(_ t: Tile) -> ([String], [Character: UInt32])? {
     case .ladder:
         return ([".r....r.", ".rgggggr", ".r....r.", ".r....r.", ".r....r.", ".rgggggr", ".r....r.", ".r....r."].map { String($0.prefix(8)) },
                 ["r": 0x7A5428, "g": 0xB98A4E])
+    case .anvil:
+        return (["........", "........", "hhhhhhh.", ".HHHHHHh", "..sss...", "..sss...", ".bbbbb..", "bbbbbbb."],
+                ["h": 0x8A8E98, "H": 0x6A6E78, "s": 0x4A4E58, "b": 0x3A3E48])
+    case .tinkerBench:
+        return (["....g...", "...ggg..", "tttttttt", "bbbbbbbb", "b.c..k.b", "b.c..k.b", "b......b", "b......b"],
+                ["t": 0xC89B5E, "b": 0x8F6732, "g": 0xD8A040, "c": 0xB0B4BC, "k": 0xC03A3A])
+    case .riftForge:
+        return (["..pppp..", ".pPppPp.", "oovvvvoo", "ovVvvVvo", "ovvVVvvo", "oovvvvoo", "oooooooo", "oooooooo"],
+                ["o": 0x241838, "p": 0x8A4CD8, "P": 0xD8A8FF, "v": 0x4A2A7A, "V": 0xB070FF])
     default:
         return nil
     }
@@ -860,6 +881,8 @@ enum Mat: Int, Codable, CaseIterable {
     case stick, coal, copperOre, ironOre, goldOre, mythrilOre, diamond, emberOre, voidOre
     case copperBar, ironBar, goldBar, mythrilBar, emberBar, voidBar
     case string, leather, bone, feather, wool, gunpowder, seeds, claw, tusk, fur
+    /// rare: crystal grottos, relic chests in ruins, and the Hollow Warden's heart
+    case crystalShard, relicFragment, umbralHeart
 
     var name: String {
         switch self {
@@ -888,6 +911,9 @@ enum Mat: Int, Codable, CaseIterable {
         case .claw: return "Claw"
         case .tusk: return "Tusk"
         case .fur: return "Thick Fur"
+        case .crystalShard: return "Crystal Shard"
+        case .relicFragment: return "Relic Fragment"
+        case .umbralHeart: return "Umbral Heart"
         }
     }
 }
@@ -977,6 +1003,27 @@ enum PartType: Int, Codable, CaseIterable {
     }
 }
 
+/// Equipment worn in the two gear slots
+enum Gear: Int, Codable, CaseIterable {
+    case headlamp, swiftBoots, divingMask, emberCharm
+    var name: String {
+        switch self {
+        case .headlamp: return "Headlamp"
+        case .swiftBoots: return "Swift Boots"
+        case .divingMask: return "Diving Mask"
+        case .emberCharm: return "Ember Charm"
+        }
+    }
+    var effect: String {
+        switch self {
+        case .headlamp: return "Lights the way around you"
+        case .swiftBoots: return "Run 18% faster"
+        case .divingMask: return "Hold your breath three times as long"
+        case .emberCharm: return "Lava and fire hurt far less"
+        }
+    }
+}
+
 enum Gadget: Int, Codable, CaseIterable {
     case shears, wrench, treasureMap, portalKey, carKit, boatKit, motorboatKit, bomb
     var name: String {
@@ -1006,11 +1053,17 @@ enum Item: Hashable, Codable {
     case part(PartType)
     case gadget(Gadget)
     case wall(Int)
+    /// long reach, a quick thrust that runs through two foes in a line
+    case spear(Tier)
+    /// slow and heavy: big knockback, smashes guards and stone hides
+    case hammer(Tier)
+    case gear(Gear)
 
     /// Order used by inventory sorting: gear first, then building blocks, materials and the rest
     var sortGroup: Int {
         switch self {
-        case .sword: return 0
+        case .sword, .spear, .hammer: return 0
+        case .gear: return 4
         case .bow, .gun: return 1
         case .ammo: return 2
         case .tool: return 3
@@ -1027,7 +1080,10 @@ enum Item: Hashable, Codable {
     /// Short description lines for tooltips
     var infoLines: [String] {
         switch self {
-        case .sword(let t): return ["Melee weapon", String(format: "Damage %.1f", t.damage)]
+        case .sword(let t): return ["Sword: quick, even swings", String(format: "Damage %.1f", t.damage)]
+        case .spear(let t): return ["Spear: long reach, runs through two foes", String(format: "Damage %.1f", t.damage * 0.95)]
+        case .hammer(let t): return ["Hammer: slow, heavy, smashes guards and stone", String(format: "Damage %.1f", t.damage * 1.75)]
+        case .gear(let g): return ["Gear: wear it in a gear slot", g.effect]
         case .tool(let k, let t): return [k.name + " (tool)", String(format: "Mining speed x%.1f", t.mineSpeed), "Tier \(t.rawValue)"]
         case .armor(let s, let t): return [s.name + " armour", String(format: "Defense +%.1f", t.defense * s.weight)]
         case .food(let f): return ["Food", String(format: "Restores %.0f hunger", f.hunger), f.heal > 0 ? String(format: "Heals %.0f", f.heal) : "Eat to recover"]
@@ -1047,6 +1103,9 @@ enum Item: Hashable, Codable {
         case .block(let t): return t.name
         case .tool(let k, let t): return t.name + " " + k.name
         case .sword(let t): return t.name + " Sword"
+        case .spear(let t): return t.name + " Spear"
+        case .hammer(let t): return t.name + " War Hammer"
+        case .gear(let g): return g.name
         case .armor(let s, let t): return t.armorName + " " + s.name
         case .mat(let m): return m.name
         case .food(let f): return f.name
@@ -1070,7 +1129,7 @@ enum Item: Hashable, Codable {
 
     var isWeapon: Bool {
         switch self {
-        case .sword, .bow, .gun: return true
+        case .sword, .spear, .hammer, .bow, .gun: return true
         default: return false
         }
     }
@@ -1086,6 +1145,8 @@ enum Item: Hashable, Codable {
         switch self {
         case .tool(_, let t): return t
         case .sword(let t): return t
+        case .spear(let t): return t
+        case .hammer(let t): return t
         case .armor(_, let t): return t
         default: return nil
         }
@@ -1095,6 +1156,8 @@ enum Item: Hashable, Codable {
     var meleeDamage: Double {
         switch self {
         case .sword(let t): return t.damage
+        case .spear(let t): return t.damage * 0.95
+        case .hammer(let t): return t.damage * 1.75
         case .tool(let k, let t):
             switch k {
             case .axe: return t.damage * 0.8
@@ -1110,6 +1173,8 @@ enum Item: Hashable, Codable {
     var meleeCooldown: Double {
         switch self {
         case .sword: return 0.42
+        case .spear: return 0.48
+        case .hammer: return 0.8
         case .tool(let k, _): return k == .axe ? 0.55 : 0.5
         default: return 0.4
         }
@@ -1118,6 +1183,8 @@ enum Item: Hashable, Codable {
     var meleeReach: Double {
         switch self {
         case .sword: return 2.7
+        case .spear: return 3.5
+        case .hammer: return 2.3
         case .tool: return 2.2
         default: return 1.8
         }
@@ -1126,6 +1193,24 @@ enum Item: Hashable, Codable {
     var isFood: Bool {
         if case .food = self { return true }
         return false
+    }
+
+    /// Knockback a melee hit gives
+    var meleeKnock: Double {
+        switch self {
+        case .spear: return 4.5
+        case .hammer: return 11.5
+        default: return 6.0
+        }
+    }
+
+    /// how long the swing animation of a melee attack lasts
+    var swingTime: Double {
+        switch self {
+        case .spear: return 0.3
+        case .hammer: return 0.42
+        default: return 0.25
+        }
     }
 }
 
@@ -1265,6 +1350,68 @@ func iconMat(_ m: Mat) -> PixelBuf {
     case .claw: b.line(2, 7, 7, 2, 0xEDE6D0); b.line(3, 7, 7, 3, 0xBDB69A); b.rect(1, 7, 2, 2, 0x7A5A3A)
     case .tusk: b.line(2, 8, 4, 3, 0xF4EEDC); b.line(4, 3, 8, 2, 0xF4EEDC); b.line(3, 8, 5, 4, 0xC8C0A8)
     case .fur: b.rect(2, 2, 6, 6, 0x7A7066); b.rect(3, 3, 4, 4, 0x9A9086); b.set(2, 2, 0); b.set(7, 7, 0); b.set(3, 5, 0xBAB0A6)
+    case .crystalShard:
+        b.line(3, 8, 5, 1, 0x8AF0E8); b.line(4, 8, 6, 2, 0x5CC8C8); b.line(5, 8, 7, 4, 0x3A9AA8)
+        b.rect(2, 8, 6, 1, 0x3A9AA8); b.set(5, 2, 0xD8FFFA); b.set(4, 4, 0xD8FFFA)
+    case .relicFragment:
+        b.rect(2, 3, 6, 5, 0xB8A070); b.rect(2, 3, 6, 1, 0xD8C090); b.rect(2, 7, 6, 1, 0x8A7450)
+        b.set(4, 5, 0x5ED8C8); b.set(5, 5, 0x5ED8C8); b.set(7, 2, 0xB8A070); b.set(1, 6, 0x8A7450)
+    case .umbralHeart:
+        b.ellipse(3.6, 4.2, 2.0, 2.0, 0x8A3CD0); b.ellipse(6.4, 4.2, 2.0, 2.0, 0x8A3CD0)
+        b.rect(2, 5, 6, 2, 0x8A3CD0); b.rect(3, 7, 4, 1, 0x6A2AA8); b.rect(4, 8, 2, 1, 0x4A1A80)
+        b.set(3, 3, 0xE0B8FF); b.set(4, 5, 0xFF60C0)
+    }
+    b.outline(0x1A1410)
+    return b
+}
+
+func iconSpear(_ tier: Tier) -> PixelBuf {
+    var b = PixelBuf(w: 12, h: 12)
+    let m: UInt32 = tier.color
+    // a long shaft with a leaf-shaped head, drawn on the same diagonal as the sword
+    b.line(1, 11, 8, 4, 0x9A6A32)
+    b.line(2, 11, 8, 5, 0x5E3C1C)
+    b.line(8, 3, 11, 0, m)
+    b.line(8, 4, 10, 2, tierShade(m, 0.7))
+    b.line(9, 2, 10, 1, tierShade(m, 1.3))
+    b.rect(7, 4, 2, 1, 0xC8A040)
+    b.outline(0x1A1410)
+    return b
+}
+
+func iconHammer(_ tier: Tier) -> PixelBuf {
+    var b = PixelBuf(w: 12, h: 12)
+    let m: UInt32 = tier.color
+    let hi: UInt32 = tierShade(m, 1.25)
+    let lo: UInt32 = tierShade(m, 0.7)
+    b.line(1, 11, 7, 5, 0x9A6A32)
+    b.line(2, 11, 7, 6, 0x5E3C1C)
+    // a broad, squared head across the top of the haft
+    b.rect(5, 1, 6, 4, m)
+    b.rect(5, 1, 6, 1, hi)
+    b.rect(5, 4, 6, 1, lo)
+    b.rect(10, 1, 1, 4, lo)
+    b.rect(7, 2, 2, 1, hi)
+    b.outline(0x1A1410)
+    return b
+}
+
+func iconGear(_ g: Gear) -> PixelBuf {
+    var b = PixelBuf(w: 12, h: 12)
+    switch g {
+    case .headlamp:
+        b.rect(1, 5, 10, 2, 0x5A4030); b.rect(1, 5, 10, 1, 0x7A5A40)
+        b.ellipse(6, 5.5, 2.4, 2.4, 0x6A6E78); b.ellipse(6, 5.5, 1.4, 1.4, 0xFFF0A0); b.set(5, 5, 0xFFFFFF)
+        b.set(9, 3, 0xFFF0A0); b.set(10, 2, 0xFFF0A0)
+    case .swiftBoots:
+        b.rect(2, 2, 4, 6, 0x8A5A2A); b.rect(2, 8, 8, 2, 0x8A5A2A); b.rect(2, 10, 9, 1, 0x4A3018)
+        b.rect(3, 3, 2, 4, 0xB8743A); b.line(6, 4, 9, 2, 0xF0F0F8); b.line(6, 5, 9, 4, 0xC8C8D8)
+    case .divingMask:
+        b.rect(1, 4, 10, 4, 0x3A4A5A); b.rect(2, 5, 3, 2, 0x8AD0F0); b.rect(7, 5, 3, 2, 0x8AD0F0)
+        b.set(2, 5, 0xE0F8FF); b.set(7, 5, 0xE0F8FF); b.rect(5, 8, 2, 3, 0xD87A30); b.rect(5, 1, 2, 3, 0xD87A30)
+    case .emberCharm:
+        b.line(3, 1, 6, 4, 0xC8A040); b.line(9, 1, 6, 4, 0xC8A040)
+        b.ellipse(6, 7, 3.0, 3.4, 0xE8580C); b.ellipse(6, 7.4, 1.8, 2.0, 0xFFA030); b.set(6, 7, 0xFFE680); b.set(5, 5, 0xFFD060)
     }
     b.outline(0x1A1410)
     return b
@@ -1367,6 +1514,9 @@ func itemBuf(_ it: Item) -> PixelBuf {
     case .block(let t): return tileBuf(t)
     case .tool(let k, let t): return iconTool(k, t)
     case .sword(let t): return iconSword(t)
+    case .spear(let t): return iconSpear(t)
+    case .hammer(let t): return iconHammer(t)
+    case .gear(let g): return iconGear(g)
     case .armor(let s, let t): return iconArmor(s, t)
     case .mat(let m): return iconMat(m)
     case .food(let f): return iconFood(f)
@@ -1381,24 +1531,52 @@ func itemBuf(_ it: Item) -> PixelBuf {
 
 enum Station: Int, Codable {
     case hand, bench, furnace, campfire
+    /// appended, so the raw values above never change: metalwork, machinery, Umbral smithing
+    case anvil, tinker, forge
     var name: String {
         switch self {
         case .hand: return "By hand"
         case .bench: return "Workbench"
         case .furnace: return "Furnace"
         case .campfire: return "Campfire / Furnace"
+        case .anvil: return "Anvil"
+        case .tinker: return "Tinker's Bench"
+        case .forge: return "Rift Forge"
+        }
+    }
+    /// the block that provides this station
+    var tile: Tile? {
+        switch self {
+        case .hand, .campfire: return nil
+        case .bench: return .workbench
+        case .furnace: return .furnace
+        case .anvil: return .anvil
+        case .tinker: return .tinkerBench
+        case .forge: return .riftForge
         }
     }
 }
 
+/// Which station a tier of tools, weapons and armour is made at: wood to copper at the workbench,
+/// iron to mythril on an anvil, and the Umbral metals only in a rift forge
+func tierStation(_ t: Tier) -> Station {
+    switch t {
+    case .wood, .stone, .copper: return .bench
+    case .iron, .gold, .diamond, .mythril: return .anvil
+    case .ember, .voidium: return .forge
+    }
+}
+
 enum RecipeCat: Int, CaseIterable {
-    case basic, tools, weapons, armor, smelt, food, vehicle
+    case basic, build, tools, weapons, armor, gear, smelt, food, vehicle
     var name: String {
         switch self {
         case .basic: return "Basics"
+        case .build: return "Building"
         case .tools: return "Tools"
         case .weapons: return "Weapons"
         case .armor: return "Armor"
+        case .gear: return "Gear"
         case .smelt: return "Smelting"
         case .food: return "Food"
         case .vehicle: return "Vehicles"
@@ -1460,23 +1638,27 @@ enum RecipeBook {
         add(.block(.torch), 4, [(stick, 1), (coal, 1)], .hand, .basic)
         add(.block(.campfire), 1, [(.block(.log), 3), (stick, 2)], .hand, .basic)
         add(.block(.furnace), 1, [(.block(.stone), 12)], .bench, .basic)
-        add(.block(.platform), 4, [(planks, 2)], .hand, .basic)
-        add(.block(.ladder), 3, [(stick, 5)], .hand, .basic)
-        add(.block(.chest), 1, [(planks, 8)], .bench, .basic)
-        add(.block(.brick), 2, [(.block(.stone), 2)], .bench, .basic)
-        add(.block(.lantern), 1, [(.mat(.ironBar), 1), (.block(.torch), 1)], .bench, .basic)
-        add(.block(.hay), 2, [(.food(.wheat), 4)], .bench, .basic)
+        // the stations that unlock the later recipe tiers
+        add(.block(.anvil), 1, [(.mat(.ironBar), 6), (.block(.stone), 4)], .bench, .basic)
+        add(.block(.tinkerBench), 1, [(planks, 6), (.mat(.ironBar), 3), (.mat(.copperBar), 2)], .bench, .basic)
+        add(.block(.riftForge), 1, [(.block(.obsidian), 12), (.block(.glowCrystal), 4), (.mat(.emberBar), 2)], .anvil, .basic)
         add(.mat(.string), 2, [(.mat(.wool), 1)], .hand, .basic)
         add(.mat(.gunpowder), 2, [(coal, 1), (.block(.sand), 1)], .bench, .basic)
         add(.block(.glass), 1, [(.block(.sand), 2)], .furnace, .smelt)
-        // Doors and background walls (walls have no collision)
-        add(.block(.doorClosed), 1, [(planks, 6)], .bench, .basic)
-        add(.wall(5), 4, [(planks, 1)], .bench, .basic)
-        add(.wall(6), 4, [(.block(.brick), 1)], .bench, .basic)
-        add(.wall(2), 4, [(.block(.stone), 1)], .bench, .basic)
-        add(.wall(1), 4, [(.block(.dirt), 1)], .bench, .basic)
-        add(.wall(7), 4, [(.block(.sandstone), 1)], .bench, .basic)
-        add(.wall(4), 4, [(.block(.ashStone), 1)], .bench, .basic)
+        // Building: platforms, ladders, storage, light, doors and background walls (no collision)
+        add(.block(.platform), 4, [(planks, 2)], .hand, .build)
+        add(.block(.ladder), 3, [(stick, 5)], .hand, .build)
+        add(.block(.chest), 1, [(planks, 8)], .bench, .build)
+        add(.block(.brick), 2, [(.block(.stone), 2)], .bench, .build)
+        add(.block(.lantern), 1, [(.mat(.ironBar), 1), (.block(.torch), 1)], .bench, .build)
+        add(.block(.hay), 2, [(.food(.wheat), 4)], .bench, .build)
+        add(.block(.doorClosed), 1, [(planks, 6)], .bench, .build)
+        add(.wall(5), 4, [(planks, 1)], .bench, .build)
+        add(.wall(6), 4, [(.block(.brick), 1)], .bench, .build)
+        add(.wall(2), 4, [(.block(.stone), 1)], .bench, .build)
+        add(.wall(1), 4, [(.block(.dirt), 1)], .bench, .build)
+        add(.wall(7), 4, [(.block(.sandstone), 1)], .bench, .build)
+        add(.wall(4), 4, [(.block(.ashStone), 1)], .bench, .build)
         // Smelting
         add(.mat(.copperBar), 1, [(.mat(.copperOre), 2), (coal, 1)], .furnace, .smelt)
         add(.mat(.ironBar), 1, [(.mat(.ironOre), 2), (coal, 1)], .furnace, .smelt)
@@ -1489,43 +1671,53 @@ enum RecipeBook {
         add(.food(.cookedFish), 1, [(.food(.rawFish), 1)], .campfire, .food)
         add(.food(.bread), 1, [(.food(.wheat), 3)], .bench, .food)
         // Tools, swords, armor for every tier
+        // Tools, weapons and armour for every tier, each tier at its own station
         for t in Tier.allCases {
             let m: Item = tierMaterial(t)
-            add(.tool(.pickaxe, t), 1, [(m, 3), (stick, 2)], .bench, .tools)
-            add(.tool(.axe, t), 1, [(m, 3), (stick, 2)], .bench, .tools)
-            add(.tool(.shovel, t), 1, [(m, 1), (stick, 2)], .bench, .tools)
-            add(.tool(.hoe, t), 1, [(m, 2), (stick, 2)], .bench, .tools)
-            add(.sword(t), 1, [(m, 2), (stick, 1)], .bench, .weapons)
+            let st: Station = tierStation(t)
+            add(.tool(.pickaxe, t), 1, [(m, 3), (stick, 2)], st, .tools)
+            add(.tool(.axe, t), 1, [(m, 3), (stick, 2)], st, .tools)
+            add(.tool(.shovel, t), 1, [(m, 1), (stick, 2)], st, .tools)
+            add(.tool(.hoe, t), 1, [(m, 2), (stick, 2)], st, .tools)
+            add(.sword(t), 1, [(m, 2), (stick, 1)], st, .weapons)
+            add(.spear(t), 1, [(m, 2), (stick, 3)], st, .weapons)
+            add(.hammer(t), 1, [(m, 4), (stick, 2)], st, .weapons)
             let a: Item = armorMaterial(t)
-            add(.armor(.head, t), 1, [(a, 5)], .bench, .armor)
-            add(.armor(.chest, t), 1, [(a, 8)], .bench, .armor)
-            add(.armor(.legs, t), 1, [(a, 7)], .bench, .armor)
+            add(.armor(.head, t), 1, [(a, 5)], st, .armor)
+            add(.armor(.chest, t), 1, [(a, 8)], st, .armor)
+            add(.armor(.legs, t), 1, [(a, 7)], st, .armor)
         }
         // Ranged
         add(.bow, 1, [(stick, 3), (.mat(.string), 3)], .bench, .weapons)
         add(.ammo(.arrow), 6, [(stick, 1), (.mat(.feather), 1), (.block(.stone), 1)], .bench, .weapons)
-        add(.gun(.pistol), 1, [(.mat(.ironBar), 5), (planks, 2)], .bench, .weapons)
-        add(.gun(.rifle), 1, [(.mat(.ironBar), 8), (planks, 4), (.mat(.gunpowder), 2)], .bench, .weapons)
-        add(.ammo(.bullet), 8, [(.mat(.ironBar), 1), (.mat(.gunpowder), 1)], .bench, .weapons)
-        add(.gadget(.shears), 1, [(.mat(.ironBar), 2)], .bench, .tools)
-        add(.gadget(.wrench), 1, [(.mat(.ironBar), 3), (stick, 1)], .bench, .tools)
+        add(.gun(.pistol), 1, [(.mat(.ironBar), 5), (planks, 2)], .anvil, .weapons)
+        add(.gun(.rifle), 1, [(.mat(.ironBar), 8), (planks, 4), (.mat(.gunpowder), 2)], .anvil, .weapons)
+        add(.ammo(.bullet), 8, [(.mat(.ironBar), 1), (.mat(.gunpowder), 1)], .anvil, .weapons)
+        add(.gadget(.shears), 1, [(.mat(.ironBar), 2)], .anvil, .tools)
+        add(.gadget(.wrench), 1, [(.mat(.ironBar), 3), (stick, 1)], .anvil, .tools)
         add(.gadget(.bomb), 3, [(.mat(.gunpowder), 2), (.mat(.ironBar), 1), (.mat(.string), 1)], .bench, .weapons)
+        // Gear, worn in the two gear slots
+        add(.gear(.divingMask), 1, [(.block(.glass), 3), (.mat(.copperBar), 2), (.mat(.leather), 1)], .bench, .gear)
+        add(.gear(.headlamp), 1, [(.mat(.ironBar), 2), (.mat(.crystalShard), 1), (.block(.torch), 1)], .tinker, .gear)
+        add(.gear(.swiftBoots), 1, [(.mat(.leather), 4), (.mat(.feather), 3), (.mat(.goldBar), 2)], .anvil, .gear)
+        add(.gear(.emberCharm), 1, [(.mat(.emberBar), 3), (.block(.glowCrystal), 2), (.mat(.crystalShard), 1)], .forge, .gear)
         // Ready-made vehicles (place them in one tap) - easiest way to get driving
-        add(.gadget(.carKit), 1, [(planks, 10), (.mat(.ironBar), 14), (.mat(.leather), 2), (.mat(.wool), 2)], .bench, .vehicle)
+        add(.gadget(.carKit), 1, [(planks, 10), (.mat(.ironBar), 14), (.mat(.leather), 2), (.mat(.wool), 2)], .tinker, .vehicle)
         add(.gadget(.boatKit), 1, [(planks, 20), (.mat(.string), 4), (.mat(.wool), 2)], .bench, .vehicle)
-        add(.gadget(.motorboatKit), 1, [(planks, 20), (.mat(.ironBar), 12), (.mat(.copperBar), 3), (.mat(.wool), 2), (.block(.glass), 1)], .bench, .vehicle)
-        // Vehicle parts (for building your own design)
+        add(.gadget(.motorboatKit), 1, [(planks, 20), (.mat(.ironBar), 12), (.mat(.copperBar), 3), (.mat(.wool), 2), (.block(.glass), 1)], .tinker, .vehicle)
+        // Vehicle parts (for building your own design): wooden ones at the workbench, machinery at
+        // the tinker's bench
         add(.part(.frame), 1, [(planks, 4), (.mat(.ironBar), 1)], .bench, .vehicle)
-        add(.part(.wheel), 1, [(.mat(.ironBar), 2), (.mat(.leather), 1)], .bench, .vehicle)
-        add(.part(.engine), 1, [(.mat(.ironBar), 6), (.mat(.copperBar), 3), (coal, 2)], .bench, .vehicle)
-        add(.part(.steering), 1, [(.mat(.ironBar), 1), (stick, 2)], .bench, .vehicle)
+        add(.part(.wheel), 1, [(.mat(.ironBar), 2), (.mat(.leather), 1)], .tinker, .vehicle)
+        add(.part(.engine), 1, [(.mat(.ironBar), 6), (.mat(.copperBar), 3), (coal, 2)], .tinker, .vehicle)
+        add(.part(.steering), 1, [(.mat(.ironBar), 1), (stick, 2)], .tinker, .vehicle)
         add(.part(.seat), 1, [(planks, 2), (.mat(.wool), 2)], .bench, .vehicle)
-        add(.part(.fuelTank), 1, [(.mat(.ironBar), 3), (.block(.glass), 1)], .bench, .vehicle)
+        add(.part(.fuelTank), 1, [(.mat(.ironBar), 3), (.block(.glass), 1)], .tinker, .vehicle)
         add(.part(.hull), 1, [(planks, 6), (.mat(.string), 2)], .bench, .vehicle)
-        add(.part(.propeller), 1, [(.mat(.ironBar), 3)], .bench, .vehicle)
+        add(.part(.propeller), 1, [(.mat(.ironBar), 3)], .tinker, .vehicle)
         add(.part(.paddle), 1, [(planks, 2), (stick, 2)], .bench, .vehicle)
-        add(.part(.drill), 1, [(.mat(.ironBar), 6), (.mat(.copperBar), 2)], .bench, .vehicle)
-        add(.part(.diamondDrill), 1, [(.part(.drill), 1), (.mat(.diamond), 4), (.mat(.goldBar), 2)], .bench, .vehicle)
+        add(.part(.drill), 1, [(.mat(.ironBar), 6), (.mat(.copperBar), 2)], .tinker, .vehicle)
+        add(.part(.diamondDrill), 1, [(.part(.drill), 1), (.mat(.diamond), 4), (.mat(.goldBar), 2)], .tinker, .vehicle)
         return list
     }
 }
@@ -1534,13 +1726,36 @@ enum RecipeBook {
 
 struct Inventory: Codable {
     var slots: [Stack?]
+    /// head, body, legs, then the two gear slots
     var armor: [Stack?]
     static let hotbarCount: Int = 10
     static let size: Int = 40
+    static let armorSlots: Int = 5
+    static let firstGearSlot: Int = 3
+
+    enum CodingKeys: String, CodingKey {
+        case slots, armor
+    }
 
     init() {
         slots = [Stack?](repeating: nil, count: Inventory.size)
-        armor = [Stack?](repeating: nil, count: 3)
+        armor = [Stack?](repeating: nil, count: Inventory.armorSlots)
+    }
+
+    /// Saves from before the gear slots hold three armour entries: they gain two empty gear slots
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        slots = try c.decode([Stack?].self, forKey: .slots)
+        armor = try c.decode([Stack?].self, forKey: .armor)
+        while slots.count < Inventory.size { slots.append(nil) }
+        while armor.count < Inventory.armorSlots { armor.append(nil) }
+    }
+
+    func wearing(_ g: Gear) -> Bool {
+        for i in Inventory.firstGearSlot..<armor.count {
+            if let s = armor[i], case .gear(let x) = s.item, x == g { return true }
+        }
+        return false
     }
 
     func total(_ item: Item) -> Int {
@@ -8096,7 +8311,7 @@ extension Game {
             rideRex(r, ix, jumpPressed, dt)
             return
         }
-        let runMax: Double = 7.4 * speedMult
+        let runMax: Double = 7.4 * speedMult * (wearing(.swiftBoots) ? 1.18 : 1.0)
         if ix != 0 {
             facing = ix > 0 ? 1 : -1
         }
@@ -8263,11 +8478,12 @@ extension Game {
         }
         if world.tile(Int(floor(pb.x)), Int(floor(pb.y - 0.5))) == .campfire { playerBurn = max(playerBurn, 1.2) }
         if pb.inLava {
-            playerBurn = max(playerBurn, 2.5)
+            let charm: Bool = wearing(.emberCharm)
+            playerBurn = max(playerBurn, charm ? 1.0 : 2.5)
             lavaT += dt
             if lavaT > 0.35 {
                 lavaT = 0
-                var info = DamageInfo(amount: 5, type: .lava, source: .environment)
+                var info = DamageInfo(amount: charm ? 2 : 5, type: .lava, source: .environment)
                 info.originX = pb.x
                 _ = hurtPlayer(info)
             }
@@ -8282,7 +8498,7 @@ extension Game {
         // air
         let headY: Int = Int(floor(pb.y - pb.h * 0.92))
         if world.tile(Int(floor(pb.x)), headY) == .water {
-            air -= dt
+            air -= dt * (wearing(.divingMask) ? 1.0 / 3.0 : 1.0)
             if air <= 0 {
                 air = 0
                 drownT += dt
@@ -8455,7 +8671,7 @@ extension Game {
         let pcx: Int = Int(floor(pb.x))
         let pcy: Int = Int(floor(pb.y - pb.h * 0.6))
         var hl: Int = heldLightLevel()
-        hl = max(hl, 5)
+        hl = max(hl, wearing(.headlamp) ? 11 : 5)
         dyn.append((pcx, pcy, hl))
         for m in mobs {
             var lv: Int = 0
@@ -8686,7 +8902,7 @@ extension Game {
         let ty: Int = Int(floor(wy))
         let t: Tile = world.tile(tx, ty)
         switch t {
-        case .chest, .workbench, .furnace, .campfire, .portalOff, .doorClosed, .doorOpen: return true
+        case .chest, .workbench, .furnace, .campfire, .portalOff, .doorClosed, .doorOpen, .anvil, .tinkerBench, .riftForge: return true
         default: break
         }
         if let m = mobAtPoint(wx, wy, 0.15) {
@@ -8727,6 +8943,11 @@ extension Game {
             return
         case .campfire:
             craftStation = .campfire
+            showInventory = true
+            bumpHUD()
+            return
+        case .anvil, .tinkerBench, .riftForge:
+            craftStation = t == .anvil ? .anvil : (t == .tinkerBench ? .tinker : .forge)
             showInventory = true
             bumpHUD()
             return
@@ -8883,7 +9104,7 @@ extension Game {
     func stackAt(_ r: SlotRef) -> Stack? {
         switch r {
         case .inv(let i): return i >= 0 && i < inv.slots.count ? inv.slots[i] : nil
-        case .armor(let i): return i >= 0 && i < 3 ? inv.armor[i] : nil
+        case .armor(let i): return i >= 0 && i < inv.armor.count ? inv.armor[i] : nil
         case .chest(let i):
             guard let p = openChest else { return nil }
             let items: [Stack] = world.chestItems(p.x, p.y)
@@ -8978,9 +9199,19 @@ extension Game {
         }
     }
 
+    /// Whether an item may go into armour slot `i`: armour into its own slot, gear into either gear slot
+    func fitsArmorSlot(_ it: Item, _ i: Int) -> Bool {
+        switch it {
+        case .armor(let slot, _): return slot.rawValue == i
+        case .gear: return i >= Inventory.firstGearSlot && i < inv.armor.count
+        default: return false
+        }
+    }
+
     func tapArmorSlot(_ i: Int) {
+        if i < 0 || i >= inv.armor.count { return }
         if let h = carry {
-            if case .armor(let slot, _) = h.item, slot.rawValue == i {
+            if fitsArmorSlot(h.item, i) {
                 let old: Stack? = inv.armor[i]
                 inv.armor[i] = h
                 carry = old
@@ -8993,13 +9224,29 @@ extension Game {
     }
 
     func quickEquip(_ i: Int) {
-        if let s = inv.slots[i], case .armor(let slot, _) = s.item {
-            let old: Stack? = inv.armor[slot.rawValue]
-            inv.armor[slot.rawValue] = s
-            inv.slots[i] = old
-            bumpHUD()
+        guard let s = inv.slots[i] else { return }
+        var target: Int = -1
+        switch s.item {
+        case .armor(let slot, _): target = slot.rawValue
+        case .gear(let g):
+            // the same piece already worn is swapped out; otherwise the first free gear slot, else the first
+            target = Inventory.firstGearSlot
+            var free: Int = -1
+            for k in Inventory.firstGearSlot..<inv.armor.count {
+                if let w = inv.armor[k], case .gear(let x) = w.item, x == g { free = k; break }
+                if inv.armor[k] == nil && free < 0 { free = k }
+            }
+            if free >= 0 { target = free }
+        default: return
         }
+        if target < 0 || target >= inv.armor.count { return }
+        let old: Stack? = inv.armor[target]
+        inv.armor[target] = s
+        inv.slots[i] = old
+        bumpHUD()
     }
+
+    func wearing(_ g: Gear) -> Bool { return inv.wearing(g) }
 
     // chest transfer
     func chestTapSlot(_ cx: Int, _ cy: Int, _ idx: Int) {
@@ -9063,7 +9310,10 @@ extension Game {
                 case .bench: if t == .workbench { return true }
                 case .furnace: if t == .furnace { return true }
                 case .campfire: if t == .furnace || t == .campfire { return true }
-                default: break
+                case .anvil: if t == .anvil { return true }
+                case .tinker: if t == .tinkerBench { return true }
+                case .forge: if t == .riftForge { return true }
+                case .hand: return true
                 }
             }
         }
@@ -9102,8 +9352,11 @@ extension Game {
         for tier in Tier.allCases {
             for k in ToolType.allCases { out.append(.tool(k, tier)) }
             out.append(.sword(tier))
+            out.append(.spear(tier))
+            out.append(.hammer(tier))
             for s in ArmorSlot.allCases { out.append(.armor(s, tier)) }
         }
+        for g in Gear.allCases { out.append(.gear(g)) }
         out.append(.bow)
         out.append(.gun(.pistol))
         out.append(.gun(.rifle))
@@ -9135,7 +9388,7 @@ extension Game {
 
 func toolClass(_ t: Tile) -> ToolType {
     switch t {
-    case .log, .jungleLog, .palmLog, .logBlock, .jungleLogBlock, .palmLogBlock, .planks, .workbench, .chest, .platform, .leaves, .jungleLeaves, .cactus, .hay, .reed, .lantern, .torch, .ladder:
+    case .log, .jungleLog, .palmLog, .logBlock, .jungleLogBlock, .palmLogBlock, .planks, .workbench, .chest, .platform, .leaves, .jungleLeaves, .cactus, .hay, .reed, .lantern, .torch, .ladder, .tinkerBench:
         return .axe
     case .dirt, .grass, .sand, .snow, .mud, .dryGrass, .jungleGrass, .mossGrass, .farmland:
         return .shovel
@@ -9186,7 +9439,7 @@ extension Game {
 extension Game {
     func updateUse(_ dt: Double) {
         if useCD > 0 { useCD -= dt }
-        if swingT > 0 { swingT -= dt }
+        if swingT > 0 { swingT -= dt } else { swingDur = 0.25 }
         if muzzleT > 0 { muzzleT -= dt }
         if bowRecoil > 0 { bowRecoil -= dt }
         if eatT > 0 { eatT -= dt }
@@ -9223,7 +9476,7 @@ extension Game {
         switch it {
         case .block(let t): usePlaceBlock(t, dt)
         case .tool(let k, let tr): useToolItem(k, tr, dt)
-        case .sword: useSword(it)
+        case .sword, .spear, .hammer: useSword(it)
         case .gun(let g): useGun(g, pressed)
         case .food(let f): useFood(f, pressed)
         case .mat(let m):
@@ -9231,7 +9484,7 @@ extension Game {
         case .part(let p): usePart(p, pressed)
         case .gadget(let g): useGadget(g, pressed)
         case .wall(let k): usePlaceWall(k)
-        case .armor:
+        case .armor, .gear:
             if pressed { quickEquip(sel); say("Equipped.", 1.0) }
         default: break
         }
@@ -9286,6 +9539,7 @@ extension Game {
     func swingEmpty(_ it: Item?) {
         let cd: Double = it?.meleeCooldown ?? 0.4
         useCD = cd
+        swingDur = it?.swingTime ?? 0.25
         swingT = swingDur
         swingDir = facing
         // wide arc may still catch mobs close to the player
@@ -9306,6 +9560,7 @@ extension Game {
         if useCD > 0 { return }
         let cd: Double = it?.meleeCooldown ?? 0.4
         useCD = cd
+        swingDur = it?.swingTime ?? 0.25
         swingT = swingDur
         swingDir = aimX >= pb.x ? 1 : -1
         facing = swingDir
@@ -9315,12 +9570,24 @@ extension Game {
         _ = target
     }
 
-    /// damage every hostile/neutral mob inside the arc in front of the player
+    /// damage every hostile/neutral mob inside the arc in front of the player. A sword sweeps an even
+    /// arc; a spear thrusts along a narrow line and runs through the two nearest foes; a hammer swings
+    /// a tall arc with heavy knockback that breaks guards.
     func meleeArc(_ dmg: Double, _ reach: Double, _ it: Item?) {
         let ox: Double = pb.x
         let oy: Double = pb.y - pb.h * 0.55
         var hitAny: Bool = false
         let swingKey: Int = newID()
+        var height: Double = 1.2
+        var maxHits: Int = Int.max
+        var heavy: Bool = false
+        switch it {
+        case .spear?: height = 0.6; maxHits = 2
+        case .hammer?: height = 1.8; heavy = true
+        default: break
+        }
+        let knock: Double = it?.meleeKnock ?? 6.0
+        var targets: [(Mob, Double)] = []
         for m in mobsNear(ox - reach - 4, ox + reach + 4) {
             if m.hp <= 0 || m.tame || m.kind == .villager { continue }
             let dx: Double = m.b.x - ox
@@ -9329,15 +9596,23 @@ extension Game {
             if dx * Double(swingDir) < -0.4 - m.b.w * 0.5 { continue }
             let ex: Double = abs(dx) - m.b.w * 0.5
             let ey: Double = abs(dy) - m.b.h * 0.5
-            if ex > reach || ey > 1.2 { continue }
+            if ex > reach || ey > height { continue }
+            targets.append((m, ex))
+        }
+        if targets.count > maxHits {
+            targets.sort { $0.1 < $1.1 }
+            targets.removeLast(targets.count - maxHits)
+        }
+        for (m, _) in targets {
             var d: Double = dmg
             if Double.random(in: 0...1) < 0.1 { d *= 1.5 }
             var info = DamageInfo(amount: d, type: .melee, source: .player)
             info.dirX = Double(swingDir)
-            info.knock = 6.0
+            info.knock = knock
             info.originX = ox
             info.key = swingKey
             info.cooldown = 0.3
+            info.heavy = heavy
             if applyMobDamage(m, info) { hitAny = true }
         }
         // pirate ships
@@ -9350,7 +9625,7 @@ extension Game {
                 hitAny = true
             }
         }
-        if hitAny { addShake(0.08) }
+        if hitAny { addShake(heavy ? 0.16 : 0.08) }
     }
 
     // MARK: mining & breaking
@@ -10661,16 +10936,24 @@ extension Game {
 // MARK: - Combat: damage, death, projectiles, drops, particles
 
 extension Game {
-    func hurtMob(_ m: Mob, _ dmg: Double, _ dirX: Double, _ knock: Double, _ byPlayer: Bool) {
+    func hurtMob(_ m: Mob, _ dmg: Double, _ dirX: Double, _ knock: Double, _ byPlayer: Bool, heavy: Bool = false) {
         if m.hp <= 0 { return }
         if m.kind == .rex && m.tame && byPlayer { return }
         var d: Double = dmg
         var kb: Double = knock
         if m.blocking && m.kind == .skeleton && dirX != 0 && dirX * Double(m.dir) < 0 {
-            d *= 0.1
-            kb *= 0.25
-            spawnParticles(m.b.x - Double(m.dir) * 0.5, m.b.y - 1.0, 0xE8F0FF, 5, 4.0, 0.2, 0)
-            floatText("Blocked", m.b.x, m.b.top - 0.4, 0xA0C0FF)
+            if heavy {
+                // a hammer blow knocks the shield aside and leaves the skeleton open for a moment
+                m.blocking = false
+                m.cd = max(m.cd, 0.9)
+                spawnParticles(m.b.x - Double(m.dir) * 0.5, m.b.y - 1.0, 0xFFF0C0, 8, 5.0, 0.25, 0)
+                floatText("Guard broken", m.b.x, m.b.top - 0.4, 0xFFD080)
+            } else {
+                d *= 0.1
+                kb *= 0.25
+                spawnParticles(m.b.x - Double(m.dir) * 0.5, m.b.y - 1.0, 0xE8F0FF, 5, 4.0, 0.2, 0)
+                floatText("Blocked", m.b.x, m.b.top - 0.4, 0xA0C0FF)
+            }
         }
         if d < 0.5 { d = 0.5 }
         m.hp -= d
@@ -11113,6 +11396,8 @@ struct DamageInfo {
     /// attack instance id: the same key never hits the same target twice within `cooldown` seconds
     var key: Int = 0
     var cooldown: Double = 0.5
+    /// a crushing blow (war hammer): breaks a raised guard and cracks stone hides
+    var heavy: Bool = false
 
     init(amount: Double, type: DamageType, source: DamageSource) {
         self.amount = amount
@@ -11279,7 +11564,7 @@ extension Game {
         m.lastAttacker = info.source.id
         var dir: Double = info.dirX
         if dir == 0 && info.knock > 0 { dir = m.b.x >= info.originX ? 1.0 : -1.0 }
-        hurtMob(m, amount, dir, info.knock, byPlayer)
+        hurtMob(m, amount, dir, info.knock, byPlayer, heavy: info.heavy)
         return true
     }
 
@@ -11469,7 +11754,8 @@ extension Game {
     func updatePlayerBurn(_ dt: Double) {
         if playerBurn <= 0 { return }
         if pb.inWater || mode == .creative { playerBurn = 0; return }
-        playerBurn -= dt
+        // the ember charm makes flames die out twice as fast
+        playerBurn -= dt * (wearing(.emberCharm) ? 2.0 : 1.0)
         playerBurnTick += dt
         if playerBurnTick >= 0.6 {
             playerBurnTick = 0
@@ -16130,7 +16416,34 @@ enum WorldRenderer {
                 strokeLine(&c, x0, 0, x0 + pull, 0, Color(hex: 0xE8E8E8), 2)
             }
             return
-        case .block, .mat, .food, .ammo, .part, .gadget, .wall:
+        case .spear:
+            // a straight thrust: the spear levels out and drives forward, then draws back
+            ang = Double.pi * 0.25 - 0.15
+            rect = mkRect(-sz * 0.35, -sz * 0.9, sz * 1.25, sz * 1.25)
+            if g.swingT > 0 {
+                let t: Double = 1.0 - g.swingT / max(0.01, g.swingDur)
+                let push: Double = sin(min(1.0, t * 1.6) * Double.pi) * 0.55 * v.tp
+                c.translateBy(x: CGFloat(push), y: 0)
+                ang = Double.pi * 0.25
+            } else if g.mining {
+                ang = Double.pi * 0.25 - 0.15 * abs(sin(g.clock * 9.0))
+            }
+        case .hammer:
+            // wound up high, then brought down hard past level
+            rect = mkRect(-sz * 0.2, -sz * 1.0, sz * 1.15, sz * 1.15)
+            if g.swingT > 0 {
+                let t: Double = 1.0 - g.swingT / max(0.01, g.swingDur)
+                // the head comes down fast (the blow lands at the start), then the swing settles
+                let e: Double = 1.0 - pow(1.0 - t, 3.0)
+                let deg: Double = -130.0 + 215.0 * e
+                ang = deg * Double.pi / 180.0
+            } else if g.mining {
+                let wob: Double = abs(sin(g.clock * 7.0))
+                ang = (-40.0 + 60.0 * wob) * Double.pi / 180.0
+            } else {
+                ang = -0.35
+            }
+        case .block, .mat, .food, .ammo, .part, .gadget, .wall, .gear:
             let small: Double = sz * 0.7
             rect = mkRect(-small * 0.2, -small * 0.8, small, small)
             if g.swingT > 0 {
@@ -17278,26 +17591,42 @@ struct InventoryPanel: View {
             game.chestStore(p.x, p.y, i)
             return
         }
-        if let s = game.inv.slots[i], case .armor = s.item {
-            game.quickEquip(i)
-            return
+        if let s = game.inv.slots[i] {
+            switch s.item {
+            case .armor, .gear:
+                game.quickEquip(i)
+                return
+            default: break
+            }
         }
         game.splitSlot(i)
     }
 
     var armorColumn: some View {
-        let names: [String] = ["Head", "Body", "Legs"]
-        return VStack(spacing: 4) {
-            ForEach(0..<3, id: \.self) { i in
-                VStack(spacing: 1) {
-                    dragSlot(.armor(i), game.inv.armor[i], size: 40, tap: { game.tapArmorSlot(i) }, hold: {})
-                    Text(names[i]).font(.pixel(9, .bold)).foregroundColor(Color.white.opacity(0.7))
+        let names: [String] = ["Head", "Body", "Legs", "Gear", "Gear"]
+        let n: Int = min(names.count, game.inv.armor.count)
+        return HStack(alignment: .top, spacing: 4) {
+            VStack(spacing: 4) {
+                ForEach(0..<min(3, n), id: \.self) { i in
+                    equipSlot(i, names[i])
+                }
+                HStack(spacing: 2) {
+                    Art.shared.shieldIcon.resizable().frame(width: 14, height: 14)
+                    Text(String(Int(game.inv.defense.rounded()))).font(.pixel(11))
                 }
             }
-            HStack(spacing: 2) {
-                Art.shared.shieldIcon.resizable().frame(width: 14, height: 14)
-                Text(String(Int(game.inv.defense.rounded()))).font(.pixel(11))
+            VStack(spacing: 4) {
+                ForEach(min(3, n)..<n, id: \.self) { i in
+                    equipSlot(i, names[i])
+                }
             }
+        }
+    }
+
+    func equipSlot(_ i: Int, _ name: String) -> some View {
+        VStack(spacing: 1) {
+            dragSlot(.armor(i), game.inv.armor[i], size: 40, tap: { game.tapArmorSlot(i) }, hold: {})
+            Text(name).font(.pixel(9, .bold)).foregroundColor(Color.white.opacity(0.7))
         }
     }
 
@@ -17347,6 +17676,7 @@ struct InventoryPanel: View {
         if game.stationAvailable(.bench) { s.append("Workbench") }
         if game.stationAvailable(.furnace) { s.append("Furnace") }
         else if game.stationAvailable(.campfire) { s.append("Campfire") }
+        for st in [Station.anvil, .tinker, .forge] where game.stationAvailable(st) { s.append(st.name) }
         return "Near: " + s.joined(separator: ", ")
     }
 

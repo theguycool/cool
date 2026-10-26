@@ -6484,6 +6484,20 @@ final class Game: ObservableObject, @unchecked Sendable {
     var showChunks: Bool = false
     var fullBright: Bool = false
     var infiniteReach: Bool = false
+    /// debug: multiplies the health of newly spawned creatures
+    var mobHealthMult: Double = 1.0
+    /// debug: individual systems can be paused to isolate problems
+    var pauseMobs: Bool = false
+    var pauseBosses: Bool = false
+    var pauseSpawning: Bool = false
+    var pauseProjectiles: Bool = false
+    var pauseVehicles: Bool = false
+    var pauseWorldTicks: Bool = false
+    var pauseParticles: Bool = false
+    /// debug: the creature picked with "Select at cursor"
+    weak var debugSelected: Mob? = nil
+    /// lairs whose boss stays away until the player has left the area (after "Delete all entities")
+    var suppressedLairs: Set<Int> = []
 
     // tool use
     var swingT: Double = 0
@@ -6744,18 +6758,18 @@ extension Game {
         updateInputEdges()
         updatePlayer(dt)
         updateUse(dt)
-        updateMobs(dt)
-        updateBosses(dt)
-        updateSpawning(dt)
-        updateProjectiles(dt)
-        updateFallingBlocks(dt)
+        if !pauseMobs { updateMobs(dt) }
+        if !pauseBosses { updateBosses(dt) }
+        if !pauseSpawning { updateSpawning(dt) }
+        if !pauseProjectiles { updateProjectiles(dt) }
+        if !pauseWorldTicks { updateFallingBlocks(dt) }
         updateDrops(dt)
-        updateVehicles(dt)
-        updateShips(dt)
-        updateWorldTicks(dt)
+        if !pauseVehicles { updateVehicles(dt) }
+        if !pauseMobs { updateShips(dt) }
+        if !pauseWorldTicks { updateWorldTicks(dt) }
         updatePortal(dt)
         updateAutosave(dt)
-        updateParticles(dt)
+        if !pauseParticles { updateParticles(dt) }
         updateStreaming()
         updateCamera(dt)
         updateLight(dt)
@@ -9344,6 +9358,10 @@ extension Game {
         let m = Mob(id: newID(), kind: kind, x: x, y: y)
         if kind == .zombie { m.variant = Int.random(in: 0...2) }
         if kind == .villager { m.variant = Int.random(in: 0...2); m.persistent = false }
+        if mobHealthMult != 1.0 {
+            m.maxHP *= mobHealthMult
+            m.hp = m.maxHP
+        }
         mobs.append(m)
         return m
     }
@@ -10161,6 +10179,10 @@ extension Game {
             let key: Int = lairKey(L)
             if defeated.contains(key) { continue }
             let dist: Double = abs(Double(L.cx) - pb.x)
+            if suppressedLairs.contains(key) {
+                if dist > 180 { suppressedLairs.remove(key) }
+                continue
+            }
             var existing: Mob? = nil
             for m in mobs where m.isBoss && m.lair == key { existing = m }
             if dist < 90 && existing == nil && world.isLoaded(L.cx) && !dead {
@@ -12182,6 +12204,169 @@ extension Game {
         for m in mobs where m.def.hostile && !m.tame && m.hp > 0 { killMob(m, true) }
     }
 
+    struct EntityCounts {
+        var hostile: Int = 0
+        var passive: Int = 0
+        var bosses: Int = 0
+        var dying: Int = 0
+        var projectiles: Int = 0
+        var drops: Int = 0
+        var particles: Int = 0
+        var falling: Int = 0
+        var vehicles: Int = 0
+        var ships: Int = 0
+    }
+
+    func entityCounts() -> EntityCounts {
+        var c = EntityCounts()
+        for m in mobs {
+            if m.hp <= 0 && !m.downed { c.dying += 1 } else if m.isBoss { c.bosses += 1 } else if m.def.hostile { c.hostile += 1 } else { c.passive += 1 }
+        }
+        c.projectiles = projectiles.count
+        c.drops = drops.count
+        c.particles = particles.count
+        c.falling = fallingBlocks.count
+        c.vehicles = vehicles.count
+        c.ships = ships.count
+        return c
+    }
+
+    /// Removes every creature, boss, ship, projectile, dropped item, falling block and particle (and,
+    /// if asked, vehicles). References to them are cleared so nothing keeps a removed entity alive, and
+    /// nearby lair bosses stay away until the player has left the area.
+    func debugDeleteAllEntities(includeVehicles: Bool) {
+        if mounted != nil || (includeVehicles && inVehicle != nil) { dismount() }
+        if world.dim == .overworld {
+            for L in gen.lairCenters(near: Int(floor(pb.x))) where abs(Double(L.cx) - pb.x) < 180 {
+                suppressedLairs.insert(lairKey(L))
+            }
+        }
+        for m in mobs { m.removed = true }
+        mobs.removeAll()
+        mobGrid.rebuild(mobs)
+        activeBoss = nil
+        rex = nil
+        mounted = nil
+        debugSelected = nil
+        ships.removeAll()
+        projectiles.removeAll()
+        drops.removeAll()
+        particles.removeAll()
+        fallingBlocks.removeAll()
+        floats.removeAll()
+        playerHitStamps.removeAll()
+        if includeVehicles {
+            inVehicle = nil
+            vehicles.removeAll()
+        }
+        say("All entities deleted.", 2.0)
+        bumpHUD()
+    }
+
+    /// Picks the creature closest to the cursor (or to the player when there is no cursor)
+    func debugSelectAtCursor() {
+        let tx: Double = aimValid ? aimX : pb.x
+        let ty: Double = aimValid ? aimY : pb.y - 1
+        var best: Mob? = nil
+        var bd: Double = 36
+        for m in mobs where m.hp > 0 || m.downed {
+            let dx: Double = m.b.x - tx
+            let dy: Double = m.b.cy - ty
+            let d: Double = dx * dx + dy * dy
+            if d < bd { bd = d; best = m }
+        }
+        debugSelected = best
+        if best == nil { say("Nothing near the cursor.", 1.2) }
+        bumpHUD()
+    }
+
+    func debugRemoveSelected() {
+        guard let m = debugSelected else { return }
+        m.removed = true
+        mobs.removeAll { $0 === m }
+        if m === activeBoss { activeBoss = nil }
+        if m === rex { rex = nil }
+        if m === mounted { dismount(); mounted = nil }
+        debugSelected = nil
+        bumpHUD()
+    }
+
+    // hazard tests: each creates a hazard right next to the player so damage, immunities and
+    // knockback can be checked by eye
+    func debugLavaPool() {
+        let x0: Int = Int(floor(pb.x)) + facing * 3
+        let y: Int = Int(floor(pb.y))
+        for dx in 0..<4 {
+            let x: Int = x0 + (facing > 0 ? dx : -dx)
+            _ = world.set(x, y, .lava)
+            _ = world.set(x, y + 1, .stone)
+        }
+        light.valid = false
+    }
+
+    func debugExplosionAtCursor() {
+        let x: Double = aimValid ? aimX : pb.x + Double(facing) * 4
+        let y: Double = aimValid ? aimY : pb.y - 1
+        explode(x, y, radius: 3.0, power: 20, source: .environment, breakBlocks: false)
+    }
+
+    func debugSandDrop() {
+        let x: Int = Int(floor(pb.x)) + facing * 2
+        let top: Int = Int(floor(pb.y)) - 8
+        for k in 0..<3 where !world.solid(x, top + k) { _ = world.set(x, top + k, .sand) }
+        checkFalling(x, top + 3)
+    }
+
+    func debugSpikes() {
+        let x: Int = Int(floor(pb.x)) + facing * 2
+        let y: Int = Int(floor(pb.y)) - 1
+        if !world.solid(x, y) { _ = world.set(x, y, .spikes) }
+    }
+
+    func debugResetMultipliers() {
+        speedMult = 1
+        dmgOutMult = 1
+        dmgInMult = 1
+        mobHealthMult = 1
+        bumpHUD()
+    }
+
+    func debugResetSystems() {
+        pauseMobs = false
+        pauseBosses = false
+        pauseSpawning = false
+        pauseProjectiles = false
+        pauseVehicles = false
+        pauseWorldTicks = false
+        pauseParticles = false
+        light.valid = false
+        RenderCache.shared.clearAll()
+        Perf.shared.genWorstMs = 0
+        tickWorstMs = 0
+        say("Systems reset.", 1.2)
+        bumpHUD()
+    }
+
+    /// Short report of the world generator around the player
+    func debugWorldgenLines() -> [String] {
+        let x: Int = Int(floor(pb.x))
+        var out: [String] = []
+        out.append(joinText("Gen version ", String(gen.genVersion), "  sea ", String(WorldGen.sea)))
+        out.append(joinText("Biome ", biomeHere.name, "  surface y ", String(world.surfaceY(x))))
+        var nearest: Int = -1
+        var d: Int = 0
+        while d < 3000 && nearest < 0 {
+            for sx in [x - d, x + d] {
+                if !gen.infinite && (sx < 0 || sx >= gen.width) { continue }
+                if gen.colBase(sx).biome == .ocean { nearest = sx; break }
+            }
+            d += 16
+        }
+        if nearest >= 0 { out.append(joinText("Nearest ocean x ", String(nearest), " (", String(abs(nearest - x)), " away)")) }
+        else { out.append("No ocean within 3000 blocks") }
+        return out
+    }
+
     func debugTeleport(_ x: Double, _ y: Double) {
         if inVehicle != nil || mounted != nil { dismount() }
         world.loadAround(centerX: Int(floor(x)), radius: 3)
@@ -13717,6 +13902,14 @@ final class RenderCache: @unchecked Sendable {
 
     func key(_ dim: Int, _ cx: Int, _ sy: Int) -> Int {
         return ((cx &* 64) &+ sy) &* 2 &+ dim
+    }
+
+    /// Drops every cached picture (debug "reset systems"); they are rebuilt as needed
+    func clearAll() {
+        sections.removeAll()
+        lightRev = -1
+        lightImg = nil
+        glowImg = nil
     }
 
     func evict() {
@@ -15960,6 +16153,13 @@ struct DeathView: View {
 struct DebugPanel: View {
     @ObservedObject var game: Game
     @ObservedObject var hud: HUDSignal
+    @State var confirmDelete: Bool = false
+    @State var includeVehicles: Bool = false
+    @State var tpX: String = ""
+    @State var tpY: String = ""
+    @State var showPerf: Bool = true
+    @State var showSystems: Bool = false
+    @State var showWorld: Bool = false
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 8) {
@@ -15975,6 +16175,14 @@ struct DebugPanel: View {
                     Slider(value: $game.speedMult, in: 0.5...4.0, step: 0.5)
                 }
                 actions
+                entitySection
+                multiplierSection
+                hazardSection
+                if showPerf { perfSection }
+                SmallButton(title: showSystems ? "Hide systems" : "Systems...") { showSystems.toggle() }
+                if showSystems { systemsSection }
+                SmallButton(title: showWorld ? "Hide worldgen" : "Worldgen...") { showWorld.toggle() }
+                if showWorld { worldSection }
                 section("SPAWN MOB")
                 spawnGrid
             }
@@ -16017,7 +16225,136 @@ struct DebugPanel: View {
                     SmallButton(title: "Down 20") { game.pb.y += 20; game.pb.vy = 0; game.fallPeak = 0 }
                     SmallButton(title: "→ 200") { game.debugTeleport(game.pb.x + 200, game.pb.y) }
                 }
+                HStack(spacing: 6) {
+                    TextField("X", text: $tpX).frame(width: 64).padding(3).background(Color.white.opacity(0.15))
+                    TextField("Y", text: $tpY).frame(width: 64).padding(3).background(Color.white.opacity(0.15))
+                    SmallButton(title: "Go") {
+                        if let x = Double(tpX.trimmingCharacters(in: .whitespaces)) {
+                            let y: Double = Double(tpY.trimmingCharacters(in: .whitespaces)) ?? game.pb.y
+                            game.debugTeleport(x, y)
+                        }
+                    }
+                }
             }
+        }
+    }
+
+    var entitySection: some View {
+        let c: Game.EntityCounts = game.entityCounts()
+        return VStack(alignment: .leading, spacing: 6) {
+            section("ENTITIES")
+            Text(verbatim: joinText("Hostile ", String(c.hostile), "  Passive ", String(c.passive), "  Bosses ", String(c.bosses), "  Dying ", String(c.dying)))
+                .font(.pixel(10, .semibold))
+            Text(verbatim: joinText("Shots ", String(c.projectiles), "  Drops ", String(c.drops), "  Falling ", String(c.falling), "  FX ", String(c.particles)))
+                .font(.pixel(10, .semibold))
+            Text(verbatim: joinText("Vehicles ", String(c.vehicles), "  Ships ", String(c.ships)))
+                .font(.pixel(10, .semibold))
+            HStack(spacing: 6) {
+                SmallButton(title: "Select at cursor") { game.debugSelectAtCursor() }
+                if game.debugSelected != nil {
+                    SmallButton(title: "Remove", color: Color(hex: 0xA03030)) { game.debugRemoveSelected() }
+                }
+            }
+            if let m = game.debugSelected {
+                Text(verbatim: joinText(m.def.name, " #", String(m.id), String(format: "  HP %.0f/%.0f  ", m.hp, m.maxHP), String(format: "x %.1f y %.1f", m.b.x, m.b.y)))
+                    .font(.pixel(10, .semibold)).foregroundColor(Color(hex: 0xA0E0FF))
+                HStack(spacing: 6) {
+                    SmallButton(title: "Heal") { m.hp = m.maxHP; game.bumpHUD() }
+                    SmallButton(title: "HP x2") { m.maxHP *= 2; m.hp = m.maxHP; game.bumpHUD() }
+                    SmallButton(title: "Kill") { if m.hp > 0 { game.killMob(m, false) }; game.bumpHUD() }
+                }
+            }
+            Toggle("Include vehicles", isOn: $includeVehicles).font(.pixel(11, .bold))
+            if confirmDelete {
+                HStack(spacing: 6) {
+                    SmallButton(title: "CONFIRM DELETE ALL", color: Color(hex: 0xC02020)) {
+                        game.debugDeleteAllEntities(includeVehicles: includeVehicles)
+                        confirmDelete = false
+                    }
+                    SmallButton(title: "Cancel") { confirmDelete = false }
+                }
+            } else {
+                SmallButton(title: "Delete all entities", color: Color(hex: 0xA03030)) { confirmDelete = true }
+            }
+        }
+    }
+
+    var multiplierSection: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            section("MULTIPLIERS")
+            Text(verbatim: joinText("Creature health (new spawns) x", String(format: "%.2f", game.mobHealthMult))).font(.pixel(10, .semibold))
+            Slider(value: $game.mobHealthMult, in: 0.25...5.0, step: 0.25)
+            Text(verbatim: joinText("Damage dealt x", String(format: "%.2f", game.dmgOutMult))).font(.pixel(10, .semibold))
+            Slider(value: $game.dmgOutMult, in: 0.0...10.0, step: 0.25)
+            Text(verbatim: joinText("Damage taken x", String(format: "%.2f", game.dmgInMult))).font(.pixel(10, .semibold))
+            Slider(value: $game.dmgInMult, in: 0.0...5.0, step: 0.25)
+            SmallButton(title: "Reset multipliers") { game.debugResetMultipliers() }
+        }
+    }
+
+    var hazardSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            section("HAZARD TESTS")
+            HStack(spacing: 6) {
+                SmallButton(title: "Lava pool") { game.debugLavaPool() }
+                SmallButton(title: "Explosion") { game.debugExplosionAtCursor() }
+            }
+            HStack(spacing: 6) {
+                SmallButton(title: "Sand drop") { game.debugSandDrop() }
+                SmallButton(title: "Spikes") { game.debugSpikes() }
+                SmallButton(title: "Set on fire") { game.playerBurn = 3.0; game.bumpHUD() }
+            }
+        }
+    }
+
+    var perfLines: [String] {
+        let p: Perf = Perf.shared
+        var out: [String] = []
+        out.append(String(format: "Tick %.2f ms (worst %.1f)  Draw %.2f ms", game.tickMs, game.tickWorstMs, p.renderMs))
+        out.append(String(format: "AI %.2f  Physics %.2f  Light %.2f ms", p.aiMs, p.physMs, p.lightMs))
+        out.append(String(format: "Chunk gen %.1f ms (worst %.1f), %d made", p.genMs, p.genWorstMs, p.chunksGenerated))
+        out.append(joinText("Light full/partial ", String(p.lightFull), "/", String(p.lightDyn)))
+        out.append(joinText("Moves ", String(p.moveCalls), "  Box checks ", String(p.boxChecks)))
+        out.append(joinText("Damage queries ", String(p.damageQueries), "  AI skipped ", String(p.aiSkipped)))
+        return out
+    }
+
+    var perfSection: some View {
+        let lines: [String] = perfLines
+        return VStack(alignment: .leading, spacing: 2) {
+            section("PERFORMANCE")
+            ForEach(0..<lines.count, id: \.self) { i in
+                Text(lines[i]).font(.pixel(10, .semibold))
+            }
+        }
+    }
+
+    var systemsSection: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            section("PAUSE SYSTEMS")
+            Toggle("Creatures", isOn: $game.pauseMobs)
+            Toggle("Bosses", isOn: $game.pauseBosses)
+            Toggle("Spawning", isOn: $game.pauseSpawning)
+            Toggle("Projectiles", isOn: $game.pauseProjectiles)
+            Toggle("Vehicles", isOn: $game.pauseVehicles)
+            Toggle("World ticks (plants, sand, leaves)", isOn: $game.pauseWorldTicks)
+            Toggle("Particles", isOn: $game.pauseParticles)
+            HStack(spacing: 6) {
+                SmallButton(title: "Reset systems") { game.debugResetSystems() }
+                SmallButton(title: "Reset camera") { game.settings.resetCamera(); game.bumpHUD() }
+            }
+        }
+        .font(.pixel(11, .bold))
+    }
+
+    var worldSection: some View {
+        let lines: [String] = game.debugWorldgenLines()
+        return VStack(alignment: .leading, spacing: 2) {
+            section("WORLD GENERATION")
+            ForEach(0..<lines.count, id: \.self) { i in
+                Text(lines[i]).font(.pixel(10, .semibold))
+            }
+            Text(verbatim: joinText("Structures chance ", String(format: "%.2f", game.gen.rareChance))).font(.pixel(10, .semibold))
         }
     }
 

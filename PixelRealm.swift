@@ -6321,6 +6321,10 @@ final class Game: ObservableObject, @unchecked Sendable {
 
     // camera and view
     var camX: Double = 0
+    /// where the camera is heading (dead zone applied); camX/camY ease toward it
+    var camTX: Double = 0
+    var camTY: Double = 0
+    var camLead: Double = 0
     var camY: Double = 0
     var viewW: Double = 1024
     var viewH: Double = 768
@@ -6816,15 +6820,37 @@ extension Game {
 
     // MARK: camera, streaming, light
 
+    /// Camera follow: a dead zone around the player, optional look-ahead in the direction of travel
+    /// (eased so turning around does not jerk the view), and frame-rate independent exponential smoothing.
     func updateCamera(_ dt: Double) {
-        let lead: Double = abs(pb.vx) > 1.0 ? Double(facing) * 1.6 : 0
-        let tx: Double = pb.x + lead
-        let ty: Double = pb.y - 1.6
-        let k: Double = min(1.0, dt * 7.0)
-        camX += (tx - camX) * k
-        camY += (ty - camY) * k
-        if abs(tx - camX) > 40 { camX = tx }
-        if abs(ty - camY) > 40 { camY = ty }
+        let st: Settings = settings
+        // look ahead: further when driving fast, eased in and out
+        var leadTarget: Double = 0
+        if st.camLookAhead {
+            if let v = inVehicle {
+                leadTarget = clampD(v.vx * 0.35, -6.0, 6.0)
+            } else if abs(pb.vx) > 1.0 {
+                leadTarget = Double(facing) * 1.6
+            }
+        }
+        camLead += (leadTarget - camLead) * min(1.0, dt * 2.5)
+        let fx: Double = pb.x + camLead
+        let fy: Double = pb.y - 1.6
+        // the target only moves once the player leaves the dead zone around it
+        let dz: Double = clampD(st.camDeadZone, 0, 4)
+        if fx > camTX + dz { camTX = fx - dz } else if fx < camTX - dz { camTX = fx + dz }
+        let dzy: Double = dz * 0.75
+        if fy > camTY + dzy { camTY = fy - dzy } else if fy < camTY - dzy { camTY = fy + dzy }
+        if abs(camTX - camX) > 40 || abs(camTY - camY) > 40 || !st.camSmoothOn {
+            // teleports, respawns and "smoothing off" snap straight to the target
+            camX = camTX
+            camY = camTY
+        } else {
+            let rate: Double = 2.5 + clampD(st.camFollow, 0, 1) * 11.5
+            let k: Double = 1.0 - exp(-rate * dt)
+            camX += (camTX - camX) * k
+            camY += (camTY - camY) * k
+        }
         let halfW: Double = viewTilesW * 0.5
         let halfH: Double = viewTilesH * 0.5
         if !gen.infinite {
@@ -10507,6 +10533,7 @@ extension Game {
             var outLeft: Double = 0
             var outRight: Double = 0
             var stepWheel: Int = 0
+            let hitsBefore: Int = anyHits
             for smp in samples {
                 let lx: Double = smp.lx - v.comX
                 let ly: Double = smp.ly - v.comY
@@ -10525,9 +10552,11 @@ extension Game {
                 let pvy: Double = v.vy + v.angVel * rx
                 let vn: Double = pvx * nx + pvy * ny
                 // ramming: a hard hit knocks out weak blocks (trunks fell the whole tree)
-                if vn < -5.5 && v.mass * -vn > 40.0 {
+                if vn < -3.0 && v.mass * -vn > 25.0 {
                     let tt: Tile = world.tile(Int(floor(wx)), Int(floor(wy)))
-                    if tt.hardness <= 1.0 && tt != .doorClosed { rammed.append((Int(floor(wx)), Int(floor(wy)))) }
+                    // tree trunks give way to a moderate hit; other wooden builds need a hard one
+                    // only free-standing wooden things break; terrain (dirt, sand, stone) never gets dug out
+                    if tt.hardness <= 1.0 && tt != .doorClosed && toolClass(tt) == .axe && (isLogTile(tt) || vn < -5.5) { rammed.append((Int(floor(wx)), Int(floor(wy)))) }
                 }
                 if vn < 0 {
                     let rn: Double = rx * ny - ry * nx
@@ -10563,8 +10592,19 @@ extension Game {
             v.px += (outRight - outLeft) * 0.8
             v.py += (outDown - outUp) * 0.8
             wheelHits = max(wheelHits, stepWheel)
+            // grounded stability assist: a tilted vehicle resting on something is eased back toward
+            // upright, and rotation that would tip it further is damped. Flips stay possible in the air.
+            if anyHits > hitsBefore {
+                let a: Double = v.angle.truncatingRemainder(dividingBy: 2.0 * Double.pi)
+                let wrapped: Double = a > Double.pi ? a - 2.0 * Double.pi : (a < -Double.pi ? a + 2.0 * Double.pi : a)
+                if abs(wrapped) > 0.4 && abs(wrapped) < 2.5 {
+                    v.angVel -= sin(wrapped) * 11.0 * h
+                    if v.angVel * wrapped > 0 { v.angVel *= (1.0 - min(1.0, 8.0 * h)) }
+                }
+            }
             // engine drive through wheels that are on the ground
-            if stepWheel > 0 && v.canDriveOnLand && steerOK && hasFuel && abs(throttle) > 0.1 {
+            // (only while roughly upright: a car on its nose or roof cannot push itself along)
+            if stepWheel > 0 && v.canDriveOnLand && steerOK && hasFuel && abs(throttle) > 0.1 && abs(remainder(v.angle, 2.0 * Double.pi)) < 1.0 {
                 let vmax: Double = min(17.0, 6.5 + 3.0 * Double(v.engines))
                 let along: Double = v.vx * c2 + v.vy * s2
                 if !(abs(along) > vmax && along * throttle > 0) {
@@ -10592,8 +10632,17 @@ extension Game {
         v.contacts = anyHits
         v.submerged = subFrac
         // in the air, the driver can pitch the vehicle (lean back / forward); flips are possible
+        if anyHits == 0 && subFrac == 0 && v.wheels > 0 {
+            // airborne wheeled vehicles slowly level out and shed spin (arcade suspension: driving off a
+            // ledge at speed no longer guarantees a nosedive)
+            let a: Double = remainder(v.angle, 2.0 * Double.pi)
+            if abs(a) < 2.0 { v.angVel -= sin(a) * 4.0 * dt }
+            v.angVel *= (1.0 - min(1.0, 1.5 * dt))
+        }
         if anyHits == 0 && subFrac == 0 && v.rider && abs(throttle) > 0.1 {
-            v.angVel += throttle * 5.0 * dt
+            // gentle and capped, so holding the throttle over a jump leans the car rather than spinning it
+            // (like most driving games: throttle leans the car back, reverse tips the nose down)
+            if abs(v.angVel) < 2.5 || v.angVel * throttle > 0 { v.angVel -= throttle * 2.5 * dt }
         }
         // fuel and exhaust
         let burning: Bool = v.engines > 0 && v.fuel > 0 && abs(throttle) > 0.1
@@ -10787,7 +10836,7 @@ extension Game {
         facing = v.dir
         if jumpPressed {
             let tilt: Double = abs(remainder(v.angle, 2.0 * Double.pi))
-            if tilt > 1.6 && v.contacts > 0 && v.speed < 3.0 {
+            if tilt > 0.9 && v.contacts > 0 && v.speed < 3.0 {
                 // upside down: give it a shove back onto its wheels
                 v.vy = -7.5
                 v.angVel = (remainder(v.angle, 2.0 * Double.pi) > 0 ? -1.0 : 1.0) * 6.0

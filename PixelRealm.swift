@@ -6669,6 +6669,8 @@ final class Game: ObservableObject, @unchecked Sendable {
     var villagerCells: Set<Int> = []
     var fallingBlocks: [FallingBlock] = []
     var decayZones: [DecayZone] = []
+    /// short-lived lights from explosions (fed into the light map as moving lights, then removed)
+    var flashes: [LightFlash] = []
     let mobGrid: MobGrid = MobGrid()
     var frameNo: Int = 0
 
@@ -6866,6 +6868,7 @@ extension Game {
         updatePortal(dt)
         updateAutosave(dt)
         if !pauseParticles { updateParticles(dt) }
+        updateFlashes(dt)
         updateStreaming()
         updateCamera(dt)
         updateLight(dt)
@@ -7233,8 +7236,13 @@ extension Game {
             if m.burn > 0 { lv = max(lv, 6) }
             if lv > 0 { dyn.append((Int(floor(m.b.x)), Int(floor(m.b.y - m.b.h * 0.5)), lv)) }
         }
-        for p in projectiles where p.kind == .fireball {
-            dyn.append((Int(floor(p.x)), Int(floor(p.y)), 10))
+        for p in projectiles where p.kind == .fireball || p.kind == .bomb {
+            // fireballs glow; a bomb's lit fuse gives a small light
+            dyn.append((Int(floor(p.x)), Int(floor(p.y)), p.kind == .fireball ? 10 : 5))
+        }
+        for f in flashes {
+            let lv: Int = f.level
+            if lv > 0 { dyn.append((Int(floor(f.x)), Int(floor(f.y)), lv)) }
         }
         for s in ships {
             dyn.append((Int(floor(s.x)) - 3, Int(floor(s.deckY(Double(WorldGen.sea)))) - 2, 10))
@@ -10095,6 +10103,9 @@ extension Game {
         spawnParticles(x, y, 0xFFC050, 18, 8.0, 0.5, 2)
         spawnParticles(x, y, 0x606060, 12, 4.0, 1.0, -3)
         addShake(0.6)
+        // the blast lights up its surroundings for a moment (the light map floods it through open space,
+        // so walls still cast shadows), fading out over the same time as the fire particles
+        addLightFlash(x, y, peak: 15, dur: 0.75, radius: radius + 2.5)
     }
 
     // MARK: hazards for creatures
@@ -10200,6 +10211,25 @@ extension Game {
 
     // MARK: falling blocks
 
+    // MARK: light flashes
+
+    func addLightFlash(_ x: Double, _ y: Double, peak: Int, dur: Double, radius: Double) {
+        // a cap keeps a chain of explosions from piling up work; the oldest gives way
+        if flashes.count >= 12 { flashes.removeFirst() }
+        flashes.append(LightFlash(x: x, y: y, peak: clampI(peak, 0, 15), dur: dur, radius: radius))
+    }
+
+    func updateFlashes(_ dt: Double) {
+        if flashes.isEmpty { return }
+        var keep: [LightFlash] = []
+        for f0 in flashes {
+            var f: LightFlash = f0
+            f.age += dt
+            if f.age < f.dur { keep.append(f) }
+        }
+        flashes = keep
+    }
+
     /// Sand with nothing under it falls; it hurts whatever it lands on
     func checkFalling(_ x: Int, _ y: Int) {
         var yy: Int = y
@@ -10248,6 +10278,27 @@ extension Game {
         }
         fallingBlocks = keep
     }
+}
+
+/// A burst of light at a fixed spot in the world that fades out (explosions)
+struct LightFlash {
+    var x: Double
+    var y: Double
+    /// light level at the moment it starts (0...15)
+    var peak: Int
+    var age: Double = 0
+    var dur: Double
+    /// glow radius in blocks for the drawn flash
+    var radius: Double
+
+    /// 1 at the start, easing smoothly to 0 at the end
+    var strength: Double {
+        let t: Double = clampD(age / max(0.01, dur), 0, 1)
+        let u: Double = 1.0 - t
+        return u * u * (3.0 - 2.0 * u)
+    }
+    /// current light level for the light map
+    var level: Int { return Int((Double(peak) * strength).rounded()) }
 }
 
 struct FallingBlock {
@@ -11762,6 +11813,7 @@ extension Game {
         projectiles.removeAll()
         drops.removeAll()
         particles.removeAll()
+        flashes.removeAll()
         ships.removeAll()
         shipTimer = 30
         activeBoss = nil
@@ -12464,6 +12516,7 @@ extension Game {
         projectiles.removeAll()
         drops.removeAll()
         particles.removeAll()
+        flashes.removeAll()
         fallingBlocks.removeAll()
         floats.removeAll()
         playerHitStamps.removeAll()
@@ -14353,6 +14406,7 @@ enum WorldRenderer {
         drawParticles(&ctx, g, v)
         drawClouds(&ctx, W, H, g, v)
         drawLight(&ctx, g, v, cache)
+        drawFlashes(&ctx, g, v)
         drawTrajectory(&ctx, g, v)
         drawOverlays(&ctx, W, H, g, v)
         drawFloats(&ctx, g, v)
@@ -15062,6 +15116,28 @@ enum WorldRenderer {
         let pyMid: Double = g.pb.y - g.pb.h * 0.5
         if CloudField.contains(seed, g.clock, g.pb.x, pyMid) {
             fillRect(&ctx, mkRect(0, 0, W, H), rgbColor(shade, 0.16))
+        }
+    }
+
+    /// The visible burst of an explosion: warm additive glow rings over the light layer. In the dark the
+    /// light map already brightens the surrounding blocks; this makes the burst readable in daylight
+    /// too, where everything is already at full light and the light map cannot get any brighter.
+    static func drawFlashes(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
+        if g.flashes.isEmpty { return }
+        var c: GraphicsContext = ctx
+        c.blendMode = .plusLighter
+        for f in g.flashes {
+            if !v.visible(f.x, f.y, f.radius + 2) { continue }
+            let k: Double = f.strength
+            if k <= 0.01 { continue }
+            let cx: Double = v.sx(f.x)
+            let cy: Double = v.sy(f.y)
+            // three soft rings: wide dim amber, middle orange, small bright core
+            let rings: [(Double, UInt32, Double)] = [(1.0, 0xFF8A30, 0.16), (0.6, 0xFFB050, 0.22), (0.28, 0xFFE8B0, 0.34)]
+            for ring in rings {
+                let r: Double = f.radius * ring.0 * v.tp * (0.85 + 0.15 * k)
+                fillOval(&c, mkRect(cx - r, cy - r, r * 2.0, r * 2.0), rgbColor(ring.1, ring.2 * k))
+            }
         }
     }
 

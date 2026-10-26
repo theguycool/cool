@@ -407,6 +407,9 @@ enum Tile: UInt8, CaseIterable, Codable {
     case anvil, tinkerBench, riftForge
     /// crystal deposits that line the walls of crystal grottos
     case crystalOre
+    /// birch trunks (passable, like every tree trunk) and the solid block a placed birch log becomes,
+    /// birch and pine foliage
+    case birchLog, birchLogBlock, birchLeaves, pineLeaves
 
     static let defTable: [TileDef] = Tile.allCases.map { Tile.makeDef($0) }
     static let solidTable: [Bool] = Tile.allCases.map { Tile.makeDef($0).solid }
@@ -440,6 +443,7 @@ enum Tile: UInt8, CaseIterable, Codable {
         case .log: return .logBlock
         case .jungleLog: return .jungleLogBlock
         case .palmLog: return .palmLogBlock
+        case .birchLog: return .birchLogBlock
         default: return self
         }
     }
@@ -597,6 +601,14 @@ enum Tile: UInt8, CaseIterable, Codable {
             return TileDef(name: "Rift Forge", hard: 3.0, tier: 5, solid: false, opaque: false, light: 9, style: .custom, colors: [0x2A1A3A])
         case .crystalOre:
             return TileDef(name: "Crystal Vein", hard: 2.8, tier: 4, light: 6, style: .ore, colors: [0x5E6678, 0x4F5666, 0x6D7688, 0x40475A, 0x5E6678, 0x8AF0E8, 0xD8FFFA], drop: .mat(.crystalShard))
+        case .birchLog:
+            return TileDef(name: "Birch Log", hard: 0.8, solid: false, opaque: false, style: .custom, colors: [0xE2DED2, 0xC8C4B8, 0xF4F2EA, 0x3A3632, 0xE2DED2])
+        case .birchLogBlock:
+            return TileDef(name: "Birch Log", hard: 0.8, style: .custom, colors: [0xE2DED2, 0xC8C4B8, 0xF4F2EA, 0x3A3632, 0xE2DED2], drop: .block(.birchLog))
+        case .birchLeaves:
+            return TileDef(name: "Birch Leaves", hard: 0.2, solid: false, opaque: false, platform: true, style: .leaves, colors: [0x7DB846, 0x649A34, 0x9ACC5A, 0x4E7E28, 0x7DB846], noDrop: true)
+        case .pineLeaves:
+            return TileDef(name: "Pine Needles", hard: 0.2, solid: false, opaque: false, platform: true, style: .leaves, colors: [0x2E6E52, 0x225A42, 0x3E8464, 0x18463A, 0x2E6E52], noDrop: true)
         }
     }
 }
@@ -696,6 +708,9 @@ func customTileRows(_ t: Tile) -> ([String], [Character: UInt32])? {
     case .riftForge:
         return (["..pppp..", ".pPppPp.", "oovvvvoo", "ovVvvVvo", "ovvVVvvo", "oovvvvoo", "oooooooo", "oooooooo"],
                 ["o": 0x241838, "p": 0x8A4CD8, "P": 0xD8A8FF, "v": 0x4A2A7A, "V": 0xB070FF])
+    case .birchLog, .birchLogBlock:
+        return (["lwwwwwws", "lwwkkwws", "lwwwwwws", "lwwwwwws", "lkwwwwks", "lwwwwwws", "lwwwkkws", "lwwwwwws"],
+                ["l": 0xF4F2EA, "w": 0xE2DED2, "k": 0x3A3632, "s": 0xB8B4A8])
     default:
         return nil
     }
@@ -1633,6 +1648,7 @@ enum RecipeBook {
         add(planks, 4, [(.block(.log), 1)], .hand, .basic)
         add(planks, 4, [(.block(.jungleLog), 1)], .hand, .basic)
         add(planks, 4, [(.block(.palmLog), 1)], .hand, .basic)
+        add(planks, 4, [(.block(.birchLog), 1)], .hand, .basic)
         add(stick, 4, [(planks, 2)], .hand, .basic)
         add(.block(.workbench), 1, [(planks, 8)], .hand, .basic)
         add(.block(.torch), 4, [(stick, 1), (coal, 1)], .hand, .basic)
@@ -3888,6 +3904,8 @@ final class GenCache {
     var villages: [Int: VillageSite?] = [:]
     var rares: [Int: RareSite?] = [:]
     var ponds: [Int: PondSite?] = [:]
+    var grottos: [Int: GrottoSite?] = [:]
+    var mines: [Int: MineSite?] = [:]
     var hits: Int = 0
     var misses: Int = 0
 
@@ -3896,6 +3914,8 @@ final class GenCache {
         villages.removeAll(keepingCapacity: true)
         rares.removeAll(keepingCapacity: true)
         ponds.removeAll(keepingCapacity: true)
+        grottos.removeAll(keepingCapacity: true)
+        mines.removeAll(keepingCapacity: true)
     }
 
     /// Keeps memory bounded in infinite worlds
@@ -3904,6 +3924,8 @@ final class GenCache {
         if villages.count > 4_000 { villages.removeAll(keepingCapacity: true) }
         if rares.count > 8_000 { rares.removeAll(keepingCapacity: true) }
         if ponds.count > 8_000 { ponds.removeAll(keepingCapacity: true) }
+        if grottos.count > 4_000 { grottos.removeAll(keepingCapacity: true) }
+        if mines.count > 4_000 { mines.removeAll(keepingCapacity: true) }
     }
 }
 
@@ -3947,7 +3969,8 @@ struct WorldGen {
     let width: Int
     let spawnX: Int
     /// 1 = original rules (kept for worlds saved before ocean basins), 2 = with ocean basins,
-    /// 3 = buildings and lairs that never wall off the way along the ground
+    /// 3 = buildings and lairs that never wall off the way along the ground, birch and pine trees,
+    /// surface landmarks, crystal grottos and abandoned mines
     let genVersion: Int
     static let currentVersion: Int = 3
     let options: WorldOptions
@@ -4755,9 +4778,15 @@ func generateOverworldChunk(_ g: WorldGen, _ cx: Int) -> Chunk {
     // surface plants & trees
     let villages: [VillageSite] = g.villages(overlapping: x0 - 20, x0 + chunkW + 20)
     let rares: [RareSite] = g.rareSites(overlapping: x0 - 30, x0 + chunkW + 30)
+    // mine headframes and grotto cave mouths keep their ground clear as well
+    let mines: [MineSite] = g.mineSites(overlapping: x0 - 20, x0 + chunkW + 20)
+    var mouths: [Int] = []
+    for s in g.grottoSites(overlapping: x0 - 30, x0 + chunkW + 30) where s.open { mouths.append(s.passStartX + s.dir * s.passLen) }
     func blocked(_ x: Int) -> Bool {
         for v in villages { if abs(x - v.x) < v.halfW + 6 { return true } }
         for r in rares { if abs(x - r.x) < 16 { return true } }
+        for mn in mines { if x >= mn.x - 6 && x <= mn.x + 8 { return true } }
+        for mx in mouths { if abs(x - mx) < 16 { return true } }
         if let l = g.lairAt(x, radius: 110) { _ = l; return true }
         // flat worlds keep the spawn point clear of trees, and trees out of ponds
         if g.options.flat && (abs(x - g.spawnX) < 5 || g.nearPond(x, 2)) { return true }
@@ -4824,26 +4853,55 @@ func generateOverworldChunk(_ g: WorldGen, _ cx: Int) -> Chunk {
             for dx in -4...4 { ch.putIfAir(x + dx, gy - th, .leaves) }
             for dx in -2...2 { ch.putIfAir(x + dx, gy - th - 1, .leaves) }
         } else if tb == .tundra || (tb == .mountain && c.h > 98) {
+            let needles: Tile = g.genVersion >= 3 ? .pineLeaves : .leaves
             let th: Int = 6 + Int(tr * 5.0)
             for k in 1...th { ch.put(x, gy - k, .log) }
             var layer: Int = 0
             while layer < th - 1 {
                 let wdt: Int = min(3, 1 + layer / 2)
-                for dx in -wdt...wdt { ch.putIfAir(x + dx, gy - th - 1 + layer, .leaves) }
+                for dx in -wdt...wdt { ch.putIfAir(x + dx, gy - th - 1 + layer, needles) }
                 layer += 1
             }
-            ch.putIfAir(x, gy - th - 2, .leaves)
+            ch.putIfAir(x, gy - th - 2, needles)
         } else if tb == .swamp {
             let th: Int = 4 + Int(tr * 2.0)
             for k in 1...th { ch.put(x, gy - k, .log) }
             for dx in -3...3 { ch.putIfAir(x + dx, gy - th, .jungleLeaves); if abs(dx) < 3 { ch.putIfAir(x + dx, gy - th - 1, .jungleLeaves) } }
         } else {
-            let th: Int = 4 + Int(tr * 4.0)
-            for k in 1...th { ch.put(x, gy - k, .log) }
-            for dy in -3...1 { for dx in -2...2 {
-                if abs(dx) == 2 && (dy == -3 || dy == 1) { continue }
-                ch.putIfAir(x + dx, gy - th + dy, .leaves)
-            } }
+            // newer worlds mix birches into forests and plains, and tall pines into forests
+            let variety: Double = g.genVersion >= 3 ? hash2(x, 8, g.seed &+ 96) : 1.0
+            if variety < 0.3 && (tb == .forest || tb == .plains) {
+                // birch: a slim white trunk under a narrow, airy crown
+                let th: Int = 6 + Int(tr * 4.0)
+                for k in 1...th { ch.put(x, gy - k, .birchLog) }
+                for dy in -4...0 {
+                    let w: Int = (dy == -4 || dy == 0) ? 1 : 2
+                    for dx in -w...w {
+                        if abs(dx) == 2 && hash2(x + dx, gy + dy, g.seed &+ 95) < 0.3 { continue }
+                        ch.putIfAir(x + dx, gy - th + dy, .birchLeaves)
+                    }
+                }
+                ch.putIfAir(x, gy - th - 5, .birchLeaves)
+            } else if variety < 0.44 && tb == .forest {
+                // pine: tall, with a stepped cone of dark needles
+                let th: Int = 10 + Int(tr * 5.0)
+                for k in 1...th { ch.put(x, gy - k, .log) }
+                var layer: Int = 0
+                while layer < th - 4 {
+                    var wdt: Int = min(3, 1 + layer / 3)
+                    if layer % 3 == 0 && layer > 0 { wdt -= 1 }
+                    for dx in -wdt...wdt { ch.putIfAir(x + dx, gy - th - 1 + layer, .pineLeaves) }
+                    layer += 1
+                }
+                ch.putIfAir(x, gy - th - 2, .pineLeaves)
+            } else {
+                let th: Int = 4 + Int(tr * 4.0)
+                for k in 1...th { ch.put(x, gy - k, .log) }
+                for dy in -3...1 { for dx in -2...2 {
+                    if abs(dx) == 2 && (dy == -3 || dy == 1) { continue }
+                    ch.putIfAir(x + dx, gy - th + dy, .leaves)
+                } }
+            }
         }
     }
     // palms on warm beaches
@@ -4857,6 +4915,7 @@ func generateOverworldChunk(_ g: WorldGen, _ cx: Int) -> Chunk {
         for k in 1...th { ch.put(x + (k > th - 3 ? 1 : 0), c.h - k, .palmLog) }
         for dx in -3...4 { ch.putIfAir(x + 1 + dx, c.h - th - (abs(dx - 0) > 2 ? 0 : 1), .jungleLeaves) }
     }
+    if g.hasLandmarks { placeLandmarks(g, ch, colAt, blocked) }
     applyStructures(g, ch, cols, x0 - m)
     ch.rebuildSky()
     return ch
@@ -5803,6 +5862,493 @@ func applyStructures(_ g: WorldGen, _ ch: Chunk, _ cols: [Col], _ off: Int) {
     for v in g.villages(overlapping: x0 - 14, x0 + chunkW + 14) { buildVillage(g, ch, v) }
     for r in g.rareSites(overlapping: x0 - 30, x0 + chunkW + 30) { buildRare(g, ch, cols, off, r) }
     if abs(g.portalX - mid) < 24 { buildPortalChamber(g, ch) }
+    for s in g.grottoSites(overlapping: x0, x0 + chunkW - 1) { buildGrotto(g, ch, s) }
+    for s in g.mineSites(overlapping: x0, x0 + chunkW - 1) { buildMine(g, ch, s) }
+}
+
+// MARK: - Crystal grottos, old mines and surface landmarks (generator version 3)
+
+/// A vaulted cavern deep underground, its walls studded with crystal, a guarded altar chest at the
+/// centre, a still pool, and a long stepped passage climbing from it toward the surface (in standard
+/// worlds it comes out as a cave mouth; flat worlds keep their crust whole, so there it ends sealed)
+struct GrottoSite {
+    var cell: Int
+    var x: Int
+    /// the row the cavern floor is on
+    var floorY: Int
+    var rx: Int
+    var ry: Int
+    /// the passage leaves the cavern on this side and climbs one row per column
+    var dir: Int
+    var passLen: Int
+    /// whether the passage reaches the surface
+    var open: Bool
+    var seed: UInt64
+    var passStartX: Int { return x + dir * (rx - 3) }
+    var minX: Int { return min(x - rx - 3, passStartX + min(0, dir * passLen) - 2) }
+    var maxX: Int { return max(x + rx + 3, passStartX + max(0, dir * passLen) + 2) }
+}
+
+/// An old mine: a timber headframe over a covered, laddered shaft, with galleries off it
+struct MineSite {
+    var cell: Int
+    /// left column of the three-wide shaft (the ladder runs up the middle column)
+    var x: Int
+    var ground: Int
+    /// floor rows of the galleries, top to bottom; the last one is the floor of the shaft
+    var levels: [Int]
+    var left: [Int]
+    var right: [Int]
+    var seed: UInt64
+    var bottom: Int { return levels.last ?? ground }
+    var minX: Int { return x - (left.max() ?? 0) - 3 }
+    var maxX: Int { return x + 2 + (right.max() ?? 0) + 3 }
+}
+
+extension WorldGen {
+    static let grottoCell: Int = 700
+    static let mineCell: Int = 900
+    static let landmarkCell: Int = 72
+    /// the longest passage a grotto may have (the deepest floors lie about 280 rows down)
+    static let grottoReach: Int = 420
+
+    var hasGrottos: Bool { return genVersion >= 3 && hasStructures && (!options.flat || options.caves) }
+    var hasMines: Bool { return genVersion >= 3 && hasStructures }
+    var hasLandmarks: Bool { return genVersion >= 3 && hasTrees }
+
+    func grottoSite(cell c: Int) -> GrottoSite? {
+        if let v = cache.grottos[c] { return v }
+        let v: GrottoSite? = computeGrottoSite(cell: c)
+        cache.grottos[c] = v
+        return v
+    }
+
+    /// whether a grotto passage may come out of the ground at x: dry land with nothing built there
+    func caveMouthClear(_ x: Int) -> Bool {
+        let c: Col = col(x)
+        if c.biome == .ocean || c.h >= WorldGen.sea - 1 { return false }
+        if abs(x - spawnX) < 30 || abs(x - portalX) < 60 { return false }
+        if lairAt(x, radius: 140) != nil { return false }
+        for v in villages(overlapping: x - 20, x + 20) where abs(v.x - x) < v.halfW + 16 { return false }
+        for r in rareSites(overlapping: x - 40, x + 40) where abs(r.x - x) < 40 { return false }
+        return true
+    }
+
+    func computeGrottoSite(cell c: Int) -> GrottoSite? {
+        if !hasGrottos { return nil }
+        if hash2(c, 601, seed) > 0.6 { return nil }
+        let cw: Int = WorldGen.grottoCell
+        let x: Int = c * cw + 90 + Int(hash2(c, 602, seed) * Double(cw - 180))
+        if !infinite && (x < 260 || x > width - 260) { return nil }
+        if abs(x - portalX) < 240 { return nil }
+        let rx: Int = 17 + Int(hash2(c, 604, seed) * 9.0)
+        let ry: Int = 8 + Int(hash2(c, 605, seed) * 4.0)
+        let floorY: Int = 250 + Int(hash2(c, 603, seed) * 130.0)
+        let first: Int = hash2(c, 606, seed) < 0.5 ? -1 : 1
+        var site = GrottoSite(cell: c, x: x, floorY: floorY, rx: rx, ry: ry, dir: first, passLen: 0, open: false, seed: hashU(c, 607, seed))
+        // trace the passage up one row per column; try the other side if the first comes out badly
+        var best: (Int, Int, Bool)? = nil
+        for d in [first, -first] {
+            let sx: Int = x + d * (rx - 3)
+            var k: Int = 0
+            var result: (Int, Bool)? = nil
+            var checked: Bool = false
+            while k < WorldGen.grottoReach {
+                let px: Int = sx + d * k
+                if !infinite && (px < 40 || px > width - 40) { result = (max(0, k - 1), false); break }
+                let h: Int = col(px).h
+                let fk: Int = floorY - k
+                if options.flat {
+                    // stop while the passage roof is still below the crust
+                    if fk - 5 < h + WorldGen.flatCrust { result = (max(0, k - 1), false); break }
+                } else {
+                    if !checked && fk <= h + 8 {
+                        // the last stretch: open only onto clear, dry ground
+                        checked = true
+                        var clear: Bool = true
+                        var j: Int = 0
+                        while j <= 16 && clear { clear = caveMouthClear(px + d * j); j += 4 }
+                        if !clear { result = (k, false); break }
+                    }
+                    if fk <= h { result = (k, true); break }
+                }
+                k += 1
+            }
+            let r: (Int, Bool) = result ?? (k, false)
+            if r.1 { best = (d, r.0, true); break }
+            if best == nil { best = (d, r.0, false) }
+        }
+        if let b = best {
+            site.dir = b.0
+            site.passLen = b.1
+            site.open = b.2
+        }
+        return site
+    }
+
+    func grottoSites(overlapping x0: Int, _ x1: Int) -> [GrottoSite] {
+        var out: [GrottoSite] = []
+        if !hasGrottos { return out }
+        let cw: Int = WorldGen.grottoCell
+        let c0: Int = floorDiv(x0 - WorldGen.grottoReach - 40, cw)
+        let c1: Int = floorDiv(x1 + WorldGen.grottoReach + 40, cw)
+        for c in c0...c1 {
+            if let s = grottoSite(cell: c), s.maxX >= x0 && s.minX <= x1 { out.append(s) }
+        }
+        return out
+    }
+
+    func mineSite(cell c: Int) -> MineSite? {
+        if let v = cache.mines[c] { return v }
+        let v: MineSite? = computeMineSite(cell: c)
+        cache.mines[c] = v
+        return v
+    }
+
+    func computeMineSite(cell c: Int) -> MineSite? {
+        if !hasMines { return nil }
+        if hash2(c, 621, seed) > 0.55 { return nil }
+        let cw: Int = WorldGen.mineCell
+        let ok: [Biome] = [.plains, .forest, .mountain, .tundra, .savanna, .desert]
+        // a few tries across the cell for a level spot to sink the shaft
+        func usable(_ x: Int) -> Col? {
+            if !infinite && (x < 320 || x > width - 320) { return nil }
+            if abs(x - spawnX) < 60 || abs(x - portalX) < 80 { return nil }
+            let base: Col = col(x)
+            if !ok.contains(base.biome) || base.h >= WorldGen.sea - 1 { return nil }
+            for d in -4...6 {
+                let cc: Col = col(x + d)
+                if cc.biome == .ocean || abs(cc.h - base.h) > 1 { return nil }
+            }
+            if lairAt(x, radius: 200) != nil { return nil }
+            if nearestVillageSimple(x) { return nil }
+            for r in rareSites(overlapping: x - 70, x + 70) where abs(r.x - x) < 70 { return nil }
+            return base
+        }
+        var found: (Int, Col)? = nil
+        for attempt in 0..<10 {
+            let x: Int = c * cw + 120 + Int(hash2(c, 622 + attempt * 3, seed) * Double(cw - 240))
+            if let b = usable(x) { found = (x, b); break }
+        }
+        guard let (x, base) = found else { return nil }
+        let depth: Int = 60 + Int(hash2(c, 623, seed) * 100.0)
+        let n: Int = depth > 130 ? 3 : (depth > 90 ? 2 : 1)
+        var levels: [Int] = []
+        var left: [Int] = []
+        var right: [Int] = []
+        for k in 0..<n {
+            levels.append(base.h + depth * (k + 1) / n)
+            left.append(16 + Int(hash2(c, 630 + k, seed) * 40.0))
+            right.append(16 + Int(hash2(c, 640 + k, seed) * 40.0))
+        }
+        return MineSite(cell: c, x: x, ground: base.h, levels: levels, left: left, right: right, seed: hashU(c, 624, seed))
+    }
+
+    func mineSites(overlapping x0: Int, _ x1: Int) -> [MineSite] {
+        var out: [MineSite] = []
+        if !hasMines { return out }
+        let cw: Int = WorldGen.mineCell
+        for c in floorDiv(x0 - 80, cw)...floorDiv(x1 + 80, cw) {
+            if let s = mineSite(cell: c), s.maxX >= x0 && s.minX <= x1 { out.append(s) }
+        }
+        return out
+    }
+}
+
+/// Water or lava touching carved-out space becomes stone, so nothing hangs in the air
+private func sealLiquid(_ ch: Chunk, _ x: Int, _ y: Int) {
+    if ch.at(x, y).liquid { ch.put(x, y, .stone) }
+}
+
+func buildGrotto(_ g: WorldGen, _ ch: Chunk, _ s: GrottoSite) {
+    let cx0: Int = ch.x0
+    let cx1: Int = ch.x0 + chunkW - 1
+    let rxD: Double = Double(s.rx)
+    let ryD: Double = Double(s.ry)
+    let fy: Int = s.floorY
+    let xa: Int = max(cx0, s.x - s.rx - 3)
+    let xb: Int = min(cx1, s.x + s.rx + 3)
+    if xa <= xb {
+        for x in xa...xb {
+            let u: Double = Double(x - s.x) / rxD
+            let wob: Double = 1.0 + (vnoise(Double(x) * 0.18, 3.0, s.seed) - 0.5) * 0.26
+            let inner: Double = wob * wob - u * u
+            let vault: Int = inner > 0 ? Int((sqrt(inner) / wob * ryD).rounded()) : 0
+            let ow: Double = wob * 1.28
+            let outer: Double = ow * ow - u * u
+            let shell: Int = outer > 0 ? Int((sqrt(outer) / ow * ryD * 1.2).rounded()) + 1 : 0
+            let pool: Bool = u * Double(-s.dir) > 0.45 && u * Double(-s.dir) < 0.8
+            // crystal-studded shell around the vault
+            if shell > 0 {
+                for y in (fy - shell - 1)...(fy + 1) {
+                    if y >= fy - vault && y < fy { continue }
+                    let t: Tile = ch.at(x, y)
+                    if t.liquid { ch.put(x, y, .stone); continue }
+                    if !t.solid || t == .bedrock { continue }
+                    let r: Double = hash2(x, y, s.seed &+ 3)
+                    if r < 0.22 { ch.put(x, y, .crystalOre) } else if r < 0.27 { ch.put(x, y, .glowCrystal) }
+                }
+            }
+            if vault <= 0 { continue }
+            for y in (fy - vault)..<fy { ch.put(x, y, .air) }
+            // a level floor (stone bridges any cave below), or the pool
+            if pool {
+                ch.put(x, fy, .water)
+                ch.put(x, fy + 1, .water)
+                if !ch.at(x, fy + 2).solid { ch.put(x, fy + 2, .stone) }
+                sealLiquid(ch, x, fy + 2)
+            } else if !ch.at(x, fy).solid || ch.at(x, fy) == .glowCrystal {
+                ch.put(x, fy, .stone)
+            }
+            // crystals hanging from the vault and standing on the floor
+            if vault > 4 && hash2(x, 1, s.seed &+ 5) < 0.14 { ch.put(x, fy - vault, .glowCrystal) }
+            if !pool && abs(x - s.x) > 7 && hash2(x, 2, s.seed &+ 5) < 0.08 { ch.put(x, fy - 1, .glowCrystal) }
+        }
+        // the altar, its chest, and two crystal pillars standing guard
+        for dx in -2...2 { ch.put(s.x + dx, fy - 1, .mossBrick) }
+        ch.put(s.x, fy - 2, .chest)
+        for side in [-1, 1] {
+            ch.put(s.x + side * 6, fy - 1, .glowCrystal)
+            ch.put(s.x + side * 6, fy - 2, .glowCrystal)
+        }
+    }
+    // the passage: four rows tall, climbing one row per column, lit by crystals in its roof
+    if s.passLen <= 0 { return }
+    let sx: Int = s.passStartX
+    for k in 0...s.passLen {
+        let px: Int = sx + s.dir * k
+        if px < cx0 || px > cx1 { continue }
+        let fk: Int = fy - k
+        for y in (fk - 4)...(fk - 1) where ch.at(px, y) != .bedrock { ch.put(px, y, .air) }
+        if !ch.at(px, fk).solid && k < s.passLen - 2 { ch.put(px, fk, .stone) }
+        sealLiquid(ch, px, fk)
+        sealLiquid(ch, px, fk - 5)
+        if k % 7 == 3 && ch.at(px, fk - 5).solid && ch.at(px, fk - 5) != .bedrock { ch.put(px, fk - 5, .glowCrystal) }
+        if s.open {
+            // near the mouth, clear away trunks and leaves left hanging over the cut
+            let h: Int = g.col(px).h
+            let lo: Int = max(1, h - 18)
+            let hi: Int = fk - 4
+            if fk - 5 <= h + 1 && lo < hi {
+                for y in lo..<hi {
+                    let t: Tile = ch.at(px, y)
+                    if isLogTile(t) || isLeafTile(t) { ch.put(px, y, .air) }
+                }
+            }
+        }
+    }
+}
+
+func buildMine(_ g: WorldGen, _ ch: Chunk, _ s: MineSite) {
+    let cx0: Int = ch.x0
+    let cx1: Int = ch.x0 + chunkW - 1
+    let gy: Int = s.ground
+    let bottom: Int = s.bottom
+    let sx: Int = s.x
+    let plankWall: UInt8 = 5
+    func clipped(_ a: Int, _ b: Int) -> ClosedRange<Int>? {
+        let lo: Int = max(a, cx0)
+        let hi: Int = min(b, cx1)
+        return lo <= hi ? lo...hi : nil
+    }
+    // the headframe: two timber posts (background walls, so they never block the way), a beam you
+    // can stand on, a lantern under it, torches either side
+    if let r = clipped(sx - 2, sx + 4) {
+        for x in r {
+            for y in (gy - 7)...(gy - 1) {
+                let t: Tile = ch.at(x, y)
+                if t.isPlant || isLogTile(t) || isLeafTile(t) { ch.put(x, y, .air) }
+            }
+        }
+    }
+    ch.fillWall(sx - 1, gy - 5, sx - 1, gy - 1, plankWall)
+    ch.fillWall(sx + 3, gy - 5, sx + 3, gy - 1, plankWall)
+    ch.fill(sx - 1, gy - 6, sx + 3, gy - 6, .platform)
+    ch.put(sx + 1, gy - 5, .lantern)
+    ch.put(sx - 2, gy - 1, .torch)
+    ch.put(sx + 4, gy - 1, .torch)
+    let galleryRows: Set<Int> = Set(s.levels.flatMap { [$0 - 3, $0 - 2, $0 - 1] })
+    // the shaft: covered with planks you can drop through, a ladder all the way down
+    if let r = clipped(sx, sx + 2) {
+        for x in r {
+            ch.put(x, gy, .platform)
+            for y in (gy + 1)..<bottom { ch.put(x, y, x == sx + 1 ? .ladder : .air) }
+            ch.put(x, bottom, .planks)
+            ch.fillWall(x, gy + 1, x, bottom - 1, plankWall)
+        }
+    }
+    // timber lining where the shaft passes through open cave or water
+    for x in [sx - 1, sx + 3] where x >= cx0 && x <= cx1 {
+        for y in (gy + 1)..<bottom where !galleryRows.contains(y) {
+            let t: Tile = ch.at(x, y)
+            if !t.solid || t.liquid { ch.put(x, y, .planks) }
+        }
+    }
+    // the galleries
+    for (i, f) in s.levels.enumerated() {
+        let xa: Int = sx - s.left[i]
+        let xb: Int = sx + 2 + s.right[i]
+        let depthBelow: Int = f - gy
+        if let r = clipped(xa, xb) {
+            for x in r {
+                let inShaft: Bool = x >= sx && x <= sx + 2
+                if inShaft {
+                    // landings either side of the ladder at the upper galleries
+                    if f != bottom && x != sx + 1 { ch.put(x, f, .platform) }
+                    continue
+                }
+                let rel: Int = x < sx ? sx - x : x - (sx + 2)
+                for y in (f - 3)...(f - 1) { ch.put(x, y, .air) }
+                if !ch.at(x, f).solid || ch.at(x, f).liquid { ch.put(x, f, .planks) }
+                sealLiquid(ch, x, f - 4)
+                if rel % 6 == 3 {
+                    // a timber support: posts behind, a beam overhead
+                    ch.fillWall(x, f - 3, x, f - 1, plankWall)
+                    ch.put(x, f - 4, .planks)
+                } else if rel % 12 == 7 {
+                    ch.put(x, f - 1, .torch)
+                }
+                if rel % 6 == 4 && hash2(x, f + 1, s.seed) < 0.35 { ch.put(x, f - 3, .cobweb) }
+                // ore showing in the roof and floor
+                let r0: Double = hash2(x, f, s.seed &+ 7)
+                if r0 < 0.09 && rel % 6 != 3 {
+                    let ores: [Tile] = depthBelow < 80 ? [.coal, .copper, .coal] : (depthBelow < 130 ? [.iron, .copper, .coal] : [.iron, .gold, .iron])
+                    let ore: Tile = ores[Int(hash2(x, f, s.seed &+ 8) * 3.0) % 3]
+                    let oy: Int = r0 < 0.05 ? f - 4 : f
+                    if ch.at(x, oy).solid && ch.at(x, oy) != .planks { ch.put(x, oy, ore) }
+                }
+            }
+        }
+        // one end keeps a chest, the other has caved in
+        let chestLeft: Bool = hash2(i, 650, s.seed) < 0.5
+        if hash2(i, 651, s.seed) < 0.75 { ch.put(chestLeft ? xa + 1 : xb - 1, f - 1, .chest) }
+        let rubble: Int = chestLeft ? xb : xa
+        ch.put(rubble, f - 1, .stone)
+        ch.put(rubble, f - 2, .stone)
+    }
+}
+
+/// The small set pieces scattered over the land
+enum Landmark {
+    case boulder, mossyBoulder, snowBoulder, fallenLog, fallenJungleLog, mossyLog, meadow, mushroomRing
+    case bones, sandstoneRuin, iceSpikes, cairn, termiteMound, reeds
+
+    var halfWidth: Int {
+        switch self {
+        case .boulder, .mossyBoulder, .snowBoulder, .termiteMound: return 2
+        case .fallenLog, .fallenJungleLog, .mossyLog, .bones, .sandstoneRuin, .reeds: return 4
+        case .meadow: return 6
+        case .mushroomRing, .iceSpikes: return 3
+        case .cairn: return 1
+        }
+    }
+
+    static func pick(_ b: Biome, _ r: Double) -> Landmark? {
+        switch b {
+        case .plains: return r < 0.4 ? .boulder : (r < 0.75 ? .meadow : .fallenLog)
+        case .forest: return r < 0.45 ? .fallenLog : (r < 0.7 ? .mossyBoulder : .mushroomRing)
+        case .jungle: return r < 0.5 ? .fallenJungleLog : .meadow
+        case .savanna: return r < 0.45 ? .boulder : (r < 0.75 ? .bones : .termiteMound)
+        case .desert: return r < 0.55 ? .bones : .sandstoneRuin
+        case .tundra: return r < 0.6 ? .iceSpikes : .snowBoulder
+        case .swamp: return r < 0.55 ? .mossyLog : .reeds
+        case .mountain: return r < 0.65 ? .boulder : .cairn
+        case .ocean, .umbral: return nil
+        }
+    }
+}
+
+/// One landmark (or none) per 72 columns, picked by biome. Each is at most three blocks tall, so it
+/// can always be walked or hopped over, and each only goes on level, dry ground away from buildings.
+func placeLandmarks(_ g: WorldGen, _ ch: Chunk, _ colAt: (Int) -> Col, _ blocked: (Int) -> Bool) {
+    let x0: Int = ch.x0
+    let cw: Int = WorldGen.landmarkCell
+    for c in floorDiv(x0 - 8, cw)...floorDiv(x0 + chunkW + 8, cw) {
+        if hash2(c, 701, g.seed) > 0.5 { continue }
+        let lx: Int = c * cw + 8 + Int(hash2(c, 702, g.seed) * Double(cw - 16))
+        if lx + 6 < x0 || lx - 6 >= x0 + chunkW { continue }
+        if !g.infinite && (lx < 24 || lx > g.width - 24) { continue }
+        if abs(lx - g.spawnX) < 14 { continue }
+        let base: Col = colAt(lx)
+        guard let kind = Landmark.pick(base.biome, hash2(c, 703, g.seed)) else { continue }
+        let hw: Int = kind.halfWidth
+        var ok: Bool = true
+        for d in -hw...hw {
+            let cc: Col = colAt(lx + d)
+            if cc.biome == .ocean || cc.h >= WorldGen.sea - 1 || abs(cc.h - base.h) > 1 || blocked(lx + d) { ok = false; break }
+        }
+        if !ok { continue }
+        let seed: UInt64 = hashU(c, 704, g.seed)
+        // writes over air and small plants only, so trunks and buildings stay as they are
+        func place(_ d: Int, _ up: Int, _ t: Tile) {
+            let x: Int = lx + d
+            let y: Int = colAt(x).h - up
+            let cur: Tile = ch.at(x, y)
+            if cur == .air || (cur.isPlant && cur != .torch && cur != .lantern) { ch.put(x, y, t) }
+        }
+        func plant(_ d: Int, _ t: Tile) {
+            let x: Int = lx + d
+            let h: Int = colAt(x).h
+            if x < x0 || x >= x0 + chunkW { return }
+            if !ch.at(x, h).solid { return }
+            if ch.at(x, h - 1) == .air || ch.at(x, h - 1) == .tallGrass { ch.put(x, h - 1, t) }
+        }
+        func rnd(_ k: Int) -> Double { return hash2(lx, k, seed) }
+        switch kind {
+        case .boulder, .mossyBoulder, .snowBoulder:
+            let cap: Tile = kind == .mossyBoulder ? .mossGrass : (kind == .snowBoulder ? .snow : .stone)
+            let wide: Bool = rnd(1) < 0.5
+            for d in -2...2 {
+                if abs(d) == 2 && !wide { continue }
+                let hgt: Int = abs(d) == 2 || (abs(d) == 1 && !wide) ? 1 : 2
+                for k in 1...hgt { place(d, k, k == hgt ? cap : .stone) }
+            }
+        case .fallenLog, .fallenJungleLog, .mossyLog:
+            let len: Int = 4 + Int(rnd(1) * 4.0)
+            let start: Int = -len / 2
+            let wood: Tile = kind == .fallenJungleLog ? .jungleLogBlock : (rnd(3) < 0.35 && kind == .fallenLog ? .birchLogBlock : .logBlock)
+            for d in start..<(start + len) { place(d, 1, wood) }
+            if rnd(2) < 0.6 || kind == .mossyLog { place(start + 1, 2, .mushroom) }
+            if kind == .mossyLog { place(start + len - 2, 2, .mushroom) }
+            plant(start - 1, .tallGrass)
+            plant(start + len, .tallGrass)
+        case .meadow:
+            for d in -6...6 {
+                let r: Double = rnd(10 + d)
+                plant(d, r < 0.36 ? .flowerR : (r < 0.72 ? .flowerY : .tallGrass))
+            }
+        case .mushroomRing:
+            for d in [-3, -2, 2, 3] { plant(d, .mushroom) }
+            plant(0, .tallGrass)
+        case .bones:
+            for d in -3...3 { place(d, 1, .fossil) }
+            for d in [-2, 0, 2] { place(d, 2, .fossil) }
+            place(4, 1, .fossil)
+            place(4, 2, .fossil)
+        case .sandstoneRuin:
+            for d in [-3, 3] {
+                place(d, 1, .sandstone)
+                if rnd(d + 5) < 0.7 { place(d, 2, .sandstone) }
+            }
+            for d in -1...1 { place(d, 1, .sandstone) }
+            if rnd(4) < 0.3 { place(0, 2, .chest) }
+        case .iceSpikes:
+            for (d, hgt) in [(-2, 2), (0, 3), (2, 2)] where rnd(d + 7) < 0.85 || d == 0 {
+                for k in 1...hgt { place(d, k, .ice) }
+            }
+        case .cairn:
+            for k in 1...3 { place(0, k, .stone) }
+            place(0, 4, .torch)
+            place(-1, 1, .stone)
+            place(1, 1, .stone)
+        case .termiteMound:
+            for (d, hgt) in [(-2, 1), (-1, 2), (0, 3), (1, 2), (2, 1)] {
+                for k in 1...hgt { place(d, k, .dirt) }
+            }
+        case .reeds:
+            for d in -4...4 where rnd(20 + d) < 0.7 { plant(d, .reed) }
+        }
+    }
 }
 
 // ===== p09_umbral =====
@@ -6356,6 +6902,33 @@ func generateChestLoot(_ g: WorldGen, _ dim: Dimension, _ x: Int, _ y: Int) -> [
         add(.food(.cookedMeat), 3, 6, 0.8)
         return out
     }
+    // crystal grottos and old mines
+    if y > 150 {
+        for s in g.grottoSites(overlapping: x - 2, x + 2) where abs(x - s.x) <= s.rx && abs(y - s.floorY) < 6 {
+            add(.mat(.crystalShard), 3, 7, 1.0)
+            add(.mat(.diamond), 1, 3, 0.7)
+            add(.block(.glowCrystal), 2, 5, 0.8)
+            add(.mat(.relicFragment), 1, 2, 0.8)
+            add(.mat(.mythrilBar), 1, 3, 0.45)
+            add(.gear(.headlamp), 1, 1, 0.3)
+            add(.spear(tierPick(4, 6)), 1, 1, 0.35)
+            return out
+        }
+    }
+    if g.hasMines {
+        for s in g.mineSites(overlapping: x - 2, x + 2) where y > s.ground + 8 && y <= s.bottom + 2 {
+            add(.mat(.ironBar), 2, 6, 0.85)
+            add(.mat(.goldBar), 1, 3, 0.5)
+            add(.mat(.coal), 4, 12, 0.8)
+            add(.block(.torch), 6, 16, 0.8)
+            add(.block(.ladder), 4, 10, 0.5)
+            add(.tool(.pickaxe, tierPick(3, 5)), 1, 1, 0.35)
+            add(.hammer(tierPick(3, 4)), 1, 1, 0.2)
+            add(.mat(.relicFragment), 1, 1, 0.3)
+            add(.gear(.divingMask), 1, 1, 0.12)
+            return out
+        }
+    }
     // villages
     if y < 200, let v = g.nearestVillage(to: x), abs(x - v.x) <= v.halfW + 12 {
         add(.food(.bread), 2, 5, 0.9)
@@ -6398,6 +6971,7 @@ func generateChestLoot(_ g: WorldGen, _ dim: Dimension, _ x: Int, _ y: Int) -> [
         add(.food(.bread), 1, 3, 0.6)
         add(.block(.torch), 3, 8, 0.7)
         add(.mat(.copperBar), 1, 4, 0.5)
+        if g.genVersion >= 3 { add(.mat(.relicFragment), 1, 1, 0.15) }
     } else if y < 320 {
         add(.mat(.ironBar), 2, 6, 0.8)
         add(.mat(.goldBar), 1, 4, 0.5)
@@ -9345,7 +9919,7 @@ extension Game {
         for t in Tile.allCases {
             switch t {
             case .air, .water, .lava, .bedrock, .portalFrame, .portalOff, .portalOn, .wheat1, .wheat2, .carrot1, .carrot2, .doorOpen,
-                 .logBlock, .jungleLogBlock, .palmLogBlock: continue
+                 .logBlock, .jungleLogBlock, .palmLogBlock, .birchLogBlock: continue
             default: out.append(.block(t))
             }
         }
@@ -9388,7 +9962,8 @@ extension Game {
 
 func toolClass(_ t: Tile) -> ToolType {
     switch t {
-    case .log, .jungleLog, .palmLog, .logBlock, .jungleLogBlock, .palmLogBlock, .planks, .workbench, .chest, .platform, .leaves, .jungleLeaves, .cactus, .hay, .reed, .lantern, .torch, .ladder, .tinkerBench:
+    case .log, .jungleLog, .palmLog, .logBlock, .jungleLogBlock, .palmLogBlock, .planks, .workbench, .chest, .platform, .leaves, .jungleLeaves, .cactus, .hay, .reed, .lantern, .torch, .ladder, .tinkerBench,
+         .birchLog, .birchLogBlock, .birchLeaves, .pineLeaves:
         return .axe
     case .dirt, .grass, .sand, .snow, .mud, .dryGrass, .jungleGrass, .mossGrass, .farmland:
         return .shovel
@@ -9398,7 +9973,11 @@ func toolClass(_ t: Tile) -> ToolType {
 }
 
 func isLogTile(_ t: Tile) -> Bool {
-    return t == .log || t == .jungleLog || t == .palmLog
+    return t == .log || t == .jungleLog || t == .palmLog || t == .birchLog
+}
+
+func isLeafTile(_ t: Tile) -> Bool {
+    return t == .leaves || t == .jungleLeaves || t == .birchLeaves || t == .pineLeaves
 }
 
 struct DecayZone {
@@ -9428,7 +10007,7 @@ extension Game {
                 let x: Int = z.x + Int.random(in: -7...7)
                 let y: Int = z.y + Int.random(in: -10...4)
                 let t: Tile = world.tile(x, y)
-                if (t == .leaves || t == .jungleLeaves) && !logNear(x, y, 4) { breakTile(x, y, false) }
+                if isLeafTile(t) && !logNear(x, y, 4) { breakTile(x, y, false) }
             }
             if z.t > 0 { keep.append(z) }
         }
@@ -9783,7 +10362,7 @@ extension Game {
                 let lx: Int = x + dx
                 let ly: Int = ty + dy
                 let lt: Tile = world.tile(lx, ly)
-                if lt == .leaves || lt == .jungleLeaves {
+                if isLeafTile(lt) {
                     // only fell leaves that belong to this tree (near the trunk top)
                     if abs(dx) + abs(dy + 1) <= 8 { breakTile(lx, ly, true) }
                 }
@@ -13011,7 +13590,7 @@ extension Game {
                 if m == .emberBar { add = 120 }
             case .block(let t):
                 if t == .planks { add = 8 }
-                if t == .log || t == .jungleLog || t == .palmLog { add = 14 }
+                if isLogTile(t) { add = 14 }
             default: break
             }
             if add > 0 {
@@ -13558,6 +14137,9 @@ extension Game {
         for r in g.rareSites(overlapping: x0, x1) {
             ruins.append(r)
             markers.append(MapMarker(x: r.x, kind: 4, label: rareName(r.kind)))
+        }
+        for s in g.mineSites(overlapping: x0, x1) {
+            markers.append(MapMarker(x: s.x + 1, kind: 5, label: "Mine Shaft"))
         }
         // clues
         var clues: [String] = []
@@ -17925,6 +18507,9 @@ enum MapDrawer {
             case 3:
                 sym = "⌂"
                 col = Color(hex: 0x6A4A1A)
+            case 5:
+                sym = "▼"
+                col = Color(hex: 0x7A4A20)
             default:
                 sym = "▲"
                 col = Color(hex: 0x5A5A5A)

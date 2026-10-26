@@ -689,6 +689,21 @@ func tileBuf(_ t: Tile) -> PixelBuf {
     }
     var rng = RNG(UInt64(t.rawValue) &* 7919 &+ 13)
     let c: [UInt32] = d.colors
+    // calmer textures: pixels group into 2x2 clumps and the accent colours sit closer to the base,
+    // so terrain reads as surfaces rather than static
+    let k1: UInt32 = mixRGB(c[0], c[1], 0.6)
+    let k2: UInt32 = mixRGB(c[0], c[2], 0.6)
+    let k3: UInt32 = mixRGB(c[0], c[3], 0.5)
+    func clump(_ x: Int, _ y: Int) -> Int {
+        return Int(hashU(x / 2 + (y / 2) * 5, Int(t.rawValue), 9127) % 100)
+    }
+    func calm(_ x: Int, _ y: Int, _ r: Int) -> UInt32 {
+        let cl: Int = clump(x, y)
+        if r < 6 { return k3 }
+        if cl < 28 { return k1 }
+        if cl > 80 { return k2 }
+        return c[0]
+    }
     let specks: [(Int, Int)] = [(2, 2), (3, 2), (3, 3), (5, 5), (6, 5), (5, 6), (1, 6), (6, 1)]
     for y in 0..<8 {
         for x in 0..<8 {
@@ -698,7 +713,10 @@ func tileBuf(_ t: Tile) -> PixelBuf {
             case .grassTop:
                 if y < 2 { col = r < 60 ? c[0] : c[1] }
                 else if y == 2 { col = r < 50 ? c[1] : c[2] }
-                else { col = r < 60 ? c[2] : (r < 85 ? c[3] : c[4]) }
+                else {
+                    let cl: Int = clump(x, y)
+                    col = cl < 60 ? c[2] : (cl < 88 ? mixRGB(c[2], c[3], 0.7) : mixRGB(c[2], c[4], 0.7))
+                }
             case .log:
                 col = (x % 4 == 0) ? c[1] : (r < 20 ? c[2] : c[0])
                 if x == 7 { col = c[3] }
@@ -722,17 +740,17 @@ func tileBuf(_ t: Tile) -> PixelBuf {
             case .lava:
                 col = r < 25 ? c[3] : (r < 60 ? c[1] : (r < 85 ? c[0] : c[2]))
             case .ore:
-                col = r < 55 ? c[0] : (r < 80 ? c[1] : c[2])
+                col = calm(x, y, r + 10)
                 if specks.contains(where: { $0.0 == x && $0.1 == y }) { col = r < 60 ? c[5] : c[6] }
             case .snow:
-                col = r < 60 ? c[0] : (r < 85 ? c[1] : c[2])
+                col = calm(x, y, 50)
             case .ice:
                 col = r < 50 ? c[0] : (r < 75 ? c[1] : c[2])
                 if (x + y) % 6 == 0 { col = c[3] }
                 b.px[y * 8 + x] = 0xE0000000 | col
                 continue
             case .mud:
-                col = r < 55 ? c[0] : (r < 80 ? c[1] : (r < 92 ? c[2] : c[3]))
+                col = calm(x, y, r)
             case .cactus:
                 col = (x == 0 || x == 7) ? c[3] : ((x == 3 || x == 4) ? c[2] : c[0])
                 if y % 4 == 1 && (x == 1 || x == 6) { col = c[3] }
@@ -744,9 +762,9 @@ func tileBuf(_ t: Tile) -> PixelBuf {
             case .sandstone:
                 col = (y % 3 == 2) ? c[1] : (r < 25 ? c[2] : c[0])
             case .ash:
-                col = r < 55 ? c[0] : (r < 80 ? c[1] : (r < 93 ? c[2] : c[3]))
+                col = calm(x, y, r)
             default:
-                col = r < 55 ? c[0] : (r < 80 ? c[1] : (r < 93 ? c[2] : c[3]))
+                col = calm(x, y, r)
             }
             b.set(x, y, col)
         }
@@ -4848,7 +4866,9 @@ func generateChestLoot(_ g: WorldGen, _ dim: Dimension, _ x: Int, _ y: Int) -> [
 // MARK: - Lighting: flood-fill light over the visible window (sky light + block light)
 // Written with raw buffers and plain Ints so it stays fast in Swift Playgrounds' debug builds.
 
-let lightLUT: [Double] = (0...15).map { pow(Double($0) / 15.0, 1.0) }
+/// Brightness per light level. Slightly lifted (gamma 0.85) so torchlight reaches further into caves and
+/// the step from lit to unlit is less harsh.
+let lightLUT: [Double] = (0...15).map { pow(Double($0) / 15.0, 0.85) }
 
 final class LightMap {
     var ox: Int = 0
@@ -5126,7 +5146,8 @@ final class LightMap {
                 let sb: Double = lightLUT[s]
                 let bb: Double = lightLUT[b]
                 let bright: Double = max(max(sb, bb), ambient)
-                let a: Int = max(0, Int((1.0 - bright) * 252.0))
+                // never quite pitch black: cave walls stay faintly readable
+                let a: Int = max(0, Int((1.0 - bright) * 238.0))
                 let skyShare: Double = sb > bb ? 1.0 : 0.0
                 let tint: Double = skyShare * nightMix
                 let r: Int = Int(3.0 + 9.0 * tint)
@@ -13440,6 +13461,18 @@ func vGradient(_ ctx: inout GraphicsContext, _ r: CGRect, _ colors: [Color], _ y
     ctx.fill(Path(r), with: sh)
 }
 
+/// Darkens or tints the screen edges, fading to nothing toward the middle
+func edgeVignette(_ ctx: inout GraphicsContext, _ W: Double, _ H: Double, _ c: UInt32, _ a: Double) {
+    let band: Double = min(W, H) * 0.24
+    let on: Color = rgbColor(c, a)
+    let off: Color = rgbColor(c, 0)
+    let g: Gradient = Gradient(colors: [on, off])
+    ctx.fill(Path(mkRect(0, 0, W, band)), with: .linearGradient(g, startPoint: mkPoint(0, 0), endPoint: mkPoint(0, band)))
+    ctx.fill(Path(mkRect(0, H - band, W, band)), with: .linearGradient(g, startPoint: mkPoint(0, H), endPoint: mkPoint(0, H - band)))
+    ctx.fill(Path(mkRect(0, 0, band, H)), with: .linearGradient(g, startPoint: mkPoint(0, 0), endPoint: mkPoint(band, 0)))
+    ctx.fill(Path(mkRect(W - band, 0, band, H)), with: .linearGradient(g, startPoint: mkPoint(W, 0), endPoint: mkPoint(W - band, 0)))
+}
+
 /// Clouds placed in world space: a deterministic bank per 40-tile cell high above the sea, drifting
 /// slowly with the wind. They have no collision; anything can pass through them.
 enum CloudField {
@@ -14364,8 +14397,14 @@ enum WorldRenderer {
         let headY: Double = g.pb.y - g.pb.h * 0.9
         let headT: Tile = g.world.tile(Int(floor(g.pb.x)), Int(floor(headY)))
         if headT == .water { fillRect(&ctx, full, Color(hex: 0x1A4AA0, alpha: 0.28)) }
-        if g.pb.inLava { fillRect(&ctx, full, Color(hex: 0xFF4010, alpha: 0.3)) }
-        if g.hurtT > 0 { fillRect(&ctx, full, Color(hex: 0xFF0000, alpha: g.hurtT * 0.35)) }
+        // damage and danger read as a soft edge vignette instead of tinting the whole screen
+        if g.pb.inLava { edgeVignette(&ctx, W, H, 0xFF5010, 0.55) }
+        if g.hurtT > 0 { edgeVignette(&ctx, W, H, 0xC01818, min(0.6, g.hurtT * 0.9)) }
+        if !g.dead && g.hp < g.maxHP * 0.25 {
+            // low health: a slow, faint pulse (well under any flashing threshold)
+            let pulse: Double = 0.5 + 0.5 * sin(g.clock * 2.4)
+            edgeVignette(&ctx, W, H, 0x900E0E, 0.18 + 0.14 * pulse)
+        }
         // portal crossing: a gentle fade to deep teal (no bright flash)
         if g.fadeT > 0 { fillRect(&ctx, full, Color(hex: 0x0A2A30, alpha: min(1.0, g.fadeT))) }
     }

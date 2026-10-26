@@ -565,11 +565,11 @@ enum Tile: UInt8, CaseIterable, Codable {
         case .glowCrystal:
             return TileDef(name: "Glow Crystal", hard: 1.2, tier: 4, opaque: false, light: 11, style: .crystal, colors: [0x7A4CFF, 0xB38CFF, 0x4E2AC0, 0xE6D8FF, 0x7A4CFF])
         case .portalFrame:
-            return TileDef(name: "Portal Frame", hard: 99999, tier: 99, light: 4, style: .bricks, colors: [0x2A1A40, 0x6A3CC0, 0x3A2858, 0x1A0E2C, 0x2A1A40], noDrop: true)
+            return TileDef(name: "Rift Anchor", hard: 99999, tier: 99, light: 4, style: .custom, colors: [0x23262E, 0x3A3F4A, 0x2E323B, 0x16181E, 0x23262E], noDrop: true)
         case .portalOff:
-            return TileDef(name: "Dormant Portal", hard: 99999, tier: 99, solid: false, opaque: false, style: .custom, noDrop: true)
+            return TileDef(name: "Dormant Rift", hard: 99999, tier: 99, solid: false, opaque: false, style: .custom, noDrop: true)
         case .portalOn:
-            return TileDef(name: "Portal", hard: 99999, tier: 99, solid: false, opaque: false, light: 13, style: .custom, noDrop: true)
+            return TileDef(name: "Open Rift", hard: 99999, tier: 99, solid: false, opaque: false, light: 13, style: .custom, noDrop: true)
         case .jungleLog:
             return TileDef(name: "Jungle Log", hard: 1.0, style: .log, colors: [0x5A4A2A, 0x4A3A20, 0x6C5C34, 0x3A2C14, 0x5A4A2A])
         case .palmLog:
@@ -653,12 +653,13 @@ func customTileRows(_ t: Tile) -> ([String], [Character: UInt32])? {
     case .fossil:
         return (["ssssssss", "sbbsssss", "ssbbssss", "sssbbbbs", "ssssbssb", "sbbbssbs", "ssbssbss", "ssssssss"],
                 ["s": 0x8A8A8A, "b": 0xE8E0C8])
-    case .portalOff:
-        return (["pppppppp", "pqqqqqqp", "pqqqqqqp", "pqqqqqqp", "pqqqqqqp", "pqqqqqqp", "pqqqqqqp", "pppppppp"],
-                ["p": 0x2A1A40, "q": 0x14091E])
-    case .portalOn:
-        return (["mmmmmmmm", "mMMMMMMm", "mMppppMm", "mMpPPpMm", "mMpPPpMm", "mMppppMm", "mMMMMMMm", "mmmmmmmm"],
-                ["m": 0x7A3CE0, "M": 0xA868FF, "p": 0xD8A8FF, "P": 0xFFFFFF])
+    case .portalOff, .portalOn:
+        // drawn as one shape by the renderer's rift pass; the tiles themselves are see-through
+        return (["........"], [:])
+    case .portalFrame:
+        // dark basalt anchor stone with an amber vein
+        return (["kkbbbbkk", "kbbBbbbk", "bbbbaBbb", "bBbaabbb", "bbaabbBb", "bbabbbbb", "kbbbBbbk", "kkbbbbkk"],
+                ["k": 0x16181E, "b": 0x2A2E37, "B": 0x3C424E, "a": 0xC08040])
     case .doorClosed:
         return (["dDDDDDDd", "dDdddDDd", "dDdddDDd", "dDDDDDDd", "dDDDDgDd", "dDdddDDd", "dDdddDDd", "dDDDDDDd"],
                 ["d": 0x6A4A22, "D": 0xA97B45, "g": 0xE8C040])
@@ -4195,11 +4196,15 @@ func buildPortalChamber(_ g: WorldGen, _ ch: Chunk) {
     // frame: 7 wide, 9 tall; interior 5x7
     let fx: Int = px - 3
     let fy: Int = py + 5
-    ch.fill(fx, fy - 8, fx + 6, fy - 8, .portalFrame)
-    ch.fill(fx, fy, fx + 6, fy, .portalFrame)
-    ch.fill(fx, fy - 8, fx, fy, .portalFrame)
-    ch.fill(fx + 6, fy - 8, fx + 6, fy, .portalFrame)
-    ch.fill(fx + 1, fy - 7, fx + 5, fy - 1, .portalOff)
+    if g.genVersion >= 2 {
+        buildRift(ch, px, fy, .portalOff)
+    } else {
+        ch.fill(fx, fy - 8, fx + 6, fy - 8, .portalFrame)
+        ch.fill(fx, fy, fx + 6, fy, .portalFrame)
+        ch.fill(fx, fy - 8, fx, fy, .portalFrame)
+        ch.fill(fx + 6, fy - 8, fx + 6, fy, .portalFrame)
+        ch.fill(fx + 1, fy - 7, fx + 5, fy - 1, .portalOff)
+    }
     // decorations: torches and mossy rubble
     ch.put(px - 9, py + 4, .torch)
     ch.put(px + 9, py + 4, .torch)
@@ -4372,6 +4377,30 @@ func buildUmbralRuin(_ g: WorldGen, _ ch: Chunk, _ sx: Int, _ seed: UInt64) {
     }
 }
 
+/// The rift (world version 2+): an oval tear standing on a low basalt plinth, held by two floating
+/// anchor crescents and a keystone. Open at the sides, so it is walked into rather than climbed into.
+/// The oval occupies the same 5x7 footprint as the old frame's interior, so its centre is unchanged.
+func buildRift(_ ch: Chunk, _ px: Int, _ base: Int, _ fill: Tile) {
+    riftShape(px, base, fill) { x, y, t in ch.put(x, y, t) }
+}
+
+func riftShape(_ px: Int, _ base: Int, _ fill: Tile, _ put: (Int, Int, Tile) -> Void) {
+    for dx in -3...3 { put(px + dx, base, .portalFrame) }
+    for dy in -7...(-1) {
+        for dx in -2...2 {
+            let ey: Double = (Double(dy) + 4.0) / 3.6
+            let ex: Double = Double(dx) / 2.6
+            put(px + dx, base + dy, ex * ex + ey * ey <= 1.0 ? fill : .air)
+        }
+    }
+    for side in [-3, 3] {
+        put(px + side, base - 6, .portalFrame)
+        put(px + side, base - 5, .portalFrame)
+        put(px + side, base - 4, .portalFrame)
+    }
+    put(px, base - 9, .portalFrame)
+}
+
 func buildUmbralPortal(_ g: WorldGen, _ ch: Chunk) {
     let px: Int = g.portalX
     let gy: Int = g.umbralPortalFloor
@@ -4382,11 +4411,15 @@ func buildUmbralPortal(_ g: WorldGen, _ ch: Chunk) {
     }
     let fx: Int = px - 3
     let fyb: Int = gy - 1
-    ch.fill(fx, fyb - 8, fx + 6, fyb - 8, .portalFrame)
-    ch.fill(fx, fyb, fx + 6, fyb, .portalFrame)
-    ch.fill(fx, fyb - 8, fx, fyb, .portalFrame)
-    ch.fill(fx + 6, fyb - 8, fx + 6, fyb, .portalFrame)
-    ch.fill(fx + 1, fyb - 7, fx + 5, fyb - 1, .portalOn)
+    if g.genVersion >= 2 {
+        buildRift(ch, px, fyb, .portalOn)
+    } else {
+        ch.fill(fx, fyb - 8, fx + 6, fyb - 8, .portalFrame)
+        ch.fill(fx, fyb, fx + 6, fyb, .portalFrame)
+        ch.fill(fx, fyb - 8, fx, fyb, .portalFrame)
+        ch.fill(fx + 6, fyb - 8, fx + 6, fyb, .portalFrame)
+        ch.fill(fx + 1, fyb - 7, fx + 5, fyb - 1, .portalOn)
+    }
     // lights and a welcome chest
     ch.put(px - 9, gy - 1, .lantern)
     ch.put(px + 9, gy - 1, .lantern)
@@ -6375,6 +6408,9 @@ final class Game: ObservableObject, @unchecked Sendable {
     var portalOpened: Bool = false
     var portalT: Double = 0
     var portalCool: Double = 0
+    /// set by a portal trip: the rift will not pull the player again until they have stepped out of it
+    var portalNeedsExit: Bool = false
+    private var riftCheckT: Double = 0
     var fadeT: Double = 0
     var mounted: Mob? = nil
     var inVehicle: Vehicle? = nil
@@ -7227,9 +7263,9 @@ extension Game {
             stack.append(IntPair(x: p.x, y: p.y - 1))
         }
         portalOpened = true
-        spawnParticles(Double(tx) + 0.5, Double(ty) + 0.5, 0xB070FF, 40, 7.0, 1.2, 0)
+        spawnParticles(Double(tx) + 0.5, Double(ty) + 0.5, 0xF0A848, 40, 7.0, 1.2, 0)
         shake = 0.5
-        say("The portal awakens! Step inside to enter the Umbral Realm.", 5.0)
+        say("The rift tears open! Walk into it to cross to the Umbral Realm.", 5.0)
         bumpHUD()
     }
 
@@ -11097,17 +11133,24 @@ extension Game {
         let a: Tile = world.tile(Int(floor(px)), Int(floor(py)))
         let b: Tile = world.tile(Int(floor(px)), Int(floor(pb.y - 0.3)))
         let inside: Bool = a == .portalOn || b == .portalOn
-        if inside && portalCool <= 0 {
+        if !inside { portalNeedsExit = false }
+        riftCheckT -= dt
+        if riftCheckT <= 0 {
+            riftCheckT = 1.0
+            migrateOldRift()
+        }
+        if inside && portalCool <= 0 && !portalNeedsExit {
             portalT += dt
             fadeT = max(fadeT, min(1.0, portalT / 1.1))
             if Double.random(in: 0...1) < 0.5 {
-                spawnParticles(px + Double.random(in: -1...1), py + Double.random(in: -1.5...1.5), 0xB070FF, 1, 2.0, 0.6, -2)
+                spawnParticles(px + Double.random(in: -1...1), py + Double.random(in: -1.5...1.5), 0x7FE8DA, 1, 2.0, 0.6, -2)
             }
             if portalT >= 1.1 {
                 portalT = 0
                 let dest: Dimension = world.dim == .overworld ? .umbral : .overworld
                 let spot: (Double, Double) = portalArrival(dest)
                 travelTo(dest, arriveX: spot.0, arriveY: spot.1, silent: false)
+                portalNeedsExit = true
             }
         } else if portalT > 0 {
             portalT = max(0, portalT - dt * 2.0)
@@ -11123,6 +11166,32 @@ extension Game {
                 }
             }
         }
+    }
+
+    /// Floor row the rift stands on in the current dimension
+    var riftBase: Int {
+        return world.dim == .overworld ? gen.portalY + 5 : gen.umbralPortalFloor - 1
+    }
+
+    /// Middle of the rift's oval (same for both the old frame and the new rift)
+    var riftCenter: (Double, Double) {
+        return (Double(gen.portalX) + 0.5, Double(riftBase - 4) + 0.5)
+    }
+
+    /// Worlds made before the rift redesign have a closed rectangular frame (which also could not be
+    /// walked into). Once the area is loaded it is rebuilt as the new open rift, keeping its state.
+    func migrateOldRift() {
+        let px: Int = gen.portalX
+        let base: Int = riftBase
+        if !world.isLoaded(px - 3) || !world.isLoaded(px + 3) { return }
+        if world.tile(px - 3, base - 8) != .portalFrame || world.tile(px - 3, base - 2) != .portalFrame { return }
+        let fill: Tile = world.tile(px, base - 4) == .portalOn ? .portalOn : .portalOff
+        for x in (px - 3)...(px + 3) {
+            for y in (base - 8)...(base - 1) { _ = world.set(x, y, .air) }
+        }
+        let w: World = world
+        riftShape(px, base, fill) { x, y, t in _ = w.set(x, y, t) }
+        light.valid = false
     }
 
     /// Standing spot just to the right of the portal frame in the given dimension
@@ -13404,6 +13473,7 @@ struct View2D {
 
 enum WorldRenderer {
     static func draw(_ ctx: inout GraphicsContext, _ size: CGSize, _ g: Game) {
+        let drawT0: Double = perfNow()
         let cache: RenderCache = RenderCache.shared
         cache.reset(for: g)
         cache.frame += 1
@@ -13435,6 +13505,7 @@ enum WorldRenderer {
             drawSky(&ctx, W, H, g, v)
         }
         drawSections(&ctx, g, v, cache)
+        drawRift(&ctx, g, v)
         drawShips(&ctx, g, v)
         drawVehicles(&ctx, g, v)
         drawDrops(&ctx, g, v)
@@ -13443,16 +13514,22 @@ enum WorldRenderer {
         drawProjectiles(&ctx, g, v)
         drawParticles(&ctx, g, v)
         drawLight(&ctx, g, v, cache)
+        drawTrajectory(&ctx, g, v)
         drawOverlays(&ctx, W, H, g, v)
         drawFloats(&ctx, g, v)
         if g.showChunks || g.showHitboxes { drawDebug(&ctx, H, g, v) }
         if g.settings.showFPS {
             let fpsN: Int = Int(g.renderFPS.rounded())
-            let tickS: String = String(format: "%.1f", g.tickMs)
-            fillRect(&ctx, mkRect(W * 0.5 - 70.0, 4, 140, 20), Color.black.opacity(0.55))
-            drawLabel(&ctx, "FPS \(fpsN)  tick \(tickS)ms", W * 0.5, 14, 11, Color.yellow)
+            let pf: Perf = Perf.shared
+            let line1: String = String(format: "FPS %d  tick %.1f ms  draw %.1f ms", fpsN, g.tickMs, pf.renderMs)
+            let line2: String = String(format: "ai %.2f  phys %.2f  light %.2f  gen %.1f ms", pf.aiMs, pf.physMs, pf.lightMs, pf.genMs)
+            fillRect(&ctx, mkRect(W * 0.5 - 130.0, 4, 260, 36), Color.black.opacity(0.55))
+            drawLabel(&ctx, line1, W * 0.5, 14, 11, Color.yellow)
+            drawLabel(&ctx, line2, W * 0.5, 30, 10, Color(hex: 0xD8D0A0))
         }
         cache.evict()
+        // note: this measures building the Canvas command list; SwiftUI rasterises it afterwards
+        Perf.shared.renderMs = Perf.smooth(Perf.shared.renderMs, perfNow() - drawT0)
     }
 
     /// True when the whole view is underground (behind backdrop walls), so the sky can be skipped
@@ -14007,6 +14084,106 @@ enum WorldRenderer {
         }
     }
 
+    /// The rift: one composite shape over its tiles. States read at a glance:
+    /// dormant (dark, cracked, shards resting), open (teal swirl ringed by amber shards), charging
+    /// (brightens and spins up while you stand inside) and resting after a trip (dim until you step out).
+    static func drawRift(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
+        let c: (Double, Double) = g.riftCenter
+        if !v.visible(c.0, c.1, 7) { return }
+        let core: Tile = g.world.tile(Int(floor(c.0)), Int(floor(c.1)))
+        if core != .portalOn && core != .portalOff { return }
+        let open: Bool = core == .portalOn
+        let t: Double = g.clock
+        let tp: Double = v.tp
+        let cx: Double = v.sx(c.0)
+        let cy: Double = v.sy(c.1)
+        let rx: Double = 2.55 * tp
+        let ry: Double = 3.55 * tp
+        let charge: Double = min(1.0, g.portalT / 1.1)
+        let resting: Bool = open && (g.portalNeedsExit || g.portalCool > 0)
+        let teal: UInt32 = 0x3FCFC0
+        let amber: UInt32 = 0xF0A848
+        if !open {
+            // dormant: a dark seam with a faint amber crack and shards lying at its foot
+            fillOval(&ctx, mkRect(cx - rx * 0.9, cy - ry * 0.95, rx * 1.8, ry * 1.9), Color(hex: 0x0C0E14, alpha: 0.82))
+            ctx.stroke(Path(ellipseIn: mkRect(cx - rx * 0.9, cy - ry * 0.95, rx * 1.8, ry * 1.9)), with: .color(Color(hex: 0x4A4E5C)), lineWidth: max(1.5, tp * 0.08))
+            let pulse: Double = 0.25 + 0.15 * sin(t * 1.3)
+            strokeLine(&ctx, cx, cy - ry * 0.7, cx - tp * 0.3, cy - ry * 0.2, Color(hex: amber, alpha: pulse), max(1.0, tp * 0.06))
+            strokeLine(&ctx, cx - tp * 0.3, cy - ry * 0.2, cx + tp * 0.2, cy + ry * 0.3, Color(hex: amber, alpha: pulse), max(1.0, tp * 0.06))
+            strokeLine(&ctx, cx + tp * 0.2, cy + ry * 0.3, cx, cy + ry * 0.75, Color(hex: amber, alpha: pulse), max(1.0, tp * 0.06))
+            for i in 0..<6 {
+                let fx: Double = cx + (Double(i) - 2.5) * tp * 0.7
+                let fy: Double = cy + ry * 0.92 - abs(Double(i) - 2.5) * tp * 0.12 + sin(t * 0.8 + Double(i)) * tp * 0.04
+                shard(&ctx, fx, fy, tp * 0.22, Color(hex: 0x6A5A48))
+            }
+            return
+        }
+        let dim: Double = resting ? 0.45 : 1.0
+        let glow: Double = (0.55 + 0.45 * charge) * dim
+        // soft halo, then the body in nested ovals (light toward the middle)
+        fillOval(&ctx, mkRect(cx - rx * 1.25, cy - ry * 1.18, rx * 2.5, ry * 2.36), Color(hex: teal, alpha: 0.10 * glow))
+        let layers: [(Double, UInt32, Double)] = [(1.0, 0x0B2E36, 0.92), (0.82, 0x12505A, 0.9), (0.62, 0x1F7F84, 0.85), (0.42, 0x3FB8B0, 0.8), (0.22, 0xA8F0E4, 0.75)]
+        for (k, layer) in layers.enumerated() {
+            let wob: Double = 1.0 + 0.03 * sin(t * 2.0 + Double(k))
+            let sx: Double = rx * layer.0 * wob * (1.0 + charge * 0.06)
+            let sy: Double = ry * layer.0 * wob * (1.0 + charge * 0.04)
+            let a: Double = layer.2 * (k < 2 ? 1.0 : glow)
+            fillOval(&ctx, mkRect(cx - sx, cy - sy, sx * 2.0, sy * 2.0), Color(hex: layer.1, alpha: a))
+        }
+        // swirl arcs drawn as short polylines along the oval, spinning faster while charging
+        let spin: Double = t * (resting ? 0.4 : 1.1 + charge * 4.0)
+        let lw: Double = max(1.5, tp * 0.09)
+        for arm in 0..<3 {
+            let base: Double = spin + Double(arm) * 2.094
+            var px0: Double = 0
+            var py0: Double = 0
+            for s in 0...8 {
+                let f: Double = Double(s) / 8.0
+                let ang: Double = base + f * 1.5
+                let r: Double = 0.85 - f * 0.45
+                let x1: Double = cx + cos(ang) * rx * r
+                let y1: Double = cy + sin(ang) * ry * r
+                if s > 0 {
+                    let col: UInt32 = arm == 0 ? amber : 0xC8FFF4
+                    strokeLine(&ctx, px0, py0, x1, y1, Color(hex: col, alpha: (1.0 - f) * 0.7 * glow), lw)
+                }
+                px0 = x1
+                py0 = y1
+            }
+        }
+        // orbiting amber shards
+        for i in 0..<8 {
+            let ang: Double = spin * 0.6 + Double(i) * 0.785
+            let r: Double = 1.18 + 0.05 * sin(t * 3.0 + Double(i))
+            let sx: Double = cx + cos(ang) * rx * r
+            let sy: Double = cy + sin(ang) * ry * r
+            shard(&ctx, sx, sy, tp * (0.2 + 0.06 * charge), Color(hex: amber, alpha: 0.5 + 0.5 * dim))
+        }
+    }
+
+    static func shard(_ ctx: inout GraphicsContext, _ x: Double, _ y: Double, _ s: Double, _ c: Color) {
+        var p: Path = Path()
+        p.move(to: mkPoint(x, y - s))
+        p.addLine(to: mkPoint(x + s * 0.55, y))
+        p.addLine(to: mkPoint(x, y + s))
+        p.addLine(to: mkPoint(x - s * 0.55, y))
+        p.closeSubpath()
+        ctx.fill(p, with: .color(c))
+    }
+
+    /// Dotted flight path while drawing a bow (fades along its length; stops at the first block)
+    static func drawTrajectory(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
+        if !g.settings.showTrajectory || g.bowCharge <= 0 || g.inVehicle != nil { return }
+        let pts: [(Double, Double)] = g.arrowPreview()
+        if pts.isEmpty { return }
+        let r: Double = max(1.5, v.tp * 0.07)
+        let n: Double = Double(pts.count)
+        for (i, p) in pts.enumerated() {
+            let a: Double = 0.55 * (1.0 - Double(i) / n) * min(1.0, g.bowCharge * 1.6)
+            fillRect(&ctx, mkRect(v.sx(p.0) - r, v.sy(p.1) - r, r * 2.0, r * 2.0), Color.white.opacity(a))
+        }
+    }
+
     static func drawProjectiles(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
         let tp: Double = v.tp
         for p in g.projectiles {
@@ -14121,7 +14298,8 @@ enum WorldRenderer {
         if headT == .water { fillRect(&ctx, full, Color(hex: 0x1A4AA0, alpha: 0.28)) }
         if g.pb.inLava { fillRect(&ctx, full, Color(hex: 0xFF4010, alpha: 0.3)) }
         if g.hurtT > 0 { fillRect(&ctx, full, Color(hex: 0xFF0000, alpha: g.hurtT * 0.35)) }
-        if g.fadeT > 0 { fillRect(&ctx, full, Color(hex: 0x6A2AB0, alpha: min(1.0, g.fadeT))) }
+        // portal crossing: a gentle fade to deep teal (no bright flash)
+        if g.fadeT > 0 { fillRect(&ctx, full, Color(hex: 0x0A2A30, alpha: min(1.0, g.fadeT))) }
     }
 
     static func drawFloats(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {

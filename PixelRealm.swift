@@ -15111,6 +15111,8 @@ struct PauseView: View {
     var body: some View {
         ZStack {
             Color.black.opacity(0.6).ignoresSafeArea()
+            // scrolls on short screens now that the camera options live here too
+            ScrollView {
             VStack(spacing: 12) {
                 Text("PAUSED").font(.pixel(30)).foregroundColor(Color.white)
                 Text(verbatim: worldLine)
@@ -15120,12 +15122,22 @@ struct PauseView: View {
                     savedNote = game.saveNow() ? "Saved!" : "Could not save."
                 }
                 toggles
+                CameraSettingsSection(settings: settingsBinding, onChange: { game.tilePx = game.settings.tilePx })
                 PixelButton(title: "SAVE & QUIT", color: Color(hex: 0xA03030)) { quit() }
                 if !savedNote.isEmpty { Text(savedNote).font(.pixel(12)).foregroundColor(Color.white) }
             }
             .frame(maxWidth: 340)
             .padding()
+            }
         }
+    }
+
+    var settingsBinding: Binding<Settings> {
+        let g: Game = game
+        return Binding<Settings>(get: { g.settings }, set: { v in
+            g.settings = v
+            g.bumpHUD()
+        })
     }
 
     /// A toggle binding that also refreshes this screen (the game is paused, so nothing else would)
@@ -15751,12 +15763,49 @@ struct SettingsView: View {
             Stepper("", value: $settings.tilePx, in: 16...56, step: 8)
             Text(verbatim: rareLine).font(.pixel(13, .bold))
             Slider(value: $settings.rareChance, in: 0.0...0.8, step: 0.02)
+            CameraSettingsSection(settings: $settings)
             PixelButton(title: "DONE", color: Color(hex: 0x4E8A3E)) { done() }
         }
         .font(.pixel(14, .bold))
         .foregroundColor(Color.white)
         .padding(18)
         .background(PixelBox(color: Color(hex: 0x2C2C30)).opacity(0.95))
+    }
+}
+
+/// Camera and comfort options, shared by the main settings screen and the pause menu
+struct CameraSettingsSection: View {
+    @Binding var settings: Settings
+    var onChange: () -> Void = {}
+
+    func label(_ s: String, _ v: Double) -> some View {
+        Text(verbatim: joinText(s, ": ", String(format: "%.2f", v))).font(.pixel(12, .bold))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("CAMERA & COMFORT").font(.pixel(15)).foregroundColor(Color(hex: 0xFFE066))
+            Toggle("Smooth camera", isOn: $settings.camSmoothOn)
+            if settings.camSmoothOn {
+                label("Follow tightness", settings.camFollow)
+                Slider(value: $settings.camFollow, in: 0.0...1.0, step: 0.05)
+            }
+            label("Dead zone (blocks)", settings.camDeadZone)
+            Slider(value: $settings.camDeadZone, in: 0.0...3.0, step: 0.1)
+            Toggle("Look ahead while moving", isOn: $settings.camLookAhead)
+            Toggle("Screen shake", isOn: $settings.shakeOn)
+            if settings.shakeOn {
+                label("Shake intensity", settings.shakeIntensity)
+                Slider(value: $settings.shakeIntensity, in: 0.0...1.0, step: 0.05)
+            }
+            Toggle("Bow trajectory preview", isOn: $settings.showTrajectory)
+            SmallButton(title: "RESET CAMERA DEFAULTS") {
+                settings.resetCamera()
+                onChange()
+            }
+        }
+        .font(.pixel(13, .bold))
+        .foregroundColor(Color.white)
     }
 }
 
@@ -16032,18 +16081,17 @@ struct RootView: View {
     func phaseChanged(_ phase: ScenePhase) {
         if phase != .active, let g = game {
             _ = g.saveNow()
-            SettingsStore.save(settings)
+            var s: Settings = g.settings
+            s.tilePx = g.tilePx
+            SettingsStore.save(s)
         }
     }
 
     func leave() {
         if let g = game {
             _ = g.saveNow()
-            settings.touchControls = g.settings.touchControls
-            settings.smoothLight = g.settings.smoothLight
-            settings.fps60 = g.settings.fps60
-            settings.showFPS = g.settings.showFPS
-            settings.showCoords = g.settings.showCoords
+            // everything changed in game (toggles, camera, zoom) carries back to the menu and is persisted
+            settings = g.settings
             settings.tilePx = g.tilePx
             SettingsStore.save(settings)
             if g.mode == .hardcore && g.hardcoreOver { SaveStore.delete(g.slot) }

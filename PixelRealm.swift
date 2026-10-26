@@ -6904,7 +6904,7 @@ extension Game {
             if fallPeak > 20.0 && !swimming && mode != .creative && !godMode {
                 let dmg: Double = (fallPeak - 20.0) * 1.15
                 damagePlayer(dmg, from: pb.x, knock: 0, ignoreArmor: true)
-                shake = 0.3
+                addShake(0.3)
             }
             if fallPeak > 9.0 { spawnParticles(pb.x, pb.y, 0xB0A890, 6, 3.0, 0.4, 10) }
             fallPeak = 0
@@ -7003,7 +7003,7 @@ extension Game {
             pb.vy = -6.0
         }
         floatText("-" + String(Int(d)), pb.x, pb.y - pb.h - 0.3, 0xFF5050)
-        shake = max(shake, 0.2)
+        addShake(0.2)
         bumpHUD()
         if hp <= 0 { die() }
     }
@@ -7459,7 +7459,7 @@ extension Game {
         }
         portalOpened = true
         spawnParticles(Double(tx) + 0.5, Double(ty) + 0.5, 0xF0A848, 40, 7.0, 1.2, 0)
-        shake = 0.5
+        addShake(0.5)
         say("The rift tears open! Walk into it to cross to the Umbral Realm.", 5.0)
         bumpHUD()
     }
@@ -8447,7 +8447,7 @@ extension Game {
         muzzleT = 0.08
         swingT = 0.1
         swingDir = facing
-        shake = max(shake, g == .rifle ? 0.16 : 0.07)
+        addShake(g == .rifle ? 0.16 : 0.07)
         pb.vx -= Double(facing) * (g == .rifle ? 2.5 : 1.0)
         spawnParticles(ox + dx * 0.4, oy + dy * 0.4, 0xFFE080, 4, 3.0, 0.15, 0)
         if st.extra <= 0 && (isCreative || inv.total(.ammo(.bullet)) > 0) { startReload() }
@@ -10279,7 +10279,7 @@ extension Game {
             if m.atk == BossAtk.charge.rawValue && Double.random(in: 0...1) < 0.5 {
                 spawnParticles(m.b.x + Double(m.dir) * 1.5, m.b.y, 0xA08860, 1, 3.0, 0.4, 6)
             }
-            if m.atk == BossAtk.roar.rawValue { shake = max(shake, 0.1) }
+            if m.atk == BossAtk.roar.rawValue { addShake(0.1) }
             if m.t2 <= 0 { beginAttack(m) }
         case 2:
             runAttack(m, dt)
@@ -10356,7 +10356,7 @@ extension Game {
         case .roar:
             m.t2 = 3.2
             m.ty = 0
-            shake = max(shake, 0.35)
+            addShake(0.35)
         }
     }
 
@@ -10411,7 +10411,7 @@ extension Game {
                 m.st = 4
                 m.t2 = 1.8
                 m.b.vx = 0
-                shake = 0.6
+                addShake(0.6)
                 spawnParticles(m.b.x + Double(m.dir) * 2.5, m.b.y - 2.0, 0x9A9A9A, 20, 6.0, 0.7, 18)
                 rainRocks(m, 3)
             } else if m.t2 <= 0 {
@@ -10426,7 +10426,7 @@ extension Game {
                 m.b.vx = clampD((target - m.b.x) / flight, -11, 11)
             }
             if m.b.onGround && m.t3 == 1 {
-                shake = 0.7
+                addShake(0.7)
                 spawnParticles(m.b.x, m.b.y, 0xA08860, 24, 7.0, 0.6, 10)
                 let sp: Double = isBear ? 9.0 : 8.0
                 for sgn in [-1.0, 1.0] {
@@ -10452,7 +10452,7 @@ extension Game {
             }
         case .roar:
             accelX(m, 0, 30, dt)
-            shake = max(shake, 0.15)
+            addShake(0.15)
             m.ty -= dt
             if m.ty <= 0 {
                 m.ty = 0.42
@@ -10480,7 +10480,7 @@ extension Game {
 
     func onBearDefeated(_ m: Mob) {
         defeated.insert(m.lair)
-        shake = 0.8
+        addShake(0.8)
         spawnDrop(Stack(item: .gadget(.portalKey), count: 1), m.b.x, m.b.y - 2.0, 0, -6.0)
         spawnDrop(Stack(item: .gadget(.treasureMap), count: 1), m.b.x + 0.8, m.b.y - 2.0, 1.0, -6.0)
         gotMap = true
@@ -10490,7 +10490,7 @@ extension Game {
 
     func onRexDefeated(_ m: Mob) {
         defeated.insert(m.lair)
-        shake = 0.8
+        addShake(0.8)
         spawnParticles(m.b.x, m.b.cy, 0xFFE070, 40, 9.0, 1.2, 8)
         if rex == nil {
             m.tame = true
@@ -11609,7 +11609,7 @@ extension Game {
             } else {
                 say("You return to the Overworld.", 3.0)
             }
-            shake = 0.4
+            addShake(0.4)
         }
         bumpHUD()
     }
@@ -12314,7 +12314,7 @@ extension Game {
         let x: Int = Int(floor(pb.x)) + facing * 2
         let top: Int = Int(floor(pb.y)) - 8
         for k in 0..<3 where !world.solid(x, top + k) { _ = world.set(x, top + k, .sand) }
-        checkFalling(x, top + 3)
+        checkFalling(x, top + 2)
     }
 
     func debugSpikes() {

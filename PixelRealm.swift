@@ -466,7 +466,8 @@ enum Tile: UInt8, CaseIterable, Codable {
         case .log:
             return TileDef(name: "Log", hard: 0.9, opaque: true, style: .log, colors: [0x6B4A2A, 0x5A3C20, 0x7C5733, 0x4A3018, 0x6B4A2A])
         case .leaves:
-            return TileDef(name: "Leaves", hard: 0.2, opaque: false, style: .leaves, colors: [0x3E8A2E, 0x2F7324, 0x56A83F, 0x225C1A, 0x3E8A2E], noDrop: true)
+            // canopies are one-way: walk and shoot through them, land on top of them
+            return TileDef(name: "Leaves", hard: 0.2, solid: false, opaque: false, platform: true, style: .leaves, colors: [0x3E8A2E, 0x2F7324, 0x56A83F, 0x225C1A, 0x3E8A2E], noDrop: true)
         case .water:
             return TileDef(name: "Water", hard: 0, solid: false, opaque: false, liquid: true, style: .water, colors: [0x3B7BE0, 0x4F90F0, 0x2E64C0, 0x8DBBFF, 0x3B7BE0], noDrop: true)
         case .coal:
@@ -498,7 +499,7 @@ enum Tile: UInt8, CaseIterable, Codable {
         case .cactus:
             return TileDef(name: "Cactus", hard: 0.4, hurt: true, style: .cactus, colors: [0x3F8F3F, 0x2F7A2F, 0x58AE58, 0x1F5F1F, 0x3F8F3F])
         case .jungleLeaves:
-            return TileDef(name: "Jungle Leaves", hard: 0.2, opaque: false, style: .leaves, colors: [0x1F8A3A, 0x146B2A, 0x32AA4E, 0x0E5420, 0x1F8A3A], noDrop: true)
+            return TileDef(name: "Jungle Leaves", hard: 0.2, solid: false, opaque: false, platform: true, style: .leaves, colors: [0x1F8A3A, 0x146B2A, 0x32AA4E, 0x0E5420, 0x1F8A3A], noDrop: true)
         case .mud:
             return TileDef(name: "Mud", hard: 0.5, style: .mud, colors: [0x4E3A2A, 0x3E2E20, 0x5E4834, 0x30241A, 0x4E3A2A])
         case .dryGrass:
@@ -918,7 +919,7 @@ enum AmmoType: Int, Codable, CaseIterable {
 }
 
 enum PartType: Int, Codable, CaseIterable {
-    case frame, wheel, engine, steering, seat, fuelTank, hull, propeller, paddle
+    case frame, wheel, engine, steering, seat, fuelTank, hull, propeller, paddle, drill, diamondDrill
     var name: String {
         switch self {
         case .frame: return "Vehicle Frame"
@@ -930,6 +931,8 @@ enum PartType: Int, Codable, CaseIterable {
         case .hull: return "Hull Float"
         case .propeller: return "Propeller"
         case .paddle: return "Paddle"
+        case .drill: return "Iron Drill"
+        case .diamondDrill: return "Diamond Drill"
         }
     }
     var mass: Double {
@@ -943,6 +946,8 @@ enum PartType: Int, Codable, CaseIterable {
         case .hull: return 0.8
         case .propeller: return 0.5
         case .paddle: return 0.3
+        case .drill: return 1.6
+        case .diamondDrill: return 1.8
         }
     }
 }
@@ -1260,6 +1265,11 @@ func iconMisc(_ it: Item) -> PixelBuf {
         case .hull: b.rect(0, 4, 12, 3, 0x8F6732); b.rect(1, 7, 10, 2, 0x6A4A22); b.rect(2, 9, 8, 1, 0x4A3216); b.rect(1, 3, 10, 1, 0xB98A4E)
         case .propeller: b.rect(5, 1, 2, 10, 0x9A9AA4); b.rect(1, 5, 10, 2, 0x7A7A84); b.rect(5, 5, 2, 2, 0x4A4A52)
         case .paddle: b.line(2, 10, 8, 4, 0x8A5A2A); b.rect(8, 1, 3, 5, 0xB98A4E); b.rect(8, 1, 1, 5, 0x8F6732)
+        case .drill, .diamondDrill:
+            let bit: UInt32 = p == .drill ? 0xC8CCD4 : 0x6FE6EC
+            b.rect(0, 3, 4, 6, 0x6A6A74); b.rect(0, 3, 4, 1, 0x9A9AA4)
+            b.rect(4, 3, 3, 6, bit); b.rect(7, 4, 2, 4, bit); b.rect(9, 5, 2, 2, bit); b.set(11, 5, bit)
+            b.line(5, 3, 7, 8, shadeRGB(bit, 0.7)); b.line(8, 4, 9, 7, shadeRGB(bit, 0.7))
         }
     case .gadget(let g):
         switch g {
@@ -1453,6 +1463,8 @@ enum RecipeBook {
         add(.part(.hull), 1, [(planks, 6), (.mat(.string), 2)], .bench, .vehicle)
         add(.part(.propeller), 1, [(.mat(.ironBar), 3)], .bench, .vehicle)
         add(.part(.paddle), 1, [(planks, 2), (stick, 2)], .bench, .vehicle)
+        add(.part(.drill), 1, [(.mat(.ironBar), 6), (.mat(.copperBar), 2)], .bench, .vehicle)
+        add(.part(.diamondDrill), 1, [(.part(.drill), 1), (.mat(.diamond), 4), (.mat(.goldBar), 2)], .bench, .vehicle)
         return list
     }
 }
@@ -2521,6 +2533,12 @@ func partBuf(_ p: PartType) -> PixelBuf {
     case .paddle:
         b.line(0, 7, 5, 2, 0x8A5A2E)
         b.rect(5, 0, 3, 4, 0xB98A4E)
+    case .drill, .diamondDrill:
+        // drawn pointing right; the renderer turns it to face its open side
+        let bit: UInt32 = p == .drill ? 0xC8CCD4 : 0x6FE6EC
+        b.rect(0, 1, 3, 6, 0x5A5A64); b.rect(0, 1, 3, 1, 0x8A8A94)
+        b.rect(3, 1, 2, 6, bit); b.rect(5, 2, 1, 4, bit); b.rect(6, 3, 1, 2, bit); b.set(7, 3, bit); b.set(7, 4, shadeRGB(bit, 0.7))
+        b.set(3, 2, shadeRGB(bit, 0.65)); b.set(4, 4, shadeRGB(bit, 0.65)); b.set(3, 6, shadeRGB(bit, 0.65)); b.set(5, 5, shadeRGB(bit, 0.65))
     }
     b.outline(0x1A1410)
     return b
@@ -2620,6 +2638,9 @@ struct WorldGen {
     let infinite: Bool
     let width: Int
     let spawnX: Int
+    /// 1 = original rules (kept for worlds saved before ocean basins), 2 = with ocean basins
+    let genVersion: Int
+    static let currentVersion: Int = 2
     let rareChance: Double
     let zones: [Int]
     var portalX: Int
@@ -2654,7 +2675,8 @@ struct WorldGen {
         return z
     }
 
-    init(seed: UInt64, infinite: Bool, rareChance: Double) {
+    init(seed: UInt64, infinite: Bool, rareChance: Double, genVersion: Int = WorldGen.currentVersion) {
+        self.genVersion = genVersion
         self.seed = seed
         self.infinite = infinite
         self.width = infinite ? 2_000_000_000 : WorldGen.finiteWidth
@@ -2676,7 +2698,7 @@ struct WorldGen {
             while step < 400 && !ok {
                 let off: Int = ((step % 2 == 0) ? 1 : -1) * ((step + 1) / 2) * 5
                 let x: Int = spawnX + sd * dd + off
-                let c: Col = WorldGen.colBaseStatic(seed, infinite, width, spawnX, zones, x)
+                let c: Col = WorldGen.colBaseStatic(seed, infinite, width, spawnX, zones, x, basins: genVersion >= 2)
                 if c.biome != .ocean && c.biome != .swamp && c.land > 0.5 && WorldGen.lairStatic(spawnX, infinite, x, 230) == nil && abs(x - spawnX) < 3800 && abs(x - spawnX) > 200 {
                     found = x
                     ok = true
@@ -2783,7 +2805,59 @@ struct WorldGen {
         return best
     }
 
-    static func colBaseStatic(_ seed: UInt64, _ infinite: Bool, _ width: Int, _ spawnX: Int, _ zones: [Int], _ x: Int) -> Col {
+    /// Lair centres near x (bear at spawn+1000, rex at spawn-1100, repeating every 4096 in infinite worlds)
+    static func lairCentersStatic(_ spawnX: Int, _ infinite: Bool, _ x: Int) -> [Int] {
+        var out: [Int] = []
+        for base in [spawnX + 1000, spawnX - 1100] {
+            if !infinite { out.append(base); continue }
+            let k: Int = Int((Double(x - base) / 4096.0).rounded())
+            for kk in (k - 1)...(k + 1) { out.append(base + kk * 4096) }
+        }
+        return out
+    }
+
+    /// One ocean basin: centre, half width of the open water, and the coastal ramp width
+    struct Basin {
+        var center: Int
+        var halfW: Int
+        var ramp: Int
+    }
+
+    /// The guaranteed sea near spawn, on a seeded side, so every world has an ocean within reach
+    static func homeBasin(_ seed: UInt64, _ spawnX: Int) -> Basin {
+        let side: Int = hash2(41, 42, seed) < 0.5 ? -1 : 1
+        let off: Int = 560 + Int(hash2(43, 44, seed) * 120.0)
+        return Basin(center: spawnX + side * off, halfW: 150 + Int(hash2(45, 46, seed) * 50.0), ramp: 110)
+    }
+
+    /// Random large basins in infinite worlds (about two in five 1600-wide cells), kept clear of spawn and lairs
+    static func cellBasin(_ seed: UInt64, _ spawnX: Int, _ c: Int) -> Basin? {
+        if hash2(c, 401, seed) > 0.26 { return nil }
+        let cellW: Int = 1600
+        let hw: Int = 140 + Int(hash2(c, 402, seed) * 220.0)
+        let cen: Int = c * cellW + hw + 140 + Int(hash2(c, 403, seed) * Double(max(1, cellW - 2 * hw - 280)))
+        if abs(cen - spawnX) < hw + 900 { return nil }
+        for lc in lairCentersStatic(spawnX, true, cen) where abs(cen - lc) < hw + 330 { return nil }
+        return Basin(center: cen, halfW: hw, ramp: 140)
+    }
+
+    /// 0...1: how strongly x lies inside an ocean basin (1 = open sea, ramping down over the coast)
+    static func oceanBasin(_ seed: UInt64, _ infinite: Bool, _ spawnX: Int, _ x: Int) -> Double {
+        func weight(_ b: Basin) -> Double {
+            let d: Double = Double(abs(x - b.center))
+            return 1.0 - smooth(clampD((d - Double(b.halfW)) / Double(b.ramp), 0, 1))
+        }
+        var w: Double = weight(homeBasin(seed, spawnX))
+        if infinite {
+            let c0: Int = floorDiv(x, 1600)
+            for c in (c0 - 1)...(c0 + 1) {
+                if let b = cellBasin(seed, spawnX, c) { w = max(w, weight(b)) }
+            }
+        }
+        return w
+    }
+
+    static func colBaseStatic(_ seed: UInt64, _ infinite: Bool, _ width: Int, _ spawnX: Int, _ zones: [Int], _ x: Int, basins: Bool = true) -> Col {
         let fx: Double = Double(x)
         let H: Int = WorldGen.H
         let sea: Int = WorldGen.sea
@@ -2811,6 +2885,10 @@ struct WorldGen {
             land = max(land, lerpD(land, 0.65, lw))
             if d < 120 { forced = L.kind == .bear ? .forest : .jungle }
         }
+        // ocean basins pull the land value down into deep water (after the spawn/lair guarantees,
+        // which basins are placed well away from)
+        let basin: Double = basins ? WorldGen.oceanBasin(seed, infinite, spawnX, x) : 0
+        if basin > 0 { land = min(land, lerpD(land, 0.17, basin)) }
         let mraw: Double = max(fbm1(fx / 420.0, seed &+ 3, 2) - 0.08, 0.56 + 0.40 * WorldGen.rangeBump(seed, infinite, width, x))
         var mtn: Double = smooth(clampD((mraw - 0.60) / 0.16, 0, 1)) * clampD((land - 0.45) / 0.1, 0, 1)
         mtn *= clampD((ds - 170.0) / 130.0, 0, 1)
@@ -2867,7 +2945,7 @@ struct WorldGen {
             return c
         }
         cache.misses &+= 1
-        let c: Col = WorldGen.colBaseStatic(seed, infinite, width, spawnX, zones, x)
+        let c: Col = WorldGen.colBaseStatic(seed, infinite, width, spawnX, zones, x, basins: genVersion >= 2)
         cache.cols[x] = c
         return c
     }
@@ -5648,13 +5726,17 @@ struct VPartSave: Codable {
 struct VehicleSave: Codable {
     var id: Int
     var parts: [VPartSave]
+    /// centre of mass (saves with `rot`), or the bottom-centre of the box (older saves)
     var x: Double
     var y: Double
     var fuel: Double
     var dir: Int
     var kit: Int?
+    /// rotation in radians; nil in saves made before vehicles could rotate
+    var rot: Double? = nil
 }
 
+/// Displaced volume per part (how much it floats)
 func partVolume(_ p: PartType) -> Double {
     switch p {
     case .hull: return 4.0
@@ -5665,10 +5747,36 @@ func partVolume(_ p: PartType) -> Double {
     }
 }
 
+/// Mining power of a drill part: (tier it can break, speed)
+func drillPower(_ p: PartType) -> (Int, Double) {
+    switch p {
+    case .drill: return (4, 4.6)
+    case .diamondDrill: return (7, 8.5)
+    default: return (0, 0)
+    }
+}
+
+func isDrill(_ p: PartType) -> Bool { return p == .drill || p == .diamondDrill }
+
+/// A player-built vehicle: a rigid body made of 1x1 parts. It has a centre of mass, a rotation and
+/// an angular velocity, and every part collides, floats and drives at its rotated position, so
+/// what you see is exactly what touches the world.
 final class Vehicle {
     let id: Int
     var parts: [PartCell: PartType] = [:]
+    /// world-space bounding box of the rotated parts (kept for spawning, decks, pick tests)
     var b: Body
+    // rigid body state
+    var px: Double = 0
+    var py: Double = 0
+    var vx: Double = 0
+    var vy: Double = 0
+    var angle: Double = 0
+    var angVel: Double = 0
+    /// centre of mass in cell coordinates (cell (0,0) spans 0...1)
+    var comX: Double = 0.5
+    var comY: Double = 0.5
+    var inertia: Double = 1
     var fuel: Double = 0
     var dir: Int = 1
     var minX: Int = 0
@@ -5682,13 +5790,25 @@ final class Vehicle {
     var propellers: Int = 0
     var paddles: Int = 0
     var tanks: Int = 0
+    var drills: Int = 0
     var hasSeat: Bool = false
     var hasSteering: Bool = false
     var throttle: Double = 0
     var wheelRot: Double = 0
     var rider: Bool = false
     var propRot: Double = 0
+    var drillRot: Double = 0
+    var drilling: Bool = false
     var smoke: Double = 0
+    /// contacts touched in the last physics step (wheels on the ground, any part on the ground)
+    var wheelContacts: Int = 0
+    var contacts: Int = 0
+    var submerged: Double = 0
+    var sleepT: Double = 0
+    var asleep: Bool = false
+    /// direction each drill faces in vehicle space, and its mining progress
+    var drillDir: [PartCell: (Int, Int)] = [:]
+    var drillWork: [PartCell: (Int, Int, Double)] = [:]
     /// the kit this vehicle came from (-1 = built part by part, or changed since)
     var kit: Int = -1
 
@@ -5697,34 +5817,101 @@ final class Vehicle {
         self.b = Body(x: x, y: y, w: 1, h: 1)
         parts[PartCell(dx: 0, dy: 0)] = first
         recompute(keepAnchor: false)
+        placeBox(left: x - 0.5, bottom: y)
     }
 
-    /// world position of the top-left corner of a cell
+    // MARK: transforms
+
+    var cosA: Double { return cos(angle) }
+    var sinA: Double { return sin(angle) }
+
+    /// vehicle-space point (cell units) to world
+    func toWorld(_ lx: Double, _ ly: Double) -> (Double, Double) {
+        let ox: Double = lx - comX
+        let oy: Double = ly - comY
+        let c: Double = cosA
+        let s: Double = sinA
+        return (px + ox * c - oy * s, py + ox * s + oy * c)
+    }
+
+    /// world point to vehicle space (cell units)
+    func toLocal(_ wx: Double, _ wy: Double) -> (Double, Double) {
+        let dx: Double = wx - px
+        let dy: Double = wy - py
+        let c: Double = cosA
+        let s: Double = sinA
+        return (dx * c + dy * s + comX, -dx * s + dy * c + comY)
+    }
+
+    func cellCenter(_ c: PartCell) -> (Double, Double) {
+        return toWorld(Double(c.dx) + 0.5, Double(c.dy) + 0.5)
+    }
+
+    /// top-left of the cell's (unrotated) box around its rotated centre
     func cellPos(_ c: PartCell) -> (Double, Double) {
-        let left: Double = b.x - b.w * 0.5
-        let top: Double = b.y - b.h
-        return (left + Double(c.dx - minX), top + Double(c.dy - minY))
+        let p: (Double, Double) = cellCenter(c)
+        return (p.0 - 0.5, p.1 - 0.5)
+    }
+
+    func cellAt(_ wx: Double, _ wy: Double) -> PartCell {
+        let l: (Double, Double) = toLocal(wx, wy)
+        return PartCell(dx: Int(floor(l.0)), dy: Int(floor(l.1)))
+    }
+
+    /// Places an unrotated vehicle so its parts' box has this left edge and bottom
+    func placeBox(left: Double, bottom: Double) {
+        angle = 0
+        px = left + (comX - Double(minX))
+        py = bottom - (Double(maxY + 1) - comY)
+        updateBox()
+    }
+
+    /// Recomputes the world bounding box from the rotated part corners
+    func updateBox() {
+        var x0: Double = 1e9, x1: Double = -1e9, y0: Double = 1e9, y1: Double = -1e9
+        let c: Double = cosA
+        let s: Double = sinA
+        for (cell, _) in parts {
+            let corners: [(Double, Double)] = [(0, 0), (1, 0), (0, 1), (1, 1)]
+            for k in corners {
+                let ox: Double = Double(cell.dx) + k.0 - comX
+                let oy: Double = Double(cell.dy) + k.1 - comY
+                let wx: Double = px + ox * c - oy * s
+                let wy: Double = py + ox * s + oy * c
+                x0 = min(x0, wx); x1 = max(x1, wx); y0 = min(y0, wy); y1 = max(y1, wy)
+            }
+        }
+        b.w = max(0.1, x1 - x0)
+        b.h = max(0.1, y1 - y0)
+        b.x = (x0 + x1) * 0.5
+        b.y = y1
+        b.vx = vx
+        b.vy = vy
     }
 
     func recompute(keepAnchor: Bool) {
-        var anchorX: Double = 0
-        var anchorY: Double = 0
-        if keepAnchor {
-            let p: (Double, Double) = cellPos(PartCell(dx: 0, dy: 0))
-            anchorX = p.0
-            anchorY = p.1
+        // remember where one surviving cell is, so the rest of the vehicle stays put in the world
+        var anchor: PartCell? = nil
+        var anchorW: (Double, Double) = (0, 0)
+        if keepAnchor, let c0 = parts.keys.first {
+            anchor = c0
+            anchorW = cellCenter(c0)
         }
         var x0: Int = 0, x1: Int = 0, y0: Int = 0, y1: Int = 0
         var first: Bool = true
         mass = 0
         buoyancy = 0
-        engines = 0; wheels = 0; propellers = 0; paddles = 0; tanks = 0
+        engines = 0; wheels = 0; propellers = 0; paddles = 0; tanks = 0; drills = 0
         hasSeat = false
         hasSteering = false
+        var mx: Double = 0
+        var my: Double = 0
         for (c, t) in parts {
             if first { x0 = c.dx; x1 = c.dx; y0 = c.dy; y1 = c.dy; first = false }
             x0 = min(x0, c.dx); x1 = max(x1, c.dx); y0 = min(y0, c.dy); y1 = max(y1, c.dy)
             mass += t.mass
+            mx += t.mass * (Double(c.dx) + 0.5)
+            my += t.mass * (Double(c.dy) + 0.5)
             buoyancy += partVolume(t)
             switch t {
             case .engine: engines += 1
@@ -5734,24 +5921,44 @@ final class Vehicle {
             case .fuelTank: tanks += 1
             case .seat: hasSeat = true
             case .steering: hasSteering = true
+            case .drill, .diamondDrill: drills += 1
             default: break
             }
         }
         minX = x0; maxX = x1; minY = y0; maxY = y1
-        let nw: Double = Double(x1 - x0 + 1)
-        let nh: Double = Double(y1 - y0 + 1)
-        if keepAnchor {
-            // keep every existing cell where it was in the world
-            let left: Double = anchorX - Double(0 - minX)
-            let top: Double = anchorY - Double(0 - minY)
-            b.w = nw
-            b.h = nh
-            b.x = left + nw * 0.5
-            b.y = top + nh
-        } else {
-            b.w = nw
-            b.h = nh
+        mass = max(0.3, mass)
+        comX = mx / mass
+        comY = my / mass
+        // moment of inertia: each part as a 1x1 plate around the centre of mass
+        var inert: Double = 0
+        for (c, t) in parts {
+            let ox: Double = Double(c.dx) + 0.5 - comX
+            let oy: Double = Double(c.dy) + 0.5 - comY
+            inert += t.mass * (ox * ox + oy * oy + 1.0 / 6.0)
         }
+        inertia = max(0.2, inert)
+        // drills face the open side of their cell
+        drillDir.removeAll()
+        for (c, t) in parts where isDrill(t) {
+            let free: (PartCell) -> Bool = { self.parts[$0] == nil }
+            if free(PartCell(dx: c.dx + 1, dy: c.dy)) && !free(PartCell(dx: c.dx - 1, dy: c.dy)) { drillDir[c] = (1, 0) }
+            else if free(PartCell(dx: c.dx - 1, dy: c.dy)) && !free(PartCell(dx: c.dx + 1, dy: c.dy)) { drillDir[c] = (-1, 0) }
+            else if free(PartCell(dx: c.dx, dy: c.dy + 1)) { drillDir[c] = (0, 1) }
+            else if free(PartCell(dx: c.dx + 1, dy: c.dy)) { drillDir[c] = (1, 0) }
+            else { drillDir[c] = (0, -1) }
+        }
+        drillWork = drillWork.filter { parts[$0.key] != nil }
+        if let a = anchor, parts[a] != nil {
+            // put the anchor cell back where it was
+            let ox: Double = Double(a.dx) + 0.5 - comX
+            let oy: Double = Double(a.dy) + 0.5 - comY
+            let c: Double = cosA
+            let s: Double = sinA
+            px = anchorW.0 - (ox * c - oy * s)
+            py = anchorW.1 - (ox * s + oy * c)
+        }
+        asleep = false
+        updateBox()
     }
 
     var fuelCapacity: Double { return Double(tanks) * 60.0 + (engines > 0 ? 8.0 : 0.0) }
@@ -5759,6 +5966,9 @@ final class Vehicle {
     var canDriveOnLand: Bool { return wheels >= 2 && engines > 0 }
     var canSail: Bool { return buoyancy >= mass * 0.8 && ((engines > 0 && propellers > 0) || paddles > 0) }
     var topY: Double { return b.y - b.h }
+    var speed: Double { return sqrt(vx * vx + vy * vy) }
+    /// roughly upright (flat enough to stand on, to place kits next to, and so on)
+    var upright: Bool { return abs(remainder(angle, 2.0 * Double.pi)) < 0.35 }
 
     func hasNeighbor(_ c: PartCell) -> Bool {
         let n: [PartCell] = [PartCell(dx: c.dx + 1, dy: c.dy), PartCell(dx: c.dx - 1, dy: c.dy), PartCell(dx: c.dx, dy: c.dy + 1), PartCell(dx: c.dx, dy: c.dy - 1)]
@@ -5787,6 +5997,13 @@ final class Vehicle {
             for k in side { if parts[k] == nil { free = true } }
             if !free { return false }
         }
+        if isDrill(t) {
+            // a drill needs one open side to bore into
+            let n: [PartCell] = [PartCell(dx: c.dx + 1, dy: c.dy), PartCell(dx: c.dx - 1, dy: c.dy), PartCell(dx: c.dx, dy: c.dy + 1)]
+            var free: Bool = false
+            for k in n { if parts[k] == nil { free = true } }
+            if !free { return false }
+        }
         return true
     }
 
@@ -5808,7 +6025,6 @@ final class Vehicle {
         // keep the largest connected group
         var group: Set<PartCell> = seen
         if seen.count * 2 < parts.count {
-            // the first fill was the smaller group; keep the other one
             var other: Set<PartCell> = []
             for k in parts.keys { if !seen.contains(k) { other.insert(k) } }
             group = other
@@ -5825,7 +6041,7 @@ final class Vehicle {
     func save() -> VehicleSave {
         var ps: [VPartSave] = []
         for (c, t) in parts { ps.append(VPartSave(dx: c.dx, dy: c.dy, type: t.rawValue)) }
-        return VehicleSave(id: id, parts: ps, x: b.x, y: b.y, fuel: fuel, dir: dir, kit: kit)
+        return VehicleSave(id: id, parts: ps, x: px, y: py, fuel: fuel, dir: dir, kit: kit, rot: angle)
     }
 
     static func restore(_ s: VehicleSave) -> Vehicle {
@@ -5834,8 +6050,16 @@ final class Vehicle {
         for p in s.parts { v.parts[PartCell(dx: p.dx, dy: p.dy)] = PartType(rawValue: p.type) ?? .frame }
         if v.parts.isEmpty { v.parts[PartCell(dx: 0, dy: 0)] = .frame }
         v.recompute(keepAnchor: false)
-        v.b.x = s.x
-        v.b.y = s.y
+        if let r = s.rot {
+            v.px = s.x
+            v.py = s.y
+            v.angle = r
+            v.updateBox()
+        } else {
+            // older save: x, y were the bottom-centre of an unrotated box
+            let w: Double = Double(v.maxX - v.minX + 1)
+            v.placeBox(left: s.x - w * 0.5, bottom: s.y)
+        }
         v.fuel = s.fuel
         v.dir = s.dir
         v.kit = s.kit ?? -1
@@ -6116,6 +6340,7 @@ final class Game: ObservableObject, @unchecked Sendable {
     var shipTimer: Double = 20.0
     var villagerCells: Set<Int> = []
     var fallingBlocks: [FallingBlock] = []
+    var decayZones: [DecayZone] = []
     let mobGrid: MobGrid = MobGrid()
     var frameNo: Int = 0
 
@@ -6162,11 +6387,11 @@ final class Game: ObservableObject, @unchecked Sendable {
     var tickMs: Double = 0
     var tickWorstMs: Double = 0
 
-    init(mode: GameMode, infinite: Bool, seed: UInt64, settings: Settings) {
+    init(mode: GameMode, infinite: Bool, seed: UInt64, settings: Settings, genVersion: Int = WorldGen.currentVersion) {
         self.mode = mode
         self.settings = settings
         self.seedValue = seed
-        let gen = WorldGen(seed: seed, infinite: infinite, rareChance: settings.rareChance)
+        let gen = WorldGen(seed: seed, infinite: infinite, rareChance: settings.rareChance, genVersion: genVersion)
         self.world = World(gen: gen)
         self.tilePx = settings.tilePx
         self.pb = Body(x: Double(gen.spawnX) + 0.5, y: 100, w: 0.7, h: 1.8)
@@ -6746,6 +6971,7 @@ extension Game {
             default: break
             }
         }
+        updateLeafDecay(dt)
         // lantern/torch/crop support is checked when neighbours change (see breakTile)
     }
 }
@@ -6843,12 +7069,10 @@ extension Game {
 
     func vehicleAtPoint(_ wx: Double, _ wy: Double) -> (Vehicle, PartCell)? {
         for v in vehicles {
-            let left: Double = v.b.x - v.b.w * 0.5
-            let top: Double = v.b.y - v.b.h
-            let cx: Int = Int(floor(wx - left)) + v.minX
-            let cy: Int = Int(floor(wy - top)) + v.minY
-            let c: PartCell = PartCell(dx: cx, dy: cy)
-            if v.parts[c] != nil && wx >= left && wx <= left + v.b.w { return (v, c) }
+            if wx < v.b.left - 0.2 || wx > v.b.right + 0.2 || wy < v.b.top - 0.2 || wy > v.b.y + 0.2 { continue }
+            // pick in the vehicle's own (rotated) grid
+            let c: PartCell = v.cellAt(wx, wy)
+            if v.parts[c] != nil { return (v, c) }
         }
         return nil
     }
@@ -7238,6 +7462,41 @@ func isLogTile(_ t: Tile) -> Bool {
     return t == .log || t == .jungleLog || t == .palmLog
 }
 
+struct DecayZone {
+    var x: Int
+    var y: Int
+    var t: Double
+}
+
+extension Game {
+    /// Any trunk tile within r tiles (keeps a tree's canopy alive)
+    func logNear(_ x: Int, _ y: Int, _ r: Int) -> Bool {
+        for dy in -r...r {
+            for dx in -r...r where isLogTile(world.tile(x + dx, y + dy)) { return true }
+        }
+        return false
+    }
+
+    /// Where a trunk was cut, leaves that no longer have a trunk nearby wither over the next half
+    /// minute. Only around cut trees, so leafy ruin decorations are left alone.
+    func updateLeafDecay(_ dt: Double) {
+        if decayZones.isEmpty { return }
+        var keep: [DecayZone] = []
+        for z0 in decayZones {
+            var z: DecayZone = z0
+            z.t -= dt
+            for _ in 0..<4 {
+                let x: Int = z.x + Int.random(in: -7...7)
+                let y: Int = z.y + Int.random(in: -10...4)
+                let t: Tile = world.tile(x, y)
+                if (t == .leaves || t == .jungleLeaves) && !logNear(x, y, 4) { breakTile(x, y, false) }
+            }
+            if z.t > 0 { keep.append(z) }
+        }
+        decayZones = keep
+    }
+}
+
 extension Game {
     func updateUse(_ dt: Double) {
         if useCD > 0 { useCD -= dt }
@@ -7513,6 +7772,7 @@ extension Game {
             if isDoor(world.tile(x, y + 1)) { world.set(x, y + 1, .air) }
         }
         if world.set(x, y, .air) == .air && t != .air { return }
+        if isLogTile(t) && decayZones.count < 24 { decayZones.append(DecayZone(x: x, y: y, t: 30)) }
         let col: UInt32 = t.def.colors.first ?? 0x888888
         spawnParticles(Double(x) + 0.5, Double(y) + 0.5, col, 6, 3.5, 0.5, 16)
         if !(byPlayer && isCreative) {
@@ -7901,11 +8161,8 @@ extension Game {
         }
         // attach to an existing vehicle (the tapped cell must touch it)
         for v in vehicles {
-            let left: Double = v.b.x - v.b.w * 0.5
-            let top: Double = v.b.y - v.b.h
-            let cx: Int = Int(floor(aimX - left)) + v.minX
-            let cy: Int = Int(floor(aimY - top)) + v.minY
-            let c: PartCell = PartCell(dx: cx, dy: cy)
+            if aimX < v.b.left - 1.5 || aimX > v.b.right + 1.5 || aimY < v.b.top - 1.5 || aimY > v.b.y + 1.5 { continue }
+            let c: PartCell = v.cellAt(aimX, aimY)
             if v.parts[c] != nil || !v.hasNeighbor(c) { continue }
             if let problem = attachProblem(v, c, p) {
                 say(problem + " Green squares show where it fits.", 2.5)
@@ -7962,8 +8219,9 @@ extension Game {
             let dy: Double = s.deckY(sea)
             out.append(Deck(x0: s.x - PirateShip.deckHalf, x1: s.x + PirateShip.deckHalf - 0.1, y: dy, vx: s.speed * Double(s.dir), id: s.id))
         }
-        for v in vehicles where !v.rider {
-            out.append(Deck(x0: v.b.x - v.b.w * 0.5, x1: v.b.x + v.b.w * 0.5, y: v.b.y - v.b.h, vx: v.b.vx, id: 1_000_000 + v.id))
+        // a parked vehicle you can stand on (only while it is roughly level)
+        for v in vehicles where !v.rider && v.upright {
+            out.append(Deck(x0: v.b.x - v.b.w * 0.5, x1: v.b.x + v.b.w * 0.5, y: v.b.y - v.b.h, vx: v.vx, id: 1_000_000 + v.id))
         }
         return out
     }
@@ -10084,11 +10342,22 @@ extension Game {
 
 // ===== p17_vehicles_ships =====
 
-// MARK: - Vehicle driving and physics
+// MARK: - Vehicle driving and rigid-body physics
+
+/// One collision sample on a vehicle part: where it is on the part (vehicle space) and whether it
+/// belongs to a wheel (wheels roll and push; everything else slides with friction)
+struct VSample {
+    var lx: Double
+    var ly: Double
+    var wheel: Bool
+}
 
 extension Game {
     func updateVehicles(_ dt: Double) {
+        let t0: Double = perfNow()
         for v in vehicles { stepVehicle(v, dt) }
+        separateVehicles()
+        Perf.shared.physMs = Perf.smooth(Perf.shared.physMs, perfNow() - t0)
     }
 
     func seatCell(_ v: Vehicle) -> PartCell? {
@@ -10096,101 +10365,438 @@ extension Game {
         return nil
     }
 
-    func stepVehicle(_ v: Vehicle, _ dt: Double) {
-        if !world.isLoaded(Int(floor(v.b.x))) { return }
-        let hw: Double = v.b.w * 0.5
-        // how much of the hull is under water
-        let rows: Int = max(1, Int(v.b.h.rounded()))
-        var sub: Int = 0
-        for r in 0..<rows {
-            let yy: Double = v.b.y - 0.5 - Double(r)
-            if world.liquidFraction(v.b.x - hw, yy - 0.4, v.b.x + hw, yy + 0.4, false) > 0.5 { sub += 1 }
+    /// Collision samples: the four corners and edge midpoints of square parts; a ring for wheels
+    func vehicleSamples(_ v: Vehicle) -> [VSample] {
+        var out: [VSample] = []
+        out.reserveCapacity(v.parts.count * 8)
+        for (c, t) in v.parts {
+            let x0: Double = Double(c.dx)
+            let y0: Double = Double(c.dy)
+            if t == .wheel {
+                var k: Int = 0
+                while k < 10 {
+                    let a: Double = Double(k) / 10.0 * 2.0 * Double.pi
+                    out.append(VSample(lx: x0 + 0.5 + cos(a) * 0.47, ly: y0 + 0.5 + sin(a) * 0.47, wheel: true))
+                    k += 1
+                }
+            } else {
+                let pts: [(Double, Double)] = [(0.02, 0.02), (0.5, 0.0), (0.98, 0.02), (1.0, 0.5), (0.98, 0.98), (0.5, 1.0), (0.02, 0.98), (0.0, 0.5)]
+                for p in pts {
+                    // only outer edges can touch the world
+                    let nx: Int = p.0 < 0.25 ? -1 : (p.0 > 0.75 ? 1 : 0)
+                    let ny: Int = p.1 < 0.25 ? -1 : (p.1 > 0.75 ? 1 : 0)
+                    let openX: Bool = nx == 0 || v.parts[PartCell(dx: c.dx + nx, dy: c.dy)] == nil
+                    let openY: Bool = ny == 0 || v.parts[PartCell(dx: c.dx, dy: c.dy + ny)] == nil
+                    if openX || openY { out.append(VSample(lx: x0 + p.0, ly: y0 + p.1, wheel: false)) }
+                }
+            }
         }
-        let subFrac: Double = Double(sub) / Double(rows)
-        let inWater: Bool = sub > 0
-        let ground: Bool = v.b.onGround
-        var ax: Double = 0
+        return out
+    }
+
+    /// How far a point is inside solid ground and which way is out (the exposed face it is nearest).
+    /// For wheels, the top corner of a block with open space above acts like a ramp, so cars roll up
+    /// one-block steps and block "stairs" instead of jamming against them.
+    func penetration(_ x: Double, _ y: Double, wheel: Bool = false) -> (Double, Double, Double)? {
+        let tx: Int = Int(floor(x))
+        let ty: Int = Int(floor(y))
+        if !world.tile(tx, ty).solid { return nil }
+        var best: Double = 9
+        var nx: Double = 0
+        var ny: Double = -1
+        let up: Double = y - Double(ty)
+        let down: Double = Double(ty + 1) - y
+        let left: Double = x - Double(tx)
+        let right: Double = Double(tx + 1) - x
+        let topOpen: Bool = !world.tile(tx, ty - 1).solid
+        if wheel && topOpen && up < 0.8 {
+            let leftOpen: Bool = !world.tile(tx - 1, ty).solid
+            let rightOpen: Bool = !world.tile(tx + 1, ty).solid
+            if leftOpen && left < up { return (up * 0.75, -0.6, -0.8) }
+            if rightOpen && right < up { return (up * 0.75, 0.6, -0.8) }
+            return (up, 0, -1)
+        }
+        // prefer resting on top over catching on a side when barely inside
+        if topOpen && up < 0.3 { return (up, 0, -1) }
+        if topOpen && up < best { best = up; nx = 0; ny = -1 }
+        if !world.tile(tx - 1, ty).solid && left < best { best = left; nx = -1; ny = 0 }
+        if !world.tile(tx + 1, ty).solid && right < best { best = right; nx = 1; ny = 0 }
+        if !world.tile(tx, ty + 1).solid && down < best { best = down; nx = 0; ny = 1 }
+        if best > 8 { best = up; nx = 0; ny = -1 }
+        return (best, nx, ny)
+    }
+
+    func stepVehicle(_ v: Vehicle, _ dt: Double) {
+        if !world.isLoaded(Int(floor(v.px))) { return }
         let throttle: Double = v.rider ? v.throttle : 0
-        let burning: Bool = v.engines > 0 && v.fuel > 0 && abs(throttle) > 0.1
+        if v.asleep && abs(throttle) < 0.05 && !v.drilling {
+            // resting vehicles cost nothing until something wakes them
+            if world.boxSolid(v.b.left + 0.05, v.b.y + 0.02, v.b.right - 0.05, v.b.y + 0.2) || v.submerged > 0 { return }
+        }
+        v.asleep = false
         let steerOK: Bool = v.hasSeat && v.hasSteering
-        if inWater && v.buoyancy > 0 {
-            let up: Double = gravityG * (v.buoyancy * subFrac / max(0.5, v.mass))
-            v.b.vy += (gravityG - min(up, gravityG * 2.4)) * dt
-            v.b.vy *= (1.0 - min(1.0, 3.0 * dt))
-            v.b.vx *= (1.0 - min(1.0, 0.7 * dt))
-            if steerOK && abs(throttle) > 0.1 {
+        let hasFuel: Bool = v.fuel > 0 || isCreative
+        let samples: [VSample] = vehicleSamples(v)
+        let maxSpeed: Double = v.speed + abs(v.angVel) * 3.0
+        let steps: Int = clampI(Int(ceil(maxSpeed * dt / 0.22)), 2, 10)
+        let h: Double = dt / Double(steps)
+        let invM: Double = 1.0 / v.mass
+        let invI: Double = 1.0 / v.inertia
+        var wheelHits: Int = 0
+        var anyHits: Int = 0
+        var subFrac: Double = 0
+        var rammed: [(Int, Int)] = []
+        for _ in 0..<steps {
+            // gravity
+            v.vy += gravityG * h
+            let c: Double = v.cosA
+            let s: Double = v.sinA
+            // buoyancy and water drag, part by part (so boats tilt and settle naturally)
+            var wetParts: Int = 0
+            for (cell, t) in v.parts {
+                let lx: Double = Double(cell.dx) + 0.5 - v.comX
+                let ly: Double = Double(cell.dy) + 0.5 - v.comY
+                let wx: Double = v.px + lx * c - ly * s
+                let wy: Double = v.py + lx * s + ly * c
+                var wet: Double = 0
+                if world.tile(Int(floor(wx)), Int(floor(wy - 0.3))) == .water { wet += 0.5 }
+                if world.tile(Int(floor(wx)), Int(floor(wy + 0.3))) == .water { wet += 0.5 }
+                if wet <= 0 { continue }
+                wetParts += 1
+                let up: Double = gravityG * (partVolume(t) * 0.92 + 0.15) * wet
+                let rx: Double = wx - v.px
+                let ry: Double = wy - v.py
+                // buoyant force (upward) at the part, plus drag against the part's velocity
+                let pvx: Double = v.vx - v.angVel * ry
+                let pvy: Double = v.vy + v.angVel * rx
+                let fx: Double = -pvx * 1.6 * wet
+                let fy: Double = -up - pvy * 4.0 * wet
+                v.vx += fx * invM * h
+                v.vy += fy * invM * h
+                v.angVel += (rx * fy - ry * fx) * invI * h
+            }
+            subFrac = Double(wetParts) / Double(max(1, v.parts.count))
+            // boat propulsion along the hull
+            if wetParts > 0 && steerOK && abs(throttle) > 0.1 {
                 var thrust: Double = 0
                 var vmax: Double = 0
-                if v.engines > 0 && v.propellers > 0 && v.fuel > 0 {
-                    thrust = Double(v.engines) * 16.0
+                if v.engines > 0 && v.propellers > 0 && hasFuel {
+                    thrust = Double(v.engines) * 18.0
                     vmax = min(11.0, 4.5 + 2.0 * Double(v.engines))
                 } else if v.paddles > 0 {
-                    thrust = Double(v.paddles) * 4.0
-                    vmax = 3.2
+                    thrust = Double(v.paddles) * 5.0
+                    vmax = 3.4
                 }
-                ax = thrust / max(1.0, v.mass) * throttle * 1.6
-                if abs(v.b.vx) > vmax && v.b.vx * throttle > 0 { ax = 0 }
-            }
-        } else if inWater {
-            // no floats: sinks slowly
-            v.b.vy = min(v.b.vy + gravityG * 0.3 * dt, 3.0)
-            v.b.vx *= (1.0 - min(1.0, 2.0 * dt))
-        } else {
-            v.b.vy = min(v.b.vy + gravityG * dt, terminalV)
-            if ground {
-                if v.canDriveOnLand && steerOK && v.fuel > 0 && abs(throttle) > 0.1 {
-                    let vmax: Double = min(16.0, 6.0 + 3.0 * Double(v.engines))
-                    ax = Double(v.engines) * 40.0 / max(1.0, v.mass) * throttle
-                    if abs(v.b.vx) > vmax && v.b.vx * throttle > 0 { ax = 0 }
+                let along: Double = v.vx * c + v.vy * s
+                if !(abs(along) > vmax && along * throttle > 0) {
+                    v.vx += c * thrust * throttle * invM * h
+                    v.vy += s * thrust * throttle * invM * h
                 }
-                let fr: Double = v.wheels >= 2 ? 2.2 : 14.0
-                if abs(throttle) < 0.1 || ax == 0 { v.b.vx *= (1.0 - min(1.0, fr * dt)) }
-            } else {
-                v.b.vx *= (1.0 - min(1.0, 0.2 * dt))
             }
+            // integrate
+            v.px += v.vx * h
+            v.py += v.vy * h
+            v.angle += v.angVel * h
+            // contacts
+            let c2: Double = v.cosA
+            let s2: Double = v.sinA
+            // deepest penetration per direction; pushing out by the maximum (not the sum) keeps many
+            // simultaneous contacts from launching the vehicle
+            var outUp: Double = 0
+            var outDown: Double = 0
+            var outLeft: Double = 0
+            var outRight: Double = 0
+            var stepWheel: Int = 0
+            for smp in samples {
+                let lx: Double = smp.lx - v.comX
+                let ly: Double = smp.ly - v.comY
+                let rx: Double = lx * c2 - ly * s2
+                let ry: Double = lx * s2 + ly * c2
+                let wx: Double = v.px + rx
+                let wy: Double = v.py + ry
+                guard let pen = penetration(wx, wy, wheel: smp.wheel) else { continue }
+                let depth: Double = pen.0
+                let nx: Double = pen.1
+                let ny: Double = pen.2
+                anyHits += 1
+                if smp.wheel && ny < -0.5 { stepWheel += 1 }
+                // velocity of the contact point
+                let pvx: Double = v.vx - v.angVel * ry
+                let pvy: Double = v.vy + v.angVel * rx
+                let vn: Double = pvx * nx + pvy * ny
+                // ramming: a hard hit knocks out weak blocks (trunks fell the whole tree)
+                if vn < -5.5 && v.mass * -vn > 40.0 {
+                    let tt: Tile = world.tile(Int(floor(wx)), Int(floor(wy)))
+                    if tt.hardness <= 1.0 && tt != .doorClosed { rammed.append((Int(floor(wx)), Int(floor(wy)))) }
+                }
+                if vn < 0 {
+                    let rn: Double = rx * ny - ry * nx
+                    let kn: Double = invM + rn * rn * invI
+                    let jn: Double = -(1.0 + 0.04) * vn / kn
+                    v.vx += jn * nx * invM
+                    v.vy += jn * ny * invM
+                    v.angVel += rn * jn * invI
+                    // friction along the surface; wheels roll unless braking
+                    let tx: Double = -ny
+                    let ty: Double = nx
+                    let pvx2: Double = v.vx - v.angVel * ry
+                    let pvy2: Double = v.vy + v.angVel * rx
+                    let vt: Double = pvx2 * tx + pvy2 * ty
+                    let rt: Double = rx * ty - ry * tx
+                    let kt: Double = invM + rt * rt * invI
+                    var mu: Double = 0.7
+                    if smp.wheel {
+                        let braking: Bool = abs(throttle) < 0.1 || throttle * vt < 0
+                        mu = braking ? (v.rider ? 0.9 : 0.25) : 0.06
+                    }
+                    var jt: Double = -vt / kt
+                    let lim: Double = mu * jn
+                    jt = clampD(jt, -lim, lim)
+                    v.vx += jt * tx * invM
+                    v.vy += jt * ty * invM
+                    v.angVel += rt * jt * invI
+                }
+                let d: Double = max(0, depth - 0.01)
+                if ny < -0.5 { outUp = max(outUp, d) } else if ny > 0.5 { outDown = max(outDown, d) }
+                else if nx < -0.5 { outLeft = max(outLeft, d) } else { outRight = max(outRight, d) }
+            }
+            v.px += (outRight - outLeft) * 0.8
+            v.py += (outDown - outUp) * 0.8
+            wheelHits = max(wheelHits, stepWheel)
+            // engine drive through wheels that are on the ground
+            if stepWheel > 0 && v.canDriveOnLand && steerOK && hasFuel && abs(throttle) > 0.1 {
+                let vmax: Double = min(17.0, 6.5 + 3.0 * Double(v.engines))
+                let along: Double = v.vx * c2 + v.vy * s2
+                if !(abs(along) > vmax && along * throttle > 0) {
+                    // heavier builds accelerate and climb slower; more engines help
+                    let power: Double = Double(v.engines) * 135.0 * min(1.0, Double(stepWheel) / 4.0 + 0.5)
+                    v.vx += c2 * power * throttle * invM * h
+                    v.vy += s2 * power * throttle * invM * h
+                }
+            }
+            // a little rolling drag and air resistance
+            v.vx *= (1.0 - min(1.0, 0.05 * h))
+            v.angVel *= (1.0 - min(1.0, (anyHits > 0 ? 1.2 : 0.3) * h))
+            // stability limits
+            v.vx = clampD(v.vx, -30, 30)
+            v.vy = clampD(v.vy, -30, 30)
+            v.angVel = clampD(v.angVel, -12, 12)
         }
-        v.b.vx += ax * dt
+        for r in rammed where world.tile(r.0, r.1).solid {
+            let t: Tile = world.tile(r.0, r.1)
+            if isLogTile(t) { fellTree(r.0, r.1) } else { breakTile(r.0, r.1, v.rider) }
+            addShake(0.25)
+            v.vx *= 0.6
+        }
+        v.wheelContacts = wheelHits
+        v.contacts = anyHits
+        v.submerged = subFrac
+        // in the air, the driver can pitch the vehicle (lean back / forward); flips are possible
+        if anyHits == 0 && subFrac == 0 && v.rider && abs(throttle) > 0.1 {
+            v.angVel += throttle * 5.0 * dt
+        }
+        // fuel and exhaust
+        let burning: Bool = v.engines > 0 && v.fuel > 0 && abs(throttle) > 0.1
+        if burning && !isCreative {
+            v.fuel = max(0, v.fuel - dt * Double(v.engines) * (v.drilling ? 1.5 : 1.0))
+        }
         if burning {
-            v.fuel = max(0, v.fuel - dt * Double(v.engines))
             v.smoke += dt
             if v.smoke > 0.12 {
                 v.smoke = 0
-                let ex: Double = v.b.x - Double(v.dir) * (v.b.w * 0.5 + 0.2)
-                spawnParticles(ex, v.b.y - 0.8, 0x707070, 1, 1.5, 0.6, -2)
+                let back: (Double, Double) = v.toWorld(v.dir > 0 ? Double(v.minX) - 0.2 : Double(v.maxX) + 1.2, Double(v.maxY) + 0.3)
+                spawnParticles(back.0, back.1, 0x707070, 1, 1.5, 0.6, -2)
             }
         }
         if abs(throttle) > 0.2 { v.dir = throttle > 0 ? 1 : -1 }
-        let stepUp: Double = v.wheels >= 2 ? 1.0 : 0.0
-        world.moveBody(&v.b, dt, stepUp: stepUp, dropThrough: true, decks: [])
-        v.wheelRot += v.b.vx * dt * 2.0
-        v.propRot += (abs(throttle) > 0.1 && inWater ? 18.0 : 3.0) * dt
-        // running things over
-        if abs(v.b.vx) > 5.0 {
-            for m in mobs {
-                if m.hp <= 0 || m.tame || m.kind == .villager { continue }
-                if m.b.right > v.b.x - hw && m.b.left < v.b.x + hw && m.b.y > v.b.y - v.b.h && m.b.top < v.b.y {
-                    hurtMob(m, 6.0 + abs(v.b.vx), v.b.vx >= 0 ? 1 : -1, 9.0, true)
+        v.wheelRot += (v.vx * v.cosA + v.vy * v.sinA) * dt * 2.0
+        v.propRot += (abs(throttle) > 0.1 && subFrac > 0 ? 18.0 : 3.0) * dt
+        v.updateBox()
+        if v.drills > 0 { runDrills(v, dt) }
+        vehicleImpacts(v, dt)
+        // resting: let it sleep so it stops costing time (and cannot jitter)
+        if anyHits > 0 && v.speed < 0.08 && abs(v.angVel) < 0.03 && abs(throttle) < 0.05 && !v.drilling {
+            v.sleepT += dt
+            if v.sleepT > 0.6 { v.asleep = true; v.vx = 0; v.vy = 0; v.angVel = 0 }
+        } else {
+            v.sleepT = 0
+        }
+        if v.py > Double(world.H) + 5 {
+            v.py = Double(world.H) - 6
+            v.vy = 0
+        }
+    }
+
+    /// Vehicles shove each other apart instead of overlapping
+    func separateVehicles() {
+        if vehicles.count < 2 { return }
+        for i in 0..<vehicles.count {
+            for j in (i + 1)..<vehicles.count {
+                let a: Vehicle = vehicles[i]
+                let b: Vehicle = vehicles[j]
+                let ox: Double = min(a.b.right, b.b.right) - max(a.b.left, b.b.left)
+                let oy: Double = min(a.b.y, b.b.y) - max(a.b.top, b.b.top)
+                if ox <= 0 || oy <= 0 { continue }
+                let dirx: Double = a.b.x < b.b.x ? -1.0 : 1.0
+                let tot: Double = a.mass + b.mass
+                let push: Double = min(ox, 0.3)
+                a.px += dirx * push * (b.mass / tot)
+                b.px -= dirx * push * (a.mass / tot)
+                let rel: Double = (a.vx - b.vx) * -dirx
+                if rel < 0 {
+                    // exchange momentum along x
+                    let j: Double = rel * a.mass * b.mass / tot * 1.1
+                    a.vx += dirx * j / a.mass * -1.0
+                    b.vx -= dirx * j / b.mass * -1.0
                 }
+                a.asleep = false
+                b.asleep = false
+                a.updateBox()
+                b.updateBox()
             }
         }
-        if v.b.y > Double(world.H) + 5 { v.b.y = Double(world.H) - 3 }
     }
+
+    /// Hitting creatures (or the player) at speed hurts them according to speed and weight
+    func vehicleImpacts(_ v: Vehicle, _ dt: Double) {
+        let sp: Double = v.speed
+        if sp < 4.0 { return }
+        let src: DamageSource = v.rider ? .player : .environment
+        let nudge: Double = 0.15
+        for m in mobsNear(v.b.left - 1, v.b.right + 1) {
+            if m.hp <= 0 || m.tame || m.kind == .villager { continue }
+            if m.b.right < v.b.left - nudge || m.b.left > v.b.right + nudge || m.b.y < v.b.top || m.b.top > v.b.y { continue }
+            // must actually touch a part, not just the box
+            let cell: PartCell = v.cellAt(m.b.x, m.b.cy)
+            var touching: Bool = v.parts[cell] != nil
+            if !touching {
+                for (c, _) in v.parts {
+                    let cc: (Double, Double) = v.cellCenter(c)
+                    if abs(cc.0 - m.b.x) < 0.5 + m.b.w * 0.5 + nudge && abs(cc.1 - m.b.cy) < 0.5 + m.b.h * 0.5 { touching = true; break }
+                }
+            }
+            if !touching { continue }
+            var info = DamageInfo(amount: (sp - 3.0) * (1.2 + v.mass * 0.35), type: .impact, source: src)
+            info.dirX = v.vx >= 0 ? 1 : -1
+            info.knock = min(14.0, 4.0 + sp * 0.8)
+            info.originX = v.b.x
+            info.key = 7_000_000 + v.id
+            info.cooldown = 0.7
+            if applyMobDamage(m, info) {
+                // the creature's weight slows the vehicle
+                let mm: Double = m.def.w * m.def.h * 0.8
+                v.vx *= v.mass / (v.mass + mm * 0.5)
+                addShake(0.12)
+            }
+        }
+        if !v.rider && !dead && inVehicle !== v {
+            if pb.right > v.b.left && pb.left < v.b.right && pb.y > v.b.top && pb.top < v.b.y {
+                var info = DamageInfo(amount: (sp - 3.0) * (1.0 + v.mass * 0.3), type: .impact, source: .environment)
+                info.knock = 9.0
+                info.originX = v.b.x
+                info.key = 7_000_000 + v.id
+                info.cooldown = 0.8
+                _ = hurtPlayer(info)
+            }
+        }
+    }
+
+    // MARK: drills
+
+    /// Running drills bore into the block in front of them, using the same hardness and tier rules
+    /// (and drops) as hand mining. One block at a time per drill.
+    func runDrills(_ v: Vehicle, _ dt: Double) {
+        let powered: Bool = v.rider && (v.engines > 0 && (v.fuel > 0 || isCreative))
+        v.drilling = false
+        if !powered { v.drillWork.removeAll(); return }
+        v.drillRot += dt * 25.0
+        for (cell, d) in v.drillDir {
+            guard let pt = v.parts[cell] else { continue }
+            let pw: (Int, Double) = drillPower(pt)
+            let tip: (Double, Double) = v.toWorld(Double(cell.dx) + 0.5 + Double(d.0) * 0.85, Double(cell.dy) + 0.5 + Double(d.1) * 0.85)
+            // the bit is three blocks wide across its facing (so the hull and wheels behind it fit
+            // through the hole); it clears one block at a time, the centre one first
+            var tx: Int = Int(floor(tip.0))
+            var ty: Int = Int(floor(tip.1))
+            var t: Tile = world.tile(tx, ty)
+            if t == .air || t.liquid || t.isPlant || Tile.tierTable[t.idx] > pw.0 {
+                for side in [1.0, -1.0] {
+                    let q: (Double, Double) = v.toWorld(Double(cell.dx) + 0.5 + Double(d.0) * 0.85 + Double(d.1) * side * -1.0 + (d.1 == 0 ? 0 : 0),
+                                                       Double(cell.dy) + 0.5 + Double(d.1) * 0.85 + Double(d.0) * side * (d.0 == 0 ? 0 : 1))
+                    let qt: Tile = world.tile(Int(floor(q.0)), Int(floor(q.1)))
+                    if qt != .air && !qt.liquid && !qt.isPlant && qt.hardness < 9000 && Tile.tierTable[qt.idx] <= pw.0 {
+                        tx = Int(floor(q.0)); ty = Int(floor(q.1)); t = qt
+                        break
+                    }
+                }
+            }
+            // creatures caught in the bit get hurt
+            for m in mobsNear(tip.0 - 1, tip.0 + 1) where m.hp > 0 && !m.tame && m.kind != .villager {
+                if abs(m.b.x - tip.0) < m.b.w * 0.5 + 0.3 && tip.1 > m.b.top - 0.2 && tip.1 < m.b.y + 0.2 {
+                    var info = DamageInfo(amount: 5, type: .melee, source: .player)
+                    info.originX = v.px
+                    info.knock = 4
+                    info.key = 8_000_000 + v.id
+                    info.cooldown = 0.35
+                    applyMobDamage(m, info)
+                }
+            }
+            if t == .air || t.liquid || t.isPlant {
+                v.drillWork[cell] = nil
+                continue
+            }
+            let hard: Double = t.hardness
+            if hard >= 9000 || Tile.tierTable[t.idx] > pw.0 {
+                if Double.random(in: 0...1) < 0.1 { spawnParticles(tip.0, tip.1, 0xFFE080, 1, 3.0, 0.2, 6) }
+                continue
+            }
+            v.drilling = true
+            var work: (Int, Int, Double) = v.drillWork[cell] ?? (tx, ty, 0)
+            if work.0 != tx || work.1 != ty { work = (tx, ty, 0) }
+            work.2 += dt * pw.1
+            if Double.random(in: 0...1) < 0.35 {
+                spawnParticles(tip.0, tip.1, t.def.colors.first ?? 0x888888, 1, 3.0, 0.3, 12)
+            }
+            if work.2 >= max(0.05, hard * 1.5) {
+                breakTile(tx, ty, true)
+                v.drillWork[cell] = nil
+                addShake(0.04)
+            } else {
+                v.drillWork[cell] = work
+            }
+        }
+    }
+
+    // MARK: driving
 
     func driveVehicle(_ v: Vehicle, _ ix: Double, _ jumpPressed: Bool, _ dt: Double) {
         v.throttle = ix
+        if abs(ix) > 0.05 { v.asleep = false }
         if let c = seatCell(v) {
-            let p: (Double, Double) = cellPos(v, c)
-            pb.x = p.0 + 0.5
-            pb.y = p.1 + 0.95
+            // sit on the seat, following the vehicle's rotation
+            let p: (Double, Double) = v.toWorld(Double(c.dx) + 0.5, Double(c.dy) + 0.95)
+            pb.x = p.0
+            pb.y = p.1
         } else {
             pb.x = v.b.x
-            pb.y = v.b.y - v.b.h
+            pb.y = v.b.top
         }
-        pb.vx = 0
-        pb.vy = 0
+        pb.vx = v.vx
+        pb.vy = v.vy
         fallPeak = 0
         facing = v.dir
-        if jumpPressed && abs(v.b.vx) < 2.5 { dismount() }
+        if jumpPressed {
+            let tilt: Double = abs(remainder(v.angle, 2.0 * Double.pi))
+            if tilt > 1.6 && v.contacts > 0 && v.speed < 3.0 {
+                // upside down: give it a shove back onto its wheels
+                v.vy = -7.5
+                v.angVel = (remainder(v.angle, 2.0 * Double.pi) > 0 ? -1.0 : 1.0) * 6.0
+                v.asleep = false
+                say("Heave! Flipping the vehicle back over.", 1.5)
+            } else if v.speed < 2.5 {
+                dismount()
+            }
+        }
     }
 
     func cellPos(_ v: Vehicle, _ c: PartCell) -> (Double, Double) {
@@ -10249,7 +10855,9 @@ extension Game {
         if mounted != nil { dismount() }
         inVehicle = v
         v.rider = true
-        say("Driving. Hold the stick to move, jump to get out when stopped.", 3.0)
+        v.asleep = false
+        let drillTip: String = v.drills > 0 ? " Drills spin while the engine runs." : ""
+        say("Driving. Hold the stick to move; in the air it tilts the vehicle. Jump to get out when stopped." + drillTip, 3.5)
         bumpHUD()
     }
 }
@@ -10789,6 +11397,8 @@ struct SaveMeta: Codable {
     var day: Int
     var playSeconds: Double
     var dim: Int
+    /// world generation rules the world was created with (nil in saves made before basins existed)
+    var genVersion: Int? = nil
 }
 
 struct SaveData: Codable {
@@ -10923,7 +11533,7 @@ extension Game {
         var py: Double = pb.y
         if let r = mounted { px = r.b.x; py = r.b.y }
         if let v = inVehicle { px = v.b.x; py = v.b.y - v.b.h }
-        let meta = SaveMeta(slot: slot, name: worldName, mode: mode, infinite: gen.infinite, seed: seedValue, day: dayCount, playSeconds: playSeconds, dim: cur)
+        let meta = SaveMeta(slot: slot, name: worldName, mode: mode, infinite: gen.infinite, seed: seedValue, day: dayCount, playSeconds: playSeconds, dim: cur, genVersion: gen.genVersion)
         return SaveData(meta: meta, settings: settings, px: px, py: py, hp: max(1, hp), maxHP: maxHP, hunger: hunger, timeOfDay: timeOfDay, kills: kills, spawnX: spawnX, spawnY: spawnY, inv: inv, sel: sel, defeated: Array(defeated), gotMap: gotMap, portalOpened: portalOpened, chests: chestList, chunks: cs, vehicles: vs, pets: pets, rex: rs, nextID: nextID)
     }
 
@@ -10937,7 +11547,8 @@ extension Game {
     static func load(_ s: SaveData, settings: Settings) -> Game {
         var st: Settings = settings
         st.rareChance = s.settings.rareChance
-        let g = Game(mode: s.meta.mode, infinite: s.meta.infinite, seed: s.meta.seed, settings: st)
+        // worlds saved before the generation changes keep generating exactly as they did
+        let g = Game(mode: s.meta.mode, infinite: s.meta.infinite, seed: s.meta.seed, settings: st, genVersion: s.meta.genVersion ?? 1)
         g.slot = s.meta.slot
         g.worldName = s.meta.name
         g.dayCount = s.meta.day
@@ -11995,6 +12606,7 @@ struct GhostCell {
     var x: Double
     var y: Double
     var ok: Bool
+    var ang: Double = 0
 }
 
 extension Game {
@@ -12074,8 +12686,7 @@ extension Game {
         v.parts.removeAll()
         for k in layout { v.parts[PartCell(dx: k.dx, dy: k.dy)] = k.p }
         v.recompute(keepAnchor: false)
-        v.b.x = Double(pl.0) + v.b.w * 0.5
-        v.b.y = Double(pl.1 + 1)
+        v.placeBox(left: Double(pl.0), bottom: Double(pl.1 + 1))
         _ = h
         v.kit = g.rawValue
         if v.engines > 0 { v.fuel = min(v.fuelCapacity, 40.0) }
@@ -12165,8 +12776,9 @@ extension Game {
     func liftIfBuried(_ v: Vehicle, _ c: PartCell) {
         let wp: (Double, Double) = v.cellPos(c)
         if world.boxSolid(wp.0 + 0.02, wp.1 + 0.02, wp.0 + 0.98, wp.1 + 0.98) {
-            v.b.y -= 1.0
-            v.b.vy = 0
+            v.py -= 1.0
+            v.vy = 0
+            v.updateBox()
         }
     }
 
@@ -12195,7 +12807,7 @@ extension Game {
             if let v = nearestVehicle(10) {
                 for c in attachSpots(v, p) {
                     let wp: (Double, Double) = v.cellPos(c)
-                    out.append(GhostCell(x: wp.0, y: wp.1, ok: true))
+                    out.append(GhostCell(x: wp.0, y: wp.1, ok: true, ang: v.angle))
                 }
             }
         case .gadget(let g):
@@ -13285,21 +13897,33 @@ enum WorldRenderer {
 
     static func drawVehicles(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
         let art: Art = Art.shared
+        let tp: Double = v.tp
         for veh in g.vehicles {
             if !v.visible(veh.b.x, veh.b.y, 10) { continue }
+            let shade: Double = openShade(g, veh.b.x, veh.b.cy)
             for (cell, t) in veh.parts {
-                let p: (Double, Double) = veh.cellPos(cell)
-                let r: CGRect = v.rect(p.0, p.1, 1.0, 1.0)
+                // every part is drawn at its rotated position with the vehicle's rotation, exactly
+                // where its collision samples are
+                let p: (Double, Double) = veh.cellCenter(cell)
+                var c: GraphicsContext = ctx
+                if shade < 0.98 { c.addFilter(.colorMultiply(shadeColor(shade))) }
+                c.translateBy(x: CGFloat(v.sx(p.0)), y: CGFloat(v.sy(p.1)))
+                var rot: Double = veh.angle
+                var jitter: Double = 0
+                if t == .wheel { rot += veh.wheelRot }
+                if t == .propeller { rot += veh.propRot }
+                if isDrill(t), let d = veh.drillDir[cell] {
+                    rot += atan2(Double(d.1), Double(d.0))
+                    if veh.drilling { jitter = sin(veh.drillRot * 3.0) * tp * 0.03 }
+                }
+                c.rotate(by: Angle(radians: rot))
                 let img: Image = art.parts[t.rawValue]
-                if t == .wheel || t == .propeller {
-                    var c: GraphicsContext = ctx
-                    c.translateBy(x: r.midX, y: r.midY)
-                    let rot: Double = t == .wheel ? veh.wheelRot : veh.propRot
-                    c.rotate(by: Angle(radians: rot))
-                    let w: Double = Double(r.width)
-                    c.draw(img, in: mkRect(-w * 0.5, -w * 0.5, w, w))
-                } else {
-                    ctx.draw(img, in: r)
+                let w: Double = tp * 1.02
+                c.draw(img, in: mkRect(-w * 0.5 + jitter, -w * 0.5, w, w))
+                if isDrill(t) && veh.drilling {
+                    // spinning bit: alternating highlight bands
+                    let band: Double = (veh.drillRot.truncatingRemainder(dividingBy: 1.0)) * w * 0.4
+                    fillRect(&c, mkRect(w * 0.0 + band - w * 0.1, -w * 0.25, w * 0.08, w * 0.5), Color.white.opacity(0.35))
                 }
             }
         }
@@ -13308,10 +13932,13 @@ enum WorldRenderer {
         if !ghosts.isEmpty {
             let pulse: Double = 0.55 + 0.25 * sin(g.clock * 6.0)
             for gc in ghosts {
-                let r: CGRect = v.rect(gc.x, gc.y, 1.0, 1.0)
                 let col: Color = gc.ok ? Color(hex: 0x50F070) : Color(hex: 0xFF5050)
-                fillRect(&ctx, r, col.opacity(0.22 * pulse + 0.08))
-                strokeRect(&ctx, r, col.opacity(pulse), 2)
+                var c: GraphicsContext = ctx
+                c.translateBy(x: CGFloat(v.sx(gc.x + 0.5)), y: CGFloat(v.sy(gc.y + 0.5)))
+                c.rotate(by: Angle(radians: gc.ang))
+                let r: CGRect = mkRect(-tp * 0.5, -tp * 0.5, tp, tp)
+                fillRect(&c, r, col.opacity(0.22 * pulse + 0.08))
+                strokeRect(&c, r, col.opacity(pulse), 2)
             }
         }
     }

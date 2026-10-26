@@ -5424,6 +5424,49 @@ let gravityG: Double = 34.0
 let terminalV: Double = 26.0
 
 extension World {
+    // Box queries read chunk storage directly, one column at a time: a column of a chunk is a
+    // contiguous run of bytes, so this avoids a full tile(x, y) lookup per cell (the hottest path in
+    // physics). Columns outside loaded chunks fall back to tile(x, y).
+
+    /// Finds the first tile in the box whose flag in `table` is set. Returns its raw value or -1.
+    private func scanBox(_ tx0: Int, _ ty0: Int, _ tx1: Int, _ ty1: Int, _ table: [Bool]) -> Int {
+        // (plain local arrays, no closures: withUnsafeBufferPointer costs more than the scan itself in
+        // unoptimised builds)
+        let hh: Int = H
+        let ya: Int = ty0 > 0 ? ty0 : 0
+        let yb: Int = ty1 < hh - 1 ? ty1 : hh - 1
+        let tb: [Bool] = table
+        var tx: Int = tx0
+        while tx <= tx1 {
+            let cx: Int = floorDiv(tx, chunkW)
+            if let c = chunk(cx) {
+                let arr: [UInt8] = c.tiles
+                var i: Int = (tx - cx * chunkW) * hh + ya
+                var y: Int = ya
+                while y <= yb {
+                    let r: Int = i8(arr[i])
+                    if tb[r] { return r }
+                    y += 1
+                    i += 1
+                }
+                // rows below the world are bedrock (rows above are air)
+                if ty1 >= hh {
+                    let br: Int = i8(Tile.bedrock.rawValue)
+                    if tb[br] { return br }
+                }
+            } else {
+                var y2: Int = ty0
+                while y2 <= ty1 {
+                    let r: Int = i8(tile(tx, y2).rawValue)
+                    if tb[r] { return r }
+                    y2 += 1
+                }
+            }
+            tx += 1
+        }
+        return -1
+    }
+
     func boxSolid(_ x0: Double, _ y0: Double, _ x1: Double, _ y1: Double) -> Bool {
         Perf.shared.countBox()
         let tx0: Int = Int(floor(x0))
@@ -5431,12 +5474,7 @@ extension World {
         let ty0: Int = Int(floor(y0))
         let ty1: Int = Int(floor(y1 - 0.0001))
         if tx1 < tx0 || ty1 < ty0 { return false }
-        for ty in ty0...ty1 {
-            for tx in tx0...tx1 {
-                if tile(tx, ty).solid { return true }
-            }
-        }
-        return false
+        return scanBox(tx0, ty0, tx1, ty1, Tile.solidTable) >= 0
     }
 
     func boxHurts(_ x0: Double, _ y0: Double, _ x1: Double, _ y1: Double) -> Tile? {
@@ -5445,13 +5483,45 @@ extension World {
         let ty0: Int = Int(floor(y0))
         let ty1: Int = Int(floor(y1 - 0.0001))
         if tx1 < tx0 || ty1 < ty0 { return nil }
-        for ty in ty0...ty1 {
-            for tx in tx0...tx1 {
-                let t: Tile = tile(tx, ty)
-                if t.hurts { return t }
+        let r: Int = scanBox(tx0, ty0, tx1, ty1, Tile.hurtTable)
+        return r >= 0 ? Tile.make(UInt8(truncatingIfNeeded: r)) : nil
+    }
+
+    /// Fractions of a box covered by water and by lava, in one pass
+    func liquidFractions(_ x0: Double, _ y0: Double, _ x1: Double, _ y1: Double) -> (Double, Double) {
+        let tx0: Int = Int(floor(x0))
+        let tx1: Int = Int(floor(x1 - 0.0001))
+        let ty0: Int = Int(floor(y0))
+        let ty1: Int = Int(floor(y1 - 0.0001))
+        if tx1 < tx0 || ty1 < ty0 { return (0, 0) }
+        let waterR: UInt8 = Tile.water.rawValue
+        let lavaR: UInt8 = Tile.lava.rawValue
+        let hh: Int = H
+        var w: Int = 0
+        var l: Int = 0
+        var tx: Int = tx0
+        while tx <= tx1 {
+            let cx: Int = floorDiv(tx, chunkW)
+            if let c = chunk(cx), ty0 >= 0, ty1 < hh {
+                let arr: [UInt8] = c.tiles
+                var i: Int = (tx - cx * chunkW) * hh + ty0
+                var y: Int = ty0
+                while y <= ty1 {
+                    let r: UInt8 = arr[i]
+                    if r == waterR { w += 1 } else if r == lavaR { l += 1 }
+                    y += 1
+                    i += 1
+                }
+            } else {
+                for y in ty0...ty1 {
+                    let t: Tile = tile(tx, y)
+                    if t == .water { w += 1 } else if t == .lava { l += 1 }
+                }
             }
+            tx += 1
         }
-        return nil
+        let n: Double = Double((tx1 - tx0 + 1) * (ty1 - ty0 + 1))
+        return (Double(w) / n, Double(l) / n)
     }
 
     func liquidFraction(_ x0: Double, _ y0: Double, _ x1: Double, _ y1: Double, _ lava: Bool) -> Double {
@@ -5575,9 +5645,9 @@ extension World {
             }
         }
         // liquids
-        let lf: Double = liquidFraction(b.x - hw, b.y - b.h, b.x + hw, b.y, false)
-        b.inWater = lf > 0.35
-        b.inLava = liquidFraction(b.x - hw, b.y - b.h, b.x + hw, b.y, true) > 0.2
+        let lf: (Double, Double) = liquidFractions(b.x - hw, b.y - b.h, b.x + hw, b.y)
+        b.inWater = lf.0 > 0.35
+        b.inLava = lf.1 > 0.2
     }
 
     /// Light-weight ray test used by projectiles: tile-step along a short segment.
@@ -10005,12 +10075,15 @@ extension Game {
     func mobHazards(_ m: Mob, _ dt: Double) {
         if m.removed || m.downed { return }
         if m.hazardT > 0 { m.hazardT -= dt }
-        let hw: Double = m.b.w * 0.5
-        let x0: Double = m.b.x - hw
-        let x1: Double = m.b.x + hw
+        let b: Body = m.b
+        let def: MobDef = m.def
+        let hw: Double = b.w * 0.5
+        let x0: Double = b.x - hw
+        let x1: Double = b.x + hw
         let heatImmune: Bool = isHeatImmune(m.kind)
-        // lava: check the body and the feet row (fast movers can graze it in one frame)
-        let inLava: Bool = world.liquidFraction(x0, m.b.top, x1, m.b.y + 0.05, true) > 0.04 || m.b.inLava
+        let fx: Int = Int(floor(b.x))
+        // lava: physics already worked out whether the body is in lava; also catch feet just touching it
+        let inLava: Bool = b.inLava || world.tile(fx, Int(floor(b.y - 0.1))) == .lava
         if inLava && !heatImmune {
             m.burn = max(m.burn, 3.0)
             if m.hazardT <= 0 {
@@ -10037,8 +10110,9 @@ extension Game {
                 }
             }
         }
-        // spikes, cactus, campfires
-        if !m.def.flying && m.hazardT <= 0 {
+        // spikes, cactus, campfires (checked every 4th frame per creature, staggered; these only
+        // apply damage on a 0.6 s timer anyway)
+        if !def.flying && m.hazardT <= 0 && (frameNo &+ m.id) & 3 == 0 {
             if let t = world.boxHurts(x0 + 0.05, m.b.y - 0.6, x1 - 0.05, m.b.y + 0.05) ?? world.boxHurts(x0 - 0.02, m.b.top + 0.1, x1 + 0.02, m.b.y - 0.1) {
                 if t == .spikes || t == .cactus {
                     m.hazardT = 0.6
@@ -10048,12 +10122,11 @@ extension Game {
                     applyMobDamage(m, info)
                 }
             }
-            let fx: Int = Int(floor(m.b.x))
-            let fy: Int = Int(floor(m.b.y - 0.5))
+            let fy: Int = Int(floor(b.y - 0.5))
             if world.tile(fx, fy) == .campfire && !heatImmune { m.burn = max(m.burn, 2.0) }
         }
         // falling (knockback off a ledge counts too)
-        if !m.def.flying && m.kind != .fish {
+        if !def.flying && m.kind != .fish {
             if !m.b.onGround && m.b.vy > 0 && !m.b.inWater { m.fallPeak = max(m.fallPeak, m.b.vy) }
             if m.b.onGround || m.b.inWater {
                 if m.fallPeak > 23.0 && !m.b.inWater && !m.isBoss {
@@ -14955,7 +15028,17 @@ enum WorldRenderer {
             ctx.draw(art.crack[st], in: v.rect(Double(g.mineX), Double(g.mineY), 1, 1))
         }
         let aiming: Bool = g.useHeld || g.pendingInteract || actState.held
-        if g.aimValid && !g.dead && aiming {
+        // placement preview: a see-through copy of the held block where it would go, outlined green
+        // when it can be placed there and red when it cannot (out of reach, occupied, unsupported)
+        if g.aimValid && !g.dead && g.inVehicle == nil, let it = g.heldItem, case .block(let t) = it, t != .doorClosed, t != .doorOpen {
+            let tx: Int = Int(floor(g.aimX))
+            let ty: Int = Int(floor(g.aimY))
+            let ok: Bool = g.canPlaceAt(tx, ty, t)
+            var c: GraphicsContext = ctx
+            c.opacity = ok ? 0.5 : 0.28
+            c.draw(art.icon(it), in: v.rect(Double(tx), Double(ty), 1, 1))
+            strokeRect(&ctx, v.rect(Double(tx), Double(ty), 1, 1), ok ? Color(hex: 0x70E080, alpha: 0.9) : Color(hex: 0xFF5050, alpha: 0.75), 2)
+        } else if g.aimValid && !g.dead && aiming {
             let tx: Double = floor(g.aimX)
             let ty: Double = floor(g.aimY)
             let ok: Bool = g.inReach(g.aimX, g.aimY)

@@ -1001,6 +1001,41 @@ enum Item: Hashable, Codable {
     case gadget(Gadget)
     case wall(Int)
 
+    /// Order used by inventory sorting: gear first, then building blocks, materials and the rest
+    var sortGroup: Int {
+        switch self {
+        case .sword: return 0
+        case .bow, .gun: return 1
+        case .ammo: return 2
+        case .tool: return 3
+        case .armor: return 4
+        case .food: return 5
+        case .gadget: return 6
+        case .part: return 7
+        case .block: return 8
+        case .wall: return 9
+        case .mat: return 10
+        }
+    }
+
+    /// Short description lines for tooltips
+    var infoLines: [String] {
+        switch self {
+        case .sword(let t): return ["Melee weapon", String(format: "Damage %.1f", t.damage)]
+        case .tool(let k, let t): return [k.name + " (tool)", String(format: "Mining speed x%.1f", t.mineSpeed), "Tier \(t.rawValue)"]
+        case .armor(let s, let t): return [s.name + " armour", String(format: "Defense +%.1f", t.defense * s.weight)]
+        case .food(let f): return ["Food", String(format: "Restores %.0f hunger", f.hunger), f.heal > 0 ? String(format: "Heals %.0f", f.heal) : "Eat to recover"]
+        case .bow: return ["Bow: hold to draw, release to fire", "Uses arrows"]
+        case .gun(let g): return ["Firearm", String(format: "Damage %.0f", g.damage), "Magazine \(g.magazine)"]
+        case .ammo: return ["Ammunition"]
+        case .part(let p): return ["Vehicle part", String(format: "Mass %.1f", p.mass)]
+        case .gadget: return ["Gadget: use it from the hotbar"]
+        case .block(let t): return [t.solid ? "Building block" : "Placeable", t.light > 0 ? "Gives light" : (t.hardness >= 99 ? "Unbreakable" : String(format: "Hardness %.1f", t.hardness))]
+        case .wall: return ["Background wall"]
+        case .mat: return ["Crafting material"]
+        }
+    }
+
     var name: String {
         switch self {
         case .block(let t): return t.name
@@ -1580,6 +1615,34 @@ struct Inventory: Codable {
         let t: Stack? = slots[a]
         slots[a] = slots[b]
         slots[b] = t
+    }
+
+    /// Sorts the bag (everything past the hotbar): equal stacks merge, then items group by kind and name.
+    /// The hotbar is left alone so a sort never moves what the player has ready.
+    mutating func sortBag() {
+        var list: [Stack] = []
+        for i in Inventory.hotbarCount..<slots.count {
+            guard let s = slots[i] else { continue }
+            slots[i] = nil
+            if s.item.maxStack > 1, let j = list.firstIndex(where: { $0.item == s.item && $0.extra == s.extra && $0.count < $0.item.maxStack }) {
+                let room: Int = list[j].item.maxStack - list[j].count
+                let put: Int = min(room, s.count)
+                list[j].count += put
+                if s.count - put > 0 { var r: Stack = s; r.count = s.count - put; list.append(r) }
+            } else {
+                list.append(s)
+            }
+        }
+        list.sort { a, b in
+            let ka: Int = a.item.sortGroup
+            let kb: Int = b.item.sortGroup
+            if ka != kb { return ka < kb }
+            if a.item.name != b.item.name { return a.item.name < b.item.name }
+            return a.count > b.count
+        }
+        for (k, s) in list.enumerated() where Inventory.hotbarCount + k < slots.count {
+            slots[Inventory.hotbarCount + k] = s
+        }
     }
 
     /// Total armor defense value
@@ -7454,6 +7517,96 @@ extension Game {
             carry = b
             bumpHUD()
         }
+    }
+
+    // MARK: drag and drop
+
+    enum SlotRef: Hashable {
+        case inv(Int)
+        case armor(Int)
+        case chest(Int)
+        case drop
+    }
+
+    func stackAt(_ r: SlotRef) -> Stack? {
+        switch r {
+        case .inv(let i): return i >= 0 && i < inv.slots.count ? inv.slots[i] : nil
+        case .armor(let i): return i >= 0 && i < 3 ? inv.armor[i] : nil
+        case .chest(let i):
+            guard let p = openChest else { return nil }
+            let items: [Stack] = world.chestItems(p.x, p.y)
+            return i >= 0 && i < items.count ? items[i] : nil
+        case .drop: return nil
+        }
+    }
+
+    private func tapRef(_ r: SlotRef) {
+        switch r {
+        case .inv(let i): tapSlot(i)
+        case .armor(let i): tapArmorSlot(i)
+        case .chest(let i): if let p = openChest { chestTapSlot(p.x, p.y, i) }
+        case .drop: dropCarried()
+        }
+    }
+
+    /// Drags the stack in `from` onto `to`: places, merges or swaps using the same rules as tapping, so
+    /// armour only goes into its own slot and chests keep their limits. Anything that cannot land goes
+    /// back where it came from (or into the bag).
+    func dragStack(from: SlotRef, to: SlotRef?) {
+        if carry != nil { returnCarried() }
+        if stackAt(from) == nil { return }
+        tapRef(from)
+        guard carry != nil else { return }
+        if let to = to, to != from {
+            tapRef(to)
+        }
+        if carry != nil {
+            // put the remainder (or the swapped stack) back into the slot the drag started from
+            switch from {
+            case .chest:
+                if let p = openChest { chestTapSlot(p.x, p.y, Int.max) }
+            default:
+                if stackAt(from) == nil { tapRef(from) }
+            }
+        }
+        if carry != nil { returnCarried() }
+        bumpHUD()
+    }
+
+    func sortBag() {
+        returnCarried()
+        inv.sortBag()
+        say("Bag sorted.", 1.2)
+        bumpHUD()
+    }
+
+    /// Moves every bag stack (not the hotbar) whose item the open chest already holds into that chest
+    func quickStack() {
+        guard let p = openChest else { return }
+        var items: [Stack] = world.chestItems(p.x, p.y)
+        var moved: Int = 0
+        for i in Inventory.hotbarCount..<inv.slots.count {
+            guard var s = inv.slots[i] else { continue }
+            if !items.contains(where: { $0.item == s.item }) { continue }
+            // top up existing chest stacks first, then use free chest slots
+            if s.item.maxStack > 1 {
+                for k in 0..<items.count where items[k].item == s.item && items[k].extra == s.extra && items[k].count < s.item.maxStack && s.count > 0 {
+                    let put: Int = min(s.item.maxStack - items[k].count, s.count)
+                    items[k].count += put
+                    s.count -= put
+                    moved += put
+                }
+            }
+            if s.count > 0 && items.count < 27 {
+                items.append(s)
+                moved += s.count
+                s.count = 0
+            }
+            inv.slots[i] = s.count > 0 ? s : nil
+        }
+        world.setChestItems(p.x, p.y, items)
+        say(moved > 0 ? "Stored \(moved) items in the chest." : "Nothing here matches the chest.", 1.5)
+        bumpHUD()
     }
 
     func dropCarried() {
@@ -15038,7 +15191,6 @@ struct HUDView: View {
                     if game.gotMap || game.inv.total(.gadget(.treasureMap)) > 0 {
                         SmallButton(title: "MAP", color: Color(hex: 0x9A7A3A)) { game.showMap = true }
                     }
-                    SmallButton(title: "BAG", color: Color(hex: 0x3E6FAA)) { game.showInventory = true }
                     SmallButton(title: "DBG") { game.showDebug.toggle() }
                     SmallButton(title: "II") { game.paused = true }
                 }
@@ -15151,6 +15303,20 @@ struct HUDView: View {
                 }
                 .buttonStyle(.plain)
             }
+            // the bag opens from the end of the hotbar (replaces the old BAG text button)
+            Button {
+                game.showInventory = true
+                game.bumpHUD()
+            } label: {
+                ZStack {
+                    Rectangle().fill(Color(hex: 0x3E5A7A, alpha: 0.85))
+                    Art.shared.icon(.block(.chest)).resizable().frame(width: 26, height: 26)
+                    Text("BAG").font(.pixel(8)).foregroundColor(Color.white).offset(y: 14)
+                }
+                .frame(width: 40, height: 40)
+                .overlay(Rectangle().stroke(Color(hex: 0xA0C0E0), lineWidth: 1))
+            }
+            .buttonStyle(.plain)
         }
     }
 
@@ -15166,26 +15332,118 @@ struct HUDView: View {
 
 // MARK: - Inventory, crafting, chests, creative palette
 
+/// Where each slot sits on screen (in the panel's "inv" space), so a drag can find what it was dropped on.
+/// Filled while the slots lay out; a plain reference box keeps it out of SwiftUI state updates.
+final class SlotFrames: @unchecked Sendable {
+    var map: [Game.SlotRef: CGRect] = [:]
+
+    func target(at p: CGPoint) -> Game.SlotRef? {
+        for (k, r) in map where r.contains(p) { return k }
+        return nil
+    }
+}
+
 struct InventoryPanel: View {
     @ObservedObject var game: Game
     @ObservedObject var hud: HUDSignal
     @State var cat: RecipeCat = .basic
     @State var creativeTab: Bool = false
     @State var onlyCraftable: Bool = false
+    // drag and drop
+    @State var dragFrom: Game.SlotRef? = nil
+    @State var dragPoint: CGPoint = .zero
+    @State var hoverRef: Game.SlotRef? = nil
+    @State var frames: SlotFrames = SlotFrames()
 
     var body: some View {
-        VStack(spacing: 8) {
-            header
-            HStack(alignment: .top, spacing: 12) {
-                leftColumn
-                rightColumn
+        ZStack(alignment: .topLeading) {
+            VStack(spacing: 8) {
+                header
+                HStack(alignment: .top, spacing: 12) {
+                    leftColumn
+                    rightColumn
+                }
+            }
+            .foregroundColor(Color.white)
+            .padding(14)
+            .background(PixelBox(color: Color(hex: 0x2C2C30)).opacity(0.97))
+            // the stack being dragged follows the finger
+            if let f = dragFrom, let s = game.stackAt(f) {
+                SlotView(stack: s, size: 44)
+                    .opacity(0.9)
+                    .position(x: dragPoint.x, y: dragPoint.y)
+                    .allowsHitTesting(false)
             }
         }
-        .foregroundColor(Color.white)
-        .padding(14)
-        .background(PixelBox(color: Color(hex: 0x2C2C30)).opacity(0.97))
+        .coordinateSpace(name: "inv")
         .frame(maxWidth: 1000)
         .padding(10)
+    }
+
+    /// A slot that can be tapped (pick up / place), long-pressed, hovered for info, and dragged
+    func dragSlot(_ ref: Game.SlotRef, _ stack: Stack?, size: CGFloat, selected: Bool = false, tap: @escaping () -> Void, hold: @escaping () -> Void) -> some View {
+        let box: SlotFrames = frames
+        let g: Game = game
+        return SlotView(stack: stack, selected: selected, size: size)
+            .background(GeometryReader { gp -> Color in
+                box.map[ref] = gp.frame(in: .named("inv"))
+                return Color.clear
+            })
+            .opacity(dragFrom == ref ? 0.35 : 1.0)
+            .onTapGesture {
+                hoverRef = ref
+                tap()
+            }
+            .onLongPressGesture(minimumDuration: 0.35) { hold() }
+            .onHover { inside in if inside { hoverRef = ref } }
+            .gesture(DragGesture(minimumDistance: 8, coordinateSpace: .named("inv"))
+                .onChanged { v in
+                    if dragFrom == nil {
+                        if g.carry != nil || g.stackAt(ref) == nil { return }
+                        dragFrom = ref
+                        hoverRef = ref
+                    }
+                    dragPoint = v.location
+                }
+                .onEnded { v in
+                    if let from = dragFrom {
+                        g.dragStack(from: from, to: box.target(at: v.location))
+                    }
+                    dragFrom = nil
+                })
+    }
+
+    /// Drop zone: dragging a stack here throws it out into the world
+    var dropZone: some View {
+        let box: SlotFrames = frames
+        let active: Bool = dragFrom != nil
+        return Text(active ? "DROP HERE" : "DROP")
+            .font(.pixel(11))
+            .foregroundColor(Color.white.opacity(active ? 1.0 : 0.6))
+            .frame(width: 84, height: 36)
+            .background(Color(hex: active ? 0x7A3A2A : 0x3A2E2A).opacity(0.9))
+            .overlay(Rectangle().stroke(Color(hex: 0xA06A2A), lineWidth: active ? 2 : 1))
+            .background(GeometryReader { gp -> Color in
+                box.map[.drop] = gp.frame(in: .named("inv"))
+                return Color.clear
+            })
+            .onTapGesture { game.dropCarried() }
+    }
+
+    /// Name and details of the slot last touched or hovered
+    var infoBox: some View {
+        let s: Stack? = hoverRef.flatMap { game.stackAt($0) } ?? game.carry
+        return VStack(alignment: .leading, spacing: 2) {
+            if let st = s {
+                Text(verbatim: st.count > 1 ? joinText(st.item.name, "  x", String(st.count)) : st.item.name).font(.pixel(12))
+                Text(verbatim: st.item.infoLines.joined(separator: " · ")).font(.pixel(10, .semibold)).foregroundColor(Color.white.opacity(0.75))
+            } else {
+                Text("Tap or hover an item to see what it does.").font(.pixel(10, .semibold)).foregroundColor(Color.white.opacity(0.55))
+            }
+        }
+        .frame(maxWidth: 460, minHeight: 34, alignment: .leading)
+        .padding(.horizontal, 6)
+        .background(Color.black.opacity(0.25))
     }
 
     var titleText: String {
@@ -15199,6 +15457,10 @@ struct InventoryPanel: View {
             Spacer()
             if game.isCreative && game.openChest == nil {
                 SmallButton(title: creativeTab ? "CRAFTING" : "ALL ITEMS", color: Color(hex: 0x3E6FAA)) { creativeTab.toggle() }
+            }
+            SmallButton(title: "SORT", color: Color(hex: 0x4E6A8A)) { game.sortBag() }
+            if game.openChest != nil {
+                SmallButton(title: "QUICK STACK", color: Color(hex: 0x4E8A3E)) { game.quickStack() }
             }
             SmallButton(title: "CLOSE", color: Color(hex: 0xA03030)) { close() }
         }
@@ -15227,6 +15489,7 @@ struct InventoryPanel: View {
                 }
             }
             carryBar
+            infoBox
             Text(verbatim: holdHint)
                 .font(.pixel(10, .semibold))
                 .foregroundColor(Color.white.opacity(0.7))
@@ -15235,17 +15498,15 @@ struct InventoryPanel: View {
 
     var holdHint: String {
         let tail: String = game.openChest != nil ? "move to chest." : "split stack, equip armor."
-        return joinText("Tap: pick up / place. Hold: ", tail)
+        return joinText("Drag to move, swap or stack (onto DROP to throw away). Tap: pick up / place. Hold: ", tail)
     }
 
     func invSlot(_ i: Int) -> some View {
         let isHot: Bool = i < Inventory.hotbarCount
         let selected: Bool = isHot && game.sel == i
         let ring: Color = isHot ? Color(hex: 0xFFE070, alpha: 0.35) : Color.clear
-        return SlotView(stack: game.inv.slots[i], selected: selected, size: 40)
+        return dragSlot(.inv(i), game.inv.slots[i], size: 40, selected: selected, tap: { game.tapSlot(i) }, hold: { longPress(i) })
             .overlay(Rectangle().stroke(ring, lineWidth: 1))
-            .onTapGesture { game.tapSlot(i) }
-            .onLongPressGesture(minimumDuration: 0.35) { longPress(i) }
     }
 
     func longPress(_ i: Int) {
@@ -15265,8 +15526,7 @@ struct InventoryPanel: View {
         return VStack(spacing: 4) {
             ForEach(0..<3, id: \.self) { i in
                 VStack(spacing: 1) {
-                    SlotView(stack: game.inv.armor[i], size: 40)
-                        .onTapGesture { game.tapArmorSlot(i) }
+                    dragSlot(.armor(i), game.inv.armor[i], size: 40, tap: { game.tapArmorSlot(i) }, hold: {})
                     Text(names[i]).font(.pixel(9, .bold)).foregroundColor(Color.white.opacity(0.7))
                 }
             }
@@ -15284,11 +15544,11 @@ struct InventoryPanel: View {
                 Text(verbatim: joinText("Holding ", c.item.name)).font(.pixel(12))
                 Spacer()
                 SmallButton(title: "PUT BACK") { game.returnCarried() }
-                SmallButton(title: "DROP", color: Color(hex: 0xA06A2A)) { game.dropCarried() }
             } else {
                 Text("Hand empty").font(.pixel(11, .semibold)).foregroundColor(Color.white.opacity(0.6))
                 Spacer()
             }
+            dropZone
         }
         .frame(height: 40)
     }
@@ -15296,7 +15556,7 @@ struct InventoryPanel: View {
     @ViewBuilder
     var rightColumn: some View {
         if let p = game.openChest {
-            ChestPanel(game: game, hud: game.hud, cx: p.x, cy: p.y)
+            chestGrid(p.x, p.y)
         } else if creativeTab && game.isCreative {
             creativePalette
         } else {
@@ -15412,40 +15672,36 @@ struct RecipeRow: View {
     }
 }
 
-struct ChestPanel: View {
-    @ObservedObject var game: Game
-    @ObservedObject var hud: HUDSignal
-    let cx: Int
-    let cy: Int
-    var body: some View {
+/// The open chest, shown beside the bag; its slots take part in drag and drop like the bag's
+extension InventoryPanel {
+    func chestGrid(_ cx: Int, _ cy: Int) -> some View {
         let items: [Stack] = game.world.chestItems(cx, cy)
         return VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text("CHEST").font(.pixel(15))
                 Spacer()
-                SmallButton(title: "TAKE ALL", color: Color(hex: 0x4E8A3E)) { takeAll() }
+                SmallButton(title: "TAKE ALL", color: Color(hex: 0x4E8A3E)) { takeAll(cx, cy) }
             }
             VStack(spacing: 3) {
                 ForEach(0..<3, id: \.self) { r in
                     HStack(spacing: 3) {
                         ForEach(0..<9, id: \.self) { c in
-                            chestSlot(r * 9 + c, items)
+                            chestSlot(cx, cy, r * 9 + c, items)
                         }
                     }
                 }
             }
-            Text("Tap: take / put the held stack. Hold: move into your bag.").font(.pixel(10, .semibold)).foregroundColor(Color.white.opacity(0.7))
+            Text("Drag between chest and bag. Tap: take / put the held stack. Hold: move into your bag.").font(.pixel(10, .semibold)).foregroundColor(Color.white.opacity(0.7))
         }
     }
 
-    func chestSlot(_ i: Int, _ items: [Stack]) -> some View {
+    func chestSlot(_ cx: Int, _ cy: Int, _ i: Int, _ items: [Stack]) -> some View {
         let s: Stack? = i < items.count ? items[i] : nil
-        return SlotView(stack: s, size: 40)
-            .onTapGesture { game.chestTapSlot(cx, cy, i) }
-            .onLongPressGesture(minimumDuration: 0.35) { game.chestQuickMove(cx, cy, i) }
+        let g: Game = game
+        return dragSlot(.chest(i), s, size: 40, tap: { g.chestTapSlot(cx, cy, i) }, hold: { g.chestQuickMove(cx, cy, i) })
     }
 
-    func takeAll() {
+    func takeAll(_ cx: Int, _ cy: Int) {
         var n: Int = 0
         while n < 30 {
             let items: [Stack] = game.world.chestItems(cx, cy)
@@ -16460,8 +16716,11 @@ struct GameView: View {
             }
             if game.showInventory {
                 Color.black.opacity(0.35).ignoresSafeArea()
-                ScrollView {
+                // no scroll view around the panel (it would fight with dragging); it scales to fit instead
+                GeometryReader { geo in
                     InventoryPanel(game: game, hud: game.hud)
+                        .scaleEffect(min(1.0, min(geo.size.width / 1000.0, geo.size.height / 600.0)))
+                        .frame(width: geo.size.width, height: geo.size.height)
                 }
             }
             if game.showMap {

@@ -2314,147 +2314,244 @@ func spriteWraith() -> [PixelBuf] {
 
 // MARK: - Boss, boat and vehicle-part sprites
 
-func spriteBearBoss() -> [PixelBuf] {
-    var out: [PixelBuf] = []
-    var m = Mammal()
-    m.H = 40; m.fur = 0x3A2A22; m.dark = 0x20140E; m.belly = 0x4A362A; m.nose = 0x0A0A0A; m.eye = 0xFF2A1A
-    m.bodyRX = 16; m.bodyRY = 9.5; m.legLen = 10; m.legW = 6
-    m.headRX = 7.5; m.headRY = 6.5; m.headDX = -1.0; m.headDY = 1.5
-    m.snout = 4; m.ears = 1; m.tail = 1; m.tailExtra = 3; m.tex = 0.22
-    let walk: [PixelBuf] = mammalFrames(m, seed: 201) { b, g in
-        var x: Int = Int(g.cx - g.bw * 0.7)
-        while x < Int(g.cx + g.bw * 0.55) {
-            let nx: Double = (Double(x) - g.cx) / g.bw
-            let inner: Double = max(0.05, 1.0 - nx * nx)
-            let rise: Double = g.bh * sqrt(inner)
-            let topY: Int = Int(g.cy - rise) - 1
-            b.line(x, topY, x + 1, topY - 4, 0xD8D0B8)
-            b.line(x + 1, topY, x + 1, topY - 3, 0xB8B098)
-            x += 4
+// MARK: boss art (hand-shaped, top-lit, no texture noise)
+
+extension PixelBuf {
+    /// Filled ellipse with built-in lighting: a highlight toward the upper front, a shadow band below
+    mutating func litEllipse(_ cx: Double, _ cy: Double, _ rx: Double, _ ry: Double, _ base: UInt32, _ light: UInt32, _ dark: UInt32) {
+        let x0: Int = Int(floor(cx - rx)) - 1
+        let x1: Int = Int(ceil(cx + rx)) + 1
+        let y0: Int = Int(floor(cy - ry)) - 1
+        let y1: Int = Int(ceil(cy + ry)) + 1
+        for yy in y0...y1 {
+            for xx in x0...x1 {
+                let nx: Double = (Double(xx) + 0.5 - cx) / rx
+                let ny: Double = (Double(yy) + 0.5 - cy) / ry
+                if nx * nx + ny * ny > 1.0 { continue }
+                var c: UInt32 = base
+                if ny > 0.52 { c = dark } else {
+                    let hx: Double = (nx - 0.12) / 0.78
+                    let hy: Double = (ny + 0.42) / 0.5
+                    if hx * hx + hy * hy < 1.0 { c = light }
+                }
+                set(xx, yy, c)
+            }
         }
-        b.line(Int(g.hx - 3), Int(g.hy - 4), Int(g.hx + 3), Int(g.hy + 2), 0xB8A08A)
-        b.line(Int(g.hx - 2), Int(g.hy - 4), Int(g.hx + 4), Int(g.hy + 2), 0x7A6050)
-        b.rect(Int(g.hx + 2), Int(g.hy) - 3, 3, 2, 0xFF2A1A)
-        b.set(Int(g.hx + 3), Int(g.hy) - 3, 0xFFE0A0)
-        b.set(Int(g.hx + 7), Int(g.hy) + 2, 0xF4EEDC)
-        b.set(Int(g.hx + 9), Int(g.hy) + 2, 0xF4EEDC)
-        b.line(Int(g.hx + 8), Int(g.hy) + 2, Int(g.hx + 8), Int(g.hy) + 3, 0xF4EEDC)
-        let claw: UInt32 = 0xEDE6D0
-        b.rect(Int(g.cx + g.bw * 0.64) - 1, g.ground, 4, 1, claw)
-        b.rect(Int(g.cx + g.bw * 0.30) - 1, g.ground, 4, 1, claw)
     }
-    out.append(walk[1])
-    out.append(walk[2])
-    // rear-up pose and swipe pose
-    for pose in 0..<2 {
-        var b = PixelBuf(w: walk[0].w, h: 40)
-        let cx: Double = 24
-        b.rect(14, 28, 7, 9, 0x20140E); b.rect(30, 28, 7, 9, 0x2A1C14)
-        b.rect(12, 37, 10, 1, 0xEDE6D0); b.rect(29, 37, 10, 1, 0xEDE6D0)
-        b.ellipse(cx + 2, 22, 12.5, 14, 0x3A2A22)
-        b.ellipse(cx + 3, 26, 8, 9, 0x4A362A)
-        var sp: Int = 0
-        while sp < 5 {
-            b.line(8 + sp * 2, 14 + sp * 3, 5 + sp * 2, 11 + sp * 3, 0xD8D0B8)
-            sp += 1
+
+    /// Filled polygon (even-odd test per pixel centre)
+    mutating func poly(_ pts: [(Double, Double)], _ rgb: UInt32) {
+        if pts.count < 3 { return }
+        var minX: Double = pts[0].0, maxX: Double = pts[0].0, minY: Double = pts[0].1, maxY: Double = pts[0].1
+        for p in pts { minX = min(minX, p.0); maxX = max(maxX, p.0); minY = min(minY, p.1); maxY = max(maxY, p.1) }
+        for yy in Int(floor(minY))...Int(ceil(maxY)) {
+            for xx in Int(floor(minX))...Int(ceil(maxX)) {
+                let px: Double = Double(xx) + 0.5
+                let py: Double = Double(yy) + 0.5
+                var inside: Bool = false
+                var j: Int = pts.count - 1
+                for i in 0..<pts.count {
+                    let a = pts[i]
+                    let b = pts[j]
+                    if (a.1 > py) != (b.1 > py) && px < (b.0 - a.0) * (py - a.1) / (b.1 - a.1) + a.0 { inside = !inside }
+                    j = i
+                }
+                if inside { set(xx, yy, rgb) }
+            }
+        }
+    }
+}
+
+/// The Bear boss: a hulking brown bear with bone plates along its spine, a scarred eye and amber glare.
+/// Frames: 0-1 walk, 2 rear up (roar / slam wind-up), 3 swipe.
+func spriteBearBoss() -> [PixelBuf] {
+    let W: Int = 66
+    let H: Int = 50
+    let fur: UInt32 = 0x4A3426
+    let furL: UInt32 = 0x6A4C36
+    let furD: UInt32 = 0x2C1E16
+    let far: UInt32 = 0x34241A
+    let muzzle: UInt32 = 0x9A7A5A
+    let bone: UInt32 = 0xE0D4B8
+    let boneD: UInt32 = 0x9A8C70
+    let claw: UInt32 = 0xF0EADA
+    let eye: UInt32 = 0xFFB030
+    let gnd: Int = 48
+    var out: [PixelBuf] = []
+
+    func paw(_ b: inout PixelBuf, _ x: Int, _ top: Int, _ c: UInt32, _ cd: UInt32) {
+        b.rect(x, top, 7, gnd - top - 1, c)
+        b.rect(x, gnd - 4, 7, 2, cd)
+        b.rect(x - 1, gnd - 2, 9, 2, cd)
+        b.set(x + 6, gnd - 1, claw); b.set(x + 8, gnd - 1, claw); b.set(x + 4, gnd - 1, claw)
+    }
+
+    for f in 0..<2 {
+        var b = PixelBuf(w: W, h: H)
+        let s: Int = f == 0 ? 2 : -2
+        // far legs (darker), then body, then near legs
+        paw(&b, 18 - s, 33, far, furD)
+        paw(&b, 44 + s, 33, far, furD)
+        b.litEllipse(31, 29, 22, 12, fur, furL, furD)
+        b.litEllipse(40, 22, 12, 10, fur, furL, furD)       // shoulder hump
+        b.ellipse(32, 36, 15, 4.5, 0x5A4232)                 // belly
+        paw(&b, 13 + s, 34, fur, furD)
+        paw(&b, 40 - s, 34, fur, furD)
+        // bone plates along the spine
+        var x: Double = 14
+        while x < 47 {
+            let nx: Double = (x - 31) / 22
+            var top: Double = 29 - 12 * sqrt(max(0, 1 - nx * nx))
+            let hx: Double = (x - 40) / 12
+            if abs(hx) < 1 { top = min(top, 22 - 10 * sqrt(max(0, 1 - hx * hx))) }
+            let tall: Double = 3.5 + (1 - abs(nx)) * 2.5
+            b.poly([(x - 2, top + 1.5), (x + 0.5, top - tall), (x + 2, top + 1.5)], bone)
+            b.set(Int(x) - 1, Int(top), boneD)
+            x += 4.5
         }
         // head
-        b.ellipse(cx + 8, 6, 8.5, 6.5, 0x3A2A22)
-        b.rect(29, 7, 9, 5, 0x3A2A22)
-        b.rect(31, 9, 8, 3, 0x6A0E0E)
-        b.rect(31, 8, 1, 2, 0xF4EEDC); b.rect(34, 8, 1, 2, 0xF4EEDC); b.rect(37, 8, 1, 2, 0xF4EEDC)
-        b.rect(32, 12, 1, 2, 0xF4EEDC); b.rect(36, 12, 1, 2, 0xF4EEDC)
-        b.rect(30, 4, 3, 2, 0xFF2A1A); b.set(31, 4, 0xFFE0A0)
-        b.ellipse(21, 1.5, 2, 2, 0x20140E); b.ellipse(31, 0.5, 2, 2, 0x20140E)
-        b.line(22, 3, 28, 9, 0xB8A08A)
-        if pose == 0 {
-            // both arms raised
-            b.rect(34, 8, 7, 14, 0x2A1C14)
-            b.rect(36, 2, 8, 8, 0x3A2A22)
-            b.rect(37, 0, 1, 3, 0xEDE6D0); b.rect(40, 0, 1, 3, 0xEDE6D0); b.rect(43, 1, 1, 3, 0xEDE6D0)
-            b.rect(14, 10, 6, 12, 0x2A1C14)
-        } else {
-            // swing forward
-            b.rect(33, 16, 20, 7, 0x3A2A22)
-            b.rect(48, 14, 7, 11, 0x2A1C14)
-            b.rect(53, 14, 3, 1, 0xEDE6D0); b.rect(54, 17, 3, 1, 0xEDE6D0); b.rect(54, 20, 3, 1, 0xEDE6D0); b.rect(53, 23, 3, 1, 0xEDE6D0)
-            b.rect(14, 12, 6, 12, 0x2A1C14)
-        }
-        b.texture(UInt64(210 + pose), 0.22)
-        b.outline(0x0A0604)
+        let bob: Double = f == 0 ? 0 : 1
+        b.litEllipse(53, 27 + bob, 8.5, 7.5, fur, furL, furD)
+        b.ellipse(48.5, 20 + bob, 2.6, 2.6, furD)            // ears
+        b.ellipse(55, 19.5 + bob, 2.6, 2.6, furD)
+        b.set(48, 20 + Int(bob), 0x7A5A44)
+        b.litEllipse(60, 30 + bob, 5.5, 3.8, muzzle, 0xB89878, 0x7A5C42)
+        b.rect(63, 27 + Int(bob), 2, 2, 0x161010)             // nose
+        b.line(57, 32 + Int(bob), 64, 32 + Int(bob), 0x3A2418) // mouth
+        b.set(60, 33 + Int(bob), claw); b.set(63, 33 + Int(bob), claw) // fangs
+        b.rect(55, 24 + Int(bob), 3, 2, eye)                  // eye with dark pupil
+        b.set(57, 24 + Int(bob), 0x2A1000)
+        b.line(53, 23 + Int(bob), 58, 22 + Int(bob), furD)     // brow
+        b.line(54, 21 + Int(bob), 58, 27 + Int(bob), 0xC8A888) // scar
         out.append(b)
     }
+
+    for pose in 0..<2 {
+        var b = PixelBuf(w: W, h: H)
+        // legs planted wide
+        paw(&b, 18, 36, far, furD)
+        paw(&b, 30, 36, fur, furD)
+        // upright body
+        b.litEllipse(30, 30, 13, 15, fur, furL, furD)
+        b.ellipse(31, 34, 8, 9, 0x5E4434)
+        // plates now run up the back
+        for k in 0..<5 {
+            let py: Double = 20 + Double(k) * 4.2
+            let px: Double = 18.5 - Double(k) * 0.4
+            b.poly([(px + 1, py - 2), (px - 4.5, py), (px + 1, py + 2)], bone)
+        }
+        // far arm
+        if pose == 0 {
+            b.rect(15, 10, 6, 14, far)
+            b.rect(14, 6, 8, 6, far)
+        } else {
+            b.rect(17, 20, 6, 10, far)
+        }
+        // head, roaring
+        b.litEllipse(36, 12, 8.5, 7.5, fur, furL, furD)
+        b.ellipse(31, 5, 2.6, 2.6, furD)
+        b.ellipse(38.5, 4.5, 2.6, 2.6, furD)
+        b.litEllipse(43, 15, 5.5, 4, muzzle, 0xB89878, 0x7A5C42)
+        b.rect(46, 12, 2, 2, 0x161010)
+        b.rect(40, 16, 7, 4, 0x5A0E10)                        // open mouth
+        b.set(41, 16, claw); b.set(44, 16, claw); b.set(46, 16, claw)
+        b.set(42, 19, claw); b.set(45, 19, claw)
+        b.rect(38, 9, 3, 2, eye)
+        b.set(40, 9, 0x2A1000)
+        b.line(36, 8, 41, 7, furD)
+        b.line(37, 6, 41, 12, 0xC8A888)
+        // near arm
+        if pose == 0 {
+            // both paws raised overhead
+            b.poly([(38, 22), (44, 20), (52, 3), (47, 1)], fur)
+            b.litEllipse(50, 3, 4, 3.5, fur, furL, furD)
+            b.set(48, 0, claw); b.set(51, 0, claw); b.set(54, 1, claw)
+            b.set(15, 5, claw); b.set(18, 5, claw); b.set(21, 5, claw)
+        } else {
+            // swipe: arm thrown forward, claws spread
+            b.poly([(36, 22), (58, 18), (60, 26), (37, 30)], fur)
+            b.litEllipse(59, 22, 4.5, 5, fur, furL, furD)
+            b.line(63, 17, 65, 16, claw)
+            b.line(64, 20, 65, 20, claw)
+            b.line(64, 23, 65, 24, claw)
+            b.line(63, 26, 64, 27, claw)
+        }
+        out.append(b)
+    }
+    for i in 0..<out.count { out[i].outline(0x1C1622) }
     return out
 }
 
+/// The T-Rex: a dark olive hunter with a striped back, heavy brow and a pale throat.
+/// Frames: 0-1 walk, 2 bite (jaw open).
 func spriteTRex() -> [PixelBuf] {
+    let W: Int = 80
+    let H: Int = 48
+    let skin: UInt32 = 0x55803E
+    let skinL: UInt32 = 0x76A050
+    let skinD: UInt32 = 0x35562A
+    let far: UInt32 = 0x3E6230
+    let stripe: UInt32 = 0x2C4A24
+    let belly: UInt32 = 0xD6CE98
+    let claw: UInt32 = 0xF0EADA
+    let gnd: Int = 46
     var out: [PixelBuf] = []
-    let skin: UInt32 = 0x5E8A3A
-    let dark: UInt32 = 0x3E6428
-    let belly: UInt32 = 0xC8C88A
+
+    func leg(_ b: inout PixelBuf, _ hipX: Double, _ step: Double, _ c: UInt32, _ cl: UInt32, _ cd: UInt32) {
+        b.litEllipse(hipX, 30, 6.5, 8.5, c, cl, cd)                     // thigh
+        let footX: Double = hipX + step
+        b.poly([(hipX - 3, 34), (hipX + 3, 34), (footX + 2, Double(gnd) - 3), (footX - 2, Double(gnd) - 3)], cd)
+        b.rect(Int(footX) - 4, gnd - 3, 10, 3, cd)
+        b.set(Int(footX) + 6, gnd - 1, claw); b.set(Int(footX) + 3, gnd - 1, claw); b.set(Int(footX), gnd - 1, claw)
+    }
+
     for f in 0..<3 {
-        var b = PixelBuf(w: 76, h: 46)
-        let lift: Int = f == 1 ? 2 : 0
-        let lift2: Int = f == 0 ? 2 : 0
-        // legs
-        b.ellipse(36, 31, 6.5, 8.5, dark)
-        b.rect(32, 36, 5, 7 - lift, dark)
-        b.rect(28, 42 - lift, 10, 3, dark)
-        b.rect(28, 44 - lift, 3, 1, 0xEDE6D0); b.rect(32, 44 - lift, 3, 1, 0xEDE6D0); b.rect(36, 44 - lift, 3, 1, 0xEDE6D0)
-        b.ellipse(26, 31, 6.5, 8.5, skin)
-        b.rect(22, 36, 5, 7 - lift2, skin)
-        b.rect(18, 42 - lift2, 10, 3, skin)
-        b.rect(18, 44 - lift2, 3, 1, 0xEDE6D0); b.rect(22, 44 - lift2, 3, 1, 0xEDE6D0); b.rect(26, 44 - lift2, 3, 1, 0xEDE6D0)
-        // body & tail
-        b.ellipse(32, 24, 16, 9.5, skin)
-        b.ellipse(34, 28, 12, 5, belly)
-        var t: Int = 0
-        while t < 22 {
-            let tx: Int = 18 - t
-            let ty: Int = 22 + t / 4
-            let th: Int = max(2, 8 - t / 3)
-            b.rect(tx, ty - th / 2, 2, th, t % 2 == 0 ? skin : dark)
-            t += 1
-        }
-        // neck & head
-        b.ellipse(46, 17, 7, 8, skin)
+        var b = PixelBuf(w: W, h: H)
+        let step: Double = f == 0 ? 3 : (f == 1 ? -3 : 0)
+        leg(&b, 37, -step, far, far, stripe)
+        // tail: a tapering wedge from the hips
+        b.poly([(20, 18), (1, 27), (2, 29), (22, 31)], skin)
+        b.poly([(1, 27), (12, 26.5), (12, 28.5), (2, 29)], skinD)
+        // body
+        b.litEllipse(32, 24, 15, 9.5, skin, skinL, skinD)
+        b.poly([(30, 31), (44, 29), (50, 24), (46, 32), (32, 33.5)], belly)
+        // neck and head
         let open: Bool = f == 2
-        b.ellipse(56, 11, 10, 7, skin)
-        b.rect(60, 11, 14, 4, skin)
-        b.rect(74, 11, 1, 3, dark)
-        // lower jaw
-        let jy: Int = open ? 19 : 15
-        b.rect(54, jy, 19, 3, dark)
+        b.poly([(40, 18), (50, 10), (54, 18), (44, 28)], skin)
+        b.litEllipse(59, 12, 10.5, 7, skin, skinL, skinD)
+        b.poly([(60, 8), (78, 10), (78, 15), (60, 16)], skin)            // snout
+        b.rect(76, 10, 2, 1, skinD)                                      // nostril
+        let jy: Double = open ? 21 : 16
+        b.poly([(52, 16), (76, jy - 1), (75, jy + 2), (53, 21)], skinD)  // lower jaw
+        b.poly([(52, 18), (66, jy + 1), (66, jy + 3), (53, 22)], belly)  // throat
         if open {
-            b.rect(58, 15, 15, 4, 0x6A0E1E)
-            b.rect(60, 18, 12, 1, 0xE06070)
+            b.poly([(60, 15), (77, 15), (75, 19.5), (61, 19)], 0x6A1420)
+            b.line(62, 18, 74, 18, 0xC85060)
         }
-        // teeth
-        var tx: Int = 60
-        while tx < 74 {
-            b.set(tx, 15, 0xF4F0DC)
-            b.set(tx, 16, 0xF4F0DC)
-            if open { b.set(tx + 1, jy - 1, 0xF4F0DC) }
+        var tx: Int = 62
+        while tx < 77 {
+            b.set(tx, 15, claw)
+            if open { b.set(tx + 1, Int(jy) - 1, claw) } else { b.set(tx + 1, 16, claw) }
             tx += 3
         }
-        b.rect(56, 6, 4, 3, 0xFFC820); b.set(58, 7, 0x101010)
-        b.rect(66, 8, 2, 1, dark)
-        b.line(52, 4, 56, 3, dark)
-        // tiny arms
-        b.line(50, 24, 54, 28, dark); b.line(54, 28, 56, 28, 0xEDE6D0)
-        b.line(49, 25, 52, 29, skin)
-        // back ridge
-        var rx: Int = 22
-        while rx < 46 {
-            b.set(rx, 15 + (abs(rx - 34) / 3), dark)
-            rx += 3
+        b.rect(60, 8, 3, 2, 0xFFC040)                                    // eye
+        b.set(61, 8, 0x201000)
+        b.line(57, 7, 64, 6, stripe)                                     // brow ridge
+        // back stripes
+        for k in 0..<6 {
+            let sx: Double = 21 + Double(k) * 4.6
+            b.line(Int(sx), 15 + abs(k - 3) / 2, Int(sx) - 2, 19 + abs(k - 3) / 2, stripe)
         }
-        b.texture(UInt64(220 + f), 0.2)
-        b.outline(0x14240A)
+        // little arms
+        b.line(48, 23, 52, 26, skinD)
+        b.line(52, 26, 53, 25, claw)
+        leg(&b, 29, step, skin, skinL, skinD)
         out.append(b)
     }
+    for i in 0..<out.count { out[i].outline(0x1C1622) }
     return out
 }
+
 
 func spritePirateBoat() -> PixelBuf {
     var b = PixelBuf(w: 76, h: 40)
@@ -8437,6 +8534,7 @@ extension Game {
             if m.hurtT > 0 { m.hurtT -= dt }
             if m.cd > 0 { m.cd -= dt }
             if m.flash > 0 { m.flash -= dt }
+            if m.lean != 0 { m.lean *= (1.0 - min(1.0, dt * 7.0)); if abs(m.lean) < 0.01 { m.lean = 0 } }
             if m.regrow > 0 {
                 m.regrow -= dt
                 if m.regrow <= 0 { m.sheared = false }
@@ -13145,7 +13243,8 @@ func makeSpriteSet(_ frames: [PixelBuf], hitH: Double, fixedScale: Double? = nil
     for f in frames {
         r.append(pixImage(f))
         l.append(pixImage(f.flipped()))
-        let t: PixelBuf = f.tinted(0xFF3030, 0.55)
+        // hit frames flash white (reads clearly on every creature, and is not a red full-body tint)
+        let t: PixelBuf = f.whiteFlash()
         hr.append(pixImage(t))
         hl.append(pixImage(t.flipped()))
     }
@@ -13300,41 +13399,123 @@ final class Art: @unchecked Sendable {
 
     func buildMobSet(_ k: MobKind, _ v: Int) -> SpriteSet {
         let h: Double = mobDef(k).h
+        let fr: ([PixelBuf], Double?) = mobFrames(k, v)
+        // the bosses are hand-shaded already; everything else gets the shared finishing pass
+        let finished: Bool = k == .bearBoss || k == .rex
+        return makeSpriteSet(finished ? fr.0 : fr.0.map { stylizeSprite($0) }, hitH: h, fixedScale: fr.1)
+    }
+
+    /// Raw art frames for a creature (and a fixed scale for the humanoids)
+    func mobFrames(_ k: MobKind, _ v: Int) -> ([PixelBuf], Double?) {
         switch k {
-        case .pig: return makeSpriteSet(spritePig(), hitH: h)
-        case .cow: return makeSpriteSet(spriteCow(), hitH: h)
-        case .sheep: return makeSpriteSet(spriteSheep(shorn: v == 1), hitH: h)
-        case .chicken: return makeSpriteSet(spriteChicken(), hitH: h)
-        case .crow: return makeSpriteSet(spriteCrow(colorA: 0x2A2A34, colorB: 0x16161E), hitH: h)
-        case .giraffe: return makeSpriteSet(spriteGiraffe(), hitH: h)
-        case .frog: return makeSpriteSet(spriteFrog(), hitH: h)
-        case .fish: return makeSpriteSet(spriteFish(), hitH: h)
-        case .elephant: return makeSpriteSet(spriteElephant(), hitH: h)
-        case .bear: return makeSpriteSet(spriteBear(kind: 0), hitH: h)
-        case .grizzly: return makeSpriteSet(spriteBear(kind: 1), hitH: h)
-        case .polarBear: return makeSpriteSet(spriteBear(kind: 2), hitH: h)
-        case .tiger: return makeSpriteSet(spriteTiger(), hitH: h)
-        case .wolf: return makeSpriteSet(spriteWolf(tamedColors: v == 1), hitH: h)
-        case .cat: return makeSpriteSet(spriteCat(), hitH: h)
-        case .zombie: return makeSpriteSet(humanoidFrames(zombieStyle(v)), hitH: h, fixedScale: 0.125)
-        case .skeleton: return makeSpriteSet(humanoidFrames(skeletonStyle()), hitH: h, fixedScale: 0.125)
-        case .slime: return makeSpriteSet(spriteSlime(main: 0x4EC04E, glow: 0x9AF09A, eye: 0x103010), hitH: h)
-        case .bat: return makeSpriteSet(spriteBat(), hitH: h)
-        case .scorpion: return makeSpriteSet(spriteScorpion(), hitH: h)
-        case .wraith: return makeSpriteSet(spriteWraith(), hitH: h)
-        case .villager: return makeSpriteSet(humanoidFrames(villagerStyle(v)), hitH: h, fixedScale: 0.125)
-        case .pirate: return makeSpriteSet(humanoidFrames(pirateStyle(false)), hitH: h, fixedScale: 0.125)
-        case .pirateGunner: return makeSpriteSet(humanoidFrames(pirateGunnerStyle()), hitH: h, fixedScale: 0.125)
-        case .pirateCaptain: return makeSpriteSet(humanoidFrames(pirateStyle(true)), hitH: h, fixedScale: 0.125)
-        case .imp: return makeSpriteSet(humanoidFrames(impStyle()), hitH: h, fixedScale: 0.125)
-        case .emberSlime: return makeSpriteSet(spriteSlime(main: 0xE8601E, glow: 0xFFC060, eye: 0x401000), hitH: h)
+        case .pig: return (spritePig(), nil)
+        case .cow: return (spriteCow(), nil)
+        case .sheep: return (spriteSheep(shorn: v == 1), nil)
+        case .chicken: return (spriteChicken(), nil)
+        case .crow: return (spriteCrow(colorA: 0x2A2A34, colorB: 0x16161E), nil)
+        case .giraffe: return (spriteGiraffe(), nil)
+        case .frog: return (spriteFrog(), nil)
+        case .fish: return (spriteFish(), nil)
+        case .elephant: return (spriteElephant(), nil)
+        case .bear: return (spriteBear(kind: 0), nil)
+        case .grizzly: return (spriteBear(kind: 1), nil)
+        case .polarBear: return (spriteBear(kind: 2), nil)
+        case .tiger: return (spriteTiger(), nil)
+        case .wolf: return (spriteWolf(tamedColors: v == 1), nil)
+        case .cat: return (spriteCat(), nil)
+        case .zombie: return (humanoidFrames(zombieStyle(v)), 0.125)
+        case .skeleton: return (humanoidFrames(skeletonStyle()), 0.125)
+        case .slime: return (spriteSlime(main: 0x4EC04E, glow: 0x9AF09A, eye: 0x103010), nil)
+        case .bat: return (spriteBat(), nil)
+        case .scorpion: return (spriteScorpion(), nil)
+        case .wraith: return (spriteWraith(), nil)
+        case .villager: return (humanoidFrames(villagerStyle(v)), 0.125)
+        case .pirate: return (humanoidFrames(pirateStyle(false)), 0.125)
+        case .pirateGunner: return (humanoidFrames(pirateGunnerStyle()), 0.125)
+        case .pirateCaptain: return (humanoidFrames(pirateStyle(true)), 0.125)
+        case .imp: return (humanoidFrames(impStyle()), 0.125)
+        case .emberSlime: return (spriteSlime(main: 0xE8601E, glow: 0xFFC060, eye: 0x401000), nil)
         case .cinderBat:
             let f: [PixelBuf] = spriteBat().map { $0.tinted(0xFF6A1E, 0.45) }
-            return makeSpriteSet(f, hitH: h)
-        case .bearBoss: return makeSpriteSet(spriteBearBoss(), hitH: h)
-        case .rex: return makeSpriteSet(spriteTRex(), hitH: h)
+            return (f, nil)
+        case .bearBoss: return (spriteBearBoss(), nil)
+        case .rex: return (spriteTRex(), nil)
         }
     }
+}
+
+/// One shared finishing pass so every creature reads as part of the same set:
+/// - texture jitter is smoothed out (each pixel averages with similar-coloured neighbours, so eyes,
+///   stripes and edges survive but speckle noise goes)
+/// - a soft top rim light and a darker underside give consistent top-down lighting
+/// - outlines are unified to one deep colour and completed where a sprite lacked them
+func stylizeSprite(_ src: PixelBuf) -> PixelBuf {
+    let w: Int = src.w
+    let h: Int = src.h
+    let outlineC: UInt32 = 0x1C1622
+    func lum(_ c: UInt32) -> Double {
+        return Double((c >> 16) & 0xFF) * 0.3 + Double((c >> 8) & 0xFF) * 0.59 + Double(c & 0xFF) * 0.11
+    }
+    func opaque(_ b: PixelBuf, _ x: Int, _ y: Int) -> Bool { return (b.get(x, y) >> 24) != 0 }
+    var b: PixelBuf = src
+    // 1. edge-preserving smoothing
+    for y in 0..<h {
+        for x in 0..<w {
+            let c: UInt32 = src.px[y * w + x]
+            if (c >> 24) == 0 { continue }
+            let l0: Double = lum(c)
+            if l0 < 40 { continue }
+            var r: Double = Double((c >> 16) & 0xFF) * 2.0
+            var g: Double = Double((c >> 8) & 0xFF) * 2.0
+            var bl: Double = Double(c & 0xFF) * 2.0
+            var wsum: Double = 2.0
+            for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                let n: UInt32 = src.get(x + dx, y + dy)
+                if (n >> 24) == 0 { continue }
+                if abs(lum(n) - l0) > 34 { continue }
+                r += Double((n >> 16) & 0xFF)
+                g += Double((n >> 8) & 0xFF)
+                bl += Double(n & 0xFF)
+                wsum += 1.0
+            }
+            let rgb: UInt32 = (UInt32(r / wsum) << 16) | (UInt32(g / wsum) << 8) | UInt32(bl / wsum)
+            b.px[y * w + x] = 0xFF000000 | rgb
+        }
+    }
+    // 2. lighting and outline colour
+    var out: PixelBuf = b
+    for y in 0..<h {
+        for x in 0..<w {
+            let c: UInt32 = b.px[y * w + x]
+            if (c >> 24) == 0 { continue }
+            let edge: Bool = !opaque(b, x - 1, y) || !opaque(b, x + 1, y) || !opaque(b, x, y - 1) || !opaque(b, x, y + 1)
+            let l: Double = lum(c)
+            if edge && l < 48 {
+                out.px[y * w + x] = 0xFF000000 | outlineC
+                continue
+            }
+            let above: UInt32 = b.get(x, y - 1)
+            let below: UInt32 = b.get(x, y + 1)
+            var rgb: UInt32 = c & 0xFFFFFF
+            if (above >> 24) == 0 || lum(above) < 48 { rgb = mixRGB(rgb, 0xFFF4E0, 0.16) }
+            else if (below >> 24) == 0 || lum(below) < 48 { rgb = shadeRGB(rgb, 0.84) }
+            out.px[y * w + x] = 0xFF000000 | rgb
+        }
+    }
+    // 3. complete missing outlines (only next to light pixels, so existing outlines are not doubled)
+    var done: PixelBuf = out
+    for y in 0..<h {
+        for x in 0..<w {
+            if opaque(out, x, y) { continue }
+            var needs: Bool = false
+            for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                let n: UInt32 = out.get(x + dx, y + dy)
+                if (n >> 24) != 0 && (n & 0xFFFFFF) != outlineC && lum(n) >= 48 { needs = true }
+            }
+            if needs { done.px[y * w + x] = 0xFF000000 | outlineC }
+        }
+    }
+    return done
 }
 
 /// True for creatures drawn with the shared humanoid frames
@@ -13852,6 +14033,23 @@ enum WorldRenderer {
         }
     }
 
+    /// drawSet with a rotation and vertical squash about the feet (for leaning, breathing and falling over)
+    static func drawSetPosed(_ ctx: inout GraphicsContext, _ v: View2D, _ s: SpriteSet, _ frame: Int, _ left: Bool, _ hurt: Bool, _ x: Double, _ y: Double, _ alpha: Double, _ shade: Double, _ rot: Double, _ squash: Double) {
+        let px: Double = s.scale * v.tp
+        let sw: Double = Double(s.w)
+        let shh: Double = Double(s.h)
+        let cc: Double = left ? (sw - s.centerCol) : s.centerCol
+        let foot: Double = Double(s.footRow)
+        var c: GraphicsContext = ctx
+        c.opacity = alpha
+        if shade < 0.98 { c.addFilter(.colorMultiply(shadeColor(shade))) }
+        c.translateBy(x: CGFloat(v.sx(x)), y: CGFloat(v.sy(y)))
+        if rot != 0 { c.rotate(by: Angle(radians: rot)) }
+        if squash != 1.0 { c.scaleBy(x: CGFloat(1.0 + (1.0 - squash) * 0.5), y: CGFloat(squash)) }
+        let r: CGRect = mkRect(-cc * px, -foot * px, sw * px, shh * px)
+        c.draw(s.frame(frame, left: left, hurt: hurt), in: r)
+    }
+
     static func walkFrame(_ m: Mob) -> Int {
         let a: Int = Int(m.anim * 2.0)
         return 1 + a % 2
@@ -13898,17 +14096,42 @@ enum WorldRenderer {
     static func drawMobs(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
         let art: Art = Art.shared
         for m in g.mobs {
-            if m.hp <= 0 && !m.downed { continue }
+            let dying: Bool = m.hp <= 0 && !m.downed
+            if dying && (m.deathT < 0 || m.removed) { continue }
             if !v.visible(m.b.x, m.b.y, 8) { continue }
             let s: SpriteSet = art.mobSet(m)
             let left: Bool = m.dir < 0
             var alpha: Double = 1.0
             if m.kind == .wraith { alpha = 0.82 }
             if m.downed { alpha = 0.55 }
-            let warn: Bool = m.isBoss && m.st == 1
+            let warn: Bool = m.isBoss && m.st == 1 && !dying
             if warn { drawTelegraph(&ctx, g, v, m) }
             let shade: Double = openShade(g, m.b.x, m.b.cy)
-            drawSet(&ctx, v, s, mobFrame(m), left, m.hurtT > 0, m.b.x, m.b.y, alpha, shade: shade)
+            // animation layer on top of the frames: knockback lean, idle breathing, death topple
+            var rot: Double = m.lean * 0.22
+            var squash: Double = 1.0
+            if abs(m.b.vx) < 0.3 && m.b.onGround && !dying {
+                squash = 1.0 + 0.022 * sin(g.clock * 2.6 + Double(m.id % 17))
+            }
+            if dying {
+                let t: Double = m.deathT
+                let blob: Bool = m.kind == .slime || m.kind == .emberSlime || m.def.flying || m.kind == .fish
+                if blob {
+                    squash = max(0.2, 1.0 - t * 1.1)
+                } else {
+                    let fall: Double = min(1.0, t / 0.4)
+                    let side: Double = m.dir > 0 ? -1.0 : 1.0
+                    rot = side * fall * fall * 1.45
+                }
+                alpha *= clampD(1.0 - (t - 0.3) / 0.4, 0, 1)
+            }
+            let flash: Bool = m.flash > 0 || (dying && m.deathT < 0.08)
+            if abs(rot) > 0.01 || abs(squash - 1.0) > 0.004 {
+                drawSetPosed(&ctx, v, s, mobFrame(m), left, flash, m.b.x, m.b.y, alpha, shade, rot, squash)
+            } else {
+                drawSet(&ctx, v, s, mobFrame(m), left, flash, m.b.x, m.b.y, alpha, shade: shade)
+            }
+            if dying { continue }
             if m.burn > 0 {
                 let fl: Double = 0.25 + 0.15 * sin(g.clock * 20.0)
                 let r: CGRect = v.rect(m.b.left, m.b.top + m.b.h * 0.3, m.b.w, m.b.h * 0.7)

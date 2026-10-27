@@ -1020,13 +1020,14 @@ enum PartType: Int, Codable, CaseIterable {
 
 /// Equipment worn in the two gear slots
 enum Gear: Int, Codable, CaseIterable {
-    case headlamp, swiftBoots, divingMask, emberCharm
+    case headlamp, swiftBoots, divingMask, emberCharm, wardenSigil
     var name: String {
         switch self {
         case .headlamp: return "Headlamp"
         case .swiftBoots: return "Swift Boots"
         case .divingMask: return "Diving Mask"
         case .emberCharm: return "Ember Charm"
+        case .wardenSigil: return "Warden's Sigil"
         }
     }
     var effect: String {
@@ -1035,6 +1036,7 @@ enum Gear: Int, Codable, CaseIterable {
         case .swiftBoots: return "Run 18% faster"
         case .divingMask: return "Hold your breath three times as long"
         case .emberCharm: return "Lava and fire hurt far less"
+        case .wardenSigil: return "Hit 20% harder, take 15% less damage"
         }
     }
 }
@@ -1424,6 +1426,10 @@ func iconGear(_ g: Gear) -> PixelBuf {
     case .divingMask:
         b.rect(1, 4, 10, 4, 0x3A4A5A); b.rect(2, 5, 3, 2, 0x8AD0F0); b.rect(7, 5, 3, 2, 0x8AD0F0)
         b.set(2, 5, 0xE0F8FF); b.set(7, 5, 0xE0F8FF); b.rect(5, 8, 2, 3, 0xD87A30); b.rect(5, 1, 2, 3, 0xD87A30)
+    case .wardenSigil:
+        b.ellipse(6, 6, 4.6, 4.6, 0x3A2C4A); b.ellipse(6, 6, 3.4, 3.4, 0x6A4A8A)
+        b.line(6, 3, 6, 9, 0xD8A8FF); b.line(3, 6, 9, 6, 0xD8A8FF); b.set(6, 6, 0xFFFFFF)
+        b.set(4, 4, 0xB070FF); b.set(8, 8, 0xB070FF); b.set(4, 8, 0xB070FF); b.set(8, 4, 0xB070FF)
     case .emberCharm:
         b.line(3, 1, 6, 4, 0xC8A040); b.line(9, 1, 6, 4, 0xC8A040)
         b.ellipse(6, 7, 3.0, 3.4, 0xE8580C); b.ellipse(6, 7.4, 1.8, 2.0, 0xFFA030); b.set(6, 7, 0xFFE680); b.set(5, 5, 0xFFD060)
@@ -1717,6 +1723,7 @@ enum RecipeBook {
         add(.gear(.headlamp), 1, [(.mat(.ironBar), 2), (.mat(.crystalShard), 1), (.block(.torch), 1)], .tinker, .gear)
         add(.gear(.swiftBoots), 1, [(.mat(.leather), 4), (.mat(.feather), 3), (.mat(.goldBar), 2)], .anvil, .gear)
         add(.gear(.emberCharm), 1, [(.mat(.emberBar), 3), (.block(.glowCrystal), 2), (.mat(.crystalShard), 1)], .forge, .gear)
+        add(.gear(.wardenSigil), 1, [(.mat(.umbralHeart), 1), (.mat(.voidBar), 4), (.mat(.crystalShard), 4)], .forge, .gear)
         // Ready-made vehicles (place them in one tap) - easiest way to get driving
         add(.gadget(.carKit), 1, [(planks, 10), (.mat(.ironBar), 14), (.mat(.leather), 2), (.mat(.wool), 2)], .tinker, .vehicle)
         add(.gadget(.boatKit), 1, [(planks, 20), (.mat(.string), 4), (.mat(.wool), 2)], .bench, .vehicle)
@@ -2070,7 +2077,7 @@ struct CreatureAnim {
 
 // MARK: - Humanoid sprites
 
-enum HandItem { case none, sword, cutlass, pistol }
+enum HandItem { case none, sword, cutlass, pistol, bow }
 
 struct HumanStyle {
     var skin: UInt32 = 0xF1C27D
@@ -2220,6 +2227,26 @@ func humanoidFrame(_ s: HumanStyle, legs: Int, pose: Int) -> PixelBuf {
             cv.inkRect(16, 9, 1, 2, inkF(0x8A5A2A))
             cv.ink(20, 7, inkF(0xFFE080))
         }
+    case .bow:
+        let wood: UInt32 = inkF(s.weaponColor)
+        let str: UInt32 = inkF(0xE8E0D0)
+        if pose == 4 || pose == 2 {
+            // arm out, string drawn back to the cheek, arrow nocked
+            cv.inkRect(13, 7, 3, 2, inkS(s.sleeve))
+            cv.inkLine(17, 3, 18, 5, wood)
+            cv.inkLine(18, 5, 18, 10, wood)
+            cv.inkLine(18, 10, 17, 12, wood)
+            cv.inkLine(17, 3, 14, 7, str)
+            cv.inkLine(14, 8, 17, 12, str)
+            cv.inkLine(14, 8, 20, 8, inkF(0xB08A5A))
+            cv.ink(21, 8, inkF(0xD0D0D8))
+        } else {
+            // carried at the side
+            cv.inkLine(15, 4, 16, 6, wood)
+            cv.inkLine(16, 6, 16, 10, wood)
+            cv.inkLine(16, 10, 15, 12, wood)
+            cv.inkLine(15, 5, 15, 11, str)
+        }
     case .none:
         break
     }
@@ -2312,6 +2339,17 @@ func skeletonStyle() -> HumanStyle {
     s.weaponColor = 0xB8C0CC
     s.shield = 0x8A5A2E
     s.ribs = true
+    return s
+}
+
+/// The Skeleton Archer: a hooded skull with a longbow and no shield
+func skeletonArcherStyle() -> HumanStyle {
+    var s = skeletonStyle()
+    s.hat = 0x3E4A36
+    s.shield = 0
+    s.weapon = .bow
+    s.weaponColor = 0x8A5A2A
+    s.belt = 0x5A4A30
     return s
 }
 
@@ -2627,7 +2665,318 @@ func creatureArt(_ k: MobKind, _ v: Int) -> ([PixelBuf], CreatureAnim) {
     case .cinderBat: a.cycle = [0, 1, 2, 1]; return (spriteCinderBat(), a)
     case .bearBoss: return (spriteBearBoss(), a)
     case .rex: return (spriteTRex(), a)
+    case .crawler: a.attack = 3; return (spriteCaveCrawler(), a)
+    case .golem: return (spriteStoneGolem(), a)
+    case .archer: return (humanoidFrames(skeletonArcherStyle()), a)
+    case .sentinel: a.cycle = [0, 1]; return (spriteCrystalSentinel(), a)
+    case .mimic: return (spriteMimic(), a)
+    case .warden: return (spriteHollowWarden(), a)
     }
+}
+
+// ===== p05e_newcreatures =====
+
+// MARK: - Sprites for the cave crawler, stone golem, crystal sentinel, mimic and Hollow Warden
+
+/// Cave Crawler: a low, many-legged hunter with a red eye cluster. Frames: 0 idle, 1-2 scuttle, 3 pounce.
+func spriteCaveCrawler() -> [PixelBuf] {
+    let pal: [Character: UInt32] = ["b": inkS(0x6A5078), "d": inkS(0x4A3858), "e": inkF(0xFF5A4A), "E": inkF(0xFFB0A0),
+                                    "l": inkF(0x2E2238), "f": inkF(0xE8E0C8), "s": inkF(0x8A6A9A)]
+    let body: [String] = [
+        "....dbbbd...",
+        "..dbbsbsbbb.",
+        ".dbbbbbbbbeE",
+        "..dbdbdbbbef",
+    ]
+    let legs0: [String] = [
+        ".l.l..l.l.l.",
+        "l..l..l..l.l",
+    ]
+    let legs1: [String] = [
+        "..l.l.l..l..",
+        ".l...l..l..l",
+    ]
+    let legs2: [String] = [
+        ".ll..l.ll...",
+        "l...l..l..ll",
+    ]
+    let pounceBody: [String] = [
+        "...dbbbd....",
+        ".dbbsbsbbbb.",
+        "dbbbbbbbbbeE",
+        ".dbdbdbbbbef",
+    ]
+    let pounceLegs: [String] = [
+        "l.l......lll",
+        ".l.........l",
+    ]
+    return composeCreature(12, 6, pal, [
+        [(body, 0, 0), (legs0, 0, 4)],
+        [(body, 0, 0), (legs1, 0, 4)],
+        [(body, 0, 0), (legs2, 0, 4)],
+        [(pounceBody, 0, 0), (pounceLegs, 0, 4)],
+    ])
+}
+
+/// Stone Golem: a hulking boulder with glowing eyes, moss on its shoulders and a crystal set in its
+/// chest. Frames: 0 idle, 1-2 walk, 3 fists raised, 4 slam, 5 throw.
+func spriteStoneGolem() -> [PixelBuf] {
+    let pal: [Character: UInt32] = ["g": inkS(0x6E6A66), "G": inkS(0x8A8682), "s": inkS(0x7A7672), "S": inkS(0x96928C),
+                                    "e": inkF(0x7AF8F0), "m": inkS(0x5E8A3E), "c": inkF(0x8AF0E8), "k": inkF(0x4A4644), "a": inkS(0x6A6662)]
+    let head: [String] = [
+        "....gggggg....",
+        "...gGGGGGGg...",
+        "...gGeGGeGg...",
+        "...gGGGGGGg...",
+        "....gkkkkg....",
+    ]
+    let torso: [String] = [
+        "..mmsssssmm...",
+        ".msSSSSSSSSsm.",
+        ".sSSSSSSSSSSs.",
+        ".sSSSSccSSSSs.",
+        ".sSSSSckSSSSs.",
+        "..sSSSSSSSSs..",
+        "...ssssssss...",
+    ]
+    let armsDown: [String] = [
+        "aa..........aa",
+        "aa..........aa",
+        "aaa........aaa",
+        "aaa........aaa",
+        ".aa........aa.",
+    ]
+    let legsA: [String] = [
+        "...sss..sss...",
+        "...sss..sss...",
+        "..ssss..ssss..",
+        "..kkkk..kkkk..",
+    ]
+    let legsB: [String] = [
+        "..sss....sss..",
+        "..sss....sss..",
+        ".ssss....ssss.",
+        ".kkkk....kkkk.",
+    ]
+    let legsC: [String] = [
+        "....ssssss....",
+        "....ss..ss....",
+        "...sss..sss...",
+        "...kkk..kkk...",
+    ]
+    let armsUp: [String] = [
+        "aa..........aa",
+        "aaa........aaa",
+        "aaa........aaa",
+        ".aa........aa.",
+        "..a........a..",
+    ]
+    let armsSlam: [String] = [
+        "...........aaa",
+        "..........aaaa",
+        "..........aaaa",
+        "...........aaa",
+    ]
+    let rock: [String] = [
+        "...........kk.",
+        "..........kggk",
+        "..........kggk",
+        "...........kk.",
+    ]
+    return composeCreature(14, 20, pal, [
+        [(head, 0, 0), (torso, 0, 5), (armsDown, 0, 6), (legsA, 0, 12), (["....ssssss...."], 0, 11)],
+        [(head, 0, 0), (torso, 0, 5), (armsDown, 0, 6), (legsB, 0, 12), (["....ssssss...."], 0, 11)],
+        [(head, 0, 0), (torso, 0, 5), (armsDown, 0, 6), (legsC, 0, 12), (["....ssssss...."], 0, 11)],
+        [(armsUp, 0, 0), (head, 0, 1), (torso, 0, 6), (legsA, 0, 13), (["....ssssss...."], 0, 12)],
+        [(head, 0, 2), (torso, 0, 7), (armsSlam, 0, 13), (legsB, 0, 14), (["....ssssss...."], 0, 13)],
+        [(rock, 0, 0), (["...........aa.", "...........aa."], 0, 4), (head, 0, 1), (torso, 0, 6), (armsDown, 0, 7), (legsA, 0, 13), (["....ssssss...."], 0, 12)],
+    ])
+}
+
+/// Crystal Sentinel: a floating construct of crystal around a bright core, with shards orbiting it.
+/// Frames: 0-1 hovering, 2 charging, 3 striking.
+func spriteCrystalSentinel() -> [PixelBuf] {
+    let pal: [Character: UInt32] = ["c": inkS(0x2E8E9A), "C": inkS(0x5ECAD2), "H": inkS(0xA8F0F0), "W": inkF(0xF0FFFF),
+                                    "O": inkF(0xFFFFFF), "o": inkF(0x9AF8F0), "k": inkF(0x1E5A66)]
+    let core: [String] = [
+        ".....cc.....",
+        "....cHCc....",
+        "...cHCCCc...",
+        "...cWkWCc...",
+        "...cCCCCc...",
+        "....cCCc....",
+        "............",
+        "....cCCc....",
+        "...cHooCc...",
+        "...cCOOCc...",
+        "...cCooCc...",
+        "....cCCc....",
+        ".....cc.....",
+        "......c.....",
+    ]
+    let shardsA: [String] = [
+        ".c........c.",
+        "cC........Cc",
+        ".c........c.",
+    ]
+    let shardsB: [String] = [
+        "............",
+        ".c........c.",
+        "cC........Cc",
+        ".c........c.",
+    ]
+    let below: [String] = [".....cc.....", "......c....."]
+    let chargeCore: [String] = [
+        "...cHOOCc...",
+        "...cOOOOc...",
+        "...cHOOCc...",
+    ]
+    let strikeShards: [String] = [
+        "..........cC",
+        "...........c",
+        "..........cC",
+    ]
+    return composeCreature(12, 17, pal, [
+        [(core, 0, 0), (shardsA, 0, 7), (below, 0, 15)],
+        [(core, 0, 0), (shardsB, 0, 7), (below, 0, 14)],
+        [(core, 0, 0), (chargeCore, 0, 8), (["c..........c", "Cc........cC", "c..........c"], 0, 6), (below, 0, 15)],
+        [(core, 0, 0), (chargeCore, 0, 8), (strikeShards, 0, 7), (below, 0, 15)],
+    ])
+}
+
+/// Mimic: closed, it is a plain wooden chest; open, a mouthful of teeth. Frames: 0 closed, 1-2 hopping
+/// with the lid ajar, 3 biting wide.
+func spriteMimic() -> [PixelBuf] {
+    let pal: [Character: UInt32] = ["w": inkS(0x8F6732), "d": inkS(0xB98A4E), "g": inkF(0xF5D142), "t": inkF(0xF4F0E0),
+                                    "k": inkF(0x2A1010), "r": inkF(0xD04A5A), "e": inkF(0xFFE040)]
+    let closed: [String] = [
+        "..........",
+        "..........",
+        "wwwwwwwwww",
+        "wddddddddw",
+        "wwwwgwwwww",
+        "wddddddddw",
+        "wddddddddw",
+        "wwwwwwwwww",
+    ]
+    let ajar: [String] = [
+        "..........",
+        "wwwwwwwwww",
+        "wddddddeew",
+        "wtkttkttkw",
+        "kkkkkkkrrk",
+        "wtttkttttw",
+        "wddddddddw",
+        "wwwwwwwwww",
+    ]
+    let wide: [String] = [
+        "wwwwwwwww.",
+        "wdddddeew.",
+        "wtktktktw.",
+        "kk.......k",
+        "kkkkkkrrrk",
+        "wttkttkttw",
+        "wddddddddw",
+        "wwwwwwwwww",
+    ]
+    return composeCreature(10, 8, pal, [
+        [(closed, 0, 0)],
+        [(ajar, 0, 0)],
+        [(ajar, 0, 0)],
+        [(wide, 0, 0)],
+    ])
+}
+
+/// The Hollow Warden: an empty suit of armour under a ragged hood, two violet lights for eyes, carrying a
+/// great scythe. Frames: 0-1 hovering, 2 scythe drawn back, 3 sweep, 4 casting.
+func spriteHollowWarden() -> [PixelBuf] {
+    let W: Int = 30
+    let H: Int = 42
+    let cloak: UInt32 = 0x34283E
+    let cloakHi: UInt32 = 0x4A3A58
+    let iron: UInt32 = 0x5C5A6E
+    let ironHi: UInt32 = 0x8A88A0
+    let hood: UInt32 = 0x2A2034
+    let eye: UInt32 = 0xE0B0FF
+    let rune: UInt32 = 0xB070FF
+    let shaft: UInt32 = 0x8A6A4A
+    let blade: UInt32 = 0xD8DCE8
+    let edge: UInt32 = 0x9A9EB0
+    func base(_ sway: Int) -> PixelBuf {
+        var b = PixelBuf(w: W + 2, h: H + 2)
+        let ox: Int = 1
+        let oy: Int = 1
+        // cloak: widening from the shoulders to a ragged hem
+        for y in 12..<38 {
+            let half: Int = 5 + (y - 12) / 3
+            let cx: Int = 13 + ox
+            for x in (cx - half)...(cx + half) { b.ink(x, y + oy, inkS(cloak)) }
+            b.ink(cx - half + 1, y + oy, inkS(cloakHi))
+        }
+        for x in 4..<24 {
+            let len: Int = (x + sway) % 3 == 0 ? 3 : ((x + sway) % 3 == 1 ? 1 : 2)
+            for k in 0..<len where 38 + k < H { b.ink(x + ox, 38 + k + oy, inkS(cloak)) }
+        }
+        // pauldrons and breastplate
+        b.inkRect(6 + ox, 11 + oy, 6, 3, inkS(iron))
+        b.inkRect(15 + ox, 11 + oy, 6, 3, inkS(iron))
+        b.inkRect(7 + ox, 11 + oy, 4, 1, inkS(ironHi))
+        b.inkRect(16 + ox, 11 + oy, 4, 1, inkS(ironHi))
+        b.inkRect(10 + ox, 14 + oy, 7, 8, inkS(iron))
+        b.inkRect(11 + ox, 14 + oy, 1, 8, inkS(ironHi))
+        b.ink(13 + ox, 17 + oy, inkF(rune)); b.ink(13 + ox, 18 + oy, inkF(rune)); b.ink(12 + ox, 18 + oy, inkF(rune)); b.ink(14 + ox, 18 + oy, inkF(rune)); b.ink(13 + ox, 19 + oy, inkF(rune))
+        b.inkRect(9 + ox, 22 + oy, 9, 1, inkS(0x6A5A4A))
+        // hood with a dark hollow and two lights
+        b.inkEllipse(13.5 + Double(ox), 6.0 + Double(oy), 5.2, 5.6, inkS(hood))
+        b.inkEllipse(14.2 + Double(ox), 7.2 + Double(oy), 3.2, 3.4, inkF(0x0E0814))
+        b.ink(13 + ox, 7 + oy, inkF(eye)); b.ink(16 + ox, 7 + oy, inkF(eye))
+        b.ink(13 + ox, 8 + oy, inkF(0x8A5AC0)); b.ink(16 + ox, 8 + oy, inkF(0x8A5AC0))
+        return b
+    }
+    func scythe(_ b: inout PixelBuf, _ pose: Int) {
+        let ox: Int = 1
+        let oy: Int = 1
+        switch pose {
+        case 0:
+            // upright in the front hand
+            b.inkLine(22 + ox, 3 + oy, 22 + ox, 40 + oy, inkF(shaft))
+            b.inkLine(22 + ox, 1 + oy, 28 + ox, 4 + oy, inkF(blade))
+            b.inkLine(22 + ox, 2 + oy, 28 + ox, 5 + oy, inkF(blade))
+            b.inkLine(23 + ox, 3 + oy, 28 + ox, 6 + oy, inkF(edge))
+            b.inkLine(28 + ox, 5 + oy, 28 + ox, 8 + oy, inkF(blade))
+            b.inkRect(20 + ox, 20 + oy, 3, 3, inkS(iron))
+        case 1:
+            // drawn back over the shoulder
+            b.inkLine(4 + ox, 4 + oy, 20 + ox, 26 + oy, inkF(shaft))
+            b.inkLine(3 + ox, 4 + oy, 0 + ox, 11 + oy, inkF(blade))
+            b.inkLine(4 + ox, 4 + oy, 1 + ox, 11 + oy, inkF(blade))
+            b.inkLine(5 + ox, 4 + oy, 2 + ox, 11 + oy, inkF(edge))
+            b.inkRect(18 + ox, 22 + oy, 3, 3, inkS(iron))
+        case 2:
+            // swept low and level in front
+            b.inkLine(6 + ox, 27 + oy, 29 + ox, 27 + oy, inkF(shaft))
+            b.inkLine(6 + ox, 28 + oy, 29 + ox, 28 + oy, inkF(shaft))
+            b.inkLine(29 + ox, 27 + oy, 26 + ox, 36 + oy, inkF(blade))
+            b.inkLine(28 + ox, 28 + oy, 25 + ox, 36 + oy, inkF(blade))
+            b.inkLine(27 + ox, 28 + oy, 24 + ox, 35 + oy, inkF(edge))
+            b.inkRect(18 + ox, 25 + oy, 3, 3, inkS(iron))
+        default:
+            // held aside while the free hand casts
+            b.inkLine(4 + ox, 6 + oy, 4 + ox, 40 + oy, inkF(shaft))
+            b.inkLine(4 + ox, 4 + oy, 0 + ox, 8 + oy, inkF(blade))
+            b.inkLine(4 + ox, 5 + oy, 0 + ox, 9 + oy, inkF(blade))
+            b.inkRect(20 + ox, 18 + oy, 3, 3, inkS(iron))
+            b.inkEllipse(25.0 + Double(ox), 19.5 + Double(oy), 2.4, 2.4, inkF(0x9A5AE0))
+            b.inkEllipse(25.0 + Double(ox), 19.5 + Double(oy), 1.2, 1.2, inkF(0xF0D8FF))
+        }
+    }
+    var frames: [PixelBuf] = []
+    for (sway, pose) in [(0, 0), (1, 0), (0, 1), (0, 2), (1, 3)] {
+        var b: PixelBuf = base(sway)
+        scythe(&b, pose)
+        frames.append(finishCreature(b, band: 2))
+    }
+    return frames
 }
 
 func creatureSpriteSet(_ k: MobKind, _ v: Int) -> SpriteSet {
@@ -6373,15 +6722,37 @@ extension WorldGen {
     }
 
     func uFloor(_ x: Int) -> Int {
-        let raw: Int = uFloorRaw(x)
+        var raw: Int = uFloorRaw(x)
+        if let c = citadel {
+            // the citadel stands on level ground, with long ramps down (or up) to the cavern floor
+            let dc: Int = abs(x - c.x)
+            if dc <= 110 {
+                let t: Double = smooth(clampD(Double(dc - 50) / 60.0, 0, 1))
+                raw = Int(lerpD(Double(c.floor), Double(raw), t).rounded())
+            }
+        }
         let d: Int = abs(x - portalX)
         if d > 44 { return raw }
         let t: Double = smooth(clampD((Double(d) - 16.0) / 28.0, 0, 1))
         return Int(lerpD(Double(umbralPortalFloor), Double(raw), t).rounded())
     }
 
+    /// The Hollow Warden's citadel (worlds of generator version 3): some 380 to 540 blocks from the
+    /// rift, its gate facing back toward it
+    var citadel: CitadelSite? {
+        if genVersion < 3 { return nil }
+        let side: Int = hash2(77, 78, seed) < 0.5 ? -1 : 1
+        let dist: Int = 380 + Int(hash2(79, 80, seed) * 160.0)
+        var x: Int = portalX + side * dist
+        if !infinite && (x < 200 || x > width - 200) { x = portalX - side * dist }
+        if !infinite && (x < 200 || x > width - 200) { return nil }
+        let floor: Int = clampI(uFloorRaw(x), 190, 226)
+        return CitadelSite(x: x, floor: floor, gate: portalX >= x ? 1 : -1)
+    }
+
     func uRuinSite(cell c: Int) -> Int? {
         if hash2(c, 511, seed) > 0.55 { return nil }
+        if let cd = citadel, abs(c * 260 + 140 - cd.x) < 200 { return nil }
         let sx: Int = c * 260 + 40 + Int(hash2(c, 512, seed) * 180.0)
         if abs(sx - portalX) < 60 { return nil }
         if !infinite && (sx < 40 || sx > width - 40) { return nil }
@@ -6457,8 +6828,59 @@ func generateUmbralChunk(_ g: WorldGen, _ cx: Int) -> Chunk {
         if let sx = g.uRuinSite(cell: c) { buildUmbralRuin(g, ch, sx, hashU(c, 513, g.seed)) }
     }
     if abs(g.portalX - (x0 + chunkW / 2)) < 30 { buildUmbralPortal(g, ch) }
+    if let c = g.citadel, abs(c.x - (x0 + chunkW / 2)) < 60 { buildCitadel(g, ch, c) }
     ch.rebuildSky()
     return ch
+}
+
+/// Where the Hollow Warden keeps its hall
+struct CitadelSite {
+    var x: Int
+    var floor: Int
+    /// the side the gate faces (toward the rift); the throne stands at the far end
+    var gate: Int
+    var throneX: Int { return x - gate * 33 }
+    var chestX: Int { return x - gate * 37 }
+}
+
+/// A ruined hall: a paved floor between two gate towers, ash-stone walls behind, broken arches above,
+/// lanterns on plinths, a throne on a low dais and the Warden's hoard behind it. Both towers have
+/// doorways, so the hall can always be walked through.
+func buildCitadel(_ g: WorldGen, _ ch: Chunk, _ c: CitadelSite) {
+    let f: Int = c.floor
+    let seed: UInt64 = g.seed &+ 9191
+    for x in (c.x - 50)...(c.x + 50) {
+        if x < ch.x0 || x >= ch.x0 + chunkW { continue }
+        let dx: Int = x - c.x
+        ch.fill(x, f - 22, x, f - 1, .air)
+        ch.fill(x, f + 1, x, f + 3, .obsidian)
+        ch.put(x, f, abs(dx) % 6 == 0 ? .crackedBrick : .brick)
+        if abs(dx) <= 40 { ch.fillWall(x, f - 14, x, f - 1, 4) }
+        if abs(dx) == 12 || abs(dx) == 26 { ch.fillWall(x, f - 14, x, f - 1, 6) }
+        // gate towers with doorways
+        if abs(dx) == 41 || abs(dx) == 42 {
+            ch.fill(x, f - 15, x, f - 6, .brick)
+            if hash2(x, 3, seed) < 0.3 { ch.put(x, f - 10, .crackedBrick) }
+        }
+        // the broken arches overhead
+        if abs(dx) <= 42 && hash2(x, 4, seed) > 0.2 {
+            ch.put(x, f - 16, hash2(x, 5, seed) < 0.25 ? .crackedBrick : .brick)
+            if abs(dx) % 9 == 4 { ch.put(x, f - 15, .glowCrystal) }
+        }
+        // lanterns on plinths
+        if abs(dx) == 6 || abs(dx) == 19 || abs(dx) == 33 {
+            if x != c.throneX && x != c.chestX {
+                ch.put(x, f - 1, .brick)
+                ch.put(x, f - 2, .lantern)
+            }
+        }
+    }
+    // the throne on its dais, the hoard behind it
+    for dx in -3...3 { ch.put(c.throneX + dx, f - 1, .brick) }
+    ch.fill(c.throneX - c.gate, f - 4, c.throneX - c.gate, f - 2, .obsidian)
+    ch.put(c.throneX + 1, f - 2, .crackedBrick)
+    ch.put(c.throneX - 1, f - 2, .crackedBrick)
+    ch.put(c.chestX, f - 1, .chest)
 }
 
 func buildUmbralRuin(_ g: WorldGen, _ ch: Chunk, _ sx: Int, _ seed: UInt64) {
@@ -6869,6 +7291,16 @@ func generateChestLoot(_ g: WorldGen, _ dim: Dimension, _ x: Int, _ y: Int) -> [
     func tierPick(_ lo: Int, _ hi: Int) -> Tier {
         let r: Int = lo + rng.int(max(1, hi - lo + 1))
         return Tier(rawValue: clampI(r, 1, 9)) ?? .wood
+    }
+    if dim == .umbral, let c = g.citadel, abs(x - c.chestX) <= 1 && abs(y - (c.floor - 1)) <= 1 {
+        // the Warden's hoard
+        add(.mat(.voidBar), 3, 6, 1.0)
+        add(.mat(.emberBar), 4, 8, 1.0)
+        add(.mat(.diamond), 3, 6, 1.0)
+        add(.mat(.relicFragment), 2, 3, 1.0)
+        add(.armor(ArmorSlot.allCases[rng.int(3)], .voidium), 1, 1, 0.5)
+        add(.spear(.voidium), 1, 1, 0.3)
+        return out
     }
     if dim == .umbral {
         add(.mat(.emberBar), 2, 6, 0.8)
@@ -7644,6 +8076,8 @@ extension World {
 
 enum ProjKind: Int, Codable {
     case arrow, bullet, fireball, rock, shock, spit, bolt, bomb
+    /// a crystal shard thrown by the Crystal Sentinel
+    case shard
 }
 
 struct Projectile {
@@ -7716,6 +8150,8 @@ enum MobKind: Int, Codable, CaseIterable {
     case villager, pirate, pirateGunner, pirateCaptain
     case imp, emberSlime, cinderBat
     case bearBoss, rex
+    /// appended, so saved creature kinds keep their numbers
+    case crawler, golem, archer, sentinel, mimic, warden
 }
 
 enum Behavior: Int {
@@ -7774,6 +8210,12 @@ func makeMobDef(_ k: MobKind) -> MobDef {
     case .cinderBat: return MobDef(name: "Cinder Bat", w: 0.6, h: 0.4, hp: 14, speed: 4.6, dmg: 7, behavior: .flyer, flying: true, aggro: 14, hostile: true)
     case .bearBoss: return MobDef(name: "Ursavor, Warden of the Gate", w: 5.2, h: 3.9, hp: 900, speed: 3.0, dmg: 22, behavior: .boss, aggro: 60, hostile: true)
     case .rex: return MobDef(name: "Tyrannax the Bonecrown", w: 7.0, h: 4.4, hp: 1400, speed: 3.4, dmg: 30, behavior: .boss, aggro: 60, hostile: true)
+    case .crawler: return MobDef(name: "Cave Crawler", w: 1.1, h: 0.6, hp: 22, speed: 4.4, dmg: 7, behavior: .hostile, aggro: 13, jump: 11.5, hostile: true)
+    case .golem: return MobDef(name: "Stone Golem", w: 1.5, h: 2.2, hp: 150, speed: 1.15, dmg: 16, behavior: .hostile, aggro: 12, jump: 9, hostile: true)
+    case .archer: return MobDef(name: "Skeleton Archer", w: 0.7, h: 1.8, hp: 26, speed: 2.3, dmg: 7, behavior: .ranged, aggro: 20, hostile: true)
+    case .sentinel: return MobDef(name: "Crystal Sentinel", w: 1.4, h: 2.0, hp: 320, speed: 3.0, dmg: 12, behavior: .boss, flying: true, aggro: 30, hostile: true)
+    case .mimic: return MobDef(name: "Mimic", w: 1.0, h: 0.95, hp: 90, speed: 3.2, dmg: 13, behavior: .hostile, aggro: 16, jump: 12, hostile: true)
+    case .warden: return MobDef(name: "The Hollow Warden", w: 3.0, h: 4.6, hp: 2200, speed: 2.6, dmg: 26, behavior: .boss, flying: true, aggro: 60, hostile: true)
     }
 }
 
@@ -7820,6 +8262,18 @@ func mobDrops(_ k: MobKind, _ rng: inout RNG, _ sheared: Bool) -> [Stack] {
     case .rex:
         add(.mat(.bone), 10, 20, 1.0); add(.mat(.tusk), 2, 4, 1.0); add(.mat(.goldBar), 6, 12, 1.0)
         add(.mat(.mythrilBar), 2, 5, 1.0); add(.food(.cookedMeat), 6, 10, 1.0)
+    case .crawler: add(.mat(.string), 1, 3, 0.8); add(.mat(.claw), 1, 1, 0.25)
+    case .golem:
+        add(.block(.stone), 4, 8, 1.0); add(.mat(.ironOre), 1, 3, 0.6); add(.mat(.crystalShard), 1, 2, 0.35)
+        add(.mat(.relicFragment), 1, 1, 0.1)
+    case .archer: add(.mat(.bone), 1, 2, 0.9); add(.ammo(.arrow), 3, 8, 0.8); add(.bow, 1, 1, 0.05)
+    case .sentinel:
+        add(.mat(.crystalShard), 8, 14, 1.0); add(.mat(.diamond), 2, 4, 1.0); add(.block(.glowCrystal), 4, 8, 1.0)
+        add(.mat(.relicFragment), 2, 3, 1.0); add(.gear(.headlamp), 1, 1, 0.35)
+    case .mimic: add(.mat(.goldBar), 2, 5, 1.0); add(.mat(.relicFragment), 1, 1, 0.8); add(.mat(.diamond), 1, 2, 0.35)
+    case .warden:
+        add(.mat(.umbralHeart), 1, 1, 1.0); add(.mat(.voidBar), 6, 10, 1.0); add(.mat(.diamond), 4, 8, 1.0)
+        add(.mat(.emberBar), 4, 8, 1.0); add(.mat(.relicFragment), 3, 3, 1.0)
     }
     return out
 }
@@ -7867,6 +8321,10 @@ let spawnRules: [SpawnRule] = [
     SpawnRule(kind: .slime, weight: 3, place: .cave, when: .any, biomes: [], group: 2, minY: 140),
     SpawnRule(kind: .bat, weight: 4, place: .cave, when: .any, biomes: [], group: 3, minY: 150),
     SpawnRule(kind: .wraith, weight: 2, place: .cave, when: .any, biomes: [], group: 1, minY: 380),
+    SpawnRule(kind: .crawler, weight: 4, place: .cave, when: .any, biomes: [], group: 2, minY: 140),
+    SpawnRule(kind: .archer, weight: 3, place: .cave, when: .any, biomes: [], group: 1, minY: 150),
+    SpawnRule(kind: .golem, weight: 1.5, place: .cave, when: .any, biomes: [], group: 1, minY: 260),
+    SpawnRule(kind: .archer, weight: 2, place: .surface, when: .night, biomes: [], group: 1),
     // umbral realm
     SpawnRule(kind: .imp, weight: 5, place: .umbral, when: .any, biomes: [], group: 1),
     SpawnRule(kind: .wraith, weight: 3, place: .umbral, when: .any, biomes: [], group: 1),
@@ -7933,6 +8391,9 @@ final class Mob {
     var face: Int = 0
     var turnT: Double = 0
     var atkT: Double = 0
+    /// a mimic's hoard (dropped when it dies) and the spots a telegraphed attack will strike
+    var loot: [Stack] = []
+    var spots: [Double] = []
     static let turnDur: Double = 0.14
     static let atkDur: Double = 0.28
 
@@ -7953,7 +8414,7 @@ final class Mob {
     var def: MobDef { return mobDef(kind) }
     var x: Double { return b.x }
     var y: Double { return b.y }
-    var isBoss: Bool { return kind == .bearBoss || (kind == .rex && !tame) }
+    var isBoss: Bool { return kind == .bearBoss || (kind == .rex && !tame) || kind == .sentinel || kind == .warden }
 }
 
 struct MobSave: Codable {
@@ -8625,6 +9086,8 @@ final class Game: ObservableObject, @unchecked Sendable {
     var decayZones: [DecayZone] = []
     /// short-lived lights from explosions (fed into the light map as moving lights, then removed)
     var flashes: [LightFlash] = []
+    /// ground about to be struck by a telegraphed attack (drawn as a warning)
+    var dangerZones: [DangerZone] = []
     let mobGrid: MobGrid = MobGrid()
     var frameNo: Int = 0
 
@@ -8811,6 +9274,7 @@ extension Game {
         updatePlayer(dt)
         updateUse(dt)
         if !pauseMobs { updateMobs(dt) }
+        updateDangerZones(dt)
         if !pauseBosses { updateBosses(dt) }
         if !pauseSpawning { updateSpawning(dt) }
         if !pauseProjectiles { updateProjectiles(dt) }
@@ -9255,6 +9719,8 @@ extension Game {
             case .wraith: lv = 6
             case .cinderBat: lv = 6
             case .bearBoss, .rex: lv = m.isBoss ? 6 : 0
+            case .sentinel: lv = 9
+            case .warden: lv = 10
             default: lv = 0
             }
             if m.burn > 0 { lv = max(lv, 6) }
@@ -9501,6 +9967,7 @@ extension Game {
         let t: Tile = world.tile(tx, ty)
         switch t {
         case .chest:
+            if tryMimic(tx, ty) { return }
             openChest = IntPair(x: tx, y: ty)
             showInventory = true
             bumpHUD()
@@ -10952,6 +11419,8 @@ extension Game {
             updateBossMob(m, dt)
             return
         }
+        if m.kind == .sentinel { updateSentinel(m, dt); return }
+        if m.kind == .warden { updateWarden(m, dt); return }
         if m.boat >= 0 && updateCrew(m, dt) { return }
         let toPX: Double = pb.x - m.b.x
         let dist: Double = abs(toPX)
@@ -11023,7 +11492,15 @@ extension Game {
             updateFlyer(m, dt, near && !peaceful, dist, dyP)
         case .fish:
             updateFish(m, dt)
-        case .bearBoss, .rex:
+        case .crawler:
+            updateCrawler(m, dt, near && !peaceful, dist, dyP)
+        case .golem:
+            updateGolem(m, dt, near && !peaceful, dist, dyP)
+        case .archer:
+            updateArcher(m, dt, near && !peaceful, dist, dyP)
+        case .mimic:
+            updateMimic(m, dt, !peaceful && !dead && dist < 20, dist, dyP)
+        case .bearBoss, .rex, .sentinel, .warden:
             break
         }
     }
@@ -11539,7 +12016,8 @@ extension Game {
         m.hurtT = 0.22
         m.flash = 0.12
         if dirX != 0 && kb > 0 { m.lean = clampD(dirX * kb / 9.0, -1, 1) }
-        let resist: Double = m.isBoss ? 0.97 : (m.def.w > 2.0 ? 0.6 : 0.0)
+        var resist: Double = m.isBoss ? 0.97 : (m.def.w > 2.0 ? 0.6 : 0.0)
+        if m.kind == .golem { resist = heavy ? 0.45 : 0.88 }
         if dirX != 0 && kb > 0 {
             m.b.vx = dirX * kb * (1.0 - resist)
             if resist < 0.9 { m.b.vy = min(m.b.vy, -3.5) }
@@ -11590,6 +12068,9 @@ extension Game {
         if credit { kills += 1 }
         if m.kind == .bearBoss { onBearDefeated(m) }
         if m.kind == .rex { onRexDefeated(m) }
+        if m.kind == .sentinel || m.kind == .warden { onGuardianDefeated(m) }
+        for s in m.loot { spawnDrop(s, m.b.x, m.b.y - m.b.h * 0.5, Double.random(in: -2.5...2.5), -5.0) }
+        m.loot = []
         if m === activeBoss { activeBoss = nil }
         bumpHUD()
     }
@@ -12004,7 +12485,7 @@ final class MobGrid {
 
 func isHeatImmune(_ k: MobKind) -> Bool {
     switch k {
-    case .imp, .emberSlime, .cinderBat: return true
+    case .imp, .emberSlime, .cinderBat, .warden: return true
     default: return false
     }
 }
@@ -12018,6 +12499,14 @@ func damageResist(_ k: MobKind, _ t: DamageType) -> Double {
     case (.bearBoss, .lava), (.rex, .lava): return 0.5
     case (.bearBoss, .explosion), (.rex, .explosion): return 0.6
     case (.slime, .fall), (.emberSlime, .fall), (.cat, .fall), (.frog, .fall): return 0.2
+    // the golem's stone hide shrugs off blades and arrows (a hammer's crushing blow gets through)
+    case (.golem, .melee), (.golem, .contact): return 0.55
+    case (.golem, .projectile): return 0.35
+    case (.golem, .fire), (.golem, .fall): return 0.2
+    case (.golem, .explosion): return 1.25
+    case (.sentinel, .fall), (.warden, .fall), (.warden, .lava), (.mimic, .fall): return 0
+    case (.sentinel, .projectile): return 0.8
+    case (.warden, .explosion): return 0.7
     default: return 1
     }
 }
@@ -12087,7 +12576,7 @@ extension Game {
         switch m.kind {
         case .pirate, .pirateGunner, .pirateCaptain: return .pirate
         case .imp, .emberSlime, .cinderBat: return .umbral
-        case .bearBoss, .rex: return .boss
+        case .bearBoss, .rex, .sentinel, .warden: return .boss
         default: return m.def.hostile ? .hostile : .wild
         }
     }
@@ -12136,7 +12625,11 @@ extension Game {
             if m.hitStamps.count > 24 { m.hitStamps = m.hitStamps.filter { clock - $0.value < 4.0 } }
         }
         var amount: Double = info.amount * damageResist(m.kind, info.type)
-        if info.source.kind == .player { amount *= dmgOutMult }
+        if info.heavy && m.kind == .golem { amount *= 1.9 }
+        if info.source.kind == .player {
+            amount *= dmgOutMult
+            if wearing(.wardenSigil) { amount *= 1.2 }
+        }
         if amount <= 0 { return false }
         let byPlayer: Bool = info.source.kind == .player
         if byPlayer { m.lastHitByPlayer = clock }
@@ -12158,7 +12651,8 @@ extension Game {
             if playerHitStamps.count > 24 { playerHitStamps = playerHitStamps.filter { clock - $0.value < 4.0 } }
         }
         let before: Double = hp
-        damagePlayer(info.amount * dmgInMult, from: info.originX, knock: info.knock, ignoreArmor: info.type.bypassesArmor)
+        let sigil: Double = wearing(.wardenSigil) ? 0.85 : 1.0
+        damagePlayer(info.amount * dmgInMult * sigil, from: info.originX, knock: info.knock, ignoreArmor: info.type.bypassesArmor)
         return hp < before
     }
 
@@ -12459,10 +12953,16 @@ extension Game {
     }
 
     func updateBosses(_ dt: Double) {
+        if world.dim == .umbral {
+            updateWardenSpawn()
+            refreshBossBar()
+            return
+        }
         if world.dim != .overworld {
             activeBoss = nil
             return
         }
+        updateGuardians()
         let px: Int = Int(floor(pb.x))
         for L in gen.lairCenters(near: px) {
             let key: Int = lairKey(L)
@@ -12481,6 +12981,10 @@ extension Game {
                 mobs.removeAll { $0 === e }
             }
         }
+        refreshBossBar()
+    }
+
+    func refreshBossBar() {
         var best: Mob? = nil
         var bd: Double = 70
         for m in mobs where m.isBoss && m.hp > 0 {
@@ -13950,6 +14454,7 @@ extension Game {
         drops.removeAll()
         particles.removeAll()
         flashes.removeAll()
+        dangerZones.removeAll()
         ships.removeAll()
         shipTimer = 30
         activeBoss = nil
@@ -14326,8 +14831,20 @@ extension Game {
     func makeSave() -> SaveData {
         var cs: [ChunkSave] = []
         let cur: Int = world.dim.rawValue
+        // a mimic still on the loose is saved as the chest it came out of, its hoard back inside
+        var mimicSpots: [Int: [(Int, Int, [Stack])]] = [:]
+        for m in mobs where m.kind == .mimic && m.hp > 0 && !m.removed {
+            let ox: Int = Int(floor(m.homeX))
+            let oy: Int = Int(floor(m.homeY)) - 1
+            mimicSpots[floorDiv(ox, chunkW), default: []].append((ox, oy, m.loot))
+        }
         for (k, c) in world.chunks where c.dirty {
-            cs.append(ChunkSave(dim: cur, cx: k, data: Data(World.rle(c.tiles)), walls: c.walls.isEmpty ? nil : Data(World.rle(c.walls))))
+            var tiles: [UInt8] = c.tiles
+            for (ox, oy, _) in mimicSpots[k] ?? [] {
+                let i: Int = (ox - c.x0) * c.H + oy
+                if i >= 0 && i < tiles.count && tiles[i] == Tile.air.rawValue { tiles[i] = Tile.chest.rawValue }
+            }
+            cs.append(ChunkSave(dim: cur, cx: k, data: Data(World.rle(tiles)), walls: c.walls.isEmpty ? nil : Data(World.rle(c.walls))))
         }
         for d in 0..<2 {
             for (k, c) in world.parked[d] {
@@ -14337,6 +14854,13 @@ extension Game {
         }
         var chestList: [ChestEntry] = []
         for (k, v) in world.chests { chestList.append(ChestEntry(key: k, items: v)) }
+        for (_, list) in mimicSpots {
+            for (ox, oy, loot) in list {
+                let key: ChestKey = world.chestKey(ox, oy)
+                chestList.removeAll { $0.key == key }
+                chestList.append(ChestEntry(key: key, items: loot))
+            }
+        }
         var vs: [[VehicleSave]] = [[], []]
         for d in 0..<2 {
             let list: [Vehicle] = d == cur ? vehicles : vehicleStash[d]
@@ -16161,9 +16685,665 @@ final class Art: @unchecked Sendable {
 }
 
 /// True for creatures drawn with the shared humanoid frames
+
+// MARK: - Telegraphed attacks and the newer creatures' behaviour
+
+/// Ground an attack is about to strike. Drawn as a pulsing warning that fills from the bottom as the
+/// moment comes, so every telegraphed blow reads the same way and can be stepped out of.
+struct DangerZone {
+    var x0: Double
+    var y0: Double
+    var x1: Double
+    var y1: Double
+    /// seconds until the strike, and the whole wind-up
+    var t: Double
+    var dur: Double
+    var color: UInt32
+}
+
+enum WardenAtk: Int {
+    case none, sweep, bolts, blink, pillars, summon
+}
+
+extension WorldGen {
+    /// the Hollow Warden's entry in the list of defeated bosses
+    static let wardenKey: Int = 9_000_001
+    /// a grotto's Crystal Sentinel in that list
+    static func sentinelKey(_ cell: Int) -> Int { return 7_000_000 + cell }
+}
+
+extension Game {
+    func warn(_ x0: Double, _ y0: Double, _ x1: Double, _ y1: Double, _ dur: Double, _ color: UInt32 = 0xFF3A2A) {
+        if dangerZones.count >= 24 { dangerZones.removeFirst() }
+        dangerZones.append(DangerZone(x0: min(x0, x1), y0: min(y0, y1), x1: max(x0, x1), y1: max(y0, y1), t: dur, dur: max(0.05, dur), color: color))
+    }
+
+    func updateDangerZones(_ dt: Double) {
+        if dangerZones.isEmpty { return }
+        for i in dangerZones.indices { dangerZones[i].t -= dt }
+        dangerZones.removeAll { $0.t <= 0 }
+    }
+
+    /// A creature's blow over a box; targets are pushed away from the creature
+    func mobAttackBox(_ m: Mob, _ x0: Double, _ y0: Double, _ x1: Double, _ y1: Double, dmg: Double, knock: Double, type: DamageType = .melee) {
+        var info = DamageInfo(amount: dmg, type: type, source: .mob(m, faction(of: m)))
+        info.knock = knock
+        info.originX = m.b.x
+        info.originY = m.b.cy
+        info.key = newID()
+        damageBox(min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1), info)
+    }
+
+    // MARK: cave crawler: fast, crouches and pounces
+
+    func updateCrawler(_ m: Mob, _ dt: Double, _ aggro: Bool, _ dist: Double, _ dyP: Double) {
+        let d: MobDef = m.def
+        switch m.st {
+        case 3:
+            // a short crouch before the pounce
+            m.t3 -= dt
+            accelX(m, 0, 50, dt)
+            m.dir = pb.x >= m.b.x ? 1 : -1
+            if m.t3 <= 0 {
+                m.st = 4
+                m.t3 = 0.7
+                m.cd = 0
+                m.b.vy = -8.5
+                m.b.vx = Double(m.dir) * 10.5
+                m.atkT = Mob.atkDur
+            }
+        case 4:
+            m.t3 -= dt
+            if abs(dyP) < 1.4 { contactHurt(m, d.dmg * 1.3) }
+            if (m.b.onGround && m.t3 < 0.55) || m.t3 <= 0 {
+                m.st = 0
+                m.cd = 1.3
+            }
+        default:
+            if aggro {
+                chase(m, pb.x, 1.0, dt)
+                // scrambles up ledges
+                if m.b.hitWall && m.b.onGround { m.b.vy = -11.5 }
+                if m.b.onGround && m.cd <= 0 && dist > 1.8 && dist < 4.6 && abs(dyP) < 2.0 {
+                    m.st = 3
+                    m.t3 = 0.28
+                }
+                if abs(dyP) < 1.0 { contactHurt(m, d.dmg) }
+            } else {
+                wander(m, dt, 0.6)
+            }
+        }
+        stepMob(m, dt)
+    }
+
+    // MARK: stone golem: slow, armoured, slams the ground and throws rocks
+
+    func updateGolem(_ m: Mob, _ dt: Double, _ aggro: Bool, _ dist: Double, _ dyP: Double) {
+        let d: MobDef = m.def
+        switch m.st {
+        case 3:
+            // fists raised: the slam lands where the warning shows
+            m.t3 -= dt
+            accelX(m, 0, 40, dt)
+            if m.t3 <= 0 {
+                m.st = 4
+                m.t3 = 0.35
+                let x0: Double = m.dir > 0 ? m.b.x - 0.6 : m.b.x - 3.9
+                let x1: Double = m.dir > 0 ? m.b.x + 3.9 : m.b.x + 0.6
+                mobAttackBox(m, x0, m.b.y - 2.4, x1, m.b.y + 0.1, dmg: d.dmg, knock: 10)
+                m.atkT = Mob.atkDur
+                addShake(dist < 10 ? 0.2 : 0.06)
+                spawnParticles(m.b.x + Double(m.dir) * 2.2, m.b.y - 0.1, 0x8A8680, 10, 4.0, 0.5, 14)
+            }
+        case 4:
+            m.t3 -= dt
+            accelX(m, 0, 40, dt)
+            if m.t3 <= 0 { m.st = 0; m.cd = 1.6 }
+        case 5:
+            // a boulder held overhead
+            m.t3 -= dt
+            accelX(m, 0, 40, dt)
+            m.dir = pb.x >= m.b.x ? 1 : -1
+            if m.t3 <= 0 {
+                throwRock(m)
+                m.st = 4
+                m.t3 = 0.3
+                m.cd = 2.8
+            }
+        default:
+            if aggro {
+                chase(m, pb.x, 1.0, dt)
+                if m.cd <= 0 && m.b.onGround {
+                    if dist < 3.3 && abs(dyP) < 2.4 {
+                        m.st = 3
+                        m.t3 = 0.75
+                        m.dir = pb.x >= m.b.x ? 1 : -1
+                        let x0: Double = m.dir > 0 ? m.b.x - 0.6 : m.b.x - 3.9
+                        let x1: Double = m.dir > 0 ? m.b.x + 3.9 : m.b.x + 0.6
+                        warn(x0, m.b.y - 2.4, x1, m.b.y, 0.75, 0xFF8A2A)
+                    } else if dist > 4.5 && dist < 11 && Double.random(in: 0...1) < 0.02
+                                && world.lineClear(m.b.x, m.b.top + 0.3, pb.x, pb.y - pb.h * 0.6) {
+                        m.st = 5
+                        m.t3 = 0.6
+                    }
+                }
+                if abs(dyP) < 1.8 { contactHurt(m, d.dmg * 0.5) }
+            } else {
+                wander(m, dt, 0.35)
+            }
+        }
+        stepMob(m, dt, stepUp: 1.0)
+    }
+
+    /// A lobbed boulder, aimed so its arc comes down on the player
+    func throwRock(_ m: Mob) {
+        let ox: Double = m.b.x + Double(m.dir) * 0.6
+        let oy: Double = m.b.top + 0.2
+        let dx: Double = pb.x - ox
+        let t: Double = clampD(abs(dx) / 9.0, 0.5, 1.3)
+        let grav: Double = 22.0
+        let vx: Double = dx / t
+        let vy: Double = ((pb.y - 0.8) - oy - 0.5 * grav * t * t) / t
+        var p = Projectile(kind: .rock, x: ox, y: oy, vx: vx, vy: vy, dmg: m.def.dmg * 0.8, fromPlayer: false, gravity: grav)
+        p.w = 0.6
+        p.life = 3.0
+        p.owner = m.id
+        p.source = .mob(m, faction(of: m))
+        p.uid = newID()
+        projectiles.append(p)
+        m.atkT = Mob.atkDur
+    }
+
+    // MARK: skeleton archer: keeps its distance and shoots arced arrows
+
+    func updateArcher(_ m: Mob, _ dt: Double, _ aggro: Bool, _ dist: Double, _ dyP: Double) {
+        switch m.st {
+        case 3:
+            // the draw: a clear moment to close in or take cover
+            m.t3 -= dt
+            accelX(m, 0, 40, dt)
+            m.dir = pb.x >= m.b.x ? 1 : -1
+            if m.t3 <= 0 {
+                shootArrowAtPlayer(m)
+                m.st = 6
+                m.t3 = 0.25
+            }
+        case 6:
+            m.t3 -= dt
+            accelX(m, 0, 40, dt)
+            if m.t3 <= 0 { m.st = 0; m.cd = Double.random(in: 1.4...2.2) }
+        default:
+            if aggro {
+                let sees: Bool = world.lineClear(m.b.x, m.b.top + 0.3, pb.x, pb.y - pb.h * 0.6)
+                if dist < 5.0 {
+                    // too close: back off, hopping away now and then
+                    flee(m, pb.x, dt, 1.1)
+                    if m.b.onGround && Double.random(in: 0...1) < 0.025 { m.b.vy = -10; m.b.vx = Double(m.dir) * 5.5 }
+                } else if dist > 12.0 || !sees {
+                    chase(m, pb.x, 0.9, dt)
+                } else {
+                    accelX(m, 0, 20, dt)
+                    m.dir = pb.x >= m.b.x ? 1 : -1
+                }
+                if m.cd <= 0 && sees && dist >= 3.0 && dist < 18 && abs(dyP) < 10 {
+                    m.st = 3
+                    m.t3 = 0.6
+                }
+            } else {
+                wander(m, dt, 0.4)
+            }
+        }
+        stepMob(m, dt)
+    }
+
+    func shootArrowAtPlayer(_ m: Mob) {
+        let ox: Double = m.b.x + Double(m.dir) * 0.6
+        let oy: Double = m.b.y - m.b.h * 0.6
+        let tx: Double = pb.x + pb.vx * 0.2
+        let ty: Double = pb.y - pb.h * 0.55
+        let grav: Double = 15.0
+        let dx: Double = tx - ox
+        let dy: Double = ty - oy
+        let flight: Double = max(0.15, sqrt(dx * dx + dy * dy) / 19.0)
+        var p = Projectile(kind: .arrow, x: ox, y: oy, vx: dx / flight, vy: dy / flight - 0.5 * grav * flight, dmg: m.def.dmg, fromPlayer: false, gravity: grav)
+        p.life = 3.0
+        p.w = 0.22
+        p.owner = m.id
+        p.source = .mob(m, faction(of: m))
+        p.uid = newID()
+        projectiles.append(p)
+    }
+
+    // MARK: mimic: a chest that bites
+
+    func updateMimic(_ m: Mob, _ dt: Double, _ aggro: Bool, _ dist: Double, _ dyP: Double) {
+        let d: MobDef = m.def
+        m.t1 -= dt
+        m.angry = aggro
+        if m.st == 3 {
+            // jaws wide before the lunge
+            m.t3 -= dt
+            accelX(m, 0, 30, dt)
+            if m.t3 <= 0 {
+                m.st = 4
+                m.t3 = 0.6
+                m.cd = 0
+                m.b.vy = -9.5
+                m.b.vx = Double(m.dir) * 9.0
+                m.atkT = Mob.atkDur
+            }
+        } else if m.st == 4 {
+            m.t3 -= dt
+            if abs(dyP) < 1.4 { contactHurt(m, d.dmg * 1.2) }
+            if (m.b.onGround && m.t3 < 0.45) || m.t3 <= 0 {
+                m.st = 0
+                m.cd = m.hp < m.maxHP * 0.4 ? 0.7 : 1.1
+            }
+        } else if aggro {
+            m.dir = pb.x >= m.b.x ? 1 : -1
+            if m.b.onGround {
+                m.b.vx *= 0.8
+                if m.cd <= 0 && dist < 5.0 && abs(dyP) < 2.2 {
+                    m.st = 3
+                    m.t3 = 0.3
+                } else if m.t1 <= 0 {
+                    m.b.vy = -8.0
+                    m.b.vx = Double(m.dir) * 5.0
+                    m.t1 = 0.45
+                }
+            }
+            if abs(dyP) < 1.4 { contactHurt(m, d.dmg * 0.6) }
+        } else {
+            // sits still and passes for a chest again
+            accelX(m, 0, 20, dt)
+        }
+        stepMob(m, dt)
+    }
+
+    /// Some unopened chests underground in newer worlds are mimics: opening one wakes it instead
+    func tryMimic(_ x: Int, _ y: Int) -> Bool {
+        if world.dim != .overworld || gen.genVersion < 3 { return false }
+        if y < WorldGen.sea + 20 { return false }
+        // opened before, or placed by the player
+        if world.chests[world.chestKey(x, y)] != nil { return false }
+        if hash2(x, y, gen.seed &+ 909) >= 0.08 { return false }
+        // a grotto's altar chest has its own guardian
+        for s in gen.grottoSites(overlapping: x - 2, x + 2) where abs(x - s.x) <= 1 && abs(y - (s.floorY - 2)) <= 1 { return false }
+        let loot: [Stack] = world.removeChest(x, y)
+        world.set(x, y, .air)
+        let m: Mob = addMob(.mimic, Double(x) + 0.5, Double(y) + 1.0)
+        m.loot = loot
+        m.persistent = true
+        m.homeX = Double(x) + 0.5
+        m.homeY = Double(y) + 1.0
+        m.dir = pb.x >= m.b.x ? 1 : -1
+        m.st = 3
+        m.t3 = 0.45
+        m.angry = true
+        addShake(0.12)
+        spawnParticles(m.b.x, m.b.y - 0.5, 0xB98A4E, 8, 4.0, 0.4, 12)
+        say("The chest was a Mimic!", 2.5)
+        return true
+    }
+
+    // MARK: crystal sentinel: the grotto's guardian
+
+    func updateGuardians() {
+        let px: Int = Int(floor(pb.x))
+        for s in gen.grottoSites(overlapping: px - 60, px + 60) {
+            let key: Int = WorldGen.sentinelKey(s.cell)
+            if defeated.contains(key) { continue }
+            var existing: Mob? = nil
+            for m in mobs where m.kind == .sentinel && m.lair == key && m.hp > 0 { existing = m }
+            let dx: Double = abs(Double(s.x) + 0.5 - pb.x)
+            let dy: Double = abs(Double(s.floorY) - pb.y)
+            if existing == nil {
+                if dx < Double(s.rx) + 1 && dy < Double(s.ry) + 3 && !dead && world.isLoaded(s.x) {
+                    let m: Mob = addMob(.sentinel, Double(s.x) + 0.5, Double(s.floorY) - 3.0)
+                    m.lair = key
+                    m.homeX = Double(s.x) + 0.5
+                    m.homeY = Double(s.floorY)
+                    m.persistent = true
+                    m.phase = 1
+                    m.t1 = 1.5
+                    m.dir = pb.x >= m.b.x ? 1 : -1
+                    say("A Crystal Sentinel wakes to guard the grotto!", 3.0)
+                }
+            } else if let e = existing, dx > 90 || dy > 60 {
+                // leaving resets the fight
+                e.hp = 0
+                e.removed = true
+            }
+        }
+    }
+
+    func updateSentinel(_ m: Mob, _ dt: Double) {
+        let floorY: Double = m.homeY
+        let toP: Double = pb.x - m.b.x
+        let dist: Double = abs(toP)
+        let dyP: Double = (pb.y - pb.h * 0.5) - m.b.cy
+        m.anim += dt * 2.5
+        if m.phase < 2 && m.hp < m.maxHP * 0.55 && m.st != 1 {
+            m.phase = 2
+            say("The Crystal Sentinel flares with light!", 2.5)
+            spawnParticles(m.b.x, m.b.cy, 0xD8FFFA, 24, 6.0, 0.7, 0)
+        }
+        var tx: Double = m.b.x
+        var ty: Double = floorY - 2.8 + sin(clock * 1.7 + Double(m.id % 7)) * 0.5
+        switch m.st {
+        case 1:
+            m.t2 -= dt
+            m.tele = m.t2
+            // dropping to the player's level before a dash
+            if m.atk == 3 { ty = m.ty }
+            if m.t2 <= 0 { m.tele = 0; executeSentinel(m) }
+        case 2:
+            m.t2 -= dt
+            if m.t2 <= 0 { m.st = 0; m.t1 = m.phase == 2 ? Double.random(in: 0.9...1.4) : Double.random(in: 1.4...2.2) }
+        case 5:
+            // dashing straight through
+            m.t2 -= dt
+            m.b.vx = Double(m.dir) * 15.0
+            m.b.vy = (m.ty - m.b.y) * 2.0
+            if abs(dyP) < 1.8 { contactHurt(m, m.def.dmg * 1.3) }
+            world.moveBody(&m.b, dt, stepUp: 0, dropThrough: false, decks: [])
+            if m.t2 <= 0 || m.b.hitWall || abs(m.b.x - m.homeX) > 24 {
+                m.st = 2
+                m.t2 = 0.6
+                m.b.vx *= 0.3
+            }
+            return
+        default:
+            m.dir = toP >= 0 ? 1 : -1
+            if dead {
+                tx = m.homeX
+            } else {
+                // keeps a few blocks off the player
+                tx = pb.x - Double(m.dir) * 4.5
+            }
+            m.t1 -= dt
+            if m.t1 <= 0 && !dead && dist < 28 { chooseSentinelAttack(m, dist) }
+        }
+        tx = clampD(tx, m.homeX - 20, m.homeX + 20)
+        let sp: Double = m.def.speed * (m.phase == 2 ? 1.25 : 1.0)
+        m.b.vx += (clampD((tx - m.b.x) * 1.8, -sp, sp) - m.b.vx) * min(1.0, dt * 3.0)
+        m.b.vy += (clampD((ty - m.b.y) * 2.0, -sp * 1.5, sp * 1.5) - m.b.vy) * min(1.0, dt * 3.0)
+        world.moveBody(&m.b, dt, stepUp: 0, dropThrough: false, decks: [])
+        if !dead && abs(dyP) < 1.6 { contactHurt(m, m.def.dmg * 0.5) }
+    }
+
+    func chooseSentinelAttack(_ m: Mob, _ dist: Double) {
+        let r: Double = Double.random(in: 0...1)
+        let fy: Double = m.homeY
+        m.dir = pb.x >= m.b.x ? 1 : -1
+        if m.phase == 2 && r < 0.4 {
+            // crystal spikes burst from the floor around the player
+            m.atk = 2
+            m.t2 = 0.95
+            var xs: [Double] = []
+            for k in -1...1 {
+                let sx: Double = clampD(pb.x + Double(k) * 3.0 + Double.random(in: -0.5...0.5), m.homeX - 24, m.homeX + 24)
+                xs.append(sx)
+                warn(sx - 0.7, fy - 3.0, sx + 0.7, fy, 0.95, 0x5AF0F0)
+            }
+            m.spots = xs
+        } else if r < 0.72 || dist > 9 {
+            // a fan of shards
+            m.atk = 1
+            m.t2 = 0.6
+        } else {
+            // a dash along the player's level
+            m.atk = 3
+            m.t2 = 0.6
+            m.ty = pb.y - 0.1
+            warn(m.b.x, m.ty - 2.1, m.b.x + Double(m.dir) * 14.0, m.ty, 0.6, 0x5AF0F0)
+        }
+        m.st = 1
+    }
+
+    func executeSentinel(_ m: Mob) {
+        let fy: Double = m.homeY
+        switch m.atk {
+        case 2:
+            for sx in m.spots {
+                mobAttackBox(m, sx - 0.7, fy - 3.0, sx + 0.7, fy + 0.1, dmg: 14, knock: 6, type: .impact)
+                spawnParticles(sx, fy - 0.5, 0x8AF0E8, 8, 5.0, 0.5, 6)
+            }
+            m.spots = []
+            addShake(0.12)
+            m.st = 2
+            m.t2 = 0.6
+        case 3:
+            m.st = 5
+            m.t2 = 0.75
+            m.atkT = Mob.atkDur
+        default:
+            let n: Int = m.phase == 2 ? 5 : 3
+            let ox: Double = m.b.x + Double(m.dir) * 0.8
+            let oy: Double = m.b.cy
+            let aim: Double = atan2((pb.y - pb.h * 0.55) - oy, pb.x - ox)
+            for k in 0..<n {
+                let a: Double = aim + (Double(k) - Double(n - 1) * 0.5) * 0.17
+                var p = Projectile(kind: .shard, x: ox, y: oy, vx: cos(a) * 13.0, vy: sin(a) * 13.0, dmg: 9, fromPlayer: false, gravity: 0)
+                p.life = 3.0
+                p.w = 0.25
+                p.owner = m.id
+                p.source = .mob(m, faction(of: m))
+                p.uid = newID()
+                projectiles.append(p)
+            }
+            m.atkT = Mob.atkDur
+            spawnParticles(ox, oy, 0xD8FFFA, 6, 3.0, 0.25, 0)
+            m.st = 2
+            m.t2 = 0.5
+        }
+    }
+
+    func onGuardianDefeated(_ m: Mob) {
+        if m.lair != 0 { defeated.insert(m.lair) }
+        dangerZones.removeAll()
+        addShake(m.kind == .warden ? 0.6 : 0.35)
+        spawnParticles(m.b.x, m.b.cy, m.kind == .warden ? 0xD8A8FF : 0x8AF0E8, 36, 8.0, 1.1, 6)
+        if m.kind == .warden {
+            say("The Hollow Warden falls. Its heart still beats - a rift forge could bind it into a sigil.", 7.0)
+        } else {
+            say("The Crystal Sentinel shatters. The grotto is yours.", 4.5)
+        }
+    }
+
+    // MARK: the Hollow Warden
+
+    func updateWardenSpawn() {
+        guard let c = gen.citadel else { return }
+        let key: Int = WorldGen.wardenKey
+        if defeated.contains(key) { return }
+        var existing: Mob? = nil
+        for m in mobs where m.kind == .warden && m.hp > 0 { existing = m }
+        let dx: Double = abs(Double(c.x) + 0.5 - pb.x)
+        let dy: Double = abs(Double(c.floor) - pb.y)
+        if existing == nil {
+            if dx < 30 && dy < 16 && !dead && world.isLoaded(c.throneX) {
+                let m: Mob = addMob(.warden, Double(c.throneX) + 0.5, Double(c.floor) - 0.4)
+                m.lair = key
+                m.homeX = Double(c.x) + 0.5
+                m.homeY = Double(c.floor)
+                m.persistent = true
+                m.phase = 1
+                m.t1 = 2.0
+                m.dir = pb.x >= m.b.x ? 1 : -1
+                say("The Hollow Warden rises from its throne.", 4.0)
+            }
+        } else if let e = existing, dx > 140 {
+            e.hp = 0
+            e.removed = true
+            dangerZones.removeAll()
+        }
+    }
+
+    func updateWarden(_ m: Mob, _ dt: Double) {
+        let floorY: Double = m.homeY
+        let toP: Double = pb.x - m.b.x
+        let dist: Double = abs(toP)
+        let dirP: Int = toP >= 0 ? 1 : -1
+        m.anim += dt * 2.0
+        let hpf: Double = m.hp / m.maxHP
+        let want: Int = hpf > 0.66 ? 1 : (hpf > 0.33 ? 2 : 3)
+        if want > m.phase && (m.st == 0 || m.st == 2) {
+            m.phase = want
+            m.st = 1
+            m.atk = WardenAtk.summon.rawValue
+            m.t2 = 1.3
+            m.spots = []
+            say(want == 2 ? "The Hollow Warden calls up its servants!" : "The Warden's lights burn white. The floor trembles.", 3.0)
+            addShake(0.3)
+        }
+        let quick: Double = m.phase == 3 ? 0.72 : (m.phase == 2 ? 0.86 : 1.0)
+        var tx: Double = m.b.x
+        let ty: Double = floorY - 0.4 + sin(clock * 1.4) * 0.25
+        switch m.st {
+        case 1:
+            m.t2 -= dt
+            m.tele = m.t2
+            if m.t2 <= 0 { m.tele = 0; executeWarden(m) }
+        case 2:
+            m.t2 -= dt
+            if m.t2 <= 0 { m.st = 0; m.t1 = Double.random(in: 1.0...1.7) * quick }
+        case 3:
+            // bolts, one after another
+            m.t2 -= dt
+            m.dir = dirP
+            if m.t2 <= 0 {
+                fireWardenBolt(m)
+                m.t3 -= 1
+                if m.t3 <= 0 { m.st = 2; m.t2 = 0.5 } else { m.t2 = m.phase == 1 ? 0.2 : 0.15 }
+            }
+        default:
+            m.dir = dirP
+            if dead { tx = m.homeX } else if dist > 4.2 { tx = pb.x - Double(dirP) * 3.6 } else if dist < 2.2 { tx = pb.x - Double(dirP) * 3.0 }
+            m.t1 -= dt
+            if m.t1 <= 0 && !dead && dist < 44 { chooseWardenAttack(m, dist) }
+        }
+        tx = clampD(tx, m.homeX - 37, m.homeX + 37)
+        let sp: Double = m.def.speed * (m.phase == 1 ? 1.0 : (m.phase == 2 ? 1.2 : 1.4))
+        m.b.vx += (clampD((tx - m.b.x) * 2.0, -sp, sp) - m.b.vx) * min(1.0, dt * 4.0)
+        m.b.vy += ((ty - m.b.y) * 3.0 - m.b.vy) * min(1.0, dt * 4.0)
+        world.moveBody(&m.b, dt, stepUp: 0, dropThrough: false, decks: [])
+        if !dead && dist < m.b.w * 0.5 + 0.5 && abs((pb.y - pb.h * 0.5) - m.b.cy) < 2.6 { contactHurt(m, 10) }
+    }
+
+    func startWardenSweep(_ m: Mob, _ tele: Double) {
+        m.atk = WardenAtk.sweep.rawValue
+        m.t2 = tele
+        let reach: Double = 7.0
+        let x0: Double = m.dir > 0 ? m.b.x - 0.8 : m.b.x - reach
+        let x1: Double = m.dir > 0 ? m.b.x + reach : m.b.x + 0.8
+        m.tx = x0
+        m.ty = x1
+        warn(x0, m.homeY - 3.6, x1, m.homeY, tele)
+        m.st = 1
+    }
+
+    func chooseWardenAttack(_ m: Mob, _ dist: Double) {
+        let r: Double = Double.random(in: 0...1)
+        let fy: Double = m.homeY
+        m.dir = pb.x >= m.b.x ? 1 : -1
+        if m.phase == 3 && r < 0.35 {
+            // void pillars erupt in a row across the hall
+            m.atk = WardenAtk.pillars.rawValue
+            m.t2 = 1.0
+            var xs: [Double] = []
+            for k in -2...2 {
+                let sx: Double = clampD(pb.x + Double(k) * 4.0, m.homeX - 38, m.homeX + 38)
+                xs.append(sx)
+                warn(sx - 0.8, fy - 8.0, sx + 0.8, fy, 1.0, 0xB060FF)
+            }
+            m.spots = xs
+            m.st = 1
+        } else if m.phase >= 2 && r < 0.62 && dist > 4.5 {
+            // vanishes and reappears on the far side of the player
+            m.atk = WardenAtk.blink.rawValue
+            m.t2 = 0.7
+            let side: Double = pb.x >= m.b.x ? 1.0 : -1.0
+            let dest: Double = clampD(pb.x + side * 3.2, m.homeX - 36, m.homeX + 36)
+            m.tx = dest
+            warn(dest - 1.6, fy - 4.6, dest + 1.6, fy, 0.7, 0xB060FF)
+            m.st = 1
+        } else if dist < 7.5 {
+            startWardenSweep(m, m.phase == 3 ? 0.6 : 0.8)
+        } else {
+            m.atk = WardenAtk.bolts.rawValue
+            m.t2 = 0.55
+            m.st = 1
+        }
+    }
+
+    func executeWarden(_ m: Mob) {
+        let fy: Double = m.homeY
+        switch WardenAtk(rawValue: m.atk) ?? .none {
+        case .sweep:
+            mobAttackBox(m, m.tx, fy - 3.6, m.ty, fy + 0.1, dmg: m.def.dmg, knock: 12)
+            m.atkT = 0.45
+            addShake(0.16)
+            spawnParticles((m.tx + m.ty) * 0.5, fy - 1.0, 0xC8C8E0, 10, 6.0, 0.3, 4)
+            m.st = 2
+            m.t2 = 0.55
+        case .bolts:
+            m.st = 3
+            m.t3 = Double(m.phase == 1 ? 3 : 4)
+            m.t2 = 0
+        case .blink:
+            spawnParticles(m.b.x, m.b.cy, 0x8A4AE0, 16, 4.0, 0.6, -2)
+            m.b.x = m.tx
+            m.b.vx = 0
+            spawnParticles(m.b.x, m.b.cy, 0xD8A8FF, 16, 4.0, 0.6, -2)
+            m.dir = pb.x >= m.b.x ? 1 : -1
+            startWardenSweep(m, 0.42)
+        case .pillars:
+            for sx in m.spots {
+                mobAttackBox(m, sx - 0.8, fy - 8.0, sx + 0.8, fy + 0.1, dmg: 20, knock: 9, type: .impact)
+                for k in 0..<4 { spawnParticles(sx, fy - Double(k) * 2.0, 0xB070FF, 3, 2.5, 0.5, -6) }
+            }
+            m.spots = []
+            addShake(0.22)
+            m.st = 2
+            m.t2 = 0.8
+        case .summon:
+            for side in [-1.0, 1.0] {
+                let sx: Double = m.homeX + side * 28.0
+                _ = addMob(.imp, sx, fy - 0.05)
+                spawnParticles(sx, fy - 1.0, 0x8A4AE0, 14, 4.0, 0.6, -3)
+            }
+            m.st = 2
+            m.t2 = 0.6
+        case .none:
+            m.st = 0
+        }
+    }
+
+    func fireWardenBolt(_ m: Mob) {
+        let ox: Double = m.b.x + Double(m.dir) * 1.6
+        let oy: Double = m.b.y - 2.6
+        let aim: Double = atan2((pb.y - pb.h * 0.55) - oy, pb.x - ox)
+        // the last phase throws each bolt as a fan of three
+        let fan: [Double] = m.phase == 3 ? [-0.2, 0, 0.2] : [Double.random(in: -0.06...0.06)]
+        for off in fan {
+            let a: Double = aim + off
+            var p = Projectile(kind: .bolt, x: ox, y: oy, vx: cos(a) * 12.0, vy: sin(a) * 12.0, dmg: 13, fromPlayer: false, gravity: 0)
+            p.life = 3.5
+            p.w = 0.4
+            p.owner = m.id
+            p.source = .mob(m, faction(of: m))
+            p.uid = newID()
+            projectiles.append(p)
+        }
+        m.atkT = Mob.atkDur
+        spawnParticles(ox, oy, 0xD8A8FF, 4, 2.0, 0.25, 0)
+    }
+}
+
 func isHumanoid(_ k: MobKind) -> Bool {
     switch k {
-    case .zombie, .skeleton, .villager, .pirate, .pirateGunner, .pirateCaptain, .imp: return true
+    case .zombie, .skeleton, .villager, .pirate, .pirateGunner, .pirateCaptain, .imp, .archer: return true
     default: return false
     }
 }
@@ -16776,7 +17956,7 @@ enum WorldRenderer {
         let moving: Bool = abs(m.b.vx) > 0.3
         if isHumanoid(m.kind) {
             if m.st == 3 {
-                if m.kind == .pirateGunner || m.kind == .imp { return 6 }
+                if m.kind == .pirateGunner || m.kind == .imp || m.kind == .archer { return 6 }
                 return 3
             }
             if m.st == 4 { return 4 }
@@ -16803,6 +17983,25 @@ enum WorldRenderer {
                 if a == .melee || a == .sweep { return 2 }
             }
             return slow % 2
+        case .golem:
+            if m.st == 3 { return 3 }
+            if m.st == 4 { return 4 }
+            if m.st == 5 { return 5 }
+            return moving ? walkFrame(m) : 0
+        case .sentinel:
+            if m.st == 1 { return 2 }
+            if m.st == 5 || m.atkT > 0 { return 3 }
+            return Int(m.anim * 2.0) % 2
+        case .mimic:
+            if m.st == 3 || m.st == 4 { return 3 }
+            if !m.b.onGround { return 1 + Int(m.anim * 6.0) % 2 }
+            return m.angry ? 1 : 0
+        case .warden:
+            let wa: Int = m.atk
+            if m.st == 1 && wa == WardenAtk.sweep.rawValue { return 2 }
+            if m.st == 2 && wa == WardenAtk.sweep.rawValue && m.atkT > 0 { return 3 }
+            if (m.st == 1 || m.st == 3) && wa != WardenAtk.sweep.rawValue { return 4 }
+            return Int(m.anim * 1.2) % 2
         default:
             break
         }
@@ -16815,8 +18014,24 @@ enum WorldRenderer {
         return 0
     }
 
+    /// Telegraphed attacks: the struck area pulses faster as the moment nears, and fills up from the
+    /// ground to show how long is left
+    static func drawDangerZones(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
+        for z in g.dangerZones {
+            if !v.visible((z.x0 + z.x1) * 0.5, z.y1, (z.x1 - z.x0) * 0.5 + 6.0) { continue }
+            let p: Double = clampD(1.0 - z.t / z.dur, 0, 1)
+            let pulse: Double = 0.5 + 0.5 * sin(g.clock * (10.0 + 14.0 * p))
+            let r: CGRect = v.rect(z.x0, z.y0, z.x1 - z.x0, z.y1 - z.y0)
+            fillRect(&ctx, r, Color(hex: z.color, alpha: 0.08 + 0.08 * pulse))
+            let h: Double = (z.y1 - z.y0) * p
+            fillRect(&ctx, v.rect(z.x0, z.y1 - h, z.x1 - z.x0, h), Color(hex: z.color, alpha: 0.2))
+            ctx.stroke(Path(roundedRect: r, cornerRadius: 2), with: .color(Color(hex: z.color, alpha: 0.5 + 0.3 * pulse)), lineWidth: 2)
+        }
+    }
+
     static func drawMobs(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
         let art: Art = Art.shared
+        if !g.dangerZones.isEmpty { drawDangerZones(&ctx, g, v) }
         for m in g.mobs {
             let dying: Bool = m.hp <= 0 && !m.downed
             if dying && (m.deathT < 0 || m.removed) { continue }
@@ -16839,7 +18054,7 @@ enum WorldRenderer {
             var alpha: Double = 1.0
             if m.kind == .wraith { alpha = 0.82 }
             if m.downed { alpha = 0.55 }
-            let warn: Bool = m.isBoss && m.st == 1 && !dying
+            let warn: Bool = (m.kind == .bearBoss || m.kind == .rex) && m.isBoss && m.st == 1 && !dying
             if warn { drawTelegraph(&ctx, g, v, m) }
             let shade: Double = openShade(g, m.b.x, m.b.cy)
             // animation layer on top of the frames: knockback lean, idle breathing, death topple
@@ -17359,7 +18574,16 @@ enum WorldRenderer {
             case .spit:
                 fillOval(&ctx, mkRect(x - 4.0, y - 4.0, 8, 8), Color(hex: 0x8AE04A))
             case .bolt:
+                fillOval(&ctx, mkRect(x - tp * 0.34, y - tp * 0.34, tp * 0.68, tp * 0.68), Color(hex: 0x8A4AE0, alpha: 0.45))
                 fillOval(&ctx, mkRect(x - 5.0, y - 5.0, 10, 10), Color(hex: 0xC080FF))
+                fillOval(&ctx, mkRect(x - 2.0, y - 2.0, 4, 4), Color(hex: 0xF4E8FF))
+            case .shard:
+                // a slim crystal pointing along its flight
+                let ang: Double = atan2(p.vy, p.vx)
+                let dx: Double = cos(ang) * tp * 0.36
+                let dy: Double = sin(ang) * tp * 0.36
+                strokeLine(&ctx, x - dx, y - dy, x + dx, y + dy, Color(hex: 0x3AB8C0), max(3.0, tp / 6.0))
+                strokeLine(&ctx, x - dx * 0.2, y - dy * 0.2, x + dx * 0.9, y + dy * 0.9, Color(hex: 0xD8FFFA), max(1.5, tp / 14.0))
             }
         }
     }

@@ -9000,6 +9000,9 @@ final class Game: ObservableObject, @unchecked Sendable {
     @Published var showInventory: Bool = false
     @Published var showDebug: Bool = false
     @Published var showMap: Bool = false
+    @Published var showJournal: Bool = false
+    /// the villager whose trades are open
+    @Published var tradeWith: Mob? = nil
     @Published var paused: Bool = false
     @Published var openChest: IntPair? = nil
     @Published var message: String? = nil
@@ -9153,6 +9156,8 @@ final class Game: ObservableObject, @unchecked Sendable {
     var flashes: [LightFlash] = []
     /// ground about to be struck by a telegraphed attack (drawn as a warning)
     var dangerZones: [DangerZone] = []
+    var journal: Journal = Journal()
+    var discoverT: Double = 0
     let mobGrid: MobGrid = MobGrid()
     var frameNo: Int = 0
 
@@ -9340,6 +9345,7 @@ extension Game {
         updateUse(dt)
         if !pauseMobs { updateMobs(dt) }
         updateDangerZones(dt)
+        updateDiscoveries(dt)
         if !pauseBosses { updateBosses(dt) }
         if !pauseSpawning { updateSpawning(dt) }
         if !pauseProjectiles { updateProjectiles(dt) }
@@ -10092,15 +10098,13 @@ extension Game {
     func interactMob(_ m: Mob) {
         switch m.kind {
         case .villager:
-            let lines: [String] = [
-                "Beware the bear in the east. They say it guards a gate.",
-                "Skeletons walk the caves below. Bring plenty of light.",
-                "Pirates have been raiding the coast lately.",
-                "A hidden portal lies far beneath the earth. A key opens it.",
-                "Crops grow best on tilled soil. Use a hoe!",
-                "Need a weapon? Copper and iron tools are cheap to forge."
-            ]
-            say("Villager: " + lines[Int.random(in: 0..<lines.count)], 4.0)
+            // a word of what they've heard, then their trades
+            if let r = villagerRumour() {
+                recordRumour(r)
+                say(professionName(profession(m)) + ": \"" + r + "\"", 5.0)
+            }
+            tradeWith = m
+            bumpHUD()
         case .rex:
             if m.tame { mountRex(m) }
         case .wolf, .cat:
@@ -10448,6 +10452,7 @@ extension Game {
             return
         }
         for c in r.cost { _ = inv.remove(c.item, c.n) }
+        if !journal.crafted.contains(r.out.name) { journal.crafted.append(r.out.name) }
         let left: Int = inv.add(r.out, r.outCount)
         if left > 0 { spawnDrop(Stack(item: r.out, count: left), pb.x, pb.y - 1, 2, -3) }
         floatText("+" + String(r.outCount) + " " + r.out.name, pb.x, pb.y - 2.2, 0xFFE070)
@@ -12457,6 +12462,7 @@ extension Game {
             if !dead && d.pickDelay <= 0 && dist < 0.9 {
                 let left: Int = inv.add(d.stack.item, d.stack.count, extra: d.stack.extra)
                 if left < d.stack.count {
+                    if d.stack.item == .mat(.relicFragment) { journal.relics += d.stack.count - left }
                     floatText("+" + String(d.stack.count - left) + " " + d.stack.item.name, px, pb.y - pb.h - 0.5, 0xFFF0A0)
                     bumpHUD()
                 }
@@ -14867,6 +14873,8 @@ struct SaveData: Codable {
     var pets: [MobSave]
     var rex: MobSave?
     var nextID: Int
+    /// nil in saves made before the journal
+    var journal: Journal? = nil
 }
 
 func mobToSave(_ m: Mob) -> MobSave {
@@ -14995,7 +15003,7 @@ extension Game {
         if let r = mounted { px = r.b.x; py = r.b.y }
         if let v = inVehicle { px = v.b.x; py = v.b.y - v.b.h }
         let meta = SaveMeta(slot: slot, name: worldName, mode: mode, infinite: gen.infinite, seed: seedValue, day: dayCount, playSeconds: playSeconds, dim: cur, genVersion: gen.genVersion, options: gen.options)
-        return SaveData(meta: meta, settings: settings, px: px, py: py, hp: max(1, hp), maxHP: maxHP, hunger: hunger, timeOfDay: timeOfDay, kills: kills, spawnX: spawnX, spawnY: spawnY, inv: inv, sel: sel, defeated: Array(defeated), gotMap: gotMap, portalOpened: portalOpened, chests: chestList, chunks: cs, vehicles: vs, pets: pets, rex: rs, nextID: nextID)
+        return SaveData(meta: meta, settings: settings, px: px, py: py, hp: max(1, hp), maxHP: maxHP, hunger: hunger, timeOfDay: timeOfDay, kills: kills, spawnX: spawnX, spawnY: spawnY, inv: inv, sel: sel, defeated: Array(defeated), gotMap: gotMap, portalOpened: portalOpened, chests: chestList, chunks: cs, vehicles: vs, pets: pets, rex: rs, nextID: nextID, journal: journal)
     }
 
     @discardableResult
@@ -15025,6 +15033,7 @@ extension Game {
         g.inv = s.inv
         g.sel = clampI(s.sel, 0, Inventory.hotbarCount - 1)
         g.defeated = Set(s.defeated)
+        g.journal = s.journal ?? Journal()
         g.gotMap = s.gotMap
         g.portalOpened = s.portalOpened
         g.nextID = max(g.nextID, s.nextID)
@@ -16807,6 +16816,253 @@ final class Art: @unchecked Sendable {
 /// True for creatures drawn with the shared humanoid frames
 
 
+
+// MARK: - Journal: places found, what they tell, rumours, and goals worth chasing
+
+struct JournalPlace: Codable {
+    var key: String
+    var name: String
+    var x: Int
+    var day: Int
+    var dim: Int
+}
+
+/// What the player has found and learned. Saved with the world (older saves start with an empty one).
+struct Journal: Codable {
+    var places: [JournalPlace] = []
+    /// lore entries unlocked, in the order they were found
+    var lore: [String] = []
+    var rumours: [String] = []
+    var relics: Int = 0
+    /// names of things the player has crafted (for the goals list)
+    var crafted: [String] = []
+
+    func has(_ key: String) -> Bool { return places.contains { $0.key == key } }
+    func hasKind(_ prefix: String) -> Bool { return places.contains { $0.key.hasPrefix(prefix) } }
+    func count(_ prefix: String) -> Int { return places.filter { $0.key.hasPrefix(prefix) }.count }
+}
+
+/// The story each kind of place tells, a line or two each
+func loreEntry(_ key: String) -> (String, String) {
+    switch key {
+    case "village": return ("Villages", "They keep their wells deep and their doors in pairs. The old ones remember a time before the walls, and won't say what the walls were for.")
+    case "ruin.house": return ("A Ruined House", "A cellar ladder, a cold hearth, a child's carving of a bear above the door. Whoever lived here left in a hurry, and went down rather than out.")
+    case "ruin.tower": return ("A Ruined Tower", "The watch log's last entry: 'Lights under the hill again. Nobody goes down there now.'")
+    case "ruin.fort": return ("An Old Fort", "Every arrowhead in these walls points outward and down. Whatever they fought came up out of the caves.")
+    case "ruin.camp": return ("An Abandoned Camp", "Bedrolls for four, supplies for one. The tracks lead toward the mountains and do not come back.")
+    case "ruin.overgrown": return ("An Overgrown Ruin", "Roots have split a shrine stone. Its carving shows a door torn open in the sky, and a hooded figure standing in it.")
+    case "ruin.bunker": return ("A Buried Bunker", "Iron doors, rusted from the inside. Someone hoarded powder and shot for a war that never reached them.")
+    case "mine": return ("An Old Mine", "A tally scratched into a support beam stops at forty-one. Under it, in a different hand: 'The rock sings this deep.'")
+    case "grotto": return ("A Crystal Grotto", "The crystals hum when you stand still. Something set them here, and something keeps them.")
+    case "lair.bear": return ("The Bear's Den", "Claw marks ring the stones. The great bear sleeps on a seal it was set to guard, and the key to that seal sleeps with it.")
+    case "lair.rex": return ("The Bone Nest", "Ribs older than the hills. Whatever crowned itself with these bones still nests among them.")
+    case "portal": return ("The Sealed Gate", "A chamber built around a door, deep under the earth, and a key-shaped hollow worn smooth by many hands.")
+    case "umbral": return ("The Umbral Realm", "No sky, no sun, only ash and ember. The rift hums behind you. It is not the only door that was opened.")
+    case "citadel": return ("The Warden's Citadel", "Carved over the gate: HERE THE WARDEN KEEPS THE DOOR, HOLLOW SINCE THE RIFT TORE OPEN.")
+    case "sentinel": return ("The Sentinel", "It came apart into shards that still glow. It was not alive, but it was waiting, and it was told what to guard.")
+    case "warden": return ("The Hollow Warden", "There was nothing inside the armour. Its heart is warm and beats slowly. A rift forge could bind it into something worn.")
+    default: return ("", "")
+    }
+}
+
+struct JournalAim {
+    var title: String
+    var hint: String
+    var done: Bool
+}
+
+extension Game {
+    /// Goals the world offers, in roughly the order they open up. None is required; each says how to
+    /// get going on it.
+    func journalAims() -> [JournalAim] {
+        let j: Journal = journal
+        let bear: Bool = defeated.contains { $0 >= 0 && $0 < 1_000_000 }
+        let rexDown: Bool = defeated.contains { $0 >= 1_000_000 && $0 < 2_000_000 }
+        let sentinel: Bool = defeated.contains { $0 >= 6_000_000 && $0 < 8_000_000 }
+        let sigil: Bool = j.crafted.contains(Gear.wardenSigil.name) || wearing(.wardenSigil) || inv.total(.gear(.wardenSigil)) > 0
+        return [
+            JournalAim(title: "Set up a workbench", hint: "Eight planks. Chop a tree with your hands or an axe, then make planks from the logs.", done: j.crafted.contains("Workbench")),
+            JournalAim(title: "Forge iron on an anvil", hint: "Smelt iron ore in a furnace, then build an anvil (6 iron bars, 4 stone) at the workbench.", done: j.crafted.contains("Anvil")),
+            JournalAim(title: "Find a village", hint: "Villagers trade, and they hear about places you haven't seen.", done: j.hasKind("village:")),
+            JournalAim(title: "Explore an old mine", hint: "Look for a timber headframe over a covered shaft. The treasure map marks them.", done: j.hasKind("mine:")),
+            JournalAim(title: "Find a crystal grotto", hint: "Deep underground, sometimes with a cave mouth leading down. Villagers know rumours.", done: j.hasKind("grotto:")),
+            JournalAim(title: "Defeat Ursavor", hint: "The great bear's den holds the Portal Key.", done: bear),
+            JournalAim(title: "Open the sealed gate", hint: "The Portal Key opens the rift chamber far below the surface. The treasure map narrows it down.", done: portalOpened),
+            JournalAim(title: "Defeat Tyrannax", hint: "Something nests among enormous bones in the jungle.", done: rexDown),
+            JournalAim(title: "Silence a Crystal Sentinel", hint: "Each grotto has a guardian. Its shards are worth the fight.", done: sentinel),
+            JournalAim(title: "Reach the Warden's citadel", hint: "In the Umbral Realm, several hundred blocks from the rift.", done: j.has("citadel")),
+            JournalAim(title: "Defeat the Hollow Warden", hint: "Watch the ground: its strikes are marked before they land.", done: defeated.contains(WorldGen.wardenKey)),
+            JournalAim(title: "Forge the Warden's Sigil", hint: "The Warden's heart, 4 voidium bars and 4 crystal shards at a rift forge.", done: sigil),
+            JournalAim(title: "Recover relic fragments (\(min(j.relics, 10))/10)", hint: "Found in ruins, mines, grottos and with the bosses. Cartographers pay for them in rumours.", done: j.relics >= 10),
+        ]
+    }
+
+    func discover(_ key: String, _ name: String, _ x: Int, lore: String) {
+        if journal.has(key) { return }
+        journal.places.append(JournalPlace(key: key, name: name, x: x, day: dayCount, dim: world.dim.rawValue))
+        var line: String = "Discovered: " + name + "."
+        if !lore.isEmpty && !journal.lore.contains(lore) {
+            journal.lore.append(lore)
+            line += " (New journal entry)"
+        }
+        say(line, 3.5)
+        spawnParticles(pb.x, pb.y - pb.h - 0.4, 0xFFE070, 10, 2.5, 0.8, -3)
+        bumpHUD()
+    }
+
+    func addLore(_ key: String) {
+        if !journal.lore.contains(key) { journal.lore.append(key) }
+    }
+
+    /// Checks twice a second whether the player has walked into a place worth noting
+    func updateDiscoveries(_ dt: Double) {
+        discoverT -= dt
+        if discoverT > 0 || dead { return }
+        discoverT = 0.5
+        // walking away from a villager (or losing them) ends the trade
+        if let v = tradeWith, v.hp <= 0 || v.removed || abs(v.b.x - pb.x) > 8 || abs(v.b.y - pb.y) > 5 { tradeWith = nil }
+        let px: Int = Int(floor(pb.x))
+        let py: Double = pb.y
+        if world.dim == .umbral {
+            if !journal.has("umbral") { discover("umbral", "The Umbral Realm", px, lore: "umbral") }
+            if let c = gen.citadel, abs(px - c.x) < 42 && abs(py - Double(c.floor)) < 14 {
+                discover("citadel", "The Warden's Citadel", c.x, lore: "citadel")
+            }
+            return
+        }
+        if world.dim != .overworld { return }
+        for v in gen.villages(overlapping: px - 2, px + 2) where abs(px - v.x) < v.halfW {
+            discover("village:\(v.cell)", "Village", v.x, lore: "village")
+        }
+        for r in gen.rareSites(overlapping: px - 20, px + 20) where abs(px - r.x) < 14 && abs(py - Double(gen.col(r.x).h)) < 14 {
+            let k: String = "\(r.kind)"
+            discover("ruin:\(r.cell)", rareName(r.kind), r.x, lore: "ruin." + k)
+        }
+        for m in gen.mineSites(overlapping: px - 6, px + 6) where px >= m.x - 3 && px <= m.x + 5 && py > Double(m.ground - 6) && py < Double(m.bottom + 2) {
+            discover("mine:\(m.cell)", "Old Mine", m.x, lore: "mine")
+        }
+        for gs in gen.grottoSites(overlapping: px - 2, px + 2) where abs(px - gs.x) < gs.rx && abs(py - Double(gs.floorY)) < Double(gs.ry + 2) {
+            discover("grotto:\(gs.cell)", "Crystal Grotto", gs.x, lore: "grotto")
+        }
+        for L in gen.lairCenters(near: px) where abs(px - L.cx) < 40 {
+            discover("lair:\(L.kind):\(L.k)", L.kind == .bear ? "The Bear's Den" : "The Bone Nest", L.cx, lore: L.kind == .bear ? "lair.bear" : "lair.rex")
+        }
+        if abs(px - gen.portalX) < 12 && abs(py - Double(gen.portalY)) < 10 {
+            discover("portal", "The Sealed Gate", gen.portalX, lore: "portal")
+        }
+    }
+
+    /// Where something is, roughly, from the player
+    func roughDirection(_ x: Int) -> String {
+        let d: Int = x - Int(floor(pb.x))
+        if abs(d) < 40 { return "close by" }
+        return "about " + roughDistance(abs(d)) + " blocks " + (d > 0 ? "east" : "west")
+    }
+
+    /// Something a villager has heard about: the nearest kind of place the player hasn't found yet
+    func villagerRumour() -> String? {
+        let px: Int = Int(floor(pb.x))
+        var options: [(Int, String)] = []
+        if let m = gen.mineSites(overlapping: px - 1600, px + 1600).filter({ !journal.has("mine:\($0.cell)") }).min(by: { abs($0.x - px) < abs($1.x - px) }) {
+            options.append((abs(m.x - px), "They say an old mine shaft stands " + roughDirection(m.x) + ". Nobody's been down it in years."))
+        }
+        if let g = gen.grottoSites(overlapping: px - 2000, px + 2000).filter({ !journal.has("grotto:\($0.cell)") }).min(by: { abs($0.x - px) < abs($1.x - px) }) {
+            let mouth: String = g.open ? " A cave mouth leads down to it." : " You'd have to dig."
+            options.append((abs(g.x - px) + 200, "A miner swore he saw crystal light deep under the ground " + roughDirection(g.x) + "." + mouth))
+        }
+        if let r = gen.rareSites(overlapping: px - 1200, px + 1200).filter({ !journal.has("ruin:\($0.cell)") }).min(by: { abs($0.x - px) < abs($1.x - px) }) {
+            options.append((abs(r.x - px) + 100, "There's a " + rareName(r.kind).lowercased() + " " + roughDirection(r.x) + ". Folk leave it alone."))
+        }
+        for L in gen.lairCenters(near: px) where !defeated.contains(lairKey(L)) && abs(L.cx - px) < 3000 {
+            let what: String = L.kind == .bear ? "a bear the size of a house sleeps in a stone ring" : "something nests among bones bigger than trees"
+            options.append((abs(L.cx - px) + 400, "Hunters won't go near it, but " + what + ", " + roughDirection(L.cx) + "."))
+        }
+        if portalOpened && !defeated.contains(WorldGen.wardenKey) {
+            options.append((5000, "Beyond the rift, the stories go, a hollow knight keeps a hall of red stone and will let no one pass."))
+        }
+        let pick: (Int, String)? = options.sorted { $0.0 < $1.0 }.first { !journal.rumours.contains($0.1) } ?? options.first
+        return pick?.1
+    }
+
+    func recordRumour(_ r: String) {
+        if !journal.rumours.contains(r) { journal.rumours.append(r) }
+    }
+
+    // MARK: villagers
+
+    func profession(_ m: Mob) -> Int { return ((m.variant % 3) + 3) % 3 }
+
+    func professionName(_ p: Int) -> String {
+        switch p {
+        case 0: return "Farmer"
+        case 1: return "Smith"
+        default: return "Cartographer"
+        }
+    }
+
+    func villagerTrades(_ p: Int) -> [VillagerTrade] {
+        func t(_ give: [(Item, Int)], _ get: Item, _ n: Int, rumour: Bool = false) -> VillagerTrade {
+            return VillagerTrade(give: give.map { CostLine(item: $0.0, n: $0.1) }, get: Stack(item: get, count: n), rumour: rumour)
+        }
+        switch p {
+        case 0:
+            return [
+                t([(.food(.wheat), 6)], .food(.bread), 3),
+                t([(.mat(.copperBar), 1)], .food(.carrot), 4),
+                t([(.mat(.goldBar), 1)], .food(.cookedMeat), 4),
+                t([(.mat(.wool), 4)], .mat(.goldBar), 1),
+                t([(.mat(.leather), 4)], .mat(.goldBar), 1),
+            ]
+        case 1:
+            return [
+                t([(.mat(.ironOre), 8), (.mat(.coal), 2)], .mat(.ironBar), 4),
+                t([(.mat(.copperOre), 6), (.mat(.coal), 1)], .mat(.copperBar), 3),
+                t([(.mat(.goldBar), 3)], .block(.anvil), 1),
+                t([(.mat(.goldBar), 2)], .ammo(.bullet), 12),
+                t([(.mat(.goldBar), 5)], .hammer(.iron), 1),
+            ]
+        default:
+            return [
+                t([(.mat(.relicFragment), 2)], .mat(.relicFragment), 0, rumour: true),
+                t([(.mat(.goldBar), 4)], .gadget(.treasureMap), 1),
+                t([(.mat(.goldBar), 1)], .block(.torch), 12),
+                t([(.mat(.relicFragment), 3)], .gear(.headlamp), 1),
+                t([(.mat(.goldBar), 2)], .block(.ladder), 8),
+            ]
+        }
+    }
+
+    func canTrade(_ t: VillagerTrade) -> Bool {
+        if isCreative { return true }
+        if !inv.canAfford(t.give) { return false }
+        return t.rumour || inv.canFit(t.get.item, t.get.count)
+    }
+
+    func doTrade(_ t: VillagerTrade) {
+        if !canTrade(t) { say(inv.canAfford(t.give) ? "No room in your bag." : "You don't have enough for that.", 1.6); return }
+        if !isCreative { for c in t.give { _ = inv.remove(c.item, c.n) } }
+        if t.rumour {
+            if let r = villagerRumour() {
+                recordRumour(r)
+                say("The cartographer marks it in your journal: " + r, 6.0)
+            } else {
+                say("\"I've told you all I know.\"", 2.5)
+            }
+        } else {
+            giveItem(t.get.item, t.get.count)
+            floatText("+" + String(t.get.count) + " " + t.get.item.name, pb.x, pb.y - 2.2, 0xFFE070)
+        }
+        bumpHUD()
+    }
+}
+
+struct VillagerTrade {
+    var give: [CostLine]
+    var get: Stack
+    /// pays for a rumour (written into the journal) instead of an item
+    var rumour: Bool = false
+}
+
 // MARK: - Animal life: herds, rest, water, predators and prey
 
 /// Animals that predators hunt
@@ -17417,6 +17673,7 @@ extension Game {
         dangerZones.removeAll()
         addShake(m.kind == .warden ? 0.6 : 0.35)
         spawnParticles(m.b.x, m.b.cy, m.kind == .warden ? 0xD8A8FF : 0x8AF0E8, 36, 8.0, 1.1, 6)
+        addLore(m.kind == .warden ? "warden" : "sentinel")
         if m.kind == .warden {
             say("The Hollow Warden falls. Its heart still beats - a rift forge could bind it into a sigil.", 7.0)
         } else {
@@ -19356,6 +19613,7 @@ struct HUDView: View {
                     if game.gotMap || game.inv.total(.gadget(.treasureMap)) > 0 {
                         SmallButton(title: "MAP", color: Color(hex: 0x9A7A3A)) { game.showMap = true }
                     }
+                    SmallButton(title: "LOG", color: Color(hex: 0x7A5A2A)) { game.showJournal = true }
                     SmallButton(title: "DBG") { game.showDebug.toggle() }
                     SmallButton(title: "II") { game.paused = true }
                 }
@@ -19898,6 +20156,176 @@ extension InventoryPanel {
 }
 
 // MARK: - Treasure map
+
+
+// MARK: - Journal and trading panels
+
+let parchment: UInt32 = 0xE8D4A0
+let parchmentInk: UInt32 = 0x3A2410
+
+struct JournalPanel: View {
+    @ObservedObject var game: Game
+    @ObservedObject var hud: HUDSignal
+    @State var tab: Int = 0
+    var body: some View {
+        let ink: Color = Color(hex: parchmentInk)
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                Text("JOURNAL").font(.pixel(18)).foregroundColor(Color(hex: 0x4A2A10))
+                Spacer()
+                tabButton(0, "GOALS")
+                tabButton(1, "PLACES")
+                tabButton(2, "LORE")
+                tabButton(3, "RUMOURS")
+                SmallButton(title: "CLOSE", color: Color(hex: 0xA03030)) { game.showJournal = false }
+            }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    switch tab {
+                    case 0: aims(ink)
+                    case 1: places(ink)
+                    case 2: lore(ink)
+                    default: rumours(ink)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxHeight: 380)
+        }
+        .padding(16)
+        .background(Color(hex: parchment))
+        .overlay(Rectangle().stroke(Color(hex: 0x5A3A1A), lineWidth: 4))
+        .frame(maxWidth: 820)
+        .padding(16)
+    }
+
+    func tabButton(_ i: Int, _ title: String) -> some View {
+        SmallButton(title: title, color: i == tab ? Color(hex: 0x7A5A2A) : Color(hex: 0xA8906C)) { tab = i }
+    }
+
+    func aims(_ ink: Color) -> some View {
+        let list: [JournalAim] = game.journalAims()
+        return VStack(alignment: .leading, spacing: 7) {
+            ForEach(0..<list.count, id: \.self) { i in
+                HStack(alignment: .top, spacing: 8) {
+                    Text(list[i].done ? "✓" : "○").font(.pixel(14)).foregroundColor(list[i].done ? Color(hex: 0x2A6A2A) : ink)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(verbatim: list[i].title).font(.pixel(13)).foregroundColor(list[i].done ? Color(hex: 0x6A5A40) : ink)
+                        if !list[i].done {
+                            Text(verbatim: list[i].hint).font(.pixel(11, .semibold)).foregroundColor(Color(hex: 0x6A4A2A))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    func places(_ ink: Color) -> some View {
+        let ps: [JournalPlace] = game.journal.places
+        return VStack(alignment: .leading, spacing: 6) {
+            if ps.isEmpty {
+                Text("Nothing yet. The world is wide: villages, ruins, old mines and stranger places are out there.").font(.pixel(12, .semibold)).foregroundColor(ink)
+            }
+            ForEach(0..<ps.count, id: \.self) { i in
+                HStack {
+                    Text(verbatim: ps[i].name).font(.pixel(13)).foregroundColor(ink)
+                    Spacer()
+                    Text(verbatim: placeWhere(ps[i])).font(.pixel(11, .semibold)).foregroundColor(Color(hex: 0x6A4A2A))
+                }
+            }
+        }
+    }
+
+    func placeWhere(_ p: JournalPlace) -> String {
+        let start: Int = game.gen.spawnX
+        let d: Int = p.x - start
+        let side: String = abs(d) < 30 ? "by your first camp" : (roughDistance(abs(d)) + (d > 0 ? " east" : " west") + " of your start")
+        return (p.dim == 1 ? "Umbral, " : "") + side + ", day " + String(p.day)
+    }
+
+    func lore(_ ink: Color) -> some View {
+        let keys: [String] = game.journal.lore
+        return VStack(alignment: .leading, spacing: 10) {
+            if keys.isEmpty {
+                Text("Places you find will tell you something. Their stories collect here.").font(.pixel(12, .semibold)).foregroundColor(ink)
+            }
+            ForEach(0..<keys.count, id: \.self) { i in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(verbatim: loreEntry(keys[i]).0).font(.pixel(13)).foregroundColor(ink)
+                    Text(verbatim: loreEntry(keys[i]).1).font(.pixel(11, .semibold)).foregroundColor(Color(hex: 0x5A3A1A))
+                }
+            }
+        }
+    }
+
+    func rumours(_ ink: Color) -> some View {
+        let rs: [String] = game.journal.rumours
+        return VStack(alignment: .leading, spacing: 8) {
+            if rs.isEmpty {
+                Text("Talk to villagers. They hear about places long before you see them.").font(.pixel(12, .semibold)).foregroundColor(ink)
+            }
+            ForEach(0..<rs.count, id: \.self) { i in
+                Text(verbatim: "• " + rs[i]).font(.pixel(12, .semibold)).foregroundColor(ink)
+            }
+        }
+    }
+}
+
+struct TradePanel: View {
+    @ObservedObject var game: Game
+    @ObservedObject var hud: HUDSignal
+    let villager: Mob
+    var body: some View {
+        let prof: Int = game.profession(villager)
+        let trades: [VillagerTrade] = game.villagerTrades(prof)
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(verbatim: "VILLAGE " + game.professionName(prof).uppercased()).font(.pixel(16))
+                Spacer()
+                SmallButton(title: "CLOSE", color: Color(hex: 0xA03030)) { game.tradeWith = nil }
+            }
+            Text(verbatim: greeting(prof)).font(.pixel(11, .semibold)).foregroundColor(Color.white.opacity(0.75))
+            ForEach(0..<trades.count, id: \.self) { i in
+                tradeRow(trades[i])
+            }
+        }
+        .padding(14)
+        .background(PixelBox(color: Color(hex: 0x3A3A44)).opacity(0.96))
+        .frame(maxWidth: 520)
+        .padding(16)
+    }
+
+    func greeting(_ p: Int) -> String {
+        switch p {
+        case 0: return "\"Fresh from the fields. I'll take wool and leather off your hands, too.\""
+        case 1: return "\"Bring me ore and I'll smelt it cheaper than your furnace. Gold buys the rest.\""
+        default: return "\"Old relics fetch me old stories. Some of them are even true.\""
+        }
+    }
+
+    func tradeRow(_ t: VillagerTrade) -> some View {
+        let ok: Bool = game.canTrade(t)
+        return HStack(spacing: 6) {
+            ForEach(0..<t.give.count, id: \.self) { k in
+                HStack(spacing: 1) {
+                    Art.shared.icon(t.give[k].item).resizable().frame(width: 22, height: 22)
+                    Text(verbatim: "x" + String(t.give[k].n)).font(.pixel(11)).foregroundColor(game.inv.total(t.give[k].item) >= t.give[k].n || game.isCreative ? Color.white : Color(hex: 0xFF7060))
+                }
+            }
+            Text("→").font(.pixel(14))
+            if t.rumour {
+                Text("A rumour, written in your journal").font(.pixel(11, .semibold))
+            } else {
+                Art.shared.icon(t.get.item).resizable().frame(width: 22, height: 22)
+                Text(verbatim: t.get.item.name + (t.get.count > 1 ? " x" + String(t.get.count) : "")).font(.pixel(11, .semibold)).lineLimit(1)
+            }
+            Spacer(minLength: 4)
+            SmallButton(title: "TRADE", color: Color(hex: ok ? 0x4E8A3E : 0x555555)) { game.doTrade(t) }.opacity(ok ? 1.0 : 0.6)
+        }
+        .padding(4)
+        .background(Color.black.opacity(0.25))
+    }
+}
 
 struct MapPanel: View {
     @ObservedObject var game: Game
@@ -21033,6 +21461,7 @@ struct KeyInput: ViewModifier {
                 }
             }
         case "m": if isDown && (game.gotMap || game.inv.total(.gadget(.treasureMap)) > 0) { game.showMap.toggle() }
+        case "j": if isDown { game.showJournal.toggle() }
         case "r": if isDown { game.startReload() }
         case "x": if isDown { game.dismount() }
         case "=", "+": if isDown { game.tilePx = clampI(game.tilePx + 8, 16, 56); game.bumpHUD() }
@@ -21085,7 +21514,7 @@ struct GameView: View {
     var body: some View {
         ZStack {
             worldLayer
-            if !game.showInventory && !game.showMap && !game.dead {
+            if !game.showInventory && !game.showMap && !game.showJournal && game.tradeWith == nil && !game.dead {
                 HUDView(game: game, hud: game.hud)
             }
             if game.showInventory {
@@ -21102,6 +21531,14 @@ struct GameView: View {
                 ScrollView {
                     MapPanel(game: game, hud: game.hud)
                 }
+            }
+            if game.showJournal {
+                Color.black.opacity(0.45).ignoresSafeArea()
+                JournalPanel(game: game, hud: game.hud)
+            }
+            if let v = game.tradeWith, !game.showJournal {
+                Color.black.opacity(0.35).ignoresSafeArea()
+                TradePanel(game: game, hud: game.hud, villager: v)
             }
             if game.showDebug && !game.showInventory && !game.showMap {
                 HStack {

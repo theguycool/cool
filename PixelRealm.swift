@@ -986,6 +986,9 @@ enum AmmoType: Int, Codable, CaseIterable {
 
 enum PartType: Int, Codable, CaseIterable {
     case frame, wheel, engine, steering, seat, fuelTank, hull, propeller, paddle, drill, diamondDrill
+    /// appended (saved part numbers stay valid): a heavy wheel that pulls harder, a lamp that lights the
+    /// way ahead while driving, a crate that carries 27 stacks, and a drill that bores through anything
+    case offroadWheel, headlight, cargo, voidDrill
     var name: String {
         switch self {
         case .frame: return "Vehicle Frame"
@@ -999,6 +1002,10 @@ enum PartType: Int, Codable, CaseIterable {
         case .paddle: return "Paddle"
         case .drill: return "Iron Drill"
         case .diamondDrill: return "Diamond Drill"
+        case .offroadWheel: return "Offroad Wheel"
+        case .headlight: return "Headlight"
+        case .cargo: return "Cargo Crate"
+        case .voidDrill: return "Void Drill"
         }
     }
     var mass: Double {
@@ -1014,9 +1021,27 @@ enum PartType: Int, Codable, CaseIterable {
         case .paddle: return 0.3
         case .drill: return 1.6
         case .diamondDrill: return 1.8
+        case .offroadWheel: return 1.1
+        case .headlight: return 0.3
+        case .cargo: return 1.0
+        case .voidDrill: return 2.0
+        }
+    }
+
+    /// what the part does, for its tooltip
+    var role: String {
+        switch self {
+        case .wheel: return "Goes under the body. Two or more, plus an engine, drive on land."
+        case .offroadWheel: return "A heavier wheel that pulls harder up slopes and over rough ground."
+        case .headlight: return "Lights the way ahead while someone is driving."
+        case .cargo: return "Tap it to store up to 27 stacks; they travel with the vehicle."
+        case .drill, .diamondDrill, .voidDrill: return "Bores through blocks in front of it while the engine runs."
+        default: return "Vehicle part"
         }
     }
 }
+
+func isWheelPart(_ p: PartType) -> Bool { return p == .wheel || p == .offroadWheel }
 
 /// Equipment worn in the two gear slots
 enum Gear: Int, Codable, CaseIterable {
@@ -1107,7 +1132,7 @@ enum Item: Hashable, Codable {
         case .bow: return ["Bow: hold to draw, release to fire", "Uses arrows"]
         case .gun(let g): return ["Firearm", String(format: "Damage %.0f", g.damage), "Magazine \(g.magazine)"]
         case .ammo: return ["Ammunition"]
-        case .part(let p): return ["Vehicle part", String(format: "Mass %.1f", p.mass)]
+        case .part(let p): return [p.role, String(format: "Mass %.1f", p.mass)]
         case .gadget: return ["Gadget: use it from the hotbar"]
         case .block(let t): return [t.solid ? "Building block" : "Placeable", t.light > 0 ? "Gives light" : (t.hardness >= 99 ? "Unbreakable" : String(format: "Hardness %.1f", t.hardness))]
         case .wall: return ["Background wall"]
@@ -1493,8 +1518,11 @@ func iconMisc(_ it: Item) -> PixelBuf {
         case .hull: b.rect(0, 4, 12, 3, 0x8F6732); b.rect(1, 7, 10, 2, 0x6A4A22); b.rect(2, 9, 8, 1, 0x4A3216); b.rect(1, 3, 10, 1, 0xB98A4E)
         case .propeller: b.rect(5, 1, 2, 10, 0x9A9AA4); b.rect(1, 5, 10, 2, 0x7A7A84); b.rect(5, 5, 2, 2, 0x4A4A52)
         case .paddle: b.line(2, 10, 8, 4, 0x8A5A2A); b.rect(8, 1, 3, 5, 0xB98A4E); b.rect(8, 1, 1, 5, 0x8F6732)
-        case .drill, .diamondDrill:
-            let bit: UInt32 = p == .drill ? 0xC8CCD4 : 0x6FE6EC
+        case .offroadWheel: b.ellipse(6, 6, 5.6, 5.6, 0x18181C); b.ellipse(6, 6, 3.4, 3.4, 0x3A3A42); b.ellipse(6, 6, 2.2, 2.2, 0xC89040); b.set(6, 6, 0x4A3A20)
+        case .headlight: b.rect(1, 4, 5, 5, 0x5A5A64); b.rect(6, 3, 4, 7, 0x9A9AA4); b.rect(7, 4, 3, 5, 0xFFF0A0); b.set(8, 5, 0xFFFFFF); b.line(10, 4, 11, 2, 0xFFF0A0); b.line(10, 8, 11, 10, 0xFFF0A0)
+        case .cargo: b.rect(1, 2, 10, 9, 0x8F6732); b.rect(2, 3, 8, 7, 0xB98A4E); b.line(2, 3, 9, 9, 0x8F6732); b.line(2, 9, 9, 3, 0x8F6732); b.rect(1, 2, 10, 1, 0x6A6A74)
+        case .drill, .diamondDrill, .voidDrill:
+            let bit: UInt32 = p == .drill ? 0xC8CCD4 : (p == .diamondDrill ? 0x6FE6EC : 0xB070FF)
             b.rect(0, 3, 4, 6, 0x6A6A74); b.rect(0, 3, 4, 1, 0x9A9AA4)
             b.rect(4, 3, 3, 6, bit); b.rect(7, 4, 2, 4, bit); b.rect(9, 5, 2, 2, bit); b.set(11, 5, bit)
             b.line(5, 3, 7, 8, shadeRGB(bit, 0.7)); b.line(8, 4, 9, 7, shadeRGB(bit, 0.7))
@@ -1741,6 +1769,10 @@ enum RecipeBook {
         add(.part(.paddle), 1, [(planks, 2), (stick, 2)], .bench, .vehicle)
         add(.part(.drill), 1, [(.mat(.ironBar), 6), (.mat(.copperBar), 2)], .tinker, .vehicle)
         add(.part(.diamondDrill), 1, [(.part(.drill), 1), (.mat(.diamond), 4), (.mat(.goldBar), 2)], .tinker, .vehicle)
+        add(.part(.offroadWheel), 1, [(.mat(.ironBar), 3), (.mat(.leather), 2), (.mat(.fur), 1)], .tinker, .vehicle)
+        add(.part(.headlight), 1, [(.mat(.copperBar), 1), (.block(.glass), 1), (.block(.torch), 2)], .tinker, .vehicle)
+        add(.part(.cargo), 1, [(planks, 8), (.mat(.ironBar), 2)], .tinker, .vehicle)
+        add(.part(.voidDrill), 1, [(.part(.diamondDrill), 1), (.mat(.voidBar), 4), (.mat(.emberBar), 2)], .forge, .vehicle)
         return list
     }
 }
@@ -4163,9 +4195,25 @@ func partBuf(_ p: PartType) -> PixelBuf {
     case .paddle:
         b.line(0, 7, 5, 2, 0x8A5A2E)
         b.rect(5, 0, 3, 4, 0xB98A4E)
-    case .drill, .diamondDrill:
+    case .offroadWheel:
+        b.ellipse(4, 4, 4, 4, 0x18181C)
+        for k in 0..<8 {
+            let a: Double = Double(k) / 8.0 * 2.0 * Double.pi
+            b.set(Int((4.0 + cos(a) * 3.6).rounded()), Int((4.0 + sin(a) * 3.6).rounded()), 0x3A3A42)
+        }
+        b.ellipse(4, 4, 2.0, 2.0, 0xC89040)
+        b.set(4, 4, 0x4A3A20)
+        b.set(3, 3, 0xF0C060)
+    case .headlight:
+        b.rect(0, 2, 4, 4, 0x5A5A64); b.rect(0, 2, 4, 1, 0x8A8A94)
+        b.rect(4, 1, 3, 6, 0x9A9AA4); b.rect(5, 2, 2, 4, 0xFFF0A0); b.set(6, 3, 0xFFFFFF); b.set(7, 4, 0xFFF0A0)
+    case .cargo:
+        b.rect(0, 0, 8, 8, 0x8F6732); b.rect(1, 1, 6, 6, 0xB98A4E)
+        b.line(1, 1, 6, 6, 0x8F6732); b.line(1, 6, 6, 1, 0x8F6732)
+        b.rect(0, 0, 8, 1, 0x6A6A74); b.rect(0, 7, 8, 1, 0x6A6A74)
+    case .drill, .diamondDrill, .voidDrill:
         // drawn pointing right; the renderer turns it to face its open side
-        let bit: UInt32 = p == .drill ? 0xC8CCD4 : 0x6FE6EC
+        let bit: UInt32 = p == .drill ? 0xC8CCD4 : (p == .diamondDrill ? 0x6FE6EC : 0xB070FF)
         b.rect(0, 1, 3, 6, 0x5A5A64); b.rect(0, 1, 3, 1, 0x8A8A94)
         b.rect(3, 1, 2, 6, bit); b.rect(5, 2, 1, 4, bit); b.rect(6, 3, 1, 2, bit); b.set(7, 3, bit); b.set(7, 4, shadeRGB(bit, 0.7))
         b.set(3, 2, shadeRGB(bit, 0.65)); b.set(4, 4, shadeRGB(bit, 0.65)); b.set(3, 6, shadeRGB(bit, 0.65)); b.set(5, 5, shadeRGB(bit, 0.65))
@@ -8394,6 +8442,18 @@ final class Mob {
     /// a mimic's hoard (dropped when it dies) and the spots a telegraphed attack will strike
     var loot: [Stack] = []
     var spots: [Double] = []
+    /// animal life: when to look around next, a place it is heading for (1 water, 2 its herd),
+    /// a thirst timer, the prey it is hunting and a pose to hold (grazing, drinking)
+    var thinkT: Double = 0
+    /// boss attack variety: the last attack, how often in a row, and attacks since the signature move
+    var lastAtk: Int = 0
+    var repeatN: Int = 0
+    var sinceSignature: Int = 0
+    var goal: Int = 0
+    var goalX: Double = 0
+    var drinkT: Double = 0
+    var preyID: Int = 0
+    var poseT: Double = 0
     static let turnDur: Double = 0.14
     static let atkDur: Double = 0.28
 
@@ -8473,11 +8533,12 @@ func drillPower(_ p: PartType) -> (Int, Double) {
     switch p {
     case .drill: return (4, 4.6)
     case .diamondDrill: return (7, 8.5)
+    case .voidDrill: return (9, 13.0)
     default: return (0, 0)
     }
 }
 
-func isDrill(_ p: PartType) -> Bool { return p == .drill || p == .diamondDrill }
+func isDrill(_ p: PartType) -> Bool { return p == .drill || p == .diamondDrill || p == .voidDrill }
 
 /// A player-built vehicle: a rigid body made of 1x1 parts. It has a centre of mass, a rotation and
 /// an angular velocity, and every part collides, floats and drives at its rotated position, so
@@ -8512,6 +8573,8 @@ final class Vehicle {
     var paddles: Int = 0
     var tanks: Int = 0
     var drills: Int = 0
+    var offroadWheels: Int = 0
+    var headlights: Int = 0
     var hasSeat: Bool = false
     var hasSteering: Bool = false
     var throttle: Double = 0
@@ -8624,7 +8687,7 @@ final class Vehicle {
         var first: Bool = true
         mass = 0
         buoyancy = 0
-        engines = 0; wheels = 0; propellers = 0; paddles = 0; tanks = 0; drills = 0
+        engines = 0; wheels = 0; propellers = 0; paddles = 0; tanks = 0; drills = 0; offroadWheels = 0; headlights = 0
         hasSeat = false
         hasSteering = false
         var mx: Double = 0
@@ -8639,12 +8702,14 @@ final class Vehicle {
             switch t {
             case .engine: engines += 1
             case .wheel: wheels += 1
+            case .offroadWheel: wheels += 1; offroadWheels += 1
+            case .headlight: headlights += 1
             case .propeller: propellers += 1
             case .paddle: paddles += 1
             case .fuelTank: tanks += 1
             case .seat: hasSeat = true
             case .steering: hasSteering = true
-            case .drill, .diamondDrill: drills += 1
+            case .drill, .diamondDrill, .voidDrill: drills += 1
             default: break
             }
         }
@@ -8702,7 +8767,7 @@ final class Vehicle {
     func canAttach(_ c: PartCell, _ t: PartType) -> Bool {
         if parts[c] != nil { return false }
         if !hasNeighbor(c) { return false }
-        if t == .wheel {
+        if isWheelPart(t) {
             // wheels hang below the body: something must be directly above, nothing below
             if parts[PartCell(dx: c.dx, dy: c.dy - 1)] == nil { return false }
             if parts[PartCell(dx: c.dx, dy: c.dy + 1)] != nil { return false }
@@ -9740,6 +9805,16 @@ extension Game {
         }
         for v in vehicles where v.rider && v.engines > 0 && v.fuel > 0 {
             dyn.append((Int(floor(v.b.x + Double(v.dir) * (v.b.w * 0.5 + 1.0))), Int(floor(v.b.y - v.b.h * 0.5)), 10))
+        }
+        // headlights throw a beam ahead of a driven vehicle
+        for v in vehicles where v.rider && v.headlights > 0 {
+            for (cell, t) in v.parts where t == .headlight {
+                let d: Double = Double(v.dir)
+                for (k, lv) in [(0.0, 10), (2.5, 14), (5.0, 13), (7.5, 11)] {
+                    let p: (Double, Double) = v.toWorld(Double(cell.dx) + 0.5 + d * k, Double(cell.dy) + 0.5)
+                    dyn.append((Int(floor(p.0)), Int(floor(p.1)), lv))
+                }
+            }
         }
         var key: Int = dyn.count
         for d in dyn { key = key &* 31 &+ d.0 &* 7 &+ d.1 &* 13 &+ d.2 }
@@ -11150,9 +11225,25 @@ extension Game {
         }
     }
 
+    /// A cargo crate's storage lives with the other chests, under a key no block can have (built from
+    /// the vehicle's saved id and the crate's cell), so it is saved and loaded like any chest
+    func cargoSpot(_ v: Vehicle, _ c: PartCell) -> IntPair {
+        return IntPair(x: -1_000_000_000 + v.id * 4096 + (c.dx + 32) * 64 + (c.dy + 32), y: -77)
+    }
+
+    func isCargoSpot(_ p: IntPair) -> Bool { return p.y == -77 && p.x < -900_000_000 }
+
     func removeVehiclePart(_ v: Vehicle, _ c: PartCell) {
         if v.rider { dismount() }
+        let crates: [PartCell] = v.parts.filter { $0.value == .cargo }.map { $0.key }
+        let spills: [(PartCell, (Double, Double))] = crates.map { ($0, v.cellCenter($0)) }
         let returned: [PartType] = v.removePart(c)
+        // a crate that comes off tips its contents onto the ground
+        for (cell, at) in spills where v.parts[cell] == nil {
+            let k: IntPair = cargoSpot(v, cell)
+            if let p = openChest, p == k { openChest = nil }
+            for st in world.removeChest(k.x, k.y) { spawnDrop(st, at.0, at.1, Double.random(in: -2...2), -3.5) }
+        }
         for t in returned { giveItem(.part(t), 1) }
         if v.parts.isEmpty {
             vehicles.removeAll { $0.id == v.id }
@@ -11436,7 +11527,7 @@ extension Game {
             if m.t2 > 0 {
                 m.t2 -= dt
                 flee(m, m.tx, dt, 1.9)
-            } else {
+            } else if m.kind == .villager || !animalLife(m, dt) {
                 wander(m, dt, 0.55)
             }
             stepMob(m, dt)
@@ -11444,6 +11535,8 @@ extension Game {
             if m.t2 > 0 {
                 m.t2 -= dt
                 flee(m, m.tx, dt, 1.7)
+            } else if !(dist < 6.0 && !dead && m.kind != .cat) && m.kind != .cat && animalLife(m, dt) {
+                // handled: resting, heading for water or the herd
             } else if dist < 6.0 && !dead && m.kind != .cat {
                 flee(m, pb.x, dt, 1.4)
             } else {
@@ -11452,7 +11545,12 @@ extension Game {
             if m.kind == .frog && m.b.onGround && m.st == 1 && Double.random(in: 0...1) < 0.04 { m.b.vy = -9; m.b.vx = Double(m.dir) * 3.5 }
             stepMob(m, dt)
         case .elephant, .bear, .wolf:
-            if m.angry && !dead {
+            if m.drinkT > 0 && m.kind == .wolf { m.drinkT -= dt }
+            // a wolf that turns on the player forgets its prey
+            if m.angry { m.preyID = 0 }
+            if !m.angry && m.kind == .wolf && hunt(m, dt, isNight && m.drinkT <= 0) {
+                // a wolf pack runs down prey at night
+            } else if m.angry && !dead {
                 m.t3 -= dt
                 if m.t3 <= 0 || dist > 30 { m.angry = false } else {
                     chase(m, pb.x, 1.0, dt)
@@ -11468,7 +11566,16 @@ extension Game {
             }
             stepMob(m, dt)
         case .grizzly, .polarBear, .tiger, .scorpion:
-            if near && !peaceful {
+            if m.drinkT > 0 { m.drinkT -= dt }
+            // a predator busy with prey, or full after a meal, leaves a bystander alone unless the player
+            // comes right up to it or hits it
+            let provoked: Bool = clock - m.lastHitByPlayer < 8 || dist < 3.5
+            let calm: Bool = (m.preyID != 0 || m.poseT > 0 || m.drinkT > 0) && !provoked
+            if m.kind != .scorpion && (!(near && !peaceful) || calm) && hunt(m, dt, m.drinkT <= 0) {
+                // hunting, or resting after a kill
+            } else if calm {
+                wander(m, dt, 0.4)
+            } else if near && !peaceful {
                 chase(m, pb.x, 1.0, dt)
                 if m.kind == .tiger && m.b.onGround && dist < 6.5 && dist > 2.0 && m.cd <= 0.4 && Double.random(in: 0...1) < 0.04 {
                     m.b.vy = -11.5
@@ -13517,7 +13624,10 @@ func partDisplacement(_ p: PartType) -> Double {
     case .steering: return 0.2
     case .propeller: return 0.25
     case .paddle: return 0.3
-    case .drill, .diamondDrill: return 0.3
+    case .drill, .diamondDrill, .voidDrill: return 0.3
+    case .offroadWheel: return 0.5
+    case .headlight: return 0.2
+    case .cargo: return 0.9
     }
 }
 
@@ -13557,7 +13667,7 @@ extension Game {
         for (c, t) in v.parts {
             let x0: Double = Double(c.dx)
             let y0: Double = Double(c.dy)
-            if t == .wheel {
+            if isWheelPart(t) {
                 var k: Int = 0
                 while k < 10 {
                     let a: Double = Double(k) / 10.0 * 2.0 * Double.pi
@@ -13883,8 +13993,10 @@ extension Game {
             let vmax: Double = min(17.0, 6.5 + 3.0 * Double(v.engines))
             let along: Double = v.vx * c2 + v.vy * s2
             if !(abs(along) > vmax && along * throttle > 0) {
-                // heavier builds accelerate and climb slower; more engines help
-                let power: Double = Double(v.engines) * 135.0 * min(1.0, Double(stepWheel) / 4.0 + 0.5)
+                // heavier builds accelerate and climb slower; more engines help, and offroad wheels pull
+                // harder (their extra weight is the price)
+                let grip: Double = 1.0 + 0.7 * Double(v.offroadWheels) / Double(max(1, v.wheels))
+                let power: Double = Double(v.engines) * 135.0 * grip * min(1.0, Double(stepWheel) / 4.0 + 0.5)
                 v.vx += c2 * power * throttle * invM * h
                 v.vy += s2 * power * throttle * invM * h
             }
@@ -14115,6 +14227,14 @@ extension Game {
         }
         if let t = v.parts[c], t == .seat || t == .steering {
             mountVehicle(v)
+            return
+        }
+        if let t = v.parts[c], t == .cargo {
+            let k: IntPair = cargoSpot(v, c)
+            if world.chests[world.chestKey(k.x, k.y)] == nil { world.setChestItems(k.x, k.y, []) }
+            openChest = k
+            showInventory = true
+            bumpHUD()
             return
         }
         let massS: String = String(format: "%.1f", v.mass)
@@ -16261,7 +16381,7 @@ extension Game {
     func attachProblem(_ v: Vehicle, _ c: PartCell, _ p: PartType) -> String? {
         if v.parts[c] != nil { return "That spot is taken." }
         if !v.hasNeighbor(c) { return "Parts must touch the vehicle." }
-        if p == .wheel {
+        if isWheelPart(p) {
             if v.parts[PartCell(dx: c.dx, dy: c.dy - 1)] == nil { return "Wheels go directly under another part." }
             if v.parts[PartCell(dx: c.dx, dy: c.dy + 1)] != nil { return "Wheels must be on the bottom." }
         }
@@ -16685,6 +16805,159 @@ final class Art: @unchecked Sendable {
 }
 
 /// True for creatures drawn with the shared humanoid frames
+
+
+// MARK: - Animal life: herds, rest, water, predators and prey
+
+/// Animals that predators hunt
+func isPrey(_ k: MobKind) -> Bool {
+    switch k {
+    case .pig, .cow, .sheep, .chicken, .giraffe, .frog: return true
+    default: return false
+    }
+}
+
+extension Game {
+    /// Herding, sleeping at night, walking to water to drink and running from hunting predators. It
+    /// looks around about once a second (not every frame) and uses the creature grid for neighbours.
+    /// Returns true when it moved the animal this frame (the caller then skips plain wandering).
+    func animalLife(_ m: Mob, _ dt: Double) -> Bool {
+        if m.poseT > 0 { m.poseT -= dt }
+        if m.drinkT > 0 { m.drinkT -= dt }
+        m.thinkT -= dt
+        if m.thinkT <= 0 {
+            m.thinkT = Double.random(in: 0.8...1.4)
+            // a hunting predator close by: run
+            for o in mobsNear(m.b.x - 10, m.b.x + 10) where o.hp > 0 && o !== m && o.preyID != 0 && !o.tame {
+                if abs(o.b.x - m.b.x) < 10 && abs(o.b.y - m.b.y) < 4 {
+                    m.t2 = 3.0
+                    m.tx = o.b.x
+                    m.goal = 0
+                    return false
+                }
+            }
+            // the herd and the water hole wait for daylight; at night animals settle where they are
+            if m.goal == 0 && !(isNight && world.dim == .overworld) {
+                if m.drinkT <= 0 && Double.random(in: 0...1) < 0.15, let wx = waterNear(m, 12) {
+                    m.goal = 1
+                    m.goalX = wx
+                } else if Double.random(in: 0...1) < 0.3 {
+                    // drift back toward the rest of the herd
+                    var sum: Double = 0
+                    var n: Int = 0
+                    for o in mobsNear(m.b.x - 18, m.b.x + 18) where o.kind == m.kind && o !== m && o.hp > 0 && !o.tame {
+                        sum += o.b.x
+                        n += 1
+                    }
+                    if n > 0 {
+                        let cx: Double = sum / Double(n)
+                        if abs(cx - m.b.x) > 7 { m.goal = 2; m.goalX = cx }
+                    }
+                }
+            }
+        }
+        if m.goal != 0 {
+            let dx: Double = m.goalX - m.b.x
+            if abs(dx) < 1.2 || (m.goal == 2 && abs(dx) < 4) {
+                if m.goal == 1 {
+                    // drinking: head down for a few seconds
+                    m.drinkT = Double.random(in: 25...45)
+                    m.poseT = 3.0
+                    m.st = 0
+                    m.t1 = 3.2
+                }
+                m.goal = 0
+            } else {
+                m.dir = dx > 0 ? 1 : -1
+                // the water itself reads as a drop just before the edge; that is where it was going
+                let edge: Bool = m.goal == 1 && abs(dx) < 2.5
+                if (cliffAhead(m, m.dir) && !edge) || (m.b.hitWall && !m.b.onGround) {
+                    m.goal = 0
+                } else {
+                    accelX(m, Double(m.dir) * m.def.speed * 0.6, 14, dt)
+                    if m.b.hitWall && m.b.onGround { m.b.vy = -m.def.jump }
+                    return true
+                }
+            }
+        }
+        if m.poseT > 0 {
+            accelX(m, 0, 18, dt)
+            return true
+        }
+        // at night farm animals mostly settle down and sleep
+        if isNight && world.dim == .overworld && m.kind != .frog {
+            if m.st == 1 && Double.random(in: 0...1) < 0.02 { m.st = 0; m.t1 = Double.random(in: 4...9) }
+            if m.st == 0 {
+                m.t1 -= dt
+                if m.t1 <= 0 { m.st = 1; m.t1 = Double.random(in: 0.8...1.6); m.dir = Bool.random() ? 1 : -1 }
+                accelX(m, 0, 18, dt)
+                return true
+            }
+        }
+        return false
+    }
+
+    /// The nearest surface water within reach, as the column to stand at beside it
+    func waterNear(_ m: Mob, _ r: Int) -> Double? {
+        let x0: Int = Int(floor(m.b.x))
+        let gy: Int = Int(floor(m.b.y))
+        var k: Int = 1
+        while k <= r {
+            for side in [1, -1] {
+                let x: Int = x0 + side * k
+                for dy in -2...2 where world.tile(x, gy + dy) == .water {
+                    return Double(x - side) + 0.5
+                }
+            }
+            k += 2
+        }
+        return nil
+    }
+
+    /// Predators (wolves at night, big cats and bears any time the player isn't their target) run down
+    /// prey nearby, bite it, and rest after a kill. Returns true while it has prey to chase.
+    func hunt(_ m: Mob, _ dt: Double, _ allowed: Bool) -> Bool {
+        if m.poseT > 0 {
+            // resting after a meal
+            m.poseT -= dt
+            accelX(m, 0, 18, dt)
+            return true
+        }
+        var prey: Mob? = nil
+        if m.preyID != 0 {
+            for o in mobsNear(m.b.x - 24, m.b.x + 24) where o.id == m.preyID && o.hp > 0 { prey = o }
+            if prey == nil {
+                // the prey is gone: rest, and stay sated for a while
+                m.preyID = 0
+                m.poseT = 4.0
+                m.drinkT = 60.0
+                return true
+            }
+        }
+        m.thinkT -= dt
+        if prey == nil && allowed && m.thinkT <= 0 {
+            m.thinkT = Double.random(in: 1.5...3.0)
+            var bd: Double = 14
+            for o in mobsNear(m.b.x - 14, m.b.x + 14) where isPrey(o.kind) && o.hp > 0 && !o.tame && abs(o.b.y - m.b.y) < 4 {
+                let d: Double = abs(o.b.x - m.b.x)
+                if d < bd { bd = d; prey = o }
+            }
+            if let p = prey { m.preyID = p.id }
+        }
+        guard let p = prey else { return false }
+        if !allowed || abs(p.b.x - m.b.x) > 26 { m.preyID = 0; return false }
+        chase(m, p.b.x, 1.05, dt)
+        if m.kind == .wolf && m.b.onGround && abs(p.b.x - m.b.x) < 4 && Double.random(in: 0...1) < 0.03 { m.b.vy = -11; m.b.vx = Double(m.dir) * 7 }
+        if m.cd <= 0 && abs(p.b.x - m.b.x) < m.b.w * 0.5 + p.b.w * 0.5 + 0.4 && abs(p.b.y - m.b.y) < 1.4 {
+            m.cd = 0.9
+            m.atkT = Mob.atkDur
+            hurtMob(p, m.def.dmg, Double(m.dir), 5, false)
+            // the herd scatters
+            for o in mobsNear(p.b.x - 10, p.b.x + 10) where o.kind == p.kind && o.hp > 0 { o.t2 = 3.0; o.tx = m.b.x }
+        }
+        return true
+    }
+}
 
 // MARK: - Telegraphed attacks and the newer creatures' behaviour
 
@@ -17244,9 +17517,13 @@ extension Game {
     }
 
     func chooseWardenAttack(_ m: Mob, _ dist: Double) {
-        let r: Double = Double.random(in: 0...1)
+        var r: Double = Double.random(in: 0...1)
         let fy: Double = m.homeY
         m.dir = pb.x >= m.b.x ? 1 : -1
+        // variety: in the last phase the void pillars come at least every third attack, and no attack
+        // is used three times running
+        if m.phase == 3 && m.sinceSignature >= 2 { r = 0 }
+        if m.repeatN >= 2 && m.lastAtk == WardenAtk.bolts.rawValue && dist >= 7.5 { r = m.phase >= 2 ? 0.4 : 0.0 }
         if m.phase == 3 && r < 0.35 {
             // void pillars erupt in a row across the hall
             m.atk = WardenAtk.pillars.rawValue
@@ -17279,6 +17556,11 @@ extension Game {
 
     func executeWarden(_ m: Mob) {
         let fy: Double = m.homeY
+        if m.atk != WardenAtk.summon.rawValue {
+            m.repeatN = m.atk == m.lastAtk ? m.repeatN + 1 : 1
+            m.lastAtk = m.atk
+            m.sinceSignature = m.atk == WardenAtk.pillars.rawValue ? 0 : m.sinceSignature + 1
+        }
         switch WardenAtk(rawValue: m.atk) ?? .none {
         case .sweep:
             mobAttackBox(m, m.tx, fy - 3.6, m.ty, fy + 0.1, dmg: m.def.dmg, knock: 12)
@@ -18010,7 +18292,7 @@ enum WorldRenderer {
         if a.hop { return m.b.onGround ? 0 : 1 }
         if !a.cycle.isEmpty { return a.cycle[slow % a.cycle.count] }
         if moving { return walkFrame(m) }
-        if a.idleAlt >= 0 && m.b.onGround && idleVariant(m, clock) { return a.idleAlt }
+        if a.idleAlt >= 0 && m.b.onGround && (m.poseT > 0 || idleVariant(m, clock)) { return a.idleAlt }
         return 0
     }
 
@@ -18311,7 +18593,7 @@ enum WorldRenderer {
                 c.translateBy(x: CGFloat(v.sx(p.0)), y: CGFloat(v.sy(p.1)))
                 var rot: Double = veh.angle
                 var jitter: Double = 0
-                if t == .wheel { rot += veh.wheelRot }
+                if isWheelPart(t) { rot += veh.wheelRot }
                 if t == .propeller { rot += veh.propRot }
                 if isDrill(t), let d = veh.drillDir[cell] {
                     rot += atan2(Double(d.1), Double(d.0))
@@ -19330,6 +19612,7 @@ struct InventoryPanel: View {
     }
 
     var titleText: String {
+        if let p = game.openChest, game.isCargoSpot(p) { return "INVENTORY  ·  CARGO" }
         if game.openChest != nil { return "INVENTORY  ·  CHEST" }
         return "INVENTORY"
     }

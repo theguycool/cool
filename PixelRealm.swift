@@ -4,6 +4,7 @@
 // chunks, structures, the Umbral Realm, lighting, physics, mobs, vehicles, game logic, saving, UI.
 
 import SwiftUI
+import AVFoundation
 
 // ===== p01_util =====
 // ============================================================
@@ -7720,6 +7721,18 @@ final class LightMap {
                         let nb: Int = ci + ww
                         if !op[nb] { if lv[nb] < nl { lv[nb] = nl; qn[ln[nl]] = nb; ln[nl] += 1 } }
                         else if ol >= 1 && lv[nb] < ol { lv[nb] = ol; qo[ln[ol]] = nb; ln[ol] += 1 }
+                        // open air also lights the solid cells diagonally below it, so a block standing
+                        // on the ground (a cactus, a post) does not leave a dark shaft down its column
+                        if !op[ci] && ol >= 1 {
+                            if cx > 0 {
+                                let dg: Int = nb - 1
+                                if op[dg] && lv[dg] < ol { lv[dg] = ol; qo[ln[ol]] = dg; ln[ol] += 1 }
+                            }
+                            if cx < ww - 1 {
+                                let dg: Int = nb + 1
+                                if op[dg] && lv[dg] < ol { lv[dg] = ol; qo[ln[ol]] = dg; ln[ol] += 1 }
+                            }
+                        }
                     }
                 }
                 l -= 1
@@ -8934,6 +8947,10 @@ struct Settings: Codable {
     var shakeOn: Bool = true
     var shakeIntensity: Double = 0.5
     var showTrajectory: Bool = true
+    // sound
+    var soundOn: Bool = true
+    var sfxVolume: Double = 0.7
+    var ambienceVolume: Double = 0.5
 
     var shakeScale: Double { return shakeOn ? shakeIntensity : 0 }
 
@@ -8972,6 +8989,9 @@ struct Settings: Codable {
         shakeOn = (try? c.decodeIfPresent(Bool.self, forKey: .shakeOn)) ?? true
         shakeIntensity = (try? c.decodeIfPresent(Double.self, forKey: .shakeIntensity)) ?? 0.5
         showTrajectory = (try? c.decodeIfPresent(Bool.self, forKey: .showTrajectory)) ?? true
+        soundOn = (try? c.decodeIfPresent(Bool.self, forKey: .soundOn)) ?? true
+        sfxVolume = (try? c.decodeIfPresent(Double.self, forKey: .sfxVolume)) ?? 0.7
+        ambienceVolume = (try? c.decodeIfPresent(Double.self, forKey: .ambienceVolume)) ?? 0.5
     }
 }
 
@@ -9158,6 +9178,15 @@ final class Game: ObservableObject, @unchecked Sendable {
     var dangerZones: [DangerZone] = []
     var journal: Journal = Journal()
     var discoverT: Double = 0
+    /// weather: how heavy the rain (or snow) is now (0...1, eased), whether a spell of it is on, when that
+    /// changes, and whether it falls as snow here
+    var weatherRain: Double = 0
+    var weatherOn: Bool = false
+    var weatherT: Double = 90
+    var weatherSnow: Bool = false
+    /// the landing squash and the last frame's water state (for splashes)
+    var landT: Double = 0
+    var wasInWater: Bool = false
     let mobGrid: MobGrid = MobGrid()
     var frameNo: Int = 0
 
@@ -9358,6 +9387,8 @@ extension Game {
         updateAutosave(dt)
         if !pauseParticles { updateParticles(dt) }
         updateFlashes(dt)
+        updateWeather(dt)
+        updateAudio()
         updateStreaming()
         updateCamera(dt)
         updateLight(dt)
@@ -9523,6 +9554,7 @@ extension Game {
                 addShake(0.3)
             }
             if fallPeak > 9.0 { spawnParticles(pb.x, pb.y, 0xB0A890, 6, 3.0, 0.4, 10) }
+            if fallPeak > 6.0 { sfx(.land, clampD((fallPeak - 6.0) / 14.0, 0.2, 1.0)); landT = 0.12 }
             fallPeak = 0
         }
         if pb.onGround || swimming { fallPeak = 0 }
@@ -9653,6 +9685,7 @@ extension Game {
         if !ignoreArmor { d *= (1.0 - min(0.75, inv.defense * 0.045)) }
         d = max(1.0, d.rounded())
         hp -= d
+        sfx(.hurt, 0.8)
         invuln = 0.55
         hurtT = 0.35
         if knock > 0 {
@@ -10049,6 +10082,7 @@ extension Game {
         switch t {
         case .chest:
             if tryMimic(tx, ty) { return }
+            sfx(.chestOpen, 0.7)
             openChest = IntPair(x: tx, y: ty)
             showInventory = true
             bumpHUD()
@@ -10140,6 +10174,7 @@ extension Game {
         spawnParticles(Double(tx) + 0.5, Double(ty) + 0.5, 0xF0A848, 40, 7.0, 1.2, 0)
         addShake(0.5)
         say("The rift tears open! Walk into it to cross to the Umbral Realm.", 5.0)
+        sfx(.portal, 1.0)
         bumpHUD()
     }
 
@@ -10453,6 +10488,7 @@ extension Game {
         }
         for c in r.cost { _ = inv.remove(c.item, c.n) }
         if !journal.crafted.contains(r.out.name) { journal.crafted.append(r.out.name) }
+        sfx(.craft, 0.6)
         let left: Int = inv.add(r.out, r.outCount)
         if left > 0 { spawnDrop(Stack(item: r.out, count: left), pb.x, pb.y - 1, 2, -3) }
         floatText("+" + String(r.outCount) + " " + r.out.name, pb.x, pb.y - 2.2, 0xFFE070)
@@ -10668,6 +10704,7 @@ extension Game {
         swingDur = it?.swingTime ?? 0.25
         swingT = swingDur
         swingDir = facing
+        sfx(.swing, 0.5)
         // wide arc may still catch mobs close to the player
         let reach: Double = it?.meleeReach ?? 1.8
         let dmg: Double = it?.meleeDamage ?? 1.5
@@ -10688,6 +10725,7 @@ extension Game {
         useCD = cd
         swingDur = it?.swingTime ?? 0.25
         swingT = swingDur
+        sfx(.swing, 0.5)
         swingDir = aimX >= pb.x ? 1 : -1
         facing = swingDir
         let reach: Double = (it?.meleeReach ?? 1.8) + 0.8
@@ -10751,7 +10789,10 @@ extension Game {
                 hitAny = true
             }
         }
-        if hitAny { addShake(heavy ? 0.16 : 0.08) }
+        if hitAny {
+            addShake(heavy ? 0.16 : 0.08)
+            sfx(.hit, heavy ? 1.0 : 0.75)
+        }
     }
 
     // MARK: mining & breaking
@@ -10812,10 +10853,12 @@ extension Game {
             useCD = 0.26
             let col: UInt32 = def.colors.first ?? 0x888888
             spawnParticles(Double(tx) + 0.5, Double(ty) + 0.5, col, 3, 3.0, 0.4, 14)
+            digSound(t, broke: false)
         }
         if mineP >= mineNeed {
             mineP = 0
             mining = false
+            digSound(t, broke: true)
             let fell: Bool = isLogTile(t) && kind == .axe
             if fell { fellTree(tx, ty) } else { breakTile(tx, ty, true) }
         }
@@ -10970,6 +11013,7 @@ extension Game {
         world.set(tx, ty, placed)
         if t == .chest { world.setChestItems(tx, ty, []) }
         if !isCreative { inv.removeAt(sel, 1) }
+        sfx(.place, 0.6)
         placeCD = 0.11
         swingT = 0.14
         swingDir = aimX >= pb.x ? 1 : -1
@@ -11011,6 +11055,7 @@ extension Game {
         if !isCreative { inv.removeAt(sel, 1) }
         eatT = 0.5
         useCD = 0.5
+        sfx(.eat, 0.6)
         spawnParticles(pb.x + Double(facing) * 0.4, pb.y - 1.4, 0xC8A060, 5, 2.0, 0.4, 8)
         floatText("+" + String(Int(f.hunger)), pb.x, pb.y - pb.h - 0.4, 0xE0A040)
         bumpHUD()
@@ -11084,6 +11129,7 @@ extension Game {
         p.source = .player
         p.uid = newID()
         projectiles.append(p)
+        sfx(.bow, 0.7)
         useCD = st.useTime
         swingT = 0.18
         swingDir = facing
@@ -11185,6 +11231,7 @@ extension Game {
         p.uid = newID()
         p.pierce = g == .rifle ? 1 : 0
         projectiles.append(p)
+        sfx(.gun, 0.8)
         useCD = g.cooldown
         muzzleT = 0.08
         swingT = 0.1
@@ -11622,7 +11669,7 @@ extension Game {
     func updateZombie(_ m: Mob, _ dt: Double, _ aggro: Bool, _ dyP: Double) {
         let d: MobDef = m.def
         // burn in sunlight
-        if world.dim == .overworld && dayFactor > 0.7 && world.isSkyExposed(Int(floor(m.b.x)), Int(floor(m.b.y - 1))) && !m.b.inWater {
+        if world.dim == .overworld && dayFactor > 0.7 && weatherRain < 0.5 && world.isSkyExposed(Int(floor(m.b.x)), Int(floor(m.b.y - 1))) && !m.b.inWater {
             m.burn = 2.0
         }
         if aggro {
@@ -12463,6 +12510,7 @@ extension Game {
                 let left: Int = inv.add(d.stack.item, d.stack.count, extra: d.stack.extra)
                 if left < d.stack.count {
                     if d.stack.item == .mat(.relicFragment) { journal.relics += d.stack.count - left }
+                    sfx(.pickup, 0.5)
                     floatText("+" + String(d.stack.count - left) + " " + d.stack.item.name, px, pb.y - pb.h - 0.5, 0xFFF0A0)
                     bumpHUD()
                 }
@@ -12811,6 +12859,7 @@ extension Game {
     // MARK: explosions
 
     func explode(_ x: Double, _ y: Double, radius: Double, power: Double, source: DamageSource, breakBlocks: Bool) {
+        sfx(.explosion, at: x, 1.0)
         var info = DamageInfo(amount: power, type: .explosion, source: source)
         info.knock = 11.0
         info.key = newID()
@@ -13127,6 +13176,7 @@ extension Game {
         m.persistent = true
         m.dir = pb.x >= m.b.x ? 1 : -1
         say(m.def.name + " awakens!", 3.5)
+        sfx(.roar, at: m.b.x, 1.0)
     }
 
     func updateBossMob(_ m: Mob, _ dt: Double) {
@@ -15746,6 +15796,7 @@ extension Game {
     func toggleDoor(_ x: Int, _ y: Int) {
         let open: Bool = world.tile(x, y) == .doorClosed
         setDoor(x, y, open: open)
+        sfx(.door, at: Double(x), 0.7)
         spawnParticles(Double(x) + 0.5, Double(y) + 0.5, 0xA97B45, 2, 1.5, 0.3, 8)
     }
 
@@ -16817,6 +16868,559 @@ final class Art: @unchecked Sendable {
 
 
 
+
+// MARK: - Sound: every effect is synthesised at first use (no audio files), short and soft, in one style
+
+enum SoundID: Int, CaseIterable {
+    case digStone, digDirt, digWood, digSand, digCrystal, digLeaves
+    case breakStone, breakDirt, breakWood, breakCrystal
+    case place, pickup, craft, chestOpen, door
+    case swing, hit, hurt, bow, arrowHit, gun, explosion, land, eat, splash
+    case discovery, warn, roar, portal, tap
+}
+
+enum LoopID: Int, CaseIterable {
+    case engine, drill, rain, wind
+}
+
+/// The sound a block makes when dug or broken
+func soundMaterial(_ t: Tile) -> Int {
+    if isLeafTile(t) || t.isPlant || t == .cobweb { return 5 }
+    switch t {
+    case .glass, .ice, .glowCrystal, .crystalOre, .diamond: return 4
+    case .sand: return 3
+    default: break
+    }
+    switch toolClass(t) {
+    case .axe: return 2
+    case .shovel, .hoe: return 1
+    case .pickaxe: return 0
+    }
+}
+
+/// Small additive synthesiser: tones with pitch sweeps, filtered noise and plucked strings, each with an
+/// attack and an exponential decay, mixed and normalised
+struct Synth {
+    static let rate: Double = 22050
+    var out: [Float]
+    var seed: UInt64
+
+    init(_ seconds: Double, seed: UInt64) {
+        out = [Float](repeating: 0, count: max(1, Int(seconds * Synth.rate)))
+        self.seed = seed &* 2862933555777941757 &+ 3037000493
+    }
+
+    static func env(_ t: Double, _ attack: Double, _ decay: Double) -> Double {
+        return t < attack ? t / max(attack, 0.0001) : exp(-(t - attack) / max(decay, 0.0001))
+    }
+
+    /// wave: 0 sine, 1 triangle, 2 saw, 3 soft square
+    mutating func tone(_ f0: Double, _ f1: Double, _ dur: Double, _ attack: Double, _ decay: Double, _ amp: Double, wave: Int = 0, at: Double = 0, vibrato: Double = 0) {
+        let n0: Int = Int(at * Synth.rate)
+        let n: Int = min(out.count - n0, Int(dur * Synth.rate))
+        if n <= 0 { return }
+        var ph: Double = 0
+        for i in 0..<n {
+            let t: Double = Double(i) / Synth.rate
+            let k: Double = t / max(dur, 0.0001)
+            var f: Double = f0 + (f1 - f0) * k
+            if vibrato > 0 { f *= 1.0 + 0.012 * sin(t * vibrato * 2.0 * Double.pi) }
+            ph += f / Synth.rate
+            let x: Double = ph - floor(ph)
+            var v: Double
+            switch wave {
+            case 1: v = 4.0 * abs(x - 0.5) - 1.0
+            case 2: v = 2.0 * x - 1.0
+            case 3: v = tanh(sin(x * 2.0 * Double.pi) * 3.0)
+            default: v = sin(x * 2.0 * Double.pi)
+            }
+            out[n0 + i] += Float(v * amp * Synth.env(t, attack, decay))
+        }
+    }
+
+    mutating func rnd() -> Double {
+        seed = seed &* 6364136223846793005 &+ 1442695040888963407
+        return Double((seed >> 33) & 0xFFFFFF) / Double(0xFFFFFF) * 2.0 - 1.0
+    }
+
+    /// noise through a one-pole low-pass (lp) and high-pass (hp); lp can sweep to lp1
+    mutating func noise(_ dur: Double, _ attack: Double, _ decay: Double, _ amp: Double, lp: Double, hp: Double, lp1: Double = -1, at: Double = 0) {
+        let n0: Int = Int(at * Synth.rate)
+        let n: Int = min(out.count - n0, Int(dur * Synth.rate))
+        if n <= 0 { return }
+        var low: Double = 0
+        var low2: Double = 0
+        let ah: Double = 1.0 - exp(-2.0 * Double.pi * hp / Synth.rate)
+        for i in 0..<n {
+            let t: Double = Double(i) / Synth.rate
+            let cut: Double = lp1 > 0 ? lp + (lp1 - lp) * (t / dur) : lp
+            let al: Double = 1.0 - exp(-2.0 * Double.pi * cut / Synth.rate)
+            low += al * (rnd() - low)
+            low2 += ah * (low - low2)
+            out[n0 + i] += Float((low - low2) * amp * 2.2 * Synth.env(t, attack, decay))
+        }
+    }
+
+    /// a plucked string (Karplus-Strong)
+    mutating func pluck(_ f: Double, _ dur: Double, _ amp: Double, at: Double = 0) {
+        let period: Int = max(2, Int(Synth.rate / f))
+        var ring: [Double] = (0..<period).map { _ in rnd() }
+        let n0: Int = Int(at * Synth.rate)
+        let n: Int = min(out.count - n0, Int(dur * Synth.rate))
+        if n <= 0 { return }
+        var k: Int = 0
+        for i in 0..<n {
+            let a: Double = ring[k]
+            let b: Double = ring[(k + 1) % period]
+            ring[k] = (a + b) * 0.497
+            out[n0 + i] += Float(a * amp)
+            k = (k + 1) % period
+        }
+    }
+
+    /// peak-normalise and fade the ends so nothing clicks
+    mutating func finish(_ peak: Float) {
+        var m: Float = 0
+        for v in out { m = max(m, abs(v)) }
+        let g: Float = m > 0 ? peak / m : 0
+        let fade: Int = min(out.count / 2, 66)
+        for i in 0..<out.count {
+            var v: Float = out[i] * g
+            if i < fade { v *= Float(i) / Float(fade) }
+            if i > out.count - 1 - fade { v *= Float(out.count - 1 - i) / Float(fade) }
+            out[i] = v
+        }
+    }
+}
+
+enum SoundBank {
+    static func effect(_ id: SoundID, _ variant: Int) -> [Float] {
+        let p: Double = [0.94, 1.0, 1.06][variant % 3]
+        let seed: UInt64 = UInt64(id.rawValue * 31 + variant + 1)
+        var s: Synth
+        var peak: Float = 0.75
+        switch id {
+        case .digStone, .breakStone:
+            let big: Bool = id == .breakStone
+            s = Synth(big ? 0.22 : 0.08, seed: seed)
+            s.noise(big ? 0.2 : 0.06, 0.002, big ? 0.06 : 0.02, 0.6, lp: 6000, hp: 1500)
+            s.tone(900 * p, 700 * p, 0.06, 0.001, 0.015, 0.3)
+            if big { s.noise(0.18, 0.01, 0.06, 0.4, lp: 1500, hp: 200, at: 0.03) }
+        case .digDirt, .breakDirt:
+            let big: Bool = id == .breakDirt
+            s = Synth(big ? 0.2 : 0.09, seed: seed)
+            s.noise(big ? 0.18 : 0.08, 0.003, big ? 0.06 : 0.03, 0.8, lp: 900, hp: 80)
+            s.tone(140 * p, 90 * p, 0.08, 0.002, 0.03, 0.4)
+        case .digWood, .breakWood:
+            let big: Bool = id == .breakWood
+            s = Synth(big ? 0.25 : 0.09, seed: seed)
+            s.tone(320 * p, 300 * p, 0.08, 0.001, 0.025, 0.6, wave: 1)
+            s.tone(640 * p, 600 * p, 0.06, 0.001, 0.015, 0.25)
+            s.noise(0.03, 0.001, 0.01, 0.3, lp: 3000, hp: 400)
+            if big { s.tone(240 * p, 200 * p, 0.2, 0.002, 0.06, 0.5, wave: 1, at: 0.04); s.noise(0.15, 0.01, 0.05, 0.3, lp: 1200, hp: 150, at: 0.05) }
+        case .digSand:
+            s = Synth(0.1, seed: seed)
+            s.noise(0.09, 0.005, 0.04, 0.6, lp: 2500, hp: 300)
+        case .digCrystal, .breakCrystal:
+            let big: Bool = id == .breakCrystal
+            s = Synth(big ? 0.45 : 0.3, seed: seed)
+            s.tone(1500 * p, 1500 * p, 0.3, 0.002, 0.12, 0.4)
+            s.tone(2310 * p, 2300 * p, 0.25, 0.002, 0.08, 0.25)
+            s.noise(0.02, 0.001, 0.006, 0.2, lp: 8000, hp: 2000)
+            if big { for k in 0..<4 { s.tone((1800 + Double(k) * 420) * p, 1700 * p, 0.2, 0.002, 0.06, 0.18, at: 0.03 * Double(k)) } }
+            peak = 0.55
+        case .digLeaves:
+            s = Synth(0.08, seed: seed)
+            s.noise(0.07, 0.01, 0.025, 0.35, lp: 4000, hp: 1200)
+            peak = 0.4
+        case .place:
+            s = Synth(0.09, seed: seed)
+            s.tone(200 * p, 120 * p, 0.08, 0.002, 0.025, 0.7)
+            s.noise(0.04, 0.001, 0.012, 0.3, lp: 1200, hp: 100)
+        case .pickup:
+            s = Synth(0.14, seed: seed)
+            s.tone(660 * p, 660 * p, 0.06, 0.002, 0.03, 0.4, wave: 1)
+            s.tone(990 * p, 990 * p, 0.08, 0.002, 0.04, 0.35, wave: 1, at: 0.05)
+            peak = 0.4
+        case .craft:
+            s = Synth(0.4, seed: seed)
+            s.tone(1180 * p, 1180 * p, 0.35, 0.001, 0.1, 0.4)
+            s.tone(1770 * p, 1770 * p, 0.3, 0.001, 0.06, 0.3)
+            s.tone(2900 * p, 2900 * p, 0.2, 0.001, 0.03, 0.15)
+            s.noise(0.02, 0.001, 0.005, 0.3, lp: 7000, hp: 1500)
+            peak = 0.5
+        case .chestOpen:
+            s = Synth(0.3, seed: seed)
+            s.tone(150 * p, 130 * p, 0.26, 0.02, 0.12, 0.4, wave: 1, vibrato: 18)
+            s.tone(95 * p, 80 * p, 0.08, 0.002, 0.03, 0.4, at: 0.2)
+            peak = 0.5
+        case .door:
+            s = Synth(0.12, seed: seed)
+            s.tone(240 * p, 180 * p, 0.08, 0.001, 0.025, 0.6, wave: 1)
+            s.noise(0.05, 0.001, 0.015, 0.4, lp: 2000, hp: 150)
+        case .swing:
+            s = Synth(0.16, seed: seed)
+            s.noise(0.15, 0.04, 0.05, 0.4, lp: 700 * p, hp: 250, lp1: 3200 * p)
+            peak = 0.35
+        case .hit:
+            s = Synth(0.12, seed: seed)
+            s.noise(0.08, 0.001, 0.025, 0.7, lp: 1800, hp: 100)
+            s.tone(120 * p, 70 * p, 0.1, 0.001, 0.04, 0.8)
+        case .hurt:
+            s = Synth(0.2, seed: seed)
+            s.tone(230 * p, 150 * p, 0.17, 0.005, 0.07, 0.5, wave: 1)
+            s.noise(0.08, 0.002, 0.03, 0.3, lp: 1200, hp: 100)
+        case .bow:
+            s = Synth(0.3, seed: seed)
+            s.pluck(196 * p, 0.28, 0.6)
+            s.noise(0.03, 0.001, 0.01, 0.2, lp: 3000, hp: 600)
+            peak = 0.5
+        case .arrowHit:
+            s = Synth(0.08, seed: seed)
+            s.noise(0.04, 0.001, 0.012, 0.5, lp: 2500, hp: 300)
+            s.tone(260 * p, 200 * p, 0.05, 0.001, 0.02, 0.4, wave: 1)
+            peak = 0.45
+        case .gun:
+            s = Synth(0.16, seed: seed)
+            s.noise(0.12, 0.001, 0.035, 0.9, lp: 7000, hp: 200)
+            s.tone(90 * p, 50 * p, 0.12, 0.001, 0.05, 0.7)
+            peak = 0.7
+        case .explosion:
+            s = Synth(1.0, seed: seed)
+            s.noise(0.95, 0.003, 0.28, 1.0, lp: 700 * p, hp: 20)
+            s.tone(60 * p, 35 * p, 0.8, 0.003, 0.3, 0.8)
+            peak = 0.85
+        case .land:
+            s = Synth(0.09, seed: seed)
+            s.noise(0.07, 0.002, 0.025, 0.7, lp: 600, hp: 40)
+            s.tone(90 * p, 60 * p, 0.06, 0.001, 0.025, 0.4)
+            peak = 0.5
+        case .eat:
+            s = Synth(0.3, seed: seed)
+            for k in 0..<3 { s.noise(0.05, 0.002, 0.015, 0.4, lp: 2500, hp: 500, at: Double(k) * 0.09) }
+            peak = 0.4
+        case .splash:
+            s = Synth(0.3, seed: seed)
+            s.noise(0.28, 0.005, 0.1, 0.6, lp: 3000, hp: 400)
+            peak = 0.45
+        case .discovery:
+            s = Synth(0.75, seed: seed)
+            for (k, f) in [523.0, 659.0, 784.0, 1047.0].enumerated() { s.tone(f, f, 0.4, 0.004, 0.16, 0.3, wave: 1, at: Double(k) * 0.09) }
+            peak = 0.45
+        case .warn:
+            s = Synth(0.5, seed: seed)
+            s.tone(110, 165, 0.45, 0.05, 0.25, 0.35, wave: 3)
+            peak = 0.4
+        case .roar:
+            s = Synth(1.1, seed: seed)
+            s.noise(1.0, 0.08, 0.4, 0.8, lp: 500, hp: 40)
+            s.tone(75 * p, 55 * p, 1.0, 0.06, 0.4, 0.5, wave: 2, vibrato: 7)
+            peak = 0.7
+        case .portal:
+            s = Synth(1.0, seed: seed)
+            for f in [440.0, 660.0, 880.0] { s.tone(f, f * 1.02, 0.9, 0.15, 0.4, 0.25, vibrato: 5) }
+            peak = 0.45
+        case .tap:
+            s = Synth(0.04, seed: seed)
+            s.tone(1400, 1300, 0.03, 0.001, 0.008, 0.3)
+            peak = 0.25
+        }
+        s.finish(peak)
+        return s.out
+    }
+
+    /// Seamless loops: whole numbers of cycles per loop, and noise cross-faded into its own start
+    static func loop(_ id: LoopID) -> [Float] {
+        var s: Synth
+        switch id {
+        case .engine:
+            s = Synth(1.0, seed: 101)
+            s.tone(55, 55, 1.0, 0.0001, 1000, 0.5, wave: 2)
+            s.tone(110, 110, 1.0, 0.0001, 1000, 0.25, wave: 3)
+            for i in 0..<s.out.count { s.out[i] *= Float(0.75 + 0.25 * sin(Double(i) / Synth.rate * 9.0 * 2.0 * Double.pi)) }
+        case .drill:
+            s = Synth(1.0, seed: 102)
+            s.tone(180, 180, 1.0, 0.0001, 1000, 0.4, wave: 3)
+            s.noise(1.0, 0.0001, 1000, 0.2, lp: 2000, hp: 300)
+            for i in 0..<s.out.count { s.out[i] *= Float(0.7 + 0.3 * sin(Double(i) / Synth.rate * 30.0 * 2.0 * Double.pi)) }
+        case .rain:
+            s = Synth(2.2, seed: 103)
+            s.noise(2.2, 0.0001, 1000, 0.6, lp: 3000, hp: 500)
+        case .wind:
+            s = Synth(3.2, seed: 104)
+            s.noise(3.2, 0.0001, 1000, 0.6, lp: 300, hp: 40)
+            for i in 0..<s.out.count { s.out[i] *= Float(0.6 + 0.4 * sin(Double(i) / Synth.rate / 3.0 * 2.0 * Double.pi)) }
+        }
+        s.finish(0.6)
+        if id == .rain || id == .wind {
+            // fold the extra 0.2 s back over the start so the loop point is seamless
+            let tail: Int = Int(0.2 * Synth.rate)
+            let n: Int = s.out.count - tail
+            for i in 0..<tail {
+                let k: Float = Float(i) / Float(tail)
+                s.out[i] = s.out[i] * k + s.out[n + i] * (1 - k)
+            }
+            s.out.removeLast(tail)
+        }
+        return s.out
+    }
+}
+
+/// Plays the effects: a small pool of voices (the oldest is cut off when all are busy), a minimum gap
+/// between repeats of the same effect, and four looping beds whose volume follows the game.
+final class Sound {
+    static let shared: Sound = Sound()
+    private let engine: AVAudioEngine = AVAudioEngine()
+    private var format: AVAudioFormat? = nil
+    private var voices: [AVAudioPlayerNode] = []
+    private var loopNodes: [AVAudioPlayerNode] = []
+    private var buffers: [Int: [AVAudioPCMBuffer]] = [:]
+    private var lastPlay: [Int: Double] = [:]
+    private var nextVoice: Int = 0
+    private(set) var running: Bool = false
+    private var started: Bool = false
+    var enabled: Bool = true
+    var sfxVolume: Float = 0.7
+    var ambienceVolume: Float = 0.5
+
+    /// Call once the game is on screen
+    func start() {
+        if started { return }
+        started = true
+        #if os(iOS)
+        // ambient: mixes with the player's own music and respects the silent switch
+        try? AVAudioSession.sharedInstance().setCategory(.ambient, mode: .default, options: [.mixWithOthers])
+        try? AVAudioSession.sharedInstance().setActive(true)
+        #endif
+        guard let fmt = AVAudioFormat(standardFormatWithSampleRate: Synth.rate, channels: 1) else { return }
+        format = fmt
+        for _ in 0..<8 {
+            let n = AVAudioPlayerNode()
+            engine.attach(n)
+            engine.connect(n, to: engine.mainMixerNode, format: fmt)
+            voices.append(n)
+        }
+        for _ in LoopID.allCases {
+            let n = AVAudioPlayerNode()
+            engine.attach(n)
+            engine.connect(n, to: engine.mainMixerNode, format: fmt)
+            n.volume = 0
+            loopNodes.append(n)
+        }
+        engine.prepare()
+        do { try engine.start() } catch { return }
+        running = true
+        for v in voices { v.play() }
+        for l in LoopID.allCases {
+            let n: AVAudioPlayerNode = loopNodes[l.rawValue]
+            if let b = makeBuffer(SoundBank.loop(l)) {
+                n.scheduleBuffer(b, at: nil, options: .loops, completionHandler: nil)
+                n.play()
+            }
+        }
+    }
+
+    private func makeBuffer(_ samples: [Float]) -> AVAudioPCMBuffer? {
+        guard let fmt = format, let b = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: AVAudioFrameCount(samples.count)) else { return nil }
+        b.frameLength = AVAudioFrameCount(samples.count)
+        if let ch = b.floatChannelData {
+            for i in 0..<samples.count { ch[0][i] = samples[i] }
+        }
+        return b
+    }
+
+    static func minGap(_ id: SoundID) -> Double {
+        switch id {
+        case .pickup, .tap: return 0.05
+        case .digStone, .digDirt, .digWood, .digSand, .digCrystal, .digLeaves: return 0.09
+        case .hit, .arrowHit: return 0.06
+        case .land, .place, .door: return 0.08
+        case .warn: return 0.35
+        case .roar, .portal, .discovery, .explosion: return 0.25
+        default: return 0.04
+        }
+    }
+
+    func play(_ id: SoundID, _ volume: Double = 1.0) {
+        guard running && enabled && sfxVolume > 0 && volume > 0.02 else { return }
+        let now: Double = Date().timeIntervalSinceReferenceDate
+        if let t = lastPlay[id.rawValue], now - t < Sound.minGap(id) { return }
+        lastPlay[id.rawValue] = now
+        if buffers[id.rawValue] == nil {
+            var list: [AVAudioPCMBuffer] = []
+            for v in 0..<3 { if let b = makeBuffer(SoundBank.effect(id, v)) { list.append(b) } }
+            buffers[id.rawValue] = list
+        }
+        guard let list = buffers[id.rawValue], !list.isEmpty else { return }
+        let b: AVAudioPCMBuffer = list[Int.random(in: 0..<list.count)]
+        let v: AVAudioPlayerNode = voices[nextVoice]
+        nextVoice = (nextVoice + 1) % voices.count
+        v.volume = Float(min(1.0, volume)) * sfxVolume
+        v.scheduleBuffer(b, at: nil, options: .interrupts, completionHandler: nil)
+        if !v.isPlaying { v.play() }
+    }
+
+    func setLoop(_ id: LoopID, _ volume: Double) {
+        guard running else { return }
+        let target: Float = enabled ? Float(max(0, min(1, volume))) * ambienceVolume : 0
+        let n: AVAudioPlayerNode = loopNodes[id.rawValue]
+        // ease toward the target so loops fade in and out instead of popping
+        n.volume += (target - n.volume) * 0.15
+    }
+}
+
+extension Game {
+    /// A sound effect; world events further than ~32 blocks from the player are not heard
+    func sfx(_ id: SoundID, at x: Double? = nil, _ volume: Double = 1.0) {
+        var v: Double = volume
+        if let wx = x { v *= max(0, 1.0 - abs(wx - pb.x) / 32.0) }
+        Sound.shared.play(id, v)
+    }
+
+    func digSound(_ t: Tile, broke: Bool) {
+        let m: Int = soundMaterial(t)
+        let id: SoundID
+        switch m {
+        case 0: id = broke ? .breakStone : .digStone
+        case 1: id = broke ? .breakDirt : .digDirt
+        case 2: id = broke ? .breakWood : .digWood
+        case 3: id = broke ? .breakDirt : .digSand
+        case 4: id = broke ? .breakCrystal : .digCrystal
+        default: id = .digLeaves
+        }
+        sfx(id, broke ? 0.9 : 0.6)
+    }
+
+    /// Once a frame: settings into the mixer, and the looping beds (engine, drill, rain, wind)
+    func updateAudio() {
+        let snd: Sound = Sound.shared
+        snd.enabled = settings.soundOn
+        snd.sfxVolume = Float(settings.sfxVolume)
+        snd.ambienceVolume = Float(settings.ambienceVolume)
+        if !snd.running { return }
+        var engineV: Double = 0
+        var drillV: Double = 0
+        if let v = inVehicle, v.engines > 0, v.fuel > 0 || isCreative {
+            engineV = 0.3 + 0.5 * abs(v.throttle)
+            if v.drilling { drillV = 0.7 }
+        }
+        snd.setLoop(.engine, engineV)
+        snd.setLoop(.drill, drillV)
+        let open: Bool = world.dim == .overworld && world.isSkyExposed(Int(floor(pb.x)), Int(floor(pb.y - pb.h)))
+        snd.setLoop(.rain, open ? weatherRain : 0)
+        snd.setLoop(.wind, world.dim == .umbral ? 0.6 : (open && pb.y < 80 ? 0.35 : 0))
+    }
+}
+
+
+// MARK: - Weather and ambient life
+
+extension Game {
+    /// Spells of rain (snow in cold places, nothing in deserts) come and go every few minutes. Rain
+    /// keeps zombies from burning at dawn and puts out a burning player who stands in it.
+    func updateWeather(_ dt: Double) {
+        if landT > 0 { landT -= dt }
+        if pb.inWater && !wasInWater && pb.vy > 4.0 {
+            sfx(.splash, clampD(pb.vy / 14.0, 0.3, 1.0))
+            spawnParticles(pb.x, pb.y - 0.4, 0xB8D8F8, 8, 3.5, 0.45, 14)
+        }
+        wasInWater = pb.inWater
+        if world.dim != .overworld {
+            weatherRain = max(0, weatherRain - dt * 0.2)
+            return
+        }
+        weatherT -= dt
+        if weatherT <= 0 {
+            if weatherOn {
+                weatherOn = false
+                weatherT = Double.random(in: 150...320)
+            } else {
+                weatherOn = Double.random(in: 0...1) < 0.45
+                weatherT = weatherOn ? Double.random(in: 60...160) : Double.random(in: 120...260)
+            }
+        }
+        let b: Biome = biomeHere
+        let dry: Bool = b == .desert || b == .savanna
+        let target: Double = weatherOn && !dry ? 1.0 : 0.0
+        weatherRain += (target - weatherRain) * min(1.0, dt * 0.15)
+        weatherSnow = b == .tundra || (b == .mountain && pb.y < 80)
+        if weatherRain > 0.5 && !weatherSnow && playerBurn > 0 && world.isSkyExposed(Int(floor(pb.x)), Int(floor(pb.y - pb.h))) {
+            playerBurn = 0
+        }
+    }
+}
+
+extension WorldRenderer {
+    /// Rain streaks or snowflakes, placed in world space (so they stay put as the camera moves) and
+    /// only where the sky is open above them
+    static func drawWeather(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
+        let k: Double = g.weatherRain
+        if k < 0.03 || g.world.dim != .overworld { return }
+        let n: Int = Int(120.0 * k)
+        let snow: Bool = g.weatherSnow
+        var path: Path = Path()
+        let span: Double = v.hTiles + 4.0
+        for i in 0..<n {
+            let fx: Double = hash2(i, 11, 77)
+            let fy: Double = hash2(i, 12, 77)
+            let speed: Double = snow ? 2.5 + fx * 1.5 : 18.0 + fy * 6.0
+            let wy: Double = v.top - 2.0 + (fy * span + g.clock * speed).truncatingRemainder(dividingBy: span)
+            var wx: Double = v.left - 1.0 + fx * (v.wTiles + 2.0)
+            wx += snow ? sin(g.clock * 1.3 + Double(i)) * 0.6 : -(wy - v.top) * 0.12
+            if wy >= Double(g.world.skyTop(Int(floor(wx)))) { continue }
+            let sx: Double = v.sx(wx)
+            let sy: Double = v.sy(wy)
+            if snow {
+                path.addRect(mkRect(sx, sy, 3, 3))
+            } else {
+                path.move(to: CGPoint(x: sx, y: sy))
+                path.addLine(to: CGPoint(x: sx - v.tp * 0.07, y: sy + v.tp * 0.55))
+            }
+        }
+        if snow {
+            ctx.fill(path, with: .color(Color.white.opacity(0.8)))
+        } else {
+            ctx.stroke(path, with: .color(Color(hex: 0xA8C8F0, alpha: 0.42)), lineWidth: 1.5)
+        }
+    }
+
+    /// Fireflies over grass on clear nights; embers drifting up through the Umbral Realm. Drawn after
+    /// the lighting so they glow in the dark. A handful of shapes, no particles.
+    static func drawAmbientLife(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
+        if g.world.dim == .umbral {
+            var path: Path = Path()
+            for i in 0..<24 {
+                let fx: Double = hash2(i, 31, 13)
+                let rise: Double = 1.2 + hash2(i, 32, 13) * 1.6
+                let span: Double = v.hTiles + 4.0
+                let wy: Double = v.top + span - 2.0 - (hash2(i, 33, 13) * span + g.clock * rise).truncatingRemainder(dividingBy: span)
+                let wx: Double = v.left + fx * v.wTiles + sin(g.clock * 0.8 + Double(i) * 1.9) * 0.8
+                let s: Double = i % 5 == 0 ? 3.0 : 2.0
+                path.addRect(mkRect(v.sx(wx), v.sy(wy), s, s))
+            }
+            ctx.fill(path, with: .color(Color(hex: 0xFF9A4A, alpha: 0.55)))
+            return
+        }
+        if g.dayFactor > 0.3 || g.weatherRain > 0.5 { return }
+        let b: Biome = g.biomeHere
+        if !(b == .forest || b == .plains || b == .swamp || b == .jungle) { return }
+        let tp: Double = v.tp
+        for i in 0..<14 {
+            let wx: Double = g.pb.x - 20.0 + hash2(i, 21, 9) * 40.0 + sin(g.clock * 0.4 + Double(i)) * 2.0
+            let ix: Int = Int(floor(wx))
+            let ground: Double = Double(g.world.surfaceY(ix))
+            let wy: Double = ground - 1.0 - hash2(i, 22, 9) * 4.0 + sin(g.clock * 0.7 + Double(i) * 1.7) * 0.6
+            if wy >= Double(g.world.skyTop(ix)) || !v.visible(wx, wy, 1) { continue }
+            let blink: Double = 0.5 + 0.5 * sin(g.clock * 2.2 + Double(i) * 1.3)
+            if blink < 0.25 { continue }
+            let x: Double = v.sx(wx)
+            let y: Double = v.sy(wy)
+            fillOval(&ctx, mkRect(x - tp * 0.22, y - tp * 0.22, tp * 0.44, tp * 0.44), Color(hex: 0xE8FF8A, alpha: 0.18 * blink))
+            fillRect(&ctx, mkRect(x - 1.5, y - 1.5, 3, 3), Color(hex: 0xF4FFC0, alpha: 0.9 * blink))
+        }
+    }
+}
+
 // MARK: - Journal: places found, what they tell, rumours, and goals worth chasing
 
 struct JournalPlace: Codable {
@@ -16906,6 +17510,7 @@ extension Game {
             line += " (New journal entry)"
         }
         say(line, 3.5)
+        sfx(.discovery, 0.8)
         spawnParticles(pb.x, pb.y - pb.h - 0.4, 0xFFE070, 10, 2.5, 0.8, -3)
         bumpHUD()
     }
@@ -17244,6 +17849,7 @@ extension WorldGen {
 extension Game {
     func warn(_ x0: Double, _ y0: Double, _ x1: Double, _ y1: Double, _ dur: Double, _ color: UInt32 = 0xFF3A2A) {
         if dangerZones.count >= 24 { dangerZones.removeFirst() }
+        sfx(.warn, at: (x0 + x1) * 0.5, 0.6)
         dangerZones.append(DangerZone(x0: min(x0, x1), y0: min(y0, y1), x1: max(x0, x1), y1: max(y0, y1), t: dur, dur: max(0.05, dur), color: color))
     }
 
@@ -17702,6 +18308,7 @@ extension Game {
                 m.t1 = 2.0
                 m.dir = pb.x >= m.b.x ? 1 : -1
                 say("The Hollow Warden rises from its throne.", 4.0)
+                sfx(.roar, at: m.b.x, 1.0)
             }
         } else if let e = existing, dx > 140 {
             e.hp = 0
@@ -18206,7 +18813,9 @@ enum WorldRenderer {
         drawProjectiles(&ctx, g, v)
         drawParticles(&ctx, g, v)
         drawClouds(&ctx, W, H, g, v)
+        drawWeather(&ctx, g, v)
         drawLight(&ctx, g, v, cache)
+        drawAmbientLife(&ctx, g, v)
         drawFlashes(&ctx, g, v)
         drawTrajectory(&ctx, g, v)
         drawOverlays(&ctx, W, H, g, v)
@@ -18296,6 +18905,8 @@ enum WorldRenderer {
         default: break
         }
         vGradient(&ctx, full, [rgbColor(topC), rgbColor(botC)], 0, H)
+        // an overcast sky while it rains
+        if g.weatherRain > 0.02 { fillRect(&ctx, full, Color(hex: 0x6A7480, alpha: 0.45 * g.weatherRain * max(0.3, day))) }
         // stars
         if day < 0.6 {
             let a: Double = (0.6 - day) / 0.6
@@ -18320,14 +18931,17 @@ enum WorldRenderer {
         let bx: Double = (0.1 + 0.8 * ang) * W
         let arc: Double = sin(ang * Double.pi)
         let by: Double = H * (0.55 - 0.42 * arc)
+        // rain clouds hide the sun and moon
+        var sc: GraphicsContext = ctx
+        sc.opacity = 1.0 - 0.85 * g.weatherRain
         if t < 0.5 {
-            fillRect(&ctx, mkRect(bx - 36.0, by - 36.0, 72.0, 72.0), Color(hex: 0xFFE680, alpha: 0.25))
-            fillRect(&ctx, mkRect(bx - 28.0, by - 28.0, 56.0, 56.0), Color(hex: 0xFFD84A))
-            fillRect(&ctx, mkRect(bx - 18.0, by - 18.0, 36.0, 36.0), Color(hex: 0xFFF2A0))
+            fillRect(&sc, mkRect(bx - 36.0, by - 36.0, 72.0, 72.0), Color(hex: 0xFFE680, alpha: 0.25))
+            fillRect(&sc, mkRect(bx - 28.0, by - 28.0, 56.0, 56.0), Color(hex: 0xFFD84A))
+            fillRect(&sc, mkRect(bx - 18.0, by - 18.0, 36.0, 36.0), Color(hex: 0xFFF2A0))
         } else {
-            fillRect(&ctx, mkRect(bx - 22.0, by - 22.0, 44.0, 44.0), Color(hex: 0xE8ECF4))
-            fillRect(&ctx, mkRect(bx - 8.0, by - 12.0, 10.0, 10.0), Color(hex: 0xC0C6D0))
-            fillRect(&ctx, mkRect(bx + 6.0, by + 4.0, 8.0, 8.0), Color(hex: 0xC0C6D0))
+            fillRect(&sc, mkRect(bx - 22.0, by - 22.0, 44.0, 44.0), Color(hex: 0xE8ECF4))
+            fillRect(&sc, mkRect(bx - 8.0, by - 12.0, 10.0, 10.0), Color(hex: 0xC0C6D0))
+            fillRect(&sc, mkRect(bx + 6.0, by + 4.0, 8.0, 8.0), Color(hex: 0xC0C6D0))
         }
         // (clouds now live in the world itself: see CloudField / drawClouds)
         // parallax background: two layers of hills, or in a flat world a level horizon of distant tree
@@ -18700,7 +19314,13 @@ enum WorldRenderer {
         if g.mounted != nil || g.inVehicle != nil { showItem = false }
         if showItem && !pose { drawHeldItem(&ctx, g, v) }
         let shade: Double = openShade(g, g.pb.x, g.pb.cy)
-        drawSet(&ctx, v, s, fr, left, g.hurtT > 0, g.pb.x, g.pb.y, alpha, shade: shade)
+        if g.landT > 0 {
+            // a brief squash on landing from a fall
+            let k: Double = g.landT / 0.12
+            drawSetPosed(&ctx, v, s, fr, left, g.hurtT > 0, g.pb.x, g.pb.y, alpha, shade, 0, 1.0 - 0.1 * k)
+        } else {
+            drawSet(&ctx, v, s, fr, left, g.hurtT > 0, g.pb.x, g.pb.y, alpha, shade: shade)
+        }
         if showItem && pose { drawHeldItem(&ctx, g, v) }
         if g.pb.inWater && g.air < 10 {
             let headY: Double = g.pb.y - g.pb.h * 0.92
@@ -21365,6 +21985,14 @@ struct CameraSettingsSection: View {
                 Slider(value: $settings.shakeIntensity, in: 0.0...1.0, step: 0.05)
             }
             Toggle("Bow trajectory preview", isOn: $settings.showTrajectory)
+            Text("SOUND").font(.pixel(15)).foregroundColor(Color(hex: 0xFFE066))
+            Toggle("Sound", isOn: $settings.soundOn)
+            if settings.soundOn {
+                label("Effects volume", settings.sfxVolume)
+                Slider(value: $settings.sfxVolume, in: 0.0...1.0, step: 0.05)
+                label("Ambience volume", settings.ambienceVolume)
+                Slider(value: $settings.ambienceVolume, in: 0.0...1.0, step: 0.05)
+            }
             SmallButton(title: "RESET CAMERA DEFAULTS") {
                 settings.resetCamera()
                 onChange()
@@ -21555,6 +22183,7 @@ struct GameView: View {
         }
         .background(Color.black)
         .onReceive(timer) { _ in step() }
+        .onAppear { Sound.shared.start() }
         .modifier(KeyInput(game: game))
     }
 

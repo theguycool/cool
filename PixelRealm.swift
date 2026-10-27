@@ -601,7 +601,7 @@ enum Tile: UInt8, CaseIterable, Codable {
         case .riftForge:
             return TileDef(name: "Rift Forge", hard: 3.0, tier: 5, solid: false, opaque: false, light: 9, style: .custom, colors: [0x2A1A3A])
         case .crystalOre:
-            return TileDef(name: "Crystal Vein", hard: 2.8, tier: 4, light: 6, style: .ore, colors: [0x5E6678, 0x4F5666, 0x6D7688, 0x40475A, 0x5E6678, 0x8AF0E8, 0xD8FFFA], drop: .mat(.crystalShard))
+            return TileDef(name: "Crystal Vein", hard: 2.8, tier: 4, light: 6, style: .custom, colors: [0x5E6678, 0x4F5666, 0x6D7688, 0x40475A, 0x5E6678, 0x8AF0E8, 0xD8FFFA], drop: .mat(.crystalShard))
         case .birchLog:
             return TileDef(name: "Birch Log", hard: 0.8, solid: false, opaque: false, style: .custom, colors: [0xE2DED2, 0xC8C4B8, 0xF4F2EA, 0x3A3632, 0xE2DED2])
         case .birchLogBlock:
@@ -709,6 +709,10 @@ func customTileRows(_ t: Tile) -> ([String], [Character: UInt32])? {
     case .riftForge:
         return (["..pppp..", ".pPppPp.", "oovvvvoo", "ovVvvVvo", "ovvVVvvo", "oovvvvoo", "oooooooo", "oooooooo"],
                 ["o": 0x241838, "p": 0x8A4CD8, "P": 0xD8A8FF, "v": 0x4A2A7A, "V": 0xB070FF])
+    case .crystalOre:
+        // slate with a cluster of pale cyan shards breaking through it
+        return (["sSsdsSss", "sdsscCss", "ssscWCds", "sSccWCcs", "dscWCcss", "ssCcsdSs", "sSsssscs", "dsSdsssS"],
+                ["s": 0x5E6678, "S": 0x6D7688, "d": 0x4F5666, "c": 0x3AA8B0, "C": 0x8AF0E8, "W": 0xE8FFFF])
     case .birchLog, .birchLogBlock:
         return (["lwwwwwws", "lwwkkwws", "lwwwwwws", "lwwwwwws", "lkwwwwks", "lwwwwwws", "lwwwkkws", "lwwwwwws"],
                 ["l": 0xF4F2EA, "w": 0xE2DED2, "k": 0x3A3632, "s": 0xB8B4A8])
@@ -22010,6 +22014,10 @@ struct HelpView: View {
         "Touch the world to mine, attack, place or use the item in your hand. The USE button aims for you.",
         "Hotbar: tap a slot. BAG opens your inventory, armor and crafting. Hold a slot to split a stack.",
         "Craft a workbench, then a furnace. Better pickaxes mine deeper ores: copper, iron, gold, diamond, mythril.",
+        "Iron and better gear is forged on an anvil; machinery and vehicle parts at a tinker's bench; Umbral metals only at a rift forge. Tap a station to craft at it.",
+        "Spears reach far and run through two foes; war hammers are slow but smash shields and stone. Two gear slots hold a headlamp, swift boots, a diving mask and more.",
+        "LOG (or J) opens your journal: places you have found, their stories, villagers' rumours and goals worth chasing.",
+        "Villagers trade (farmers, smiths and cartographers) and tell you about places you haven't seen. Some old chests underground are not what they seem.",
         "Torches, lanterns and campfires light the dark. Caves get darker and more dangerous the deeper you go.",
         "Eat to stay fed. Cook meat at a campfire. Hunger at zero hurts you.",
         "Skeleton knights block with shields. Pirates sail the seas and raid the coast.",
@@ -22018,7 +22026,8 @@ struct HelpView: View {
         "Vehicles, the easy way: craft a Car Kit, Rowboat Kit or Motorboat Kit (Vehicles tab at a workbench) and tap the ground to place it. Stand next to it and press DRIVE. PACK UP puts it back in your bag.",
         "Your own designs: place a Frame (car) or Hull Float (boat), then hold a part - green squares show where it fits. A checklist shows what is still missing. Coal or wood is fuel: hold it and tap the vehicle.",
         "Zoom with + and −. The DBG button opens the debug menu. II pauses and saves.",
-        "Keyboard: A/D move, W jump, S down, 1-0 hotbar, E bag, M map, F use, R reload, X dismount, +/- zoom, Esc pause."
+        "Watch the ground in big fights: an attack's area pulses and fills up just before it lands. Step out of it.",
+        "Keyboard: A/D move, W jump, S down, 1-0 hotbar, E bag, M map, J journal, F use, R reload, X dismount, +/- zoom, Esc pause."
     ]
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {

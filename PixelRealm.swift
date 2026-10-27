@@ -6477,11 +6477,15 @@ func buildGrotto(_ g: WorldGen, _ ch: Chunk, _ s: GrottoSite) {
             let u: Double = Double(x - s.x) / rxD
             let wob: Double = 1.0 + (vnoise(Double(x) * 0.18, 3.0, s.seed) - 0.5) * 0.26
             let inner: Double = wob * wob - u * u
-            let vault: Int = inner > 0 ? Int((sqrt(inner) / wob * ryD).rounded()) : 0
+            let vaultD: Double = inner > 0 ? (sqrt(inner) / wob * ryD).rounded() : 0
+            let vault: Int = Int(vaultD)
             let ow: Double = wob * 1.28
             let outer: Double = ow * ow - u * u
-            let shell: Int = outer > 0 ? Int((sqrt(outer) / ow * ryD * 1.2).rounded()) + 1 : 0
-            let pool: Bool = u * Double(-s.dir) > 0.45 && u * Double(-s.dir) < 0.8
+            let shellD: Double = outer > 0 ? (sqrt(outer) / ow * ryD * 1.2).rounded() + 1.0 : 0
+            let shell: Int = Int(shellD)
+            let side: Double = -Double(s.dir)
+            let along: Double = u * side
+            let pool: Bool = along > 0.45 && along < 0.8
             // crystal-studded shell around the vault
             if shell > 0 {
                 for y in (fy - shell - 1)...(fy + 1) {

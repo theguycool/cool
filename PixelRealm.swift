@@ -411,6 +411,9 @@ enum Tile: UInt8, CaseIterable, Codable {
     /// birch trunks (passable, like every tree trunk) and the solid block a placed birch log becomes,
     /// birch and pine foliage
     case birchLog, birchLogBlock, birchLeaves, pineLeaves
+    /// ores of the upper ground and the middle depths (tin, saltpeter, silver, amethyst geodes), a
+    /// building block cut from amethyst, and old mine fittings: rails, supply crates and ore carts
+    case tin, saltpeter, silver, amethyst, amethystBlock, rail, crate, oreCart
 
     static let defTable: [TileDef] = Tile.allCases.map { Tile.makeDef($0) }
     static let solidTable: [Bool] = Tile.allCases.map { Tile.makeDef($0).solid }
@@ -610,6 +613,22 @@ enum Tile: UInt8, CaseIterable, Codable {
             return TileDef(name: "Birch Leaves", hard: 0.2, solid: false, opaque: false, platform: true, style: .leaves, colors: [0x7DB846, 0x649A34, 0x9ACC5A, 0x4E7E28, 0x7DB846], noDrop: true)
         case .pineLeaves:
             return TileDef(name: "Pine Needles", hard: 0.2, solid: false, opaque: false, platform: true, style: .leaves, colors: [0x2E6E52, 0x225A42, 0x3E8464, 0x18463A, 0x2E6E52], noDrop: true)
+        case .tin:
+            return TileDef(name: "Tin Ore", hard: 1.7, tier: 2, style: .custom, colors: stoneCols + [0xC8D2DA, 0xF2F6FA], drop: .mat(.tinOre))
+        case .saltpeter:
+            return TileDef(name: "Saltpeter", hard: 1.0, tier: 1, style: .custom, colors: stoneCols + [0xEDEAE0, 0xFFFFFF], drop: .mat(.saltpeter))
+        case .silver:
+            return TileDef(name: "Silver Ore", hard: 2.4, tier: 3, light: 1, style: .custom, colors: stoneCols + [0xDDE4EE, 0xFFFFFF], drop: .mat(.silverOre))
+        case .amethyst:
+            return TileDef(name: "Amethyst Geode", hard: 1.8, tier: 2, light: 4, style: .custom, colors: stoneCols + [0x9A5ADC, 0xE0C0FF], drop: .mat(.amethyst))
+        case .amethystBlock:
+            return TileDef(name: "Amethyst Block", hard: 1.4, tier: 1, light: 6, style: .crystal, colors: [0x8A4CC8, 0xB07AE8, 0x6A34A8, 0xE8D0FF, 0x8A4CC8])
+        case .rail:
+            return TileDef(name: "Rail", hard: 0.2, solid: false, opaque: false, plant: true, style: .custom, colors: [0x6A6A72])
+        case .crate:
+            return TileDef(name: "Supply Crate", hard: 0.7, style: .custom, colors: [0xA97B45])
+        case .oreCart:
+            return TileDef(name: "Ore Cart", hard: 0.8, solid: false, opaque: false, style: .custom, colors: [0x5A5E68], noDrop: true)
         }
     }
 }
@@ -716,6 +735,32 @@ func customTileRows(_ t: Tile) -> ([String], [Character: UInt32])? {
     case .birchLog, .birchLogBlock:
         return (["lwwwwwws", "lwwkkwws", "lwwwwwws", "lwwwwwws", "lkwwwwks", "lwwwwwws", "lwwwkkws", "lwwwwwws"],
                 ["l": 0xF4F2EA, "w": 0xE2DED2, "k": 0x3A3632, "s": 0xB8B4A8])
+    // the newer ores each get their own shape, not just a colour, so they read at a glance in a dark cave
+    case .tin:
+        // rounded pale nuggets with a bright glint
+        return (["sSsdssSs", "sttsSdss", "tWTtssds", "sTTsdttS", "ssdsTWTs", "dSsstTTs", "stTssdss", "sTWsSssd"],
+                ["s": 0x8A8A8A, "S": 0x9A9A9A, "d": 0x6A6A6A, "t": 0xAEB8C2, "T": 0xC8D2DA, "W": 0xF2F6FA])
+    case .saltpeter:
+        // a white crust in feathery streaks along the bedding of the rock
+        return (["sSswwsds", "swwWwsss", "ssssdSss", "dsswwwWs", "sSwWwsss", "sssssdss", "swwwSsds", "sSdwWwws"],
+                ["s": 0x8A8A8A, "S": 0x9A9A9A, "d": 0x6A6A6A, "w": 0xDCD8CC, "W": 0xFFFFFF])
+    case .silver:
+        // thin bright veins with sparkling points
+        return (["sSssdsvW", "ssdssvvs", "sSsvvsSs", "dsvvssds", "svvsSsss", "vWsssdss", "vssdsSsv", "sSdsssvW"],
+                ["s": 0x7E8088, "S": 0x92949C, "d": 0x62646C, "v": 0xC4CCD8, "W": 0xFFFFFF])
+    case .amethyst:
+        // violet crystal points growing out of a hollow in the rock
+        return (["sSsdssSs", "ssdsaSss", "sSsaAads", "dsaAWAas", "saAWAAas", "aAAAaAAa", "dsSssdSs", "sSdssSsd"],
+                ["s": 0x8A8A8A, "S": 0x9A9A9A, "d": 0x6A6A6A, "a": 0x7A3CBC, "A": 0xB07AE8, "W": 0xEEDCFF])
+    case .rail:
+        return (["........", "........", "........", "........", "........", "........", "rrrrrrrr", "t.t..t.t"],
+                ["r": 0x9A9EA8, "t": 0x6A4A26])
+    case .crate:
+        return (["pppppppp", "pPddddPp", "pdPddPdp", "pddPPddp", "pddPPddp", "pdPddPdp", "pPddddPp", "pppppppp"],
+                ["p": 0x7A5628, "P": 0xA97B45, "d": 0xC89B5E])
+    case .oreCart:
+        return (["........", "........", "..oyoc..", "mmmmmmmm", "mMMMMMMm", "mMMMMMMm", ".kk..kk.", ".kk..kk."],
+                ["m": 0x4A4E58, "M": 0x6A6E78, "o": 0xD2793A, "y": 0xC8D2DA, "c": 0x2A2A2E, "k": 0x2A2A2E])
     default:
         return nil
     }
@@ -903,9 +948,17 @@ enum Mat: Int, Codable, CaseIterable {
     case string, leather, bone, feather, wool, gunpowder, seeds, claw, tusk, fur
     /// rare: crystal grottos, relic chests in ruins, and the Hollow Warden's heart
     case crystalShard, relicFragment, umbralHeart
+    /// appended: tin (alloyed with copper into bronze), saltpeter for powder and fire, silver, amethyst
+    case tinOre, bronzeBar, saltpeter, silverOre, silverBar, amethyst
 
     var name: String {
         switch self {
+        case .tinOre: return "Tin Ore"
+        case .bronzeBar: return "Bronze Bar"
+        case .saltpeter: return "Saltpeter"
+        case .silverOre: return "Silver Ore"
+        case .silverBar: return "Silver Bar"
+        case .amethyst: return "Amethyst Shard"
         case .stick: return "Stick"
         case .coal: return "Coal"
         case .copperOre: return "Copper Ore"
@@ -934,6 +987,22 @@ enum Mat: Int, Codable, CaseIterable {
         case .crystalShard: return "Crystal Shard"
         case .relicFragment: return "Relic Fragment"
         case .umbralHeart: return "Umbral Heart"
+        }
+    }
+
+    /// what the material is good for, for its tooltip
+    var use: String {
+        switch self {
+        case .coal: return "Fuel for smelting; torches; gunpowder"
+        case .copperOre, .ironOre, .goldOre, .mythrilOre, .emberOre, .voidOre, .silverOre: return "Smelt it into bars in a furnace"
+        case .tinOre: return "Smelt with copper ore into bronze"
+        case .bronzeBar: return "Crossbows, bolts, maces, lanterns, rails"
+        case .saltpeter: return "Strong gunpowder and fire flasks"
+        case .silverBar: return "Silver charm, storm rod"
+        case .amethyst: return "Amethyst blocks, headlamps, the storm rod"
+        case .copperBar, .ironBar, .goldBar, .mythrilBar, .emberBar, .voidBar: return "Tools, weapons and armour"
+        case .crystalShard, .relicFragment, .umbralHeart: return "Rare crafting material"
+        default: return "Crafting material"
         }
     }
 }
@@ -974,19 +1043,172 @@ enum Food: Int, Codable, CaseIterable {
     }
 }
 
+/// Weapons that are loaded and then fired with a tap: firearms, bolt throwers and the storm rod. Each
+/// keeps its loaded shots in the stack's `extra`.
 enum GunType: Int, Codable, CaseIterable {
     case pistol, rifle
-    var name: String { return self == .pistol ? "Flintlock Pistol" : "Long Rifle" }
-    var damage: Double { return self == .pistol ? 9 : 24 }
-    var cooldown: Double { return self == .pistol ? 0.32 : 0.85 }
-    var magazine: Int { return self == .pistol ? 6 : 4 }
-    var reloadTime: Double { return self == .pistol ? 1.3 : 2.2 }
-    var speed: Double { return self == .pistol ? 34 : 48 }
+    /// appended (saved numbers stay valid): a bolt thrower and its heavy upgrade, a scattergun, a rare
+    /// repeating crossbow, and a rod whose charge of lightning refills on its own
+    case crossbow, arbalest, blunderbuss, repeater, stormRod
+    var name: String {
+        switch self {
+        case .pistol: return "Flintlock Pistol"
+        case .rifle: return "Long Rifle"
+        case .crossbow: return "Crossbow"
+        case .arbalest: return "Heavy Crossbow"
+        case .blunderbuss: return "Blunderbuss"
+        case .repeater: return "Prospector's Repeater"
+        case .stormRod: return "Storm Rod"
+        }
+    }
+    /// damage of one shot (one pellet for the blunderbuss, the first strike for the storm rod)
+    var damage: Double {
+        switch self {
+        case .pistol: return 9
+        case .rifle: return 24
+        case .crossbow: return 15
+        case .arbalest: return 26
+        case .blunderbuss: return 4.5
+        case .repeater: return 11
+        case .stormRod: return 12
+        }
+    }
+    var cooldown: Double {
+        switch self {
+        case .pistol: return 0.32
+        case .rifle: return 0.85
+        case .crossbow, .arbalest, .blunderbuss: return 0.2
+        case .repeater: return 0.2
+        case .stormRod: return 0.5
+        }
+    }
+    var magazine: Int {
+        switch self {
+        case .pistol: return 6
+        case .rifle: return 4
+        case .crossbow, .arbalest, .blunderbuss: return 1
+        case .repeater: return 5
+        case .stormRod: return 5
+        }
+    }
+    var reloadTime: Double {
+        switch self {
+        case .pistol: return 1.3
+        case .rifle: return 2.2
+        case .crossbow: return 0.85
+        case .arbalest: return 1.35
+        case .blunderbuss: return 1.7
+        case .repeater: return 2.0
+        case .stormRod: return 2.5
+        }
+    }
+    var speed: Double {
+        switch self {
+        case .pistol: return 34
+        case .rifle: return 48
+        case .crossbow: return 42
+        case .arbalest: return 50
+        case .blunderbuss: return 30
+        case .repeater: return 40
+        case .stormRod: return 0
+        }
+    }
+    /// what a reload takes from the bag (the storm rod recharges by itself instead)
+    var ammo: AmmoType? {
+        switch self {
+        case .pistol, .rifle, .blunderbuss: return .bullet
+        case .crossbow, .arbalest, .repeater: return .bolt
+        case .stormRod: return nil
+        }
+    }
+    /// creatures each shot may pass through before it stops
+    var pierce: Int {
+        switch self {
+        case .rifle, .crossbow: return 1
+        case .arbalest: return 2
+        default: return 0
+        }
+    }
+    /// downward pull on the shot (bolts drop a little; bullets fly straight)
+    var gravity: Double {
+        switch self {
+        case .crossbow, .repeater: return 6
+        case .arbalest: return 4
+        default: return 0
+        }
+    }
+    /// how long a shot flies before it is spent (sets the range)
+    var shotLife: Double {
+        switch self {
+        case .blunderbuss: return 0.3
+        case .crossbow, .arbalest, .repeater: return 2.0
+        default: return 1.6
+        }
+    }
+    var knock: Double {
+        switch self {
+        case .arbalest: return 8
+        case .blunderbuss: return 3.2
+        case .crossbow, .repeater: return 5
+        default: return 4
+        }
+    }
+    /// heavy weapons need a fresh press for every shot; the rest keep firing while held
+    var needsPress: Bool { return self == .rifle || self == .arbalest || self == .blunderbuss }
+    var isFirearm: Bool { return self == .pistol || self == .rifle || self == .blunderbuss }
+    var isBoltThrower: Bool { return self == .crossbow || self == .arbalest || self == .repeater }
 }
 
 enum AmmoType: Int, Codable, CaseIterable {
     case arrow, bullet
-    var name: String { return self == .arrow ? "Arrow" : "Bullet" }
+    /// crossbow bolts (appended)
+    case bolt
+    var name: String {
+        switch self {
+        case .arrow: return "Arrow"
+        case .bullet: return "Bullet"
+        case .bolt: return "Crossbow Bolt"
+        }
+    }
+}
+
+/// The club family: crude blunt weapons whose blows leave foes dazed for a moment
+enum ClubKind: Int, Codable, CaseIterable {
+    case wooden, studded, mace
+    var name: String {
+        switch self {
+        case .wooden: return "Wooden Club"
+        case .studded: return "Studded Club"
+        case .mace: return "Bronze Mace"
+        }
+    }
+    var damage: Double {
+        switch self {
+        case .wooden: return 5
+        case .studded: return 7.5
+        case .mace: return 11
+        }
+    }
+    var daze: Double {
+        switch self {
+        case .wooden: return 0.45
+        case .studded: return 0.55
+        case .mace: return 0.7
+        }
+    }
+}
+
+/// One-of-a-kind weapons. They are never crafted: they turn up, rarely, in the deeper and better
+/// hidden chests of old mines, grottos and lairs.
+enum Relic: Int, Codable, CaseIterable {
+    case moonDagger, emberCleaver, quakeMaul
+    var name: String {
+        switch self {
+        case .moonDagger: return "Moonsilver Dagger"
+        case .emberCleaver: return "Ember Cleaver"
+        case .quakeMaul: return "Quake Maul"
+        }
+    }
 }
 
 enum PartType: Int, Codable, CaseIterable {
@@ -1051,6 +1273,8 @@ func isWheelPart(_ p: PartType) -> Bool { return p == .wheel || p == .offroadWhe
 /// Equipment worn in the two gear slots
 enum Gear: Int, Codable, CaseIterable {
     case headlamp, swiftBoots, divingMask, emberCharm, wardenSigil
+    /// appended: a silver ward against the restless dead
+    case silverCharm
     var name: String {
         switch self {
         case .headlamp: return "Headlamp"
@@ -1058,6 +1282,7 @@ enum Gear: Int, Codable, CaseIterable {
         case .divingMask: return "Diving Mask"
         case .emberCharm: return "Ember Charm"
         case .wardenSigil: return "Warden's Sigil"
+        case .silverCharm: return "Silver Charm"
         }
     }
     var effect: String {
@@ -1067,14 +1292,18 @@ enum Gear: Int, Codable, CaseIterable {
         case .divingMask: return "Hold your breath three times as long"
         case .emberCharm: return "Lava and fire hurt far less"
         case .wardenSigil: return "Hit 20% harder, take 15% less damage"
+        case .silverCharm: return "The undead hit you 25% softer; you hit them 25% harder"
         }
     }
 }
 
 enum Gadget: Int, Codable, CaseIterable {
     case shears, wrench, treasureMap, portalKey, carKit, boatKit, motorboatKit, bomb
+    /// appended: a thrown flask that bursts into a patch of fire
+    case fireFlask
     var name: String {
         switch self {
+        case .fireFlask: return "Fire Flask"
         case .shears: return "Shears"
         case .wrench: return "Wrench"
         case .treasureMap: return "Treasure Map"
@@ -1085,6 +1314,48 @@ enum Gadget: Int, Codable, CaseIterable {
         case .bomb: return "Bomb"
         }
     }
+}
+
+/// The shape of a melee swing (drives the hit test, the animation and the trail)
+enum SwingStyle: Int {
+    case slash, thrust, smash, stab, bash
+}
+
+/// How a melee weapon strikes. One table drives the hit test, the timing, the animation and the
+/// effects, so a weapon reaches exactly as far and as wide whether the player taps a foe, holds the
+/// action button or swings at empty air.
+struct MeleeProfile {
+    var damage: Double
+    var cooldown: Double
+    /// from the shoulder to the near edge of a target
+    var reach: Double
+    /// half the angle swept either side of the aim (radians)
+    var halfArc: Double
+    var style: SwingStyle = .slash
+    /// thrusts hit along a straight band this wide instead of an arc
+    var band: Double = 0.55
+    var maxHits: Int = 99
+    var knock: Double = 6
+    /// a crushing blow: breaks raised guards and cracks stone hides
+    var heavy: Bool = false
+    /// seconds a struck foe is left dazed (clubs)
+    var daze: Double = 0
+    /// the blow lands this long after the swing starts (heavy weapons)
+    var windup: Double = 0
+    var swingTime: Double = 0.25
+    /// run speed while the swing lasts (heavy weapons commit you to the blow)
+    var moveScale: Double = 1.0
+    var critChance: Double = 0.1
+    /// seconds of fire a hit sets on the target
+    var burn: Double = 0
+    var undeadMult: Double = 1
+    /// every third blow in a quick run lands twice as hard
+    var combo: Bool = false
+    /// multiplier for a blow into a foe's back
+    var backstab: Double = 1
+    /// the blow sends a shockwave along the ground
+    var shockwave: Bool = false
+    var trail: UInt32 = 0xFFFFFF
 }
 
 enum Item: Hashable, Codable {
@@ -1105,13 +1376,21 @@ enum Item: Hashable, Codable {
     /// slow and heavy: big knockback, smashes guards and stone hides
     case hammer(Tier)
     case gear(Gear)
+    /// appended: quick stabs at close range, every third in a run hits twice as hard, cuts deep from behind
+    case knife(Tier)
+    /// cheap blunt weapons that daze
+    case club(ClubKind)
+    /// slings stones (any rock in the bag) in a lob that knocks foes back
+    case sling
+    /// one of a kind, found and never made
+    case relic(Relic)
 
     /// Order used by inventory sorting: gear first, then building blocks, materials and the rest
     var sortGroup: Int {
         switch self {
-        case .sword, .spear, .hammer: return 0
+        case .sword, .spear, .hammer, .knife, .club, .relic: return 0
         case .gear: return 4
-        case .bow, .gun: return 1
+        case .bow, .gun, .sling: return 1
         case .ammo: return 2
         case .tool: return 3
         case .armor: return 4
@@ -1124,24 +1403,71 @@ enum Item: Hashable, Codable {
         }
     }
 
-    /// Short description lines for tooltips
+    /// Short description lines for tooltips: what the weapon is for, then its numbers
     var infoLines: [String] {
         switch self {
-        case .sword(let t): return ["Sword: quick, even swings", String(format: "Damage %.1f", t.damage)]
-        case .spear(let t): return ["Spear: long reach, runs through two foes", String(format: "Damage %.1f", t.damage * 0.95)]
-        case .hammer(let t): return ["Hammer: slow, heavy, smashes guards and stone", String(format: "Damage %.1f", t.damage * 1.75)]
+        case .sword, .spear, .hammer, .knife, .club, .relic:
+            let p: MeleeProfile = melee
+            var lines: [String] = [weaponBlurb]
+            lines.append(String(format: "Damage %.1f · every %.2f s", p.damage, p.cooldown))
+            let reachS: String = String(format: "Reach %.1f", p.reach)
+            let hits: String = p.maxHits >= 99 ? "hits all in the arc" : (p.maxHits == 1 ? "one foe" : "up to \(p.maxHits) foes")
+            lines.append(reachS + " · " + hits)
+            return lines
         case .gear(let g): return ["Gear: wear it in a gear slot", g.effect]
         case .tool(let k, let t): return [k.name + " (tool)", String(format: "Mining speed x%.1f", t.mineSpeed), "Tier \(t.rawValue)"]
         case .armor(let s, let t): return [s.name + " armour", String(format: "Defense +%.1f", t.defense * s.weight)]
         case .food(let f): return ["Food", String(format: "Restores %.0f hunger", f.hunger), f.heal > 0 ? String(format: "Heals %.0f", f.heal) : "Eat to recover"]
-        case .bow: return ["Bow: hold to draw, release to fire", "Uses arrows"]
-        case .gun(let g): return ["Firearm", String(format: "Damage %.0f", g.damage), "Magazine \(g.magazine)"]
+        case .bow: return ["Bow: hold to draw, release to fire", "Damage 5-14 · arcing shots", "Uses arrows"]
+        case .sling: return ["Sling: tap to throw a stone in a lob", "Damage 4.5 · every 0.55 s · big knockback", "Uses any stone or slate you carry"]
+        case .gun(let g):
+            var lines: [String] = [weaponBlurb]
+            if g == .blunderbuss {
+                lines.append(String(format: "7 pellets x %.1f · reload %.1f s", g.damage, g.reloadTime))
+            } else if g == .stormRod {
+                lines.append(String(format: "Damage %.0f, then leaps to 3 more · %d charges", g.damage, g.magazine))
+            } else {
+                lines.append(String(format: "Damage %.0f · %d loaded · reload %.1f s", g.damage, g.magazine, g.reloadTime))
+            }
+            if let a = g.ammo { lines.append("Uses " + a.name.lowercased() + "s") } else { lines.append("Recharges by itself") }
+            return lines
         case .ammo: return ["Ammunition"]
         case .part(let p): return [p.role, String(format: "Mass %.1f", p.mass)]
-        case .gadget: return ["Gadget: use it from the hotbar"]
+        case .gadget(let g):
+            if g == .fireFlask { return ["Throw it: bursts into fire that burns", "everything standing in it"] }
+            if g == .bomb { return ["Throw it: explodes after a moment", "Breaks blocks"] }
+            return ["Gadget: use it from the hotbar"]
         case .block(let t): return [t.solid ? "Building block" : "Placeable", t.light > 0 ? "Gives light" : (t.hardness >= 99 ? "Unbreakable" : String(format: "Hardness %.1f", t.hardness))]
         case .wall: return ["Background wall"]
-        case .mat: return ["Crafting material"]
+        case .mat(let m): return [m.use]
+        }
+    }
+
+    /// What a weapon is for, in a line
+    var weaponBlurb: String {
+        switch self {
+        case .sword: return "Sword: quick, even sweeps that hit every foe in front"
+        case .spear: return "Spear: long reach, a thrust that runs through two foes"
+        case .hammer: return "Hammer: slow and heavy, smashes guards and stone"
+        case .knife: return "Knife: fast stabs, every 3rd in a run hits double, deadly from behind"
+        case .club: return "Club: cheap blunt blows that leave foes dazed"
+        case .relic(let r):
+            switch r {
+            case .moonDagger: return "Relic knife: the restless dead fall to it twice as fast"
+            case .emberCleaver: return "Relic blade: a wide sweep that sets foes ablaze"
+            case .quakeMaul: return "Relic maul: its blow sends a quake along the ground"
+            }
+        case .gun(let g):
+            switch g {
+            case .pistol: return "Pistol: quick shots, six to a load"
+            case .rifle: return "Rifle: a heavy shot that runs through a foe"
+            case .crossbow: return "Crossbow: tap to fire a fast, flat bolt"
+            case .arbalest: return "Heavy crossbow: a crushing bolt through two foes"
+            case .blunderbuss: return "Blunderbuss: a close-range blast of pellets"
+            case .repeater: return "Repeater: five bolts in quick succession"
+            case .stormRod: return "Storm rod: lightning that leaps between foes"
+            }
+        default: return name
         }
     }
 
@@ -1152,6 +1478,10 @@ enum Item: Hashable, Codable {
         case .sword(let t): return t.name + " Sword"
         case .spear(let t): return t.name + " Spear"
         case .hammer(let t): return t.name + " War Hammer"
+        case .knife(let t): return t.name + " Knife"
+        case .club(let k): return k.name
+        case .relic(let r): return r.name
+        case .sling: return "Sling"
         case .gear(let g): return g.name
         case .armor(let s, let t): return t.armorName + " " + s.name
         case .mat(let m): return m.name
@@ -1169,21 +1499,31 @@ enum Item: Hashable, Codable {
         switch self {
         case .block, .mat, .food, .ammo, .wall: return 99
         case .part: return 20
-        case .gadget(let g): return g == .bomb ? 30 : 1
+        case .gadget(let g): return g == .bomb ? 30 : (g == .fireFlask ? 20 : 1)
         default: return 1
         }
     }
 
     var isWeapon: Bool {
         switch self {
-        case .sword, .spear, .hammer, .bow, .gun: return true
+        case .sword, .spear, .hammer, .knife, .club, .relic, .bow, .gun, .sling: return true
+        case .gadget(let g): return g == .bomb || g == .fireFlask
+        default: return false
+        }
+    }
+
+    /// a hand-held melee weapon (tools are not, though they can still hit)
+    var isMeleeWeapon: Bool {
+        switch self {
+        case .sword, .spear, .hammer, .knife, .club, .relic: return true
         default: return false
         }
     }
 
     var isRanged: Bool {
         switch self {
-        case .bow, .gun: return true
+        case .bow, .gun, .sling: return true
+        case .gadget(let g): return g == .bomb || g == .fireFlask
         default: return false
         }
     }
@@ -1194,48 +1534,57 @@ enum Item: Hashable, Codable {
         case .sword(let t): return t
         case .spear(let t): return t
         case .hammer(let t): return t
+        case .knife(let t): return t
         case .armor(_, let t): return t
         default: return nil
         }
     }
 
-    /// Melee damage when swung
-    var meleeDamage: Double {
+    /// How this item strikes when swung (anything can be swung; weapons are made for it)
+    var melee: MeleeProfile {
         switch self {
-        case .sword(let t): return t.damage
-        case .spear(let t): return t.damage * 0.95
-        case .hammer(let t): return t.damage * 1.75
-        case .tool(let k, let t):
-            switch k {
-            case .axe: return t.damage * 0.8
-            case .pickaxe: return t.damage * 0.6
-            case .shovel: return t.damage * 0.5
-            case .hoe: return t.damage * 0.4
+        case .sword(let t):
+            return MeleeProfile(damage: t.damage, cooldown: 0.42, reach: 3.0, halfArc: 1.1, style: .slash, knock: 6, trail: tierShade(t.color, 1.2))
+        case .spear(let t):
+            return MeleeProfile(damage: t.damage * 0.95, cooldown: 0.48, reach: 3.8, halfArc: 0.25, style: .thrust, band: 0.55, maxHits: 2, knock: 4.5, swingTime: 0.3, trail: tierShade(t.color, 1.2))
+        case .hammer(let t):
+            return MeleeProfile(damage: t.damage * 1.75, cooldown: 0.8, reach: 2.6, halfArc: 0.95, style: .smash, knock: 11.5, heavy: true, windup: 0.14, swingTime: 0.42, moveScale: 0.55, trail: tierShade(t.color, 1.1))
+        case .knife(let t):
+            return MeleeProfile(damage: t.damage * 0.48, cooldown: 0.24, reach: 2.0, halfArc: 0.6, style: .stab, maxHits: 1, knock: 3, swingTime: 0.16, critChance: 0.08, combo: true, backstab: 1.5, trail: tierShade(t.color, 1.3))
+        case .club(let k):
+            return MeleeProfile(damage: k.damage, cooldown: 0.62, reach: 2.5, halfArc: 0.85, style: .bash, maxHits: 2, knock: 8, daze: k.daze, windup: 0.06, swingTime: 0.32, moveScale: 0.8, trail: 0xE8D8B8)
+        case .relic(let r):
+            switch r {
+            case .moonDagger:
+                return MeleeProfile(damage: 6.5, cooldown: 0.24, reach: 2.1, halfArc: 0.65, style: .stab, maxHits: 1, knock: 3, swingTime: 0.16, critChance: 0.1, undeadMult: 2.0, combo: true, backstab: 1.6, trail: 0xC8E8FF)
+            case .emberCleaver:
+                return MeleeProfile(damage: 13, cooldown: 0.5, reach: 3.1, halfArc: 1.3, style: .slash, knock: 7, swingTime: 0.3, burn: 3.0, trail: 0xFF8A30)
+            case .quakeMaul:
+                return MeleeProfile(damage: 20, cooldown: 0.95, reach: 2.7, halfArc: 1.0, style: .smash, knock: 13, heavy: true, windup: 0.18, swingTime: 0.46, moveScale: 0.5, shockwave: true, trail: 0xE8C878)
             }
-        case .gun, .bow: return 2.0
-        default: return 1.5
+        case .tool(let k, let t):
+            var d: Double = t.damage * 0.4
+            switch k {
+            case .axe: d = t.damage * 0.8
+            case .pickaxe: d = t.damage * 0.6
+            case .shovel: d = t.damage * 0.5
+            case .hoe: d = t.damage * 0.4
+            }
+            return MeleeProfile(damage: d, cooldown: k == .axe ? 0.55 : 0.5, reach: 2.4, halfArc: 0.8, style: .slash, knock: 5, swingTime: 0.25, trail: 0xE0E0E0)
+        case .gun, .bow, .sling:
+            return MeleeProfile(damage: 2.0, cooldown: 0.4, reach: 1.9, halfArc: 0.7, style: .bash, knock: 4, swingTime: 0.22, trail: 0xD0D0D0)
+        default:
+            return Item.bareHands
         }
     }
 
-    var meleeCooldown: Double {
-        switch self {
-        case .sword: return 0.42
-        case .spear: return 0.48
-        case .hammer: return 0.8
-        case .tool(let k, _): return k == .axe ? 0.55 : 0.5
-        default: return 0.4
-        }
-    }
+    /// what an empty hand does
+    static let bareHands: MeleeProfile = MeleeProfile(damage: 1.5, cooldown: 0.4, reach: 1.8, halfArc: 0.75, style: .bash, knock: 4, swingTime: 0.22, trail: 0xE8D8C8)
 
-    var meleeReach: Double {
-        switch self {
-        case .sword: return 2.7
-        case .spear: return 3.5
-        case .hammer: return 2.3
-        case .tool: return 2.2
-        default: return 1.8
-        }
-    }
+    /// Melee damage when swung
+    var meleeDamage: Double { return melee.damage }
+    var meleeCooldown: Double { return melee.cooldown }
+    var meleeReach: Double { return melee.reach }
 
     var isFood: Bool {
         if case .food = self { return true }
@@ -1243,22 +1592,10 @@ enum Item: Hashable, Codable {
     }
 
     /// Knockback a melee hit gives
-    var meleeKnock: Double {
-        switch self {
-        case .spear: return 4.5
-        case .hammer: return 11.5
-        default: return 6.0
-        }
-    }
+    var meleeKnock: Double { return melee.knock }
 
     /// how long the swing animation of a melee attack lasts
-    var swingTime: Double {
-        switch self {
-        case .spear: return 0.3
-        case .hammer: return 0.42
-        default: return 0.25
-        }
-    }
+    var swingTime: Double { return melee.swingTime }
 }
 
 struct Stack: Codable, Hashable {
@@ -1407,6 +1744,19 @@ func iconMat(_ m: Mat) -> PixelBuf {
         b.ellipse(3.6, 4.2, 2.0, 2.0, 0x8A3CD0); b.ellipse(6.4, 4.2, 2.0, 2.0, 0x8A3CD0)
         b.rect(2, 5, 6, 2, 0x8A3CD0); b.rect(3, 7, 4, 1, 0x6A2AA8); b.rect(4, 8, 2, 1, 0x4A1A80)
         b.set(3, 3, 0xE0B8FF); b.set(4, 5, 0xFF60C0)
+    case .tinOre:
+        b.ellipse(5, 5.5, 3.6, 3.2, 0x8A8A8A)
+        b.ellipse(3.6, 4.6, 1.2, 1.1, 0xC8D2DA); b.ellipse(6.4, 6.6, 1.3, 1.1, 0xC8D2DA); b.set(3, 4, 0xF2F6FA); b.set(6, 6, 0xF2F6FA)
+    case .bronzeBar: bar(0xC89040)
+    case .saltpeter:
+        b.ellipse(5, 6.5, 3.8, 2.4, 0xD8D4C8); b.rect(3, 4, 2, 2, 0xF4F2EA); b.rect(5, 3, 2, 3, 0xFFFFFF); b.set(7, 5, 0xEDEAE0); b.set(2, 7, 0xB8B4A8)
+    case .silverOre:
+        b.ellipse(5, 5.5, 3.6, 3.2, 0x7E8088)
+        b.line(2, 7, 7, 3, 0xC4CCD8); b.line(3, 7, 7, 4, 0xDDE4EE); b.set(6, 3, 0xFFFFFF); b.set(3, 7, 0xFFFFFF)
+    case .silverBar: bar(0xD8DEE8)
+    case .amethyst:
+        b.line(3, 8, 4, 2, 0xB07AE8); b.line(4, 8, 5, 3, 0x7A3CBC); b.line(5, 8, 7, 3, 0x9A5ADC); b.line(6, 8, 8, 5, 0x7A3CBC)
+        b.rect(2, 8, 7, 1, 0x5A2A8A); b.set(4, 3, 0xEEDCFF); b.set(6, 4, 0xEEDCFF)
     }
     b.outline(0x1A1410)
     return b
@@ -1443,6 +1793,126 @@ func iconHammer(_ tier: Tier) -> PixelBuf {
     return b
 }
 
+func iconKnife(_ tier: Tier) -> PixelBuf {
+    var b = PixelBuf(w: 12, h: 12)
+    let m: UInt32 = tier.color
+    // a short, broad blade on the sword's diagonal, a stubby guard and a wrapped grip
+    b.line(6, 5, 10, 1, m)
+    b.line(6, 6, 10, 2, tierShade(m, 0.7))
+    b.line(5, 5, 9, 1, tierShade(m, 1.35))
+    b.line(4, 5, 6, 7, 0x6A6A74)
+    b.line(2, 9, 5, 6, 0x6A4220)
+    b.set(3, 8, 0x9A6A32)
+    b.set(2, 9, 0x9A6A32)
+    b.outline(0x1A1410)
+    return b
+}
+
+func iconClub(_ k: ClubKind) -> PixelBuf {
+    var b = PixelBuf(w: 12, h: 12)
+    switch k {
+    case .wooden, .studded:
+        // a haft that swells into a knotted head
+        b.line(1, 11, 5, 7, 0x7A5428)
+        b.line(2, 11, 5, 8, 0x5E3C1C)
+        b.ellipse(7.8, 4.2, 3.2, 3.2, 0x9A6A32)
+        b.ellipse(7.2, 3.6, 1.6, 1.4, 0xB98A4E)
+        b.set(9, 6, 0x6A4220)
+        if k == .studded {
+            for (x, y) in [(6, 2), (9, 2), (10, 5), (7, 6), (5, 4)] { b.set(x, y, 0xD8D8E0) }
+        }
+    case .mace:
+        b.line(1, 11, 6, 6, 0x6A4220)
+        b.line(2, 11, 6, 7, 0x4A3018)
+        b.ellipse(8, 4, 2.8, 2.8, 0xC89040)
+        b.ellipse(7.4, 3.4, 1.2, 1.2, 0xF0C070)
+        b.rect(7, 0, 2, 1, 0xA87030); b.rect(11, 3, 1, 2, 0xA87030); b.rect(4, 3, 1, 2, 0xA87030); b.rect(7, 7, 2, 1, 0xA87030)
+    }
+    b.outline(0x1A1410)
+    return b
+}
+
+func iconSling() -> PixelBuf {
+    var b = PixelBuf(w: 12, h: 12)
+    // two cords meeting in a leather pouch that holds a stone
+    b.line(1, 1, 6, 8, 0xC8B080)
+    b.line(4, 1, 7, 7, 0xA89060)
+    b.ellipse(7.5, 8.5, 2.6, 2.0, 0x8A5A2A)
+    b.ellipse(7.5, 8.0, 1.4, 1.2, 0x9A9A9A)
+    b.set(7, 7, 0xC8C8C8)
+    b.rect(0, 0, 2, 2, 0x6A4220)
+    b.outline(0x1A1410)
+    return b
+}
+
+func iconRelic(_ r: Relic) -> PixelBuf {
+    var b = PixelBuf(w: 12, h: 12)
+    switch r {
+    case .moonDagger:
+        b.line(5, 6, 11, 0, 0xDDE4EE)
+        b.line(6, 6, 11, 1, 0x9AA8C0)
+        b.line(5, 5, 10, 0, 0xFFFFFF)
+        b.line(3, 5, 6, 8, 0x8AA8E8)
+        b.line(1, 10, 4, 7, 0x3A4A7A)
+        b.set(1, 10, 0xC8E8FF)
+        b.set(9, 3, 0xC8E8FF)
+    case .emberCleaver:
+        // a broad, hooked blade glowing along its edge
+        b.line(1, 11, 4, 8, 0x4A3018)
+        b.rect(4, 6, 2, 2, 0x3A2A2A)
+        b.line(5, 5, 10, 0, 0x5A3A3A)
+        b.line(6, 6, 11, 1, 0xC0401A)
+        b.line(7, 6, 11, 2, 0xFF7A1E)
+        b.line(7, 7, 11, 3, 0xFFC050)
+        b.set(11, 0, 0xFFE080)
+    case .quakeMaul:
+        b.line(1, 11, 6, 6, 0x6A4A26)
+        b.line(2, 11, 6, 7, 0x4A3018)
+        b.rect(4, 0, 7, 5, 0x8A8070)
+        b.rect(4, 0, 7, 1, 0xB8AC90)
+        b.rect(4, 4, 7, 1, 0x5A5448)
+        b.line(6, 1, 8, 3, 0xF0C860)
+        b.line(8, 3, 9, 1, 0xF0C860)
+    }
+    b.outline(0x1A1410)
+    return b
+}
+
+func iconLauncher(_ g: GunType) -> PixelBuf {
+    var b = PixelBuf(w: 12, h: 12)
+    switch g {
+    case .crossbow, .arbalest, .repeater:
+        let prod: UInt32 = g == .crossbow ? 0xA06A2E : (g == .arbalest ? 0x9AA0AA : 0xC89040)
+        // a stock pointing right, the bow arms across its front, the drawn string behind them
+        b.rect(1, 6, 9, 2, 0x8A5A2A)
+        b.rect(1, 7, 3, 2, 0x6A4220)
+        b.line(9, 1, 10, 5, prod); b.line(10, 8, 9, 11, prod); b.rect(9, 5, 2, 3, prod)
+        b.line(9, 1, 6, 6, 0xE8E8E8); b.line(6, 7, 9, 11, 0xE8E8E8)
+        b.rect(7, 5, 4, 1, 0xC8C8D0)
+        if g == .arbalest { b.rect(0, 5, 2, 1, 0x6A6E78); b.set(0, 4, 0x6A6E78) }
+        if g == .repeater { b.rect(4, 3, 4, 3, 0x7A5428); b.rect(4, 3, 4, 1, 0xC89040) }
+    case .blunderbuss:
+        b.rect(3, 4, 7, 2, 0x5A5A64)
+        b.rect(3, 4, 7, 1, 0x7A7A84)
+        b.rect(10, 2, 2, 6, 0x6A6A74)
+        b.rect(11, 3, 1, 4, 0x2A2A30)
+        b.rect(0, 5, 4, 3, 0x8A5A2A)
+        b.rect(4, 6, 2, 2, 0x6A4220)
+        b.set(1, 5, 0xB07A40)
+    case .stormRod:
+        b.line(1, 11, 8, 4, 0xC4CCD8)
+        b.line(2, 11, 8, 5, 0x8A929E)
+        b.ellipse(9, 2.8, 2.2, 2.2, 0x9A5ADC)
+        b.ellipse(8.6, 2.4, 1.0, 1.0, 0xEEDCFF)
+        b.set(11, 0, 0xFFF4A0); b.set(11, 5, 0xFFF4A0); b.set(6, 1, 0xFFF4A0)
+        b.rect(6, 6, 2, 1, 0xD2793A)
+    default:
+        break
+    }
+    b.outline(0x1A1410)
+    return b
+}
+
 func iconGear(_ g: Gear) -> PixelBuf {
     var b = PixelBuf(w: 12, h: 12)
     switch g {
@@ -1463,6 +1933,11 @@ func iconGear(_ g: Gear) -> PixelBuf {
     case .emberCharm:
         b.line(3, 1, 6, 4, 0xC8A040); b.line(9, 1, 6, 4, 0xC8A040)
         b.ellipse(6, 7, 3.0, 3.4, 0xE8580C); b.ellipse(6, 7.4, 1.8, 2.0, 0xFFA030); b.set(6, 7, 0xFFE680); b.set(5, 5, 0xFFD060)
+    case .silverCharm:
+        // a silver crescent on a fine chain
+        b.line(3, 1, 6, 4, 0xA8AEB8); b.line(9, 1, 6, 4, 0xA8AEB8)
+        b.ellipse(6, 7.5, 3.4, 3.4, 0xDDE4EE); b.ellipse(7.4, 6.6, 2.6, 2.6, 0)
+        b.set(4, 8, 0xFFFFFF); b.set(5, 10, 0xB8C0CC); b.set(3, 6, 0xFFFFFF)
     }
     b.outline(0x1A1410)
     return b
@@ -1500,6 +1975,19 @@ func iconMisc(_ it: Item) -> PixelBuf {
         b.line(9, 0, 11, 3, 0x7A4A1E); b.line(11, 3, 11, 8, 0x7A4A1E); b.line(11, 8, 9, 11, 0x7A4A1E)
         b.line(8, 0, 8, 11, 0xE8E8E8)
         b.line(2, 6, 7, 6, 0xB08A5A); b.set(1, 6, 0xDDDDDD)
+    case .gun(let g) where g != .pistol && g != .rifle:
+        return iconLauncher(g)
+    case .ammo(.bolt):
+        b.line(2, 9, 8, 3, 0x7A5428); b.line(3, 9, 8, 4, 0x5E3C1C)
+        b.rect(8, 2, 2, 2, 0xC89040); b.set(10, 1, 0xF0C070)
+        b.line(1, 10, 2, 8, 0xC8C8D0); b.line(1, 10, 3, 10, 0xC8C8D0)
+    case .gadget(.fireFlask):
+        b.ellipse(6, 7.5, 3.6, 3.4, 0xB8E0F0)
+        b.ellipse(6, 8.2, 2.8, 2.4, 0xFF7A1E)
+        b.ellipse(5.4, 7.4, 1.2, 1.0, 0xFFD060)
+        b.rect(5, 2, 2, 2, 0xB8E0F0)
+        b.rect(5, 1, 2, 1, 0x8A5A2A)
+        b.set(8, 6, 0xFFFFFF)
     case .gun(let g):
         if g == .pistol {
             b.rect(2, 3, 8, 2, 0x6A6A74); b.rect(2, 5, 4, 2, 0x5A5A64); b.rect(2, 5, 2, 4, 0x8A5A2A); b.rect(9, 2, 2, 1, 0x9A9AA4); b.set(6, 5, 0x3A3A44)
@@ -1534,6 +2022,7 @@ func iconMisc(_ it: Item) -> PixelBuf {
         }
     case .gadget(let g):
         switch g {
+        case .fireFlask: break
         case .shears: b.line(2, 9, 8, 3, 0xC8C8D0); b.line(3, 3, 9, 9, 0xA8A8B0); b.ellipse(2.5, 9.5, 1.6, 1.6, 0xD04A3A); b.ellipse(9.5, 9.5, 1.6, 1.6, 0xD04A3A)
         case .wrench: b.line(2, 10, 8, 4, 0xB8B8C0); b.line(3, 10, 9, 4, 0x8A8A94); b.ellipse(9, 3, 2.2, 2.2, 0xB8B8C0); b.rect(9, 1, 2, 2, 0)
         case .treasureMap:
@@ -1570,6 +2059,10 @@ func itemBuf(_ it: Item) -> PixelBuf {
     case .sword(let t): return iconSword(t)
     case .spear(let t): return iconSpear(t)
     case .hammer(let t): return iconHammer(t)
+    case .knife(let t): return iconKnife(t)
+    case .club(let k): return iconClub(k)
+    case .relic(let r): return iconRelic(r)
+    case .sling: return iconSling()
     case .gear(let g): return iconGear(g)
     case .armor(let s, let t): return iconArmor(s, t)
     case .mat(let m): return iconMat(m)
@@ -1699,6 +2192,7 @@ enum RecipeBook {
         add(.block(.riftForge), 1, [(.block(.obsidian), 12), (.block(.glowCrystal), 4), (.mat(.emberBar), 2)], .anvil, .basic)
         add(.mat(.string), 2, [(.mat(.wool), 1)], .hand, .basic)
         add(.mat(.gunpowder), 2, [(coal, 1), (.block(.sand), 1)], .bench, .basic)
+        add(.mat(.gunpowder), 4, [(coal, 1), (.mat(.saltpeter), 1)], .bench, .basic)
         add(.block(.glass), 1, [(.block(.sand), 2)], .furnace, .smelt)
         // Building: platforms, ladders, storage, light, doors and background walls (no collision)
         add(.block(.platform), 4, [(planks, 2)], .hand, .build)
@@ -1714,6 +2208,10 @@ enum RecipeBook {
         add(.wall(1), 4, [(.block(.dirt), 1)], .bench, .build)
         add(.wall(7), 4, [(.block(.sandstone), 1)], .bench, .build)
         add(.wall(4), 4, [(.block(.ashStone), 1)], .bench, .build)
+        add(.block(.amethystBlock), 1, [(.mat(.amethyst), 4)], .bench, .build)
+        add(.block(.lantern), 1, [(.mat(.bronzeBar), 1), (.block(.torch), 1)], .bench, .build)
+        add(.block(.rail), 8, [(.mat(.bronzeBar), 1), (stick, 2)], .bench, .build)
+        add(.block(.crate), 1, [(planks, 6)], .bench, .build)
         // Smelting
         add(.mat(.copperBar), 1, [(.mat(.copperOre), 2), (coal, 1)], .furnace, .smelt)
         add(.mat(.ironBar), 1, [(.mat(.ironOre), 2), (coal, 1)], .furnace, .smelt)
@@ -1721,6 +2219,9 @@ enum RecipeBook {
         add(.mat(.mythrilBar), 1, [(.mat(.mythrilOre), 3), (coal, 2)], .furnace, .smelt)
         add(.mat(.emberBar), 1, [(.mat(.emberOre), 3), (coal, 1)], .furnace, .smelt)
         add(.mat(.voidBar), 1, [(.mat(.voidOre), 3), (coal, 2)], .furnace, .smelt)
+        // bronze is copper with a little tin; silver smelts like the other metals
+        add(.mat(.bronzeBar), 2, [(.mat(.copperOre), 2), (.mat(.tinOre), 1), (coal, 1)], .furnace, .smelt)
+        add(.mat(.silverBar), 1, [(.mat(.silverOre), 2), (coal, 1)], .furnace, .smelt)
         // Food
         add(.food(.cookedMeat), 1, [(.food(.rawMeat), 1)], .campfire, .food)
         add(.food(.cookedFish), 1, [(.food(.rawFish), 1)], .campfire, .food)
@@ -1737,6 +2238,7 @@ enum RecipeBook {
             add(.sword(t), 1, [(m, 2), (stick, 1)], st, .weapons)
             add(.spear(t), 1, [(m, 2), (stick, 3)], st, .weapons)
             add(.hammer(t), 1, [(m, 4), (stick, 2)], st, .weapons)
+            if t != .wood { add(.knife(t), 1, [(m, 1), (stick, 1)], st, .weapons) }
             let a: Item = armorMaterial(t)
             add(.armor(.head, t), 1, [(a, 5)], st, .armor)
             add(.armor(.chest, t), 1, [(a, 8)], st, .armor)
@@ -1751,9 +2253,24 @@ enum RecipeBook {
         add(.gadget(.shears), 1, [(.mat(.ironBar), 2)], .anvil, .tools)
         add(.gadget(.wrench), 1, [(.mat(.ironBar), 3), (stick, 1)], .anvil, .tools)
         add(.gadget(.bomb), 3, [(.mat(.gunpowder), 2), (.mat(.ironBar), 1), (.mat(.string), 1)], .bench, .weapons)
+        // the club line: a crude start, studded with bone, then a bronze mace
+        add(.club(.wooden), 1, [(planks, 3), (stick, 1)], .hand, .weapons)
+        add(.club(.studded), 1, [(.club(.wooden), 1), (.mat(.bone), 3)], .bench, .weapons)
+        add(.club(.mace), 1, [(.club(.studded), 1), (.mat(.bronzeBar), 4)], .anvil, .weapons)
+        add(.sling, 1, [(.mat(.leather), 1), (.mat(.string), 2)], .hand, .weapons)
+        // bolt throwers: bronze makes the crossbow and its bolts; iron makes the heavy one
+        add(.gun(.crossbow), 1, [(.mat(.bronzeBar), 3), (planks, 3), (.mat(.string), 2)], .bench, .weapons)
+        add(.ammo(.bolt), 8, [(.mat(.bronzeBar), 1), (stick, 2)], .bench, .weapons)
+        add(.ammo(.bolt), 8, [(.mat(.ironBar), 1), (stick, 2)], .anvil, .weapons)
+        add(.gun(.arbalest), 1, [(.gun(.crossbow), 1), (.mat(.ironBar), 4), (.mat(.string), 2)], .anvil, .weapons)
+        add(.gun(.blunderbuss), 1, [(.mat(.bronzeBar), 5), (.mat(.ironBar), 2), (planks, 2), (.mat(.gunpowder), 2)], .anvil, .weapons)
+        add(.gadget(.fireFlask), 2, [(.block(.glass), 1), (.mat(.saltpeter), 1), (coal, 1)], .bench, .weapons)
+        add(.gun(.stormRod), 1, [(.mat(.silverBar), 3), (.mat(.amethyst), 4), (.mat(.copperBar), 2), (.mat(.goldBar), 1)], .tinker, .weapons)
         // Gear, worn in the two gear slots
         add(.gear(.divingMask), 1, [(.block(.glass), 3), (.mat(.copperBar), 2), (.mat(.leather), 1)], .bench, .gear)
         add(.gear(.headlamp), 1, [(.mat(.ironBar), 2), (.mat(.crystalShard), 1), (.block(.torch), 1)], .tinker, .gear)
+        add(.gear(.headlamp), 1, [(.mat(.ironBar), 2), (.mat(.amethyst), 2), (.block(.torch), 1)], .tinker, .gear)
+        add(.gear(.silverCharm), 1, [(.mat(.silverBar), 4), (.mat(.string), 1)], .anvil, .gear)
         add(.gear(.swiftBoots), 1, [(.mat(.leather), 4), (.mat(.feather), 3), (.mat(.goldBar), 2)], .anvil, .gear)
         add(.gear(.emberCharm), 1, [(.mat(.emberBar), 3), (.block(.glowCrystal), 2), (.mat(.crystalShard), 1)], .forge, .gear)
         add(.gear(.wardenSigil), 1, [(.mat(.umbralHeart), 1), (.mat(.voidBar), 4), (.mat(.crystalShard), 4)], .forge, .gear)
@@ -1771,6 +2288,7 @@ enum RecipeBook {
         add(.part(.fuelTank), 1, [(.mat(.ironBar), 3), (.block(.glass), 1)], .tinker, .vehicle)
         add(.part(.hull), 1, [(planks, 6), (.mat(.string), 2)], .bench, .vehicle)
         add(.part(.propeller), 1, [(.mat(.ironBar), 3)], .tinker, .vehicle)
+        add(.part(.propeller), 1, [(.mat(.bronzeBar), 3)], .tinker, .vehicle)
         add(.part(.paddle), 1, [(planks, 2), (stick, 2)], .bench, .vehicle)
         add(.part(.drill), 1, [(.mat(.ironBar), 6), (.mat(.copperBar), 2)], .tinker, .vehicle)
         add(.part(.diamondDrill), 1, [(.part(.drill), 1), (.mat(.diamond), 4), (.mat(.goldBar), 2)], .tinker, .vehicle)
@@ -4374,9 +4892,10 @@ struct WorldGen {
     let spawnX: Int
     /// 1 = original rules (kept for worlds saved before ocean basins), 2 = with ocean basins,
     /// 3 = buildings and lairs that never wall off the way along the ground, birch and pine trees,
-    /// surface landmarks, crystal grottos and abandoned mines
+    /// surface landmarks, crystal grottos and abandoned mines, 4 = mines grown into branching networks
+    /// (side rooms, drifts down ladders, dead ends, collapses hiding chests, a great chamber)
     let genVersion: Int
-    static let currentVersion: Int = 3
+    static let currentVersion: Int = 4
     let options: WorldOptions
     let rareChance: Double
     let zones: [Int]
@@ -5040,12 +5559,23 @@ struct OreRule {
     var thr: Double
     var p: Double
     var salt: UInt64
+    /// above 0: the ore only forms where a broad regional field passes this value, so it is common in
+    /// some stretches of land and absent from others
+    var region: Double = 0
 }
 
+/// Ores by depth (rows count down from the sky; the sea is at 120). Each rule is a field of blobs: rock
+/// where the field passes `thr` turns to ore with chance `p`. The first rule that matches wins, so
+/// the rare ones come first. Shallow ground has coal, copper, saltpeter and (in some regions) tin;
+/// iron and silver start in the middle depths; gold, diamond and mythril are kept for the deep.
 let oreRules: [OreRule] = [
-    OreRule(tile: .coal, minY: 128, maxY: 340, thr: 0.80, p: 0.70, salt: 31),
-    OreRule(tile: .copper, minY: 150, maxY: 370, thr: 0.84, p: 0.65, salt: 32),
-    OreRule(tile: .iron, minY: 205, maxY: 450, thr: 0.855, p: 0.62, salt: 33),
+    OreRule(tile: .amethyst, minY: 150, maxY: 330, thr: 0.967, p: 0.9, salt: 41),
+    OreRule(tile: .saltpeter, minY: 112, maxY: 205, thr: 0.865, p: 0.55, salt: 42),
+    OreRule(tile: .tin, minY: 122, maxY: 265, thr: 0.845, p: 0.62, salt: 43, region: 0.47),
+    OreRule(tile: .coal, minY: 120, maxY: 340, thr: 0.81, p: 0.66, salt: 31),
+    OreRule(tile: .copper, minY: 125, maxY: 345, thr: 0.84, p: 0.65, salt: 32),
+    OreRule(tile: .silver, minY: 200, maxY: 400, thr: 0.913, p: 0.6, salt: 44),
+    OreRule(tile: .iron, minY: 205, maxY: 450, thr: 0.86, p: 0.56, salt: 33),
     OreRule(tile: .gold, minY: 310, maxY: 530, thr: 0.885, p: 0.58, salt: 34),
     OreRule(tile: .diamond, minY: 390, maxY: 548, thr: 0.925, p: 0.55, salt: 35),
     OreRule(tile: .mythril, minY: 455, maxY: 548, thr: 0.945, p: 0.55, salt: 36)
@@ -5060,8 +5590,20 @@ func oreBias(_ b: Biome, _ t: Tile) -> Double {
     case (.jungle, .copper): return 0.04
     case (.savanna, .gold): return 0.03
     case (.swamp, .coal): return 0.05
+    // saltpeter crusts form in dry ground and hardly at all in wet
+    case (.desert, .saltpeter): return 0.05
+    case (.savanna, .saltpeter): return 0.04
+    case (.mountain, .saltpeter): return 0.02
+    case (.swamp, .saltpeter), (.jungle, .saltpeter), (.ocean, .saltpeter): return -0.2
+    case (.mountain, .tin), (.tundra, .tin): return 0.03
+    case (.mountain, .silver), (.tundra, .silver): return 0.02
     default: return 0
     }
+}
+
+/// the broad field that decides where regional ores (tin) form
+func oreRegion(_ x: Int, _ salt: UInt64, _ seed: UInt64) -> Double {
+    return vnoise(Double(x) * 0.006, 0.37, seed &+ salt &+ 900)
 }
 
 extension WorldGen {
@@ -5095,6 +5637,7 @@ extension WorldGen {
         let fy: Double = Double(y)
         for r in oreRules {
             if y < r.minY || y > r.maxY { continue }
+            if r.region > 0 && oreRegion(x, r.salt, seed) < r.region { continue }
             let blob: Double = vnoise(fx * 0.22, fy * 0.22, seed &+ r.salt)
             if blob + oreBias(biome, r.tile) > r.thr {
                 if hash2(x, y, seed &+ 40 &+ r.salt) < r.p { return r.tile }
@@ -5189,7 +5732,7 @@ func generateOverworldChunk(_ g: WorldGen, _ cx: Int) -> Chunk {
     func blocked(_ x: Int) -> Bool {
         for v in villages { if abs(x - v.x) < v.halfW + 6 { return true } }
         for r in rares { if abs(x - r.x) < 16 { return true } }
-        for mn in mines { if x >= mn.x - 6 && x <= mn.x + 8 { return true } }
+        for mn in mines { if x >= mn.x - 6 && x <= mn.x + (mn.plan == nil ? 8 : 11) { return true } }
         for mx in mouths { if abs(x - mx) < 16 { return true } }
         if let l = g.lairAt(x, radius: 110) { _ = l; return true }
         // flat worlds keep the spawn point clear of trees, and trees out of ponds
@@ -5557,7 +6100,9 @@ struct GenSampler {
         var k: Int = 0
         while k < nOre {
             let lo: Int = max(oreRules[k].minY, h + 9)
-            let hi: Int = min(oreRules[k].maxY, H - 6)
+            var hi: Int = min(oreRules[k].maxY, H - 6)
+            // a regional ore is missing from this column altogether outside its region
+            if oreRules[k].region > 0 && oreRegion(cx, oreSalt[k], seed) < oreRules[k].region { hi = lo - 1 }
             oreLo[k] = lo
             oreHi[k] = hi
             if hi >= lo { fill(ores + k * H, seed &+ oreSalt[k], fx * 0.22, 0.22, lo, hi) }
@@ -6304,9 +6849,13 @@ struct MineSite {
     var left: [Int]
     var right: [Int]
     var seed: UInt64
+    /// worlds made with generator version 4 or later: the whole network, laid out once
+    var plan: MinePlan? = nil
     var bottom: Int { return levels.last ?? ground }
-    var minX: Int { return x - (left.max() ?? 0) - 3 }
-    var maxX: Int { return x + 2 + (right.max() ?? 0) + 3 }
+    var minX: Int { if let p = plan { return p.minX - 2 }; return x - (left.max() ?? 0) - 3 }
+    var maxX: Int { if let p = plan { return p.maxX + 2 }; return x + 2 + (right.max() ?? 0) + 3 }
+    /// the lowest open row anywhere in the mine
+    var deepest: Int { return max(bottom, plan?.maxY ?? bottom) }
 }
 
 extension WorldGen {
@@ -6411,7 +6960,7 @@ extension WorldGen {
 
     func computeMineSite(cell c: Int) -> MineSite? {
         if !hasMines { return nil }
-        if hash2(c, 621, seed) > 0.55 { return nil }
+        if hash2(c, 621, seed) > (genVersion >= 4 ? 0.62 : 0.55) { return nil }
         let cw: Int = WorldGen.mineCell
         let ok: [Biome] = [.plains, .forest, .mountain, .tundra, .savanna, .desert]
         // a few tries across the cell for a level spot to sink the shaft
@@ -6435,6 +6984,12 @@ extension WorldGen {
             if let b = usable(x) { found = (x, b); break }
         }
         guard let (x, base) = found else { return nil }
+        if genVersion >= 4 {
+            let (plan, levels, lefts, rights) = planMine(cell: c, x: x, ground: base.h)
+            var site = MineSite(cell: c, x: x, ground: base.h, levels: levels, left: lefts, right: rights, seed: hashU(c, 624, seed))
+            site.plan = plan
+            return site
+        }
         let depth: Int = 60 + Int(hash2(c, 623, seed) * 100.0)
         let n: Int = depth > 130 ? 3 : (depth > 90 ? 2 : 1)
         var levels: [Int] = []
@@ -6452,7 +7007,8 @@ extension WorldGen {
         var out: [MineSite] = []
         if !hasMines { return out }
         let cw: Int = WorldGen.mineCell
-        for c in floorDiv(x0 - 80, cw)...floorDiv(x1 + 80, cw) {
+        let reach: Int = genVersion >= 4 ? 160 : 80
+        for c in floorDiv(x0 - reach, cw)...floorDiv(x1 + reach, cw) {
             if let s = mineSite(cell: c), s.maxX >= x0 && s.minX <= x1 { out.append(s) }
         }
         return out
@@ -6575,6 +7131,16 @@ func buildMine(_ g: WorldGen, _ ch: Chunk, _ s: MineSite) {
     ch.put(sx + 1, gy - 5, .lantern)
     ch.put(sx - 2, gy - 1, .torch)
     ch.put(sx + 4, gy - 1, .torch)
+    if let plan = s.plan {
+        // version 4: the shaft is covered with boards you drop through; the network lies below
+        if let r = clipped(sx, sx + 2) { for x in r { ch.put(x, gy, .platform) } }
+        // an ore cart left on a short run of rail by the headframe
+        if let r = clipped(sx + 5, sx + 9) {
+            for x in r where (ch.at(x, gy - 1) == .air || ch.at(x, gy - 1).isPlant) && ch.at(x, gy).solid { ch.put(x, gy - 1, x == sx + 7 ? .oreCart : .rail) }
+        }
+        buildMinePlan(g, ch, s, plan)
+        return
+    }
     let galleryRows: Set<Int> = Set(s.levels.flatMap { [$0 - 3, $0 - 2, $0 - 1] })
     // the shaft: covered with planks you can drop through, a ladder all the way down
     if let r = clipped(sx, sx + 2) {
@@ -6633,6 +7199,515 @@ func buildMine(_ g: WorldGen, _ ch: Chunk, _ s: MineSite) {
         let rubble: Int = chestLeft ? xb : xa
         ch.put(rubble, f - 1, .stone)
         ch.put(rubble, f - 2, .stone)
+    }
+}
+
+// MARK: - Old mines, version 4: a branching network round a laddered shaft
+
+/// Where a chest in a mine sits, which sets what it may hold: out in a gallery, in a side room or at
+/// a dead end, or hidden (behind fallen rock, or in a nook high in a chamber roof)
+enum MineSpot: Int {
+    case open, room, hidden
+}
+
+struct MineChest {
+    var x: Int
+    var y: Int
+    var spot: MineSpot
+    /// 0 for the top gallery, rising with depth (the great chamber counts one deeper)
+    var depth: Int
+}
+
+/// A column of open space carved out of the rock
+struct MineSpan {
+    var x: Int
+    var y0: Int
+    var y1: Int
+}
+
+struct MineTile {
+    var x: Int
+    var y: Int
+    var t: Tile
+}
+
+struct MineWall {
+    var x: Int
+    var y0: Int
+    var y1: Int
+}
+
+/// Everything a v4 mine is made of, worked out once per site: the spaces to carve, the floors to make
+/// sound, the timber walls behind, the fittings, the ore showing in the walls and the chests. Each
+/// chunk applies the part that falls inside it, in the same order, so a mine is seamless across chunks.
+struct MinePlan {
+    var carve: [MineSpan] = []
+    var floors: [MineTile] = []
+    var walls: [MineWall] = []
+    var tiles: [MineTile] = []
+    /// ore exposed in the rock face: only placed where the rock is still solid
+    var ores: [MineTile] = []
+    var chests: [MineChest] = []
+    var minX: Int = 0
+    var maxX: Int = 0
+    var maxY: Int = 0
+    /// how the mine is laid out (for tests, and to keep the variety honest)
+    var tunnels: Int = 0
+    var rooms: Int = 0
+    var chambers: Int = 0
+    var winzes: Int = 0
+    var deadEnds: Int = 0
+}
+
+/// One gallery as laid out: where it starts, which way it runs and its floor row at each column
+struct MineRun {
+    var startX: Int
+    var dir: Int
+    var floors: [Int]
+    var depth: Int
+    func x(_ k: Int) -> Int { return startX + dir * k }
+}
+
+/// Builds a plan. Everything is drawn from the site's own seeded generator, so the same world seed
+/// always gives the same mine. Side workings are tried one at a time and kept only if the space they
+/// would open does not run into space already opened (apart from where they are meant to join),
+/// so no drift ever cuts across a gallery or lays its floor in someone else's way.
+struct MinePlanner {
+    var plan: MinePlan = MinePlan()
+    var rng: RNG
+    let shaftX: Int
+    let ground: Int
+    /// every open cell so far, for the overlap test
+    var open: Set<Int> = []
+
+    init(seed: UInt64, shaftX: Int, ground: Int) {
+        rng = RNG(seed)
+        self.shaftX = shaftX
+        self.ground = ground
+        plan.minX = shaftX - 3
+        plan.maxX = shaftX + 5
+    }
+
+    @inline(__always) static func key(_ x: Int, _ y: Int) -> Int { return x &* 4096 &+ y }
+
+    mutating func chance(_ p: Double) -> Bool { return rng.double() < p }
+    mutating func range(_ lo: Int, _ hi: Int) -> Int { return lo + rng.int(max(1, hi - lo + 1)) }
+
+    mutating func carve(_ x: Int, _ y0: Int, _ y1: Int) {
+        if y1 < y0 { return }
+        plan.carve.append(MineSpan(x: x, y0: y0, y1: y1))
+        plan.minX = min(plan.minX, x - 1)
+        plan.maxX = max(plan.maxX, x + 1)
+        plan.maxY = max(plan.maxY, y1 + 1)
+    }
+
+    mutating func tile(_ x: Int, _ y: Int, _ t: Tile) { plan.tiles.append(MineTile(x: x, y: y, t: t)) }
+    mutating func floor(_ x: Int, _ y: Int) { plan.floors.append(MineTile(x: x, y: y, t: .planks)) }
+    mutating func wall(_ x: Int, _ y0: Int, _ y1: Int) { plan.walls.append(MineWall(x: x, y0: y0, y1: y1)) }
+    mutating func ore(_ x: Int, _ y: Int, _ t: Tile) { plan.ores.append(MineTile(x: x, y: y, t: t)) }
+
+    /// chests go in last, each on sound floor (see buildMinePlan)
+    mutating func chest(_ x: Int, _ y: Int, _ spot: MineSpot, _ depth: Int) {
+        if plan.chests.contains(where: { abs($0.x - x) <= 1 && $0.y == y }) { return }
+        plan.chests.append(MineChest(x: x, y: y, spot: spot, depth: depth))
+    }
+
+    /// marks everything carved since `from` as open
+    mutating func commit(_ from: Int) {
+        var i: Int = from
+        while i < plan.carve.count {
+            let sp: MineSpan = plan.carve[i]
+            for y in sp.y0...sp.y1 { open.insert(MinePlanner.key(sp.x, y)) }
+            i += 1
+        }
+    }
+
+    /// Lays out a side working with `body`; keeps it only if what it carves (and the floor and fittings
+    /// it lays) stays clear of space opened before, except inside the joint (`jx0...jx1` x `jy0...jy1`)
+    @discardableResult
+    mutating func attempt(_ jx0: Int, _ jx1: Int, _ jy0: Int, _ jy1: Int, _ body: (inout MinePlanner) -> Void) -> Bool {
+        let snap: MinePlan = plan
+        let c0: Int = plan.carve.count
+        let f0: Int = plan.floors.count
+        let t0: Int = plan.tiles.count
+        body(&self)
+        func clash(_ x: Int, _ y: Int) -> Bool {
+            if x >= jx0 && x <= jx1 && y >= jy0 && y <= jy1 { return false }
+            return open.contains(MinePlanner.key(x, y))
+        }
+        var bad: Bool = false
+        var i: Int = c0
+        while i < plan.carve.count && !bad {
+            let sp: MineSpan = plan.carve[i]
+            for y in (sp.y0 - 1)...(sp.y1 + 1) where clash(sp.x, y) || clash(sp.x - 1, y) || clash(sp.x + 1, y) { bad = true; break }
+            i += 1
+        }
+        // a floor plank or a fitting laid inside space that is already open would be in the way
+        var j: Int = f0
+        while j < plan.floors.count && !bad { if clash(plan.floors[j].x, plan.floors[j].y) { bad = true }; j += 1 }
+        var k: Int = t0
+        while k < plan.tiles.count && !bad { if clash(plan.tiles[k].x, plan.tiles[k].y) { bad = true }; k += 1 }
+        if bad {
+            plan = snap
+            return false
+        }
+        commit(c0)
+        return true
+    }
+
+    /// The ore that shows in a mine's rock face at row y, following the same depth bands as the ore in
+    /// the open ground: coal, copper, tin and saltpeter up top, iron and silver from the middle depths,
+    /// gold only deep down, and a little amethyst in between
+    mutating func oreFor(_ y: Int) -> Tile {
+        let r: Double = rng.double()
+        if y < 205 { return r < 0.45 ? .coal : (r < 0.75 ? .copper : (r < 0.92 ? .tin : .saltpeter)) }
+        if y < 300 { return r < 0.22 ? .coal : (r < 0.38 ? .copper : (r < 0.5 ? .tin : (r < 0.8 ? .iron : (r < 0.95 ? .silver : .amethyst)))) }
+        return r < 0.15 ? .coal : (r < 0.55 ? .iron : (r < 0.8 ? .silver : .gold))
+    }
+
+    /// A run of gallery from x0 out to x1 (either way) whose floor drifts up and down a row at a
+    /// time, with timber sets, torches, rails, cobwebs and ore along it
+    mutating func gallery(from x0: Int, to x1: Int, floor f0: Int, depth: Int, rails: Bool, lit: Double) -> MineRun {
+        let dir: Int = x1 >= x0 ? 1 : -1
+        let n: Int = abs(x1 - x0) + 1
+        var floors: [Int] = []
+        var f: Int = f0
+        var nextStep: Int = range(7, 15)
+        let support: Int = range(5, 7)
+        let torchGap: Int = range(10, 15)
+        var lastTorch: Int = -range(2, 6)
+        var k: Int = 0
+        while k < n {
+            let x: Int = x0 + dir * k
+            // the floor drifts a row now and then, never far from the level's own height
+            if k == nextStep && k > 3 && k < n - 3 {
+                let d: Int = chance(0.5) ? 1 : -1
+                if abs(f + d - f0) <= 3 { f += d }
+                nextStep = k + range(7, 15)
+            }
+            floors.append(f)
+            let tall: Bool = k > 0 && floors[k - 1] != f
+            carve(x, f - (tall ? 4 : 3), f - 1)
+            floor(x, f)
+            var torch: Bool = false
+            if k % support == support / 2 && k > 1 {
+                // a timber set: posts behind, a beam overhead (a few have rotted away)
+                if chance(0.85) {
+                    wall(x, f - 3, f - 1)
+                    tile(x, f - 4 - (tall ? 1 : 0), .planks)
+                } else {
+                    wall(x, f - 2, f - 1)
+                }
+            } else if k - lastTorch >= torchGap && chance(lit) {
+                tile(x, f - 1, .torch)
+                lastTorch = k
+                torch = true
+            } else if chance(0.05 + 0.03 * Double(depth)) {
+                tile(x, f - 3, .cobweb)
+            }
+            if rails && !torch && k > 2 && !tall && chance(0.92) { tile(x, f - 1, .rail) }
+            // ore showing in the roof and floor
+            if chance(0.085) { ore(x, chance(0.55) ? f - 4 - (tall ? 1 : 0) : f, oreFor(f)) }
+            k += 1
+        }
+        plan.tunnels += 1
+        return MineRun(startX: x0, dir: dir, floors: floors, depth: depth)
+    }
+
+    /// A storage room above the gallery, reached by a short ladder through its roof
+    mutating func storageRoom(_ x: Int, _ f: Int, _ depth: Int) {
+        let w: Int = range(6, 9)
+        let x0: Int = x - w / 2
+        let x1: Int = x0 + w - 1
+        let rf: Int = f - 5
+        let h: Int = 4
+        for xx in x0...x1 {
+            carve(xx, rf - h, rf - 1)
+            floor(xx, rf)
+            wall(xx, rf - h, rf - 1)
+        }
+        // the hatch: a ladder from the gallery up through the room's floor
+        carve(x, rf, f - 4)
+        for y in rf...(f - 1) { tile(x, y, .ladder) }
+        // crates stacked along the walls, a lantern, and the chest in a corner
+        let crateLeft: Bool = chance(0.5)
+        let cx: Int = crateLeft ? x0 : x1
+        tile(cx, rf - 1, .crate)
+        if chance(0.6) { tile(cx, rf - 2, .crate) }
+        let other: Int = crateLeft ? x1 : x0
+        tile(other, rf - 1, .crate)
+        tile(x, rf - h, .lantern)
+        chest(crateLeft ? x0 + 1 : x1 - 1, rf - 1, .room, depth)
+        plan.rooms += 1
+    }
+
+    /// An abandoned work area: the gallery opens up, a workbench and furnace stand cold, a cart sits
+    /// off its rails; sometimes a chest of the crew's things
+    mutating func workArea(_ run: MineRun, _ k0: Int, _ w: Int) {
+        let f: Int = run.floors[k0]
+        for j in 0..<w {
+            let xx: Int = run.x(k0 + j)
+            carve(xx, f - 5, f - 4)
+            wall(xx, f - 5, f - 1)
+        }
+        tile(run.x(k0 + 1), f - 1, .workbench)
+        tile(run.x(k0 + 2), f - 1, .furnace)
+        tile(run.x(k0 + w - 2), f - 1, .oreCart)
+        tile(run.x(k0 + w / 2), f - 5, .lantern)
+        if chance(0.5) { chest(run.x(k0 + w - 3), f - 1, .room, run.depth) }
+        plan.rooms += 1
+    }
+
+    /// A ladder down from the gallery to a short drift that runs off one way and ends blind
+    mutating func winze(_ x: Int, _ f: Int, _ depth: Int, _ drop: Int) {
+        let bottom: Int = f + drop
+        carve(x, f, bottom - 1)
+        for y in f...(bottom - 1) { tile(x, y, .ladder) }
+        let dir: Int = chance(0.5) ? 1 : -1
+        let len: Int = range(12, 24)
+        let run: MineRun = gallery(from: x, to: x + dir * len, floor: bottom, depth: depth + 1, rails: false, lit: 0.3)
+        plan.winzes += 1
+        deadEnd(run.x(len), run.floors.last ?? bottom, dir, depth + 1)
+    }
+
+    /// A ladder up through the gallery roof to a short drift above it that ends blind
+    mutating func raise(_ x: Int, _ f: Int, _ depth: Int, _ rise: Int) {
+        let top: Int = f - rise
+        carve(x, top - 3, f - 4)
+        for y in (top - 1)...(f - 1) { tile(x, y, .ladder) }
+        let dir: Int = chance(0.5) ? 1 : -1
+        let len: Int = range(10, 20)
+        let run: MineRun = gallery(from: x + dir, to: x + dir * len, floor: top, depth: depth, rails: false, lit: 0.3)
+        plan.winzes += 1
+        deadEnd(run.x(len - 1), run.floors.last ?? top, dir, depth)
+    }
+
+    /// A sloping drift carried on past the end of a gallery, climbing or falling a row every two
+    /// columns, to a dead end
+    mutating func ramp(_ x: Int, _ f: Int, _ dir: Int, _ depth: Int) {
+        let rise: Int = chance(0.5) ? -1 : 1
+        let rows: Int = range(4, 7)
+        var ff: Int = f
+        for k in 0..<(rows * 2) {
+            if k % 2 == 1 { ff += rise }
+            let xx: Int = x + dir * k
+            carve(xx, ff - 3 - (k % 2 == 1 ? 1 : 0), ff - 1)
+            floor(xx, ff)
+        }
+        let x1: Int = x + dir * (rows * 2)
+        let len: Int = range(5, 12)
+        let run: MineRun = gallery(from: x1, to: x1 + dir * len, floor: ff, depth: depth, rails: false, lit: 0.2)
+        deadEnd(run.x(len), run.floors.last ?? ff, dir, depth)
+    }
+
+    /// The blind end of a drift at x: bare rock and a cart, or a chest left behind, or a fall of rock
+    /// that hides a little pocket with a chest in it (dig through to find it)
+    mutating func deadEnd(_ x: Int, _ f: Int, _ dir: Int, _ depth: Int) {
+        plan.deadEnds += 1
+        let r: Double = rng.double()
+        if r < 0.3 {
+            chest(x - dir, f - 1, .room, depth)
+        } else if r < 0.55 {
+            attempt(x, x, f - 4, f) { p in p.collapse(x, f, dir, depth) }
+        } else if r < 0.75 {
+            tile(x - dir, f - 1, .oreCart)
+        }
+        // otherwise just the rock face
+    }
+
+    /// rubble two or three blocks thick at the end of a drift, then the pocket beyond it
+    mutating func collapse(_ x: Int, _ f: Int, _ dir: Int, _ depth: Int) {
+        let thick: Int = range(2, 3)
+        for j in 1...thick {
+            let xx: Int = x + dir * j
+            carve(xx, f - 3, f - 1)
+            for y in (f - 3)...(f - 1) { tile(xx, y, rubble()) }
+            floor(xx, f)
+        }
+        let p0: Int = x + dir * (thick + 1)
+        for j in 0..<4 {
+            carve(p0 + dir * j, f - 3, f - 1)
+            floor(p0 + dir * j, f)
+        }
+        chest(p0 + dir * 3, f - 1, .hidden, depth)
+        tile(p0 + dir * 1, f - 3, .cobweb)
+    }
+
+    /// what a collapse is made of: broken stone, earth and rotten timber
+    mutating func rubble() -> Tile {
+        let r: Double = rng.double()
+        return r < 0.45 ? .stone : (r < 0.8 ? .dirt : .planks)
+    }
+
+    /// The great chamber on the lowest level: a tall hall over the gallery shored up with timber, a
+    /// scaffold half-way up with a chest on it, ore-rich walls, and a nook high in the roof with
+    /// something tucked away (only reached by building up to it)
+    mutating func chamber(_ run: MineRun, _ kc: Int, _ hw: Int) {
+        let f: Int = run.floors[kc]
+        let cx: Int = run.x(kc)
+        let h: Int = range(9, 12)
+        for dx in -hw...hw {
+            let x: Int = cx + dx
+            let u: Double = Double(dx) / Double(hw)
+            let top: Int = f - 3 - Int((Double(h - 3) * (1.0 - u * u)).rounded())
+            carve(x, top, f - 4)
+            if abs(dx) % 7 == 3 && abs(dx) < hw - 1 { wall(x, top, f - 1) }
+            if chance(0.3) { ore(x, top - 1, oreFor(top)) }
+        }
+        for y in (f - 6)...(f - 1) where chance(0.4) {
+            ore(cx - hw - 1, y, oreFor(y))
+            ore(cx + hw + 1, y, oreFor(y))
+        }
+        // the scaffold: a walkway half-way up with a ladder at one end
+        let sy: Int = f - 5
+        let s0: Int = cx - hw / 2
+        let s1: Int = cx + hw / 2
+        for x in s0...s1 { tile(x, sy, .platform) }
+        for y in sy...(f - 1) { tile(s0, y, .ladder) }
+        chest(s1 - 1, sy - 1, .room, run.depth + 1)
+        tile(cx, f - h + 1, .lantern)
+        // the nook: a hollow just above the roof's high point
+        if chance(0.6) {
+            let ny: Int = f - h - 1
+            carve(cx + 2, ny - 1, ny)
+            carve(cx + 3, ny - 1, ny)
+            floor(cx + 3, ny + 1)
+            chest(cx + 3, ny, .hidden, run.depth + 1)
+        }
+        plan.chambers += 1
+    }
+}
+
+extension WorldGen {
+    /// Lays out a version-4 mine at `x` (left column of the three-wide shaft) on ground row `ground`
+    func planMine(cell c: Int, x: Int, ground: Int) -> (MinePlan, [Int], [Int], [Int]) {
+        var p = MinePlanner(seed: hashU(c, 700, seed), shaftX: x, ground: ground)
+        let depth: Int = 60 + p.rng.int(100)
+        let nLevels: Int = depth > 135 ? 4 : (depth > 95 ? 3 : 2)
+        var levels: [Int] = []
+        for k in 0..<nLevels {
+            var f: Int = ground + depth * (k + 1) / nLevels
+            if k < nLevels - 1 { f += p.range(-3, 3) }
+            levels.append(f)
+        }
+        let bottom: Int = levels.last ?? (ground + depth)
+        // the shaft: three wide, a ladder up the middle, covered over at the top
+        for xx in x...(x + 2) {
+            p.carve(xx, ground + 1, bottom - 1)
+            p.wall(xx, ground + 1, bottom - 1)
+        }
+        for y in (ground + 1)...(bottom - 1) { p.tile(x + 1, y, .ladder) }
+        for xx in x...(x + 2) { p.floor(xx, bottom) }
+        // first every level's landing and its two galleries
+        var lefts: [Int] = []
+        var rights: [Int] = []
+        var runs: [(MineRun, MineRun)] = []
+        for (i, f) in levels.enumerated() {
+            let left: Int = p.range(24, 64)
+            let right: Int = p.range(24, 64)
+            lefts.append(left)
+            rights.append(right)
+            let rails: Bool = i < 2 && p.chance(0.7)
+            let lit: Double = max(0.25, 0.9 - 0.2 * Double(i))
+            for xx in x...(x + 2) { p.carve(xx, f - 3, f - 1) }
+            if f != bottom {
+                p.tile(x, f, .platform)
+                p.tile(x + 2, f, .platform)
+            }
+            let l: MineRun = p.gallery(from: x - 1, to: x - left, floor: f, depth: i, rails: rails, lit: lit)
+            let r: MineRun = p.gallery(from: x + 3, to: x + 2 + right, floor: f, depth: i, rails: rails, lit: lit)
+            runs.append((l, r))
+        }
+        p.commit(0)
+        // the great chamber, on the lowest level, along its longer gallery
+        if p.chance(0.66), let last = runs.last {
+            let run: MineRun = last.0.floors.count >= last.1.floors.count ? last.0 : last.1
+            if run.floors.count >= 30 {
+                let hw: Int = p.range(9, min(13, (run.floors.count - 10) / 2))
+                let kc: Int = p.range(hw + 4, run.floors.count - hw - 4)
+                let cx: Int = run.x(kc)
+                // the hall opens round its own gallery, whose floor wanders a few rows: all of that is the joint
+                p.attempt(cx - hw - 2, cx + hw + 2, run.floors[kc] - 8, run.floors[kc] + 4) { q in q.chamber(run, kc, hw) }
+            }
+        }
+        // then the side workings along each gallery, each kept only if it fits
+        for (i, pair) in runs.enumerated() {
+            for run in [pair.0, pair.1] {
+                let n: Int = run.floors.count
+                var k: Int = p.range(8, 13)
+                while k < n - 6 {
+                    let gx: Int = run.x(k)
+                    let gf: Int = run.floors[k]
+                    let r: Double = p.rng.double()
+                    var used: Int = 0
+                    if r < 0.24 {
+                        if p.attempt(gx - 1, gx + 1, gf - 6, gf) { q in q.storageRoom(gx, gf, i) } { used = 10 }
+                    } else if r < 0.42 {
+                        let drop: Int = p.range(8, 13)
+                        if p.attempt(gx - 1, gx + 1, gf - 4, gf + 1) { q in q.winze(gx, gf, i, drop) } { used = 9 }
+                    } else if r < 0.56 {
+                        let rise: Int = p.range(7, 10)
+                        if p.attempt(gx - 1, gx + 1, gf - 5, gf) { q in q.raise(gx, gf, i, rise) } { used = 9 }
+                    } else if r < 0.7 {
+                        let w: Int = p.range(6, 8)
+                        if k + w < n - 2 && (0..<w).allSatisfy({ run.floors[k + $0] == gf }) {
+                            let xa: Int = min(run.x(k), run.x(k + w - 1))
+                            let xb: Int = max(run.x(k), run.x(k + w - 1))
+                            if p.attempt(xa - 1, xb + 1, gf - 4, gf) { q in q.workArea(run, k, w) } { used = w + 2 }
+                        }
+                    }
+                    k += max(used, p.range(5, 9)) + p.range(3, 7)
+                }
+                // the far end: a slope carried on to a dead end, or the dead end itself
+                let endX: Int = run.x(n - 1)
+                let endF: Int = run.floors.last ?? levels[i]
+                if p.chance(0.4) {
+                    let ja: Int = min(endX, endX + run.dir)
+                    let jb: Int = max(endX, endX + run.dir)
+                    if !p.attempt(ja, jb, endF - 4, endF + 1, { q in q.ramp(endX + run.dir, endF, run.dir, i) }) {
+                        p.deadEnd(endX, endF, run.dir, i)
+                    }
+                } else {
+                    p.deadEnd(endX, endF, run.dir, i)
+                }
+            }
+        }
+        return (p.plan, levels, lefts, rights)
+    }
+}
+
+/// Builds the part of a version-4 mine that falls in this chunk: carve, seal any water or lava that
+/// would pour in, make the floors sound, timber behind, fittings, ore in the rock face, then chests
+func buildMinePlan(_ g: WorldGen, _ ch: Chunk, _ s: MineSite, _ plan: MinePlan) {
+    let cx0: Int = ch.x0
+    let cx1: Int = ch.x0 + chunkW - 1
+    @inline(__always) func inside(_ x: Int) -> Bool { return x >= cx0 && x <= cx1 }
+    for sp in plan.carve where sp.x >= cx0 - 1 && sp.x <= cx1 + 1 {
+        if inside(sp.x) { for y in sp.y0...sp.y1 { ch.put(sp.x, y, .air) } }
+    }
+    for sp in plan.carve where sp.x >= cx0 - 1 && sp.x <= cx1 + 1 {
+        for y in sp.y0...sp.y1 {
+            if ch.at(sp.x - 1, y).liquid { ch.put(sp.x - 1, y, .stone) }
+            if ch.at(sp.x + 1, y).liquid { ch.put(sp.x + 1, y, .stone) }
+        }
+        if ch.at(sp.x, sp.y0 - 1).liquid { ch.put(sp.x, sp.y0 - 1, .stone) }
+        if ch.at(sp.x, sp.y1 + 1).liquid { ch.put(sp.x, sp.y1 + 1, .stone) }
+    }
+    for f in plan.floors where inside(f.x) {
+        let t: Tile = ch.at(f.x, f.y)
+        if !t.solid || t.liquid { ch.put(f.x, f.y, f.t) }
+    }
+    let plankWall: UInt8 = 5
+    for w in plan.walls where inside(w.x) { ch.fillWall(w.x, w.y0, w.x, w.y1, plankWall) }
+    for t in plan.tiles where inside(t.x) { ch.put(t.x, t.y, t.t) }
+    for o in plan.ores where inside(o.x) {
+        let t: Tile = ch.at(o.x, o.y)
+        if t == .stone || t == .slate || t == .deepRock || t == .sandstone { ch.put(o.x, o.y, o.t) }
+    }
+    for c in plan.chests where inside(c.x) {
+        let below: Tile = ch.at(c.x, c.y + 1)
+        if !(below.solid || below == .platform) || below.liquid { ch.put(c.x, c.y + 1, .planks) }
+        ch.put(c.x, c.y, .chest)
     }
 }
 
@@ -7243,7 +8318,7 @@ final class World {
     func needsSupport(_ t: Tile) -> Bool {
         if t.isPlant && t != .torch && t != .lantern && t != .cobweb { return true }
         switch t {
-        case .workbench, .furnace, .chest, .campfire, .wheat1, .wheat2, .wheat3, .carrot1, .carrot2, .carrot3, .doorClosed, .doorOpen: return true
+        case .workbench, .furnace, .chest, .campfire, .wheat1, .wheat2, .wheat3, .carrot1, .carrot2, .carrot3, .doorClosed, .doorOpen, .oreCart: return true
         default: return false
         }
     }
@@ -7348,6 +8423,127 @@ final class World {
 
 func lootStack(_ it: Item, _ n: Int) -> Stack { return Stack(item: it, count: n) }
 
+/// One line of a loot table: what, how many, how likely against the others in its tier, and the
+/// shallowest mine level it can turn up at
+struct LootEntry {
+    var item: Item
+    var lo: Int
+    var hi: Int
+    var weight: Double
+    var minDepth: Int = 0
+}
+
+/// Mine chest loot by rarity. Most of what a chest holds comes from the common tier; a pull from the
+/// useful tier is occasional; a chest gets at most one chance at the exceptional tier, and that chance
+/// is small: larger deeper down and in rooms, and largest in chests that were hidden away.
+enum MineLoot {
+    static let common: [LootEntry] = [
+        LootEntry(item: .mat(.coal), lo: 3, hi: 8, weight: 10),
+        LootEntry(item: .block(.torch), lo: 3, hi: 8, weight: 9),
+        LootEntry(item: .block(.planks), lo: 4, hi: 10, weight: 5),
+        LootEntry(item: .mat(.stick), lo: 3, hi: 8, weight: 4),
+        LootEntry(item: .mat(.copperOre), lo: 2, hi: 5, weight: 5),
+        LootEntry(item: .mat(.tinOre), lo: 2, hi: 4, weight: 4),
+        LootEntry(item: .mat(.string), lo: 1, hi: 4, weight: 3),
+        LootEntry(item: .food(.bread), lo: 1, hi: 2, weight: 4),
+        LootEntry(item: .food(.apple), lo: 1, hi: 3, weight: 2),
+        LootEntry(item: .block(.ladder), lo: 2, hi: 6, weight: 3),
+        LootEntry(item: .block(.rail), lo: 3, hi: 8, weight: 2),
+        LootEntry(item: .mat(.ironOre), lo: 1, hi: 3, weight: 3, minDepth: 1)
+    ]
+    static let useful: [LootEntry] = [
+        LootEntry(item: .mat(.ironBar), lo: 1, hi: 3, weight: 6),
+        LootEntry(item: .mat(.bronzeBar), lo: 2, hi: 4, weight: 6),
+        LootEntry(item: .ammo(.arrow), lo: 6, hi: 14, weight: 4),
+        LootEntry(item: .ammo(.bolt), lo: 4, hi: 10, weight: 4),
+        LootEntry(item: .ammo(.bullet), lo: 4, hi: 8, weight: 2, minDepth: 1),
+        LootEntry(item: .mat(.saltpeter), lo: 2, hi: 5, weight: 3),
+        LootEntry(item: .mat(.gunpowder), lo: 2, hi: 4, weight: 3),
+        LootEntry(item: .gadget(.fireFlask), lo: 1, hi: 2, weight: 2),
+        LootEntry(item: .gadget(.bomb), lo: 1, hi: 2, weight: 2),
+        LootEntry(item: .block(.lantern), lo: 1, hi: 2, weight: 3),
+        LootEntry(item: .food(.cookedMeat), lo: 1, hi: 3, weight: 3),
+        LootEntry(item: .mat(.silverBar), lo: 1, hi: 2, weight: 2, minDepth: 1),
+        LootEntry(item: .mat(.goldBar), lo: 1, hi: 2, weight: 2, minDepth: 2),
+        LootEntry(item: .mat(.amethyst), lo: 1, hi: 3, weight: 1.5, minDepth: 1),
+        LootEntry(item: .knife(.iron), lo: 1, hi: 1, weight: 1.5),
+        LootEntry(item: .tool(.pickaxe, .iron), lo: 1, hi: 1, weight: 1.2),
+        LootEntry(item: .club(.studded), lo: 1, hi: 1, weight: 1),
+        LootEntry(item: .gun(.crossbow), lo: 1, hi: 1, weight: 0.8),
+        LootEntry(item: .armor(.head, .iron), lo: 1, hi: 1, weight: 0.8)
+    ]
+    static let exceptional: [LootEntry] = [
+        LootEntry(item: .relic(.moonDagger), lo: 1, hi: 1, weight: 2),
+        LootEntry(item: .relic(.emberCleaver), lo: 1, hi: 1, weight: 1.5, minDepth: 2),
+        LootEntry(item: .relic(.quakeMaul), lo: 1, hi: 1, weight: 1.5, minDepth: 2),
+        LootEntry(item: .gun(.repeater), lo: 1, hi: 1, weight: 2, minDepth: 1),
+        LootEntry(item: .gun(.stormRod), lo: 1, hi: 1, weight: 1, minDepth: 2),
+        LootEntry(item: .mat(.diamond), lo: 1, hi: 3, weight: 3, minDepth: 1),
+        LootEntry(item: .mat(.mythrilBar), lo: 1, hi: 2, weight: 1.5, minDepth: 2),
+        LootEntry(item: .gear(.swiftBoots), lo: 1, hi: 1, weight: 1.5),
+        LootEntry(item: .gear(.headlamp), lo: 1, hi: 1, weight: 2),
+        LootEntry(item: .gear(.silverCharm), lo: 1, hi: 1, weight: 1.5),
+        LootEntry(item: .mat(.relicFragment), lo: 1, hi: 2, weight: 2)
+    ]
+
+    /// the chance a chest gets its one pull from the exceptional tier
+    static func exceptionalChance(_ spot: MineSpot, _ depth: Int) -> Double {
+        var p: Double = 0.012 + 0.008 * Double(depth)
+        if spot == .room { p += 0.012 }
+        if spot == .hidden { p += 0.05 }
+        return min(p, 0.12)
+    }
+
+    /// the chance each pull comes from the useful tier rather than the common one
+    static func usefulChance(_ spot: MineSpot, _ depth: Int) -> Double {
+        var p: Double = 0.18 + 0.05 * Double(depth)
+        if spot == .room { p += 0.06 }
+        if spot == .hidden { p += 0.15 }
+        return min(p, 0.55)
+    }
+
+    static func pick(_ table: [LootEntry], _ depth: Int, _ rng: inout RNG) -> LootEntry? {
+        let ok: [LootEntry] = table.filter { $0.minDepth <= depth }
+        var total: Double = 0
+        for e in ok { total += e.weight }
+        if total <= 0 { return nil }
+        var r: Double = rng.double() * total
+        for e in ok {
+            r -= e.weight
+            if r <= 0 { return e }
+        }
+        return ok.last
+    }
+
+    /// Rolls a mine chest: two to four stacks, never the same item twice, counts within stack limits
+    static func roll(_ rng: inout RNG, _ spot: MineSpot, _ depth: Int) -> [Stack] {
+        var out: [Stack] = []
+        var n: Int = 2 + rng.int(2) + (spot == .open ? 0 : 1)
+        func add(_ e: LootEntry, _ rng: inout RNG) -> Bool {
+            if out.contains(where: { $0.item == e.item }) { return false }
+            let c: Int = min(e.item.maxStack, max(1, e.lo + rng.int(max(1, e.hi - e.lo + 1))))
+            out.append(Stack(item: e.item, count: c))
+            return true
+        }
+        if rng.double() < exceptionalChance(spot, depth), let e = pick(exceptional, depth, &rng) {
+            if add(e, &rng) { n -= 1 }
+        }
+        let pu: Double = usefulChance(spot, depth)
+        var tries: Int = 0
+        while n > 0 && tries < 12 {
+            tries += 1
+            let table: [LootEntry] = rng.double() < pu ? useful : common
+            if let e = pick(table, depth, &rng), add(e, &rng) { n -= 1 }
+        }
+        if out.isEmpty { out.append(Stack(item: .block(.torch), count: 4)) }
+        return out
+    }
+
+    static func isExceptional(_ it: Item) -> Bool {
+        return exceptional.contains { $0.item == it }
+    }
+}
+
 func generateChestLoot(_ g: WorldGen, _ dim: Dimension, _ x: Int, _ y: Int) -> [Stack] {
     var rng = RNG(hashU(x, y, g.seed &+ 777))
     var out: [Stack] = []
@@ -7414,17 +8610,16 @@ func generateChestLoot(_ g: WorldGen, _ dim: Dimension, _ x: Int, _ y: Int) -> [
         }
     }
     if g.hasMines {
-        for s in g.mineSites(overlapping: x - 2, x + 2) where y > s.ground + 8 && y <= s.bottom + 2 {
-            add(.mat(.ironBar), 2, 6, 0.85)
-            add(.mat(.goldBar), 1, 3, 0.5)
-            add(.mat(.coal), 4, 12, 0.8)
-            add(.block(.torch), 6, 16, 0.8)
-            add(.block(.ladder), 4, 10, 0.5)
-            add(.tool(.pickaxe, tierPick(3, 5)), 1, 1, 0.35)
-            add(.hammer(tierPick(3, 4)), 1, 1, 0.2)
-            add(.mat(.relicFragment), 1, 1, 0.3)
-            add(.gear(.divingMask), 1, 1, 0.12)
-            return out
+        for s in g.mineSites(overlapping: x - 2, x + 2) where y > s.ground + 8 && y <= s.deepest + 2 {
+            if let plan = s.plan {
+                // version 4: the plan knows each chest's place, and that sets its loot
+                if let c = plan.chests.first(where: { $0.x == x && $0.y == y }) { return MineLoot.roll(&rng, c.spot, c.depth) }
+                return MineLoot.roll(&rng, .open, 0)
+            }
+            // older mines: a chest at the end of a gallery, deeper galleries a little richer
+            var lv: Int = 0
+            for (i, f) in s.levels.enumerated() where y <= f { lv = i; break }
+            return MineLoot.roll(&rng, .room, lv)
         }
     }
     // villages
@@ -8156,6 +9351,8 @@ enum ProjKind: Int, Codable {
     case arrow, bullet, fireball, rock, shock, spit, bolt, bomb
     /// a crystal shard thrown by the Crystal Sentinel
     case shard
+    /// the player's crossbow bolt, a blunderbuss pellet, a slung stone and a thrown fire flask
+    case quarrel, pellet, pebble, flask
 }
 
 struct Projectile {
@@ -8181,6 +9378,8 @@ struct Projectile {
     var lastHit: Int = -1
     var stuckAngle: Double = 0
     var trail: Int = 0
+    /// knockback on hit (0: the kind's usual push)
+    var knock: Double = 0
     var angle: Double { return atan2(vy, vx) }
 }
 
@@ -8485,6 +9684,9 @@ final class Mob {
     var preyID: Int = 0
     weak var prey: Mob? = nil
     var poseT: Double = 0
+    /// dazed by a club: stands reeling, then can't be dazed again for a moment
+    var daze: Double = 0
+    var dazeGuard: Double = 0
     static let turnDur: Double = 0.14
     static let atkDur: Double = 0.28
 
@@ -9212,6 +10414,29 @@ final class Game: ObservableObject, @unchecked Sendable {
     let mobGrid: MobGrid = MobGrid()
     var frameNo: Int = 0
 
+    // combat: the blow a heavy weapon is winding up, the brief freeze when a hit lands, the foe the
+    // aim is locked onto, a knife's run of quick hits, the trails, lightning and fire on screen
+    var strikeT: Double = 0
+    var strikeSel: Int = -1
+    var strikeItem: Item? = nil
+    weak var strikeTarget: Mob? = nil
+    var hitStopT: Double = 0
+    weak var lockTarget: Mob? = nil
+    var lockT: Double = 0
+    var comboN: Int = 0
+    var comboT: Double = -10
+    var slashes: [SlashFX] = []
+    var arcs: [ArcFX] = []
+    var fireZones: [FireZone] = []
+    var rodT: Double = 0
+    /// a finger is on the world (it aims for itself; the action button only keeps the action going)
+    var touchActive: Bool = false
+    /// a panel, the pause menu or death is covering the controls (their held state is dropped)
+    var inputBlocked: Bool = false
+    var lastWeaponSel: Int = -1
+    /// what the last melee blow hit (for the feedback and the tests)
+    var lastStrikeHits: Int = 0
+
     // damage bookkeeping
     var playerHitStamps: [Int: Double] = [:]
     var playerBurn: Double = 0
@@ -9359,10 +10584,15 @@ final class Game: ObservableObject, @unchecked Sendable {
     var heldItem: Item? { return inv.slots[sel]?.item }
 
     func setSel(_ i: Int) {
-        sel = clampI(i, 0, Inventory.hotbarCount - 1)
+        let n: Int = clampI(i, 0, Inventory.hotbarCount - 1)
+        if n != sel, let it = heldItem, it.isWeapon { lastWeaponSel = sel }
+        sel = n
         bowCharge = 0
         mining = false
         mineP = 0
+        // a blow being wound up is dropped with the weapon; a knife's run starts over
+        strikeT = 0
+        comboN = 0
         bumpHUD()
     }
 
@@ -9388,18 +10618,24 @@ extension Game {
             if messageT <= 0 { message = nil }
         }
         updateTime(dt)
+        updateInputGate()
         mobGrid.rebuild(mobs)
         decksCache = (ships.isEmpty && vehicles.isEmpty) ? [] : buildDecks()
         updatePointerTimers(dt)
         updateInputEdges()
         updatePlayer(dt)
         updateUse(dt)
-        if !pauseMobs { updateMobs(dt) }
+        // a landed blow holds the creatures still for a frame or two (the player keeps moving), which
+        // is what makes a hit feel like it connected
+        let frozen: Bool = hitStopT > 0
+        if frozen { hitStopT -= dt }
+        if !pauseMobs && !frozen { updateMobs(dt) }
         updateDangerZones(dt)
         updateDiscoveries(dt)
-        if !pauseBosses { updateBosses(dt) }
+        if !pauseBosses && !frozen { updateBosses(dt) }
         if !pauseSpawning { updateSpawning(dt) }
         if !pauseProjectiles { updateProjectiles(dt) }
+        updateCombatFX(dt)
         if !pauseWorldTicks { updateFallingBlocks(dt) }
         updateDrops(dt)
         if !pauseVehicles { updateVehicles(dt) }
@@ -9473,7 +10709,9 @@ extension Game {
             rideRex(r, ix, jumpPressed, dt)
             return
         }
-        let runMax: Double = 7.4 * speedMult * (wearing(.swiftBoots) ? 1.18 : 1.0)
+        var runMax: Double = 7.4 * speedMult * (wearing(.swiftBoots) ? 1.18 : 1.0)
+        // heavy weapons commit you to the blow: slower on your feet while it lasts
+        if swingT > 0 || strikeT > 0, let it = heldItem, it.isMeleeWeapon { runMax *= it.melee.moveScale }
         if ix != 0 {
             facing = ix > 0 ? 1 : -1
         }
@@ -9860,6 +11098,7 @@ extension Game {
             let lv: Int = f.level
             if lv > 0 { dyn.append((Int(floor(f.x)), Int(floor(f.y)), lv)) }
         }
+        for z in fireZones { dyn.append((Int(floor(z.x)), Int(floor(z.y - 0.6)), 11)) }
         for s in ships {
             dyn.append((Int(floor(s.x)) - 3, Int(floor(s.deckY(Double(WorldGen.sea)))) - 2, 10))
             dyn.append((Int(floor(s.x)) + 3, Int(floor(s.deckY(Double(WorldGen.sea)))) - 2, 10))
@@ -9976,7 +11215,10 @@ extension Game {
         aimValid = true
         downTime = 0
         usePressedFlag = false
-        if isInteractive(wx, wy) {
+        touchActive = true
+        // with a weapon out, a tap on a foe is an attack, even if a door or chest is behind it
+        let fight: Bool = (heldItem?.isWeapon ?? false) && hostileAt(wx, wy)
+        if !fight && isInteractive(wx, wy) {
             pendingInteract = true
             useHeld = false
         } else {
@@ -10003,13 +11245,24 @@ extension Game {
     }
 
     func pointerUp() {
+        touchActive = false
         if pendingInteract {
             if downTime < 0.3 { interact(aimX, aimY) }
             pendingInteract = false
         }
+        // the action button may still be held: then it carries on (and aims for itself again)
+        if actState.held { return }
         if useHeld { useReleasedFlag = true }
         useHeld = false
         useWasHeld = false
+    }
+
+    /// a hostile (or angered) creature under or right next to a point
+    func hostileAt(_ wx: Double, _ wy: Double) -> Bool {
+        for m in mobsNear(wx - 4, wx + 4) where m.hp > 0 && !m.tame && m.kind != .villager && (m.def.hostile || m.angry) {
+            if wx >= m.b.left - 0.4 && wx <= m.b.right + 0.4 && wy >= m.b.top - 0.4 && wy <= m.b.y + 0.4 { return true }
+        }
+        return false
     }
 
     func updatePointerTimers(_ dt: Double) {
@@ -10104,7 +11357,16 @@ extension Game {
         switch t {
         case .chest:
             if tryMimic(tx, ty) { return }
+            let firstLook: Bool = world.chests[world.chestKey(tx, ty)] == nil
             sfx(.chestOpen, 0.7)
+            spawnParticles(Double(tx) + 0.5, Double(ty) + 0.3, 0xC8A878, 5, 2.0, 0.4, 6)
+            if firstLook && world.chestItems(tx, ty).contains(where: { MineLoot.isExceptional($0.item) }) {
+                // a rare find: it should feel like one
+                sfx(.rareLoot, 0.8)
+                spawnParticles(Double(tx) + 0.5, Double(ty) + 0.2, 0xFFE070, 16, 3.5, 0.9, -3)
+                addLightFlash(Double(tx) + 0.5, Double(ty) + 0.3, peak: 10, dur: 0.8, radius: 1.8, color: 0xFFD860)
+                say("Something rare glints in this chest!", 2.5)
+            }
             openChest = IntPair(x: tx, y: ty)
             showInventory = true
             bumpHUD()
@@ -10511,8 +11773,10 @@ extension Game {
         for c in r.cost { _ = inv.remove(c.item, c.n) }
         if !journal.crafted.contains(r.out.name) { journal.crafted.append(r.out.name) }
         sfx(.craft, 0.6)
-        let left: Int = inv.add(r.out, r.outCount)
-        if left > 0 { spawnDrop(Stack(item: r.out, count: left), pb.x, pb.y - 1, 2, -3) }
+        // a new storm rod comes charged; firearms and crossbows still need loading
+        let ex: Int = r.out == .gun(.stormRod) ? GunType.stormRod.magazine : 0
+        let left: Int = inv.add(r.out, r.outCount, extra: ex)
+        if left > 0 { spawnDrop(Stack(item: r.out, count: left, extra: ex), pb.x, pb.y - 1, 2, -3) }
         floatText("+" + String(r.outCount) + " " + r.out.name, pb.x, pb.y - 2.2, 0xFFE070)
         bumpHUD()
     }
@@ -10533,14 +11797,16 @@ extension Game {
             out.append(.sword(tier))
             out.append(.spear(tier))
             out.append(.hammer(tier))
+            if tier != .wood { out.append(.knife(tier)) }
             for s in ArmorSlot.allCases { out.append(.armor(s, tier)) }
         }
         for g in Gear.allCases { out.append(.gear(g)) }
         out.append(.bow)
-        out.append(.gun(.pistol))
-        out.append(.gun(.rifle))
-        out.append(.ammo(.arrow))
-        out.append(.ammo(.bullet))
+        out.append(.sling)
+        for c in ClubKind.allCases { out.append(.club(c)) }
+        for r in Relic.allCases { out.append(.relic(r)) }
+        for gt in GunType.allCases { out.append(.gun(gt)) }
+        for a in AmmoType.allCases { out.append(.ammo(a)) }
         for g in Gadget.allCases { out.append(.gadget(g)) }
         for k in wallKinds { out.append(.wall(k)) }
         for p in PartType.allCases { out.append(.part(p)) }
@@ -10628,11 +11894,22 @@ extension Game {
         if bowRecoil > 0 { bowRecoil -= dt }
         if eatT > 0 { eatT -= dt }
         if placeCD > 0 { placeCD -= dt }
+        if lockT > 0 { lockT -= dt }
+        if let t = lockTarget, t.hp <= 0 || t.removed { lockTarget = nil }
         if dead || inVehicle != nil {
             mining = false
             usePressedFlag = false
             useReleasedFlag = false
+            strikeT = 0
             return
+        }
+        // a heavy blow lands at the end of its wind-up, if the same weapon is still in hand
+        if strikeT > 0 {
+            strikeT -= dt
+            if strikeT <= 0 {
+                strikeT = 0
+                if sel == strikeSel && heldItem == strikeItem { resolveMelee(strikeItem) }
+            }
         }
         updateReload(dt)
         let pressed: Bool = usePressedFlag
@@ -10654,14 +11931,15 @@ extension Game {
         }
         if !useHeld { return }
         guard let it = held else {
-            useBareHand(dt)
+            useBareHand(dt, pressed)
             return
         }
         switch it {
         case .block(let t): usePlaceBlock(t, dt)
-        case .tool(let k, let tr): useToolItem(k, tr, dt)
-        case .sword, .spear, .hammer: useSword(it)
+        case .tool(let k, let tr): useToolItem(k, tr, dt, pressed)
+        case .sword, .spear, .hammer, .knife, .club, .relic: useMeleeWeapon(it, pressed)
         case .gun(let g): useGun(g, pressed)
+        case .sling: useSling(pressed)
         case .food(let f): useFood(f, pressed)
         case .mat(let m):
             if m == .seeds { usePlant(.wheat1, it, pressed) }
@@ -10676,9 +11954,9 @@ extension Game {
 
     // MARK: bare hands & tools
 
-    func useBareHand(_ dt: Double) {
-        if let m = targetMob() {
-            meleeHit(nil, m)
+    func useBareHand(_ dt: Double, _ pressed: Bool) {
+        if let m = mobUnderAim(Item.bareHands) {
+            if pressed || meleeCandidates(Item.bareHands).count > 0 { startMelee(nil, target: m) }
             return
         }
         let tx: Int = Int(floor(aimX))
@@ -10686,12 +11964,13 @@ extension Game {
         mineStep(tx, ty, nil, nil, dt)
     }
 
-    func useToolItem(_ k: ToolType, _ tr: Tier, _ dt: Double) {
+    func useToolItem(_ k: ToolType, _ tr: Tier, _ dt: Double, _ pressed: Bool) {
         let it: Item = .tool(k, tr)
         let tx: Int = Int(floor(aimX))
         let ty: Int = Int(floor(aimY))
-        if let m = targetMob() {
-            meleeHit(it, m)
+        // pointing at a creature means fighting it, not digging the block behind it
+        if let m = mobUnderAim(it.melee) {
+            if pressed || meleeCandidates(it.melee).count > 0 { startMelee(it, target: m) }
             return
         }
         if k == .hoe {
@@ -10712,109 +11991,65 @@ extension Game {
         mineStep(tx, ty, k, tr, dt)
     }
 
-    func useSword(_ it: Item) {
-        if let m = targetMob() {
-            meleeHit(it, m)
-        } else if useCD <= 0 {
-            swingEmpty(it)
+    /// A melee weapon in hand. A fresh press always swings (toward the aim, or the foe under it); held
+    /// down it keeps swinging, but only while a foe is actually in reach, so holding on empty ground or
+    /// on a foe that is still too far away never wastes swings.
+    func useMeleeWeapon(_ it: Item, _ pressed: Bool) {
+        let p: MeleeProfile = it.melee
+        let target: Mob? = mobUnderAim(p)
+        if let t = target {
+            // the touch landed on (or close to) a foe: the blow goes at it
+            aimX = t.b.x
+            aimY = t.b.cy
+        }
+        if !pressed && meleeCandidates(p).isEmpty { return }
+        startMelee(it, target: target)
+    }
+
+    /// Swings the item right now, ignoring its cooldown and wind-up (used by debug tools and tests)
+    func swingEmpty(_ it: Item?) {
+        useCD = 0
+        strikeT = 0
+        if startMelee(it) && strikeT > 0 {
+            strikeT = 0
+            resolveMelee(it)
         }
     }
 
-    func swingEmpty(_ it: Item?) {
-        let cd: Double = it?.meleeCooldown ?? 0.4
-        useCD = cd
-        swingDur = it?.swingTime ?? 0.25
-        swingT = swingDur
-        swingDir = facing
-        sfx(.swing, 0.5)
-        // wide arc may still catch mobs close to the player
-        let reach: Double = it?.meleeReach ?? 1.8
-        let dmg: Double = it?.meleeDamage ?? 1.5
-        meleeArc(dmg, reach, it)
+    /// The foe the player is pointing at: under the aim, or close to it (fingers are not precise),
+    /// near enough to be worth swinging at
+    func mobUnderAim(_ p: MeleeProfile) -> Mob? {
+        if !aimValid { return nil }
+        let pad: Double = 0.9
+        var best: Mob? = nil
+        var bd: Double = 1e9
+        for m in mobsNear(aimX - 6, aimX + 6) {
+            if m.hp <= 0 || m.removed || m.tame || m.kind == .villager || m.downed { continue }
+            let x0: Double = m.b.left - pad
+            let x1: Double = m.b.right + pad
+            let y0: Double = m.b.top - pad
+            let y1: Double = m.b.y + pad
+            if aimX < x0 || aimX > x1 || aimY < y0 || aimY > y1 { continue }
+            let reach: Double = boxDistance(m, shoulderX, shoulderY)
+            if reach > max(p.reach + 1.5, 4.0) { continue }
+            var d: Double = abs(aimX - m.b.x) + abs(aimY - m.b.cy)
+            if !(m.def.hostile || m.angry) { d += 2.0 }
+            if d < bd { bd = d; best = m }
+        }
+        return best
     }
 
     func targetMob() -> Mob? {
-        if let m = mobAtPoint(aimX, aimY, 0.35) {
-            if m.tame || m.kind == .villager { return nil }
-            if inReach(m.b.x, m.b.cy) { return m }
-        }
+        let p: MeleeProfile = heldItem?.melee ?? Item.bareHands
+        if let m = mobUnderAim(p), boxDistance(m, shoulderX, shoulderY) <= p.reach { return m }
         return nil
     }
 
     func meleeHit(_ it: Item?, _ target: Mob) {
-        if useCD > 0 { return }
-        let cd: Double = it?.meleeCooldown ?? 0.4
-        useCD = cd
-        swingDur = it?.swingTime ?? 0.25
-        swingT = swingDur
-        sfx(.swing, 0.5)
-        swingDir = aimX >= pb.x ? 1 : -1
-        facing = swingDir
-        let reach: Double = (it?.meleeReach ?? 1.8) + 0.8
-        let dmg: Double = it?.meleeDamage ?? 1.5
-        meleeArc(dmg, reach, it)
-        _ = target
-    }
-
-    /// damage every hostile/neutral mob inside the arc in front of the player. A sword sweeps an even
-    /// arc; a spear thrusts along a narrow line and runs through the two nearest foes; a hammer swings
-    /// a tall arc with heavy knockback that breaks guards.
-    func meleeArc(_ dmg: Double, _ reach: Double, _ it: Item?) {
-        let ox: Double = pb.x
-        let oy: Double = pb.y - pb.h * 0.55
-        var hitAny: Bool = false
-        let swingKey: Int = newID()
-        var height: Double = 1.2
-        var maxHits: Int = Int.max
-        var heavy: Bool = false
-        switch it {
-        case .spear?: height = 0.6; maxHits = 2
-        case .hammer?: height = 1.8; heavy = true
-        default: break
-        }
-        let knock: Double = it?.meleeKnock ?? 6.0
-        var targets: [(Mob, Double)] = []
-        for m in mobsNear(ox - reach - 4, ox + reach + 4) {
-            if m.hp <= 0 || m.tame || m.kind == .villager { continue }
-            let dx: Double = m.b.x - ox
-            let dy: Double = m.b.cy - oy
-            // front only
-            if dx * Double(swingDir) < -0.4 - m.b.w * 0.5 { continue }
-            let ex: Double = abs(dx) - m.b.w * 0.5
-            let ey: Double = abs(dy) - m.b.h * 0.5
-            if ex > reach || ey > height { continue }
-            targets.append((m, ex))
-        }
-        if targets.count > maxHits {
-            targets.sort { $0.1 < $1.1 }
-            targets.removeLast(targets.count - maxHits)
-        }
-        for (m, _) in targets {
-            var d: Double = dmg
-            if Double.random(in: 0...1) < 0.1 { d *= 1.5 }
-            var info = DamageInfo(amount: d, type: .melee, source: .player)
-            info.dirX = Double(swingDir)
-            info.knock = knock
-            info.originX = ox
-            info.key = swingKey
-            info.cooldown = 0.3
-            info.heavy = heavy
-            if applyMobDamage(m, info) { hitAny = true }
-        }
-        // pirate ships
-        for s in ships {
-            let dx: Double = abs(s.x - ox)
-            let dy: Double = abs(s.deckY(Double(WorldGen.sea)) - pb.y)
-            if dx < 5.0 + reach * 0.3 && dy < 3.5 {
-                s.hp -= dmg * 0.6
-                s.hitT = 0.2
-                hitAny = true
-            }
-        }
-        if hitAny {
-            addShake(heavy ? 0.16 : 0.08)
-            sfx(.hit, heavy ? 1.0 : 0.75)
-        }
+        aimX = target.b.x
+        aimY = target.b.cy
+        aimValid = true
+        startMelee(it, target: target)
     }
 
     // MARK: mining & breaking
@@ -10905,6 +12140,13 @@ extension Game {
             out.append(Stack(item: .food(.carrot), count: 1))
         case .cobweb:
             out.append(Stack(item: .mat(.string), count: 1))
+        case .saltpeter:
+            out.append(Stack(item: .mat(.saltpeter), count: 1 + (r < 0.35 ? 1 : 0)))
+        case .amethyst:
+            out.append(Stack(item: .mat(.amethyst), count: 1 + (r < 0.5 ? 1 : 0)))
+        case .oreCart:
+            // an abandoned cart still holds a little of what was being hauled out (fixed by its spot)
+            for st in oreCartLoad(x, y) { out.append(st) }
         case .chest:
             for s in world.removeChest(x, y) { out.append(s) }
             out.append(Stack(item: .block(.chest), count: 1))
@@ -11159,11 +12401,33 @@ extension Game {
         bumpHUD()
     }
 
-    /// Sample points of the arrow's flight for the aiming arc
+    /// Sample points of the shot's flight for the aiming arc: the bow while it is drawn, the sling and
+    /// bolt throwers while the aim is held
     func arrowPreview() -> [(Double, Double)] {
-        if bowCharge <= 0 { return [] }
-        let st: BowStats = bowStats(.bow)
-        let l: (Double, Double, Double, Double) = arrowLaunch(max(0.45, bowCharge))
+        var l: (Double, Double, Double, Double)
+        var grav: Double
+        if bowCharge > 0 {
+            let st: BowStats = bowStats(.bow)
+            l = arrowLaunch(max(0.45, bowCharge))
+            grav = st.gravity
+        } else if useHeld && aimValid && inVehicle == nil, let it = heldItem {
+            var speed: Double = 0
+            var ox: Double = pb.x + Double(facing) * 0.4
+            var oy: Double = pb.y - 1.3
+            switch it {
+            case .sling: speed = 23; grav = 16
+            case .gun(let g) where g.isBoltThrower:
+                speed = g.speed; grav = g.gravity
+                ox = pb.x + Double(facing) * 0.7
+                oy = pb.y - 1.2
+            case .gadget(let gd) where gd == .bomb || gd == .fireFlask: speed = throwSpeed; grav = throwGravity
+            default: return []
+            }
+            let a: Double = lobAngle(aimX - ox, aimY - oy, speed, grav)
+            l = (ox, oy, cos(a) * speed, sin(a) * speed)
+        } else {
+            return []
+        }
         var x: Double = l.0
         var y: Double = l.1
         let vx: Double = l.2
@@ -11172,7 +12436,7 @@ extension Game {
         let step: Double = 0.03
         var i: Int = 0
         while i < 40 {
-            vy = min(vy + st.gravity * step, 40)
+            vy = min(vy + grav * step, 40)
             let nx: Double = x + vx * step
             let ny: Double = y + vy * step
             if world.segmentSolidT(x, y, nx, ny) != nil { break }
@@ -11201,15 +12465,16 @@ extension Game {
         reloadT -= dt
         if reloadT <= 0 {
             reloadT = 0
-            if var st = inv.slots[sel], case .gun(let g) = st.item {
+            if var st = inv.slots[sel], case .gun(let g) = st.item, let a = g.ammo {
                 let need: Int = g.magazine - st.extra
                 var take: Int = need
                 if !isCreative {
-                    take = min(need, inv.total(.ammo(.bullet)))
-                    _ = inv.remove(.ammo(.bullet), take)
+                    take = min(need, inv.total(.ammo(a)))
+                    _ = inv.remove(.ammo(a), take)
                 }
                 st.extra += take
                 inv.slots[sel] = st
+                if g.isBoltThrower { sfx(.tap, 0.5) }
                 bumpHUD()
             }
             reloadSlot = -1
@@ -11217,51 +12482,80 @@ extension Game {
     }
 
     func startReload() {
-        guard let st = heldStack, case .gun(let g) = st.item else { return }
+        guard let st = heldStack, case .gun(let g) = st.item, let a = g.ammo else { return }
         if reloadT > 0 || st.extra >= g.magazine { return }
-        if !isCreative && inv.total(.ammo(.bullet)) <= 0 {
-            say("Out of bullets!", 1.5)
+        if !isCreative && inv.total(.ammo(a)) <= 0 {
+            say("Out of " + a.name.lowercased() + "s!", 1.5)
             return
         }
         reloadT = g.reloadTime
         reloadSlot = sel
-        say("Reloading...", 1.0)
+        // a crossbow is cocked after every bolt: no need to announce that each time
+        if g.magazine > 1 { say("Reloading...", 1.0) }
     }
 
+    /// Fires a loaded weapon: bullets, bolts, a spread of pellets, or the storm rod's lightning. Heavy
+    /// weapons need a fresh press per shot; the rest keep firing while held. Empty ones reload by
+    /// themselves when there is ammunition.
     func useGun(_ g: GunType, _ pressed: Bool) {
         guard var st = inv.slots[sel] else { return }
         if reloadT > 0 { return }
         if st.extra <= 0 {
+            if g == .stormRod {
+                if pressed { say("The rod is still gathering its charge.", 1.2) }
+                return
+            }
             if pressed || useCD <= 0 { startReload() }
             return
         }
         if useCD > 0 { return }
-        if g == .rifle && !pressed { return }
-        st.extra -= 1
+        if g.needsPress && !pressed { return }
+        if !isCreative || g != .stormRod { st.extra -= 1 }
         inv.slots[sel] = st
+        useCD = g.cooldown
+        if g == .stormRod {
+            fireStormRod()
+            bumpHUD()
+            return
+        }
+        facing = aimX >= pb.x ? 1 : -1
         let ox: Double = pb.x + Double(facing) * 0.7
         let oy: Double = pb.y - 1.2
-        facing = aimX >= pb.x ? 1 : -1
-        var dx: Double = aimX - ox
-        var dy: Double = aimY - oy
-        let len: Double = max(0.001, sqrt(dx * dx + dy * dy))
-        dx /= len
-        dy /= len
-        var p = Projectile(kind: .bullet, x: ox, y: oy, vx: dx * g.speed, vy: dy * g.speed, dmg: g.damage, fromPlayer: true, gravity: 0)
-        p.life = 1.6
-        p.source = .player
-        p.uid = newID()
-        p.pierce = g == .rifle ? 1 : 0
-        projectiles.append(p)
-        sfx(.gun, 0.8)
-        useCD = g.cooldown
-        muzzleT = 0.08
+        // bolts drop a little: they are raised just enough to fly through the spot aimed at
+        let base: Double = lobAngle(aimX - ox, aimY - oy, g.speed, g.gravity)
+        let n: Int = g == .blunderbuss ? 7 : 1
+        for i in 0..<n {
+            var a: Double = base
+            // an even fan of pellets, so the spread always covers the same cone
+            if n > 1 { a += (Double(i) / Double(n - 1) - 0.5) * 0.6 }
+            let dx: Double = cos(a)
+            let dy: Double = sin(a)
+            let kind: ProjKind = g == .blunderbuss ? .pellet : (g.isBoltThrower ? .quarrel : .bullet)
+            var p = Projectile(kind: kind, x: ox, y: oy, vx: dx * g.speed, vy: dy * g.speed, dmg: g.damage, fromPlayer: true, gravity: g.gravity)
+            p.life = g.shotLife * (n > 1 ? Double.random(in: 0.85...1.1) : 1.0)
+            p.source = .player
+            p.uid = newID()
+            p.pierce = g.pierce
+            p.knock = g.knock
+            if kind == .pellet { p.w = 0.16 }
+            if kind == .quarrel { p.w = 0.22 }
+            projectiles.append(p)
+        }
+        let heavyShot: Bool = g == .rifle || g == .arbalest || g == .blunderbuss
+        switch g {
+        case .blunderbuss: sfx(.blunderbuss, 0.9)
+        case .crossbow, .arbalest, .repeater: sfx(.crossbow, 0.75)
+        default: sfx(.gun, 0.8)
+        }
+        muzzleT = g.isBoltThrower ? 0 : 0.08
         swingT = 0.1
         swingDir = facing
-        addShake(g == .rifle ? 0.16 : 0.07)
-        pb.vx -= Double(facing) * (g == .rifle ? 2.5 : 1.0)
-        spawnParticles(ox + dx * 0.4, oy + dy * 0.4, 0xFFE080, 4, 3.0, 0.15, 0)
-        if st.extra <= 0 && (isCreative || inv.total(.ammo(.bullet)) > 0) { startReload() }
+        addShake(heavyShot ? 0.16 : 0.07)
+        pb.vx -= Double(facing) * (g == .blunderbuss ? 4.0 : (heavyShot ? 2.5 : 1.0))
+        let dx0: Double = cos(base)
+        let dy0: Double = sin(base)
+        if g.isFirearm { spawnParticles(ox + dx0 * 0.4, oy + dy0 * 0.4, 0xFFE080, g == .blunderbuss ? 9 : 4, 3.0, 0.15, 0) }
+        if st.extra <= 0, let am = g.ammo, isCreative || inv.total(.ammo(am)) > 0 { startReload() }
         bumpHUD()
     }
 
@@ -11296,6 +12590,8 @@ extension Game {
             if pressed && useCD <= 0 { placeKit(g) }
         case .bomb:
             if pressed { throwBomb() }
+        case .fireFlask:
+            if pressed { throwFlask() }
         }
     }
 
@@ -11378,6 +12674,674 @@ extension Game {
         useCD = 0.25
         say("Vehicle started. Now hold more parts: green squares show where they fit.", 3.0)
         bumpHUD()
+    }
+}
+
+// MARK: - Combat: melee strikes, aim, weapon switching, ranged and special weapons, feedback
+
+/// A melee swing, drawn for a moment after it is made: the trail covers exactly the space it swept
+struct SlashFX {
+    var x: Double
+    var y: Double
+    var ang: Double
+    var reach: Double
+    var halfArc: Double
+    var style: SwingStyle
+    var color: UInt32
+    var life: Double
+    var maxLife: Double
+    var hit: Bool
+}
+
+/// A lightning arc from the storm rod: a jagged line through these points
+struct ArcFX {
+    var pts: [(Double, Double)]
+    var life: Double
+}
+
+/// Ground set alight by a fire flask; it burns whatever stands in it
+struct FireZone {
+    var x: Double
+    /// the ground the flames stand on
+    var y: Double
+    var r: Double
+    var t: Double
+    var tick: Double = 0
+    var uid: Int
+}
+
+func isUndead(_ k: MobKind) -> Bool {
+    switch k {
+    case .zombie, .skeleton, .archer, .wraith: return true
+    default: return false
+    }
+}
+
+/// signed difference between two angles, in -pi...pi
+func angleDiff(_ a: Double, _ b: Double) -> Double {
+    var d: Double = a - b
+    while d > Double.pi { d -= 2.0 * Double.pi }
+    while d < -Double.pi { d += 2.0 * Double.pi }
+    return d
+}
+
+/// Rock blocks a sling can throw
+let slingAmmo: [Tile] = [.stone, .slate, .deepRock, .sandstone, .ashStone]
+
+/// The direction (radians, y pointing down) to launch a shot of speed `v` falling under gravity `g`
+/// so that it passes through the point (dx, dy) from where it starts, on the lower, flatter of the two
+/// arcs. Out of reach: the longest-reaching throw toward it (45 degrees up).
+func lobAngle(_ dx: Double, _ dy: Double, _ v: Double, _ g: Double) -> Double {
+    if g <= 0.001 { return atan2(dy, dx) }
+    let x: Double = max(0.001, abs(dx))
+    let up: Double = -dy
+    let v2: Double = v * v
+    let disc: Double = v2 * v2 - g * (g * x * x + 2.0 * up * v2)
+    let th: Double = disc < 0 ? Double.pi * 0.25 : atan((v2 - sqrt(disc)) / (g * x))
+    return dx >= 0 ? -th : Double.pi + th
+}
+
+/// Thrown and lobbed weapons are aimed at the spot itself: the game works out the arc
+let throwSpeed: Double = 15.0
+let throwGravity: Double = 22.0
+
+extension Game {
+    // MARK: geometry
+
+    /// where melee blows start from
+    var shoulderX: Double { return pb.x }
+    var shoulderY: Double { return pb.y - pb.h * 0.55 }
+
+    /// The way an attack goes: toward the aim, or straight ahead when there is no aim (or the aim is on
+    /// the player's own body, where its direction would be noise)
+    func attackAngle() -> Double {
+        let ox: Double = shoulderX
+        let oy: Double = shoulderY
+        if aimValid {
+            let dx: Double = aimX - ox
+            let dy: Double = aimY - oy
+            if dx * dx + dy * dy > 0.36 { return atan2(dy, dx) }
+        }
+        return facing >= 0 ? 0 : Double.pi
+    }
+
+    /// distance from a point to the nearest edge of a creature's box (0 inside it)
+    func boxDistance(_ m: Mob, _ ox: Double, _ oy: Double) -> Double {
+        let nx: Double = clampD(ox, m.b.left, m.b.right)
+        let ny: Double = clampD(oy, m.b.top, m.b.y)
+        let dx: Double = nx - ox
+        let dy: Double = ny - oy
+        return sqrt(dx * dx + dy * dy)
+    }
+
+    /// Whether a swing with profile `p` aimed along (dirx, diry) from the shoulder reaches `m`; returns
+    /// how far away it is. The same test serves every way of attacking, so reach never depends on how
+    /// the attack was started.
+    func meleeReach(_ m: Mob, _ dirx: Double, _ diry: Double, _ p: MeleeProfile) -> Double? {
+        let ox: Double = shoulderX
+        let oy: Double = shoulderY
+        let hw: Double = m.b.w * 0.5
+        let hh: Double = m.b.h * 0.5
+        let cx: Double = m.b.x
+        let cy: Double = m.b.y - hh
+        let nx: Double = clampD(ox, cx - hw, cx + hw)
+        let ny: Double = clampD(oy, cy - hh, cy + hh)
+        let ddx: Double = nx - ox
+        let ddy: Double = ny - oy
+        let dist: Double = sqrt(ddx * ddx + ddy * ddy)
+        if dist > p.reach { return nil }
+        let vx: Double = cx - ox
+        let vy: Double = cy - oy
+        if p.style == .thrust {
+            // a straight band along the aim
+            let along: Double = vx * dirx + vy * diry
+            let ext: Double = hw * abs(dirx) + hh * abs(diry)
+            if along + ext < 0 || along - ext > p.reach { return nil }
+            let perp: Double = abs(vx * diry - vy * dirx)
+            let pext: Double = hw * abs(diry) + hh * abs(dirx)
+            if perp - pext > p.band { return nil }
+        } else if dist > 0.45 {
+            // inside the arc: the angle to the box centre, widened by how wide the box looks from here
+            let cd: Double = max(0.2, sqrt(vx * vx + vy * vy))
+            let off: Double = abs(angleDiff(atan2(vy, vx), atan2(diry, dirx)))
+            let ext: Double = hw * abs(vy / cd) + hh * abs(vx / cd)
+            if off > p.halfArc + atan(ext / cd) { return nil }
+        } else if vx * dirx < -0.3 && abs(dirx) > 0.3 {
+            // pressed right up against the player: anything on the side being swung at
+            return nil
+        }
+        // blades do not pass through walls
+        let ix: Double = nx + (cx - nx) * 0.25
+        let iy: Double = ny + (cy - ny) * 0.25
+        if !world.lineClear(ox, oy, ix, iy) && !world.lineClear(ox, oy, cx, cy) { return nil }
+        return dist
+    }
+
+    /// every creature the current aim would catch, nearest first, at most the weapon's limit
+    func meleeCandidates(_ p: MeleeProfile) -> [(Mob, Double)] {
+        let ang: Double = attackAngle()
+        let dirx: Double = cos(ang)
+        let diry: Double = sin(ang)
+        let ox: Double = shoulderX
+        var out: [(Mob, Double)] = []
+        for m in mobsNear(ox - p.reach - 4, ox + p.reach + 4) {
+            if m.hp <= 0 || m.removed || m.tame || m.kind == .villager || m.downed { continue }
+            if let d = meleeReach(m, dirx, diry, p) { out.append((m, d)) }
+        }
+        if out.count > 1 { out.sort { $0.1 < $1.1 } }
+        if out.count > p.maxHits { out.removeLast(out.count - p.maxHits) }
+        return out
+    }
+
+    // MARK: melee
+
+    /// Starts a melee attack with the held item (nil: bare hands). A heavy weapon winds up first and
+    /// its blow lands a moment later; everything else strikes at once. False while still recovering.
+    @discardableResult
+    func startMelee(_ it: Item?, target: Mob? = nil) -> Bool {
+        if useCD > 0 || strikeT > 0 { return false }
+        let p: MeleeProfile = it?.melee ?? Item.bareHands
+        useCD = p.cooldown
+        swingDur = p.swingTime
+        swingT = p.swingTime
+        let ang: Double = attackAngle()
+        swingDir = cos(ang) >= 0 ? 1 : -1
+        facing = swingDir
+        strikeItem = it
+        strikeSel = sel
+        strikeTarget = target
+        if p.windup > 0 {
+            strikeT = p.windup
+        } else {
+            resolveMelee(it)
+        }
+        return true
+    }
+
+    /// The blow itself: everything inside the swing's shape is hit, with the weapon's knockback,
+    /// crits, combo, backstab, daze and fire; then the trail, sound and hit feedback
+    func resolveMelee(_ it: Item?) {
+        let p: MeleeProfile = it?.melee ?? Item.bareHands
+        let ox: Double = shoulderX
+        let oy: Double = shoulderY
+        let ang: Double = attackAngle()
+        let swingKey: Int = newID()
+        let targets: [(Mob, Double)] = meleeCandidates(p)
+        var hits: Int = 0
+        var crits: Int = 0
+        var undead: Bool = false
+        for (m, _) in targets {
+            var d: Double = p.damage
+            var crit: Bool = false
+            if p.combo {
+                comboN = clock - comboT < 0.7 ? comboN + 1 : 1
+                comboT = clock
+                if comboN % 3 == 0 { d *= 2.0; crit = true }
+            }
+            if !crit && Double.random(in: 0...1) < p.critChance { d *= 1.5; crit = true }
+            if p.backstab > 1 && (pb.x - m.b.x) * Double(m.dir) < 0 && !m.isBoss {
+                d *= p.backstab
+                crit = true
+            }
+            if p.undeadMult != 1 && isUndead(m.kind) { d *= p.undeadMult; undead = true }
+            let dx: Double = m.b.x - ox
+            var info = DamageInfo(amount: d, type: .melee, source: .player)
+            info.dirX = abs(dx) > 0.2 ? (dx > 0 ? 1.0 : -1.0) : Double(swingDir)
+            info.knock = p.knock
+            info.originX = ox
+            info.originY = oy
+            info.key = swingKey
+            info.cooldown = 0.3
+            info.heavy = p.heavy
+            info.crit = crit
+            if applyMobDamage(m, info) {
+                hits += 1
+                if crit { crits += 1 }
+                if p.burn > 0 && !isHeatImmune(m.kind) { m.burn = max(m.burn, p.burn) }
+                if p.daze > 0 { dazeMob(m, p.daze) }
+                spawnSparks(m.b.x - info.dirX * m.b.w * 0.3, m.b.cy, info.dirX, p.trail, crit ? 7 : 4)
+                lockTarget = m
+                lockT = 2.0
+            }
+        }
+        // pirate ships
+        for sh in ships {
+            let dx: Double = abs(sh.x - ox)
+            let dy: Double = abs(sh.deckY(Double(WorldGen.sea)) - pb.y)
+            if dx < 5.0 + p.reach * 0.3 && dy < 3.5 {
+                sh.hp -= p.damage * 0.6
+                sh.hitT = 0.2
+                hits += 1
+            }
+        }
+        if p.shockwave {
+            // the maul's blow runs along the ground as a quake
+            var q = Projectile(kind: .shock, x: pb.x + Double(swingDir) * 1.2, y: pb.y - 0.5, vx: Double(swingDir) * 15.0, vy: 0, dmg: 12, fromPlayer: true, gravity: 0)
+            q.life = 0.55
+            q.source = .player
+            q.uid = newID()
+            projectiles.append(q)
+            addShake(0.3)
+            spawnParticles(pb.x + Double(swingDir) * 1.4, pb.y - 0.1, 0xA08860, 10, 4.0, 0.5, 12)
+        }
+        lastStrikeHits = hits
+        if slashes.count > 8 { slashes.removeFirst() }
+        let life: Double = max(0.12, p.swingTime * 0.7)
+        slashes.append(SlashFX(x: ox, y: oy, ang: ang, reach: p.reach, halfArc: p.halfArc, style: p.style, color: p.trail, life: life, maxLife: life, hit: hits > 0))
+        switch p.style {
+        case .stab: sfx(.swingLight, 0.5)
+        case .thrust: sfx(.thrust, 0.55)
+        case .smash, .bash: sfx(p.heavy || p.daze > 0 ? .swingHeavy : .swing, 0.6)
+        case .slash: sfx(.swing, 0.5)
+        }
+        if hits > 0 {
+            hitStopT = max(hitStopT, p.heavy ? 0.07 : (crits > 0 ? 0.05 : 0.03))
+            addShake(p.heavy ? 0.18 : (crits > 0 ? 0.12 : 0.07))
+            sfx(crits > 0 ? .crit : .hit, p.heavy ? 1.0 : 0.75)
+            if hits >= 2 {
+                floatText("x" + String(hits), pb.x, pb.y - pb.h - 0.9, 0xFFD060)
+                sfx(.multiHit, 0.6)
+            }
+            if undead && p.undeadMult > 1 { spawnParticles(pb.x + Double(swingDir) * 1.2, pb.y - 1.2, 0xC8E8FF, 5, 2.5, 0.4, -2) }
+        } else if let t = strikeTarget ?? (lockT > 0 ? lockTarget : nil), t.hp > 0, !t.removed {
+            // aimed at something and missed: say so, where it is
+            floatText("miss", t.b.x, t.b.top - 0.3, 0xA8A8A8)
+        }
+        strikeTarget = nil
+    }
+
+    /// Leaves a creature reeling: it cannot move or attack for a moment, then cannot be dazed again
+    /// right away (no stun-locking). Bosses shrug it off; the golem only half feels it.
+    func dazeMob(_ m: Mob, _ t: Double) {
+        if m.isBoss || m.dazeGuard > 0 || m.hp <= 0 { return }
+        let k: Double = m.kind == .golem ? 0.5 : 1.0
+        m.daze = max(m.daze, t * k)
+        m.atkT = 0
+        m.blocking = false
+        sfx(.daze, at: m.b.x, 0.5)
+    }
+
+    /// sparks thrown back along the line of a blow
+    func spawnSparks(_ x: Double, _ y: Double, _ dirX: Double, _ color: UInt32, _ n: Int) {
+        if particles.count > 160 { return }
+        for _ in 0..<n {
+            let a: Double = Double.random(in: -0.9...0.9) + (dirX >= 0 ? 0 : Double.pi)
+            let sp: Double = Double.random(in: 4.0...8.0)
+            let c: UInt32 = Double.random(in: 0...1) < 0.5 ? color : 0xFFF4D0
+            particles.append(Particle(x: x, y: y, vx: cos(a) * sp, vy: sin(a) * sp - 2.0, life: Double.random(in: 0.12...0.25), maxLife: 0.25, color: c, size: Double.random(in: 0.07...0.13), gravity: 20))
+        }
+    }
+
+    // MARK: aim assist for the action button
+
+    /// The creature the action button should go for: hostile ones first (and the one already locked
+    /// on), in sight for ranged weapons, within reach for melee (a little beyond it, so the player
+    /// turns to face what is coming). Animals only when nothing hostile is near and a weapon is out.
+    func autoTarget(_ it: Item?) -> Mob? {
+        let ranged: Bool = it?.isRanged ?? false
+        let weapon: Bool = it?.isWeapon ?? false
+        let p: MeleeProfile = it?.melee ?? Item.bareHands
+        let range: Double = ranged ? 22.0 : p.reach + 3.0
+        let ox: Double = shoulderX
+        let oy: Double = shoulderY
+        var best: Mob? = nil
+        var bs: Double = 1e9
+        for m in mobsNear(ox - range - 4, ox + range + 4) {
+            if m.hp <= 0 || m.removed || m.tame || m.kind == .villager || m.downed { continue }
+            let foe: Bool = m.def.hostile || m.angry
+            if !foe && !weapon { continue }
+            let d: Double = boxDistance(m, ox, oy)
+            if d > range { continue }
+            var score: Double = d
+            if !foe { score += 8.0 }
+            if !world.lineClear(ox, oy, m.b.x, m.b.cy) {
+                if ranged { continue }
+                score += 6.0
+            }
+            if m === lockTarget { score -= 1.5 }
+            if score < bs { bs = score; best = m }
+        }
+        return best
+    }
+
+    /// launch speed and gravity of what the held item fires (0 speed: not a projectile weapon)
+    func shotBallistics(_ it: Item?) -> (Double, Double) {
+        guard let i = it else { return (0, 0) }
+        switch i {
+        case .bow: let st: BowStats = bowStats(.bow); return (st.maxSpeed, st.gravity)
+        case .gun(let g): return (g.speed, g.gravity)
+        case .sling: return (23.0, 16.0)
+        case .gadget(let g): return (g == .bomb || g == .fireFlask) ? (throwSpeed, throwGravity) : (0, 0)
+        default: return (0, 0)
+        }
+    }
+
+    /// Where to aim to hit `m`: its centre, led by its speed and raised to allow for the drop
+    func aimPointFor(_ m: Mob, _ it: Item?) -> (Double, Double) {
+        var tx: Double = m.b.x
+        var ty: Double = m.b.cy
+        let (spd, grav) = shotBallistics(it)
+        if spd > 0 {
+            let dx: Double = tx - pb.x
+            let dy: Double = ty - (pb.y - 1.2)
+            let t: Double = sqrt(dx * dx + dy * dy) / spd
+            tx += m.b.vx * t
+            // the bow is drawn and loosed along the aim, so it is aimed above the target; everything
+            // else works its own arc out to the point it is aimed at
+            if case .bow? = it { ty -= 0.5 * grav * t * t }
+        }
+        return (tx, ty)
+    }
+
+    // MARK: weapon switching
+
+    /// The hotbar slot "next weapon" would pick: the weapon used last when something else is in hand,
+    /// otherwise the next weapon along the hotbar
+    func nextWeaponSlot() -> Int? {
+        let n: Int = Inventory.hotbarCount
+        let holdingWeapon: Bool = heldItem?.isWeapon ?? false
+        if !holdingWeapon && lastWeaponSel >= 0 && lastWeaponSel < n && lastWeaponSel != sel {
+            if let s = inv.slots[lastWeaponSel], s.item.isWeapon { return lastWeaponSel }
+        }
+        var k: Int = 1
+        while k < n {
+            let i: Int = (sel + k) % n
+            if let s = inv.slots[i], s.item.isWeapon { return i }
+            k += 1
+        }
+        return nil
+    }
+
+    /// One tap to the next weapon (or back to the weapon from a tool); the HUD button and the Q key
+    func cycleWeapon() {
+        guard let i = nextWeaponSlot() else {
+            say("No other weapon in your hotbar.", 1.2)
+            return
+        }
+        setSel(i)
+        sfx(.swap, 0.6)
+        floatText(inv.slots[i]?.item.name ?? "", pb.x, pb.y - pb.h - 0.6, 0xE8E8E8)
+    }
+
+    /// What the action button does with the item in hand
+    var useLabel: String {
+        guard let it = heldItem else { return "PUNCH" }
+        if it.isWeapon { return "ATTACK" }
+        switch it {
+        case .tool: return "MINE"
+        case .block, .wall: return "BUILD"
+        case .food: return "EAT"
+        default: return "USE"
+        }
+    }
+
+    // MARK: input safety
+
+    /// Drops every held control. Panels, the pause menu and death take the on-screen controls away
+    /// mid-press, and a button that disappears never hears its finger lift, so without this an attack,
+    /// a walk or a jump could carry on by itself once the panel closes.
+    func releaseAllInput() {
+        actState.held = false
+        actState.was = false
+        stick = 0
+        stickY = 0
+        jumpHeld = false
+        downHeld = false
+        keyL = false
+        keyR = false
+        useHeld = false
+        useWasHeld = false
+        usePressedFlag = false
+        useReleasedFlag = false
+        touchActive = false
+        pendingInteract = false
+        bowCharge = 0
+        mining = false
+    }
+
+    /// Once a frame: releases the controls when something covers them
+    func updateInputGate() {
+        let blocked: Bool = paused || showInventory || showMap || showJournal || tradeWith != nil || dead
+        if blocked && !inputBlocked { releaseAllInput() }
+        inputBlocked = blocked
+    }
+
+    // MARK: sling
+
+    func useSling(_ pressed: Bool) {
+        if useCD > 0 { return }
+        var ammo: Tile? = nil
+        if !isCreative {
+            for t in slingAmmo where inv.total(.block(t)) > 0 { ammo = t; break }
+            if ammo == nil {
+                if pressed { say("The sling needs stones: any stone or slate in your bag.", 1.8) }
+                return
+            }
+        }
+        if let t = ammo { _ = inv.remove(.block(t), 1) }
+        facing = aimX >= pb.x ? 1 : -1
+        let ox: Double = pb.x + Double(facing) * 0.4
+        let oy: Double = pb.y - 1.3
+        // the stone is lobbed so that it comes down on the spot aimed at
+        let a: Double = lobAngle(aimX - ox, aimY - oy, 23.0, 16.0)
+        var p = Projectile(kind: .pebble, x: ox, y: oy, vx: cos(a) * 23.0, vy: sin(a) * 23.0, dmg: 4.5, fromPlayer: true, gravity: 16)
+        p.life = 3.0
+        p.w = 0.22
+        p.knock = 7.5
+        p.source = .player
+        p.uid = newID()
+        projectiles.append(p)
+        useCD = 0.55
+        swingDur = 0.2
+        swingT = 0.2
+        swingDir = facing
+        sfx(.sling, 0.6)
+        bumpHUD()
+    }
+
+    // MARK: fire flask
+
+    func throwFlask() {
+        if useCD > 0 { return }
+        if !isCreative { inv.removeAt(sel, 1) }
+        facing = aimX >= pb.x ? 1 : -1
+        let ox: Double = pb.x + Double(facing) * 0.4
+        let oy: Double = pb.y - 1.3
+        let a: Double = lobAngle(aimX - ox, aimY - oy, throwSpeed, throwGravity)
+        var p = Projectile(kind: .flask, x: ox, y: oy, vx: cos(a) * throwSpeed, vy: sin(a) * throwSpeed, dmg: 2, fromPlayer: true, gravity: throwGravity)
+        p.life = 2.5
+        p.w = 0.3
+        p.source = .player
+        p.uid = newID()
+        projectiles.append(p)
+        useCD = 0.45
+        swingT = 0.18
+        swingDir = facing
+        bumpHUD()
+    }
+
+    /// A flask breaks: a patch of fire on the ground below, and everything in it starts burning
+    func burstFlask(_ x: Double, _ y: Double, _ src: DamageSource) {
+        let gx: Int = Int(floor(x))
+        var gy: Double = y
+        let ground: Int = world.groundBelow(gx, Int(floor(y)))
+        if Double(ground) - y < 4.0 { gy = Double(ground) }
+        if fireZones.count >= 6 { fireZones.removeFirst() }
+        var z = FireZone(x: x, y: gy, r: 2.2, t: 3.5, uid: newID())
+        z.tick = 0.35
+        fireZones.append(z)
+        sfx(.flask, at: x, 0.9)
+        spawnParticles(x, gy - 0.4, 0xFF8030, 14, 5.0, 0.6, -2)
+        spawnParticles(x, y, 0xB8E0F0, 6, 4.0, 0.3, 18)
+        addLightFlash(x, gy - 0.8, peak: 12, dur: 0.5, radius: 3.0)
+        _ = src
+    }
+
+    // MARK: storm rod
+
+    /// Lightning down the aim to the first creature in its path, then leaping to up to three more
+    /// close by (each strike a little weaker); creatures standing in water take half as much again
+    func fireStormRod() {
+        let ox: Double = pb.x + Double(facing) * 0.4
+        let oy: Double = pb.y - 1.25
+        facing = aimX >= pb.x ? 1 : -1
+        let ang: Double = atan2(aimY - oy, aimX - ox)
+        let dx: Double = cos(ang)
+        let dy: Double = sin(ang)
+        let maxL: Double = 14.0
+        let ex: Double = ox + dx * maxL
+        let ey: Double = oy + dy * maxL
+        var endT: Double = 1.0
+        if let w = world.segmentSolidT(ox, oy, ex, ey) { endT = w.2 }
+        var first: Mob? = nil
+        var ft: Double = endT
+        for m in mobsNear(min(ox, ex) - 3, max(ox, ex) + 3) {
+            if m.hp <= 0 || m.removed || m.downed { continue }
+            if !canHarm(.player, targetFaction: faction(of: m), targetID: m.id, area: false) { continue }
+            if let t = segmentBoxT(ox, oy, ex, ey, m.b.left - 0.15, m.b.top - 0.15, m.b.right + 0.15, m.b.y + 0.15), t < ft {
+                ft = t
+                first = m
+            }
+        }
+        var anchors: [(Double, Double)] = [(ox, oy)]
+        if let m0 = first {
+            var chain: [Mob] = [m0]
+            while chain.count < 4 {
+                guard let cur = chain.last else { break }
+                var next: Mob? = nil
+                var nd: Double = 5.5 * 5.5
+                for o in mobsNear(cur.b.x - 6, cur.b.x + 6) {
+                    if o.hp <= 0 || o.removed || o.downed || chain.contains(where: { $0 === o }) { continue }
+                    if !canHarm(.player, targetFaction: faction(of: o), targetID: o.id, area: false) { continue }
+                    let ddx: Double = o.b.x - cur.b.x
+                    let ddy: Double = o.b.cy - cur.b.cy
+                    let d2: Double = ddx * ddx + ddy * ddy
+                    if d2 < nd && world.lineClear(cur.b.x, cur.b.cy, o.b.x, o.b.cy) { nd = d2; next = o }
+                }
+                guard let n = next else { break }
+                chain.append(n)
+            }
+            var dmg: Double = GunType.stormRod.damage
+            var px: Double = ox
+            for c in chain {
+                var info = DamageInfo(amount: c.b.inWater ? dmg * 1.5 : dmg, type: .shock, source: .player)
+                info.knock = 2.5
+                info.originX = px
+                info.originY = c.b.cy
+                info.key = newID()
+                if applyMobDamage(c, info) {
+                    lockTarget = c
+                    lockT = 2.0
+                }
+                anchors.append((c.b.x, c.b.cy))
+                addLightFlash(c.b.x, c.b.cy, peak: 11, dur: 0.3, radius: 2.4, color: 0x8AC8FF)
+                spawnParticles(c.b.x, c.b.cy, 0xD8F0FF, 4, 4.0, 0.2, 0)
+                px = c.b.x
+                dmg *= 0.8
+            }
+            if chain.count >= 2 {
+                floatText("x" + String(chain.count), pb.x, pb.y - pb.h - 0.9, 0xB8E0FF)
+                sfx(.multiHit, 0.5)
+            }
+        } else {
+            anchors.append((ox + dx * maxL * endT, oy + dy * maxL * endT))
+        }
+        // a jagged line between the strikes
+        var pts: [(Double, Double)] = [anchors[0]]
+        var k: Int = 1
+        while k < anchors.count {
+            let a: (Double, Double) = anchors[k - 1]
+            let b: (Double, Double) = anchors[k]
+            let sx: Double = b.0 - a.0
+            let sy: Double = b.1 - a.1
+            let len: Double = max(0.01, sqrt(sx * sx + sy * sy))
+            let steps: Int = max(2, Int(len / 1.2))
+            for j in 1..<steps {
+                let f: Double = Double(j) / Double(steps)
+                let off: Double = Double.random(in: -0.35...0.35)
+                pts.append((a.0 + sx * f - sy / len * off, a.1 + sy * f + sx / len * off))
+            }
+            pts.append(b)
+            k += 1
+        }
+        if arcs.count > 6 { arcs.removeFirst() }
+        arcs.append(ArcFX(pts: pts, life: 0.2))
+        addLightFlash(ox + dx * 0.6, oy + dy * 0.6, peak: 9, dur: 0.2, radius: 1.6, color: 0x8AC8FF)
+        sfx(.zap, 0.8)
+        muzzleT = 0.08
+        swingT = 0.12
+        swingDir = facing
+    }
+
+    // MARK: effects, fire and recharge, once a frame
+
+    func updateCombatFX(_ dt: Double) {
+        if !slashes.isEmpty {
+            for i in 0..<slashes.count { slashes[i].life -= dt }
+            slashes.removeAll { $0.life <= 0 }
+        }
+        if !arcs.isEmpty {
+            for i in 0..<arcs.count { arcs[i].life -= dt }
+            arcs.removeAll { $0.life <= 0 }
+        }
+        if !fireZones.isEmpty { updateFireZones(dt) }
+        // storm rods gather their charge back, one strike every few seconds, wherever they are carried
+        rodT += dt
+        if rodT >= GunType.stormRod.reloadTime {
+            rodT = 0
+            for i in 0..<inv.slots.count {
+                if var st = inv.slots[i], case .gun(.stormRod) = st.item, st.extra < GunType.stormRod.magazine {
+                    st.extra += 1
+                    inv.slots[i] = st
+                    if i == sel { bumpHUD() }
+                }
+            }
+        }
+    }
+
+    func updateFireZones(_ dt: Double) {
+        var keep: [FireZone] = []
+        for z0 in fireZones {
+            var z: FireZone = z0
+            z.t -= dt
+            z.tick += dt
+            if z.tick >= 0.35 {
+                z.tick = 0
+                for m in mobsNear(z.x - z.r - 2, z.x + z.r + 2) {
+                    if m.hp <= 0 || m.removed { continue }
+                    if abs(m.b.x - z.x) > z.r + m.b.w * 0.5 { continue }
+                    if m.b.y < z.y - 2.4 || m.b.top > z.y + 0.4 { continue }
+                    if !canHarm(.player, targetFaction: faction(of: m), targetID: m.id, area: true) { continue }
+                    var info = DamageInfo(amount: 2.0, type: .fire, source: .player)
+                    info.originX = z.x
+                    info.key = z.uid
+                    info.cooldown = 0.3
+                    if applyMobDamage(m, info) && !isHeatImmune(m.kind) { m.burn = max(m.burn, 2.5) }
+                }
+                // the thrower is not spared if they stand in it
+                if !dead && abs(pb.x - z.x) < z.r + pb.w * 0.5 && pb.y > z.y - 2.0 && pb.top < z.y + 0.3 && !wearing(.emberCharm) {
+                    playerBurn = max(playerBurn, 0.8)
+                }
+                if z.t > 0.3 { spawnParticles(z.x + Double.random(in: -z.r...z.r), z.y - 0.3, 0xFFA030, 2, 1.5, 0.45, -5) }
+            }
+            if z.t > 0 { keep.append(z) }
+        }
+        fireZones = keep
+    }
+
+    /// What an abandoned ore cart still holds: a little ore, fixed by where it stands
+    func oreCartLoad(_ x: Int, _ y: Int) -> [Stack] {
+        var rng = RNG(hashU(x, y, gen.seed &+ 991))
+        let deep: Bool = y > 230
+        let kinds: [Mat] = deep ? [.ironOre, .silverOre, .coal, .tinOre, .goldOre] : [.coal, .copperOre, .tinOre, .coal, .ironOre]
+        var out: [Stack] = []
+        let a: Mat = kinds[rng.int(kinds.count)]
+        out.append(Stack(item: .mat(a), count: 2 + rng.int(4)))
+        if rng.double() < 0.5 {
+            let b: Mat = kinds[rng.int(kinds.count)]
+            if b != a { out.append(Stack(item: .mat(b), count: 1 + rng.int(3))) }
+        }
+        return out
     }
 }
 
@@ -11542,6 +13506,17 @@ extension Game {
                 if m.regrow <= 0 { m.sheared = false }
             }
             if !world.isLoaded(Int(floor(m.b.x))) { continue }
+            if m.dazeGuard > 0 { m.dazeGuard -= dt }
+            if m.daze > 0 {
+                // reeling from a club: it stands (or hangs) where it is and does nothing else
+                m.daze -= dt
+                if m.daze <= 0 { m.daze = 0; m.dazeGuard = 1.2 }
+                m.b.vx *= max(0, 1.0 - dt * 9.0)
+                if m.def.flying { m.b.vy *= max(0, 1.0 - dt * 9.0) }
+                stepMob(m, dt)
+                mobHazards(m, dt)
+                continue
+            }
             // creatures well off screen wait until the player comes closer (saves a lot of work)
             if !m.isBoss && !m.tame && m.boat < 0 && (dx > 72 || dy > 56) { continue }
             // mid-distance creatures think and move at a third of the rate, staggered by id, with the
@@ -12173,7 +14148,7 @@ extension Game {
 // MARK: - Combat: damage, death, projectiles, drops, particles
 
 extension Game {
-    func hurtMob(_ m: Mob, _ dmg: Double, _ dirX: Double, _ knock: Double, _ byPlayer: Bool, heavy: Bool = false) {
+    func hurtMob(_ m: Mob, _ dmg: Double, _ dirX: Double, _ knock: Double, _ byPlayer: Bool, heavy: Bool = false, crit: Bool = false) {
         if m.hp <= 0 { return }
         if m.kind == .rex && m.tame && byPlayer { return }
         var d: Double = dmg
@@ -12203,7 +14178,11 @@ extension Game {
             m.b.vx = dirX * kb * (1.0 - resist)
             if resist < 0.9 { m.b.vy = min(m.b.vy, -3.5) }
         }
-        floatText(String(Int(d.rounded())), m.b.x, m.b.top - 0.2, byPlayer ? 0xFFFFFF : 0xFFAA40)
+        if crit && byPlayer {
+            floatText(String(Int(d.rounded())) + "!", m.b.x, m.b.top - 0.35, 0xFFE040)
+        } else {
+            floatText(String(Int(d.rounded())), m.b.x, m.b.top - 0.2, byPlayer ? 0xFFFFFF : 0xFFAA40)
+        }
         spawnParticles(m.b.x, m.b.cy, m.kind == .skeleton ? 0xE8E8E0 : 0xB02828, 4, 3.0, 0.4, 14)
         switch m.def.behavior {
         case .passive, .skittish:
@@ -12292,13 +14271,14 @@ extension Game {
         p.life -= dt
         if p.life <= 0 {
             if p.kind == .bomb { explode(p.x, p.y, radius: 3.4, power: p.dmg, source: p.source, breakBlocks: true) }
+            if p.kind == .flask { burstFlask(p.x, p.y, p.source) }
             return false
         }
         if p.stuck > 0 {
             p.stuck -= dt
-            if p.stuck <= 0 && p.kind == .arrow && p.source.kind == .player && !isCreative && Double.random(in: 0...1) < 0.35 {
-                // some arrows survive and can be picked back up
-                spawnDrop(Stack(item: .ammo(.arrow), count: 1), p.x, p.y, 0, -1)
+            if p.stuck <= 0 && (p.kind == .arrow || p.kind == .quarrel) && p.source.kind == .player && !isCreative && Double.random(in: 0...1) < 0.35 {
+                // some arrows and bolts survive and can be picked back up
+                spawnDrop(Stack(item: .ammo(p.kind == .arrow ? .arrow : .bolt), count: 1), p.x, p.y, 0, -1)
             }
             return p.stuck > 0
         }
@@ -12318,10 +14298,14 @@ extension Game {
             if let target = firstEntityOnPath(p, nx, ny, maxT: wallT) {
                 let hx: Double = p.x + (nx - p.x) * target.t
                 let hy: Double = p.y + (ny - p.y) * target.t
+                if p.kind == .flask {
+                    burstFlask(hx, hy, p.source)
+                    return false
+                }
                 let dirx: Double = p.vx >= 0 ? 1.0 : -1.0
                 var info = DamageInfo(amount: p.dmg, type: .projectile, source: p.source)
                 info.dirX = dirx
-                info.knock = p.kind == .bullet ? 4.0 : (p.kind == .arrow ? 3.5 : 3.0)
+                info.knock = p.knock > 0 ? p.knock : (p.kind == .bullet ? 4.0 : (p.kind == .arrow ? 3.5 : 3.0))
                 info.originX = p.x
                 info.originY = p.y
                 info.key = p.uid
@@ -12331,6 +14315,12 @@ extension Game {
                     if applyMobDamage(m, info) {
                         if p.kind == .fireball { m.burn = max(m.burn, 2.5) }
                         spawnParticles(hx, hy, p.kind == .fireball ? 0xFF8030 : 0xE8E0D0, 3, 2.5, 0.25, 8)
+                        if p.source.kind == .player {
+                            // a clear "it landed" for the player's own shots
+                            sfx(.arrowHit, 0.55)
+                            lockTarget = m
+                            lockT = 2.0
+                        }
                     }
                     p.lastHit = m.id
                 } else {
@@ -12349,7 +14339,13 @@ extension Game {
             let hx: Double = p.x + (nx - p.x) * wallT
             let hy: Double = p.y + (ny - p.y) * wallT
             switch p.kind {
-            case .arrow:
+            case .flask:
+                burstFlask(hx, hy, p.source)
+                return false
+            case .pebble:
+                spawnParticles(hx, hy, 0x9A9A9A, 4, 2.5, 0.3, 14)
+                return false
+            case .arrow, .quarrel:
                 // stick into the block, nudged back out of it slightly so it reads as embedded
                 p.x = hx - p.vx * 0.004
                 p.y = hy - p.vy * 0.004
@@ -12364,11 +14360,25 @@ extension Game {
                 rockImpact(p, hx, hy)
                 return false
             case .bomb:
-                // bounce, losing energy
-                let solidLeftRight: Bool = Int(floor(hx - p.vx * 0.01)) != wallTile.0
-                if solidLeftRight { p.vx = -p.vx * 0.45 } else { p.vy = -p.vy * 0.4; p.vx *= 0.7 }
-                p.x = hx - (nx - p.x) * 0.02
-                p.y = hy - (ny - p.y) * 0.02
+                // bounce off the face it struck, losing energy, and come to rest on top of the ground
+                // (it used to work its way into the floor and go off inside the rock)
+                let tx: Double = Double(wallTile.0)
+                let ty: Double = Double(wallTile.1)
+                let onTop: Bool = abs(hy - ty) < 0.02 && p.vy > 0
+                let onBottom: Bool = abs(hy - (ty + 1.0)) < 0.02 && p.vy < 0
+                if onTop || onBottom {
+                    // the ground grips it: it settles close to where it came down
+                    p.vy = -p.vy * 0.35
+                    p.vx *= onTop ? 0.4 : 0.7
+                    p.x = hx
+                    p.y = onTop ? ty - 0.02 : ty + 1.02
+                    if onTop && abs(p.vy) < 1.5 { p.vy = 0; p.vx *= 0.6 }
+                } else {
+                    p.vx = -p.vx * 0.45
+                    p.x = p.vx < 0 ? tx - 0.02 : tx + 1.02
+                    p.y = hy
+                }
+                if world.solid(Int(floor(p.x)), Int(floor(p.y))) { p.y = Double(world.groundBelow(Int(floor(p.x)), Int(floor(p.y)) - 4)) - 0.02 }
                 return true
             default:
                 spawnParticles(hx, hy, p.kind == .fireball ? 0xFF8030 : 0xFFE080, 5, 3.0, 0.25, 6)
@@ -12466,15 +14476,12 @@ extension Game {
     func throwBomb() {
         if useCD > 0 { return }
         if !isCreative { inv.removeAt(sel, 1) }
+        facing = aimX >= pb.x ? 1 : -1
         let ox: Double = pb.x + Double(facing) * 0.4
         let oy: Double = pb.y - 1.3
-        var dx: Double = aimX - ox
-        var dy: Double = aimY - oy
-        let len: Double = max(0.001, sqrt(dx * dx + dy * dy))
-        dx /= len
-        dy /= len
-        let speed: Double = min(16.0, 6.0 + len * 1.6)
-        var p = Projectile(kind: .bomb, x: ox, y: oy, vx: dx * speed + pb.vx * 0.5, vy: dy * speed - 2.0, dmg: 26, fromPlayer: true, gravity: 22.0)
+        // thrown on the arc that lands it on the spot aimed at (then it may bounce a little)
+        let a: Double = lobAngle(aimX - ox, aimY - oy, throwSpeed, throwGravity)
+        var p = Projectile(kind: .bomb, x: ox, y: oy, vx: cos(a) * throwSpeed, vy: sin(a) * throwSpeed, dmg: 26, fromPlayer: true, gravity: throwGravity)
         p.life = 1.8
         p.w = 0.4
         p.source = DamageSource.player
@@ -12590,6 +14597,8 @@ extension Game {
 
 enum DamageType: Int {
     case melee, projectile, explosion, fire, lava, impact, stomp, contact, fall, drown, starve, hazard, crush
+    /// lightning from the storm rod
+    case shock
 
     /// Armor does not help against these
     var bypassesArmor: Bool {
@@ -12641,6 +14650,8 @@ struct DamageInfo {
     var cooldown: Double = 0.5
     /// a crushing blow (war hammer): breaks a raised guard and cracks stone hides
     var heavy: Bool = false
+    /// a critical blow (shown bigger and brighter)
+    var crit: Bool = false
 
     init(amount: Double, type: DamageType, source: DamageSource) {
         self.amount = amount
@@ -12690,6 +14701,10 @@ func damageResist(_ k: MobKind, _ t: DamageType) -> Double {
     case (.sentinel, .fall), (.warden, .fall), (.warden, .lava), (.mimic, .fall): return 0
     case (.sentinel, .projectile): return 0.8
     case (.warden, .explosion): return 0.7
+    // lightning: stone and crystal carry it poorly
+    case (.golem, .shock): return 0.6
+    case (.sentinel, .shock): return 0.5
+    case (.warden, .shock): return 0.75
     default: return 1
     }
 }
@@ -12812,6 +14827,7 @@ extension Game {
         if info.source.kind == .player {
             amount *= dmgOutMult
             if wearing(.wardenSigil) { amount *= 1.2 }
+            if isUndead(m.kind) && wearing(.silverCharm) { amount *= 1.25 }
         }
         if amount <= 0 { return false }
         let byPlayer: Bool = info.source.kind == .player
@@ -12819,7 +14835,7 @@ extension Game {
         m.lastAttacker = info.source.id
         var dir: Double = info.dirX
         if dir == 0 && info.knock > 0 { dir = m.b.x >= info.originX ? 1.0 : -1.0 }
-        hurtMob(m, amount, dir, info.knock, byPlayer, heavy: info.heavy)
+        hurtMob(m, amount, dir, info.knock, byPlayer, heavy: info.heavy, crit: info.crit)
         return true
     }
 
@@ -12834,8 +14850,9 @@ extension Game {
             if playerHitStamps.count > 24 { playerHitStamps = playerHitStamps.filter { clock - $0.value < 4.0 } }
         }
         let before: Double = hp
-        let sigil: Double = wearing(.wardenSigil) ? 0.85 : 1.0
-        damagePlayer(info.amount * dmgInMult * sigil, from: info.originX, knock: info.knock, ignoreArmor: info.type.bypassesArmor)
+        var ward: Double = wearing(.wardenSigil) ? 0.85 : 1.0
+        if info.source.kind == .mob && wearing(.silverCharm), let src = mobs.first(where: { $0.id == info.source.id }), isUndead(src.kind) { ward *= 0.75 }
+        damagePlayer(info.amount * dmgInMult * ward, from: info.originX, knock: info.knock, ignoreArmor: info.type.bypassesArmor)
         return hp < before
     }
 
@@ -13027,10 +15044,10 @@ extension Game {
 
     // MARK: light flashes
 
-    func addLightFlash(_ x: Double, _ y: Double, peak: Int, dur: Double, radius: Double) {
+    func addLightFlash(_ x: Double, _ y: Double, peak: Int, dur: Double, radius: Double, color: UInt32 = 0xFF8A30) {
         // a cap keeps a chain of explosions from piling up work; the oldest gives way
         if flashes.count >= 12 { flashes.removeFirst() }
-        flashes.append(LightFlash(x: x, y: y, peak: clampI(peak, 0, 15), dur: dur, radius: radius))
+        flashes.append(LightFlash(x: x, y: y, peak: clampI(peak, 0, 15), dur: dur, radius: radius, color: color))
     }
 
     func updateFlashes(_ dt: Double) {
@@ -13104,6 +15121,8 @@ struct LightFlash {
     var dur: Double
     /// glow radius in blocks for the drawn flash
     var radius: Double
+    /// tint of the drawn glow (explosions are amber, lightning pale blue)
+    var color: UInt32 = 0xFF8A30
 
     /// 1 at the start, easing smoothly to 0 at the end
     var strength: Double {
@@ -15206,13 +17225,15 @@ final class ActState: @unchecked Sendable {
 let actState = ActState()
 
 extension Game {
-    /// Called once per frame before tick. While the on-screen action button is held, the game
-    /// aims for you: nearest enemy in reach for weapons, otherwise the block in front of you.
+    /// Called once per frame before tick. While the on-screen action button is held, the game aims
+    /// for you: the best foe for the weapon in hand (hostile ones first, the one already locked on,
+    /// in sight for ranged weapons, led and raised for the shot's drop), otherwise the block in front.
+    /// A finger on the world aims for itself; then the button only keeps the action going.
     func applyActButton() {
         let held: Bool = actState.held
         defer { actState.was = held }
         if !held {
-            if actState.was {
+            if actState.was && !touchActive {
                 useHeld = false
                 useWasHeld = false
                 useReleasedFlag = true
@@ -15220,6 +17241,10 @@ extension Game {
             return
         }
         if dead { return }
+        if touchActive {
+            useHeld = true
+            return
+        }
         let it: Item? = heldItem
         var tx: Double = pb.x + Double(facing) * 1.1
         var ty: Double = pb.y - 1.3
@@ -15231,32 +17256,13 @@ extension Game {
             default: wantsMob = true
             }
         }
-        if wantsMob {
-            let range: Double = (it?.isRanged ?? false) ? 22.0 : reachDistance() + 0.5
-            var best: Mob? = nil
-            var bd: Double = range
-            for m in mobs {
-                if m.hp <= 0 || m.tame || m.kind == .villager { continue }
-                if !m.def.hostile && !m.angry && !(it?.isWeapon ?? false) { continue }
-                let dx: Double = m.b.x - pb.x
-                let dy: Double = m.b.cy - (pb.y - pb.h * 0.6)
-                let d: Double = sqrt(dx * dx + dy * dy)
-                if d < bd { bd = d; best = m }
-            }
-            if let m = best {
-                tx = m.b.x
-                ty = m.b.cy
-                if case .bow? = it {
-                    // lead the target and aim above it so the arrow's drop carries it onto the target
-                    let st: BowStats = bowStats(.bow)
-                    let dx: Double = tx - pb.x
-                    let dy: Double = ty - (pb.y - 1.2)
-                    let t: Double = sqrt(dx * dx + dy * dy) / st.maxSpeed
-                    tx += m.b.vx * t
-                    ty -= 0.5 * st.gravity * t * t
-                }
-                aimed = true
-            }
+        if wantsMob, let m = autoTarget(it) {
+            let a: (Double, Double) = aimPointFor(m, it)
+            tx = a.0
+            ty = a.1
+            aimed = true
+            lockTarget = m
+            lockT = max(lockT, 0.5)
         }
         if !aimed {
             let fx: Int = Int(floor(pb.x + Double(facing) * (pb.w * 0.5 + 0.55)))
@@ -15332,7 +17338,9 @@ extension Game {
             (.armor(.head, .diamond), 1), (.armor(.chest, .diamond), 1), (.armor(.legs, .diamond), 1),
             (.part(.frame), 10), (.part(.wheel), 4), (.part(.engine), 2), (.part(.seat), 1), (.part(.steering), 1),
             (.part(.fuelTank), 2), (.part(.hull), 6), (.part(.propeller), 1), (.mat(.coal), 40), (.gadget(.wrench), 1),
-            (.gadget(.portalKey), 1), (.gadget(.treasureMap), 1), (.gadget(.carKit), 1), (.gadget(.motorboatKit), 1)
+            (.gadget(.portalKey), 1), (.gadget(.treasureMap), 1), (.gadget(.carKit), 1), (.gadget(.motorboatKit), 1),
+            (.knife(.diamond), 1), (.club(.mace), 1), (.sling, 1), (.gun(.crossbow), 1), (.gun(.blunderbuss), 1),
+            (.gun(.stormRod), 1), (.ammo(.bolt), 99), (.gadget(.fireFlask), 20)
         ]
         for (it, n) in kit { giveItem(it, n, extra: gunLoad(it)) }
         gotMap = true
@@ -15583,13 +17591,26 @@ extension Game {
 
     var selectedName: String {
         guard let s = heldStack else { return "Empty hand" }
-        if case .gun(let g) = s.item {
-            let nm: String = s.item.name
+        let nm: String = s.item.name
+        switch s.item {
+        case .gun(let g):
             let ex: Int = s.extra
             let mg: Int = g.magazine
-            return "\(nm)  \(ex)/\(mg)"
+            if let a = g.ammo {
+                let left: Int = inv.total(.ammo(a))
+                return "\(nm)  \(ex)/\(mg) · \(left) left"
+            }
+            return "\(nm)  \(ex)/\(mg) charges"
+        case .bow:
+            let n: Int = inv.total(.ammo(.arrow))
+            return "\(nm) · \(n) arrows"
+        case .sling:
+            var n: Int = 0
+            for t in slingAmmo { n += inv.total(.block(t)) }
+            return "\(nm) · \(n) stones"
+        default:
+            return nm
         }
-        return s.item.name
     }
 
     func armorPieces() -> (Tier?, Tier?, Tier?) {
@@ -16907,6 +18928,9 @@ enum SoundID: Int, CaseIterable {
     case place, pickup, craft, chestOpen, door
     case swing, hit, hurt, bow, arrowHit, gun, explosion, land, eat, splash
     case discovery, warn, roar, portal, tap
+    /// combat (appended): a knife's flick, a heavy blow, a thrust, a critical hit, several foes at once,
+    /// crossbow, sling, blunderbuss, lightning, a fire flask, a dazed foe, a weapon swap, a rare find
+    case swingLight, swingHeavy, thrust, crit, multiHit, crossbow, sling, blunderbuss, zap, flask, daze, swap, rareLoot
 }
 
 enum LoopID: Int, CaseIterable {
@@ -17154,6 +19178,75 @@ enum SoundBank {
             s = Synth(0.04, seed: seed)
             s.tone(1400, 1300, 0.03, 0.001, 0.008, 0.3)
             peak = 0.25
+        case .swingLight:
+            s = Synth(0.1, seed: seed)
+            s.noise(0.09, 0.01, 0.025, 0.4, lp: 1800 * p, hp: 700, lp1: 6000 * p)
+            peak = 0.3
+        case .swingHeavy:
+            s = Synth(0.3, seed: seed)
+            s.noise(0.28, 0.06, 0.08, 0.6, lp: 300 * p, hp: 60, lp1: 1400 * p)
+            s.tone(95 * p, 60 * p, 0.25, 0.04, 0.08, 0.4)
+            peak = 0.45
+        case .thrust:
+            s = Synth(0.12, seed: seed)
+            s.noise(0.1, 0.005, 0.03, 0.5, lp: 2500 * p, hp: 500, lp1: 7000 * p)
+            s.tone(500 * p, 900 * p, 0.05, 0.002, 0.02, 0.15)
+            peak = 0.35
+        case .crit:
+            s = Synth(0.25, seed: seed)
+            s.noise(0.08, 0.001, 0.025, 0.7, lp: 2400, hp: 100)
+            s.tone(130 * p, 70 * p, 0.12, 0.001, 0.045, 0.8)
+            s.tone(1480 * p, 1320 * p, 0.2, 0.001, 0.07, 0.3)
+            s.tone(2220 * p, 2000 * p, 0.14, 0.001, 0.04, 0.15)
+            peak = 0.75
+        case .multiHit:
+            s = Synth(0.3, seed: seed)
+            s.tone(660 * p, 660 * p, 0.12, 0.002, 0.05, 0.35, wave: 1)
+            s.tone(990 * p, 990 * p, 0.16, 0.002, 0.07, 0.35, wave: 1, at: 0.07)
+            peak = 0.45
+        case .crossbow:
+            s = Synth(0.24, seed: seed)
+            s.pluck(110 * p, 0.2, 0.7)
+            s.noise(0.03, 0.001, 0.008, 0.5, lp: 4000, hp: 800)
+            s.tone(180 * p, 120 * p, 0.06, 0.001, 0.02, 0.4, wave: 1, at: 0.01)
+            peak = 0.55
+        case .sling:
+            s = Synth(0.26, seed: seed)
+            s.noise(0.2, 0.02, 0.06, 0.35, lp: 900 * p, hp: 200, lp1: 2600 * p)
+            for i in 0..<s.out.count { s.out[i] *= Float(0.6 + 0.4 * sin(Double(i) / Synth.rate * 38.0 * 2.0 * Double.pi)) }
+            s.noise(0.05, 0.001, 0.015, 0.4, lp: 3500, hp: 600, at: 0.18)
+            peak = 0.4
+        case .blunderbuss:
+            s = Synth(0.5, seed: seed)
+            s.noise(0.45, 0.001, 0.12, 1.0, lp: 4500 * p, hp: 60, lp1: 900)
+            s.tone(70 * p, 32 * p, 0.4, 0.001, 0.14, 0.9)
+            peak = 0.85
+        case .zap:
+            s = Synth(0.3, seed: seed)
+            for k in 0..<5 { s.noise(0.03, 0.001, 0.01, 0.6, lp: 9000, hp: 2200, at: Double(k) * 0.045) }
+            s.tone(1900 * p, 420 * p, 0.25, 0.001, 0.08, 0.35, wave: 2)
+            peak = 0.6
+        case .flask:
+            s = Synth(0.6, seed: seed)
+            s.noise(0.06, 0.001, 0.02, 0.6, lp: 9000, hp: 3000)
+            for k in 0..<3 { s.tone((2600 + Double(k) * 700) * p, 2400 * p, 0.08, 0.001, 0.03, 0.15, at: 0.01 * Double(k)) }
+            s.noise(0.5, 0.08, 0.2, 0.7, lp: 400, hp: 60, lp1: 1600, at: 0.04)
+            peak = 0.6
+        case .daze:
+            s = Synth(0.35, seed: seed)
+            for (k, f) in [1500.0, 1900.0, 1700.0].enumerated() { s.tone(f * p, f * 1.05 * p, 0.08, 0.004, 0.03, 0.25, at: Double(k) * 0.09) }
+            peak = 0.3
+        case .swap:
+            s = Synth(0.1, seed: seed)
+            s.tone(900 * p, 850 * p, 0.04, 0.001, 0.012, 0.35, wave: 1)
+            s.tone(1300 * p, 1250 * p, 0.04, 0.001, 0.012, 0.3, wave: 1, at: 0.045)
+            s.noise(0.02, 0.001, 0.006, 0.2, lp: 6000, hp: 1500)
+            peak = 0.3
+        case .rareLoot:
+            s = Synth(0.9, seed: seed)
+            for (k, f) in [784.0, 988.0, 1175.0, 1568.0, 1976.0].enumerated() { s.tone(f, f, 0.45, 0.003, 0.18, 0.28, wave: 1, at: Double(k) * 0.07) }
+            for k in 0..<6 { s.tone(3000 + Double(k) * 310, 2900, 0.1, 0.001, 0.04, 0.08, at: 0.35 + Double(k) * 0.05) }
+            peak = 0.5
         }
         s.finish(peak)
         return s.out
@@ -17266,7 +19359,9 @@ final class Sound {
         case .hit, .arrowHit: return 0.06
         case .land, .place, .door: return 0.08
         case .warn: return 0.35
-        case .roar, .portal, .discovery, .explosion: return 0.25
+        case .roar, .portal, .discovery, .explosion, .rareLoot: return 0.25
+        case .crit, .multiHit, .swingLight: return 0.05
+        case .daze, .flask: return 0.15
         default: return 0.04
         }
     }
@@ -18841,6 +20936,7 @@ enum WorldRenderer {
         drawMobs(&ctx, g, v)
         drawPlayer(&ctx, g, v)
         drawProjectiles(&ctx, g, v)
+        drawCombatFX(&ctx, g, v)
         drawParticles(&ctx, g, v)
         drawClouds(&ctx, W, H, g, v)
         drawWeather(&ctx, g, v)
@@ -19274,6 +21370,16 @@ enum WorldRenderer {
             if m.tame {
                 drawLabel(&ctx, "♥", v.sx(m.b.x), v.sy(m.b.top) - 10.0, 12, Color(hex: 0xFF5A7A))
             }
+            if m.daze > 0 {
+                // little stars circling the head while it reels
+                for k in 0..<3 {
+                    let a: Double = g.clock * 6.0 + Double(k) * 2.094
+                    let sx: Double = m.b.x + cos(a) * max(0.45, m.b.w * 0.45)
+                    let sy: Double = m.b.top - 0.25 + sin(a) * 0.12
+                    let sz: Double = max(3.0, v.tp * 0.14)
+                    fillRect(&ctx, mkRect(v.sx(sx) - sz * 0.5, v.sy(sy) - sz * 0.5, sz, sz), Color(hex: k == 1 ? 0xFFFFFF : 0xFFE060))
+                }
+            }
             let damaged: Bool = m.hp < m.maxHP && m.hp > 0
             if !m.isBoss && damaged && m.kind != .villager {
                 let w: Double = max(0.9, m.b.w)
@@ -19409,11 +21515,36 @@ enum WorldRenderer {
             if g.swingT > 0 {
                 let t: Double = 1.0 - g.swingT / max(0.01, g.swingDur)
                 let push: Double = sin(min(1.0, t * 1.6) * Double.pi) * 0.55 * v.tp
+                c.rotate(by: Angle(radians: clampD(aimAng, -1.1, 1.1)))
                 c.translateBy(x: CGFloat(push), y: 0)
                 ang = Double.pi * 0.25
             } else if g.mining {
                 ang = Double.pi * 0.25 - 0.15 * abs(sin(g.clock * 9.0))
             }
+        case .knife, .relic(.moonDagger):
+            // a quick jab forward toward the aim, held low and ready between blows
+            ang = Double.pi * 0.25 + 0.2
+            rect = mkRect(-sz * 0.2, -sz * 0.7, sz * 0.85, sz * 0.85)
+            if g.swingT > 0 {
+                let t: Double = 1.0 - g.swingT / max(0.01, g.swingDur)
+                let push: Double = sin(min(1.0, t * 1.8) * Double.pi) * 0.4 * v.tp
+                c.rotate(by: Angle(radians: clampD(aimAng, -1.2, 1.2)))
+                c.translateBy(x: CGFloat(push), y: 0)
+                ang = Double.pi * 0.25
+            }
+        case .club, .relic(.quakeMaul):
+            // raised over the shoulder during the wind-up, then brought down hard
+            rect = mkRect(-sz * 0.2, -sz * 0.95, sz * 1.1, sz * 1.1)
+            if g.swingT > 0 {
+                let t: Double = 1.0 - g.swingT / max(0.01, g.swingDur)
+                let e: Double = 1.0 - pow(1.0 - t, 3.0)
+                ang = (-120.0 + 200.0 * e) * Double.pi / 180.0 + clampD(aimAng, -0.8, 0.8) * 0.6
+            } else {
+                ang = -0.3
+            }
+        case .sling:
+            rect = mkRect(-sz * 0.2, -sz * 0.6, sz * 0.8, sz * 0.8)
+            ang = g.swingT > 0 ? g.clock * 30.0 : -0.2
         case .hammer:
             // wound up high, then brought down hard past level
             rect = mkRect(-sz * 0.2, -sz * 1.0, sz * 1.15, sz * 1.15)
@@ -19422,7 +21553,7 @@ enum WorldRenderer {
                 // the head comes down fast (the blow lands at the start), then the swing settles
                 let e: Double = 1.0 - pow(1.0 - t, 3.0)
                 let deg: Double = -130.0 + 215.0 * e
-                ang = deg * Double.pi / 180.0
+                ang = deg * Double.pi / 180.0 + clampD(aimAng, -0.8, 0.8) * 0.6
             } else if g.mining {
                 let wob: Double = abs(sin(g.clock * 7.0))
                 ang = (-40.0 + 60.0 * wob) * Double.pi / 180.0
@@ -19441,7 +21572,8 @@ enum WorldRenderer {
                 let t: Double = 1.0 - g.swingT / max(0.01, g.swingDur)
                 let e: Double = t * t * (3.0 - 2.0 * t)
                 let deg: Double = -100.0 + 190.0 * e
-                ang = deg * Double.pi / 180.0
+                // the arc swings round the aim, so a blow aimed upward sweeps up there
+                ang = deg * Double.pi / 180.0 + clampD(aimAng, -1.0, 1.0) * 0.8
             } else if g.mining {
                 let wob: Double = abs(sin(g.clock * 9.0))
                 let deg: Double = -30.0 + 50.0 * wob
@@ -19692,8 +21824,10 @@ enum WorldRenderer {
             if k <= 0.01 { continue }
             let cx: Double = v.sx(f.x)
             let cy: Double = v.sy(f.y)
-            // three soft rings: wide dim amber, middle orange, small bright core
-            let rings: [(Double, UInt32, Double)] = [(1.0, 0xFF8A30, 0.16), (0.6, 0xFFB050, 0.22), (0.28, 0xFFE8B0, 0.34)]
+            // three soft rings: wide and dim, middle, small bright core (amber for fire, blue for lightning)
+            let mid: UInt32 = mixRGB(f.color, 0xFFFFFF, 0.25)
+            let core: UInt32 = mixRGB(f.color, 0xFFFFFF, 0.7)
+            let rings: [(Double, UInt32, Double)] = [(1.0, f.color, 0.16), (0.6, mid, 0.22), (0.28, core, 0.34)]
             for ring in rings {
                 let r: Double = f.radius * ring.0 * v.tp * (0.85 + 0.15 * k)
                 fillOval(&c, mkRect(cx - r, cy - r, r * 2.0, r * 2.0), rgbColor(ring.1, ring.2 * k))
@@ -19703,13 +21837,14 @@ enum WorldRenderer {
 
     /// Dotted flight path while drawing a bow (fades along its length; stops at the first block)
     static func drawTrajectory(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
-        if !g.settings.showTrajectory || g.bowCharge <= 0 || g.inVehicle != nil { return }
+        if !g.settings.showTrajectory || g.inVehicle != nil { return }
         let pts: [(Double, Double)] = g.arrowPreview()
         if pts.isEmpty { return }
         let r: Double = max(1.5, v.tp * 0.07)
         let n: Double = Double(pts.count)
+        let strength: Double = g.bowCharge > 0 ? min(1.0, g.bowCharge * 1.6) : 0.7
         for (i, p) in pts.enumerated() {
-            let a: Double = 0.55 * (1.0 - Double(i) / n) * min(1.0, g.bowCharge * 1.6)
+            let a: Double = 0.55 * (1.0 - Double(i) / n) * strength
             fillRect(&ctx, mkRect(v.sx(p.0) - r, v.sy(p.1) - r, r * 2.0, r * 2.0), Color.white.opacity(a))
         }
     }
@@ -19721,6 +21856,35 @@ enum WorldRenderer {
             let x: Double = v.sx(p.x)
             let y: Double = v.sy(p.y)
             switch p.kind {
+            case .quarrel:
+                // a short, heavy bolt with a bronze head
+                let ang: Double = p.stuck > 0 ? p.stuckAngle : atan2(p.vy, p.vx)
+                let dx: Double = cos(ang)
+                let dy: Double = sin(ang)
+                let hx: Double = dx * tp * 0.32
+                let hy: Double = dy * tp * 0.32
+                let lw: Double = max(2.5, tp / 9.0)
+                if p.stuck <= 0 {
+                    strokeLine(&ctx, x - hx - dx * tp * 0.7, y - hy - dy * tp * 0.7, x - hx, y - hy, Color.white.opacity(0.2), lw)
+                }
+                strokeLine(&ctx, x - hx, y - hy, x + hx, y + hy, Color(hex: 0x6A4A26), lw)
+                strokeLine(&ctx, x + hx * 0.5, y + hy * 0.5, x + hx * 1.1, y + hy * 1.1, Color(hex: 0xC89040), lw + 1.5)
+            case .pellet:
+                let ang: Double = atan2(p.vy, p.vx)
+                strokeLine(&ctx, x - cos(ang) * tp * 0.5, y - sin(ang) * tp * 0.5, x, y, Color(hex: 0xFFE8A0, alpha: 0.35), 2)
+                fillRect(&ctx, mkRect(x - 2.0, y - 2.0, 4, 4), Color(hex: 0xFFF2C0))
+            case .pebble:
+                let sz: Double = max(4.0, p.w * tp)
+                let h: Double = sz * 0.5
+                fillRect(&ctx, mkRect(x - h, y - h, sz, sz), Color(hex: 0x8A8A8A))
+                fillRect(&ctx, mkRect(x - h, y - h, sz * 0.5, sz * 0.45), Color(hex: 0xB0B0B0))
+            case .flask:
+                let r: Double = tp * 0.26
+                fillOval(&ctx, mkRect(x - r, y - r, r * 2.0, r * 2.0), Color(hex: 0xB8E0F0))
+                fillOval(&ctx, mkRect(x - r * 0.75, y - r * 0.55, r * 1.5, r * 1.3), Color(hex: 0xFF7A1E))
+                fillRect(&ctx, mkRect(x - r * 0.3, y - r * 1.6, r * 0.6, r * 0.7), Color(hex: 0xB8E0F0))
+                let flick: Bool = Int(p.life * 12.0) % 2 == 0
+                fillRect(&ctx, mkRect(x - 2.0, y - r * 2.2, 4, 4), flick ? Color(hex: 0xFFD040) : Color(hex: 0xFF8030))
             case .arrow:
                 // the arrow points along its flight (or the angle it hit at, once stuck)
                 let ang: Double = p.stuck > 0 ? p.stuckAngle : atan2(p.vy, p.vx)
@@ -19775,6 +21939,93 @@ enum WorldRenderer {
                 strokeLine(&ctx, x - dx * 0.2, y - dy * 0.2, x + dx * 0.9, y + dy * 0.9, Color(hex: 0xD8FFFA), max(1.5, tp / 14.0))
             }
         }
+    }
+
+    /// Fire from flasks, the trails of melee swings and the storm rod's lightning
+    static func drawCombatFX(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
+        let tp: Double = v.tp
+        for z in g.fireZones {
+            if !v.visible(z.x, z.y, z.r + 2) { continue }
+            let fade: Double = clampD(z.t / 0.6, 0, 1)
+            var x: Double = z.x - z.r
+            var k: Int = 0
+            while x <= z.x + z.r {
+                // flickering tongues of flame along the patch, tallest in the middle
+                let mid: Double = 1.0 - abs(x - z.x) / (z.r + 0.4)
+                let flick: Double = 0.6 + 0.4 * sin(g.clock * 17.0 + Double(k) * 1.7)
+                let h: Double = (0.35 + 0.75 * mid) * flick * fade
+                fillRect(&ctx, v.rect(x - 0.17, z.y - h, 0.34, h), Color(hex: 0xFF6A1E, alpha: 0.75))
+                fillRect(&ctx, v.rect(x - 0.09, z.y - h * 0.6, 0.18, h * 0.6), Color(hex: 0xFFD060, alpha: 0.85))
+                x += 0.4
+                k += 1
+            }
+        }
+        for sl in g.slashes {
+            let t: Double = 1.0 - sl.life / max(0.01, sl.maxLife)
+            let a: Double = (sl.hit ? 0.85 : 0.6) * (1.0 - t)
+            let sz: Double = max(3.0, tp * 0.13)
+            let col: Color = rgbColor(sl.color, a)
+            let core: Color = rgbColor(0xFFFFFF, a * 0.8)
+            switch sl.style {
+            case .thrust, .stab:
+                // a straight jab out along the aim, its tip brightest
+                let len: Double = sl.reach * (sl.style == .stab ? 0.9 : 1.0) * min(1.0, 0.4 + t * 1.6)
+                let n: Int = max(3, Int(len * 3.0))
+                for i in 0..<n {
+                    let f: Double = 0.35 + (Double(i) / Double(n)) * (len - 0.35)
+                    let px: Double = sl.x + cos(sl.ang) * f
+                    let py: Double = sl.y + sin(sl.ang) * f
+                    fillRect(&ctx, mkRect(v.sx(px) - sz * 0.5, v.sy(py) - sz * 0.5, sz, sz), i == n - 1 ? core : col)
+                }
+            case .slash, .smash, .bash:
+                // pixels along the swept arc, laid down from the top of the swing to its end
+                let r: Double = sl.reach * 0.85
+                let sweep: Double = min(1.0, 0.25 + t * 2.0)
+                let n: Int = max(5, Int(sl.halfArc * 2.0 * r * 3.0))
+                let a0: Double = sl.ang - sl.halfArc
+                let span: Double = sl.halfArc * 2.0 * sweep
+                for i in 0...n {
+                    let f: Double = Double(i) / Double(n)
+                    let aa: Double = a0 + span * f
+                    let px: Double = sl.x + cos(aa) * r
+                    let py: Double = sl.y + sin(aa) * r
+                    fillRect(&ctx, mkRect(v.sx(px) - sz * 0.5, v.sy(py) - sz * 0.5, sz, sz), col)
+                    if i % 2 == 0 {
+                        let r2: Double = r * 0.7
+                        fillRect(&ctx, mkRect(v.sx(sl.x + cos(aa) * r2) - sz * 0.4, v.sy(sl.y + sin(aa) * r2) - sz * 0.4, sz * 0.8, sz * 0.8), core)
+                    }
+                }
+            }
+        }
+        for arc in g.arcs {
+            if arc.pts.count < 2 { continue }
+            let a: Double = clampD(arc.life / 0.2, 0, 1)
+            var path = Path()
+            path.move(to: mkPoint(v.sx(arc.pts[0].0), v.sy(arc.pts[0].1)))
+            for p in arc.pts.dropFirst() { path.addLine(to: mkPoint(v.sx(p.0), v.sy(p.1))) }
+            ctx.stroke(path, with: .color(Color(hex: 0x6AB0FF, alpha: 0.55 * a)), lineWidth: max(4.0, tp * 0.22))
+            ctx.stroke(path, with: .color(Color(hex: 0xF0F8FF, alpha: a)), lineWidth: max(1.5, tp * 0.07))
+        }
+    }
+
+    /// Corner brackets round the foe the attacks are going at
+    static func drawTargetMarker(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
+        guard let m = g.lockTarget, m.hp > 0, !m.removed, !g.dead else { return }
+        if !(actState.held || g.lockT > 0) { return }
+        if !v.visible(m.b.x, m.b.y, 4) { return }
+        let pad: Double = 0.2
+        let x0: Double = v.sx(m.b.left - pad)
+        let x1: Double = v.sx(m.b.right + pad)
+        let y0: Double = v.sy(m.b.top - pad)
+        let y1: Double = v.sy(m.b.y + pad)
+        let l: Double = max(5.0, min(x1 - x0, y1 - y0) * 0.28)
+        let a: Double = actState.held ? 0.9 : clampD(g.lockT, 0, 1) * 0.7
+        let c: Color = Color(hex: 0xFFE060, alpha: a)
+        let w: Double = 2.0
+        strokeLine(&ctx, x0, y0, x0 + l, y0, c, w); strokeLine(&ctx, x0, y0, x0, y0 + l, c, w)
+        strokeLine(&ctx, x1, y0, x1 - l, y0, c, w); strokeLine(&ctx, x1, y0, x1, y0 + l, c, w)
+        strokeLine(&ctx, x0, y1, x0 + l, y1, c, w); strokeLine(&ctx, x0, y1, x0, y1 - l, c, w)
+        strokeLine(&ctx, x1, y1, x1 - l, y1, c, w); strokeLine(&ctx, x1, y1, x1, y1 - l, c, w)
     }
 
     static func drawParticles(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
@@ -19841,6 +22092,7 @@ enum WorldRenderer {
             let col: Color = ok ? Color.white.opacity(0.8) : Color(hex: 0xFF5050, alpha: 0.6)
             strokeRect(&ctx, v.rect(tx, ty, 1, 1), col, 2)
         }
+        drawTargetMarker(&ctx, g, v)
         let full: CGRect = mkRect(0, 0, W, H)
         let headY: Double = g.pb.y - g.pb.h * 0.9
         let headT: Tile = g.world.tile(Int(floor(g.pb.x)), Int(floor(headY)))
@@ -19976,7 +22228,7 @@ struct HoldButton: View {
     var color: Color = Color(hex: 0x6B6B6B)
     var onChange: (Bool) -> Void
     @State var pressed: Bool = false
-    var fontSize: CGFloat { return size * 0.3 }
+    var fontSize: CGFloat { return size * (label.count > 4 ? 0.2 : 0.3) }
     var fill: Color { return pressed ? Color(hex: 0x3A3A3A) : color }
     var body: some View {
         Text(label)
@@ -20004,6 +22256,30 @@ struct HoldButton: View {
     func release() {
         pressed = false
         onChange(false)
+    }
+}
+
+/// One tap to the next weapon: shows the weapon it will switch to
+struct WeaponSwapButton: View {
+    let stack: Stack
+    var action: () -> Void
+    var body: some View {
+        Button(action: action) {
+            ZStack(alignment: .bottomTrailing) {
+                Art.shared.icon(stack.item)
+                    .resizable()
+                    .frame(width: 34, height: 34)
+                    .frame(width: 56, height: 56)
+                Text("⇄")
+                    .font(.pixel(14))
+                    .foregroundColor(Color.white)
+                    .shadow(color: Color.black, radius: 0, x: 1, y: 1)
+                    .padding(3)
+            }
+            .frame(width: 56, height: 56)
+            .background(PixelBox(color: Color(hex: 0x5A4A7A)).opacity(0.85))
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -20337,7 +22613,10 @@ struct HUDView: View {
             Spacer(minLength: 0)
             if game.settings.touchControls {
                 VStack(alignment: .trailing, spacing: 8) {
-                    HoldButton(label: "USE", size: 64, color: Color(hex: 0xA06A2A)) { down in actState.held = down }
+                    if let next = game.nextWeaponSlot(), let st = game.inv.slots[next] {
+                        WeaponSwapButton(stack: st) { game.cycleWeapon() }
+                    }
+                    HoldButton(label: game.useLabel, size: 76, color: Color(hex: 0xA06A2A)) { down in actState.held = down }
                     HoldButton(label: "JUMP", size: 82, color: Color(hex: 0x4E8A3E)) { down in game.jumpHeld = down }
                 }
             }
@@ -20355,7 +22634,9 @@ struct HUDView: View {
             }
             if let s = game.heldStack, case .gun(let gt) = s.item {
                 if game.reloadT > 0 {
-                    OutlinedText(text: "RELOADING", size: 12, color: Color(hex: 0xFFE080))
+                    OutlinedText(text: gt.isBoltThrower && gt.magazine == 1 ? "COCKING" : "RELOADING", size: 12, color: Color(hex: 0xFFE080))
+                } else if gt == .stormRod {
+                    if s.extra < gt.magazine { OutlinedText(text: "CHARGING", size: 12, color: Color(hex: 0xB8E0FF)) }
                 } else if s.extra < gt.magazine {
                     SmallButton(title: "RELOAD", color: Color(hex: 0x6A5A2A)) { game.startReload() }
                 }
@@ -22037,14 +24318,20 @@ struct HelpView: View {
     var done: () -> Void
     let lines: [String] = [
         "Move with the left stick (or A/D). JUMP button (W/Space). Pull the stick down to drop through platforms.",
-        "Touch the world to mine, attack, place or use the item in your hand. The USE button aims for you.",
+        "Touch the world to mine, attack, place or use the item in your hand. A blow goes where you touch: tap a foe (or near it) to hit it, tap above you to swing up. Hold to keep attacking a foe in reach.",
+        "The ATTACK button aims for you: it picks the nearest hostile creature (not the cow beside it), turns you to face it and keeps hitting while it is in reach. Yellow corners mark the foe you are fighting.",
+        "The ⇄ button (or Q) switches to the next weapon in your hotbar; from a tool it goes straight back to the weapon you used last.",
         "Hotbar: tap a slot. BAG opens your inventory, armor and crafting. Hold a slot to split a stack.",
-        "Craft a workbench, then a furnace. Better pickaxes mine deeper ores: copper, iron, gold, diamond, mythril.",
+        "Craft a workbench, then a furnace. Near the top you find coal, copper, saltpeter and (in some lands) tin; iron and silver lie deeper, gold, diamond and mythril deepest. Amethyst geodes are rare.",
+        "Smelt copper and tin ore together into bronze: crossbows, bolts, maces and lanterns. Saltpeter makes strong gunpowder and fire flasks. Silver makes a charm against the undead and, with amethyst, the storm rod.",
         "Iron and better gear is forged on an anvil; machinery and vehicle parts at a tinker's bench; Umbral metals only at a rift forge. Tap a station to craft at it.",
-        "Spears reach far and run through two foes; war hammers are slow but smash shields and stone. Two gear slots hold a headlamp, swift boots, a diving mask and more.",
+        "Weapons: swords sweep everything in front; spears reach far and run through two; hammers are slow and heavy and slow you as they swing; knives are quick, every third stab in a run hits double, and they cut deep from behind; clubs leave foes dazed.",
+        "Ranged: the bow is drawn and loosed; the sling throws any stone you carry; crossbows fire with a tap and reload themselves; the blunderbuss blasts a cone of pellets up close; the storm rod's lightning leaps between foes and recharges by itself. Thrown flasks and slung stones come down where you tap.",
+        "Two gear slots hold a headlamp, swift boots, a diving mask, a silver charm and more.",
         "LOG (or J) opens your journal: places you have found, their stories, villagers' rumours and goals worth chasing.",
         "Villagers trade (farmers, smiths and cartographers) and tell you about places you haven't seen. Some old chests underground are not what they seem.",
         "Torches, lanterns and campfires light the dark. Caves get darker and more dangerous the deeper you go.",
+        "Old mines (a timber headframe on the surface) run deep: galleries, storage rooms up short ladders, drifts down and up, dead ends, sometimes a great chamber. Look for chests in rooms and at dead ends; the best are hidden behind fallen rock.",
         "Eat to stay fed. Cook meat at a campfire. Hunger at zero hurts you.",
         "Skeleton knights block with shields. Pirates sail the seas and raid the coast.",
         "Defeat Ursavor the giant bear to get a Portal Key and a Treasure Map. The map hints where the hidden gate is.",
@@ -22053,7 +24340,7 @@ struct HelpView: View {
         "Your own designs: place a Frame (car) or Hull Float (boat), then hold a part - green squares show where it fits. A checklist shows what is still missing. Coal or wood is fuel: hold it and tap the vehicle.",
         "Zoom with + and −. The DBG button opens the debug menu. II pauses and saves.",
         "Watch the ground in big fights: an attack's area pulses and fills up just before it lands. Step out of it.",
-        "Keyboard: A/D move, W jump, S down, 1-0 hotbar, E bag, M map, J journal, F use, R reload, X dismount, +/- zoom, Esc pause."
+        "Keyboard: A/D move, W jump, S down, 1-0 hotbar, Q next weapon, E bag, M map, J journal, F attack/use, R reload, X dismount, +/- zoom, Esc pause."
     ]
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -22126,6 +24413,7 @@ struct KeyInput: ViewModifier {
         case "m": if isDown && (game.gotMap || game.inv.total(.gadget(.treasureMap)) > 0) { game.showMap.toggle() }
         case "j": if isDown { game.showJournal.toggle() }
         case "r": if isDown { game.startReload() }
+        case "q": if isDown { game.cycleWeapon() }
         case "x": if isDown { game.dismount() }
         case "=", "+": if isDown { game.tilePx = clampI(game.tilePx + 8, 16, 56); game.bumpHUD() }
         case "-": if isDown { game.tilePx = clampI(game.tilePx - 8, 16, 56); game.bumpHUD() }
@@ -22269,6 +24557,7 @@ struct GameView: View {
         var dt: Double = now - clock.last
         if clock.last == 0 || dt > 0.1 { dt = 1.0 / 60.0 }
         clock.last = now
+        game.updateInputGate()
         if game.paused { return }
         if !game.settings.fps60 {
             clock.skip.toggle()

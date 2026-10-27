@@ -1936,8 +1936,14 @@ func iconGear(_ g: Gear) -> PixelBuf {
     case .silverCharm:
         // a silver crescent on a fine chain
         b.line(3, 1, 6, 4, 0xA8AEB8); b.line(9, 1, 6, 4, 0xA8AEB8)
-        b.ellipse(6, 7.5, 3.4, 3.4, 0xDDE4EE); b.ellipse(7.4, 6.6, 2.6, 2.6, 0)
-        b.set(4, 8, 0xFFFFFF); b.set(5, 10, 0xB8C0CC); b.set(3, 6, 0xFFFFFF)
+        b.ellipse(6, 7.5, 3.4, 3.4, 0xDDE4EE)
+        // the bite that makes it a crescent is cut clean out (left see-through, not painted black)
+        for yy in 0..<12 { for xx in 0..<12 {
+            let dx: Double = Double(xx) + 0.5 - 7.6
+            let dy: Double = Double(yy) + 0.5 - 6.6
+            if dx * dx + dy * dy < 2.7 * 2.7 { b.clear(xx, yy) }
+        } }
+        b.set(3, 8, 0xFFFFFF); b.set(5, 10, 0xB8C0CC); b.set(3, 6, 0xF4F8FF)
     }
     b.outline(0x1A1410)
     return b
@@ -7257,6 +7263,9 @@ struct MinePlan {
     var chambers: Int = 0
     var winzes: Int = 0
     var deadEnds: Int = 0
+    /// where the great chamber is, if there is one (its centre column and floor row)
+    var chamberX: Int = 0
+    var chamberFloor: Int = 0
 }
 
 /// One gallery as laid out: where it starts, which way it runs and its floor row at each column
@@ -7575,6 +7584,8 @@ struct MinePlanner {
             chest(cx + 3, ny, .hidden, run.depth + 1)
         }
         plan.chambers += 1
+        plan.chamberX = cx
+        plan.chamberFloor = f
     }
 }
 
@@ -11956,7 +11967,7 @@ extension Game {
 
     func useBareHand(_ dt: Double, _ pressed: Bool) {
         if let m = mobUnderAim(Item.bareHands) {
-            if pressed || meleeCandidates(Item.bareHands).count > 0 { startMelee(nil, target: m) }
+            if pressed || (useCD <= 0 && !meleeCandidates(Item.bareHands).isEmpty) { startMelee(nil, target: m) }
             return
         }
         let tx: Int = Int(floor(aimX))
@@ -11970,7 +11981,7 @@ extension Game {
         let ty: Int = Int(floor(aimY))
         // pointing at a creature means fighting it, not digging the block behind it
         if let m = mobUnderAim(it.melee) {
-            if pressed || meleeCandidates(it.melee).count > 0 { startMelee(it, target: m) }
+            if pressed || (useCD <= 0 && !meleeCandidates(it.melee).isEmpty) { startMelee(it, target: m) }
             return
         }
         if k == .hoe {
@@ -12002,7 +12013,12 @@ extension Game {
             aimX = t.b.x
             aimY = t.b.cy
         }
-        if !pressed && meleeCandidates(p).isEmpty { return }
+        if !pressed {
+            // held: nothing to do while the weapon recovers (this runs every frame), then swing only
+            // if something is actually in reach
+            if useCD > 0 || strikeT > 0 { return }
+            if meleeCandidates(p).isEmpty { return }
+        }
         startMelee(it, target: target)
     }
 
@@ -13234,7 +13250,7 @@ extension Game {
                     lockT = 2.0
                 }
                 anchors.append((c.b.x, c.b.cy))
-                addLightFlash(c.b.x, c.b.cy, peak: 11, dur: 0.3, radius: 2.4, color: 0x8AC8FF)
+                addLightFlash(c.b.x, c.b.cy, peak: 9, dur: 0.22, radius: 1.0, color: 0x6AA8FF)
                 spawnParticles(c.b.x, c.b.cy, 0xD8F0FF, 4, 4.0, 0.2, 0)
                 px = c.b.x
                 dmg *= 0.8
@@ -13266,7 +13282,7 @@ extension Game {
         }
         if arcs.count > 6 { arcs.removeFirst() }
         arcs.append(ArcFX(pts: pts, life: 0.2))
-        addLightFlash(ox + dx * 0.6, oy + dy * 0.6, peak: 9, dur: 0.2, radius: 1.6, color: 0x8AC8FF)
+        addLightFlash(ox + dx * 0.6, oy + dy * 0.6, peak: 8, dur: 0.15, radius: 0.7, color: 0x6AA8FF)
         sfx(.zap, 0.8)
         muzzleT = 0.08
         swingT = 0.12
@@ -21962,38 +21978,40 @@ enum WorldRenderer {
         }
         for sl in g.slashes {
             let t: Double = 1.0 - sl.life / max(0.01, sl.maxLife)
-            let a: Double = (sl.hit ? 0.85 : 0.6) * (1.0 - t)
-            let sz: Double = max(3.0, tp * 0.13)
-            let col: Color = rgbColor(sl.color, a)
-            let core: Color = rgbColor(0xFFFFFF, a * 0.8)
+            let a: Double = (sl.hit ? 0.9 : 0.65) * (1.0 - t * t)
+            // chunky pixel blocks laid edge to edge, so the trail reads as one solid band
+            let sz: Double = max(4.0, tp * 0.2)
+            let stepPx: Double = sz * 0.75
             switch sl.style {
             case .thrust, .stab:
                 // a straight jab out along the aim, its tip brightest
                 let len: Double = sl.reach * (sl.style == .stab ? 0.9 : 1.0) * min(1.0, 0.4 + t * 1.6)
-                let n: Int = max(3, Int(len * 3.0))
+                let n: Int = max(3, Int((len - 0.35) * tp / stepPx))
                 for i in 0..<n {
-                    let f: Double = 0.35 + (Double(i) / Double(n)) * (len - 0.35)
-                    let px: Double = sl.x + cos(sl.ang) * f
-                    let py: Double = sl.y + sin(sl.ang) * f
-                    fillRect(&ctx, mkRect(v.sx(px) - sz * 0.5, v.sy(py) - sz * 0.5, sz, sz), i == n - 1 ? core : col)
+                    let f: Double = Double(i) / Double(max(1, n - 1))
+                    let d: Double = 0.35 + f * (len - 0.35)
+                    let px: Double = sl.x + cos(sl.ang) * d
+                    let py: Double = sl.y + sin(sl.ang) * d
+                    let c: Color = f > 0.85 ? rgbColor(0xFFFFFF, a) : rgbColor(sl.color, a * (0.3 + 0.7 * f))
+                    fillRect(&ctx, mkRect(v.sx(px) - sz * 0.5, v.sy(py) - sz * 0.5, sz, sz), c)
                 }
             case .slash, .smash, .bash:
-                // pixels along the swept arc, laid down from the top of the swing to its end
+                // a crescent swept round the aim from the top of the swing down: brightest at its leading
+                // edge, a pale inner edge, fading toward where the swing began
                 let r: Double = sl.reach * 0.85
-                let sweep: Double = min(1.0, 0.25 + t * 2.0)
-                let n: Int = max(5, Int(sl.halfArc * 2.0 * r * 3.0))
+                let sweep: Double = min(1.0, 0.3 + t * 2.2)
                 let a0: Double = sl.ang - sl.halfArc
                 let span: Double = sl.halfArc * 2.0 * sweep
+                let n: Int = max(6, Int(span * r * tp / stepPx))
                 for i in 0...n {
                     let f: Double = Double(i) / Double(n)
                     let aa: Double = a0 + span * f
-                    let px: Double = sl.x + cos(aa) * r
-                    let py: Double = sl.y + sin(aa) * r
-                    fillRect(&ctx, mkRect(v.sx(px) - sz * 0.5, v.sy(py) - sz * 0.5, sz, sz), col)
-                    if i % 2 == 0 {
-                        let r2: Double = r * 0.7
-                        fillRect(&ctx, mkRect(v.sx(sl.x + cos(aa) * r2) - sz * 0.4, v.sy(sl.y + sin(aa) * r2) - sz * 0.4, sz * 0.8, sz * 0.8), core)
-                    }
+                    let k: Double = 0.25 + 0.75 * f
+                    let ox: Double = cos(aa)
+                    let oy: Double = sin(aa)
+                    fillRect(&ctx, mkRect(v.sx(sl.x + ox * r) - sz * 0.5, v.sy(sl.y + oy * r) - sz * 0.5, sz, sz), rgbColor(sl.color, a * k))
+                    let r2: Double = r - sz / tp * 0.9
+                    fillRect(&ctx, mkRect(v.sx(sl.x + ox * r2) - sz * 0.4, v.sy(sl.y + oy * r2) - sz * 0.4, sz * 0.8, sz * 0.8), rgbColor(0xFFFFFF, a * k * 0.7))
                 }
             }
         }
@@ -22085,7 +22103,8 @@ enum WorldRenderer {
             c.opacity = ok ? 0.5 : 0.28
             c.draw(art.icon(it), in: v.rect(Double(tx), Double(ty), 1, 1))
             strokeRect(&ctx, v.rect(Double(tx), Double(ty), 1, 1), ok ? Color(hex: 0x70E080, alpha: 0.9) : Color(hex: 0xFF5050, alpha: 0.75), 2)
-        } else if g.aimValid && !g.dead && aiming {
+        } else if g.aimValid && !g.dead && aiming && !(g.heldItem?.isWeapon ?? false) {
+            // (a weapon shows the foe it is going for instead: see drawTargetMarker)
             let tx: Double = floor(g.aimX)
             let ty: Double = floor(g.aimY)
             let ok: Bool = g.inReach(g.aimX, g.aimY)

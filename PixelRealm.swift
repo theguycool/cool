@@ -4308,6 +4308,8 @@ final class GenCache {
     var ponds: [Int: PondSite?] = [:]
     var grottos: [Int: GrottoSite?] = [:]
     var mines: [Int: MineSite?] = [:]
+    /// the Warden's citadel, worked out once (nil inside = this world has none)
+    var citadel: CitadelSite?? = nil
     var hits: Int = 0
     var misses: Int = 0
 
@@ -6793,6 +6795,13 @@ extension WorldGen {
     /// The Hollow Warden's citadel (worlds of generator version 3): some 380 to 540 blocks from the
     /// rift, its gate facing back toward it
     var citadel: CitadelSite? {
+        if let c = cache.citadel { return c }
+        let c: CitadelSite? = computeCitadel()
+        cache.citadel = .some(c)
+        return c
+    }
+
+    func computeCitadel() -> CitadelSite? {
         if genVersion < 3 { return nil }
         let side: Int = hash2(77, 78, seed) < 0.5 ? -1 : 1
         let dist: Int = 380 + Int(hash2(79, 80, seed) * 160.0)
@@ -8470,6 +8479,7 @@ final class Mob {
     var goalX: Double = 0
     var drinkT: Double = 0
     var preyID: Int = 0
+    weak var prey: Mob? = nil
     var poseT: Double = 0
     static let turnDur: Double = 0.14
     static let atkDur: Double = 0.28
@@ -8491,7 +8501,10 @@ final class Mob {
     var def: MobDef { return mobDef(kind) }
     var x: Double { return b.x }
     var y: Double { return b.y }
-    var isBoss: Bool { return kind == .bearBoss || (kind == .rex && !tame) || kind == .sentinel || kind == .warden }
+    /// a boss or guardian kind (worked out once: this is checked for every creature every frame)
+    private(set) lazy var bossKind: Bool = kind == .bearBoss || kind == .rex || kind == .sentinel || kind == .warden
+    /// bosses never become tame, except the T-rex, which then stops being one
+    var isBoss: Bool { return bossKind && !tame }
 }
 
 struct MobSave: Codable {
@@ -9182,6 +9195,7 @@ final class Game: ObservableObject, @unchecked Sendable {
     var dangerZones: [DangerZone] = []
     var journal: Journal = Journal()
     var discoverT: Double = 0
+    var guardianT: Double = 0
     /// weather: how heavy the rain (or snow) is now (0...1, eased), whether a spell of it is on, when that
     /// changes, and whether it falls as snow here
     var weatherRain: Double = 0
@@ -13119,8 +13133,11 @@ extension Game {
     }
 
     func updateBosses(_ dt: Double) {
+        guardianT -= dt
+        let checkGuardians: Bool = guardianT <= 0
+        if checkGuardians { guardianT = 0.25 }
         if world.dim == .umbral {
-            updateWardenSpawn()
+            if checkGuardians { updateWardenSpawn() }
             refreshBossBar()
             return
         }
@@ -13128,7 +13145,12 @@ extension Game {
             activeBoss = nil
             return
         }
-        updateGuardians()
+        if checkGuardians { updateGuardians() }
+        // the lairs are checked four times a second too (a boss wakes as you approach, not to the frame)
+        if !checkGuardians {
+            refreshBossBar()
+            return
+        }
         let px: Int = Int(floor(pb.x))
         for L in gen.lairCenters(near: px) {
             let key: Int = lairKey(L)
@@ -17790,7 +17812,7 @@ extension Game {
         }
         var prey: Mob? = nil
         if m.preyID != 0 {
-            for o in mobsNear(m.b.x - 24, m.b.x + 24) where o.id == m.preyID && o.hp > 0 { prey = o }
+            if let o = m.prey, o.id == m.preyID, o.hp > 0, !o.removed { prey = o }
             if prey == nil {
                 // the prey is gone: rest, and stay sated for a while
                 m.preyID = 0
@@ -17807,7 +17829,7 @@ extension Game {
                 let d: Double = abs(o.b.x - m.b.x)
                 if d < bd { bd = d; prey = o }
             }
-            if let p = prey { m.preyID = p.id }
+            if let p = prey { m.preyID = p.id; m.prey = p }
         }
         guard let p = prey else { return false }
         if !allowed || abs(p.b.x - m.b.x) > 26 { m.preyID = 0; return false }

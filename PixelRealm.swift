@@ -414,6 +414,11 @@ enum Tile: UInt8, CaseIterable, Codable {
     /// ores of the upper ground and the middle depths (tin, saltpeter, silver, amethyst geodes), a
     /// building block cut from amethyst, and old mine fittings: rails, supply crates and ore carts
     case tin, saltpeter, silver, amethyst, amethystBlock, rail, crate, oreCart
+    /// weather (appended): a weather station and its Doppler upgrade, a storm siren, a lightning rod, a
+    /// wind turbine, a rain barrel and the larger cistern, a weather vane, a heater, and storm building:
+    /// sandbags, storm shutters (closed and open), reinforced walls and storm shingles
+    case weatherStation, dopplerStation, stormSiren, lightningRod, windTurbine, rainBarrel, rainCistern, weatherVane, heater
+    case sandbag, shutterClosed, shutterOpen, stormBrick, shingles
 
     static let defTable: [TileDef] = Tile.allCases.map { Tile.makeDef($0) }
     static let solidTable: [Bool] = Tile.allCases.map { Tile.makeDef($0).solid }
@@ -427,6 +432,9 @@ enum Tile: UInt8, CaseIterable, Codable {
     static let tierTable: [Int] = Tile.allCases.map { Tile.makeDef($0).tier }
     /// things can rest on or hang from these (solid tiles, plus tree trunks, which have no collision)
     static let supportTable: [Bool] = Tile.allCases.map { Tile.makeDef($0).solid || isLogTile($0) }
+    /// rain, hail and lightning stop at these (anything solid, glass, platforms, leaves, water)
+    static let rainStopTable: [Bool] = Tile.allCases.map { Tile.makeDef($0).solid || Tile.makeDef($0).platform || Tile.makeDef($0).liquid || isLeafTile($0) }
+    static let deviceTable: [Bool] = Tile.allCases.map { isWeatherDevice($0) }
 
     var idx: Int { return i8(rawValue) }
     var def: TileDef { return Tile.defTable[i8(rawValue)] }
@@ -629,6 +637,34 @@ enum Tile: UInt8, CaseIterable, Codable {
             return TileDef(name: "Supply Crate", hard: 0.7, style: .custom, colors: [0xA97B45])
         case .oreCart:
             return TileDef(name: "Ore Cart", hard: 0.8, solid: false, opaque: false, style: .custom, colors: [0x5A5E68], noDrop: true)
+        case .weatherStation:
+            return TileDef(name: "Weather Station", hard: 1.0, solid: false, opaque: false, light: 3, style: .custom, colors: [0x8F6732])
+        case .dopplerStation:
+            return TileDef(name: "Doppler Station", hard: 1.4, tier: 1, solid: false, opaque: false, light: 5, style: .custom, colors: [0x5A6470])
+        case .stormSiren:
+            return TileDef(name: "Storm Siren", hard: 1.4, tier: 1, solid: false, opaque: false, style: .custom, colors: [0x8A8E98])
+        case .lightningRod:
+            return TileDef(name: "Lightning Rod", hard: 0.8, solid: false, opaque: false, style: .custom, colors: [0xD2793A])
+        case .windTurbine:
+            return TileDef(name: "Wind Turbine", hard: 1.2, tier: 1, solid: false, opaque: false, style: .custom, colors: [0xC8CCD4])
+        case .rainBarrel:
+            return TileDef(name: "Rain Barrel", hard: 0.7, solid: false, opaque: false, style: .custom, colors: [0x8F6732])
+        case .rainCistern:
+            return TileDef(name: "Rain Cistern", hard: 1.4, tier: 1, solid: false, opaque: false, style: .custom, colors: [0x6A6E78])
+        case .weatherVane:
+            return TileDef(name: "Weather Vane", hard: 0.6, solid: false, opaque: false, style: .custom, colors: [0xD2793A])
+        case .heater:
+            return TileDef(name: "Heater", hard: 1.2, tier: 1, solid: false, opaque: false, light: 9, style: .custom, colors: [0x4A4E58])
+        case .sandbag:
+            return TileDef(name: "Sandbags", hard: 0.9, style: .custom, colors: [0xB8A070])
+        case .shutterClosed:
+            return TileDef(name: "Storm Shutter", hard: 1.0, style: .custom, colors: [0x6A7A5A], drop: .block(.shutterClosed))
+        case .shutterOpen:
+            return TileDef(name: "Open Shutter", hard: 1.0, solid: false, opaque: false, style: .custom, colors: [0x6A7A5A], drop: .block(.shutterClosed))
+        case .stormBrick:
+            return TileDef(name: "Reinforced Wall", hard: 3.0, tier: 2, style: .custom, colors: [0x6A6E78])
+        case .shingles:
+            return TileDef(name: "Storm Shingles", hard: 1.1, tier: 1, style: .custom, colors: [0x7A4A3A])
         }
     }
 }
@@ -761,6 +797,50 @@ func customTileRows(_ t: Tile) -> ([String], [Character: UInt32])? {
     case .oreCart:
         return (["........", "........", "..oyoc..", "mmmmmmmm", "mMMMMMMm", "mMMMMMMm", ".kk..kk.", ".kk..kk."],
                 ["m": 0x4A4E58, "M": 0x6A6E78, "o": 0xD2793A, "y": 0xC8D2DA, "c": 0x2A2A2E, "k": 0x2A2A2E])
+    // weather devices: each reads at a glance (cups on a station, a dish on the Doppler, a horn and
+    // beacon on the siren); their moving parts are drawn live over the tile
+    case .weatherStation:
+        return ([".c...c..", ".ccpcc..", "...p....", "bbbbbbbb", "bkkkkkkb", "bkGgGgkb", "bbbbbbbb", "bb....bb"],
+                ["c": 0xC8CCD4, "p": 0x8A8E98, "b": 0x8F6732, "k": 0x1A2A2A, "G": 0x60E0A0, "g": 0x2A8A5A])
+    case .dopplerStation:
+        return (["..dddd..", ".dDDDDd.", "...pp...", "mmmmmmmm", "mkkkkkkm", "mkRgRgkm", "mmmmmmmm", "mm....mm"],
+                ["d": 0xE0E4EA, "D": 0x9AA0AC, "p": 0x6A6E78, "m": 0x5A6470, "k": 0x10181C, "R": 0xFF5050, "g": 0x60E0A0])
+    case .stormSiren:
+        return (["...rr...", "..rRRr..", "..mmmm..", "hHmmmmHh", "hHmmmmHh", "...pp...", "...pp...", "..bbbb.."],
+                ["r": 0xC02020, "R": 0xFF6060, "m": 0x8A8E98, "h": 0x6A6E78, "H": 0xA8AEB8, "p": 0x5A5E68, "b": 0x3A3E48])
+    case .lightningRod:
+        return (["...yy...", "...oo...", "...oO...", "...oO...", "...oO...", "...oO...", "..bbbb..", ".bbbbbb."],
+                ["y": 0xFFE8A0, "o": 0xD2793A, "O": 0xA85A28, "b": 0x5A5E68])
+    case .windTurbine:
+        return (["..nnnn..", "..nNNn..", "...pp...", "...pp...", "...pp...", "...pp...", "...pp...", "..bbbb.."],
+                ["n": 0xE8ECF0, "N": 0xC8CCD4, "p": 0xD8DCE2, "b": 0x6A6E78])
+    case .rainBarrel:
+        return (["........", ".kddddk.", ".bBbbBb.", ".hhhhhh.", ".bBbbBb.", ".bBbbBb.", ".hhhhhh.", ".bBbbBb."],
+                ["k": 0x5A3A1A, "d": 0x2A1A0E, "b": 0x8F6732, "B": 0xB98A4E, "h": 0x5A5E68])
+    case .rainCistern:
+        return (["mmmmmmmm", "mkkkkkkm", "mSSSSSSm", "mSsSSsSm", "mSSSSSSm", "mSsSSsSm", "mSSSSSSm", "mmmmmmmm"],
+                ["m": 0x5A5E68, "k": 0x1A1A20, "S": 0x8A8A8A, "s": 0x7A7A7A])
+    case .weatherVane:
+        return (["........", "........", "...yy...", "...pp...", "..cpPc..", "...pp...", "...pp...", "..bbbb.."],
+                ["y": 0xFFE8A0, "p": 0xA85A28, "P": 0xD2793A, "c": 0xD2793A, "b": 0x5A5E68])
+    case .heater:
+        return (["...pp...", "...pp...", "mmmmmmmm", "mkooookm", "mkOyOokm", "mkooookm", "mmmmmmmm", "m.m..m.m"],
+                ["p": 0x4A4E58, "m": 0x5A5E68, "k": 0x2A2A2E, "o": 0xE05818, "O": 0xFFA030, "y": 0xFFE680])
+    case .sandbag:
+        return (["tTTttTTt", "tttttttt", "dttdtttd", "TTttTTtt", "tttttttt", "tdtttdtt", "tTTttTTt", "tttttttt"],
+                ["t": 0xB8A070, "T": 0xD2BC8A, "d": 0x8A7448])
+    case .shutterClosed:
+        return (["ffffffff", "fsSsSsSf", "fssssssf", "fsSsSsSf", "fssssssf", "fsSsSsSf", "fssssssf", "ffffffff"],
+                ["f": 0x4A4E58, "s": 0x6A7A5A, "S": 0x8A9A72])
+    case .shutterOpen:
+        return (["ff......", "fs......", "fS......", "fs......", "fS......", "fs......", "fS......", "ff......"],
+                ["f": 0x4A4E58, "s": 0x6A7A5A, "S": 0x8A9A72])
+    case .stormBrick:
+        return (["iiiiiiii", "bbbkbbbk", "bbbkbbbk", "kkkkkkkk", "bkbbbkbb", "bkbbbkbb", "iiiiiiii", "bbbkbbbk"],
+                ["i": 0x9AA0AC, "b": 0x6A6E78, "k": 0x4A4E58])
+    case .shingles:
+        return (["rRrrRrrR", "rrrrrrrr", "kkkkkkkk", "RrrRrrRr", "rrrrrrrr", "kkkkkkkk", "rRrrRrrR", "rrrrrrrr"],
+                ["r": 0x7A4A3A, "R": 0x9A6250, "k": 0x4A2A20])
     default:
         return nil
     }
@@ -1275,8 +1355,12 @@ enum Gear: Int, Codable, CaseIterable {
     case headlamp, swiftBoots, divingMask, emberCharm, wardenSigil
     /// appended: a silver ward against the restless dead
     case silverCharm
+    /// appended: warm clothes against the cold, and boots that grip snow and ice
+    case winterCoat, snowBoots
     var name: String {
         switch self {
+        case .winterCoat: return "Winter Coat"
+        case .snowBoots: return "Snow Boots"
         case .headlamp: return "Headlamp"
         case .swiftBoots: return "Swift Boots"
         case .divingMask: return "Diving Mask"
@@ -1293,6 +1377,8 @@ enum Gear: Int, Codable, CaseIterable {
         case .emberCharm: return "Lava and fire hurt far less"
         case .wardenSigil: return "Hit 20% harder, take 15% less damage"
         case .silverCharm: return "The undead hit you 25% softer; you hit them 25% harder"
+        case .winterCoat: return "Keeps out most of the cold of a blizzard"
+        case .snowBoots: return "No slipping on snow and ice, no sinking in deep snow"
         }
     }
 }
@@ -1301,8 +1387,12 @@ enum Gadget: Int, Codable, CaseIterable {
     case shears, wrench, treasureMap, portalKey, carKit, boatKit, motorboatKit, bomb
     /// appended: a thrown flask that bursts into a patch of fire
     case fireFlask
+    /// appended: a pocket barometer, and a flask of rainwater from a rain barrel
+    case barometer, waterFlask
     var name: String {
         switch self {
+        case .barometer: return "Barometer"
+        case .waterFlask: return "Water Flask"
         case .fireFlask: return "Fire Flask"
         case .shears: return "Shears"
         case .wrench: return "Wrench"
@@ -1436,6 +1526,8 @@ enum Item: Hashable, Codable {
         case .gadget(let g):
             if g == .fireFlask { return ["Throw it: bursts into fire that burns", "everything standing in it"] }
             if g == .bomb { return ["Throw it: explodes after a moment", "Breaks blocks"] }
+            if g == .barometer { return ["Hold it to read the air pressure", "Falling fast: a storm is coming"] }
+            if g == .waterFlask { return ["Rainwater: pour it on a young crop", "to help it grow, or on a fire"] }
             return ["Gadget: use it from the hotbar"]
         case .block(let t): return [t.solid ? "Building block" : "Placeable", t.light > 0 ? "Gives light" : (t.hardness >= 99 ? "Unbreakable" : String(format: "Hardness %.1f", t.hardness))]
         case .wall: return ["Background wall"]
@@ -1499,7 +1591,7 @@ enum Item: Hashable, Codable {
         switch self {
         case .block, .mat, .food, .ammo, .wall: return 99
         case .part: return 20
-        case .gadget(let g): return g == .bomb ? 30 : (g == .fireFlask ? 20 : 1)
+        case .gadget(let g): return g == .bomb ? 30 : (g == .fireFlask ? 20 : (g == .waterFlask ? 10 : 1))
         default: return 1
         }
     }
@@ -1944,6 +2036,15 @@ func iconGear(_ g: Gear) -> PixelBuf {
             if dx * dx + dy * dy < 2.7 * 2.7 { b.clear(xx, yy) }
         } }
         b.set(3, 8, 0xFFFFFF); b.set(5, 10, 0xB8C0CC); b.set(3, 6, 0xF4F8FF)
+    case .winterCoat:
+        // a padded coat with a fur collar
+        b.rect(2, 2, 8, 9, 0x8A3A3A); b.rect(1, 3, 2, 6, 0x8A3A3A); b.rect(9, 3, 2, 6, 0x8A3A3A)
+        b.rect(3, 1, 6, 2, 0xE8E0D0); b.line(6, 3, 6, 10, 0x5A2424)
+        b.set(5, 5, 0xD8C060); b.set(5, 7, 0xD8C060); b.rect(3, 4, 1, 5, 0xA84A4A)
+    case .snowBoots:
+        // fur-topped boots with a cleated sole
+        b.rect(2, 2, 4, 6, 0x5A4030); b.rect(2, 8, 8, 2, 0x5A4030); b.rect(2, 1, 4, 2, 0xE8E0D0)
+        b.rect(2, 10, 9, 1, 0x2A2A30); b.set(3, 11, 0x9AA0AC); b.set(6, 11, 0x9AA0AC); b.set(9, 11, 0x9AA0AC)
     }
     b.outline(0x1A1410)
     return b
@@ -2049,6 +2150,13 @@ func iconMisc(_ it: Item) -> PixelBuf {
         case .bomb:
             b.ellipse(5.5, 7.0, 3.8, 3.8, 0x3A3A44); b.ellipse(4.5, 6.0, 1.4, 1.2, 0x6A6A78)
             b.rect(5, 2, 2, 2, 0x8A6A3A); b.line(7, 2, 9, 0, 0xC8A060); b.set(9, 0, 0xFFD040); b.set(10, 0, 0xFF8030)
+        case .barometer:
+            // a brass dial with a needle
+            b.ellipse(6, 6, 5.0, 5.0, 0xC89040); b.ellipse(6, 6, 3.8, 3.8, 0xF0E8D0)
+            b.line(6, 6, 8, 3, 0x2A2A30); b.set(6, 6, 0x8A3A3A); b.set(3, 6, 0x6A6A70); b.set(9, 6, 0x6A6A70); b.set(6, 9, 0x6A6A70)
+        case .waterFlask:
+            b.ellipse(6, 7.5, 3.6, 3.4, 0xB8E0F0); b.ellipse(6, 8.2, 2.8, 2.4, 0x3B7BE0); b.ellipse(5.4, 7.4, 1.0, 0.8, 0x8DBBFF)
+            b.rect(5, 2, 2, 2, 0xB8E0F0); b.rect(5, 1, 2, 1, 0x8A5A2A); b.set(8, 6, 0xFFFFFF)
         }
     default:
         break
@@ -2122,8 +2230,11 @@ func tierStation(_ t: Tier) -> Station {
 
 enum RecipeCat: Int, CaseIterable {
     case basic, build, tools, weapons, armor, gear, smelt, food, vehicle
+    /// appended: weather devices and storm building
+    case weather
     var name: String {
         switch self {
+        case .weather: return "Weather"
         case .basic: return "Basics"
         case .build: return "Building"
         case .tools: return "Tools"
@@ -2302,6 +2413,25 @@ enum RecipeBook {
         add(.part(.headlight), 1, [(.mat(.copperBar), 1), (.block(.glass), 1), (.block(.torch), 2)], .tinker, .vehicle)
         add(.part(.cargo), 1, [(planks, 8), (.mat(.ironBar), 2)], .tinker, .vehicle)
         add(.part(.voidDrill), 1, [(.part(.diamondDrill), 1), (.mat(.voidBar), 4), (.mat(.emberBar), 2)], .forge, .vehicle)
+        // Weather: reading it, warning of it, and building against it
+        add(.block(.weatherStation), 1, [(.mat(.copperBar), 3), (.block(.glass), 2), (planks, 4), (.mat(.feather), 1)], .bench, .weather)
+        add(.block(.dopplerStation), 1, [(.block(.weatherStation), 1), (.mat(.silverBar), 2), (.mat(.amethyst), 2), (.mat(.copperBar), 2)], .tinker, .weather)
+        add(.gadget(.barometer), 1, [(.mat(.copperBar), 2), (.block(.glass), 1)], .bench, .weather)
+        add(.block(.weatherVane), 1, [(.mat(.copperBar), 2), (stick, 2)], .bench, .weather)
+        add(.block(.lightningRod), 1, [(.mat(.copperBar), 4)], .bench, .weather)
+        add(.block(.stormSiren), 1, [(.mat(.ironBar), 3), (.mat(.copperBar), 2), (.mat(.bronzeBar), 1)], .anvil, .weather)
+        add(.block(.windTurbine), 1, [(.mat(.ironBar), 4), (planks, 6), (.mat(.copperBar), 2)], .tinker, .weather)
+        add(.block(.rainBarrel), 1, [(planks, 6), (.mat(.copperBar), 1)], .bench, .weather)
+        add(.block(.rainCistern), 1, [(.block(.rainBarrel), 1), (.mat(.ironBar), 3), (.block(.stone), 6)], .anvil, .weather)
+        add(.block(.heater), 1, [(.mat(.ironBar), 3), (.block(.brick), 2), (coal, 2)], .bench, .weather)
+        add(.block(.sandbag), 4, [(.block(.sand), 4), (.mat(.string), 1)], .bench, .weather)
+        add(.block(.shutterClosed), 2, [(planks, 3), (.mat(.ironBar), 1)], .bench, .weather)
+        add(.block(.stormBrick), 4, [(.block(.brick), 4), (.mat(.ironBar), 1)], .anvil, .weather)
+        add(.block(.shingles), 6, [(planks, 3), (.block(.stone), 3)], .bench, .weather)
+        add(.gear(.winterCoat), 1, [(.mat(.wool), 5), (.mat(.leather), 3)], .bench, .weather)
+        add(.gear(.winterCoat), 1, [(.mat(.fur), 3), (.mat(.leather), 2)], .bench, .weather)
+        add(.gear(.snowBoots), 1, [(.mat(.leather), 3), (.mat(.wool), 2)], .bench, .weather)
+        add(.block(.mud), 2, [(.block(.dirt), 2), (.gadget(.waterFlask), 1)], .hand, .weather)
         return list
     }
 }
@@ -5460,6 +5590,11 @@ final class Chunk {
     var backRev: Int = -1
     /// change counter per 16-row section (the renderer only rebuilds sections that changed)
     var secRev: [Int]
+    /// weather facts re-read when the chunk changes (see World.weatherScan): per column the row rain
+    /// stops at, and the weather devices standing in it
+    var wxRev: Int = -1
+    var wxTop: [Int] = []
+    var wxDev: [DeviceSpot] = []
 
     init(cx: Int, H: Int) {
         self.cx = cx
@@ -8330,6 +8465,7 @@ final class World {
         if t.isPlant && t != .torch && t != .lantern && t != .cobweb { return true }
         switch t {
         case .workbench, .furnace, .chest, .campfire, .wheat1, .wheat2, .wheat3, .carrot1, .carrot2, .carrot3, .doorClosed, .doorOpen, .oreCart: return true
+        case .weatherStation, .dopplerStation, .stormSiren, .lightningRod, .windTurbine, .rainBarrel, .rainCistern, .weatherVane, .heater: return true
         default: return false
         }
     }
@@ -10185,8 +10321,50 @@ struct Settings: Codable {
     var soundOn: Bool = true
     var sfxVolume: Double = 0.7
     var ambienceVolume: Double = 0.5
+    // weather: a master switch, a switch for each kind, what it may damage, how strong and how often
+    // severe weather is, alerts, how much is drawn, and gentler lightning
+    var weatherOn: Bool = true
+    var allowRain: Bool = true
+    var allowThunder: Bool = true
+    var allowWind: Bool = true
+    var allowTornado: Bool = true
+    var allowHurricane: Bool = true
+    var allowBlizzard: Bool = true
+    var allowHail: Bool = true
+    var weatherHurtsPlayer: Bool = true
+    var weatherHurtsBlocks: Bool = true
+    var weatherHurtsCreatures: Bool = true
+    /// 0.25 (gentle) ... 1.5 (fierce)
+    var weatherIntensity: Double = 1.0
+    /// how often severe weather comes: 0 rare, 1 normal, 2 frequent
+    var severeFrequency: Int = 1
+    var weatherAlerts: Bool = true
+    /// 0.2 ... 1: how many raindrops, flakes and stones are drawn
+    var weatherParticles: Double = 1.0
+    /// lightning lights the scene gently instead of flashing it (strikes still happen)
+    var reduceFlashes: Bool = false
 
     var shakeScale: Double { return shakeOn ? shakeIntensity : 0 }
+
+    mutating func resetWeather() {
+        let d: Settings = Settings()
+        weatherOn = d.weatherOn
+        allowRain = d.allowRain
+        allowThunder = d.allowThunder
+        allowWind = d.allowWind
+        allowTornado = d.allowTornado
+        allowHurricane = d.allowHurricane
+        allowBlizzard = d.allowBlizzard
+        allowHail = d.allowHail
+        weatherHurtsPlayer = d.weatherHurtsPlayer
+        weatherHurtsBlocks = d.weatherHurtsBlocks
+        weatherHurtsCreatures = d.weatherHurtsCreatures
+        weatherIntensity = d.weatherIntensity
+        severeFrequency = d.severeFrequency
+        weatherAlerts = d.weatherAlerts
+        weatherParticles = d.weatherParticles
+        reduceFlashes = d.reduceFlashes
+    }
 
     static let cameraDefaults: Settings = Settings()
 
@@ -10226,6 +10404,22 @@ struct Settings: Codable {
         soundOn = (try? c.decodeIfPresent(Bool.self, forKey: .soundOn)) ?? true
         sfxVolume = (try? c.decodeIfPresent(Double.self, forKey: .sfxVolume)) ?? 0.7
         ambienceVolume = (try? c.decodeIfPresent(Double.self, forKey: .ambienceVolume)) ?? 0.5
+        weatherOn = (try? c.decodeIfPresent(Bool.self, forKey: .weatherOn)) ?? true
+        allowRain = (try? c.decodeIfPresent(Bool.self, forKey: .allowRain)) ?? true
+        allowThunder = (try? c.decodeIfPresent(Bool.self, forKey: .allowThunder)) ?? true
+        allowWind = (try? c.decodeIfPresent(Bool.self, forKey: .allowWind)) ?? true
+        allowTornado = (try? c.decodeIfPresent(Bool.self, forKey: .allowTornado)) ?? true
+        allowHurricane = (try? c.decodeIfPresent(Bool.self, forKey: .allowHurricane)) ?? true
+        allowBlizzard = (try? c.decodeIfPresent(Bool.self, forKey: .allowBlizzard)) ?? true
+        allowHail = (try? c.decodeIfPresent(Bool.self, forKey: .allowHail)) ?? true
+        weatherHurtsPlayer = (try? c.decodeIfPresent(Bool.self, forKey: .weatherHurtsPlayer)) ?? true
+        weatherHurtsBlocks = (try? c.decodeIfPresent(Bool.self, forKey: .weatherHurtsBlocks)) ?? true
+        weatherHurtsCreatures = (try? c.decodeIfPresent(Bool.self, forKey: .weatherHurtsCreatures)) ?? true
+        weatherIntensity = clampD((try? c.decodeIfPresent(Double.self, forKey: .weatherIntensity)) ?? 1.0, 0.25, 1.5)
+        severeFrequency = clampI((try? c.decodeIfPresent(Int.self, forKey: .severeFrequency)) ?? 1, 0, 2)
+        weatherAlerts = (try? c.decodeIfPresent(Bool.self, forKey: .weatherAlerts)) ?? true
+        weatherParticles = clampD((try? c.decodeIfPresent(Double.self, forKey: .weatherParticles)) ?? 1.0, 0.2, 1.0)
+        reduceFlashes = (try? c.decodeIfPresent(Bool.self, forKey: .reduceFlashes)) ?? false
     }
 }
 
@@ -10413,12 +10607,62 @@ final class Game: ObservableObject, @unchecked Sendable {
     var journal: Journal = Journal()
     var discoverT: Double = 0
     var guardianT: Double = 0
-    /// weather: how heavy the rain (or snow) is now (0...1, eased), whether a spell of it is on, when that
-    /// changes, and whether it falls as snow here
+    /// weather (see WeatherSim): the simulation, what it brings to where the player stands, and the
+    /// short-lived things it puts in the world
+    var weather: WeatherSim = WeatherSim()
+    var wxHere: LocalWeather = LocalWeather()
+    /// kept for the code that reads them: how hard rain or snow falls on the player, and whether it is snow
     var weatherRain: Double = 0
-    var weatherOn: Bool = false
-    var weatherT: Double = 90
     var weatherSnow: Bool = false
+    /// where the player last stood in the overworld (the weather is judged there while they are away)
+    var wxHomeX: Double = 0
+    var coastCache: [Int: (Double, Double)] = [:]
+    var bolts: [LightningBolt] = []
+    var thunderQueue: [PendingThunder] = []
+    var strikeMark: StrikeMark? = nil
+    var strikeAcc: Double = 0
+    var playerStrikeCD: Double = 0
+    var skyFlash: Double = 0
+    var hailPool: [HailStone] = []
+    var hailAcc: Double = 0
+    var hailHitT: Double = 0
+    var hailBroken: Int = 0
+    /// how much warmth the player has lost to the cold (0 fine ... 1 freezing), and what keeps it in
+    var bodyCold: Double = 0
+    var coldHurtT: Double = 0
+    var coldWarned: Bool = false
+    var warmthNear: Double = 0
+    var warmthT: Double = 0
+    /// 0 open, 1 under a roof, 2 indoors, 3 underground or in a storm shelter (see shelterAt)
+    var shelterLevel: Int = 0
+    var wxCellT: Double = 0
+    /// the wind's hold on the player this frame (see updateWeatherForces)
+    var wxWalk: Double = 0
+    var wxAirDrift: Double = 0
+    var wxRest: Double = 0
+    var wxAccelX: Double = 0
+    var wxAccelY: Double = 0
+    var wxSlip: Double = 0
+    var wxSlow: Double = 1
+    /// thrown by a tornado: a hard landing hurts less
+    var flingT: Double = 0
+    var wxDebrisT: Double = 0
+    var tornadoAcc: Double = 0
+    var tornadoGround: Double = 0
+    var hurricaneAcc: Double = 0
+    var surgeT: Double = 0
+    var swampT: Double = 0
+    var wxDevT: Double = 0
+    var wxNoteT: Double = 0
+    /// the present severe spell actually reached the player (it then goes in the journal)
+    var stormFelt: Bool = false
+    var sirenLevel: Double = 0
+    /// the warning strip under the top bar (0 none, 1 advisory, 2 warning)
+    var wxBanner: String = ""
+    var wxBannerLevel: Int = 0
+    /// the weather station whose screen is open
+    var stationAt: DeviceSpot? = nil
+    @Published var showWeather: Bool = false
     /// the landing squash and the last frame's water state (for splashes)
     var landT: Double = 0
     var wasInWater: Bool = false
@@ -10511,6 +10755,10 @@ final class Game: ObservableObject, @unchecked Sendable {
         camY = pb.y - 2
         setupStartingKit()
         timeOfDay = 0.06
+        // the weather has its own random numbers, started from the world's seed
+        weather.rngS = seed ^ 0x57EA_7E12_9B3D_0451
+        weather.fxS = seed ^ 0x0FF5_E7FA_CE12_7731
+        wxHomeX = pb.x
     }
 
     func setupStartingKit() {
@@ -10720,7 +10968,7 @@ extension Game {
             rideRex(r, ix, jumpPressed, dt)
             return
         }
-        var runMax: Double = 7.4 * speedMult * (wearing(.swiftBoots) ? 1.18 : 1.0)
+        var runMax: Double = 7.4 * speedMult * (wearing(.swiftBoots) ? 1.18 : 1.0) * wxSlow
         // heavy weapons commit you to the blow: slower on your feet while it lasts
         if swingT > 0 || strikeT > 0, let it = heldItem, it.isMeleeWeapon { runMax *= it.melee.moveScale }
         if ix != 0 {
@@ -10780,13 +11028,25 @@ extension Game {
             updateSurvival(dt, ix)
             return
         }
-        let target: Double = ix * runMax * (swimming ? 0.55 : 1.0)
-        let accel: Double = pb.onGround ? 72.0 : 40.0
+        // the wind (see updateWeatherForces) helps or holds back a walk, carries a jump, and in a gale
+        // pushes even a player standing still; snow and wet ground make the footing slippery. All of
+        // these are zero in calm weather, so movement is then exactly as it always was.
+        let windT: Double = swimming ? 0 : (pb.onGround ? wxWalk : wxAirDrift)
+        let target: Double = ix * runMax * (swimming ? 0.55 : 1.0) + (ix != 0 ? windT : 0)
+        let grip: Double = pb.onGround ? 1.0 - 0.6 * wxSlip : 1.0
+        let accel: Double = (pb.onGround ? 72.0 : 40.0) * grip
         if ix != 0 {
             if pb.vx < target { pb.vx = min(target, pb.vx + accel * dt) } else { pb.vx = max(target, pb.vx - accel * dt) }
         } else {
-            let fr: Double = (pb.onGround ? 90.0 : 12.0) * dt
-            if pb.vx > 0 { pb.vx = max(0, pb.vx - fr) } else { pb.vx = min(0, pb.vx + fr) }
+            let rest: Double = swimming ? 0 : (pb.onGround ? wxRest : wxAirDrift)
+            let fr: Double = (pb.onGround ? 90.0 * (1.0 - 0.8 * wxSlip) : 12.0) * dt
+            if pb.vx > rest { pb.vx = max(rest, pb.vx - fr) } else { pb.vx = min(rest, pb.vx + fr) }
+        }
+        // a tornado's pull and lift (bounded; zero without one)
+        if wxAccelX != 0 || wxAccelY != 0 {
+            pb.vx = clampD(pb.vx + wxAccelX * dt, -16, 16)
+            pb.vy = clampD(pb.vy + wxAccelY * dt, -14, terminalV)
+            if wxAccelY < -8 { pb.onGround = false }
         }
         if pb.onGround { coyote = 0.11 } else { coyote -= dt }
         if jumpPressed { jumpBuf = 0.13 } else { jumpBuf -= dt }
@@ -10820,8 +11080,10 @@ extension Game {
         if !pb.onGround && pb.vy > 0 { fallPeak = max(fallPeak, pb.vy) }
         if pb.onGround && wasAir {
             if fallPeak > 20.0 && !swimming && mode != .creative && !godMode {
-                let dmg: Double = (fallPeak - 20.0) * 1.15
-                damagePlayer(dmg, from: pb.x, knock: 0, ignoreArmor: true)
+                var dmg: Double = (fallPeak - 20.0) * 1.15
+                // thrown by a tornado: a hard landing, but one that can be lived through
+                if flingT > 0 { dmg = settings.weatherHurtsPlayer ? min(dmg, 3.0) : 0 }
+                if dmg > 0 { damagePlayer(dmg, from: pb.x, knock: 0, ignoreArmor: true) }
                 addShake(0.3)
             }
             if fallPeak > 9.0 { spawnParticles(pb.x, pb.y, 0xB0A890, 6, 3.0, 0.4, 10) }
@@ -10935,7 +11197,8 @@ extension Game {
         } else {
             starveT = 0
         }
-        if hunger >= 14 && hp < maxHP {
+        // a frozen body does not heal until it has warmed up
+        if hunger >= 14 && hp < maxHP && bodyCold < 0.9 {
             regenT += dt
             let period: Double = hunger >= 18 ? 0.9 : 1.6
             if regenT >= period {
@@ -11192,11 +11455,14 @@ extension Game {
             let x: Int = px + Int.random(in: -40...40)
             let y: Int = py + Int.random(in: -26...26)
             let t: Tile = world.tile(x, y)
+            // rain falling on a crop (not snow) helps it along
+            var grow: Double = 0.35
+            if t.isPlant && weatherRain > 0.2 && !weatherSnow && y < world.rainTop(x) + 1 { grow = 0.35 + 0.3 * weatherRain }
             switch t {
-            case .wheat1: if Double.random(in: 0...1) < 0.35 { world.set(x, y, .wheat2) }
-            case .wheat2: if Double.random(in: 0...1) < 0.35 { world.set(x, y, .wheat3) }
-            case .carrot1: if Double.random(in: 0...1) < 0.35 { world.set(x, y, .carrot2) }
-            case .carrot2: if Double.random(in: 0...1) < 0.35 { world.set(x, y, .carrot3) }
+            case .wheat1: if Double.random(in: 0...1) < grow { world.set(x, y, .wheat2) }
+            case .wheat2: if Double.random(in: 0...1) < grow { world.set(x, y, .wheat3) }
+            case .carrot1: if Double.random(in: 0...1) < grow { world.set(x, y, .carrot2) }
+            case .carrot2: if Double.random(in: 0...1) < grow { world.set(x, y, .carrot3) }
             case .dirt:
                 if world.dim == .overworld && y < world.skyTop(x) + 1 && world.tile(x, y - 1) == .air {
                     let a: Tile = world.tile(x - 1, y)
@@ -11343,6 +11609,7 @@ extension Game {
         let t: Tile = world.tile(tx, ty)
         switch t {
         case .chest, .workbench, .furnace, .campfire, .portalOff, .doorClosed, .doorOpen, .anvil, .tinkerBench, .riftForge: return true
+        case .weatherStation, .dopplerStation, .stormSiren, .lightningRod, .windTurbine, .rainBarrel, .rainCistern, .weatherVane, .heater, .shutterClosed, .shutterOpen: return true
         default: break
         }
         if let m = mobAtPoint(wx, wy, 0.15) {
@@ -11407,6 +11674,9 @@ extension Game {
             return
         case .doorClosed, .doorOpen:
             toggleDoor(tx, ty)
+            return
+        case .weatherStation, .dopplerStation, .stormSiren, .lightningRod, .windTurbine, .rainBarrel, .rainCistern, .weatherVane, .heater, .shutterClosed, .shutterOpen:
+            useWeatherDevice(tx, ty, t)
             return
         default: break
         }
@@ -11799,7 +12069,7 @@ extension Game {
         for t in Tile.allCases {
             switch t {
             case .air, .water, .lava, .bedrock, .portalFrame, .portalOff, .portalOn, .wheat1, .wheat2, .carrot1, .carrot2, .doorOpen,
-                 .logBlock, .jungleLogBlock, .palmLogBlock, .birchLogBlock: continue
+                 .logBlock, .jungleLogBlock, .palmLogBlock, .birchLogBlock, .shutterOpen: continue
             default: out.append(.block(t))
             }
         }
@@ -11845,9 +12115,9 @@ extension Game {
 func toolClass(_ t: Tile) -> ToolType {
     switch t {
     case .log, .jungleLog, .palmLog, .logBlock, .jungleLogBlock, .palmLogBlock, .planks, .workbench, .chest, .platform, .leaves, .jungleLeaves, .cactus, .hay, .reed, .lantern, .torch, .ladder, .tinkerBench,
-         .birchLog, .birchLogBlock, .birchLeaves, .pineLeaves:
+         .birchLog, .birchLogBlock, .birchLeaves, .pineLeaves, .weatherStation, .rainBarrel, .shutterClosed, .shutterOpen:
         return .axe
-    case .dirt, .grass, .sand, .snow, .mud, .dryGrass, .jungleGrass, .mossGrass, .farmland:
+    case .dirt, .grass, .sand, .snow, .mud, .dryGrass, .jungleGrass, .mossGrass, .farmland, .sandbag:
         return .shovel
     default:
         return .pickaxe
@@ -12608,6 +12878,10 @@ extension Game {
             if pressed { throwBomb() }
         case .fireFlask:
             if pressed { throwFlask() }
+        case .barometer:
+            if pressed { say(barometerReading(), 2.5) }
+        case .waterFlask:
+            useWaterFlask(pressed)
         }
     }
 
@@ -12724,6 +12998,8 @@ struct FireZone {
     var t: Double
     var tick: Double = 0
     var uid: Int
+    /// started by lightning, not by a thrown flask (it then answers to the weather damage settings)
+    var env: Bool = false
 }
 
 func isUndead(_ k: MobKind) -> Bool {
@@ -13117,7 +13393,7 @@ extension Game {
 
     /// Once a frame: releases the controls when something covers them
     func updateInputGate() {
-        let blocked: Bool = paused || showInventory || showMap || showJournal || tradeWith != nil || dead
+        let blocked: Bool = paused || showInventory || showMap || showJournal || showWeather || tradeWith != nil || dead
         if blocked && !inputBlocked { releaseAllInput() }
         inputBlocked = blocked
     }
@@ -13320,22 +13596,28 @@ extension Game {
         for z0 in fireZones {
             var z: FireZone = z0
             z.t -= dt
+            // rain puts fires out sooner
+            let rain: Double = abs(z.x - pb.x) < 40 ? wxHere.precip : precipAt(z.x)
+            if rain > 0.05 && !wxHere.snow { z.t -= dt * 2.0 * rain }
             z.tick += dt
             if z.tick >= 0.35 {
                 z.tick = 0
-                for m in mobsNear(z.x - z.r - 2, z.x + z.r + 2) {
+                let src: DamageSource = z.env ? .environment : .player
+                let hurtsMobs: Bool = !z.env || settings.weatherHurtsCreatures
+                for m in mobsNear(z.x - z.r - 2, z.x + z.r + 2) where hurtsMobs {
                     if m.hp <= 0 || m.removed { continue }
                     if abs(m.b.x - z.x) > z.r + m.b.w * 0.5 { continue }
                     if m.b.y < z.y - 2.4 || m.b.top > z.y + 0.4 { continue }
-                    if !canHarm(.player, targetFaction: faction(of: m), targetID: m.id, area: true) { continue }
-                    var info = DamageInfo(amount: 2.0, type: .fire, source: .player)
+                    if !canHarm(src, targetFaction: faction(of: m), targetID: m.id, area: true) { continue }
+                    var info = DamageInfo(amount: 2.0, type: .fire, source: src)
                     info.originX = z.x
                     info.key = z.uid
                     info.cooldown = 0.3
                     if applyMobDamage(m, info) && !isHeatImmune(m.kind) { m.burn = max(m.burn, 2.5) }
                 }
                 // the thrower is not spared if they stand in it
-                if !dead && abs(pb.x - z.x) < z.r + pb.w * 0.5 && pb.y > z.y - 2.0 && pb.top < z.y + 0.3 && !wearing(.emberCharm) {
+                let hurtsPlayer: Bool = !z.env || settings.weatherHurtsPlayer
+                if hurtsPlayer && !dead && abs(pb.x - z.x) < z.r + pb.w * 0.5 && pb.y > z.y - 2.0 && pb.top < z.y + 0.3 && !wearing(.emberCharm) {
                     playerBurn = max(playerBurn, 0.8)
                 }
                 if z.t > 0.3 { spawnParticles(z.x + Double.random(in: -z.r...z.r), z.y - 0.3, 0xFFA030, 2, 1.5, 0.45, -5) }
@@ -13682,7 +13964,7 @@ extension Game {
     func updateZombie(_ m: Mob, _ dt: Double, _ aggro: Bool, _ dyP: Double) {
         let d: MobDef = m.def
         // burn in sunlight
-        if world.dim == .overworld && dayFactor > 0.7 && weatherRain < 0.5 && world.isSkyExposed(Int(floor(m.b.x)), Int(floor(m.b.y - 1))) && !m.b.inWater {
+        if world.dim == .overworld && dayFactor > 0.7 && precipAt(m.b.x) < 0.5 && wxHere.cloud < 0.9 && world.isSkyExposed(Int(floor(m.b.x)), Int(floor(m.b.y - 1))) && !m.b.inWater {
             m.burn = 2.0
         }
         if aggro {
@@ -14065,7 +14347,9 @@ extension Game {
             sy = Double(y + 1)
         }
         let biome: Biome = world.dim == .overworld ? gen.col(ix).biome : .umbral
-        let night: Bool = isNight
+        // under a dark storm by day, now and then the night's creatures come out too
+        let stormDark: Bool = world.dim == .overworld && settings.weatherOn && wxHere.cloud > 0.9 && wxHere.precip > 0.6 && Double.random(in: 0...1) < 0.35
+        let night: Bool = isNight || stormDark
         var cands: [SpawnRule] = []
         var total: Double = 0
         for r in spawnRules {
@@ -16990,6 +17274,10 @@ struct SaveData: Codable {
     var nextID: Int
     /// nil in saves made before the journal
     var journal: Journal? = nil
+    /// nil in saves made before the weather simulation (such worlds start with fair weather)
+    var weather: WeatherSim? = nil
+    /// how cold the player was
+    var bodyCold: Double? = nil
 }
 
 func mobToSave(_ m: Mob) -> MobSave {
@@ -17118,7 +17406,7 @@ extension Game {
         if let r = mounted { px = r.b.x; py = r.b.y }
         if let v = inVehicle { px = v.b.x; py = v.b.y - v.b.h }
         let meta = SaveMeta(slot: slot, name: worldName, mode: mode, infinite: gen.infinite, seed: seedValue, day: dayCount, playSeconds: playSeconds, dim: cur, genVersion: gen.genVersion, options: gen.options)
-        return SaveData(meta: meta, settings: settings, px: px, py: py, hp: max(1, hp), maxHP: maxHP, hunger: hunger, timeOfDay: timeOfDay, kills: kills, spawnX: spawnX, spawnY: spawnY, inv: inv, sel: sel, defeated: Array(defeated), gotMap: gotMap, portalOpened: portalOpened, chests: chestList, chunks: cs, vehicles: vs, pets: pets, rex: rs, nextID: nextID, journal: journal)
+        return SaveData(meta: meta, settings: settings, px: px, py: py, hp: max(1, hp), maxHP: maxHP, hunger: hunger, timeOfDay: timeOfDay, kills: kills, spawnX: spawnX, spawnY: spawnY, inv: inv, sel: sel, defeated: Array(defeated), gotMap: gotMap, portalOpened: portalOpened, chests: chestList, chunks: cs, vehicles: vs, pets: pets, rex: rs, nextID: nextID, journal: journal, weather: weather, bodyCold: bodyCold)
     }
 
     @discardableResult
@@ -17149,6 +17437,10 @@ extension Game {
         g.sel = clampI(s.sel, 0, Inventory.hotbarCount - 1)
         g.defeated = Set(s.defeated)
         g.journal = s.journal ?? Journal()
+        // the weather carries on as it was (its plan is only remade if the settings differ from when
+        // it was saved)
+        if let w = s.weather { g.weather = w }
+        g.bodyCold = clampD(s.bodyCold ?? 0, 0, 1)
         g.gotMap = s.gotMap
         g.portalOpened = s.portalOpened
         g.nextID = max(g.nextID, s.nextID)
@@ -18310,6 +18602,13 @@ extension Game {
         }
         h.combine(vehicleHelpKey())
         h.combine(message ?? "")
+        // weather: the banner, what is shown in the info corner, a barometer in hand
+        h.combine(wxBanner)
+        h.combine(weather.kind.rawValue)
+        h.combine(wxHere.snow)
+        h.combine(Int(abs(wxHere.wind)))
+        h.combine(weatherHereLabel)
+        if case .gadget(.barometer)? = heldItem { h.combine(Int(pressureNow())) }
         if settings.showFPS { h.combine(Int(renderFPS)) }
         return h.finalize()
     }
@@ -18841,6 +19140,8 @@ final class Art: @unchecked Sendable {
     var boatL: Image
     var parts: [Image] = []
     private var icons: [Item: Image] = [:]
+    /// weather symbols (see weatherIcon)
+    var wxIcons: [Int: Image] = [:]
     private var mobSets: [Int: SpriteSet] = [:]
     private var playerSets: [Int: SpriteSet] = [:]
     var crack: [Image] = []
@@ -18947,10 +19248,16 @@ enum SoundID: Int, CaseIterable {
     /// combat (appended): a knife's flick, a heavy blow, a thrust, a critical hit, several foes at once,
     /// crossbow, sling, blunderbuss, lightning, a fire flask, a dazed foe, a weapon swap, a rare find
     case swingLight, swingHeavy, thrust, crit, multiHit, crossbow, sling, blunderbuss, zap, flask, daze, swap, rareLoot
+    /// weather (appended): a close thunderclap, far-off rolling thunder, the crackle before a strike,
+    /// an alert chime, a hailstone's tick
+    case thunderNear, thunderFar, strikeWarn, weatherAlert, hailTick
 }
 
 enum LoopID: Int, CaseIterable {
     case engine, drill, rain, wind
+    /// weather beds (appended): a heavy downpour, a howling gale, hail on everything, a tornado's roar,
+    /// a storm siren
+    case heavyRain, gale, hail, tornado, siren
 }
 
 /// The sound a block makes when dug or broken
@@ -19263,6 +19570,40 @@ enum SoundBank {
             for (k, f) in [784.0, 988.0, 1175.0, 1568.0, 1976.0].enumerated() { s.tone(f, f, 0.45, 0.003, 0.18, 0.28, wave: 1, at: Double(k) * 0.07) }
             for k in 0..<6 { s.tone(3000 + Double(k) * 310, 2900, 0.1, 0.001, 0.04, 0.08, at: 0.35 + Double(k) * 0.05) }
             peak = 0.5
+        case .thunderNear:
+            // a sharp crack, then the long rumble rolling away under it
+            s = Synth(2.4, seed: seed)
+            s.noise(0.09, 0.001, 0.03, 1.0, lp: 9000, hp: 900)
+            s.noise(0.25, 0.004, 0.09, 0.8, lp: 2600 * p, hp: 120, at: 0.02)
+            s.noise(2.3, 0.03, 0.75, 0.9, lp: 420 * p, hp: 25, lp1: 160, at: 0.05)
+            s.noise(1.2, 0.05, 0.35, 0.5, lp: 300 * p, hp: 25, at: 0.6 + 0.2 * Double(variant))
+            s.tone(48 * p, 34 * p, 1.6, 0.02, 0.6, 0.35)
+            peak = 0.9
+        case .thunderFar:
+            // rolls of low rumble, no crack (the high notes are lost on the way)
+            s = Synth(3.0, seed: seed)
+            s.noise(2.6, 0.25, 0.9, 0.7, lp: 260 * p, hp: 22, lp1: 140)
+            s.noise(1.0, 0.1, 0.35, 0.55, lp: 220 * p, hp: 22, at: 0.5 + 0.3 * Double(variant))
+            s.noise(1.0, 0.1, 0.35, 0.45, lp: 200 * p, hp: 22, at: 1.4)
+            s.tone(40 * p, 30 * p, 2.4, 0.3, 0.8, 0.25)
+            peak = 0.6
+        case .strikeWarn:
+            // the buzz and crackle in the air just before a strike
+            s = Synth(0.7, seed: seed)
+            for k in 0..<9 { s.noise(0.035, 0.001, 0.012, 0.45 + 0.05 * Double(k), lp: 9000, hp: 2600, at: Double(k) * 0.07) }
+            s.tone(120 * p, 180 * p, 0.65, 0.2, 0.3, 0.2, wave: 2, vibrato: 30)
+            peak = 0.5
+        case .weatherAlert:
+            s = Synth(0.9, seed: seed)
+            s.tone(880, 880, 0.3, 0.005, 0.12, 0.35, wave: 1)
+            s.tone(660, 660, 0.4, 0.005, 0.18, 0.35, wave: 1, at: 0.28)
+            s.tone(880, 880, 0.3, 0.005, 0.12, 0.25, wave: 1, at: 0.56)
+            peak = 0.45
+        case .hailTick:
+            s = Synth(0.05, seed: seed)
+            s.noise(0.03, 0.0005, 0.008, 0.6, lp: 9000, hp: 2500)
+            s.tone(2600 * p, 2400 * p, 0.02, 0.0005, 0.006, 0.3)
+            peak = 0.3
         }
         s.finish(peak)
         return s.out
@@ -19289,9 +19630,59 @@ enum SoundBank {
             s = Synth(3.2, seed: 104)
             s.noise(3.2, 0.0001, 1000, 0.6, lp: 300, hp: 40)
             for i in 0..<s.out.count { s.out[i] *= Float(0.6 + 0.4 * sin(Double(i) / Synth.rate / 3.0 * 2.0 * Double.pi)) }
+        case .heavyRain:
+            // denser and deeper than light rain, with slow surges
+            s = Synth(3.0, seed: 105)
+            s.noise(3.0, 0.0001, 1000, 0.7, lp: 1800, hp: 120)
+            s.noise(3.0, 0.0001, 1000, 0.3, lp: 5000, hp: 1500)
+            for i in 0..<s.out.count { s.out[i] *= Float(0.8 + 0.2 * sin(Double(i) / Synth.rate / 1.4 * 2.0 * Double.pi)) }
+        case .gale:
+            // a howl: band-limited noise whose loudness rises and falls in gusts
+            s = Synth(4.2, seed: 106)
+            s.noise(4.2, 0.0001, 1000, 0.6, lp: 900, hp: 250)
+            s.noise(4.2, 0.0001, 1000, 0.4, lp: 260, hp: 60)
+            for i in 0..<s.out.count {
+                let t: Double = Double(i) / Synth.rate
+                s.out[i] *= Float(0.55 + 0.3 * sin(t / 2.0 * 2.0 * Double.pi) + 0.15 * sin(t / 0.5 * 2.0 * Double.pi))
+            }
+        case .hail:
+            // countless small stones ticking on everything
+            s = Synth(2.2, seed: 107)
+            s.noise(2.2, 0.0001, 1000, 0.15, lp: 6000, hp: 1800)
+            var k: Int = 0
+            while k < 110 {
+                let at: Double = s.rnd() * 0.5 + 0.5
+                s.noise(0.02, 0.0005, 0.006, 0.6, lp: 9000, hp: 2400, at: at * 2.0)
+                k += 1
+            }
+        case .tornado:
+            // a deep, steady roar like a train that does not pass
+            s = Synth(3.4, seed: 108)
+            s.noise(3.4, 0.0001, 1000, 0.8, lp: 180, hp: 25)
+            s.noise(3.4, 0.0001, 1000, 0.3, lp: 700, hp: 200)
+            for i in 0..<s.out.count { s.out[i] *= Float(0.75 + 0.25 * sin(Double(i) / Synth.rate / 0.85 * 2.0 * Double.pi)) }
+        case .siren:
+            // a siren's slow rise and fall: the pitch's swing averages out over the loop, so the wave
+            // ends exactly where it began
+            s = Synth(4.0, seed: 109)
+            var ph: Double = 0
+            for i in 0..<s.out.count {
+                let t: Double = Double(i) / Synth.rate
+                let f: Double = 640.0 + 220.0 * sin(t / 4.0 * 2.0 * Double.pi)
+                ph += f / Synth.rate
+                let x: Double = ph - floor(ph)
+                s.out[i] = Float(tanh(sin(x * 2.0 * Double.pi) * 2.0) * 0.5)
+            }
         }
-        s.finish(0.6)
-        if id == .rain || id == .wind {
+        if id == .siren {
+            // the siren's wave already joins up end to start: no fades, which would dip at the seam
+            var m: Float = 0
+            for v in s.out { m = max(m, abs(v)) }
+            if m > 0 { for i in 0..<s.out.count { s.out[i] *= 0.6 / m } }
+        } else {
+            s.finish(0.6)
+        }
+        if id == .rain || id == .wind || id == .heavyRain || id == .gale || id == .hail || id == .tornado {
             // fold the extra 0.2 s back over the start so the loop point is seamless
             let tail: Int = Int(0.2 * Synth.rate)
             let n: Int = s.out.count - tail
@@ -19376,6 +19767,11 @@ final class Sound {
         case .land, .place, .door: return 0.08
         case .warn: return 0.35
         case .roar, .portal, .discovery, .explosion, .rareLoot: return 0.25
+        case .thunderNear: return 0.3
+        case .thunderFar: return 0.5
+        case .strikeWarn: return 0.6
+        case .weatherAlert: return 2.0
+        case .hailTick: return 0.07
         case .crit, .multiHit, .swingLight: return 0.05
         case .daze, .flask: return 0.15
         default: return 0.04
@@ -19447,18 +19843,2147 @@ extension Game {
         }
         snd.setLoop(.engine, engineV)
         snd.setLoop(.drill, drillV)
-        let open: Bool = world.dim == .overworld && world.isSkyExposed(Int(floor(pb.x)), Int(floor(pb.y - pb.h)))
-        snd.setLoop(.rain, open ? weatherRain : 0)
-        snd.setLoop(.wind, world.dim == .umbral ? 0.6 : (open && pb.y < 80 ? 0.35 : 0))
+        // the weather beds, layered: light and heavy rain, wind and gale, hail, a tornado, a siren. They
+        // all run from the start and only their volumes move, so nothing restarts or clicks. Under a roof
+        // the rain and wind are muffled rather than cut.
+        let L: LocalWeather = wxHere
+        let ow: Bool = world.dim == .overworld && settings.weatherOn
+        let muffle: Double = shelterLevel == 0 ? 1.0 : (shelterLevel == 1 ? 0.55 : (shelterLevel == 2 ? 0.3 : 0.08))
+        let rainV: Double = ow && !L.snow ? L.precip : 0
+        snd.setLoop(.rain, min(1.0, rainV * 1.1) * muffle)
+        snd.setLoop(.heavyRain, clampD((rainV - 0.45) * 1.6, 0, 1) * muffle)
+        let aw: Double = ow ? abs(L.wind) : 0
+        let high: Double = world.dim == .overworld && shelterLevel == 0 && pb.y < 80 ? 0.35 : 0
+        snd.setLoop(.wind, world.dim == .umbral ? 0.6 : max(high, clampD(aw / 10.0, 0, 0.8) * muffle))
+        snd.setLoop(.gale, clampD((aw - 8.0) / 8.0, 0, 1) * muffle)
+        snd.setLoop(.hail, ow ? clampD(L.hail * 1.2, 0, 1) * muffle : 0)
+        var roar: Double = 0
+        if ow, let e = weather.tornado { roar = clampD(1.0 - abs(e.x - pb.x) / 90.0, 0, 1) * e.funnel * max(muffle, 0.4) }
+        snd.setLoop(.tornado, roar)
+        snd.setLoop(.siren, sirenLevel * 0.7)
     }
 }
 
 
-// MARK: - Weather and ambient life
+// MARK: - Weather: one simulation for the whole overworld
+// The weather is a single saved simulation (WeatherSim), stepped once a frame by the game clock. It
+// holds the state over the region (clear, rain, a storm...), the plan of what comes next (the forecast
+// devices read it directly), amounts that ease toward whatever the state and the settings allow (cloud,
+// rain, wind, lightning, hail, cold) and the two rare events (a tornado, a hurricane). What a place
+// actually gets is worked out from that and the place itself: storm cells drift over the land with the
+// wind (a noise field in world space, so it is the same whichever chunks happen to be loaded), deserts
+// stay dry, cold country gets snow and the coast takes the brunt of a hurricane. Nothing keeps a timer
+// of its own: rain, lightning, hail, cold and the weather devices all read the simulation.
+
+enum WeatherKind: Int, Codable, CaseIterable {
+    case clear, partlyCloudy, overcast, lightRain, heavyRain, thunderstorm, strongWind, windstorm, hailstorm, snowfall, blizzard, tornado, hurricane
+
+    var name: String {
+        switch self {
+        case .clear: return "Clear"
+        case .partlyCloudy: return "Partly cloudy"
+        case .overcast: return "Overcast"
+        case .lightRain: return "Light rain"
+        case .heavyRain: return "Heavy rain"
+        case .thunderstorm: return "Thunderstorm"
+        case .strongWind: return "Strong wind"
+        case .windstorm: return "Windstorm"
+        case .hailstorm: return "Hailstorm"
+        case .snowfall: return "Snowfall"
+        case .blizzard: return "Blizzard"
+        case .tornado: return "Tornado"
+        case .hurricane: return "Hurricane"
+        }
+    }
+
+    var severe: Bool {
+        switch self {
+        case .thunderstorm, .windstorm, .hailstorm, .blizzard, .tornado, .hurricane: return true
+        default: return false
+        }
+    }
+
+    /// 0 calm ... 1 the worst there is (drives the barometer and the forecast's wording)
+    var severity: Double {
+        switch self {
+        case .clear: return 0
+        case .partlyCloudy: return 0.1
+        case .overcast: return 0.25
+        case .lightRain, .snowfall: return 0.35
+        case .strongWind: return 0.4
+        case .heavyRain: return 0.5
+        case .windstorm: return 0.7
+        case .thunderstorm: return 0.75
+        case .hailstorm: return 0.8
+        case .blizzard: return 0.85
+        case .tornado, .hurricane: return 1.0
+        }
+    }
+
+    /// What a spell of it brings at full strength (before the settings and the place are applied)
+    var profile: WeatherProfile {
+        switch self {
+        case .clear: return WeatherProfile(cloud: 0.04, wind: 1.2, gust: 0.25)
+        case .partlyCloudy: return WeatherProfile(cloud: 0.35, wind: 2.4, gust: 0.35)
+        case .overcast: return WeatherProfile(cloud: 0.72, wind: 3.0, gust: 0.35)
+        case .lightRain: return WeatherProfile(cloud: 0.78, precip: 0.38, wind: 3.0, gust: 0.4, cover: 0.55)
+        case .heavyRain: return WeatherProfile(cloud: 0.9, precip: 0.85, wind: 5.0, gust: 0.5, cover: 0.8)
+        case .thunderstorm: return WeatherProfile(cloud: 1.0, precip: 0.9, wind: 7.0, gust: 0.7, thunder: 6.0, cover: 0.75)
+        case .strongWind: return WeatherProfile(cloud: 0.4, wind: 9.0, gust: 0.6, cover: 0.3)
+        case .windstorm: return WeatherProfile(cloud: 0.7, precip: 0.15, wind: 14.0, gust: 0.8, cover: 0.4)
+        case .hailstorm: return WeatherProfile(cloud: 0.95, precip: 0.55, wind: 6.0, gust: 0.6, thunder: 2.0, hail: 1.0, cover: 0.6)
+        case .snowfall: return WeatherProfile(cloud: 0.8, precip: 0.6, wind: 2.5, gust: 0.4, cover: 0.85, chill: 0.2)
+        case .blizzard: return WeatherProfile(cloud: 1.0, precip: 1.0, wind: 13.0, gust: 0.7, cover: 1.0, chill: 1.0)
+        case .tornado: return WeatherProfile(cloud: 1.0, precip: 0.75, wind: 8.0, gust: 0.8, thunder: 5.0, hail: 0.25, cover: 0.7)
+        case .hurricane: return WeatherProfile(cloud: 1.0, precip: 1.0, wind: 15.0, gust: 0.8, thunder: 2.0, cover: 1.0)
+        }
+    }
+
+    /// How long a spell of it lasts, in seconds of play (a day is 720)
+    var spell: ClosedRange<Double> {
+        switch self {
+        case .clear: return 180...420
+        case .partlyCloudy: return 150...300
+        case .overcast: return 120...240
+        case .lightRain: return 90...200
+        case .heavyRain: return 70...150
+        case .thunderstorm: return 80...150
+        case .strongWind: return 70...140
+        case .windstorm: return 60...110
+        case .hailstorm: return 35...70
+        case .snowfall: return 120...240
+        case .blizzard: return 80...150
+        case .tornado: return 95...120
+        case .hurricane: return 330...440
+        }
+    }
+}
+
+struct WeatherProfile {
+    var cloud: Double = 0
+    var precip: Double = 0
+    /// typical air speed over open ground, in blocks per second
+    var wind: Double = 0
+    /// how far the wind gusts above and below that (0 steady ... 1 wild)
+    var gust: Double = 0
+    /// lightning strikes per minute over the land around the player
+    var thunder: Double = 0
+    var hail: Double = 0
+    /// how much of the land the rain covers at once (0 scattered showers ... 1 everywhere)
+    var cover: Double = 0
+    /// how much colder it makes the land
+    var chill: Double = 0
+}
+
+struct WeatherStep: Codable {
+    var kind: WeatherKind
+    var dur: Double
+}
+
+/// A tornado: it forms far off (the warning), touches down and crosses the land with the wind, then
+/// ropes out. Its strength never changes on the way, so its danger can be judged from afar.
+struct TornadoEvent: Codable {
+    var x: Double
+    /// which way it travels (-1 west, 1 east) and how fast
+    var dir: Double
+    var speed: Double
+    /// 0 forming (the warning), 1 on the ground, 2 roping out
+    var phase: Int = 0
+    var t: Double = 0
+    var warnDur: Double
+    var groundDur: Double
+    var strength: Double
+    var wander: Double
+    /// blocks it has torn loose so far (it stops tearing at a limit)
+    var broken: Int = 0
+    var uid: Int = 0
+    /// closest it came to the player (for the journal)
+    var closest: Double = 1e9
+
+    static let ropeDur: Double = 8.0
+
+    /// 0...1: how much of a funnel there is (grows while forming, thins as it ropes out)
+    var funnel: Double {
+        switch phase {
+        case 0: return clampD((t - warnDur + 12.0) / 12.0, 0, 1) * 0.55
+        case 1: return min(1.0, 0.55 + t / 4.0)
+        default: return max(0, 1.0 - t / TornadoEvent.ropeDur)
+        }
+    }
+    /// how hard it blows and tears (0 while it is only forming)
+    var force: Double {
+        switch phase {
+        case 0: return 0
+        case 1: return strength * min(1.0, t / 4.0)
+        default: return strength * max(0, 1.0 - t / TornadoEvent.ropeDur)
+        }
+    }
+}
+
+enum HurricaneStage: Int, Codable, CaseIterable {
+    case approaching, intensifying, peak, eye, backside, weakening, clearing
+
+    var name: String {
+        switch self {
+        case .approaching: return "approaching"
+        case .intensifying: return "intensifying"
+        case .peak: return "at its height"
+        case .eye: return "the eye is passing"
+        case .backside: return "back wall of the storm"
+        case .weakening: return "weakening"
+        case .clearing: return "clearing"
+        }
+    }
+    /// how hard it blows in this stage (0...1 of its strength)
+    var force: Double {
+        switch self {
+        case .approaching: return 0.35
+        case .intensifying: return 0.7
+        case .peak: return 1.0
+        case .eye: return 0.12
+        case .backside: return 0.95
+        case .weakening: return 0.55
+        case .clearing: return 0.2
+        }
+    }
+    /// share of the whole storm's length
+    var share: Double {
+        switch self {
+        case .approaching: return 0.26
+        case .intensifying: return 0.15
+        case .peak: return 0.13
+        case .eye: return 0.05
+        case .backside: return 0.12
+        case .weakening: return 0.15
+        case .clearing: return 0.14
+        }
+    }
+}
+
+/// A hurricane comes in off the sea in stages, blowing onshore until the eye passes and offshore
+/// after it. It is felt hardest at the coast and fades inland.
+struct HurricaneEvent: Codable {
+    var stage: HurricaneStage = .approaching
+    var t: Double = 0
+    var total: Double
+    /// the side the sea (and the storm) is on: -1 west, 1 east
+    var side: Double
+    /// where it comes ashore
+    var coastX: Double
+    var strength: Double
+    /// eased 0...1 force now
+    var force: Double = 0
+    var broken: Int = 0
+    var closest: Double = 1e9
+
+    var stageDur: Double { return total * stage.share }
+    /// seconds from now until the end of each stage, then the time it is over
+    func timeLeft() -> Double {
+        var left: Double = stageDur - t
+        var k: Int = stage.rawValue + 1
+        while k < HurricaneStage.allCases.count {
+            left += total * HurricaneStage.allCases[k].share
+            k += 1
+        }
+        return max(0, left)
+    }
+}
+
+/// Wet ground and lying snow over a 48-block stretch of land
+struct GroundCell: Codable {
+    var wet: Double = 0
+    var snow: Double = 0
+    var t: Double = 0
+}
+
+struct SurgeCell: Codable, Hashable {
+    var x: Int
+    var y: Int
+}
+
+/// A storm the player lived through, for the journal
+struct StormRecord: Codable {
+    var kind: Int
+    var day: Int
+    var note: String
+}
+
+struct WeatherSim: Codable {
+    var kind: WeatherKind = .clear
+    var stateT: Double = 0
+    var stateDur: Double = 300
+    /// what comes after the present spell, in order (kept four steps long)
+    var plan: [WeatherStep] = []
+    /// smoothed amounts (see WeatherProfile); wind is signed, positive blowing east
+    var cloud: Double = 0.04
+    var precip: Double = 0
+    var wind: Double = 1.0
+    var gust: Double = 0.25
+    var thunder: Double = 0
+    var hail: Double = 0
+    var chill: Double = 0
+    var cover: Double = 0
+    /// which way the wind is set to blow (-1 / 1); it may turn round between spells
+    var windDir: Double = 1
+    /// how far the storm cells and the clouds have drifted with the wind, in blocks
+    var drift: Double = 0
+    var cloudDrift: Double = 0
+    /// weather clock: seconds of play since the simulation began
+    var t: Double = 0
+    var rngS: UInt64 = 0x51ED_2701
+    /// a second stream for what the weather does (where bolts fall, what the wind tears loose), so
+    /// those never change what the weather itself does next
+    var fxS: UInt64 = 0xFACE_0FF5
+    /// severe weather (and tornadoes and hurricanes, more rarely still) may not begin before these
+    /// times: each severe spell is followed by a calm (a new world starts with one)
+    var calmUntil: Double = 600
+    var tornadoUntil: Double = 1200
+    var hurricaneUntil: Double = 1800
+    var bigHail: Bool = false
+    var tornado: TornadoEvent? = nil
+    var hurricane: HurricaneEvent? = nil
+    var cells: [Int: GroundCell] = [:]
+    /// what weather devices hold (rain collectors, turbines), by place
+    var store: [String: Double] = [:]
+    /// sea water a storm surge pushed ashore, taken away again when the storm passes
+    var surge: [SurgeCell] = []
+    /// the settings the plan was made under (a change makes it again)
+    var planSig: Int = -1
+    /// whether the master switch was on last frame
+    var wasOn: Bool = true
+
+    init() {}
+
+    enum CodingKeys: String, CodingKey {
+        case kind, stateT, stateDur, plan, cloud, precip, wind, gust, thunder, hail, chill, cover, windDir, drift, cloudDrift, t, rngS, fxS
+        case calmUntil, tornadoUntil, hurricaneUntil, bigHail, tornado, hurricane, cells, store, surge, planSig, wasOn
+    }
+
+    /// Missing or damaged fields fall back to their defaults, so a weather record never stops a world
+    /// from loading
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        kind = (try? c.decodeIfPresent(WeatherKind.self, forKey: .kind)) ?? .clear
+        stateT = (try? c.decodeIfPresent(Double.self, forKey: .stateT)) ?? 0
+        stateDur = (try? c.decodeIfPresent(Double.self, forKey: .stateDur)) ?? 300
+        plan = (try? c.decodeIfPresent([WeatherStep].self, forKey: .plan)) ?? []
+        cloud = (try? c.decodeIfPresent(Double.self, forKey: .cloud)) ?? 0.04
+        precip = (try? c.decodeIfPresent(Double.self, forKey: .precip)) ?? 0
+        wind = (try? c.decodeIfPresent(Double.self, forKey: .wind)) ?? 1.0
+        gust = (try? c.decodeIfPresent(Double.self, forKey: .gust)) ?? 0.25
+        thunder = (try? c.decodeIfPresent(Double.self, forKey: .thunder)) ?? 0
+        hail = (try? c.decodeIfPresent(Double.self, forKey: .hail)) ?? 0
+        chill = (try? c.decodeIfPresent(Double.self, forKey: .chill)) ?? 0
+        cover = (try? c.decodeIfPresent(Double.self, forKey: .cover)) ?? 0
+        windDir = (try? c.decodeIfPresent(Double.self, forKey: .windDir)) ?? 1
+        drift = (try? c.decodeIfPresent(Double.self, forKey: .drift)) ?? 0
+        cloudDrift = (try? c.decodeIfPresent(Double.self, forKey: .cloudDrift)) ?? 0
+        t = (try? c.decodeIfPresent(Double.self, forKey: .t)) ?? 0
+        rngS = (try? c.decodeIfPresent(UInt64.self, forKey: .rngS)) ?? 0x51ED_2701
+        fxS = (try? c.decodeIfPresent(UInt64.self, forKey: .fxS)) ?? 0xFACE_0FF5
+        calmUntil = (try? c.decodeIfPresent(Double.self, forKey: .calmUntil)) ?? 600
+        tornadoUntil = (try? c.decodeIfPresent(Double.self, forKey: .tornadoUntil)) ?? 1200
+        hurricaneUntil = (try? c.decodeIfPresent(Double.self, forKey: .hurricaneUntil)) ?? 1800
+        bigHail = (try? c.decodeIfPresent(Bool.self, forKey: .bigHail)) ?? false
+        tornado = (try? c.decodeIfPresent(TornadoEvent.self, forKey: .tornado)) ?? nil
+        hurricane = (try? c.decodeIfPresent(HurricaneEvent.self, forKey: .hurricane)) ?? nil
+        cells = (try? c.decodeIfPresent([Int: GroundCell].self, forKey: .cells)) ?? [:]
+        store = (try? c.decodeIfPresent([String: Double].self, forKey: .store)) ?? [:]
+        surge = (try? c.decodeIfPresent([SurgeCell].self, forKey: .surge)) ?? []
+        planSig = (try? c.decodeIfPresent(Int.self, forKey: .planSig)) ?? -1
+        wasOn = (try? c.decodeIfPresent(Bool.self, forKey: .wasOn)) ?? true
+        // a record from a broken save must not leave the simulation stuck
+        if !stateDur.isFinite || stateDur <= 0 { stateDur = 120 }
+        if !stateT.isFinite || stateT < 0 { stateT = 0 }
+        if !wind.isFinite { wind = 1 }
+    }
+
+    /// The simulation's own random numbers (saved with it, so a reloaded world carries on the same way)
+    mutating func rand() -> Double {
+        rngS = rngS &+ 0x9E3779B97F4A7C15
+        var z: UInt64 = rngS
+        z = (z ^ (z >> 30)) &* 0xBF58476D1CE4E5B9
+        z = (z ^ (z >> 27)) &* 0x94D049BB133111EB
+        z = z ^ (z >> 31)
+        return Double(z >> 11) / 9007199254740992.0
+    }
+
+    mutating func pick(_ r: ClosedRange<Double>) -> Double {
+        let u: Double = rand()
+        return r.lowerBound + (r.upperBound - r.lowerBound) * u
+    }
+
+    /// The effects' stream (see fxS)
+    mutating func fx() -> Double {
+        fxS = fxS &+ 0x9E3779B97F4A7C15
+        var z: UInt64 = fxS
+        z = (z ^ (z >> 30)) &* 0xBF58476D1CE4E5B9
+        z = (z ^ (z >> 27)) &* 0x94D049BB133111EB
+        z = z ^ (z >> 31)
+        return Double(z >> 11) / 9007199254740992.0
+    }
+
+    mutating func fxPick(_ r: ClosedRange<Double>) -> Double {
+        let u: Double = fx()
+        return r.lowerBound + (r.upperBound - r.lowerBound) * u
+    }
+}
+
+/// The weather at one place, after the storm cells, the land and the height have had their say
+struct LocalWeather {
+    var cloud: Double = 0
+    /// how hard it is falling here (0...1)
+    var precip: Double = 0
+    var snow: Bool = false
+    /// signed air speed (blocks per second), gusts included
+    var wind: Double = 0
+    var thunder: Double = 0
+    var hail: Double = 0
+    /// 0 warm ... 1 bitter (snow falls from 0.5)
+    var chill: Double = 0
+    var hot: Bool = false
+    /// how much the air is thick with rain or snow (0 clear ... 1 a whiteout)
+    var fog: Double = 0
+    var wet: Double = 0
+    var snowCover: Double = 0
+    /// 0...1: how hard a tornado or hurricane is felt here
+    var tornado: Double = 0
+    var hurricane: Double = 0
+}
+
+/// Where the weather is judged when picking what comes next
+struct WeatherContext {
+    var cold: Bool = false
+    var dry: Bool = false
+    var tornadoCountry: Bool = false
+    /// the sea is that way (-1 west, 1 east) and near enough for a hurricane; 0 when too far inland
+    var seaSide: Double = 0
+    var coastX: Double = 0
+}
+
+/// Walks forward through the present spell and the plan, keeping track of when severe weather may
+/// next begin (the planner and the simulation use the same rules, so the forecast holds)
+struct PlanCursor {
+    var T: Double
+    var calm: Double
+    var tor: Double
+    var hur: Double
+    var last: WeatherKind
+
+    mutating func note(_ k: WeatherKind, _ end: Double, _ gaps: (Double, Double, Double)) {
+        if k.severe { calm = max(calm, end + gaps.0) }
+        if k == .tornado { tor = max(tor, end + gaps.1) }
+        if k == .hurricane { hur = max(hur, end + gaps.2) }
+        last = k
+        T = end
+    }
+}
+
+/// A bolt of lightning on screen: the main channel, a few forks, and how long it shows
+struct LightningBolt {
+    var pts: [(Double, Double)]
+    var forks: [[(Double, Double)]]
+    var life: Double
+    var maxLife: Double
+}
+
+/// A strike about to land near the player: shown and heard first, so it can be dodged
+struct StrikeMark {
+    var x: Double
+    var y: Double
+    var t: Double
+    var total: Double
+}
+
+struct PendingThunder {
+    var t: Double
+    var vol: Double
+    var near: Bool
+}
+
+/// One hailstone of the small pool the hail is drawn from (it bounces once, then breaks)
+struct HailStone {
+    var x: Double = 0
+    var y: Double = 0
+    var vx: Double = 0
+    var vy: Double = 0
+    var bounces: Int = 0
+    var size: Double = 0.12
+    var on: Bool = false
+}
+
+struct ForecastLine {
+    var kind: WeatherKind
+    var startsIn: Double
+    var dur: Double
+}
+
+// MARK: - Weather simulation: states, the plan, smoothing and the weather at a place
+
+/// how wet a biome's weather is (deserts mostly stay dry under passing storms)
+func biomeWetness(_ b: Biome) -> Double {
+    switch b {
+    case .desert: return 0.1
+    case .savanna: return 0.5
+    case .jungle: return 1.15
+    case .swamp: return 1.1
+    default: return 1.0
+    }
+}
+
+/// width of the strips of land that remember wet ground and lying snow
+let groundCellW: Double = 48.0
 
 extension Game {
-    /// Spells of rain (snow in cold places, nothing in deserts) come and go every few minutes. Rain
-    /// keeps zombies from burning at dawn and puts out a burning player who stands in it.
+    /// Calm kept between severe spells, and the longer gaps between tornadoes and between hurricanes,
+    /// by the frequency setting
+    func weatherGaps() -> (Double, Double, Double) {
+        switch settings.severeFrequency {
+        case 0: return (900, 3600, 5400)
+        case 2: return (150, 600, 900)
+        default: return (420, 1800, 2700)
+        }
+    }
+
+    /// How much more (or less) often severe weather is picked when it may come
+    func severeWeight() -> Double {
+        switch settings.severeFrequency {
+        case 0: return 0.4
+        case 2: return 2.2
+        default: return 1.0
+        }
+    }
+
+    var weatherIntensity: Double { return clampD(settings.weatherIntensity, 0.25, 1.5) }
+
+    func weatherAllowed(_ k: WeatherKind) -> Bool {
+        let s: Settings = settings
+        switch k {
+        case .lightRain, .heavyRain, .snowfall: return s.allowRain
+        case .thunderstorm: return s.allowThunder
+        case .strongWind, .windstorm: return s.allowWind
+        case .hailstorm: return s.allowHail
+        case .blizzard: return s.allowBlizzard
+        case .tornado: return s.allowTornado
+        case .hurricane: return s.allowHurricane
+        default: return true
+        }
+    }
+
+    /// The settings the forecast depends on; when they change the plan is made again
+    func planSignature() -> Int {
+        let s: Settings = settings
+        var k: Int = s.severeFrequency
+        let flags: [Bool] = [s.allowRain, s.allowThunder, s.allowWind, s.allowTornado, s.allowHurricane, s.allowBlizzard, s.allowHail]
+        for f in flags { k = k * 2 + (f ? 1 : 0) }
+        return k
+    }
+
+    /// What a state brings once the switched-off kinds of weather are taken out and the intensity is
+    /// applied. Blizzards and hurricanes bring their own snow, rain and wind (their switches decide).
+    func allowedProfile(_ k: WeatherKind) -> WeatherProfile {
+        let s: Settings = settings
+        if !s.weatherOn { return WeatherProfile() }
+        var kk: WeatherKind = k
+        if kk == .blizzard && !s.allowBlizzard { kk = .snowfall }
+        if kk == .hurricane && !s.allowHurricane { kk = .windstorm }
+        if kk == .tornado && !s.allowTornado { kk = .thunderstorm }
+        var p: WeatherProfile = kk.profile
+        let own: Bool = kk == .blizzard || kk == .hurricane
+        if !s.allowRain && !own { p.precip = 0 }
+        if !s.allowWind && !own {
+            p.wind = 0
+            p.gust = 0
+        }
+        if !s.allowThunder { p.thunder = 0 }
+        if !s.allowHail { p.hail = 0 }
+        let I: Double = weatherIntensity
+        p.precip = min(1.0, p.precip * I)
+        p.wind *= I
+        p.thunder *= I
+        p.hail = min(1.0, p.hail * I)
+        return p
+    }
+
+    /// Where the weather is judged: the player in the overworld, or where they left it
+    var weatherX: Double { return world.dim == .overworld ? pb.x : wxHomeX }
+
+    func weatherContext() -> WeatherContext {
+        var c = WeatherContext()
+        let x: Int = Int(floor(weatherX))
+        let col: Col = gen.col(x)
+        let b: Biome = col.biome
+        c.cold = b == .tundra || (b == .mountain && col.h < 84)
+        c.dry = b == .desert
+        c.tornadoCountry = b == .plains || b == .savanna || b == .forest || b == .swamp || b == .desert
+        if let sea = seaNear(x) {
+            c.seaSide = sea.0
+            c.coastX = sea.1
+        }
+        return c
+    }
+
+    /// The nearest open sea within 280 blocks: which side it is on, and where its shore is
+    func seaNear(_ x: Int) -> (Double, Double)? {
+        let key: Int = floorDiv(x, 32)
+        if let c = coastCache[key] { return c.0 == 0 ? nil : c }
+        var found: (Double, Double) = (0, 0)
+        var d: Int = 0
+        while d <= 280 {
+            if gen.col(x + d).biome == .ocean { found = (1, Double(x + d)); break }
+            if gen.col(x - d).biome == .ocean { found = (-1, Double(x - d)); break }
+            d += 8
+        }
+        if coastCache.count > 256 { coastCache.removeAll() }
+        coastCache[key] = found
+        return found.0 == 0 ? nil : found
+    }
+
+    // MARK: the plan (the forecast is read straight from it)
+
+    /// Where the present spell and the plan end, and when severe weather may next begin after them
+    func planCursor() -> PlanCursor {
+        let gaps: (Double, Double, Double) = weatherGaps()
+        var cur = PlanCursor(T: weather.t, calm: weather.calmUntil, tor: weather.tornadoUntil, hur: weather.hurricaneUntil, last: weather.kind)
+        cur.note(weather.kind, weather.t + max(0, weather.stateDur - weather.stateT), gaps)
+        for s in weather.plan { cur.note(s.kind, cur.T + s.dur, gaps) }
+        return cur
+    }
+
+    func fillPlan() {
+        if weather.plan.count >= 4 { return }
+        let ctx: WeatherContext = weatherContext()
+        let gaps: (Double, Double, Double) = weatherGaps()
+        var cur: PlanCursor = planCursor()
+        while weather.plan.count < 4 {
+            let step: WeatherStep = planStep(cur, ctx)
+            weather.plan.append(step)
+            cur.note(step.kind, cur.T + step.dur, gaps)
+        }
+    }
+
+    /// Picks the spell that follows `cur.last`, beginning at `cur.T`. Weather moves to its neighbours
+    /// (clear to cloud to rain to storm and back), so it changes gradually; severe spells may only
+    /// begin once the calm after the last one is over, and a thunderstorm may grow hail or spin up a
+    /// tornado as part of the same storm.
+    func planStep(_ cur: PlanCursor, _ ctx: WeatherContext) -> WeatherStep {
+        let s: Settings = settings
+        let fw: Double = severeWeight()
+        let sev: Double = cur.T >= cur.calm ? fw : 0
+        var opts: [(WeatherKind, Double)] = []
+        func add(_ k: WeatherKind, _ w: Double) {
+            if w > 0 && weatherAllowed(k) { opts.append((k, w)) }
+        }
+        let rain: WeatherKind = ctx.cold ? .snowfall : .lightRain
+        let heavy: WeatherKind = ctx.cold ? .snowfall : .heavyRain
+        let hurricaneOK: Bool = ctx.seaSide != 0 && !ctx.cold && cur.T >= cur.hur
+        // with rain switched off the wet spells drop out; storms can still come, dry
+        let dryFill: Double = s.allowRain ? 0 : 3.0
+        switch cur.last {
+        case .clear:
+            add(.clear, 2.2)
+            add(.partlyCloudy, 4.0)
+            add(.strongWind, ctx.dry ? 1.2 : 0.5)
+        case .partlyCloudy:
+            add(.clear, 3.0)
+            add(.partlyCloudy, 1.2)
+            add(.overcast, 3.0)
+            add(.strongWind, 0.6)
+        case .overcast:
+            add(.partlyCloudy, 2.5)
+            add(.overcast, 0.6)
+            add(rain, ctx.dry ? 0.7 : 3.0)
+            add(heavy, ctx.dry ? 0.2 : 0.7)
+            add(.windstorm, 0.35 * sev)
+            if !ctx.cold { add(.hailstorm, 0.25 * sev) }
+            if !s.allowRain && !ctx.cold { add(.thunderstorm, 0.6 * sev) }
+            if hurricaneOK { add(.hurricane, 0.22 * sev) }
+        case .lightRain:
+            add(.overcast, 2.0)
+            add(.lightRain, 1.0)
+            add(.heavyRain, 2.4)
+        case .heavyRain:
+            add(.lightRain, 2.6)
+            add(.heavyRain, 0.6)
+            if !ctx.cold { add(.thunderstorm, 1.6 * sev) }
+        case .thunderstorm:
+            add(.heavyRain, 3.0)
+            add(.overcast, dryFill)
+            add(.hailstorm, 0.5 * fw)
+            if ctx.tornadoCountry && cur.T >= cur.tor { add(.tornado, 0.45 * fw) }
+        case .strongWind:
+            add(.partlyCloudy, 2.4)
+            add(.clear, 1.0)
+            add(.strongWind, 0.6)
+            add(.windstorm, 0.8 * sev)
+            if hurricaneOK { add(.hurricane, 0.12 * sev) }
+        case .windstorm:
+            add(.strongWind, 2.5)
+            add(.overcast, 1.5)
+        case .hailstorm:
+            add(.heavyRain, 2.5)
+            add(.lightRain, 1.0)
+            add(.overcast, dryFill)
+        case .snowfall:
+            add(.overcast, 2.4)
+            add(.snowfall, 1.0)
+            if ctx.cold { add(.blizzard, 0.9 * sev) }
+        case .blizzard:
+            add(.snowfall, 3.0)
+            add(.overcast, dryFill)
+        case .tornado, .hurricane:
+            add(.heavyRain, 2.0)
+            add(.lightRain, 1.0)
+            add(.overcast, s.allowRain ? 0.3 : 3.0)
+        }
+        if opts.isEmpty { opts.append((.partlyCloudy, 1.0)) }
+        var total: Double = 0
+        for o in opts { total += o.1 }
+        var r: Double = weather.rand() * total
+        var k: WeatherKind = opts[opts.count - 1].0
+        for o in opts {
+            if r < o.1 {
+                k = o.0
+                break
+            }
+            r -= o.1
+        }
+        let dur: Double = weather.pick(k.spell)
+        return WeatherStep(kind: k, dur: dur)
+    }
+
+    /// The present spell is over: the next one in the plan begins (and the plan is topped up)
+    func advanceWeather() {
+        let prev: WeatherKind = weather.kind
+        let gaps: (Double, Double, Double) = weatherGaps()
+        if prev.severe { weather.calmUntil = max(weather.calmUntil, weather.t + gaps.0) }
+        if prev == .tornado { weather.tornadoUntil = max(weather.tornadoUntil, weather.t + gaps.1) }
+        if prev == .hurricane { weather.hurricaneUntil = max(weather.hurricaneUntil, weather.t + gaps.2) }
+        // a severe spell the player was out in goes in the journal (tornadoes and hurricanes keep their own)
+        if prev.severe && prev != .tornado && prev != .hurricane && stormFelt && world.dim == .overworld {
+            recordStorm(prev, weatherLabel(prev, snow: wxHere.snow).lowercased() == prev.name.lowercased() ? "weathered it" : weatherLabel(prev, snow: wxHere.snow).lowercased())
+        }
+        stormFelt = false
+        if weather.plan.isEmpty { fillPlan() }
+        var step: WeatherStep = weather.plan.removeFirst()
+        let ctx: WeatherContext = weatherContext()
+        // the land may have changed under the forecast (the player travelled): no hurricane far from
+        // the sea, no tornado in the mountains or the snow
+        if step.kind == .hurricane && ctx.seaSide == 0 { step.kind = settings.allowWind ? .windstorm : .overcast }
+        if step.kind == .tornado && !ctx.tornadoCountry { step.kind = settings.allowThunder ? .thunderstorm : .heavyRain }
+        weather.kind = step.kind
+        weather.stateT = 0
+        weather.stateDur = step.dur
+        // calm spells can bring the wind round
+        if (step.kind == .clear || step.kind == .partlyCloudy) && weather.rand() < 0.35 { weather.windDir = -weather.windDir }
+        switch step.kind {
+        case .tornado: spawnTornado()
+        case .hurricane: spawnHurricane(ctx)
+        case .hailstorm:
+            weather.bigHail = weather.rand() < 0.15
+            hailBroken = 0
+        default: break
+        }
+        fillPlan()
+        announceWeather(prev, step.kind)
+    }
+
+    /// Weather switched off: everything it was doing stops at once and leaves nothing behind (storm
+    /// surge water is taken away as its ground loads; see updateSurge)
+    func weatherShutdown() {
+        weather.wasOn = false
+        weather.tornado = nil
+        weather.hurricane = nil
+        weather.kind = .clear
+        weather.stateT = 0
+        weather.stateDur = 120
+        weather.plan.removeAll()
+        weather.cloud = 0
+        weather.precip = 0
+        weather.wind = 0
+        weather.gust = 0
+        weather.thunder = 0
+        weather.hail = 0
+        weather.chill = 0
+        weather.cover = 0
+        weather.cells.removeAll()
+        clearWeatherFX()
+        // fires lightning started go out with it
+        fireZones.removeAll { $0.env }
+    }
+
+    /// The short-lived things weather puts in the world: bolts, thunder still on its way, a strike
+    /// about to land, hailstones, alerts and the forces on the player
+    func clearWeatherFX() {
+        bolts.removeAll()
+        thunderQueue.removeAll()
+        strikeMark = nil
+        strikeAcc = 0
+        skyFlash = 0
+        for i in 0..<hailPool.count { hailPool[i].on = false }
+        hailAcc = 0
+        wxBanner = ""
+        wxBannerLevel = 0
+        wxWalk = 0
+        wxAirDrift = 0
+        wxRest = 0
+        wxAccelX = 0
+        wxAccelY = 0
+        wxSlip = 0
+        wxSlow = 1
+        weatherRain = 0
+        weatherSnow = false
+        wxHere = LocalWeather()
+        tornadoAcc = 0
+        hurricaneAcc = 0
+    }
+
+    /// Weather switched back on: it starts fair, with a calm before anything severe
+    func weatherRestart() {
+        weather.wasOn = true
+        weather.kind = .clear
+        weather.stateT = 0
+        weather.stateDur = weather.pick(60...120)
+        weather.calmUntil = max(weather.calmUntil, weather.t + 300)
+        weather.plan.removeAll()
+        weather.planSig = planSignature()
+        fillPlan()
+    }
+
+    func easeTo(_ v: Double, _ to: Double, _ tau: Double, _ dt: Double) -> Double {
+        let k: Double = 1.0 - exp(-dt / max(0.05, tau))
+        return v + (to - v) * k
+    }
+
+    /// One step of the simulation (the regional state; what that means at a place is weatherAt)
+    func stepWeatherSim(_ dt: Double) {
+        if world.dim == .overworld { wxHomeX = pb.x }
+        if !settings.weatherOn {
+            if weather.wasOn { weatherShutdown() }
+            // the scenery clouds still drift by as they always have
+            weather.cloudDrift += CloudField.wind * dt
+            return
+        }
+        if !weather.wasOn { weatherRestart() }
+        weather.t += dt
+        let sig: Int = planSignature()
+        if sig != weather.planSig {
+            weather.planSig = sig
+            weather.plan.removeAll()
+            // an event whose switch went off ends at once
+            if weather.tornado != nil && !settings.allowTornado { endTornado(survived: false) }
+            if weather.hurricane != nil && !settings.allowHurricane { endHurricane(survived: false) }
+            fillPlan()
+        }
+        weather.stateT += dt
+        let held: Bool = weather.tornado != nil || weather.hurricane != nil
+        if weather.stateT >= weather.stateDur && !held { advanceWeather() }
+        if weather.plan.count < 4 { fillPlan() }
+        // ease toward what the state brings; anything switched off fades out within a second
+        var p: WeatherProfile = allowedProfile(weather.kind)
+        let raw: WeatherProfile = weather.kind.profile
+        if let h = weather.hurricane {
+            p.wind *= h.force
+            p.precip *= clampD(h.force * 1.2, 0.2, 1.0)
+            p.cloud = 0.55 + 0.45 * min(1.0, h.force * 1.6)
+            p.thunder *= h.force
+        }
+        func tau(_ target: Double, _ rv: Double, _ normal: Double) -> Double {
+            return (target <= 0.0001 && rv > 0.0001) ? 0.8 : normal
+        }
+        weather.cloud = easeTo(weather.cloud, p.cloud, 20, dt)
+        weather.precip = easeTo(weather.precip, p.precip, tau(p.precip, raw.precip, 14), dt)
+        weather.thunder = easeTo(weather.thunder, p.thunder, tau(p.thunder, raw.thunder, 8), dt)
+        weather.hail = easeTo(weather.hail, p.hail, tau(p.hail, raw.hail, 6), dt)
+        weather.chill = easeTo(weather.chill, p.chill, 25, dt)
+        weather.cover = easeTo(weather.cover, p.cover, 18, dt)
+        weather.gust = easeTo(weather.gust, p.gust, 10, dt)
+        // the wind eases through calm when it turns round, never flipping in a frame
+        if let h = weather.hurricane {
+            // onshore until the eye has passed, offshore after it
+            weather.windDir = h.stage.rawValue <= HurricaneStage.eye.rawValue ? -h.side : h.side
+        }
+        let wt: Double = p.wind * weather.windDir
+        weather.wind = easeTo(weather.wind, wt, tau(abs(wt), raw.wind, 9), dt)
+        weather.drift += weather.wind * 0.55 * dt
+        weather.cloudDrift += (weather.wind * 0.16 + (abs(weather.wind) < 0.05 ? CloudField.wind : 0)) * dt
+    }
+
+    // MARK: the weather at a place
+
+    /// How much of the land at x a storm cell covers just now (0 a dry gap ... 1 under the storm).
+    /// The cells are a noise field in world space that drifts with the wind.
+    func coverAt(_ x: Double) -> Double {
+        let c: Double = weather.cover
+        if c >= 0.99 { return 1 }
+        if c <= 0.001 { return 0 }
+        let n: Double = fbm1((x - weather.drift) / 170.0, gen.seed &+ 0x57A2, 2)
+        let thr: Double = 1.0 - c - 0.11
+        return smooth(clampD((n - thr) / 0.22, 0, 1))
+    }
+
+    /// The wind's gusting right now (the same everywhere; it rises and falls over a few seconds)
+    func gustNow() -> Double {
+        let g: Double = weather.gust
+        if g <= 0.001 { return 1 }
+        let n: Double = fbm1(weather.t * 0.23, gen.seed &+ 0x6057, 3)
+        return clampD(1.0 + (n - 0.5) * 2.0 * g, 0.35, 1.6)
+    }
+
+    /// How cold it is: the land, the height, the night and the weather (snow falls from 0.5)
+    func chillAt(_ y: Double, _ col: Col) -> Double {
+        var c: Double
+        switch col.biome {
+        case .tundra: c = 0.75
+        case .mountain: c = col.h < 84 ? 0.62 : 0.3
+        case .desert, .savanna, .jungle: c = 0.0
+        case .ocean: c = 0.2
+        default: c = 0.18
+        }
+        if y < 76 { c += (76.0 - y) / 50.0 }
+        let hot: Bool = col.biome == .desert || col.biome == .savanna || col.biome == .jungle
+        if isNight && !hot { c += 0.12 }
+        c += weather.chill * 0.4 + weather.precip * 0.05
+        return clampD(c, 0, 1.2)
+    }
+
+    /// The weather at a place. Only reads the simulation and the world's (deterministic) biomes, so a
+    /// place has the same weather whichever chunks are loaded.
+    func weatherAt(_ x: Double, _ y: Double) -> LocalWeather {
+        var L = LocalWeather()
+        if world.dim != .overworld || !settings.weatherOn { return L }
+        let ix: Int = Int(floor(x))
+        let col: Col = gen.col(ix)
+        let cov: Double = coverAt(x)
+        let w0: Double = biomeWetness(gen.col(ix - 14).biome)
+        let w1: Double = biomeWetness(col.biome)
+        let w2: Double = biomeWetness(gen.col(ix + 14).biome)
+        let wetF: Double = (w0 + w1 * 2.0 + w2) * 0.25
+        L.chill = chillAt(y, col)
+        L.snow = L.chill >= 0.5
+        L.hot = col.biome == .desert || col.biome == .savanna || col.biome == .jungle
+        L.precip = clampD(weather.precip * cov * wetF, 0, 1)
+        L.cloud = weather.cloud * (0.6 + 0.4 * cov)
+        L.thunder = weather.thunder * cov
+        // up in the cold, hail falls as snow
+        L.hail = L.snow ? 0 : weather.hail * cov
+        L.wind = weather.wind * gustNow()
+        if let e = weather.tornado {
+            let d: Double = abs(x - e.x)
+            L.tornado = e.funnel * clampD(1.0 - (d - 4.0) / 40.0, 0, 1)
+            L.cloud = max(L.cloud, min(1.0, 0.25 + e.funnel * clampD(1.0 - d / 120.0, 0, 1)))
+        }
+        if let h = weather.hurricane {
+            let f: Double = hurricaneReach(x, h)
+            L.hurricane = h.force * f
+            L.wind *= 0.3 + 0.7 * f
+            L.precip *= 0.5 + 0.5 * f
+        }
+        let blow: Double = clampD(abs(L.wind) / 14.0, 0, 1)
+        L.fog = L.snow ? L.precip * (0.25 + 0.6 * blow) : L.precip * 0.3
+        L.wet = groundValue(x, false)
+        L.snowCover = groundValue(x, true)
+        return L
+    }
+
+    /// How hard a hurricane is felt at x: fully over the sea and at the coast, fading inland
+    func hurricaneReach(_ x: Double, _ h: HurricaneEvent) -> Double {
+        let inland: Double = (h.coastX - x) * h.side
+        return clampD(1.0 - (inland - 40.0) / 300.0, 0.25, 1.0)
+    }
+
+    /// Wet ground or lying snow at x (interpolated between the strips' centres)
+    func groundValue(_ x: Double, _ snow: Bool) -> Double {
+        let f: Double = x / groundCellW - 0.5
+        let c0: Int = Int(floor(f))
+        let u: Double = f - Double(c0)
+        let a: GroundCell? = weather.cells[c0]
+        let b: GroundCell? = weather.cells[c0 + 1]
+        let va: Double = snow ? (a?.snow ?? 0) : (a?.wet ?? 0)
+        let vb: Double = snow ? (b?.snow ?? 0) : (b?.wet ?? 0)
+        return va + (vb - va) * u
+    }
+
+    /// Rain soaks the ground and snow lies on it, strip by strip around the player; strips the player
+    /// has been away from catch up as if the weather had been fair meanwhile (cheap, and close enough)
+    func updateGroundCells(_ dt: Double) {
+        wxCellT += dt
+        if wxCellT < 0.5 { return }
+        let step: Double = wxCellT
+        wxCellT = 0
+        if !settings.weatherOn { return }
+        let c0: Int = Int(floor(weatherX / groundCellW))
+        for c in (c0 - 4)...(c0 + 4) {
+            let cx: Double = (Double(c) + 0.5) * groundCellW
+            var cell: GroundCell = weather.cells[c] ?? GroundCell(wet: 0, snow: 0, t: weather.t)
+            let away: Double = max(0, weather.t - cell.t - step)
+            let surf: Double = Double(gen.col(Int(cx)).h)
+            let L: LocalWeather = weatherAt(cx, surf)
+            if away > 0 {
+                cell.wet *= exp(-away / 150.0)
+                if L.chill < 0.5 { cell.snow *= exp(-away / 300.0) }
+            }
+            if L.precip > 0.03 && !L.snow {
+                cell.wet = min(1.0, cell.wet + L.precip * step / 35.0)
+            } else {
+                let dryT: Double = L.hot ? 60 : (weather.cloud > 0.6 ? 220 : 110)
+                cell.wet = max(0, cell.wet - step / dryT)
+            }
+            if L.snow && L.precip > 0.03 {
+                cell.snow = min(1.0, cell.snow + L.precip * step / 50.0)
+            } else if L.chill < 0.45 {
+                let melt: Double = L.precip > 0.05 ? 50 : 140
+                cell.snow = max(0, cell.snow - step / melt)
+            }
+            cell.t = weather.t
+            weather.cells[c] = cell
+        }
+        if weather.cells.count > 40 {
+            weather.cells = weather.cells.filter { abs($0.key - c0) <= 12 || $0.value.wet > 0.02 || $0.value.snow > 0.02 }
+        }
+    }
+
+    // MARK: words for it: names, the forecast, pressure, alerts
+
+    /// The name of a spell as it will actually be felt: with some kinds of weather switched off, a
+    /// thunderstorm may be dry or a blizzard plain snow; up in the cold, rain is snow
+    func weatherLabel(_ k: WeatherKind, snow: Bool) -> String {
+        let s: Settings = settings
+        if !s.weatherOn { return "No weather" }
+        let p: WeatherProfile = allowedProfile(k)
+        switch k {
+        case .lightRain: return p.precip <= 0 ? "Overcast" : (snow ? "Light snow" : "Light rain")
+        case .heavyRain: return p.precip <= 0 ? "Overcast" : (snow ? "Heavy snow" : "Heavy rain")
+        case .snowfall: return p.precip <= 0 ? "Overcast" : (snow ? "Snowfall" : "Cold rain")
+        case .thunderstorm:
+            if p.thunder <= 0 { return p.precip > 0 ? (snow ? "Heavy snow" : "Heavy rain") : "Overcast" }
+            return p.precip > 0 ? "Thunderstorm" : "Dry thunderstorm"
+        case .hailstorm:
+            if p.hail <= 0 { return p.thunder > 0 ? "Thunderstorm" : (p.precip > 0 ? "Heavy rain" : "Overcast") }
+            return weather.bigHail && k == weather.kind ? "Large hail" : "Hailstorm"
+        case .strongWind: return p.wind <= 0.01 ? "Partly cloudy" : "Strong wind"
+        case .windstorm: return p.wind <= 0.01 ? "Overcast" : "Windstorm"
+        case .blizzard: return s.allowBlizzard ? (snow ? "Blizzard" : "Gale and cold rain") : weatherLabel(.snowfall, snow: snow)
+        case .tornado: return s.allowTornado ? "Tornado" : weatherLabel(.thunderstorm, snow: snow)
+        case .hurricane: return s.allowHurricane ? "Hurricane" : weatherLabel(.windstorm, snow: snow)
+        default: return k.name
+        }
+    }
+
+    /// What the weather is doing where the player is, in a few words
+    var weatherHereLabel: String {
+        if world.dim != .overworld { return "" }
+        if !settings.weatherOn { return "" }
+        let L: LocalWeather = wxHere
+        var name: String = weatherLabel(weather.kind, snow: L.snow)
+        // a storm cell that has not reached here yet (or has passed) shows as such
+        let p: WeatherProfile = allowedProfile(weather.kind)
+        if p.precip > 0.2 && L.precip < 0.05 && weather.kind != .tornado && weather.kind != .hurricane { name = joinText(name, " nearby") }
+        return name
+    }
+
+    /// The present spell, then the plan: what comes, when, and for how long
+    func forecast() -> [ForecastLine] {
+        var out: [ForecastLine] = []
+        var t: Double = max(0, weather.stateDur - weather.stateT)
+        if let h = weather.hurricane { t = max(t, h.timeLeft()) }
+        out.append(ForecastLine(kind: weather.kind, startsIn: 0, dur: t))
+        for s in weather.plan {
+            out.append(ForecastLine(kind: s.kind, startsIn: t, dur: s.dur))
+            t += s.dur
+        }
+        return out
+    }
+
+    /// Air pressure (hPa) from the simulation: low under storms, lowest near a hurricane's eye
+    func pressureNow() -> Double {
+        var p: Double = 1018.0 - 12.0 * weather.cloud - 9.0 * weather.precip - 0.8 * abs(weather.wind)
+        if let h = weather.hurricane {
+            let core: Double = h.stage == .eye ? 1.15 : h.force
+            p -= 42.0 * core * h.strength * hurricaneReach(weatherX, h)
+        }
+        if let e = weather.tornado { p -= 8.0 * e.funnel }
+        return p
+    }
+
+    /// The pressure the next spell will settle at (for the barometer's trend)
+    func pressureNext() -> Double {
+        let k: WeatherKind = weather.plan.first?.kind ?? weather.kind
+        let p: WeatherProfile = allowedProfile(k)
+        var v: Double = 1018.0 - 12.0 * p.cloud - 9.0 * p.precip - 0.8 * p.wind
+        if k == .hurricane && settings.allowHurricane { v -= 40 }
+        if k == .tornado && settings.allowTornado { v -= 8 }
+        return v
+    }
+
+    /// A line in the message box when the weather turns (only for changes worth knowing about)
+    func announceWeather(_ prev: WeatherKind, _ k: WeatherKind) {
+        if !settings.weatherAlerts || world.dim != .overworld { return }
+        let p: WeatherProfile = allowedProfile(k)
+        let snow: Bool = wxHere.snow
+        var line: String = ""
+        switch k {
+        case .lightRain:
+            if prev != .heavyRain && p.precip > 0 { line = snow ? "Snow is beginning to fall." : "It's starting to rain." }
+        case .heavyRain:
+            if prev == .lightRain && p.precip > 0 { line = snow ? "The snow is getting heavier." : "The rain is getting heavier." }
+        case .thunderstorm:
+            if p.thunder > 0 { line = "A thunderstorm is rolling in. Lightning finds high, open ground." }
+        case .strongWind:
+            if (prev == .clear || prev == .partlyCloudy) && p.wind > 0 { line = "The wind is picking up." }
+        case .windstorm:
+            if p.wind > 0 { line = "Windstorm! Strong gusts will push you around." }
+        case .hailstorm:
+            if p.hail > 0 { line = weather.bigHail ? "Large hail! Get under a roof." : "Hail is falling." }
+        case .snowfall:
+            if p.precip > 0 && prev != .blizzard { line = snow ? "Snow is falling." : "A cold rain is falling." }
+        case .blizzard:
+            if settings.allowBlizzard { line = "A blizzard is blowing in. Find shelter and warmth." }
+        case .clear, .partlyCloudy:
+            if prev.severe || prev == .heavyRain { line = "The weather is clearing." }
+        default:
+            break
+        }
+        if !line.isEmpty {
+            say(line, 3.5)
+            if k.severe { sfx(.weatherAlert, 0.6) }
+        }
+    }
+
+    /// The warning strip under the top bar while something dangerous is going on
+    func updateWeatherBanner() {
+        var text: String = ""
+        var level: Int = 0
+        let on: Bool = settings.weatherOn && world.dim == .overworld
+        if on, let e = weather.tornado {
+            let d: Double = e.x - pb.x
+            let side: String = d > 0 ? "east" : "west"
+            let dist: String = String(Int(abs(d).rounded()))
+            switch e.phase {
+            case 0:
+                let left: Int = Int(max(0, e.warnDur - e.t).rounded())
+                text = joinText("TORNADO WARNING · forming ", dist, " blocks ", side, " · take shelter (", String(left), " s)")
+                level = 2
+            case 1:
+                text = joinText("TORNADO ON THE GROUND · ", dist, " blocks ", side, " · moving ", e.dir > 0 ? "east" : "west")
+                level = 2
+            default:
+                text = "The tornado is lifting"
+                level = 1
+            }
+        } else if on, let h = weather.hurricane {
+            text = joinText("HURRICANE · ", h.stage.name)
+            level = (h.stage == .approaching || h.stage == .clearing || h.stage == .eye) ? 1 : 2
+        } else if on && strikeMark != nil {
+            text = "LIGHTNING IS ABOUT TO STRIKE NEAR YOU · move or take cover"
+            level = 2
+        } else if on && weather.kind == .blizzard && settings.allowBlizzard && wxHere.snow {
+            text = "BLIZZARD · stay sheltered and keep warm"
+            level = 1
+        } else if on && weather.kind == .hailstorm && weather.bigHail && wxHere.hail > 0.1 {
+            text = "LARGE HAIL · get under a roof"
+            level = 1
+        } else if on && weather.kind == .thunderstorm && wxHere.thunder > 0.5 {
+            text = "Thunderstorm · keep off high, open ground"
+            level = 1
+        } else if bodyCold > 0.45 && on {
+            text = "Freezing · find a fire, shelter or warm clothes"
+            level = 1
+        }
+        if !settings.weatherAlerts {
+            text = ""
+            level = 0
+        }
+        wxBanner = text
+        wxBannerLevel = level
+    }
+}
+
+// MARK: - Weather in the world: lightning, hail, cold, the wind's push, tornadoes and hurricanes
+
+/// How readily wind tears a block loose (0: never). The ground itself, stone and anything built to
+/// stand up to storms never goes; plants, leaves and light building blocks go first.
+func windBreak(_ t: Tile) -> Double {
+    if isLeafTile(t) { return 0.85 }
+    if isLogTile(t) { return 0.18 }
+    switch t {
+    case .tallGrass, .flowerR, .flowerY, .deadBush, .reed, .mushroom: return 0.9
+    case .wheat1, .wheat2, .wheat3, .carrot1, .carrot2, .carrot3: return 0.55
+    case .torch, .cobweb: return 0.8
+    case .hay: return 0.6
+    case .glass: return 0.5
+    case .cactus: return 0.3
+    case .platform, .ladder: return 0.45
+    case .planks: return 0.3
+    case .doorClosed, .doorOpen: return 0.25
+    case .logBlock, .jungleLogBlock, .palmLogBlock, .birchLogBlock: return 0.15
+    case .workbench, .lantern, .crate: return 0.2
+    case .crackedBrick: return 0.08
+    case .brick, .mossBrick, .amethystBlock: return 0.02
+    default: return 0
+    }
+}
+
+/// Things lightning can set alight
+func isFlammable(_ t: Tile) -> Bool {
+    if isLeafTile(t) || isLogTile(t) { return true }
+    switch t {
+    case .tallGrass, .flowerR, .flowerY, .deadBush, .reed, .hay, .planks, .platform, .ladder, .dryGrass, .logBlock, .jungleLogBlock, .palmLogBlock, .birchLogBlock, .workbench, .crate, .cactus:
+        return true
+    default:
+        return false
+    }
+}
+
+/// How much a shot of each kind is carried by the wind (heavy and fast shots hardly at all)
+func windCatch(_ k: ProjKind) -> Double {
+    switch k {
+    case .arrow: return 0.22
+    case .quarrel, .bolt: return 0.15
+    case .pebble, .spit: return 0.25
+    case .bomb, .flask: return 0.3
+    case .fireball: return 0.12
+    case .rock, .shard: return 0.08
+    case .pellet: return 0.05
+    case .bullet, .shock: return 0
+    }
+}
+
+/// Light creatures the wind carries along
+func isWindBlown(_ k: MobKind) -> Bool {
+    switch k {
+    case .crow, .bat, .chicken: return true
+    default: return false
+    }
+}
+
+extension Game {
+    /// How much of the open weather reaches someone at a given level of shelter
+    func shelterExposure(_ level: Int) -> Double {
+        switch level {
+        case 0: return 1.0
+        case 1: return 0.55
+        default: return 0
+        }
+    }
+
+    /// True when rain falls on the head of a body standing at (x, feet y) with the given height
+    func rainReaches(_ x: Double, _ feetY: Double, _ h: Double) -> Bool {
+        if world.dim != .overworld { return false }
+        let tx: Int = Int(floor(x))
+        return Int(floor(feetY - h)) < world.rainTop(tx)
+    }
+
+    /// 0 out in the open, 1 under a roof, 2 indoors (a roof and walls on both sides), 3 underground or
+    /// in a reinforced storm shelter
+    func shelterAt(_ x: Double, _ feetY: Double) -> Int {
+        if world.dim != .overworld { return 3 }
+        let tx: Int = Int(floor(x))
+        let head: Int = Int(floor(feetY - 1.6))
+        if head < world.rainTop(tx) { return 0 }
+        var reinforced: Bool = false
+        // count the solid cover overhead (four blocks or more is underground)
+        var solidAbove: Int = 0
+        var y: Int = head - 1
+        var n: Int = 0
+        while n < 24 && y > 0 {
+            let t: Tile = world.tile(tx, y)
+            if t.solid {
+                solidAbove += 1
+                if isStormproof(t) { reinforced = true }
+            }
+            y -= 1
+            n += 1
+        }
+        if solidAbove >= 4 && !reinforced { return 3 }
+        // walls on both sides, at head or body height
+        func wall(_ dir: Int) -> Bool {
+            var k: Int = 1
+            while k <= 8 {
+                let a: Tile = world.tile(tx + dir * k, head)
+                let b: Tile = world.tile(tx + dir * k, head + 1)
+                if a.solid || b.solid {
+                    if isStormproof(a) || isStormproof(b) { reinforced = true }
+                    return true
+                }
+                k += 1
+            }
+            return false
+        }
+        let left: Bool = wall(-1)
+        let right: Bool = wall(1)
+        if left && right { return reinforced ? 3 : 2 }
+        return 1
+    }
+
+    // MARK: lightning
+
+    func updateLightning(_ dt: Double) {
+        if !bolts.isEmpty {
+            for i in 0..<bolts.count { bolts[i].life -= dt }
+            bolts.removeAll { $0.life <= 0 }
+        }
+        if skyFlash > 0 { skyFlash = max(0, skyFlash - dt * (settings.reduceFlashes ? 0.9 : 2.6)) }
+        if playerStrikeCD > 0 { playerStrikeCD -= dt }
+        if !thunderQueue.isEmpty {
+            for i in 0..<thunderQueue.count { thunderQueue[i].t -= dt }
+            for q in thunderQueue where q.t <= 0 { Sound.shared.play(q.near ? .thunderNear : .thunderFar, q.vol) }
+            thunderQueue.removeAll { $0.t <= 0 }
+        }
+        let on: Bool = settings.weatherOn && settings.allowThunder && world.dim == .overworld
+        if var m = strikeMark {
+            if !on {
+                strikeMark = nil
+            } else {
+                m.t -= dt
+                if m.t <= 0 {
+                    strikeMark = nil
+                    lightningStrike(m.x, m.y, rod: false)
+                } else {
+                    strikeMark = m
+                    if frameNo % 6 == 0 { spawnParticles(m.x + Double.random(in: -0.6...0.6), m.y - 0.3, 0xCFE4FF, 1, 2.0, 0.3, -4) }
+                }
+            }
+        }
+        if !on || weather.thunder < 0.01 {
+            strikeAcc = 0
+            return
+        }
+        strikeAcc += dt * weather.thunder / 60.0
+        if strikeAcc >= 1.0 {
+            strikeAcc = weather.fxPick(-0.4...0.2)
+            pickStrike()
+        }
+    }
+
+    /// Where the next bolt goes. Most land away from the player and some only light up the clouds;
+    /// one landing near the player is marked first, and the next one near them waits a good while
+    /// (lightning never singles a player out).
+    func pickStrike() {
+        let px: Double = pb.x
+        var x: Double = px + weather.fxPick(-75...75)
+        if coverAt(x) < 0.3 || weather.fx() < 0.3 {
+            cloudFlash(x)
+            return
+        }
+        if abs(x - px) < 12 && playerStrikeCD > 0 {
+            x = px + (x >= px ? 1.0 : -1.0) * weather.fxPick(16...40)
+        }
+        guard let spot = strikeSpot(x) else {
+            cloudFlash(x)
+            return
+        }
+        if spot.2 {
+            lightningStrike(spot.0, spot.1, rod: true)
+            return
+        }
+        if abs(spot.0 - px) < 12 {
+            // where it actually comes down decides: near the player again so soon, it stays in the cloud
+            if playerStrikeCD > 0 {
+                cloudFlash(spot.0)
+                return
+            }
+            playerStrikeCD = 45
+            strikeMark = StrikeMark(x: spot.0, y: spot.1, t: 1.5, total: 1.5)
+            sfx(.strikeWarn, 0.8)
+            return
+        }
+        lightningStrike(spot.0, spot.1, rod: false)
+    }
+
+    /// Lightning that stays in the cloud: a soft flicker and far-off thunder
+    func cloudFlash(_ x: Double) {
+        let d: Double = abs(x - pb.x)
+        let k: Double = clampD(1.0 - d / 160.0, 0.2, 1.0)
+        skyFlash = max(skyFlash, (settings.reduceFlashes ? 0.05 : 0.2) * k)
+        thunderQueue.append(PendingThunder(t: 0.6 + d / 45.0, vol: 0.35 * k, near: false))
+    }
+
+    /// Where a bolt aimed at x comes down: a lightning rod in reach takes it, otherwise the highest
+    /// exposed point close by (a tree top, a roof, a hill). Returns (x, top y, taken by a rod).
+    func strikeSpot(_ x: Double) -> (Double, Double, Bool)? {
+        if let r = rodCovering(x) { return (Double(r.x) + 0.5, Double(r.y), true) }
+        var best: Int = Int.max
+        let x0: Int = Int(floor(x))
+        var bx: Int = x0
+        for k in -3...3 {
+            let cx: Int = x0 + k
+            if !world.isLoaded(cx) { continue }
+            let top: Int = world.rainTop(cx)
+            if top < best {
+                best = top
+                bx = cx
+            }
+        }
+        if best == Int.max || best >= world.H - 2 { return nil }
+        // the highest point may lie within a rod's reach even if the aim did not
+        if let r = rodCovering(Double(bx) + 0.5) { return (Double(r.x) + 0.5, Double(r.y), true) }
+        return (Double(bx) + 0.5, Double(best), false)
+    }
+
+    func lightningStrike(_ x: Double, _ y: Double, rod: Bool) {
+        let soft: Bool = settings.reduceFlashes
+        makeBolt(x, y)
+        skyFlash = max(skyFlash, soft ? 0.12 : 0.55)
+        addLightFlash(x, y - 0.5, peak: soft ? 11 : 15, dur: soft ? 0.7 : 0.35, radius: 1.4, color: 0xC8DCFF)
+        // thunder: at once up close, later the further off it was (light is quick, sound is slow)
+        let d: Double = abs(x - pb.x) + abs(y - pb.y) * 0.3
+        let vol: Double = clampD(1.15 - d / 140.0, 0.12, 1.0)
+        if d < 14 {
+            Sound.shared.play(.thunderNear, vol)
+        } else {
+            thunderQueue.append(PendingThunder(t: d / 45.0, vol: vol, near: d < 40))
+        }
+        spawnParticles(x, y - 0.2, 0xE8F0FF, 8, 6.0, 0.35, 10)
+        if d < 24 { addShake(0.35) }
+        if rod {
+            // the rod carries it safely into the ground
+            spawnParticles(x, y + 0.2, 0xFFE8A0, 10, 4.0, 0.4, 14)
+            return
+        }
+        let I: Double = weatherIntensity
+        if settings.weatherHurtsPlayer && !dead && abs(pb.x - x) < 1.8 && pb.y > y - 0.5 && pb.top < y + 0.6 {
+            var info = DamageInfo(amount: 7.0 * I, type: .shock, source: .environment)
+            info.originX = x
+            info.knock = 7
+            info.key = newID()
+            if hurtPlayer(info) && settings.weatherAlerts { say("Struck by lightning!", 1.5) }
+        }
+        if settings.weatherHurtsCreatures {
+            for m in mobsNear(x - 3, x + 3) where m.hp > 0 && !m.removed {
+                if abs(m.b.x - x) < 2.0 && m.b.y > y - 0.5 && m.b.top < y + 0.6 {
+                    var info = DamageInfo(amount: 12.0 * I, type: .shock, source: .environment)
+                    info.originX = x
+                    info.knock = 5
+                    info.key = newID()
+                    applyMobDamage(m, info)
+                }
+            }
+        }
+        if settings.weatherHurtsBlocks { lightningFire(Int(floor(x)), Int(floor(y))) }
+    }
+
+    /// A jagged bolt from the cloud base down to the strike, with a few forks
+    func makeBolt(_ x: Double, _ y: Double) {
+        let top: Double = min(y - 24.0, camY - viewTilesH * 0.5 - 3.0)
+        var pts: [(Double, Double)] = []
+        var cx: Double = x + weather.fxPick(-4...4)
+        let n: Int = max(6, Int((y - top) / 1.6))
+        for i in 0...n {
+            let f: Double = Double(i) / Double(n)
+            let cy: Double = top + (y - top) * f
+            cx += weather.fxPick(-0.9...0.9)
+            cx += (x - cx) * f * 0.35
+            if i == n { cx = x }
+            pts.append((cx, cy))
+        }
+        var forks: [[(Double, Double)]] = []
+        let nf: Int = 1 + Int(weather.fx() * 3.0)
+        for _ in 0..<nf {
+            let k: Int = clampI(Int(weather.fxPick(0.15...0.6) * Double(n)), 1, n - 1)
+            var fx: Double = pts[k].0
+            var fy: Double = pts[k].1
+            let side: Double = weather.fx() < 0.5 ? -1.0 : 1.0
+            var f: [(Double, Double)] = [(fx, fy)]
+            let len: Int = 3 + Int(weather.fx() * 4.0)
+            for _ in 0..<len {
+                fx += side * weather.fxPick(0.4...1.3)
+                fy += weather.fxPick(0.8...1.6)
+                f.append((fx, fy))
+            }
+            forks.append(f)
+        }
+        if bolts.count >= 4 { bolts.removeFirst() }
+        bolts.append(LightningBolt(pts: pts, forks: forks, life: 0.32, maxLife: 0.32))
+    }
+
+    /// A strike on something that burns: leaves and plants go up, and a short fire burns where it hit
+    /// (it dies sooner in the rain)
+    func lightningFire(_ tx: Int, _ ty: Int) {
+        let t: Tile = world.tile(tx, ty)
+        if !isFlammable(t) { return }
+        if isLeafTile(t) || t.isPlant || t == .hay { breakTile(tx, ty, false, dropChance: 0.3) }
+        let rain: Double = weatherAt(Double(tx) + 0.5, Double(ty)).precip
+        let ground: Int = world.groundBelow(tx, ty)
+        if fireZones.count >= 6 { fireZones.removeFirst() }
+        var z = FireZone(x: Double(tx) + 0.5, y: Double(ground), r: 1.6, t: max(1.5, 6.0 - 4.5 * rain), uid: newID())
+        z.tick = 0.35
+        z.env = true
+        fireZones.append(z)
+        spawnParticles(Double(tx) + 0.5, Double(ty), 0xFF8030, 10, 4.0, 0.6, -3)
+    }
+
+    // MARK: hail
+
+    func updateHail(_ dt: Double) {
+        let on: Bool = settings.weatherOn && settings.allowHail && world.dim == .overworld
+        let h: Double = on ? wxHere.hail : 0
+        if hailPool.isEmpty { hailPool = [HailStone](repeating: HailStone(), count: 56) }
+        let density: Double = clampD(settings.weatherParticles, 0.2, 1.0)
+        if h > 0.02 {
+            hailAcc += dt * h * 70.0 * density
+            let halfW: Double = viewTilesW * 0.5 + 3.0
+            let topY: Double = camY - viewTilesH * 0.5 - 1.0
+            while hailAcc >= 1.0 {
+                hailAcc -= 1.0
+                guard let i = hailPool.firstIndex(where: { !$0.on }) else {
+                    hailAcc = 0
+                    break
+                }
+                var s = HailStone()
+                s.on = true
+                s.x = camX + Double.random(in: -halfW...halfW)
+                s.y = topY - Double.random(in: 0...3)
+                s.vy = Double.random(in: 18...24)
+                s.vx = wxHere.wind * 0.25
+                s.size = weather.bigHail ? Double.random(in: 0.18...0.26) : Double.random(in: 0.09...0.14)
+                hailPool[i] = s
+            }
+        } else {
+            hailAcc = 0
+        }
+        let bottom: Double = camY + viewTilesH * 0.5 + 2.0
+        for i in 0..<hailPool.count where hailPool[i].on {
+            var s: HailStone = hailPool[i]
+            s.vy = min(s.vy + 30.0 * dt, 26)
+            s.vx += (wxHere.wind * 0.25 - s.vx) * min(1.0, dt * 2.0)
+            s.x += s.vx * dt
+            s.y += s.vy * dt
+            let tx: Int = Int(floor(s.x))
+            let ty: Int = Int(floor(s.y))
+            if s.vy > 0 && ty >= world.rainTop(tx) && Tile.rainStopTable[world.tile(tx, ty).idx] {
+                if s.bounces == 0 {
+                    // a bounce off whatever it hit, then it breaks
+                    s.y = Double(ty) - 0.02
+                    s.vy = -s.vy * 0.32
+                    s.vx += Double.random(in: -2.5...2.5)
+                    s.bounces = 1
+                    if abs(s.x - pb.x) < 6 && frameNo % 3 == 0 { sfx(.hailTick, 0.25) }
+                } else {
+                    s.on = false
+                    if particles.count < 120 && abs(s.x - pb.x) < 20 { spawnParticles(s.x, s.y, 0xE8F4FF, 2, 2.0, 0.25, 22) }
+                }
+            }
+            if s.y > bottom { s.on = false }
+            hailPool[i] = s
+        }
+        if h < 0.05 { return }
+        // what hail does: large stones sting whoever is out in it; crops, flowers and glass suffer
+        hailHitT -= dt
+        if hailHitT > 0 { return }
+        hailHitT = weather.bigHail ? 1.6 : 2.4
+        let I: Double = weatherIntensity
+        if weather.bigHail && h > 0.3 {
+            if settings.weatherHurtsPlayer && !dead && rainReaches(pb.x, pb.y, pb.h) {
+                // a helmet turns most of the stones
+                let helmet: Bool = inv.armor[0] != nil
+                if !helmet || Double.random(in: 0...1) < 0.35 {
+                    var info = DamageInfo(amount: 1.0 * I, type: .impact, source: .environment)
+                    info.originX = pb.x
+                    info.key = newID()
+                    _ = hurtPlayer(info)
+                }
+            }
+            if settings.weatherHurtsCreatures {
+                for m in mobsNear(pb.x - 30, pb.x + 30) where m.hp > 0 && !m.removed && !m.isBoss && m.kind != .fish {
+                    if Double.random(in: 0...1) < 0.3 && rainReaches(m.b.x, m.b.y, m.b.h) {
+                        var info = DamageInfo(amount: 1.0 * I, type: .impact, source: .environment)
+                        info.originX = m.b.x
+                        info.key = newID()
+                        applyMobDamage(m, info)
+                    }
+                }
+            }
+        }
+        if settings.weatherHurtsBlocks { hailDamage(h) }
+    }
+
+    /// Hail beats down crops a stage, shreds flowers and (large hail) breaks glass left open to the
+    /// sky. A roof over anything protects it, and only a few panes go in one storm.
+    func hailDamage(_ h: Double) {
+        for _ in 0..<3 {
+            let tx: Int = Int(floor(pb.x)) + Int.random(in: -30...30)
+            if !world.isLoaded(tx) { continue }
+            let ty: Int = world.rainTop(tx)
+            // the first thing the hail hits, or a crop or plant standing on it
+            var y: Int = ty
+            var t: Tile = world.tile(tx, y)
+            let above: Tile = world.tile(tx, y - 1)
+            if above.isPlant {
+                y -= 1
+                t = above
+            }
+            let r: Double = Double.random(in: 0...1)
+            switch t {
+            case .wheat3: if r < 0.4 * h { world.set(tx, y, .wheat2) }
+            case .wheat2: if r < 0.3 * h { world.set(tx, y, .wheat1) }
+            case .carrot3: if r < 0.4 * h { world.set(tx, y, .carrot2) }
+            case .carrot2: if r < 0.3 * h { world.set(tx, y, .carrot1) }
+            case .tallGrass, .flowerR, .flowerY:
+                if r < 0.25 * h { breakTile(tx, y, false, dropChance: 0.5) }
+            case .glass:
+                if weather.bigHail && hailBroken < 6 && r < 0.15 * h {
+                    hailBroken += 1
+                    breakTile(tx, y, false, dropChance: 0)
+                    sfx(.breakCrystal, at: Double(tx), 0.6)
+                }
+            default:
+                break
+            }
+        }
+    }
+
+    // MARK: cold
+
+    /// Heat from fires, furnaces, lamps and heaters close by (0...1)
+    func heatNear() -> Double {
+        let px: Int = Int(floor(pb.x))
+        let py: Int = Int(floor(pb.y - 1.0))
+        var best: Double = 0
+        for dy in -3...3 {
+            for dx in -5...5 {
+                let t: Tile = world.tile(px + dx, py + dy)
+                var heat: Double = 0
+                switch t {
+                case .campfire, .heater: heat = 1.0
+                case .furnace: heat = 0.7
+                case .lantern: heat = 0.3
+                case .torch: heat = 0.2
+                case .lava: heat = 0.8
+                default: break
+                }
+                if heat > 0 {
+                    let d: Double = sqrt(Double(dx * dx + dy * dy))
+                    best = max(best, heat * clampD(1.0 - d / 6.5, 0, 1))
+                }
+            }
+        }
+        return best
+    }
+
+    /// Cold country in bad weather draws the warmth out of a player who is out in it; shelter, heat
+    /// and warm clothes keep it in. Far gone, the cold slows them and then starts to hurt (never to
+    /// the death outside hardcore, like hunger).
+    func updateCold(_ dt: Double) {
+        warmthT -= dt
+        if warmthT <= 0 {
+            warmthT = 0.5
+            warmthNear = heatNear()
+            shelterLevel = shelterAt(pb.x, pb.y)
+        }
+        let L: LocalWeather = wxHere
+        var loss: Double = 0
+        if settings.weatherOn && world.dim == .overworld && mode != .creative && !dead {
+            let cold: Double = clampD((L.chill - 0.5) * 2.0, 0, 1)
+            if cold > 0 {
+                loss = cold * (0.55 + 0.45 * clampD(abs(L.wind) / 12.0, 0, 1)) + L.precip * 0.15 * cold
+                switch shelterLevel {
+                case 1: loss *= 0.6
+                case 2: loss *= 0.25
+                case 3: loss *= 0.05
+                default: break
+                }
+                if wearing(.winterCoat) { loss *= 0.35 }
+                if wearing(.snowBoots) { loss *= 0.8 }
+                if pb.inWater { loss += 0.6 * cold }
+            }
+        }
+        let gain: Double = warmthNear * 0.12 + (loss <= 0.001 ? 0.05 : 0)
+        // bare in a full blizzard a player freezes in about half a minute; a coat triples that
+        bodyCold = clampD(bodyCold + (loss * 0.03 - gain) * dt, 0, 1)
+        if !settings.weatherOn { bodyCold = max(0, bodyCold - dt * 0.2) }
+        var slow: Double = 1.0 - 0.3 * clampD((bodyCold - 0.5) * 2.0, 0, 1)
+        // deep snow drags at the feet (snow boots stay on top of it)
+        if settings.weatherOn && pb.onGround && L.snowCover > 0.5 && shelterLevel == 0 && !wearing(.snowBoots) {
+            slow *= 1.0 - 0.15 * clampD((L.snowCover - 0.5) * 2.0, 0, 1)
+        }
+        wxSlow = slow
+        if bodyCold > 0.4 && !coldWarned {
+            coldWarned = true
+            if settings.weatherAlerts { say("You're getting cold. Get out of the wind, near a fire, or into warm clothes.", 3.5) }
+        }
+        if bodyCold < 0.2 { coldWarned = false }
+        if bodyCold >= 0.97 && settings.weatherHurtsPlayer && settings.weatherOn {
+            coldHurtT += dt
+            if coldHurtT >= 4.0 {
+                coldHurtT = 0
+                if hp > 1 || mode == .hardcore {
+                    damagePlayer(1, from: pb.x, knock: 0, ignoreArmor: true)
+                    floatText("Freezing", pb.x, pb.y - pb.h - 0.6, 0xA8D8FF)
+                }
+            }
+        } else {
+            coldHurtT = 0
+        }
+    }
+
+    // MARK: the wind's push
+
+    /// The wind's (and a tornado's) hold on the player this frame: how it shifts walking, drifting in
+    /// the air and standing still, how slippery the ground is, and a tornado's pull. Every part of it
+    /// is bounded, and all of it is zero with the weather off.
+    func updateWeatherForces(_ dt: Double) {
+        wxWalk = 0
+        wxAirDrift = 0
+        wxRest = 0
+        wxAccelX = 0
+        wxAccelY = 0
+        wxSlip = 0
+        if flingT > 0 { flingT -= dt }
+        if !settings.weatherOn || world.dim != .overworld || inVehicle != nil || mounted != nil || flying || noclip || dead { return }
+        let expo: Double = shelterExposure(shelterLevel)
+        // a breeze (under 3 blocks a second) moves nobody: calm weather leaves movement exactly as it was
+        let raw: Double = wxHere.wind
+        let w: Double = (raw > 0 ? 1.0 : -1.0) * max(0, abs(raw) - 3.0) * expo
+        wxWalk = w * 0.1
+        wxAirDrift = w * 0.3
+        // a player standing still braces against the wind; only hurricane-force gusts shuffle them
+        // along, slowly (at most 0.8 blocks a second), so nobody is blown across the map
+        if abs(w) > 18.0 { wxRest = clampD((w - (w > 0 ? 18.0 : -18.0)) * 0.15, -0.8, 0.8) }
+        if pb.onGround && expo > 0.5 {
+            var slip: Double = clampD((wxHere.snowCover - 0.35) * 1.4, 0, 0.6)
+            if wxHere.chill > 0.7 && wxHere.snowCover > 0.2 { slip = max(slip, 0.35) }
+            if wxHere.precip > 0.4 && !wxHere.snow { slip = max(slip, 0.2 * wxHere.wet) }
+            if wearing(.snowBoots) { slip *= 0.15 }
+            wxSlip = slip
+        }
+        let tf: (Double, Double, Double) = tornadoField(pb.x, pb.y - pb.h * 0.5)
+        if tf.2 > 0 {
+            let k: Double = shelterLevel >= 3 ? 0 : (shelterLevel == 2 ? 0.3 : (shelterLevel == 1 ? 0.6 : 1.0))
+            if k > 0 {
+                wxAccelX = clampD((tf.0 - pb.vx) * 3.5, -40, 40) * k
+                if tf.1 < -1.0 {
+                    let lift: Double = clampD(-tf.1 / 12.0, 0, 1)
+                    wxAccelY = (-gravityG * 1.05 * lift + clampD((tf.1 - pb.vy) * 2.5, -30, 30)) * k
+                    if wxAccelY < -8 { flingT = 2.5 }
+                }
+            }
+        }
+    }
+
+    /// Light things in the open drift with the wind: shots in flight, items on the ground, small
+    /// birds and bats
+    func updateWindOnThings(_ dt: Double) {
+        if !settings.weatherOn || world.dim != .overworld { return }
+        let w: Double = wxHere.wind
+        if abs(w) < 2.5 { return }
+        for i in 0..<projectiles.count {
+            let k: Double = windCatch(projectiles[i].kind)
+            if k <= 0 || projectiles[i].stuck > 0 { continue }
+            let px: Double = projectiles[i].x
+            if projectiles[i].y >= Double(world.skyTop(Int(floor(px)))) { continue }
+            projectiles[i].vx += w * k * dt
+        }
+        if abs(w) > 7.0 {
+            for i in 0..<drops.count {
+                let d: DropItem = drops[i]
+                if d.y >= Double(world.skyTop(Int(floor(d.x)))) { continue }
+                drops[i].vx = clampD(d.vx + (w * 0.45 - d.vx) * min(1.0, 0.8 * dt), -6, 6)
+            }
+        }
+        for m in mobsNear(pb.x - 40, pb.x + 40) where isWindBlown(m.kind) && m.hp > 0 && !m.removed {
+            if m.b.y >= Double(world.skyTop(Int(floor(m.b.x)))) { continue }
+            m.b.vx = clampD(m.b.vx + w * 0.35 * dt, -9, 9)
+        }
+        // rough water tosses boats about
+        let rough: Double = max(wxHere.hurricane, abs(w) > 9.0 ? (abs(w) - 9.0) / 10.0 : 0)
+        if rough > 0.05 {
+            for v in vehicles where v.isBoat && v.submerged > 0.05 && abs(v.px - pb.x) < 80 {
+                v.asleep = false
+                v.sleepT = 0
+                let ph: Double = sin(weather.t * 1.7 + v.px * 0.3)
+                v.vy = clampD(v.vy + ph * 10.0 * rough * dt, -6, 6)
+                v.vx = clampD(v.vx + w * 0.15 * rough * dt, -10, 10)
+                v.angVel = clampD(v.angVel + cos(weather.t * 1.3 + v.px * 0.2) * 1.4 * rough * dt, -1.5, 1.5)
+            }
+            // at a hurricane's height an open boat is swamped now and then
+            if let v = inVehicle, v.isBoat, wxHere.hurricane > 0.7, settings.weatherHurtsPlayer {
+                swampT += dt
+                if swampT > 9.0 {
+                    swampT = 0
+                    if weather.fx() < 0.35 {
+                        dismount()
+                        pb.vy = -6
+                        sfx(.splash, 0.9)
+                        if settings.weatherAlerts { say("A wave swamps the boat and throws you into the sea!", 2.5) }
+                    }
+                }
+            } else {
+                swampT = 0
+            }
+        }
+    }
+
+    // MARK: tornadoes
+
+    func spawnTornado() {
+        let dir: Double = weather.windDir
+        let warn: Double = weather.pick(30...40)
+        let ground: Double = max(30, weather.stateDur - warn - TornadoEvent.ropeDur)
+        let dist: Double = weather.pick(85...110)
+        let px: Double = weatherX
+        let e = TornadoEvent(x: px - dir * dist, dir: dir, speed: weather.pick(2.6...3.4), warnDur: warn, groundDur: ground, strength: weather.pick(0.55...1.0), wander: weather.rand() * 6.283, uid: newID())
+        weather.tornado = e
+        tornadoAcc = 0
+        if settings.weatherAlerts && world.dim == .overworld {
+            say(joinText("Tornado warning! A funnel is forming to the ", dir > 0 ? "west" : "east", ". Get underground or into a shelter."), 4.5)
+            sfx(.weatherAlert, 0.9)
+        }
+    }
+
+    func endTornado(survived: Bool) {
+        guard let e = weather.tornado else { return }
+        weather.tornado = nil
+        tornadoAcc = 0
+        if weather.kind == .tornado { weather.stateT = max(weather.stateT, weather.stateDur) }
+        if survived && e.closest < 120 {
+            let d: Int = Int(e.closest.rounded())
+            recordStorm(.tornado, e.closest < 30 ? joinText("passed within ", String(d), " blocks of you") : joinText("seen ", String(d), " blocks away"))
+            if settings.weatherAlerts && world.dim == .overworld { say("The tornado has lifted. Look around for anything it scattered.", 3.5) }
+        }
+    }
+
+    func updateTornado(_ dt: Double) {
+        guard var e = weather.tornado else { return }
+        e.t += dt
+        switch e.phase {
+        case 0:
+            e.x += e.dir * 0.8 * dt
+            if e.t >= e.warnDur {
+                e.phase = 1
+                e.t = 0
+                if settings.weatherAlerts && world.dim == .overworld {
+                    say("A tornado has touched down!", 3.0)
+                    sfx(.weatherAlert, 0.9)
+                }
+            }
+        case 1:
+            e.x += (e.dir * e.speed + sin(e.wander + e.t * 0.35) * 1.3) * dt
+            if e.t >= e.groundDur {
+                e.phase = 2
+                e.t = 0
+            }
+        default:
+            e.x += e.dir * e.speed * 0.6 * dt
+            if e.t >= TornadoEvent.ropeDur {
+                weather.tornado = e
+                endTornado(survived: true)
+                return
+            }
+        }
+        if world.dim == .overworld { e.closest = min(e.closest, abs(e.x - pb.x)) }
+        weather.tornado = e
+        // only near the player is it simulated in detail (beyond that it only moves)
+        if world.dim == .overworld && abs(e.x - pb.x) < 100 && world.isLoaded(Int(floor(e.x))) {
+            tornadoGround = Double(world.surfaceY(Int(floor(e.x))))
+            tornadoEffects(dt)
+        }
+    }
+
+    /// The air a tornado moves at a point: drawn in toward the funnel, lifted near it and swirled about
+    /// it, strongest at the edge of its core and fading with distance; at the top of the funnel things
+    /// are thrown outward. Returns (vx, vy, nearness 0...1). Speeds never exceed 16 blocks a second.
+    func tornadoField(_ x: Double, _ y: Double) -> (Double, Double, Double) {
+        guard let e = weather.tornado, world.dim == .overworld, settings.weatherOn else { return (0, 0, 0) }
+        let f: Double = e.force * weatherIntensity
+        if f <= 0.01 { return (0, 0, 0) }
+        let dx: Double = x - e.x
+        let ad: Double = abs(dx)
+        let reach: Double = 24.0
+        if ad > reach { return (0, 0, 0) }
+        let core: Double = 3.2
+        let height: Double = tornadoGround - y
+        let near: Double = ad < core ? 1.0 : pow(max(0, (reach - ad) / (reach - core)), 1.6)
+        let s: Double = dx >= 0 ? 1.0 : -1.0
+        var vx: Double = -s * 9.0 * near * f
+        if ad < core * 1.8 { vx += sin(weather.t * 4.2 + y * 0.7) * 7.0 * f }
+        var vy: Double = 0
+        if ad < core * 2.2 {
+            let lift: Double = height < 18 ? 1.0 : max(0, 1.0 - (height - 18.0) / 6.0)
+            vy = -12.0 * f * lift * (ad < core ? 1.0 : 0.6)
+            if height >= 18 { vx = s * 10.0 * f }
+        }
+        let mag: Double = sqrt(vx * vx + vy * vy)
+        if mag > 16.0 {
+            vx *= 16.0 / mag
+            vy *= 16.0 / mag
+        }
+        return (vx, vy, near)
+    }
+
+    /// What a tornado near the player does: it draws in and flings creatures, items, shots and
+    /// vehicles, its debris hurts, and it tears loose plants, leaves and light building blocks (up to a
+    /// limit; never the ground). Shelter keeps the player out of most of it.
+    func tornadoEffects(_ dt: Double) {
+        guard let e = weather.tornado else { return }
+        let f: Double = e.force
+        if f <= 0.01 { return }
+        let I: Double = weatherIntensity
+        for m in mobsNear(e.x - 24, e.x + 24) where m.hp > 0 && !m.removed && !m.isBoss && m.kind != .fish {
+            let tf: (Double, Double, Double) = tornadoField(m.b.x, m.b.y - m.b.h * 0.5)
+            if tf.2 <= 0 { continue }
+            if !rainReaches(m.b.x, m.b.y, m.b.h) && shelterAt(m.b.x, m.b.y) >= 2 { continue }
+            let light: Double = 1.0 / (1.0 + m.b.w * m.b.h * 0.6)
+            m.b.vx = clampD(m.b.vx + clampD((tf.0 - m.b.vx) * 3.0, -40, 40) * light * dt, -16, 16)
+            if tf.1 < -1.0 {
+                m.b.vy = clampD(m.b.vy + (-gravityG * 1.05 + clampD((tf.1 - m.b.vy) * 2.5, -30, 30)) * light * dt, -14, 26)
+                m.b.onGround = false
+            }
+            if !settings.weatherHurtsCreatures { m.fallPeak = 0 }
+            if settings.weatherHurtsCreatures && abs(m.b.x - e.x) < 4.5 {
+                var info = DamageInfo(amount: 2.0 * f * I, type: .impact, source: .environment)
+                info.originX = e.x
+                info.key = e.uid
+                info.cooldown = 1.4
+                applyMobDamage(m, info)
+            }
+        }
+        for i in 0..<drops.count where abs(drops[i].x - e.x) < 24 {
+            let tf: (Double, Double, Double) = tornadoField(drops[i].x, drops[i].y)
+            if tf.2 <= 0 { continue }
+            drops[i].vx = clampD(drops[i].vx + (tf.0 - drops[i].vx) * 2.0 * dt, -14, 14)
+            if tf.1 < -1.0 { drops[i].vy = clampD(drops[i].vy + (tf.1 - drops[i].vy) * 2.5 * dt - gravityG * 0.8 * dt, -12, 18) }
+        }
+        for i in 0..<projectiles.count where abs(projectiles[i].x - e.x) < 24 && projectiles[i].stuck <= 0 {
+            let tf: (Double, Double, Double) = tornadoField(projectiles[i].x, projectiles[i].y)
+            projectiles[i].vx += tf.0 * 0.6 * dt
+            projectiles[i].vy += tf.1 * 0.6 * dt
+        }
+        for v in vehicles where abs(v.px - e.x) < 24 {
+            let tf: (Double, Double, Double) = tornadoField(v.px, v.py)
+            if tf.2 <= 0 { continue }
+            let heavy: Double = 1.0 / max(1.0, v.mass * 0.15)
+            v.asleep = false
+            v.sleepT = 0
+            v.vx = clampD(v.vx + clampD((tf.0 - v.vx) * 0.8, -12, 12) * heavy * dt, -12, 12)
+            v.angVel = clampD(v.angVel + tf.0 * 0.05 * heavy * dt, -2, 2)
+        }
+        // its debris
+        if settings.weatherHurtsPlayer && !dead && abs(pb.x - e.x) < 4.5 && shelterLevel < 2 {
+            wxDebrisT -= dt
+            if wxDebrisT <= 0 {
+                wxDebrisT = 1.4
+                var info = DamageInfo(amount: 2.0 * f * I, type: .impact, source: .environment)
+                info.originX = e.x
+                info.knock = 3
+                info.key = newID()
+                _ = hurtPlayer(info)
+            }
+        }
+        // the dust and wreckage thrown up at its foot
+        if particles.count < 140 && abs(e.x - pb.x) < 50 && frameNo % 2 == 0 {
+            let col: UInt32 = [0x8A7A60, 0x6A5A44, 0x5E8A4A, 0x9A8A70][frameNo % 4]
+            spawnParticles(e.x + Double.random(in: -3...3), tornadoGround - 0.3, col, 2, 7.0, 0.8, 8)
+        }
+        if settings.weatherHurtsBlocks && e.broken < 90 {
+            tornadoAcc += dt * 7.0 * f * I
+            var broken: Int = e.broken
+            while tornadoAcc >= 1.0 && broken < 90 {
+                tornadoAcc -= 1.0
+                let hit: Bool = weather.fx() < 0.7 ? tearAt(e.x + weather.fxPick(-4.8...4.8), f) : tearFace(e.x, e.dir, f)
+                if hit { broken += 1 }
+            }
+            weather.tornado?.broken = broken
+        } else {
+            tornadoAcc = 0
+        }
+    }
+
+    /// Tears one block loose at column x, working down from the first thing the wind reaches (plants
+    /// and leaves give way; a solid roof or the ground stops it)
+    @discardableResult
+    func tearAt(_ x: Double, _ f: Double) -> Bool {
+        let tx: Int = Int(floor(x))
+        if !world.isLoaded(tx) { return false }
+        var y: Int = max(1, world.rainTop(tx) - 1)
+        var n: Int = 0
+        while n < 4 {
+            let t: Tile = world.tile(tx, y)
+            if t == .air {
+                y += 1
+                n += 1
+                continue
+            }
+            if weather.fx() < windBreak(t) * f {
+                breakTile(tx, y, false, dropChance: 0.5)
+                let c: UInt32 = t.def.colors.first ?? 0x8A7A60
+                spawnParticles(Double(tx) + 0.5, Double(y) + 0.5, c, 4, 7.0, 0.7, 6)
+                return true
+            }
+            if t.solid { return false }
+            y += 1
+            n += 1
+        }
+        return false
+    }
+
+    /// Tears loose the first block the wind meets coming from `fromDir` at a random height near the
+    /// surface around x: walls take the wind side-on (a closed storm shutter or a stone wall in front
+    /// of a window keeps the glass whole)
+    @discardableResult
+    func tearFace(_ x: Double, _ fromDir: Double, _ f: Double) -> Bool {
+        let cx: Int = Int(floor(x + weather.fxPick(-6...6)))
+        if !world.isLoaded(cx) { return false }
+        let ground: Int = world.surfaceY(cx)
+        let y: Int = ground - 1 - Int(weather.fx() * 7.0)
+        let step: Int = fromDir > 0 ? 1 : -1
+        var tx: Int = cx - step * 12
+        var k: Int = 0
+        while k < 24 {
+            let t: Tile = world.tile(tx, y)
+            if t != .air && !t.liquid {
+                if weather.fx() < windBreak(t) * f {
+                    breakTile(tx, y, false, dropChance: 0.5)
+                    return true
+                }
+                return false
+            }
+            tx += step
+            k += 1
+        }
+        return false
+    }
+
+    // MARK: hurricanes
+
+    func spawnHurricane(_ ctx: WeatherContext) {
+        let side: Double = ctx.seaSide != 0 ? ctx.seaSide : 1
+        let h = HurricaneEvent(total: weather.stateDur, side: side, coastX: ctx.coastX, strength: weather.pick(0.7...1.0))
+        weather.hurricane = h
+        hurricaneAcc = 0
+        if settings.weatherAlerts && world.dim == .overworld {
+            say(joinText("Hurricane warning: a hurricane is coming in off the sea to the ", side > 0 ? "east" : "west", ". Close your shutters, then get to high ground or a shelter."), 5.0)
+            sfx(.weatherAlert, 0.9)
+        }
+    }
+
+    func endHurricane(survived: Bool) {
+        guard let h = weather.hurricane else { return }
+        weather.hurricane = nil
+        hurricaneAcc = 0
+        if weather.kind == .hurricane { weather.stateT = max(weather.stateT, weather.stateDur) }
+        if survived && h.closest < 400 {
+            recordStorm(.hurricane, h.closest < 80 ? "rode it out on the coast" : "felt it inland")
+        }
+    }
+
+    func updateHurricane(_ dt: Double) {
+        guard var h = weather.hurricane else { return }
+        h.t += dt
+        if h.t >= h.stageDur {
+            h.t = 0
+            if h.stage == .clearing {
+                weather.hurricane = h
+                endHurricane(survived: true)
+                if settings.weatherAlerts && world.dim == .overworld { say("The hurricane has passed. The sea is going back down.", 3.5) }
+                return
+            }
+            h.stage = HurricaneStage(rawValue: h.stage.rawValue + 1) ?? .clearing
+            if settings.weatherAlerts && world.dim == .overworld {
+                var line: String = ""
+                switch h.stage {
+                case .intensifying: line = "The hurricane is strengthening. The sea is rising."
+                case .peak: line = "The hurricane is at its height!"
+                case .eye: line = "The eye of the hurricane: a sudden calm. The far wall is coming, and the wind will turn."
+                case .backside: line = "The wind is back, from the other side!"
+                case .weakening: line = "The hurricane is weakening."
+                case .clearing: line = "The hurricane is moving on."
+                default: break
+                }
+                if !line.isEmpty { say(line, 3.5) }
+            }
+        }
+        h.force = easeTo(h.force, h.stage.force * h.strength, 8, dt)
+        if world.dim == .overworld { h.closest = min(h.closest, abs(pb.x - h.coastX)) }
+        weather.hurricane = h
+        if world.dim != .overworld { return }
+        let reach: Double = hurricaneReach(pb.x, h)
+        if settings.weatherHurtsBlocks && h.broken < 60 && h.force > 0.6 && reach > 0.4 {
+            hurricaneAcc += dt * 1.2 * h.force * reach * weatherIntensity
+            var broken: Int = h.broken
+            while hurricaneAcc >= 1.0 && broken < 60 {
+                hurricaneAcc -= 1.0
+                let x: Double = pb.x + weather.fxPick(-40...40)
+                let fromDir: Double = weather.wind >= 0 ? 1 : -1
+                let hit: Bool = weather.fx() < 0.5 ? tearAt(x, h.force * 0.6) : tearFace(x, fromDir, h.force * 0.6)
+                if hit { broken += 1 }
+            }
+            weather.hurricane?.broken = broken
+        } else {
+            hurricaneAcc = 0
+        }
+    }
+
+    // MARK: storm surge
+
+    /// At a hurricane's height the sea climbs a block or two up the shore near the player (sandbags
+    /// hold it back). Every flooded spot is remembered, and saved, until the water has been taken
+    /// away again once the storm eases; that also happens if the weather is switched off.
+    func updateSurge(_ dt: Double) {
+        surgeT -= dt
+        if surgeT > 0 { return }
+        surgeT = 0.5
+        var rising: Bool = false
+        var level: Int = WorldGen.sea - 1
+        if settings.weatherOn && settings.allowHurricane && settings.weatherHurtsBlocks, let h = weather.hurricane, world.dim == .overworld {
+            if h.stage == .peak || h.stage == .backside || h.stage == .intensifying {
+                rising = true
+                if h.stage == .peak || h.stage == .backside { level = WorldGen.sea - 2 }
+            }
+            if rising && weather.surge.count < 90 && abs(h.coastX - pb.x) < 140 { floodShore(h, level) }
+        }
+        if rising || weather.surge.isEmpty { return }
+        // ebbing: a few spots at a time, wherever the ground is loaded (the rest waits for it)
+        var keep: [SurgeCell] = []
+        var drained: Int = 0
+        for c in weather.surge {
+            if world.dim == .overworld && drained < 12 && world.isLoaded(c.x) {
+                if world.tile(c.x, c.y) == .water { world.set(c.x, c.y, .air) }
+                drained += 1
+                continue
+            }
+            keep.append(c)
+        }
+        weather.surge = keep
+    }
+
+    /// Floods the low shore next to the sea, one strip of columns at a time
+    func floodShore(_ h: HurricaneEvent, _ level: Int) {
+        let inland: Int = h.side > 0 ? -1 : 1
+        let sea: Int = WorldGen.sea
+        // walk in from the open sea to the first column whose surface row is not sea water
+        var x: Int = Int(floor(h.coastX)) - inland * 8
+        var k: Int = 0
+        while k < 60 && world.isLoaded(x) && world.tile(x, sea) == .water {
+            x += inland
+            k += 1
+        }
+        if !world.isLoaded(x) || k >= 60 { return }
+        var added: Int = 0
+        var col: Int = 0
+        while col < 30 && added < 8 && weather.surge.count < 90 {
+            let cx: Int = x + inland * col
+            if !world.isLoaded(cx) { return }
+            var y: Int = level
+            var blocked: Bool = false
+            while y < sea {
+                let t: Tile = world.tile(cx, y)
+                if t == .sandbag { blocked = true; break }
+                if t == .air {
+                    world.set(cx, y, .water)
+                    weather.surge.append(SurgeCell(x: cx, y: y))
+                    added += 1
+                }
+                y += 1
+            }
+            // the surge stops at higher ground or at a sandbag wall
+            if blocked || world.tile(cx, level).solid { return }
+            col += 1
+        }
+    }
+
+    // MARK: everything, once a frame
+
     func updateWeather(_ dt: Double) {
         if landT > 0 { landT -= dt }
         if pb.inWater && !wasInWater && pb.vy > 4.0 {
@@ -19466,65 +21991,1308 @@ extension Game {
             spawnParticles(pb.x, pb.y - 0.4, 0xB8D8F8, 8, 3.5, 0.45, 14)
         }
         wasInWater = pb.inWater
-        if world.dim != .overworld {
-            weatherRain = max(0, weatherRain - dt * 0.2)
-            return
+        stepWeatherSim(dt)
+        wxHere = weatherAt(pb.x, pb.y - pb.h)
+        weatherRain = wxHere.precip
+        weatherSnow = wxHere.snow
+        updateGroundCells(dt)
+        updateTornado(dt)
+        updateHurricane(dt)
+        updateSurge(dt)
+        updateLightning(dt)
+        updateHail(dt)
+        updateCold(dt)
+        updateWeatherForces(dt)
+        updateWindOnThings(dt)
+        updateWeatherDevices(dt)
+        updateWeatherBanner()
+        wxNoteT -= dt
+        if wxNoteT <= 0 {
+            wxNoteT = 1.0
+            checkWeatherNotes()
+            let L: LocalWeather = wxHere
+            if L.precip > 0.3 || abs(L.wind) > 8 || L.thunder > 0.5 || L.hail > 0.2 { stormFelt = true }
         }
-        weatherT -= dt
-        if weatherT <= 0 {
-            if weatherOn {
-                weatherOn = false
-                weatherT = Double.random(in: 150...320)
-            } else {
-                weatherOn = Double.random(in: 0...1) < 0.45
-                weatherT = weatherOn ? Double.random(in: 60...160) : Double.random(in: 120...260)
-            }
+        // rain puts out a burning player standing in it
+        if weatherRain > 0.5 && !weatherSnow && playerBurn > 0 && rainReaches(pb.x, pb.y, pb.h) { playerBurn = 0 }
+    }
+
+    /// How hard it is raining at x (cheap: for checks made for many creatures)
+    func precipAt(_ x: Double) -> Double {
+        if world.dim != .overworld || !settings.weatherOn || weather.precip < 0.01 { return 0 }
+        return weather.precip * coverAt(x) * biomeWetness(gen.col(Int(floor(x))).biome)
+    }
+
+    /// Keeps a storm the player lived through in the journal
+    func recordStorm(_ k: WeatherKind, _ note: String) {
+        var list: [StormRecord] = journal.storms ?? []
+        list.append(StormRecord(kind: k.rawValue, day: dayCount, note: note))
+        if list.count > 40 { list.removeFirst(list.count - 40) }
+        journal.storms = list
+    }
+}
+
+// MARK: - Weather on screen: storm skies, rain and snow, hail, wind, the funnel, lightning, waves
+// Everything here is drawn from the simulation and a hash of each drop's index (no per-particle
+// state), batched into one path per colour; only hailstones come from a small pool.
+
+/// Small pixel-art weather symbols for the HUD and the station's screen
+func weatherIconBuf(_ k: WeatherKind, _ snow: Bool) -> PixelBuf {
+    var b = PixelBuf(w: 12, h: 12)
+    let cloudL: UInt32 = 0xE8EEF4
+    let cloudD: UInt32 = 0x8A929E
+    let cloudS: UInt32 = 0x5A606C
+    func cloud(_ c: UInt32, _ y: Int) {
+        b.ellipse(4.5, Double(y) + 0.5, 2.6, 2.0, c)
+        b.ellipse(7.5, Double(y) - 0.5, 3.0, 2.6, c)
+        b.rect(2, y, 8, 2, c)
+    }
+    func drops(_ c: UInt32, _ n: Int) {
+        for i in 0..<n {
+            let x: Int = 2 + (i * 3) % 9
+            let y: Int = 8 + (i % 2)
+            b.set(x, y, c)
+            b.set(x - 1, y + 2, c)
         }
-        let b: Biome = biomeHere
-        let dry: Bool = b == .desert || b == .savanna
-        let target: Double = weatherOn && !dry ? 1.0 : 0.0
-        weatherRain += (target - weatherRain) * min(1.0, dt * 0.15)
-        weatherSnow = b == .tundra || (b == .mountain && pb.y < 80)
-        if weatherRain > 0.5 && !weatherSnow && playerBurn > 0 && world.isSkyExposed(Int(floor(pb.x)), Int(floor(pb.y - pb.h))) {
-            playerBurn = 0
+    }
+    func flakes() {
+        for (x, y) in [(2, 9), (5, 10), (8, 9), (10, 11), (4, 11)] {
+            b.set(x, y, 0xFFFFFF)
         }
+    }
+    switch k {
+    case .clear:
+        b.ellipse(6, 6, 3.0, 3.0, 0xFFD84A)
+        b.ellipse(5.5, 5.5, 1.6, 1.6, 0xFFF2A0)
+        for (x, y) in [(6, 0), (6, 11), (0, 6), (11, 6), (2, 2), (9, 2), (2, 9), (9, 9)] { b.set(x, y, 0xFFD84A) }
+    case .partlyCloudy:
+        b.ellipse(4, 4, 2.6, 2.6, 0xFFD84A)
+        cloud(cloudL, 7)
+    case .overcast:
+        cloud(cloudD, 5)
+        cloud(cloudL, 7)
+    case .lightRain, .snowfall:
+        cloud(cloudD, 4)
+        if snow || k == .snowfall { flakes() } else { drops(0x7AB0F0, 3) }
+    case .heavyRain:
+        cloud(cloudS, 4)
+        if snow { flakes() } else { drops(0x5A98F0, 6) }
+    case .thunderstorm:
+        cloud(cloudS, 4)
+        b.line(7, 6, 5, 9, 0xFFE060)
+        b.line(5, 9, 7, 9, 0xFFE060)
+        b.line(7, 9, 5, 11, 0xFFE060)
+        drops(0x5A98F0, 2)
+    case .strongWind, .windstorm:
+        b.line(1, 3, 8, 3, 0xE8EEF4)
+        b.line(8, 3, 9, 2, 0xE8EEF4)
+        b.line(0, 6, 10, 6, 0xE8EEF4)
+        b.line(10, 6, 11, 5, 0xE8EEF4)
+        b.line(2, 9, 7, 9, 0xE8EEF4)
+        if k == .windstorm { b.set(9, 9, 0x8A6A3A); b.set(4, 11, 0x5E8A4A) }
+    case .hailstorm:
+        cloud(cloudS, 4)
+        for (x, y) in [(3, 8), (6, 10), (9, 8), (4, 11)] { b.rect(x, y, 2, 1, 0xF4FAFF) }
+    case .blizzard:
+        cloud(cloudD, 3)
+        flakes()
+        b.line(0, 8, 6, 8, 0xC8D8E8)
+    case .tornado:
+        b.rect(1, 0, 10, 2, cloudS)
+        b.rect(3, 2, 7, 2, 0x6E727B)
+        b.rect(4, 4, 5, 2, 0x55585F)
+        b.rect(5, 6, 3, 2, 0x6E727B)
+        b.rect(5, 8, 2, 2, 0x55585F)
+        b.rect(4, 10, 2, 1, 0x8A7A60)
+    case .hurricane:
+        b.ellipse(6, 6, 4.6, 4.6, 0x8A929E)
+        b.ellipse(6, 6, 3.0, 3.0, 0xE8EEF4)
+        b.ellipse(6, 6, 1.2, 1.2, 0x3A70C8)
+        b.line(6, 1, 10, 2, 0xE8EEF4)
+        b.line(6, 11, 2, 10, 0xE8EEF4)
+    }
+    b.outline(0x1A1410)
+    return b
+}
+
+extension Art {
+    func weatherIcon(_ k: WeatherKind, _ snow: Bool) -> Image {
+        let key: Int = k.rawValue * 2 + (snow ? 1 : 0)
+        if let i = wxIcons[key] { return i }
+        let img: Image = pixImage(weatherIconBuf(k, snow))
+        wxIcons[key] = img
+        return img
     }
 }
 
 extension WorldRenderer {
-    /// Rain streaks or snowflakes, placed in world space (so they stay put as the camera moves) and
-    /// only where the sky is open above them
-    static func drawWeather(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
-        let k: Double = g.weatherRain
-        if k < 0.03 || g.world.dim != .overworld { return }
-        let n: Int = Int(120.0 * k)
-        let snow: Bool = g.weatherSnow
-        var path: Path = Path()
-        let span: Double = v.hTiles + 4.0
-        for i in 0..<n {
-            let fx: Double = hash2(i, 11, 77)
-            let fy: Double = hash2(i, 12, 77)
-            let speed: Double = snow ? 2.5 + fx * 1.5 : 18.0 + fy * 6.0
-            let wy: Double = v.top - 2.0 + (fy * span + g.clock * speed).truncatingRemainder(dividingBy: span)
-            var wx: Double = v.left - 1.0 + fx * (v.wTiles + 2.0)
-            wx += snow ? sin(g.clock * 1.3 + Double(i)) * 0.6 : -(wy - v.top) * 0.12
-            if wy >= Double(g.world.skyTop(Int(floor(wx)))) { continue }
-            let sx: Double = v.sx(wx)
-            let sy: Double = v.sy(wy)
-            if snow {
-                path.addRect(mkRect(sx, sy, 3, 3))
-            } else {
-                path.move(to: CGPoint(x: sx, y: sy))
-                path.addLine(to: CGPoint(x: sx - v.tp * 0.07, y: sy + v.tp * 0.55))
-            }
-        }
-        if snow {
-            ctx.fill(path, with: .color(Color.white.opacity(0.8)))
-        } else {
-            ctx.stroke(path, with: .color(Color(hex: 0xA8C8F0, alpha: 0.42)), lineWidth: 1.5)
+    /// The sky's share of the weather: cloud cover and storm darkness, stars and sun hidden, the
+    /// glow of lightning, and a hurricane's wall of cloud coming in off the sea
+    static func drawSkyWeather(_ ctx: inout GraphicsContext, _ W: Double, _ H: Double, _ g: Game, _ v: View2D, _ day: Double) {
+        let L: LocalWeather = g.wxHere
+        let full: CGRect = mkRect(0, 0, W, H)
+        let cl: Double = L.cloud
+        if cl > 0.05 { fillRect(&ctx, full, Color(hex: 0x66707C, alpha: 0.7 * cl * max(0.3, day))) }
+        let storm: Double = clampD((cl - 0.65) * 2.5, 0, 1) * (0.5 + 0.5 * L.precip)
+        if storm > 0.02 { fillRect(&ctx, full, Color(hex: 0x262C36, alpha: 0.42 * storm * max(0.4, day))) }
+        if L.snow && L.precip > 0.4 { fillRect(&ctx, full, Color(hex: 0xD8E0EA, alpha: 0.3 * L.precip * day)) }
+    }
+
+    /// The weather in front of the distant hills: a deck of storm cloud gathering across the top of the
+    /// sky (drifting with the wind, parallax with the camera), a hurricane's wall coming in off the sea,
+    /// and dust blown across dry country
+    static func drawSkyWeatherFront(_ ctx: inout GraphicsContext, _ W: Double, _ H: Double, _ g: Game, _ v: View2D, _ day: Double) {
+        let L: LocalWeather = g.wxHere
+        let deck: Double = clampD((L.cloud - 0.35) / 0.55, 0, 1)
+        if deck > 0.02 { drawCloudDeck(&ctx, W, H, g, v, day, deck) }
+        if let h = g.weather.hurricane, h.stage.rawValue <= HurricaneStage.intensifying.rawValue {
+            drawStormWall(&ctx, W, H, g, h)
         }
     }
 
+    /// Low cloud across the top of the view, drawn with the cloud templates: more and darker the heavier
+    /// the sky, in two rows that drift with the wind at different speeds
+    static func drawCloudDeck(_ ctx: inout GraphicsContext, _ W: Double, _ H: Double, _ g: Game, _ v: View2D, _ day: Double, _ deck: Double) {
+        let art: CloudArt = CloudArt.shared
+        let px: Double = max(2.0, floor(v.tp / 8.0 * 1.25))
+        let night: UInt32 = 0x30343C
+        let tintDay: UInt32 = mixRGB(0xB8C0CC, 0x4A505A, clampD((deck - 0.4) * 1.4, 0, 1))
+        let tint: UInt32 = mixRGB(night, tintDay, day)
+        for row in 0..<2 {
+            let speed: Double = row == 0 ? 0.6 : 1.0
+            let par: Double = row == 0 ? 0.25 : 0.4
+            let yBase: Double = row == 0 ? -px * 4.0 : H * 0.06
+            let cellW: Double = 70.0 * px
+            let off: Double = (v.left * v.tp * par + g.weather.cloudDrift * v.tp * speed) / cellW
+            let c0: Int = Int(floor(off)) - 1
+            let c1: Int = c0 + Int(W / cellW) + 3
+            var c: GraphicsContext = ctx
+            c.opacity = min(1.0, deck * (row == 0 ? 0.95 : 0.85))
+            c.addFilter(.colorMultiply(rgbColor(row == 0 ? tint : mixRGB(tint, 0xFFFFFF, 0.12))))
+            for ci in c0...c1 {
+                let hsh: Double = hash2(ci, 51 + row, 707)
+                if hsh > 0.35 + 0.65 * deck { continue }
+                let kind: Int = Int(hash2(ci, 53 + row, 707) * Double(art.shapes.count)) % art.shapes.count
+                let b: PixelBuf = art.shapes[kind]
+                let x: Double = (Double(ci) - off) * cellW + hash2(ci, 55, 707) * cellW * 0.3
+                let y: Double = yBase + floor(hash2(ci, 57 + row, 707) * 6.0) * px
+                let img: Image = hash2(ci, 59, 707) < 0.5 ? art.images[kind] : art.flipped[kind]
+                c.draw(img, in: mkRect(floor(x / px) * px, y, Double(b.w) * px, Double(b.h) * px))
+            }
+        }
+    }
+
+    /// A towering wall of dark cloud on the sea-side horizon, growing as a hurricane comes in, with
+    /// curtains of rain hanging under it
+    static func drawStormWall(_ ctx: inout GraphicsContext, _ W: Double, _ H: Double, _ g: Game, _ h: HurricaneEvent) {
+        var prog: Double = clampD(h.t / max(1, h.stageDur), 0, 1)
+        if h.stage == .intensifying { prog = 1.0 + prog }
+        let width: Double = W * (0.22 + 0.3 * prog)
+        let east: Bool = h.side > 0
+        let step: Double = 8.0
+        var wall: Path = Path()
+        var shafts: Path = Path()
+        var sx: Double = 0
+        while sx < width {
+            let x: Double = east ? W - sx - step : sx
+            let n: Double = fbm1(sx / 60.0 + g.weather.t * 0.05, 4411, 3)
+            // the wall rises toward the open sea, its top billowing
+            let rise: Double = 0.35 + 0.5 * pow(1.0 - sx / width, 0.6) + 0.12 * n
+            let top: Double = floor(H * (0.7 - rise * 0.75) / 4.0) * 4.0
+            let base: Double = H * 0.7
+            wall.addRect(mkRect(x, top, step + 1.0, base - top))
+            if hash2(Int(sx / step), 3, 91) < 0.5 { shafts.addRect(mkRect(x + 2, base, 3, H * 0.2)) }
+            sx += step
+        }
+        ctx.fill(wall, with: .color(Color(hex: 0x2E333C, alpha: 0.88)))
+        ctx.fill(shafts, with: .color(Color(hex: 0x4A5464, alpha: 0.35)))
+    }
+
+    /// Lying snow (deeper where the wind drifts it), wet ground and puddles on the open surfaces in
+    /// view. Drawn over the terrain and under everything else, so the light map shades it like the ground.
+    static func drawGroundWeather(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
+        if g.world.dim != .overworld || !g.settings.weatherOn { return }
+        if g.weather.cells.isEmpty { return }
+        let x0: Int = Int(floor(v.left)) - 1
+        let x1: Int = Int(ceil(v.left + v.wTiles)) + 1
+        let tp: Double = v.tp
+        var snowP: Path = Path()
+        var wetP: Path = Path()
+        var pudP: Path = Path()
+        var anySnow: Bool = false
+        var anyWet: Bool = false
+        var wetSum: Double = 0
+        var wetN: Double = 0
+        let lee: Double = g.weather.wind >= 0 ? 1 : -1
+        let raining: Bool = g.wxHere.precip > 0.1 && !g.wxHere.snow
+        var ripples: Path = Path()
+        for x in x0...x1 {
+            let top: Int = g.world.rainTop(x)
+            if top <= 0 || top >= g.world.H - 2 { continue }
+            let wy: Double = Double(top)
+            if wy < v.top - 1 || wy > v.top + v.hTiles + 1 { continue }
+            let t: Tile = g.world.tile(x, top)
+            if t.liquid { continue }
+            let wx: Double = Double(x) + 0.5
+            let sc: Double = g.groundValue(wx, true)
+            let wet: Double = g.groundValue(wx, false)
+            let sx: Double = v.sx(Double(x))
+            let sy: Double = v.sy(wy)
+            if sc > 0.05 {
+                let h0: Double = hash2(x, 41, 3)
+                let dr: Double = 0.5 + 0.5 * sin(Double(x) * 0.37 * lee)
+                let hh: Double = tp * min(0.45, sc * (0.12 + 0.22 * h0 + 0.15 * dr))
+                let snapH: Double = max(2.0, floor(hh / 2.0) * 2.0)
+                snowP.addRect(mkRect(sx, sy - snapH + 2.0, tp + 0.5, snapH))
+                anySnow = true
+            }
+            if wet > 0.08 && t.solid && !isLeafTile(t) && sc < 0.3 {
+                wetP.addRect(mkRect(sx, sy, tp + 0.5, max(2.0, tp * 0.14)))
+                wetSum += wet
+                wetN += 1
+                anyWet = true
+                let level: Bool = g.world.rainTop(x - 1) == top && g.world.rainTop(x + 1) == top
+                if wet > 0.35 && t != .sand && level && hash2(x, 43, 5) < (wet - 0.3) * 0.9 {
+                    pudP.addRect(mkRect(sx + 1.0, sy - 2.0, tp - 2.0, 4.0))
+                    if raining && hash2(x, Int(g.clock * 3.0), 47) < 0.5 {
+                        let rx: Double = sx + tp * (0.2 + 0.6 * hash2(x, Int(g.clock * 3.0), 48))
+                        ripples.addRect(mkRect(rx - 2.0, sy - 3.0, 4.0, 1.0))
+                    }
+                }
+            }
+        }
+        if anyWet {
+            let a: Double = 0.22 * clampD(wetSum / max(1, wetN), 0, 1)
+            ctx.fill(wetP, with: .color(Color(hex: 0x10203A, alpha: a)))
+            ctx.fill(pudP, with: .color(Color(hex: 0x6A9AD0, alpha: 0.62)))
+            ctx.fill(ripples, with: .color(Color(hex: 0xD8ECFF, alpha: 0.7)))
+        }
+        if anySnow { ctx.fill(snowP, with: .color(Color(hex: 0xF4F8FF, alpha: 0.95))) }
+    }
+
+    /// Rain and snow falling in world space, slanted and carried by the wind and stopping on the first
+    /// thing in their way; splashes where rain lands; hail from the pool; blown dust and grass bent
+    /// over in the wind
+    static func drawPrecip(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
+        if g.world.dim != .overworld || !g.settings.weatherOn { return }
+        let dens: Double = clampD(g.settings.weatherParticles, 0.2, 1.0)
+        let tp: Double = v.tp
+        let bands: Int = 8
+        var amt: [Double] = [Double](repeating: 0, count: bands)
+        var cold: [Bool] = [Bool](repeating: false, count: bands)
+        var anyP: Double = 0
+        let midY: Double = v.top + v.hTiles * 0.5
+        for b in 0..<bands {
+            let x: Double = v.left + v.wTiles * (Double(b) + 0.5) / Double(bands)
+            let L: LocalWeather = g.weatherAt(x, midY)
+            amt[b] = L.precip
+            cold[b] = L.snow
+            anyP = max(anyP, L.precip)
+        }
+        let wind: Double = g.wxHere.wind
+        let clock: Double = g.clock
+        if anyP > 0.02 {
+            let n: Int = Int(300.0 * dens)
+            let span: Double = v.hTiles + 6.0
+            let cell: Double = v.wTiles + 8.0
+            let x0: Double = v.left - 4.0
+            var rain: Path = Path()
+            var heavy: Path = Path()
+            var snow: Path = Path()
+            var streak: Path = Path()
+            for i in 0..<n {
+                let fx: Double = hash2(i, 11, 77)
+                let fy: Double = hash2(i, 12, 77)
+                let fz: Double = hash2(i, 13, 77)
+                let fw: Double = hash2(i, 14, 77)
+                // which band it falls in decides whether it falls at all (storm cells have edges)
+                let guess: Double = x0 + fx * cell
+                let bi: Int = clampI(Int((guess - v.left) / v.wTiles * Double(bands)), 0, bands - 1)
+                let a: Double = amt[bi]
+                if fw > a { continue }
+                let isSnow: Bool = cold[bi]
+                let speed: Double = isSnow ? 2.6 + fz * 1.6 : 19.0 + fz * 7.0
+                let vx: Double = isSnow ? wind * 0.85 : wind * 0.75
+                let fallen: Double = (fy * span + clock * speed).truncatingRemainder(dividingBy: span)
+                let wy: Double = v.top - 3.0 + fallen
+                var raw: Double = fx * cell + vx * (fallen / speed)
+                if isSnow { raw += sin(clock * 1.3 + Double(i)) * 0.5 }
+                let rel: Double = raw.truncatingRemainder(dividingBy: cell)
+                let wx: Double = x0 + (rel < 0 ? rel + cell : rel)
+                if wy >= Double(g.world.rainTop(Int(floor(wx)))) { continue }
+                let sx: Double = v.sx(wx)
+                let sy: Double = v.sy(wy)
+                if isSnow {
+                    if abs(vx) > 7.0 {
+                        let l: Double = tp * 0.45
+                        streak.move(to: mkPoint(sx, sy))
+                        streak.addLine(to: mkPoint(sx - (vx > 0 ? l : -l), sy - l * 0.25))
+                    } else {
+                        let s: Double = fz > 0.7 ? 3.0 : 2.0
+                        snow.addRect(mkRect(sx, sy, s, s))
+                    }
+                } else {
+                    let len: Double = (a > 0.6 ? 0.75 : 0.5) * tp
+                    let dx: Double = vx / speed * len
+                    if a > 0.6 && fz < 0.5 {
+                        heavy.move(to: mkPoint(sx, sy))
+                        heavy.addLine(to: mkPoint(sx - dx, sy - len))
+                    } else {
+                        rain.move(to: mkPoint(sx, sy))
+                        rain.addLine(to: mkPoint(sx - dx, sy - len))
+                    }
+                }
+            }
+            ctx.stroke(rain, with: .color(Color(hex: 0xA8C8F0, alpha: 0.45)), lineWidth: 1.5)
+            ctx.stroke(heavy, with: .color(Color(hex: 0x9CBCE4, alpha: 0.55)), lineWidth: 2.0)
+            ctx.fill(snow, with: .color(Color.white.opacity(0.85)))
+            ctx.stroke(streak, with: .color(Color.white.opacity(0.7)), lineWidth: 2.0)
+            drawSplashes(&ctx, g, v, amt, cold)
+        }
+        drawHail(&ctx, g, v)
+        drawWindFX(&ctx, g, v)
+    }
+
+    /// Little crowns of spray where rain is landing on open ground
+    static func drawSplashes(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D, _ amt: [Double], _ cold: [Bool]) {
+        let x0: Int = Int(floor(v.left))
+        let x1: Int = Int(ceil(v.left + v.wTiles))
+        let bands: Int = amt.count
+        let tick: Int = Int(g.clock * 7.0)
+        var p: Path = Path()
+        var x: Int = x0
+        while x <= x1 {
+            let bi: Int = clampI(Int((Double(x) - v.left) / v.wTiles * Double(bands)), 0, bands - 1)
+            let a: Double = amt[bi]
+            if a > 0.05 && !cold[bi] && hash2(x, tick, 9) < a * 0.3 {
+                let top: Int = g.world.rainTop(x)
+                let wy: Double = Double(top)
+                if top > 0 && v.visible(Double(x), wy, 1) && !g.world.tile(x, top).liquid {
+                    let ph: Double = (g.clock * 7.0).truncatingRemainder(dividingBy: 1.0)
+                    let sx: Double = v.sx(Double(x) + 0.2 + 0.6 * hash2(x, tick, 10))
+                    let sy: Double = v.sy(wy)
+                    let up: Double = 3.0 + 4.0 * ph
+                    p.addRect(mkRect(sx - 3.0 - ph * 2.0, sy - up, 2, 2))
+                    p.addRect(mkRect(sx + 1.0 + ph * 2.0, sy - up, 2, 2))
+                }
+            }
+            x += 1
+        }
+        ctx.fill(p, with: .color(Color(hex: 0xC8DCF4, alpha: 0.6)))
+    }
+
+    static func drawHail(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
+        if g.hailPool.isEmpty { return }
+        var p: Path = Path()
+        var any: Bool = false
+        for s in g.hailPool where s.on {
+            if !v.visible(s.x, s.y, 1) { continue }
+            let r: Double = max(2.0, s.size * v.tp)
+            p.addRect(mkRect(v.sx(s.x) - r * 0.5, v.sy(s.y) - r * 0.5, r, r))
+            any = true
+        }
+        if !any { return }
+        ctx.fill(p, with: .color(Color(hex: 0xF0F8FF, alpha: 0.95)))
+        ctx.stroke(p, with: .color(Color(hex: 0x9AB0C8, alpha: 0.6)), lineWidth: 1)
+    }
+
+    /// Streaks of blown air (dust in dry country) and the grass bending over in the wind
+    static func drawWindFX(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
+        let wind: Double = g.wxHere.wind
+        let aw: Double = abs(wind)
+        if aw < 2.5 { return }
+        let tp: Double = v.tp
+        let dens: Double = clampD(g.settings.weatherParticles, 0.2, 1.0)
+        if aw > 5.0 {
+            let n: Int = min(48, Int((aw - 5.0) * 4.0 * dens))
+            let cell: Double = v.wTiles + 8.0
+            let x0: Double = v.left - 4.0
+            let dry: Bool = g.biomeHere == .desert || g.biomeHere == .savanna
+            var p: Path = Path()
+            for i in 0..<n {
+                let fx: Double = hash2(i, 21, 55)
+                let fy: Double = hash2(i, 22, 55)
+                let fz: Double = hash2(i, 23, 55)
+                let raw: Double = (fx * cell + g.clock * wind * (1.1 + fz)).truncatingRemainder(dividingBy: cell)
+                let wx: Double = x0 + (raw < 0 ? raw + cell : raw)
+                let wy: Double = v.top + fy * v.hTiles
+                if wy >= Double(g.world.rainTop(Int(floor(wx)))) { continue }
+                let l: Double = tp * (0.8 + 1.2 * fz) * min(1.6, aw / 10.0)
+                let sx: Double = v.sx(wx)
+                let sy: Double = floor(v.sy(wy))
+                p.addRect(mkRect(wind > 0 ? sx - l : sx, sy, l, dry ? 2 : 1))
+            }
+            ctx.fill(p, with: .color(dry ? Color(hex: 0xD8C890, alpha: 0.4) : Color.white.opacity(0.22)))
+        }
+        // grass bent over by the wind on open ground near the surface
+        let x0: Int = Int(floor(v.left))
+        let x1: Int = Int(ceil(v.left + v.wTiles))
+        let lean: Double = clampD(wind / 14.0, -1, 1) * 0.3
+        var blades: Path = Path()
+        var any: Bool = false
+        for x in x0...x1 {
+            let top: Int = g.world.rainTop(x)
+            if top <= 0 || !v.visible(Double(x), Double(top), 1) { continue }
+            let t: Tile = g.world.tile(x, top)
+            if t != .grass && t != .dryGrass && t != .jungleGrass && t != .mossGrass { continue }
+            let sx: Double = v.sx(Double(x))
+            let sy: Double = v.sy(Double(top))
+            for k in 0..<2 {
+                let bx: Double = sx + tp * (0.25 + 0.5 * Double(k))
+                let sway: Double = (lean + sin(g.clock * 3.1 + Double(x) * 0.9 + Double(k)) * 0.06 * g.weather.gust) * tp
+                blades.move(to: mkPoint(bx, sy + 1.0))
+                blades.addLine(to: mkPoint(bx + sway, sy - tp * 0.26))
+                any = true
+            }
+        }
+        if any { ctx.stroke(blades, with: .color(Color(hex: 0x6EB848, alpha: 0.9)), lineWidth: max(1.5, tp * 0.07)) }
+    }
+
+    /// The tornado: a swaying funnel of grey bands that turn as they rise, debris flung round it and
+    /// a skirt of dust at its foot. While forming it only reaches part of the way down.
+    static func drawTornado(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
+        guard let e = g.weather.tornado, g.world.dim == .overworld, g.settings.weatherOn else { return }
+        let fn: Double = e.funnel
+        if fn <= 0.02 { return }
+        let ground: Double = g.tornadoGround > 0 ? g.tornadoGround : Double(g.world.surfaceY(Int(floor(e.x))))
+        let cloudBase: Double = ground - 32.0
+        if !v.visible(e.x, ground - 22.0, 40) { return }
+        let tp: Double = v.tp
+        let px: Double = tp / 8.0
+        let reach: Double = e.phase == 0 ? cloudBase + (ground - cloudBase) * min(1.0, fn / 0.55) * 0.75 : ground
+        var dark: Path = Path()
+        var light: Path = Path()
+        var y: Double = cloudBase
+        let bandH: Double = 0.5
+        while y < reach {
+            let hf: Double = (ground - y) / (ground - cloudBase)
+            let w: Double = (0.6 + 6.8 * pow(hf, 1.35)) * (0.5 + 0.5 * fn)
+            let sway: Double = sin(g.clock * 1.6 + hf * 3.0) * (0.4 + hf * 1.6)
+            let cx: Double = e.x + sway
+            let sx: Double = floor(v.sx(cx - w) / px) * px
+            let ex: Double = floor(v.sx(cx + w) / px) * px
+            let sy: Double = floor(v.sy(y) / px) * px
+            let stripe: Int = Int(floor(hf * 30.0 - g.clock * 5.0)) & 3
+            let r: CGRect = mkRect(sx, sy, max(px, ex - sx), bandH * tp + 1.0)
+            if stripe == 0 { light.addRect(r) } else { dark.addRect(r) }
+            y += bandH
+        }
+        let a: Double = min(1.0, fn * 1.2)
+        ctx.fill(dark, with: .color(Color(hex: 0x40434A, alpha: 0.95 * a)))
+        ctx.fill(light, with: .color(Color(hex: 0x5E626B, alpha: 0.95 * a)))
+        if e.phase == 0 { return }
+        // debris whirling round it, and dust at the foot
+        var deb: Path = Path()
+        var leaf: Path = Path()
+        for i in 0..<30 {
+            let hf: Double = hash2(i, 61, 7) * 0.7
+            let wy: Double = ground - hf * (ground - cloudBase)
+            let w: Double = (0.6 + 6.8 * pow(hf, 1.35)) * 1.2 + 0.7
+            let ang: Double = g.clock * (3.0 + hash2(i, 62, 7) * 2.0) + Double(i) * 1.7
+            let wx: Double = e.x + cos(ang) * w + sin(g.clock * 1.6 + hf * 3.0) * (0.4 + hf * 1.6)
+            let s: Double = max(2.0, tp * (0.12 + 0.12 * hash2(i, 63, 7)))
+            let r: CGRect = mkRect(v.sx(wx), v.sy(wy), s, s)
+            if i % 3 == 0 { leaf.addRect(r) } else { deb.addRect(r) }
+        }
+        ctx.fill(deb, with: .color(Color(hex: 0x6A5A44, alpha: 0.9 * a)))
+        ctx.fill(leaf, with: .color(Color(hex: 0x4E7A3A, alpha: 0.9 * a)))
+        var dust: Path = Path()
+        for k in 0..<5 {
+            let off: Double = (Double(k) - 2.0) * 1.6 + sin(g.clock * 2.0 + Double(k)) * 0.5
+            let rw: Double = (2.2 + hash2(k, 64, 7) * 1.4) * tp
+            let rh: Double = rw * 0.45
+            dust.addEllipse(in: mkRect(v.sx(e.x + off) - rw * 0.5, v.sy(ground) - rh * 0.9, rw, rh))
+        }
+        ctx.fill(dust, with: .color(Color(hex: 0x8A7A60, alpha: 0.45 * a)))
+    }
+
+    /// Storm waves along the open sea's surface (a hurricane or a strong wind), with foam on the crests
+    static func drawWaves(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
+        if g.world.dim != .overworld || !g.settings.weatherOn { return }
+        let aw: Double = abs(g.weather.wind)
+        let rough: Double = max(g.wxHere.hurricane, clampD((aw - 6.0) / 10.0, 0, 1) * 0.6)
+        if rough < 0.05 { return }
+        let sea: Int = WorldGen.sea
+        if Double(sea) < v.top - 3.0 || Double(sea) > v.top + v.hTiles + 3.0 { return }
+        let tp: Double = v.tp
+        let dir: Double = g.weather.wind >= 0 ? 1 : -1
+        var body: Path = Path()
+        var foam: Path = Path()
+        let x0: Int = Int(floor(v.left))
+        let x1: Int = Int(ceil(v.left + v.wTiles))
+        for x in x0...x1 {
+            // the water's surface at sea level, or a block or two above it where a surge has come in
+            var top: Int = -1
+            for y in (sea - 2)...sea where g.world.tile(x, y) == .water && g.world.tile(x, y - 1) == .air {
+                top = y
+                break
+            }
+            if top < 0 { continue }
+            let sy: Double = v.sy(Double(top))
+            let ph: Double = Double(x) * 0.42 - g.clock * 2.6 * dir
+            let s: Double = sin(ph)
+            let hgt: Double = floor(rough * 1.6 * (0.55 + 0.45 * s) * tp / 2.0) * 2.0
+            let sx: Double = v.sx(Double(x))
+            body.addRect(mkRect(sx, sy - hgt, tp + 0.5, hgt))
+            if s > 0.55 { foam.addRect(mkRect(sx, sy - hgt - 2.0, tp + 0.5, 3.0)) }
+        }
+        ctx.fill(body, with: .color(Color(hex: 0x3B6FC8, alpha: 0.78)))
+        ctx.fill(foam, with: .color(Color.white.opacity(0.75)))
+    }
+
+    /// Lightning (drawn over the darkness, so it lights up the night) and the warning glow where a
+    /// strike is about to land
+    static func drawBolts(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
+        let tp: Double = v.tp
+        if let m = g.strikeMark {
+            let k: Double = clampD(1.0 - m.t / max(0.01, m.total), 0, 1)
+            let pulse: Double = 0.5 + 0.5 * sin(g.clock * 18.0)
+            let a: Double = (0.25 + 0.5 * k) * (g.settings.reduceFlashes ? 0.7 : (0.6 + 0.4 * pulse))
+            let cx: Double = v.sx(m.x)
+            let cy: Double = v.sy(m.y)
+            fillRect(&ctx, mkRect(cx - tp * 0.15, cy - tp * 6.0, tp * 0.3, tp * 6.0), Color(hex: 0xCFE4FF, alpha: a * 0.35))
+            fillOval(&ctx, mkRect(cx - tp * 1.2, cy - tp * 0.4, tp * 2.4, tp * 0.8), Color(hex: 0xCFE4FF, alpha: a * 0.6))
+        }
+        if g.bolts.isEmpty { return }
+        let soft: Bool = g.settings.reduceFlashes
+        for b in g.bolts {
+            let k: Double = clampD(b.life / b.maxLife, 0, 1)
+            // a double flicker (steady when flashes are turned down)
+            let flick: Double = soft ? 0.8 : ((b.life > b.maxLife * 0.55 || b.life < b.maxLife * 0.3) ? 1.0 : 0.45)
+            var main: Path = Path()
+            for (i, p) in b.pts.enumerated() {
+                let pt: CGPoint = mkPoint(v.sx(p.0), v.sy(p.1))
+                if i == 0 { main.move(to: pt) } else { main.addLine(to: pt) }
+            }
+            var forks: Path = Path()
+            for f in b.forks {
+                for (i, p) in f.enumerated() {
+                    let pt: CGPoint = mkPoint(v.sx(p.0), v.sy(p.1))
+                    if i == 0 { forks.move(to: pt) } else { forks.addLine(to: pt) }
+                }
+            }
+            ctx.stroke(main, with: .color(Color(hex: 0x9EC0FF, alpha: 0.35 * k * flick)), lineWidth: max(4.0, tp * 0.45))
+            ctx.stroke(main, with: .color(Color.white.opacity(k * flick)), lineWidth: 2.5)
+            ctx.stroke(forks, with: .color(Color(hex: 0xDDE8FF, alpha: 0.8 * k * flick)), lineWidth: 1.5)
+        }
+    }
+
+    /// The air itself: a whiteout in a blizzard, grey murk in heavy rain, the dark under a tornado,
+    /// frost creeping in at the edges when the player is freezing, and lightning's flash
+    static func drawWeatherOverlay(_ ctx: inout GraphicsContext, _ W: Double, _ H: Double, _ g: Game, _ v: View2D) {
+        if g.world.dim != .overworld { return }
+        let L: LocalWeather = g.wxHere
+        let full: CGRect = mkRect(0, 0, W, H)
+        // heavy cloud dims the daylight evenly over everything (a storm by day is dark)
+        let dim: Double = clampD((L.cloud - 0.55) * 2.2, 0, 1) * g.dayFactor
+        if g.settings.weatherOn && dim > 0.02 { fillRect(&ctx, full, Color(hex: 0x0A0E16, alpha: 0.22 * dim)) }
+        if g.settings.weatherOn && g.shelterLevel <= 1 {
+            if L.fog > 0.02 {
+                if L.snow {
+                    fillRect(&ctx, full, Color(hex: 0xDDE5EE, alpha: min(0.55, L.fog * 0.6)))
+                } else {
+                    fillRect(&ctx, full, Color(hex: 0x7A8696, alpha: min(0.25, L.fog * 0.35)))
+                }
+            }
+            if L.tornado > 0.05 { fillRect(&ctx, full, Color(hex: 0x1E2228, alpha: 0.22 * L.tornado)) }
+            // blowing dust in dry country
+            let aw: Double = abs(L.wind)
+            let b: Biome = g.biomeHere
+            if aw > 6 && (b == .desert || b == .savanna) {
+                fillRect(&ctx, full, Color(hex: 0xD2B47A, alpha: 0.3 * clampD((aw - 6.0) / 8.0, 0, 1) * max(0.35, g.dayFactor)))
+            }
+        }
+        if g.bodyCold > 0.3 { edgeVignette(&ctx, W, H, 0xCFEFFF, (g.bodyCold - 0.3) * 0.7) }
+        if g.skyFlash > 0.01 {
+            let inside: Double = g.shelterLevel >= 3 ? 0.3 : 1.0
+            let a: Double = g.skyFlash * (g.settings.reduceFlashes ? 0.25 : 0.38) * inside
+            fillRect(&ctx, full, Color(hex: 0xEEF4FF, alpha: a))
+        }
+    }
+}
+
+// MARK: - Weather devices: station, siren, lightning rod, turbine, rain barrels, vane, heater
+// Every device reads the simulation itself (a station's forecast is the simulation's own plan, a vane
+// points where the wind actually blows, a barrel fills with the rain that actually falls on it). Their
+// places come from a per-chunk list that is rebuilt only when the chunk changes.
+
+struct DeviceSpot {
+    var x: Int
+    var y: Int
+    var t: Tile
+}
+
+/// Blocks built to stand up to storms: the wind never moves them, and walls or a roof of them make a
+/// storm shelter
+func isStormproof(_ t: Tile) -> Bool {
+    switch t {
+    case .stormBrick, .sandbag, .shutterClosed, .shingles: return true
+    default: return false
+    }
+}
+
+func isWeatherDevice(_ t: Tile) -> Bool {
+    switch t {
+    case .weatherStation, .dopplerStation, .stormSiren, .lightningRod, .windTurbine, .rainBarrel, .rainCistern, .weatherVane: return true
+    default: return false
+    }
+}
+
+/// How far a lightning rod draws strikes (blocks to either side)
+let rodReach: Double = 14.0
+/// How far a turbine's charge reaches a Doppler station
+let turbineReach: Double = 10.0
+
+extension World {
+    /// Re-reads a chunk's weather facts if it has changed since: per column, the row rain first stops
+    /// at (anything solid, glass, leaves, platforms, water), and where its weather devices are
+    func weatherScan(_ c: Chunk) {
+        if c.wxRev == c.rev && c.wxTop.count == chunkW { return }
+        c.wxRev = c.rev
+        if c.wxTop.count != chunkW { c.wxTop = [Int](repeating: c.H, count: chunkW) }
+        c.wxDev.removeAll(keepingCapacity: true)
+        let H: Int = c.H
+        for lx in 0..<chunkW {
+            let base: Int = lx * H
+            var top: Int = H
+            var y: Int = 0
+            while y < H {
+                let raw: Int = Int(c.tiles[base + y])
+                if raw != 0 {
+                    if top == H && Tile.rainStopTable[raw] { top = y }
+                    if Tile.deviceTable[raw] { c.wxDev.append(DeviceSpot(x: c.x0 + lx, y: y, t: Tile.make(UInt8(raw)))) }
+                }
+                y += 1
+            }
+            c.wxTop[lx] = c.hasSky ? top : 0
+        }
+    }
+
+    /// The first row rain (or hail, or lightning) stops at in column x; 0 where nothing is loaded
+    func rainTop(_ x: Int) -> Int {
+        let cx: Int = floorDiv(x, chunkW)
+        guard let c = chunk(cx) else { return 0 }
+        weatherScan(c)
+        return c.wxTop[x - cx * chunkW]
+    }
+
+    /// Weather devices of the given kinds between columns x0 and x1 (loaded chunks only)
+    func devices(_ x0: Int, _ x1: Int, _ kinds: [Tile]) -> [DeviceSpot] {
+        var out: [DeviceSpot] = []
+        let c0: Int = floorDiv(x0, chunkW)
+        let c1: Int = floorDiv(x1, chunkW)
+        if c1 < c0 { return out }
+        for cx in c0...c1 {
+            guard let c = chunks[cx] else { continue }
+            weatherScan(c)
+            for d in c.wxDev where d.x >= x0 && d.x <= x1 && kinds.contains(d.t) { out.append(d) }
+        }
+        return out
+    }
+}
+
+/// What a weather station's screen shows, a line at a time
+struct StationLine {
+    var kind: WeatherKind?
+    var snow: Bool = false
+    var text: String
+    var sub: String = ""
+    var color: UInt32 = 0xE8F0E8
+}
+
+func roughWhen(_ s: Double) -> String {
+    if s < 90 { return "soon" }
+    if s < 300 { return "in a few minutes" }
+    if s < 600 { return "later on" }
+    return "much later"
+}
+
+func minutesText(_ s: Double) -> String {
+    let m: Int = Int((s / 60.0).rounded())
+    if m <= 0 { return "under a minute" }
+    return m == 1 ? "about 1 min" : joinText("about ", String(m), " min")
+}
+
+func windWords(_ w: Double) -> String {
+    let a: Double = abs(w)
+    let from: String = w > 0 ? "west" : "east"
+    let speed: String = String(Int(a.rounded()))
+    var how: String = "calm"
+    if a >= 13 { how = "gale" } else if a >= 8 { how = "strong" } else if a >= 4 { how = "breezy" } else if a >= 1.5 { how = "light" }
+    if a < 0.8 { return "Calm" }
+    return joinText("Wind ", speed, " blocks/s from the ", from, " (", how, ")")
+}
+
+extension Game {
+    /// The nearest lightning rod whose reach covers column x
+    func rodCovering(_ x: Double) -> DeviceSpot? {
+        let ix: Int = Int(floor(x))
+        let r: Int = Int(rodReach)
+        var best: DeviceSpot? = nil
+        var bd: Int = Int.max
+        for d in world.devices(ix - r, ix + r, [.lightningRod]) {
+            let dd: Int = abs(d.x - ix)
+            // a rod buried under a roof is no use: it has to stand in the open
+            if d.y >= world.rainTop(d.x) && d.y > 0 { continue }
+            if dd < bd {
+                bd = dd
+                best = d
+            }
+        }
+        return best
+    }
+
+    func deviceKey(_ d: DeviceSpot) -> String { return joinText(String(d.x), ",", String(d.y)) }
+
+    /// Rain barrels fill with the rain that falls on them, turbines store the wind's energy (and run
+    /// Doppler stations near them), and sirens sound when a storm worth warning of is near
+    func updateWeatherDevices(_ dt: Double) {
+        wxDevT -= dt
+        if wxDevT > 0 { return }
+        let step: Double = 0.5 - wxDevT
+        wxDevT = 0.5
+        sirenLevel = 0
+        if world.dim != .overworld { return }
+        let px: Int = Int(floor(pb.x))
+        let list: [DeviceSpot] = world.devices(px - 96, px + 96, [.rainBarrel, .rainCistern, .windTurbine, .stormSiren, .dopplerStation])
+        if list.isEmpty { return }
+        let warn: Bool = settings.weatherOn && sirenWorthy()
+        for d in list {
+            let k: String = deviceKey(d)
+            switch d.t {
+            case .rainBarrel, .rainCistern:
+                let cap: Double = d.t == .rainBarrel ? 8 : 32
+                let open: Bool = d.y < world.rainTop(d.x)
+                let L: LocalWeather = weatherAt(Double(d.x) + 0.5, Double(d.y))
+                if open && L.precip > 0.02 {
+                    let rate: Double = (L.snow ? 0.012 : 0.04) * (d.t == .rainCistern ? 2.0 : 1.0)
+                    weather.store[k] = min(cap, (weather.store[k] ?? 0) + L.precip * rate * step)
+                }
+            case .windTurbine:
+                let open: Bool = d.y - 1 < world.rainTop(d.x) || world.tile(d.x, d.y - 1) == .air
+                if open && settings.weatherOn {
+                    // like a real turbine it needs some wind before it turns (2 blocks a second)
+                    let w: Double = abs(weatherAt(Double(d.x) + 0.5, Double(d.y)).wind)
+                    weather.store[k] = min(100, (weather.store[k] ?? 0) + max(0, w - 2.0) * 0.35 * step)
+                }
+            case .dopplerStation:
+                // the radar draws a little charge from a turbine close by
+                if let t = poweringTurbine(d) {
+                    let tk: String = deviceKey(t)
+                    weather.store[tk] = max(0, (weather.store[tk] ?? 0) - 0.1 * step)
+                }
+            case .stormSiren:
+                if warn {
+                    let dist: Double = abs(Double(d.x) - pb.x)
+                    sirenLevel = max(sirenLevel, clampD(1.0 - dist / 64.0, 0, 1))
+                }
+            default:
+                break
+            }
+        }
+    }
+
+    /// Storms a siren sounds for: a tornado forming or on the ground, a hurricane, a blizzard
+    func sirenWorthy() -> Bool {
+        if let e = weather.tornado, e.phase < 2, abs(e.x - pb.x) < 200 { return true }
+        if let h = weather.hurricane, h.stage != .clearing { return true }
+        if weather.kind == .blizzard && settings.allowBlizzard && wxHere.snow { return true }
+        return false
+    }
+
+    /// A turbine with charge to spare close enough to run a Doppler station
+    func poweringTurbine(_ d: DeviceSpot) -> DeviceSpot? {
+        let r: Int = Int(turbineReach)
+        for t in world.devices(d.x - r, d.x + r, [.windTurbine]) where abs(t.y - d.y) <= r {
+            if (weather.store[deviceKey(t)] ?? 0) > 2 { return t }
+        }
+        return nil
+    }
+
+    /// Tapping a weather device
+    func useWeatherDevice(_ tx: Int, _ ty: Int, _ t: Tile) {
+        let d = DeviceSpot(x: tx, y: ty, t: t)
+        let k: String = deviceKey(d)
+        switch t {
+        case .weatherStation, .dopplerStation:
+            stationAt = d
+            showWeather = true
+            sfx(.tap, 0.6)
+            bumpHUD()
+        case .stormSiren:
+            let on: Bool = settings.weatherOn && sirenWorthy()
+            say(on ? "The siren is sounding: a dangerous storm is near. Take shelter!" : "Storm siren: it sounds by itself when a tornado, hurricane or blizzard comes near.", 3.0)
+        case .lightningRod:
+            let open: Bool = ty < world.rainTop(tx)
+            say(open ? "Lightning rod: strikes within 14 blocks either side come down here, harmlessly." : "This rod is under cover. A lightning rod only works out in the open, on top of things.", 3.0)
+        case .windTurbine:
+            let charge: Double = weather.store[k] ?? 0
+            if let st = heldStack, case .gun(.stormRod) = st.item, charge >= 50 {
+                var n: Int = 0
+                for i in 0..<inv.slots.count {
+                    if var s = inv.slots[i], case .gun(.stormRod) = s.item, s.extra < GunType.stormRod.magazine {
+                        s.extra = GunType.stormRod.magazine
+                        inv.slots[i] = s
+                        n += 1
+                    }
+                }
+                if n > 0 {
+                    weather.store[k] = charge - 50
+                    sfx(.zap, 0.6)
+                    say("The turbine's charge fills your storm rod.", 2.0)
+                    bumpHUD()
+                    return
+                }
+            }
+            let w: Double = abs(weatherAt(Double(tx) + 0.5, Double(ty)).wind)
+            say(joinText("Wind turbine: ", String(Int(charge.rounded())), "% charged (", w > 0.5 ? joinText("turning at ", String(Int(w.rounded())), " blocks/s of wind") : "becalmed", "). Runs a Doppler station within 10 blocks; tap it holding a storm rod to recharge the rod."), 3.5)
+        case .rainBarrel, .rainCistern:
+            let cap: Double = t == .rainBarrel ? 8 : 32
+            let have: Double = weather.store[k] ?? 0
+            if have >= 1.0 {
+                weather.store[k] = have - 1.0
+                giveItem(.gadget(.waterFlask), 1)
+                sfx(.splash, 0.5)
+                say(joinText("You fill a flask. ", String(Int(have - 1.0)), " of ", String(Int(cap)), " left."), 2.0)
+            } else {
+                say(joinText(t == .rainBarrel ? "Rain barrel" : "Rain cistern", ": ", String(format: "%.1f", have), " of ", String(Int(cap)), ". It fills when rain falls on it."), 2.5)
+            }
+        case .weatherVane:
+            let w: Double = weatherAt(Double(tx) + 0.5, Double(ty)).wind
+            say(joinText("Weather vane: ", windWords(w), "."), 2.5)
+        case .shutterClosed, .shutterOpen:
+            world.set(tx, ty, t == .shutterClosed ? .shutterOpen : .shutterClosed)
+            sfx(.door, 0.6)
+            light.valid = false
+        case .heater:
+            say("Heater: keeps you warm when you stand close to it, without the smoke of a fire.", 2.5)
+        default:
+            break
+        }
+    }
+
+    /// What the station that was tapped shows (a Doppler station near a charged turbine shows more,
+    /// and more exactly)
+    func stationReport() -> [StationLine] {
+        var out: [StationLine] = []
+        guard let st = stationAt else { return out }
+        let doppler: Bool = st.t == .dopplerStation
+        let powered: Bool = doppler && poweringTurbine(st) != nil
+        if !settings.weatherOn {
+            out.append(StationLine(kind: .clear, text: "The weather is switched off", sub: "Turn it on in Settings (WEATHER) to see forecasts."))
+            return out
+        }
+        let L: LocalWeather = weatherAt(Double(st.x) + 0.5, Double(st.y))
+        let fc: [ForecastLine] = forecast()
+        let now: ForecastLine = fc[0]
+        out.append(StationLine(kind: weather.kind, snow: L.snow, text: joinText("Now: ", weatherLabel(weather.kind, snow: L.snow)), sub: joinText(powered ? minutesText(now.dur) : roughWhen(now.dur), " more"), color: 0xFFFFFF))
+        let p: Double = pressureNow()
+        let trend: Double = pressureNext() - p
+        let tr: String = trend < -6 ? "falling fast" : (trend < -2 ? "falling" : (trend > 2 ? "rising" : "steady"))
+        let temp: String = L.chill > 0.8 ? "freezing" : (L.chill > 0.5 ? "cold" : (L.chill > 0.25 ? "cool" : (L.hot ? "hot" : "mild")))
+        out.append(StationLine(text: windWords(L.wind), sub: joinText("Pressure ", String(Int(p.rounded())), " hPa, ", tr, " · ", temp)))
+        // warnings from the simulation's events
+        if let e = weather.tornado {
+            let d: Double = e.x - pb.x
+            var line: String = joinText(e.phase == 0 ? "TORNADO FORMING " : "TORNADO ", String(Int(abs(d).rounded())), " blocks ", d > 0 ? "east" : "west")
+            var sub: String = joinText("Moving ", e.dir > 0 ? "east" : "west")
+            if powered {
+                let coming: Bool = (d > 0) != (e.dir > 0)
+                if coming && e.phase <= 1 {
+                    let eta: Double = abs(d) / max(0.5, e.speed) + (e.phase == 0 ? max(0, e.warnDur - e.t) : 0)
+                    sub = joinText(sub, " · reaches you in ", minutesText(eta))
+                } else {
+                    sub = joinText(sub, " · moving away from you")
+                }
+                line = joinText(line, String(format: " · strength %d", Int((e.strength * 5.0).rounded())))
+            }
+            out.append(StationLine(kind: .tornado, text: line, sub: sub, color: 0xFF7060))
+        }
+        if let h = weather.hurricane {
+            let sub: String = powered ? joinText("Over in ", minutesText(h.timeLeft()), " · sea to the ", h.side > 0 ? "east" : "west") : "Stay off the coast and out of boats"
+            out.append(StationLine(kind: .hurricane, text: joinText("HURRICANE: ", h.stage.name), sub: sub, color: 0xFF7060))
+        }
+        if doppler && !powered { out.append(StationLine(text: "Radar unpowered", sub: "Put a charged wind turbine within 10 blocks for the full forecast", color: 0xFFC060)) }
+        // the rain that is on its way (radar)
+        if powered && L.precip < 0.05 && weather.precip > 0.15 {
+            let up: Double = weather.wind >= 0 ? -1 : 1
+            var dx: Double = 8
+            while dx <= 240 {
+                if coverAt(pb.x + up * dx) > 0.4 {
+                    let speed: Double = max(0.3, abs(weather.wind) * 0.55)
+                    out.append(StationLine(text: joinText("Rain ", String(Int(dx)), " blocks upwind"), sub: joinText("Reaches you in ", minutesText(dx / speed))))
+                    break
+                }
+                dx += 8
+            }
+        }
+        // the plan
+        let n: Int = powered ? fc.count : min(3, fc.count)
+        if n > 1 {
+            for i in 1..<n {
+                let f: ForecastLine = fc[i]
+                let when: String = powered ? joinText("In ", minutesText(f.startsIn), ", for ", minutesText(f.dur)) : roughWhen(f.startsIn).capitalized
+                let warnCol: UInt32 = f.kind.severe ? 0xFFB060 : 0xE8F0E8
+                out.append(StationLine(kind: f.kind, snow: L.snow, text: weatherLabel(f.kind, snow: L.snow), sub: when, color: warnCol))
+            }
+        }
+        // devices close by
+        let rods: Int = world.devices(st.x - 40, st.x + 40, [.lightningRod]).count
+        let sirens: Int = world.devices(st.x - 64, st.x + 64, [.stormSiren]).count
+        out.append(StationLine(text: joinText("Lightning rods nearby: ", String(rods), " · sirens: ", String(sirens)), sub: doppler ? "Doppler station" : "Weather station (craft a Doppler station for exact times)"))
+        return out
+    }
+
+    /// A barometer in hand: less than a station tells, but always with you
+    func barometerReading() -> String {
+        if !settings.weatherOn { return "Barometer: steady (no weather)" }
+        let p: Double = pressureNow()
+        let trend: Double = pressureNext() - p
+        var look: String = "fair"
+        if trend < -6 || p < 995 { look = "storm likely" } else if trend < -2 { look = "unsettled" } else if trend > 2 { look = "clearing" }
+        let arrow: String = trend < -2 ? "▼" : (trend > 2 ? "▲" : "▶")
+        return joinText("Barometer ", String(Int(p.rounded())), " hPa ", arrow, " ", look)
+    }
+
+    /// Pouring a water flask: a crop grows a stage, a fire goes out, a burning player is doused
+    func useWaterFlask(_ pressed: Bool) {
+        if !pressed || useCD > 0 { return }
+        let tx: Int = Int(floor(aimX))
+        let ty: Int = Int(floor(aimY))
+        func spend() {
+            if !isCreative { inv.removeAt(sel, 1) }
+            useCD = 0.4
+            swingT = 0.18
+            sfx(.splash, 0.5)
+            spawnParticles(aimX, aimY, 0x8DBBFF, 8, 2.5, 0.4, 14)
+            bumpHUD()
+        }
+        if inReach(aimX, aimY) {
+            let t: Tile = world.tile(tx, ty)
+            var grown: Tile? = nil
+            switch t {
+            case .wheat1: grown = .wheat2
+            case .wheat2: grown = .wheat3
+            case .carrot1: grown = .carrot2
+            case .carrot2: grown = .carrot3
+            default: break
+            }
+            if let g = grown {
+                world.set(tx, ty, g)
+                spend()
+                return
+            }
+            if let i = fireZones.firstIndex(where: { abs($0.x - aimX) < $0.r + 0.6 && abs($0.y - aimY) < 2.5 }) {
+                fireZones.remove(at: i)
+                spawnParticles(aimX, aimY, 0xC8C8C8, 10, 2.0, 0.8, -3)
+                spend()
+                return
+            }
+        }
+        if playerBurn > 0 {
+            playerBurn = 0
+            spend()
+            return
+        }
+        say("Pour it on a young crop to help it grow, or on a fire to put it out.", 2.0)
+    }
+}
+
+extension WorldRenderer {
+    /// The moving parts of weather devices in view: turbine blades turning with the wind, the vane
+    /// pointing downwind, a siren's beacon, the water in a barrel, a station's blinking screen
+    static func drawWeatherDevices(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
+        if g.world.dim != .overworld { return }
+        let x0: Int = Int(floor(v.left)) - 2
+        let x1: Int = Int(ceil(v.left + v.wTiles)) + 2
+        let list: [DeviceSpot] = g.world.devices(x0, x1, [.windTurbine, .weatherVane, .stormSiren, .rainBarrel, .rainCistern, .weatherStation, .dopplerStation])
+        if list.isEmpty { return }
+        let tp: Double = v.tp
+        var blades: Path = Path()
+        var vane: Path = Path()
+        var water: Path = Path()
+        var glow: Path = Path()
+        var beacon: Path = Path()
+        for d in list {
+            if !v.visible(Double(d.x), Double(d.y), 3) { continue }
+            let cx: Double = v.sx(Double(d.x) + 0.5)
+            let top: Double = v.sy(Double(d.y))
+            switch d.t {
+            case .windTurbine:
+                // three blades round the hub, turning with the local wind
+                let w: Double = g.settings.weatherOn ? g.weatherAt(Double(d.x) + 0.5, Double(d.y)).wind : 0
+                let ang: Double = g.clock * clampD(w * 0.6, -9, 9)
+                let hx: Double = cx
+                let hy: Double = top + tp * 0.18
+                let len: Double = tp * 0.95
+                for k in 0..<3 {
+                    let a: Double = ang + Double(k) * 2.0944
+                    blades.move(to: mkPoint(hx, hy))
+                    blades.addLine(to: mkPoint(hx + cos(a) * len, hy + sin(a) * len))
+                }
+            case .weatherVane:
+                let w: Double = g.settings.weatherOn ? g.weatherAt(Double(d.x) + 0.5, Double(d.y)).wind : 0
+                let s: Double = w >= 0 ? 1.0 : -1.0
+                let wob: Double = sin(g.clock * 5.0) * min(0.15, abs(w) * 0.01)
+                let y: Double = top + tp * 0.22
+                vane.move(to: mkPoint(cx - s * tp * 0.45, y + wob * tp))
+                vane.addLine(to: mkPoint(cx + s * tp * 0.45, y - wob * tp))
+                vane.move(to: mkPoint(cx + s * tp * 0.45, y))
+                vane.addLine(to: mkPoint(cx + s * tp * 0.25, y - tp * 0.15))
+                vane.move(to: mkPoint(cx + s * tp * 0.45, y))
+                vane.addLine(to: mkPoint(cx + s * tp * 0.25, y + tp * 0.15))
+            case .stormSiren:
+                if g.sirenLevel > 0.01 || (g.settings.weatherOn && g.sirenWorthy()) {
+                    let on: Bool = Int(g.clock * 3.0) % 2 == 0
+                    if on { beacon.addEllipse(in: mkRect(cx - tp * 0.7, top - tp * 0.5, tp * 1.4, tp * 1.0)) }
+                }
+            case .rainBarrel, .rainCistern:
+                let cap: Double = d.t == .rainBarrel ? 8 : 32
+                let f: Double = clampD((g.weather.store[g.deviceKey(d)] ?? 0) / cap, 0, 1)
+                if f > 0.02 {
+                    let inner: Double = tp * 0.7
+                    let h: Double = max(2.0, tp * 0.75 * f)
+                    water.addRect(mkRect(cx - inner * 0.5, top + tp - h - tp * 0.05, inner, h))
+                }
+            case .weatherStation, .dopplerStation:
+                if Int(g.clock * 1.5) % 3 != 0 { glow.addRect(mkRect(cx - tp * 0.32, top + tp * 0.55, tp * 0.64, tp * 0.2)) }
+            default:
+                break
+            }
+        }
+        ctx.stroke(blades, with: .color(Color(hex: 0xF0F2F4)), lineWidth: max(2.0, tp * 0.12))
+        ctx.stroke(vane, with: .color(Color(hex: 0xD2793A)), lineWidth: max(1.5, tp * 0.08))
+        ctx.fill(water, with: .color(Color(hex: 0x3B7BE0, alpha: 0.85)))
+        ctx.fill(glow, with: .color(Color(hex: 0x70F0B0, alpha: 0.5)))
+        ctx.fill(beacon, with: .color(Color(hex: 0xFF3020, alpha: 0.45)))
+    }
+}
+
+// MARK: - Weather settings, the station's screen, the journal's weather pages
+
+/// Weather options, shared by the main settings screen and the pause menu. Every kind of weather
+/// has its own switch; the first switch turns all of it off at once.
+struct WeatherSettingsSection: View {
+    @Binding var settings: Settings
+    var onChange: () -> Void = {}
+
+    func label(_ s: String, _ v: String) -> some View {
+        Text(verbatim: joinText(s, ": ", v)).font(.pixel(12, .bold))
+    }
+
+    var freqName: String {
+        switch settings.severeFrequency {
+        case 0: return "rare"
+        case 2: return "frequent"
+        default: return "normal"
+        }
+    }
+
+    func freqButton(_ i: Int, _ title: String) -> some View {
+        SmallButton(title: title, color: settings.severeFrequency == i ? Color(hex: 0x4E8A3E) : Color(hex: 0x555555)) {
+            settings.severeFrequency = i
+            onChange()
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("WEATHER").font(.pixel(15)).foregroundColor(Color(hex: 0xFFE066))
+            Toggle("Weather (all of it)", isOn: $settings.weatherOn)
+            if settings.weatherOn {
+                Toggle("Rain and snow", isOn: $settings.allowRain)
+                Toggle("Thunderstorms and lightning", isOn: $settings.allowThunder)
+                Toggle("Wind", isOn: $settings.allowWind)
+                Toggle("Hail", isOn: $settings.allowHail)
+                Toggle("Blizzards", isOn: $settings.allowBlizzard)
+                Toggle("Tornadoes", isOn: $settings.allowTornado)
+                Toggle("Hurricanes (near the sea)", isOn: $settings.allowHurricane)
+                Text("WEATHER DAMAGE").font(.pixel(12)).foregroundColor(Color(hex: 0xFFE066))
+                Toggle("Hurts the player", isOn: $settings.weatherHurtsPlayer)
+                Toggle("Damages blocks and buildings", isOn: $settings.weatherHurtsBlocks)
+                Toggle("Hurts creatures", isOn: $settings.weatherHurtsCreatures)
+                label("Intensity", joinText(String(Int((settings.weatherIntensity * 100.0).rounded())), "%"))
+                Slider(value: $settings.weatherIntensity, in: 0.25...1.5, step: 0.05)
+                label("Severe weather", freqName)
+                HStack(spacing: 6) {
+                    freqButton(0, "RARE")
+                    freqButton(1, "NORMAL")
+                    freqButton(2, "FREQUENT")
+                }
+                Toggle("Weather alerts and warnings", isOn: $settings.weatherAlerts)
+                label("Rain, snow and hail drawn", joinText(String(Int((settings.weatherParticles * 100.0).rounded())), "%"))
+                Slider(value: $settings.weatherParticles, in: 0.2...1.0, step: 0.05)
+                Toggle("Gentler lightning flashes", isOn: $settings.reduceFlashes)
+            }
+            SmallButton(title: "RESET WEATHER DEFAULTS") {
+                settings.resetWeather()
+                onChange()
+            }
+        }
+        .font(.pixel(13, .bold))
+        .foregroundColor(Color.white)
+    }
+}
+
+/// A weather station's screen, read live from the simulation
+struct WeatherPanel: View {
+    @ObservedObject var game: Game
+    @ObservedObject var hud: HUDSignal
+    var body: some View {
+        let lines: [StationLine] = game.stationReport()
+        let title: String = game.stationAt?.t == .dopplerStation ? "DOPPLER STATION" : "WEATHER STATION"
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(verbatim: title).font(.pixel(17)).foregroundColor(Color(hex: 0x70F0B0))
+                Spacer()
+                SmallButton(title: "CLOSE", color: Color(hex: 0xA03030)) {
+                    game.showWeather = false
+                    game.bumpHUD()
+                }
+            }
+            ForEach(0..<lines.count, id: \.self) { i in
+                HStack(alignment: .top, spacing: 8) {
+                    if let k = lines[i].kind {
+                        Art.shared.weatherIcon(k, lines[i].snow).resizable().frame(width: 24, height: 24)
+                    } else {
+                        Color.clear.frame(width: 24, height: 24)
+                    }
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(verbatim: lines[i].text).font(.pixel(13)).foregroundColor(Color(hex: lines[i].color))
+                        if !lines[i].sub.isEmpty {
+                            Text(verbatim: lines[i].sub).font(.pixel(11, .semibold)).foregroundColor(Color(hex: 0xA8C8B8))
+                        }
+                    }
+                }
+            }
+        }
+        .padding(16)
+        .background(PixelBox(color: Color(hex: 0x14201C)).opacity(0.96))
+        .frame(maxWidth: 560)
+        .padding(16)
+    }
+}
+
+/// The weather a player has lived through, and the notes they have made about it
+struct WeatherJournalPage: View {
+    let game: Game
+    let ink: Color
+    var body: some View {
+        let storms: [StormRecord] = game.journal.storms ?? []
+        let notes: [String] = game.journal.lore.filter { $0.hasPrefix("wx.") }
+        return VStack(alignment: .leading, spacing: 8) {
+            Text("STORMS WEATHERED").font(.pixel(13)).foregroundColor(ink)
+            if storms.isEmpty {
+                Text("None yet. Severe weather is rare; a weather station shows what is coming.").font(.pixel(12, .semibold)).foregroundColor(ink)
+            }
+            ForEach(0..<storms.count, id: \.self) { i in
+                let s: StormRecord = storms[storms.count - 1 - i]
+                let name: String = (WeatherKind(rawValue: s.kind) ?? .thunderstorm).name
+                HStack {
+                    Text(verbatim: name).font(.pixel(12)).foregroundColor(ink)
+                    Text(verbatim: s.note).font(.pixel(11, .semibold)).foregroundColor(Color(hex: 0x6A4A2A))
+                    Spacer()
+                    Text(verbatim: joinText("day ", String(s.day))).font(.pixel(11, .semibold)).foregroundColor(Color(hex: 0x6A4A2A))
+                }
+            }
+            Text("WEATHER NOTES").font(.pixel(13)).foregroundColor(ink).padding(.top, 6)
+            if notes.isEmpty {
+                Text("What you learn about lightning, wind, hail and storms is written down here as you meet them.").font(.pixel(12, .semibold)).foregroundColor(ink)
+            }
+            ForEach(0..<notes.count, id: \.self) { i in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(verbatim: loreEntry(notes[i]).0).font(.pixel(12)).foregroundColor(ink)
+                    Text(verbatim: loreEntry(notes[i]).1).font(.pixel(11, .semibold)).foregroundColor(Color(hex: 0x5A3A1A))
+                }
+            }
+        }
+    }
+}
+
+extension Game {
+    /// Writes a weather note into the journal the first time the player meets that kind of weather
+    func learnWeather(_ key: String) {
+        if journal.lore.contains(key) { return }
+        journal.lore.append(key)
+        if settings.weatherAlerts { floatText("New note in your journal", pb.x, pb.y - pb.h - 1.0, 0xE8D8A0) }
+    }
+
+    /// Notes worth writing down from what is happening now (checked about once a second)
+    func checkWeatherNotes() {
+        if !settings.weatherOn || world.dim != .overworld { return }
+        let L: LocalWeather = wxHere
+        if let e = weather.tornado, e.phase >= 1, abs(e.x - pb.x) < 120 { learnWeather("wx.tornado") }
+        if L.hurricane > 0.3 { learnWeather("wx.hurricane") }
+        if weather.kind == .blizzard && settings.allowBlizzard && L.snow && L.precip > 0.4 { learnWeather("wx.blizzard") }
+        if L.hail > 0.2 { learnWeather("wx.hail") }
+        if abs(L.wind) > 9 { learnWeather("wx.wind") }
+        if L.thunder > 1.0 { learnWeather("wx.lightning") }
+        if bodyCold > 0.5 { learnWeather("wx.cold") }
+    }
+
+    /// Debug: make a kind of weather begin now (an event starts with its usual warning)
+    func debugForceWeather(_ k: WeatherKind) {
+        if !settings.weatherOn {
+            say("Weather is switched off in Settings.", 2.0)
+            return
+        }
+        weather.tornado = nil
+        weather.hurricane = nil
+        weather.kind = k
+        weather.stateT = 0
+        weather.stateDur = weather.pick(k.spell)
+        weather.plan.removeAll()
+        clearWeatherFX()
+        if k == .tornado {
+            if settings.allowTornado { spawnTornado() } else { say("Tornadoes are switched off in Settings.", 2.0) }
+        }
+        if k == .hurricane {
+            if settings.allowHurricane {
+                var ctx: WeatherContext = weatherContext()
+                // debug storms come in anywhere: with no sea in reach, the "coast" is put to the east
+                if ctx.seaSide == 0 {
+                    ctx.seaSide = 1
+                    ctx.coastX = pb.x + 60
+                }
+                spawnHurricane(ctx)
+            } else {
+                say("Hurricanes are switched off in Settings.", 2.0)
+            }
+        }
+        if k == .hailstorm { weather.bigHail = true }
+        // the amounts jump most of the way there, so the change can be seen at once
+        let p: WeatherProfile = allowedProfile(k)
+        weather.cloud = p.cloud
+        weather.precip = p.precip * 0.8
+        weather.cover = max(p.cover, 0.6)
+        weather.thunder = p.thunder
+        weather.hail = p.hail
+        weather.chill = p.chill
+        weather.wind = p.wind * weather.windDir
+        fillPlan()
+        say(joinText("Weather: ", weatherLabel(k, snow: wxHere.snow)), 1.5)
+    }
+
+    func debugStrikeNearby() {
+        if !settings.weatherOn || !settings.allowThunder {
+            say("Lightning is switched off in Settings.", 2.0)
+            return
+        }
+        let x: Double = pb.x + Double(facing) * 6.0
+        if let s = strikeSpot(x) { lightningStrike(s.0, s.1, rod: s.2) }
+    }
+
+    var weatherDebugLine: String {
+        let k: WeatherKind = weather.kind
+        let left: Int = Int(max(0, weather.stateDur - weather.stateT))
+        let next: String = weather.plan.first?.kind.name ?? "-"
+        return joinText(k.name, " ", String(left), "s → ", next, String(format: "  rain %.2f wind %.1f cl %.2f", weather.precip, weather.wind, weather.cloud))
+    }
+}
+
+// MARK: - Ambient life
+
+extension WorldRenderer {
     /// Fireflies over grass on clear nights; embers drifting up through the Umbral Realm. Drawn after
     /// the lighting so they glow in the dark. A handful of shapes, no particles.
     static func drawAmbientLife(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
@@ -19581,6 +23349,8 @@ struct Journal: Codable {
     var relics: Int = 0
     /// names of things the player has crafted (for the goals list)
     var crafted: [String] = []
+    /// storms lived through (nil in journals saved before the weather)
+    var storms: [StormRecord]? = nil
 
     func has(_ key: String) -> Bool { return places.contains { $0.key == key } }
     func hasKind(_ prefix: String) -> Bool { return places.contains { $0.key.hasPrefix(prefix) } }
@@ -19606,6 +23376,13 @@ func loreEntry(_ key: String) -> (String, String) {
     case "citadel": return ("The Warden's Citadel", "Carved over the gate: HERE THE WARDEN KEEPS THE DOOR, HOLLOW SINCE THE RIFT TORE OPEN.")
     case "sentinel": return ("The Sentinel", "It came apart into shards that still glow. It was not alive, but it was waiting, and it was told what to guard.")
     case "warden": return ("The Hollow Warden", "There was nothing inside the armour. Its heart is warm and beats slowly. A rift forge could bind it into something worn.")
+    case "wx.lightning": return ("Notes on Lightning", "It strikes the highest thing near it: a tree top, a roof, a hill. There is a moment first, when the air crackles and your hair stands up. A copper rod standing high takes every strike within fourteen blocks safely into the ground.")
+    case "wx.wind": return ("Notes on Wind", "A strong wind carries arrows and loose things with it and leans on you as you walk. A vane shows where it blows from; a turbine stores it up.")
+    case "wx.hail": return ("Notes on Hail", "Most hail only bruises crops and flowers. Now and then it falls as big as eggs: then glass breaks and bare heads ache. A roof, or a helmet, is enough.")
+    case "wx.blizzard": return ("Notes on Blizzards", "It is the wind on you that does the harm. A fire or a heater, a roof and walls, a good coat: any of them buys time. Snow boots keep you on your feet.")
+    case "wx.cold": return ("Notes on the Cold", "Cold country, high ground and night all draw the warmth out of you, the wind and wet most of all. Stand by a fire to get it back.")
+    case "wx.tornado": return ("Notes on Tornadoes", "They grow out of the worst thunderstorms and travel with the wind. Underground, or behind reinforced walls, you will hear it pass and little more. Out in the open it will pick you up.")
+    case "wx.hurricane": return ("Notes on Hurricanes", "They come off the sea in walls of wind and rain. The calm in the middle is the eye; then the wind comes back from the other side. Sandbags hold back the sea, shutters save the windows.")
     default: return ("", "")
     }
 }
@@ -19838,6 +23615,14 @@ extension Game {
                     return false
                 }
             }
+            // in a downpour, hail or a gale, animals out in the open head for cover (a tree, a roof)
+            if m.goal == 0 && world.dim == .overworld && settings.weatherOn && abs(m.b.x - pb.x) < 60 {
+                let bad: Bool = precipAt(m.b.x) > 0.55 || wxHere.hail > 0.2 || abs(wxHere.wind) > 11 || weather.tornado != nil
+                if bad && rainReaches(m.b.x, m.b.y, m.b.h), let cx = coverNear(m, 14) {
+                    m.goal = 3
+                    m.goalX = cx
+                }
+            }
             // the herd and the water hole wait for daylight; at night animals settle where they are
             if m.goal == 0 && !(isNight && world.dim == .overworld) {
                 if m.drinkT <= 0 && Double.random(in: 0...1) < 0.15, let wx = waterNear(m, 12) {
@@ -19860,7 +23645,12 @@ extension Game {
         }
         if m.goal != 0 {
             let dx: Double = m.goalX - m.b.x
-            if abs(dx) < 1.2 || (m.goal == 2 && abs(dx) < 4) {
+            if (abs(dx) < 1.2 && m.goal != 3) || abs(dx) < 0.5 || (m.goal == 2 && abs(dx) < 4) {
+                if m.goal == 3 {
+                    // sheltering: stand still under cover a while
+                    m.poseT = 6.0
+                    m.st = 0
+                }
                 if m.goal == 1 {
                     // drinking: head down for a few seconds
                     m.drinkT = Double.random(in: 25...45)
@@ -19897,6 +23687,26 @@ extension Game {
             }
         }
         return false
+    }
+
+    /// The nearest column with cover overhead (leaves, a roof) at about the animal's own level
+    func coverNear(_ m: Mob, _ r: Int) -> Double? {
+        let x0: Int = Int(floor(m.b.x))
+        let feet: Double = m.b.y
+        var k: Int = 1
+        while k <= r {
+            for side in [1, -1] {
+                let x: Int = x0 + side * k
+                if !rainReaches(Double(x) + 0.5, feet, m.b.h) && world.groundBelow(x, Int(floor(feet)) - 1) <= Int(floor(feet)) + 1 {
+                    // a step further in, if that is covered too, so the whole body is under it
+                    let deeper: Int = x + side
+                    if !rainReaches(Double(deeper) + 0.5, feet, m.b.h) { return Double(deeper) + 0.5 }
+                    return Double(x) + 0.5
+                }
+            }
+            k += 1
+        }
+        return nil
     }
 
     /// The nearest surface water within reach, as the column to stand at beside it
@@ -20787,13 +24597,13 @@ enum CloudField {
         var y: Double
         var kind: Int
         var flip: Bool
+        var alpha: Double = 1.0
     }
 
-    static func drift(_ clock: Double) -> Double { return clock * wind }
-
-    /// Every cloud overlapping the world x range [x0, x1]
-    static func clouds(_ seed: UInt64, _ clock: Double, _ x0: Double, _ x1: Double) -> [Cloud] {
-        let d: Double = drift(clock)
+    /// Every cloud overlapping the world x range [x0, x1]. `d` is how far the clouds have drifted (the
+    /// weather keeps it, moving with the wind); `fill` is the share of cells with a cloud in them (more
+    /// under a grey sky); clouds near the cut-off fade in and out rather than popping.
+    static func clouds(_ seed: UInt64, _ d: Double, _ x0: Double, _ x1: Double, fill: Double = 0.58, rowTop: Double = 66.0, rows: Double = 20.0) -> [Cloud] {
         let maxW: Double = 16.0
         let c0: Int = Int(floor((x0 - d - maxW) / cell))
         let c1: Int = Int(floor((x1 - d) / cell))
@@ -20801,24 +24611,25 @@ enum CloudField {
         if c1 < c0 { return out }
         let shapes: [PixelBuf] = CloudArt.shared.shapes
         for ci in c0...c1 {
-            if hash2(ci, 11, seed) < 0.42 { continue }
+            let presence: Double = hash2(ci, 11, seed) - (1.0 - fill)
+            if presence <= 0 { continue }
             let kind: Int = Int(hash2(ci, 15, seed) * Double(shapes.count)) % shapes.count
             let w: Double = Double(shapes[kind].w) / pxPerTile
             // keep the cloud inside its cell so neighbours never overlap
             let slack: Double = max(0, cell - w - 2.0)
             let x: Double = Double(ci) * cell + 1.0 + hash2(ci, 12, seed) * slack + d
             // low enough to be seen from the surface, high enough to clear most hills
-            let y: Double = 66.0 + floor(hash2(ci, 13, seed) * 20.0)
-            out.append(Cloud(x: x, y: y, kind: kind, flip: hash2(ci, 14, seed) < 0.5))
+            let y: Double = rowTop + floor(hash2(ci, 13, seed) * rows)
+            out.append(Cloud(x: x, y: y, kind: kind, flip: hash2(ci, 14, seed) < 0.5, alpha: clampD(presence / 0.08, 0, 1)))
         }
         return out
     }
 
     /// True when (x, y) is inside the visible shape of a cloud (pixel exact)
-    static func contains(_ seed: UInt64, _ clock: Double, _ x: Double, _ y: Double) -> Bool {
+    static func contains(_ seed: UInt64, _ d: Double, _ x: Double, _ y: Double) -> Bool {
         if y < 64.0 || y > 92.0 { return false }
         let shapes: [PixelBuf] = CloudArt.shared.shapes
-        for c in clouds(seed, clock, x - 1.0, x + 1.0) {
+        for c in clouds(seed, d, x - 1.0, x + 1.0) {
             let b: PixelBuf = shapes[c.kind]
             var px: Int = Int(floor((x - c.x) * pxPerTile))
             let py: Int = Int(floor((y - c.y) * pxPerTile))
@@ -20945,6 +24756,8 @@ enum WorldRenderer {
             drawSky(&ctx, W, H, g, v)
         }
         drawSections(&ctx, g, v, cache)
+        drawGroundWeather(&ctx, g, v)
+        drawWaves(&ctx, g, v)
         drawRift(&ctx, g, v)
         drawShips(&ctx, g, v)
         drawVehicles(&ctx, g, v)
@@ -20954,13 +24767,17 @@ enum WorldRenderer {
         drawProjectiles(&ctx, g, v)
         drawCombatFX(&ctx, g, v)
         drawParticles(&ctx, g, v)
+        drawWeatherDevices(&ctx, g, v)
+        drawTornado(&ctx, g, v)
         drawClouds(&ctx, W, H, g, v)
-        drawWeather(&ctx, g, v)
+        drawPrecip(&ctx, g, v)
         drawLight(&ctx, g, v, cache)
         drawAmbientLife(&ctx, g, v)
+        drawBolts(&ctx, g, v)
         drawFlashes(&ctx, g, v)
         drawTrajectory(&ctx, g, v)
         drawOverlays(&ctx, W, H, g, v)
+        drawWeatherOverlay(&ctx, W, H, g, v)
         drawFloats(&ctx, g, v)
         if g.showChunks || g.showHitboxes { drawDebug(&ctx, H, g, v) }
         if g.settings.showFPS {
@@ -21047,11 +24864,12 @@ enum WorldRenderer {
         default: break
         }
         vGradient(&ctx, full, [rgbColor(topC), rgbColor(botC)], 0, H)
-        // an overcast sky while it rains
-        if g.weatherRain > 0.02 { fillRect(&ctx, full, Color(hex: 0x6A7480, alpha: 0.45 * g.weatherRain * max(0.3, day))) }
-        // stars
-        if day < 0.6 {
-            let a: Double = (0.6 - day) / 0.6
+        // cloud cover and storm darkness (see drawSkyWeather)
+        let cover: Double = g.wxHere.cloud
+        if g.settings.weatherOn { drawSkyWeather(&ctx, W, H, g, v, day) }
+        // stars (hidden behind cloud)
+        if day < 0.6 && cover < 0.95 {
+            let a: Double = (0.6 - day) / 0.6 * (1.0 - cover)
             // three twinkle groups, one draw each
             for grp in 0..<3 {
                 var path: Path = Path()
@@ -21073,9 +24891,9 @@ enum WorldRenderer {
         let bx: Double = (0.1 + 0.8 * ang) * W
         let arc: Double = sin(ang * Double.pi)
         let by: Double = H * (0.55 - 0.42 * arc)
-        // rain clouds hide the sun and moon
+        // cloud hides the sun and moon
         var sc: GraphicsContext = ctx
-        sc.opacity = 1.0 - 0.85 * g.weatherRain
+        sc.opacity = 1.0 - 0.9 * cover
         if t < 0.5 {
             fillRect(&sc, mkRect(bx - 36.0, by - 36.0, 72.0, 72.0), Color(hex: 0xFFE680, alpha: 0.25))
             fillRect(&sc, mkRect(bx - 28.0, by - 28.0, 56.0, 56.0), Color(hex: 0xFFD84A))
@@ -21085,6 +24903,8 @@ enum WorldRenderer {
             fillRect(&sc, mkRect(bx - 8.0, by - 12.0, 10.0, 10.0), Color(hex: 0xC0C6D0))
             fillRect(&sc, mkRect(bx + 6.0, by + 4.0, 8.0, 8.0), Color(hex: 0xC0C6D0))
         }
+        // lightning lights up the whole sky behind the hills
+        if g.skyFlash > 0.01 { fillRect(&ctx, full, Color(hex: 0xDDE8FF, alpha: g.skyFlash * (g.settings.reduceFlashes ? 0.3 : 0.5))) }
         // (clouds now live in the world itself: see CloudField / drawClouds)
         // parallax background: two layers of hills, or in a flat world a level horizon of distant tree
         // lines (it would be odd to see mountains behind ground that never rises)
@@ -21121,6 +24941,7 @@ enum WorldRenderer {
                 ctx.fill(path, with: .color(c))
             }
         }
+        if g.settings.weatherOn { drawSkyWeatherFront(&ctx, W, H, g, v, day) }
     }
 
     // MARK: terrain
@@ -21785,17 +25606,37 @@ enum WorldRenderer {
 
     /// World-space clouds: one cached image per cloud, drawn over creatures and the player at partial
     /// opacity, so anything inside or behind a cloud stays visible. Positions snap to the art pixel grid,
-    /// and the colour follows the time of day.
+    /// and the colour follows the time of day. As the weather clouds over, more cells fill, the clouds
+    /// turn storm-grey, and a second, lower deck of cloud gathers under a heavy sky.
     static func drawClouds(_ ctx: inout GraphicsContext, _ W: Double, _ H: Double, _ g: Game, _ v: View2D) {
         if g.world.dim != .overworld { return }
-        if v.top > 92.0 || v.top + v.hTiles < 64.0 { return }
+        if v.top > 92.0 || v.top + v.hTiles < 56.0 { return }
         let seed: UInt64 = g.gen.seed
-        let list: [CloudField.Cloud] = CloudField.clouds(seed, g.clock, v.left, v.left + v.wTiles)
+        let drift: Double = g.weather.cloudDrift
+        let cover: Double = g.settings.weatherOn ? g.wxHere.cloud : 0
+        let day: Double = g.dayFactor
+        // white by day, cool grey-blue at night, storm-grey under heavy cloud (dusk is left to the sky)
+        var tint: UInt32 = mixRGB(0x5A6480, 0xFFFFFF, max(day, 0.0))
+        let storm: Double = clampD((cover - 0.45) * 1.6, 0, 0.8)
+        if storm > 0 { tint = mixRGB(tint, mixRGB(0x2A3038, 0x6A707C, day), storm) }
+        let base: [CloudField.Cloud] = CloudField.clouds(seed, drift, v.left, v.left + v.wTiles, fill: 0.58 + 0.38 * cover)
+        drawCloudList(&ctx, g, v, base, tint, 0.85 + 0.1 * cover)
+        // the low storm deck: denser, darker and quicker
+        let deck: Double = clampD((cover - 0.4) / 0.5, 0, 1)
+        if deck > 0.02 {
+            let low: [CloudField.Cloud] = CloudField.clouds(seed ^ 0x5707, drift * 1.4 + 19.0, v.left, v.left + v.wTiles, fill: 0.85 * deck, rowTop: 56.0, rows: 12.0)
+            drawCloudList(&ctx, g, v, low, mixRGB(tint, 0x30363E, 0.35), 0.9 * deck)
+        }
+        // standing inside a cloud: a soft haze over the view
+        let pyMid: Double = g.pb.y - g.pb.h * 0.5
+        if CloudField.contains(seed, drift, g.pb.x, pyMid) {
+            fillRect(&ctx, mkRect(0, 0, W, H), rgbColor(tint, 0.12))
+        }
+    }
+
+    static func drawCloudList(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D, _ list: [CloudField.Cloud], _ tint: UInt32, _ opacity: Double) {
         if list.isEmpty { return }
         let art: CloudArt = CloudArt.shared
-        let day: Double = g.dayFactor
-        // white by day, cool grey-blue at night, warm at dusk is left to the sky behind them
-        let tint: UInt32 = mixRGB(0x5A6480, 0xFFFFFF, max(day, 0.0))
         let px: Double = v.tp / CloudField.pxPerTile
         for cl in list {
             let b: PixelBuf = art.shapes[cl.kind]
@@ -21812,18 +25653,13 @@ enum WorldRenderer {
             }
             let clear: Double = clampD((ground - bottom) / 4.0, 0, 1)
             var c: GraphicsContext = ctx
-            c.opacity = 0.85 * (0.3 + 0.7 * clear)
+            c.opacity = opacity * (0.3 + 0.7 * clear) * cl.alpha
             if tint != 0xFFFFFF { c.addFilter(.colorMultiply(rgbColor(tint))) }
             // snap to the cloud's own pixel grid so its pixels line up with the terrain's
             let sx: Double = (v.sx(cl.x) / px).rounded() * px
             let sy: Double = (v.sy(cl.y) / px).rounded() * px
             let img: Image = cl.flip ? art.flipped[cl.kind] : art.images[cl.kind]
             c.draw(img, in: mkRect(sx, sy, Double(b.w) * px, Double(b.h) * px))
-        }
-        // standing inside a cloud: a soft haze over the view
-        let pyMid: Double = g.pb.y - g.pb.h * 0.5
-        if CloudField.contains(seed, g.clock, g.pb.x, pyMid) {
-            fillRect(&ctx, mkRect(0, 0, W, H), rgbColor(tint, 0.12))
         }
     }
 
@@ -22492,6 +26328,7 @@ struct HUDView: View {
     var body: some View {
         VStack(spacing: 0) {
             topBar
+            if !game.wxBanner.isEmpty { weatherBanner.padding(.top, 4) }
             if game.activeBoss != nil { bossBar.padding(.top, 4) }
             if let m = game.message {
                 Text(m)
@@ -22602,7 +26439,42 @@ struct HUDView: View {
             OutlinedText(text: joinText("X ", String(x), "  Y ", String(y)), size: 11)
             OutlinedText(text: joinText(game.biomeHere.name, " · ", game.depthText), size: 11)
             OutlinedText(text: dayText, size: 11)
+            weatherLine
         }
+    }
+
+    /// The weather where the player is: a symbol, its name and the wind (and a barometer's reading
+    /// while one is held)
+    @ViewBuilder
+    var weatherLine: some View {
+        if game.world.dim == .overworld && game.settings.weatherOn {
+            HStack(spacing: 4) {
+                Art.shared.weatherIcon(game.weather.kind, game.wxHere.snow).resizable().frame(width: 16, height: 16)
+                OutlinedText(text: weatherText, size: 11)
+            }
+            if case .gadget(.barometer)? = game.heldItem {
+                OutlinedText(text: game.barometerReading(), size: 11, color: Color(hex: 0xE8D090))
+            }
+        }
+    }
+
+    var weatherText: String {
+        let w: Double = game.wxHere.wind
+        let name: String = game.weatherHereLabel
+        if abs(w) < 3.0 { return name }
+        return joinText(name, " · wind ", String(Int(abs(w).rounded())), w > 0 ? " →" : " ←")
+    }
+
+    var weatherBanner: some View {
+        let warn: Bool = game.wxBannerLevel >= 2
+        return Text(verbatim: game.wxBanner)
+            .font(.pixel(13))
+            .foregroundColor(Color.white)
+            .multilineTextAlignment(.center)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(PixelBox(color: warn ? Color(hex: 0xA02020) : Color(hex: 0x8A6A1A)).opacity(0.92))
+            .frame(maxWidth: 620)
     }
 
     var bossBar: some View {
@@ -23127,6 +26999,7 @@ struct JournalPanel: View {
                 tabButton(1, "PLACES")
                 tabButton(2, "LORE")
                 tabButton(3, "RUMOURS")
+                tabButton(4, "WEATHER")
                 SmallButton(title: "CLOSE", color: Color(hex: 0xA03030)) { game.showJournal = false }
             }
             ScrollView {
@@ -23135,7 +27008,8 @@ struct JournalPanel: View {
                     case 0: aims(ink)
                     case 1: places(ink)
                     case 2: lore(ink)
-                    default: rumours(ink)
+                    case 3: rumours(ink)
+                    default: WeatherJournalPage(game: game, ink: ink)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -23194,7 +27068,7 @@ struct JournalPanel: View {
     }
 
     func lore(_ ink: Color) -> some View {
-        let keys: [String] = game.journal.lore
+        let keys: [String] = game.journal.lore.filter { !$0.hasPrefix("wx.") }
         return VStack(alignment: .leading, spacing: 10) {
             if keys.isEmpty {
                 Text("Places you find will tell you something. Their stories collect here.").font(.pixel(12, .semibold)).foregroundColor(ink)
@@ -23445,12 +27319,17 @@ struct PauseView: View {
                 Text("PAUSED").font(.pixel(30)).foregroundColor(Color.white)
                 Text(verbatim: worldLine)
                     .font(.pixel(12, .bold)).foregroundColor(Color.white.opacity(0.8))
-                PixelButton(title: "RESUME", color: Color(hex: 0x4E8A3E)) { game.paused = false }
+                PixelButton(title: "RESUME", color: Color(hex: 0x4E8A3E)) {
+                    // settings changed here are kept on the device straight away
+                    SettingsStore.save(game.settings)
+                    game.paused = false
+                }
                 PixelButton(title: "SAVE GAME", color: Color(hex: 0x3E6FAA)) {
                     savedNote = game.saveNow() ? "Saved!" : "Could not save."
                 }
                 toggles
                 CameraSettingsSection(settings: settingsBinding, onChange: { game.tilePx = game.settings.tilePx })
+                WeatherSettingsSection(settings: settingsBinding, onChange: { game.bumpHUD() })
                 PixelButton(title: "SAVE & QUIT", color: Color(hex: 0xA03030)) { quit() }
                 if !savedNote.isEmpty { Text(savedNote).font(.pixel(12)).foregroundColor(Color.white) }
             }
@@ -23549,6 +27428,7 @@ struct DebugPanel: View {
                 entitySection
                 multiplierSection
                 hazardSection
+                weatherSection
                 if showPerf { perfSection }
                 SmallButton(title: showSystems ? "Hide systems" : "Systems...") { showSystems.toggle() }
                 if showSystems { systemsSection }
@@ -23815,6 +27695,32 @@ struct DebugPanel: View {
 }
 
 // ===== u05_menu =====
+
+extension DebugPanel {
+    /// Make any kind of weather start now (events come with their usual warning), or call down a bolt
+    var weatherSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            section("WEATHER")
+            Text(verbatim: game.weatherDebugLine).font(.pixel(10, .semibold))
+            HStack(spacing: 6) {
+                SmallButton(title: "Clear") { game.debugForceWeather(.clear) }
+                SmallButton(title: "Rain") { game.debugForceWeather(.heavyRain) }
+                SmallButton(title: "Storm") { game.debugForceWeather(.thunderstorm) }
+                SmallButton(title: "Hail") { game.debugForceWeather(.hailstorm) }
+            }
+            HStack(spacing: 6) {
+                SmallButton(title: "Wind") { game.debugForceWeather(.windstorm) }
+                SmallButton(title: "Snow") { game.debugForceWeather(.snowfall) }
+                SmallButton(title: "Blizzard") { game.debugForceWeather(.blizzard) }
+            }
+            HStack(spacing: 6) {
+                SmallButton(title: "Tornado", color: Color(hex: 0x8A3A3A)) { game.debugForceWeather(.tornado) }
+                SmallButton(title: "Hurricane", color: Color(hex: 0x8A3A3A)) { game.debugForceWeather(.hurricane) }
+                SmallButton(title: "Strike") { game.debugStrikeNearby() }
+            }
+        }
+    }
+}
 
 // MARK: - Settings persistence
 
@@ -24280,6 +28186,7 @@ struct SettingsView: View {
             Text(verbatim: rareLine).font(.pixel(13, .bold))
             Slider(value: $settings.rareChance, in: 0.0...0.8, step: 0.02)
             CameraSettingsSection(settings: $settings)
+            WeatherSettingsSection(settings: $settings)
             PixelButton(title: "DONE", color: Color(hex: 0x4E8A3E)) { done() }
         }
         .font(.pixel(14, .bold))
@@ -24359,6 +28266,11 @@ struct HelpView: View {
         "Your own designs: place a Frame (car) or Hull Float (boat), then hold a part - green squares show where it fits. A checklist shows what is still missing. Coal or wood is fuel: hold it and tap the vehicle.",
         "Zoom with + and −. The DBG button opens the debug menu. II pauses and saves.",
         "Watch the ground in big fights: an attack's area pulses and fills up just before it lands. Step out of it.",
+        "Weather comes and goes: showers drift over the land with the wind, deserts stay dry, the cold country gets snow. A strong wind carries arrows and jumps with it and slows you walking into it.",
+        "In a thunderstorm keep off high, open ground. When the air crackles and the ground glows, lightning is about to strike there: move. A copper lightning rod standing in the open takes every strike within 14 blocks.",
+        "Tornadoes and hurricanes are rare and always come with a warning. Get underground or behind reinforced walls; sandbags hold back a hurricane's surge, shutters keep the wind off your windows.",
+        "In a blizzard the cold gets into you: a fire, a heater, a roof and walls or a winter coat keep you warm; snow boots stop you slipping. Large hail hurts: a roof or a helmet stops it.",
+        "Weather tab (workbench and up): a weather station shows the forecast (a Doppler station next to a charged wind turbine gives exact times and tracks tornadoes), a barometer reads the pressure, sirens sound for dangerous storms and rain barrels collect water for your crops. Every kind of weather can be switched off in Settings.",
         "Keyboard: A/D move, W jump, S down, 1-0 hotbar, Q next weapon, E bag, M map, J journal, F attack/use, R reload, X dismount, +/- zoom, Esc pause."
     ]
     var body: some View {
@@ -24484,8 +28396,14 @@ struct GameView: View {
     var body: some View {
         ZStack {
             worldLayer
-            if !game.showInventory && !game.showMap && !game.showJournal && game.tradeWith == nil && !game.dead {
+            if !game.showInventory && !game.showMap && !game.showJournal && !game.showWeather && game.tradeWith == nil && !game.dead {
                 HUDView(game: game, hud: game.hud)
+            }
+            if game.showWeather {
+                Color.black.opacity(0.4).ignoresSafeArea()
+                ScrollView {
+                    WeatherPanel(game: game, hud: game.hud)
+                }
             }
             if game.showInventory {
                 Color.black.opacity(0.35).ignoresSafeArea()

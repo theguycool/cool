@@ -19231,6 +19231,8 @@ final class SectionPainter: @unchecked Sendable {
 extension Game {
     func hudKey() -> Int {
         var h: Hasher = Hasher()
+        // an open device panel shows live readings: it refreshes twice a second
+        if showPower { h.combine(Int(clock * 2.0)) }
         h.combine(Int(hp * 2.0))
         h.combine(Int(maxHP))
         h.combine(Int(hunger * 2.0))
@@ -20844,6 +20846,37 @@ extension Game {
     }
 
     /// The devices' settings and charge for the save (wiring is saved with each chunk)
+    var powerDebugLine: String {
+        let sim: PowerSim = power
+        var short: Int = 0
+        for n in sim.pnets where n.short { short += 1 }
+        var on: Int = 0
+        for n in sim.snets where n.on { on += 1 }
+        return joinText(String(sim.devs.count), " devices live (", String(world.devs.count), " placed) · ", String(sim.pnets.count), " power lines (", String(short), " short) · ", String(sim.snets.count), " pulse lines (", String(on), " on) · rebuilt ", String(sim.rebuilds), "x")
+    }
+
+    /// Debug: one of every Sparkworks part, and plenty of wire
+    func debugPowerKit() {
+        let parts: [Tile] = [.crankGen, .solarPanel, .fuelGen, .waterWheel, .emberDynamo, .battery, .accumulator, .powerSwitch, .breaker, .powerMeter,
+                             .lever, .pushButton, .pressurePlate, .pulseTimer, .repeater, .inverter, .logicGate, .motionSensor, .daySensor, .weatherSensor,
+                             .itemSensor, .proximitySensor, .gateClosed, .lampOff, .arcTrap, .autoDrill, .conveyor, .collector, .autoCrafter, .sumpPump, .signalLight]
+        for g in [Gadget.powerCable, .pulseWire, .pulseWireB] { giveItem(.gadget(g), 250) }
+        giveItem(.gadget(.wireSnips), 1)
+        giveItem(.gadget(.probe), 1)
+        for t in parts { giveItem(.block(t), 8) }
+        say("Power kit: every Sparkworks part, wire, snips and a probe.", 2.5)
+        bumpHUD()
+    }
+
+    func debugChargeAll() {
+        for (_, d) in world.devs {
+            let c: Double = PowerSpec.capacity(d.tile)
+            if c > 0 { d.charge = c }
+            if d.tile == .fuelGen || d.tile == .emberDynamo { d.charge = 3600 }
+        }
+        say("Batteries charged, generators fuelled.", 1.5)
+    }
+
     func powerSave() -> [PowerDevSave]? {
         if world.devs.isEmpty { return nil }
         var out: [PowerDevSave] = []
@@ -20915,6 +20948,18 @@ extension Game {
     var holdingWiringTool: Bool {
         if case .gadget(let g)? = heldItem { return g.wiring || g == .probe }
         return false
+    }
+
+    /// A line on the HUD while a wiring tool is in hand
+    var wiringHint: String? {
+        guard case .gadget(let g)? = heldItem else { return nil }
+        switch g {
+        case .powerCable: return "Drag to lay power cable through generators, batteries and machines"
+        case .pulseWire, .pulseWireB: return "Drag to lay pulse wire from switches and sensors to what they control"
+        case .wireSnips: return "Drag over wire to take it back up"
+        case .probe: return "Tap a device to set it up, or a wire to see its network"
+        default: return nil
+        }
     }
 
     var holdingWireSpool: Bool {
@@ -29231,6 +29276,9 @@ struct HUDView: View {
             OutlinedText(text: joinText(game.biomeHere.name, " · ", game.depthText), size: 11)
             OutlinedText(text: dayText, size: 11)
             weatherLine
+            if let hint = game.wiringHint {
+                OutlinedText(text: hint, size: 11, color: Color(hex: 0x9AF0E0))
+            }
         }
     }
 
@@ -30222,6 +30270,7 @@ struct DebugPanel: View {
                 hazardSection
                 weatherSection
                 nightSection
+                powerSection
                 if showPerf { perfSection }
                 SmallButton(title: showSystems ? "Hide systems" : "Systems...") { showSystems.toggle() }
                 if showSystems { systemsSection }
@@ -30502,6 +30551,22 @@ extension DebugPanel {
             HStack(spacing: 6) {
                 SmallButton(title: "Night + spawn test") { game.debugSpawnTest() }
                 SmallButton(title: "Clear log") { game.spawnLog = [:]; game.bumpHUD() }
+            }
+        }
+    }
+
+    /// Sparkworks: what the simulation holds, and a kit of every part to try things out
+    var powerSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            section("POWER")
+            Text(verbatim: game.powerDebugLine).font(.pixel(10, .semibold))
+            HStack(spacing: 6) {
+                SmallButton(title: "Power kit") { game.debugPowerKit() }
+                SmallButton(title: "Charge batteries") { game.debugChargeAll() }
+                SmallButton(title: "Show wiring") {
+                    game.settings.showWires = game.settings.showWires == 1 ? 0 : 1
+                    game.bumpHUD()
+                }
             }
         }
     }
@@ -31081,6 +31146,11 @@ struct HelpView: View {
         "Tornadoes and hurricanes are rare and always come with a warning. Get underground or behind reinforced walls; sandbags hold back a hurricane's surge, shutters keep the wind off your windows.",
         "In a blizzard the cold gets into you: a fire, a heater, a roof and walls or a winter coat keep you warm; snow boots stop you slipping. Large hail hurts: a roof or a helmet stops it.",
         "Weather tab (workbench and up): a weather station shows the forecast (a Doppler station next to a charged wind turbine gives exact times and tracks tornadoes), a barometer reads the pressure, sirens sound for dangerous storms and rain barrels collect water for your crops. Every kind of weather can be switched off in Settings.",
+        "Nights are dangerous: monsters come out after dark and come looking for you, more of them on the Deadly setting (Settings, Nights). They keep away from lamplight and never spawn on the floors or roofs of buildings; a monster that sees you shouts (!) and charges. Undead burn at sunrise.",
+        "Sparkworks (Power tab): generators (a hand crank, a water wheel, solar panels, a fuel generator, a wind turbine, the Ember Dynamo) make power, measured in sparks. Power cable carries it to batteries and machines: hold a spool and drag to lay it through them. Nothing runs for free: when a line can't supply what is asked, machines stop and show a red bolt.",
+        "Pulse wire (amber or teal) carries on/off signals, separately from power: from levers, buttons, pressure plates, timers and sensors to lamps, steel gates, machines, wooden doors, storm shutters and sirens. Logic parts (relays, inverters, AND/OR/XOR/NAND/NOR gates, timers) point a way: they read the wire at their back or sides and send on the wire their arrow points to.",
+        "The Spark Probe: tap a device to see how it is doing and set it up (gate type, sensor range, timer period, a breaker's limit, a crafter's recipe, which way it faces); tap a wire to light up its whole network and see what it makes, uses and stores. Wire snips take wire back up. Settings, Power Wiring chooses when wiring is drawn.",
+        "Ideas: a proximity sensor set to the player opens a steel gate for you and not for monsters; a weather sensor closes the shutters when a storm comes; a daylight sensor lights the lamps at dusk; an auto drill, conveyor and collector bring ore to a chest; a breaker keeps one line from draining your batteries.",
         "Keyboard: A/D move, W jump, S down, 1-0 hotbar, Q next weapon, E bag, M map, J journal, F attack/use, R reload, X dismount, +/- zoom, Esc pause."
     ]
     var body: some View {

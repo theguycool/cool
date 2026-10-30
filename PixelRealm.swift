@@ -9576,6 +9576,19 @@ enum MobKind: Int, Codable, CaseIterable {
     case bearBoss, rex
     /// appended, so saved creature kinds keep their numbers
     case crawler, golem, archer, sentinel, mimic, warden
+
+    /// wild hunters that roam by day as well: they have their own small number in the spawner, so
+    /// they never use up the night's monsters
+    var isPredator: Bool { return self == .grizzly || self == .polarBear || self == .tiger || self == .scorpion }
+
+    /// monsters run by `think` (senses, memory, chase, search, return) around their own attacks
+    var thinks: Bool {
+        switch self {
+        case .zombie, .skeleton, .pirate, .pirateCaptain, .pirateGunner, .imp, .slime, .emberSlime,
+             .bat, .cinderBat, .wraith, .crawler, .golem, .archer: return true
+        default: return false
+        }
+    }
 }
 
 enum Behavior: Int {
@@ -9749,6 +9762,8 @@ let spawnRules: [SpawnRule] = [
     SpawnRule(kind: .archer, weight: 3, place: .cave, when: .any, biomes: [], group: 1, minY: 150),
     SpawnRule(kind: .golem, weight: 1.5, place: .cave, when: .any, biomes: [], group: 1, minY: 260),
     SpawnRule(kind: .archer, weight: 2, place: .surface, when: .night, biomes: [], group: 1),
+    SpawnRule(kind: .skeleton, weight: 2, place: .surface, when: .night, biomes: [.plains, .desert, .tundra, .mountain, .savanna], group: 1),
+    SpawnRule(kind: .crawler, weight: 2, place: .surface, when: .night, biomes: [.jungle, .swamp, .forest], group: 2),
     // umbral realm
     SpawnRule(kind: .imp, weight: 5, place: .umbral, when: .any, biomes: [], group: 1),
     SpawnRule(kind: .wraith, weight: 3, place: .umbral, when: .any, biomes: [], group: 1),
@@ -9834,6 +9849,25 @@ final class Mob {
     /// dazed by a club: stands reeling, then can't be dazed again for a moment
     var daze: Double = 0
     var dazeGuard: Double = 0
+    /// hostile AI (see `think`): its state and how long it has been in it, whether it can see the
+    /// player (rechecked a few times a second), where it last saw them and how long ago, where it is
+    /// heading, how long it has been pushing against a wall, and why it did not attack (for the overlay)
+    var ai: MobAI = .idle
+    var aiT: Double = 0
+    var sees: Bool = false
+    var losT: Double = 0
+    var seenX: Double = 0
+    var seenY: Double = 0
+    var lostT: Double = 99
+    var aimX: Double = 0
+    var blockedT: Double = 0
+    var progX: Double = 0
+    var leapT: Double = 0
+    var leapReq: Bool = false
+    var why: AttackBlock = .none
+    /// came out at night to look for the player; how long it has been far away and forgotten
+    var hunter: Bool = false
+    var farT: Double = 0
     static let turnDur: Double = 0.14
     static let atkDur: Double = 0.28
 
@@ -9858,6 +9892,40 @@ final class Mob {
     private(set) lazy var bossKind: Bool = kind == .bearBoss || kind == .rex || kind == .sentinel || kind == .warden
     /// bosses never become tame, except the T-rex, which then stops being one
     var isBoss: Bool { return bossKind && !tame }
+}
+
+/// What a hostile creature is doing. Attack and recover come from its attack routine (a wind-up, the
+/// blow, the moment after); the rest are decided by `think`.
+enum MobAI: UInt8 {
+    case idle, alert, chase, search, back, retreat
+    var name: String {
+        switch self {
+        case .idle: return "idle"
+        case .alert: return "alert"
+        case .chase: return "chase"
+        case .search: return "search"
+        case .back: return "return"
+        case .retreat: return "regroup"
+        }
+    }
+}
+
+/// Why a creature that wants to hit the player has not (shown by the AI overlay)
+enum AttackBlock: UInt8 {
+    case none, notSeen, outOfRange, cooldown, noSight, tooHigh, blocked, peaceful, playerGone
+    var name: String {
+        switch self {
+        case .none: return ""
+        case .notSeen: return "hasn't seen you"
+        case .outOfRange: return "out of range"
+        case .cooldown: return "cooling down"
+        case .noSight: return "no line of sight"
+        case .tooHigh: return "can't reach that height"
+        case .blocked: return "path blocked"
+        case .peaceful: return "peaceful"
+        case .playerGone: return "player dead"
+        }
+    }
 }
 
 struct MobSave: Codable {
@@ -10343,6 +10411,10 @@ struct Settings: Codable {
     var weatherParticles: Double = 1.0
     /// lightning lights the scene gently instead of flashing it (strikes still happen)
     var reduceFlashes: Bool = false
+    /// how dangerous nights are: 0 calm, 1 normal, 2 deadly (how many monsters, how quickly they come)
+    var nightDanger: Int = 1
+    /// what wiring is drawn: 0 only while building with power parts in hand, 1 always, 2 never
+    var showWires: Int = 0
 
     var shakeScale: Double { return shakeOn ? shakeIntensity : 0 }
 
@@ -10420,6 +10492,8 @@ struct Settings: Codable {
         weatherAlerts = (try? c.decodeIfPresent(Bool.self, forKey: .weatherAlerts)) ?? true
         weatherParticles = clampD((try? c.decodeIfPresent(Double.self, forKey: .weatherParticles)) ?? 1.0, 0.2, 1.0)
         reduceFlashes = (try? c.decodeIfPresent(Bool.self, forKey: .reduceFlashes)) ?? false
+        nightDanger = clampI((try? c.decodeIfPresent(Int.self, forKey: .nightDanger)) ?? 1, 0, 2)
+        showWires = clampI((try? c.decodeIfPresent(Int.self, forKey: .showWires)) ?? 0, 0, 2)
     }
 }
 
@@ -10508,6 +10582,8 @@ final class Game: ObservableObject, @unchecked Sendable {
     var monstersEnabled: Bool = true
     var speedMult: Double = 1.0
     var showHitboxes: Bool = false
+    /// debug: each hostile's AI state, what it knows of the player and why it is not attacking
+    var showAI: Bool = false
     var showChunks: Bool = false
     var fullBright: Bool = false
     var infiniteReach: Bool = false
@@ -10596,6 +10672,11 @@ final class Game: ObservableObject, @unchecked Sendable {
     var ships: [PirateShip] = []
     var nextID: Int = 1
     var spawnTimer: Double = 2.0
+    /// time before the next monster may come out on the surface (sets the pace of a night)
+    var monsterSpawnCD: Double = 0
+    /// debug: how spawn attempts ended, by reason, and the last one
+    var spawnLog: [String: Int] = [:]
+    var spawnLast: String = ""
     var shipTimer: Double = 20.0
     var villagerCells: Set<Int> = []
     var fallingBlocks: [FallingBlock] = []
@@ -13682,6 +13763,15 @@ extension Game {
             m.b.vy = min(m.b.vy + gravityG * dt, terminalV)
         }
         if m.knock > 0 { m.knock -= dt }
+        if m.leapReq {
+            // a harder leap at a wall it is stuck against (see think)
+            m.leapReq = false
+            if m.b.onGround && !d.flying {
+                m.b.vy = -d.jump * 1.22
+                m.b.vx = (m.aimX >= m.b.x ? 1.0 : -1.0) * max(2.5, d.speed)
+                m.leapT = 1.6
+            }
+        }
         world.moveBody(&m.b, dt, stepUp: d.flying ? 0 : stepUp, dropThrough: false, decks: decksCache)
         if m.b.deck >= 0 && m.b.deck < decksCache.count { m.b.x += decksCache[m.b.deck].vx * dt }
         if m.boat >= 0 { clampToDeck(m) }
@@ -13743,14 +13833,13 @@ extension Game {
         if m.b.inWater { m.b.vy -= 18 * dt }
     }
 
-    func playerOverlaps(_ m: Mob, _ pad: Double) -> Bool {
-        if dead { return false }
-        return pb.right > m.b.left - pad && pb.left < m.b.right + pad && pb.y > m.b.top - pad && pb.top < m.b.y + pad
-    }
-
     func contactHurt(_ m: Mob, _ dmg: Double) {
-        if m.cd > 0 { return }
-        if playerOverlaps(m, -0.05) {
+        if m.cd > 0 || dead { return }
+        // touching: overlapping across, and up and down anything from overlapping to standing on the
+        // player's head (or the player on its back)
+        let across: Bool = pb.right > m.b.left + 0.05 && pb.left < m.b.right - 0.05
+        let upDown: Bool = pb.y > m.b.top - 0.2 && pb.top < m.b.y + 0.2
+        if across && upDown {
             var info = DamageInfo(amount: dmg, type: .contact, source: .mob(m, faction(of: m)))
             info.knock = 6.5
             info.originX = m.b.x
@@ -13775,6 +13864,7 @@ extension Game {
         let t0: Double = perfNow()
         let px: Double = pb.x
         let py: Double = pb.y
+        let offScreen: Double = viewTilesW * 0.5 + 6.0
         frameNo &+= 1
         // iterated by index because AI code may append new mobs while it runs
         var i: Int = 0
@@ -13787,6 +13877,19 @@ extension Game {
             if !m.persistent && !m.tame && !m.isBoss && (dx > 115 || dy > 85) {
                 m.removed = true
                 continue
+            }
+            // a monster nobody is fighting that stays well off-screen wanders off after a while, making
+            // room for another; at daybreak the night's hunters out of sight go back where they came from
+            if m.def.hostile && !m.persistent && !m.tame && !m.isBoss && m.boat < 0 && m.lair == 0 {
+                if (dx > offScreen || dy > 40) && m.ai != .chase {
+                    m.farT += dt
+                    if m.farT > ((m.hunter && !isNight) ? 4.0 : 40.0) {
+                        m.removed = true
+                        continue
+                    }
+                } else {
+                    m.farT = 0
+                }
             }
             if m.hurtT > 0 { m.hurtT -= dt }
             if m.cd > 0 { m.cd -= dt }
@@ -13869,6 +13972,9 @@ extension Game {
             updatePet(m, dt)
             return
         }
+        // monsters decide for themselves whether they are after the player (see think)
+        var engaged: Bool = near && !peaceful
+        if m.kind.thinks { engaged = think(m, dt, dist, dyP) }
         switch m.kind {
         case .pig, .cow, .sheep, .villager:
             if m.t2 > 0 {
@@ -13903,7 +14009,7 @@ extension Game {
                     chase(m, pb.x, 1.0, dt)
                     if m.kind == .wolf && m.b.onGround && dist < 4.0 && Double.random(in: 0...1) < 0.03 { m.b.vy = -12; m.b.vx = Double(m.dir) * 7.0 }
                     if peaceful { m.angry = false }
-                    else if abs(dyP) < 1.4 { contactHurt(m, d.dmg) }
+                    else { contactHurt(m, d.dmg) }
                 }
             } else {
                 wander(m, dt, 0.5)
@@ -13929,29 +14035,29 @@ extension Game {
                     m.b.vx = Double(m.dir) * 10.0
                     m.t3 = 0.6
                 }
-                if abs(dyP) < 1.5 { contactHurt(m, d.dmg) }
+                contactHurt(m, d.dmg)
             } else {
                 wander(m, dt, 0.5)
             }
             stepMob(m, dt)
         case .zombie:
-            updateZombie(m, dt, near && !peaceful, dyP)
+            updateZombie(m, dt, engaged, dyP)
         case .skeleton, .pirate, .pirateCaptain:
-            updateSwordsman(m, dt, near && !peaceful, dist, dyP)
+            updateSwordsman(m, dt, engaged, dist, dyP)
         case .pirateGunner, .imp:
-            updateShooter(m, dt, near && !peaceful, dist, dyP)
+            updateShooter(m, dt, engaged, dist, dyP)
         case .slime, .emberSlime:
-            updateSlime(m, dt, near && !peaceful, dyP)
+            updateSlime(m, dt, engaged, dyP)
         case .crow, .bat, .cinderBat, .wraith:
-            updateFlyer(m, dt, near && !peaceful, dist, dyP)
+            updateFlyer(m, dt, engaged, dist, dyP)
         case .fish:
             updateFish(m, dt)
         case .crawler:
-            updateCrawler(m, dt, near && !peaceful, dist, dyP)
+            updateCrawler(m, dt, engaged, dist, dyP)
         case .golem:
-            updateGolem(m, dt, near && !peaceful, dist, dyP)
+            updateGolem(m, dt, engaged, dist, dyP)
         case .archer:
-            updateArcher(m, dt, near && !peaceful, dist, dyP)
+            updateArcher(m, dt, engaged, dist, dyP)
         case .mimic:
             updateMimic(m, dt, !peaceful && !dead && dist < 20, dist, dyP)
         case .bearBoss, .rex, .sentinel, .warden:
@@ -13959,17 +14065,183 @@ extension Game {
         }
     }
 
+    // MARK: hostile minds
+
+    /// How far a monster's attack reaches (across, up or down) and whether it is shot from afar
+    func attackReach(_ m: Mob) -> (Double, Double, Bool) {
+        switch m.kind {
+        case .zombie: return (1.5, 1.7, false)
+        case .skeleton, .pirate, .pirateCaptain: return (2.0, 1.6, false)
+        case .pirateGunner, .imp: return (17.0, 9.0, true)
+        case .archer: return (18.0, 10.0, true)
+        case .crawler: return (4.6, 2.0, false)
+        case .golem: return (3.3, 2.4, false)
+        default: return (m.b.w * 0.5 + 0.5, 1.4, false)
+        }
+    }
+
+    /// A monster's senses and its plan, the same for every kind (each has its own attacks).
+    /// It notices the player by sight (a clear line from its eyes, rechecked a few times a second),
+    /// by sound up close, or by being hit; after a beat of surprise it gives chase; when the player
+    /// slips out of sight it searches where they were last seen, then goes home. Stuck against a wall
+    /// it tries one harder leap, then backs off and comes again. Night hunters spawned on the surface
+    /// roam toward the player before they have seen them. Returns whether it is after the player;
+    /// `aimX` is where it is heading.
+    func think(_ m: Mob, _ dt: Double, _ dist: Double, _ dyP: Double) -> Bool {
+        let d: MobDef = m.def
+        m.aiT += dt
+        if m.leapT > 0 { m.leapT -= dt }
+        if m.hunter && (m.kind == .skeleton || m.kind == .archer) && inSunlight(m) { m.burn = 2.0 }
+        if dead || settings.peaceful {
+            m.why = dead ? .playerGone : .peaceful
+            if m.ai != .idle && m.ai != .back { m.ai = .back; m.aiT = 0 }
+            if m.ai == .back && (abs(m.b.x - m.homeX) < 2.0 || m.aiT > 8.0) { m.ai = .idle; m.aiT = 0 }
+            m.aimX = m.homeX
+            return false
+        }
+        m.losT -= dt
+        if m.losT <= 0 {
+            // its eyes (a golem looks over a low wall) to the player's head or chest
+            m.losT = 0.18 + Double(m.id % 7) * 0.02
+            let ey: Double = m.kind == .golem ? m.b.top - 0.5 : shotY(m)
+            m.sees = m.kind == .wraith || world.lineClear(m.b.x, ey, pb.x, pb.y - pb.h * 0.6) || world.lineClear(m.b.x, ey, pb.x, pb.top + 0.2)
+        }
+        // sight reaches across most of the screen (further for the night's hunters, and for one already
+        // fighting); footsteps and scent carry through walls over a shorter distance
+        let base: Double = max(d.aggro, 16.0)
+        let sight: Double = base * (m.hunter ? 1.25 : 1.0) * (m.ai == .chase ? 1.5 : 1.0)
+        let sense: Double = base * 0.7
+        let hurt: Bool = clock - m.lastHitByPlayer < 0.6
+        let heard: Bool = dist < 3.5 && abs(dyP) < 3.0
+        let detect: Bool = hurt || heard || (dist < sight && abs(dyP) < 12.0 && m.sees)
+        let sensed: Bool = dist < sense && abs(dyP) < 10.0
+        if detect || sensed {
+            m.seenX = pb.x
+            m.seenY = pb.y
+            m.lostT = 0
+        } else {
+            m.lostT += dt
+        }
+        let hunting: Bool = m.hunter && isNight && world.dim == .overworld && dist < 80
+        switch m.ai {
+        case .idle, .back:
+            if detect {
+                m.ai = hurt ? .chase : .alert
+                m.aiT = 0
+            } else if sensed {
+                // something moving nearby, out of sight: it goes to look
+                m.ai = .search
+                m.aiT = 0
+            } else if hunting {
+                // a hunter roams toward where the player is, give or take
+                m.ai = .search
+                m.aiT = 0
+                m.seenX = pb.x + Double.random(in: -6...6)
+                m.seenY = pb.y
+            }
+        case .alert:
+            if m.aiT > 0.35 { m.ai = .chase; m.aiT = 0 }
+        case .chase:
+            if m.lostT > 2.5 { m.ai = .search; m.aiT = 0 }
+        case .search:
+            if detect {
+                m.ai = .chase
+                m.aiT = 0
+            } else if sensed {
+                m.aiT = 0
+            } else if (abs(m.b.x - m.seenX) < 1.2 && m.aiT > 2.0) || m.aiT > (hunting ? 14.0 : 8.0) {
+                if hunting {
+                    m.seenX = pb.x + Double.random(in: -8...8)
+                    m.seenY = pb.y
+                    m.aiT = 0
+                } else {
+                    m.ai = .back
+                    m.aiT = 0
+                }
+            }
+        case .retreat:
+            if m.aiT > 2.5 { m.ai = detect ? .chase : .search; m.aiT = 0 }
+        }
+        switch m.ai {
+        case .alert, .chase: m.aimX = pb.x
+        case .search: m.aimX = m.seenX
+        case .retreat: m.aimX = m.b.x + (m.b.x >= m.seenX ? 6.0 : -6.0)
+        case .back: m.aimX = m.homeX
+        case .idle: m.aimX = m.b.x
+        }
+        if m.ai == .back && abs(m.b.x - m.homeX) < 2.0 { m.ai = .idle; m.aiT = 0 }
+        // getting nowhere (pressed against a wall it can't get over, or hopping at it): one harder
+        // leap, then back off and come again. One already within reach of its attack is not stuck.
+        let reach: (Double, Double, Bool) = attackReach(m)
+        let inReach: Bool = dist <= reach.0 && abs(dyP) <= reach.1 && (!reach.2 || m.sees)
+        // (states 0 and 1 are walking about; 3 and up are its attacks)
+        let pushing: Bool = (m.ai == .chase || m.ai == .search) && abs(m.aimX - m.b.x) > 1.0 && m.st <= 1 && !(m.ai == .chase && inReach)
+        if pushing {
+            if abs(m.b.x - m.progX) > 0.6 {
+                m.progX = m.b.x
+                m.blockedT = max(0, m.blockedT - 0.5)
+            } else {
+                // a cactus or spikes in the way: it gives up on that much sooner
+                let ax: Int = Int(floor(m.b.x + Double(m.dir) * (m.b.w * 0.5 + 0.3)))
+                let thorny: Bool = world.tile(ax, Int(floor(m.b.y - 0.5))).hurts
+                m.blockedT += thorny ? dt * 3.0 : dt
+            }
+            // (applied in stepMob, after the creature's own moves, so its usual hop can't cancel it)
+            if !d.flying && m.blockedT > 0.9 && m.leapT <= 0 { m.leapReq = true }
+            if m.blockedT > 3.2 {
+                m.ai = .retreat
+                m.aiT = 0
+                m.blockedT = 0
+            }
+        } else if m.st <= 1 {
+            m.progX = m.b.x
+            m.blockedT = max(0, m.blockedT - dt * 0.5)
+        }
+        // the reason it is not attacking right now (shown by the AI overlay)
+        if m.ai == .retreat || m.blockedT > 0.9 { m.why = .blocked }
+        else if m.ai != .chase && m.ai != .alert { m.why = .notSeen }
+        else if dist > reach.0 { m.why = .outOfRange }
+        else if abs(dyP) > reach.1 { m.why = .tooHigh }
+        else if reach.2 && !m.sees { m.why = .noSight }
+        else if m.cd > 0 { m.why = .cooldown }
+        else { m.why = .none }
+        return m.ai != .idle && m.ai != .back
+    }
+
     // MARK: specific AIs
+
+    /// Out in full daylight under an open sky (the undead burn)
+    func inSunlight(_ m: Mob) -> Bool {
+        return world.dim == .overworld && dayFactor > 0.7 && precipAt(m.b.x) < 0.5 && wxHere.cloud < 0.9 && world.isSkyExposed(Int(floor(m.b.x)), Int(floor(m.b.y - 1))) && !m.b.inWater
+    }
 
     func updateZombie(_ m: Mob, _ dt: Double, _ aggro: Bool, _ dyP: Double) {
         let d: MobDef = m.def
-        // burn in sunlight
-        if world.dim == .overworld && dayFactor > 0.7 && precipAt(m.b.x) < 0.5 && wxHere.cloud < 0.9 && world.isSkyExposed(Int(floor(m.b.x)), Int(floor(m.b.y - 1))) && !m.b.inWater {
-            m.burn = 2.0
-        }
-        if aggro {
-            chase(m, pb.x, 1.0, dt)
-            if abs(dyP) < 1.6 { contactHurt(m, d.dmg) }
+        if inSunlight(m) { m.burn = 2.0 }
+        let dist: Double = abs(pb.x - m.b.x)
+        if m.st == 3 {
+            // arms drawn back: the swipe lands a moment later, so a quick step back dodges it
+            m.t3 -= dt
+            accelX(m, 0, 40, dt)
+            if m.t3 <= 0 {
+                m.st = 4
+                m.t3 = 0.25
+                mobStrike(m, reach: 1.2, height: 1.8, dmg: d.dmg, knock: 6.5)
+            }
+        } else if m.st == 4 {
+            m.t3 -= dt
+            accelX(m, 0, 40, dt)
+            if m.t3 <= 0 {
+                m.st = 0
+                m.cd = 0.9
+            }
+        } else if aggro {
+            chase(m, m.aimX, 1.0, dt)
+            if m.ai == .chase && (m.sees || dist < 1.0) && m.cd <= 0 && dist < 1.5 && abs(dyP) < 1.7 {
+                m.st = 3
+                m.t3 = 0.32
+                m.dir = pb.x >= m.b.x ? 1 : -1
+            }
         } else {
             wander(m, dt, 0.45)
         }
@@ -14001,21 +14273,21 @@ extension Game {
             let sp: Double = dist > 8 ? 1.15 : 0.95
             if isSkel {
                 // raise the shield while approaching, drop it to attack
-                m.blocking = dist > 2.4 && dist < 11
-                if dist < 2.0 && m.cd <= 0 && abs(dyP) < 1.6 {
+                m.blocking = dist > 2.4 && dist < 11 && m.ai == .chase
+                if m.ai == .chase && m.sees && dist < 2.0 && m.cd <= 0 && abs(dyP) < 1.6 {
                     m.st = 3
                     m.t3 = 0.38
                     m.blocking = false
                     m.dir = pb.x >= m.b.x ? 1 : -1
                 }
-                chase(m, pb.x, m.blocking ? 0.7 : sp, dt)
+                chase(m, m.aimX, m.blocking ? 0.7 : sp, dt)
             } else {
-                if dist < 2.0 && m.cd <= 0 && abs(dyP) < 1.6 {
+                if m.ai == .chase && m.sees && dist < 2.0 && m.cd <= 0 && abs(dyP) < 1.6 {
                     m.st = 3
                     m.t3 = 0.3
                     m.dir = pb.x >= m.b.x ? 1 : -1
                 }
-                chase(m, pb.x, sp, dt)
+                chase(m, m.aimX, sp, dt)
             }
         } else {
             m.blocking = false
@@ -14033,9 +14305,15 @@ extension Game {
             accelX(m, 0, 40, dt)
             m.dir = pb.x >= m.b.x ? 1 : -1
             if m.t3 <= 0 {
-                m.st = 6
-                m.t3 = 0.18
-                shootAtPlayer(m, isImp)
+                if clearShot(m) {
+                    m.st = 6
+                    m.t3 = 0.18
+                    shootAtPlayer(m, isImp)
+                } else if m.t3 < -0.8 {
+                    m.st = 0
+                    m.cd = 0.4
+                    m.blockedT += 0.6
+                }
             }
         } else if m.st == 6 {
             m.t3 -= dt
@@ -14043,7 +14321,10 @@ extension Game {
             if m.t3 <= 0 { m.st = 0; m.cd = isImp ? 1.9 : 2.2 }
         } else if aggro {
             let want: Double = isImp ? 8.0 : 9.0
-            if dist < want - 3.0 {
+            if (m.ai != .chase && m.ai != .alert) || !m.sees || m.blockedT > 0.5 || !m.b.onGround {
+                // no clear shot (or climbing for one): move in until there is one
+                chase(m, m.aimX, 0.9, dt)
+            } else if dist < want - 3.0 {
                 flee(m, pb.x, dt, 0.8)
             } else if dist > want + 3.0 {
                 chase(m, pb.x, 0.9, dt)
@@ -14051,7 +14332,7 @@ extension Game {
                 accelX(m, 0, 20, dt)
                 m.dir = pb.x >= m.b.x ? 1 : -1
             }
-            if m.cd <= 0 && dist < 17 && abs(dyP) < 9 {
+            if m.ai == .chase && m.sees && m.b.onGround && m.cd <= 0 && dist < 17 && abs(dyP) < 9 {
                 m.st = 3
                 m.t3 = 0.5
             }
@@ -14063,9 +14344,9 @@ extension Game {
 
     func shootAtPlayer(_ m: Mob, _ fire: Bool) {
         let ox: Double = m.b.x + Double(m.dir) * 0.6
-        let oy: Double = m.b.y - m.b.h * 0.65
+        let oy: Double = shotY(m)
         var dx: Double = pb.x - ox
-        var dy: Double = (pb.y - pb.h * 0.55) - oy
+        var dy: Double = shotAimY(m) - oy
         let len: Double = max(0.001, sqrt(dx * dx + dy * dy))
         dx /= len
         dy /= len
@@ -14086,7 +14367,7 @@ extension Game {
             m.b.vx *= 0.8
             if m.t1 <= 0 {
                 if aggro {
-                    let dirX: Double = pb.x >= m.b.x ? 1.0 : -1.0
+                    let dirX: Double = m.aimX >= m.b.x ? 1.0 : -1.0
                     m.dir = Int(dirX)
                     m.b.vy = -d.jump
                     m.b.vx = dirX * d.speed * 1.6
@@ -14099,10 +14380,14 @@ extension Game {
                 }
             }
         }
+        if aggro && !m.b.onGround {
+            // a little steering in mid-hop, so a bounce at a wall carries over it
+            accelX(m, (m.aimX >= m.b.x ? 1.0 : -1.0) * d.speed * 1.6, 5, dt)
+        }
         if m.kind == .emberSlime && Double.random(in: 0...1) < 0.1 {
             spawnParticles(m.b.x, m.b.y - 0.4, 0xFF8A20, 1, 1.2, 0.4, -3)
         }
-        if aggro && abs(dyP) < 1.5 { contactHurt(m, d.dmg) }
+        if aggro && m.ai == .chase { contactHurt(m, d.dmg) }
         stepMob(m, dt)
     }
 
@@ -14129,8 +14414,8 @@ extension Game {
                 spd = d.speed * 1.4
             }
         } else if aggro {
-            tx = pb.x
-            ty = pb.y - 1.3 + sin(clock * 3.0 + Double(m.id)) * 1.2
+            tx = m.aimX
+            ty = (m.ai == .chase ? pb.y : m.seenY) - 1.3 + sin(clock * 3.0 + Double(m.id)) * 1.2
             spd = d.speed
         } else {
             m.t1 -= dt
@@ -14160,7 +14445,7 @@ extension Game {
             world.moveBody(&m.b, dt, stepUp: 0, dropThrough: false, decks: [])
             if m.b.hitWall || m.b.hitCeil || m.b.onGround { m.b.vy = -1.0; m.t1 = 0 }
         }
-        if aggro && m.kind != .crow && abs(dyP) < 1.6 { contactHurt(m, d.dmg) }
+        if aggro && m.kind != .crow && m.ai == .chase { contactHurt(m, d.dmg) }
     }
 
     func updateFish(_ m: Mob, _ dt: Double) {
@@ -14276,24 +14561,63 @@ extension Game {
 // MARK: - Mob spawning, villagers
 
 extension Game {
+    /// Notes how a spawn attempt ended (the debug panel shows the tally)
+    func spawnNote(_ s: String) {
+        spawnLast = s
+        if spawnLog.count < 40 || spawnLog[s] != nil { spawnLog[s, default: 0] += 1 }
+    }
+
+    /// Monsters keep away from strong light: a torch, lantern, campfire or lit lamp within 7 blocks
+    func litSpot(_ x: Int, _ y: Int) -> Bool {
+        for ty in (y - 7)...(y + 2) {
+            for tx in (x - 7)...(x + 7) where Tile.lightTable[i8(world.tile(tx, ty).rawValue)] >= 9 { return true }
+        }
+        return false
+    }
+
+    /// Ground monsters can come out on: earth, sand, snow and rock, never planks, brick, glass or other
+    /// building blocks (so not on the roof or floor of a house)
+    func naturalGround(_ t: Tile) -> Bool {
+        switch t {
+        case .grass, .dirt, .stone, .sand, .snow, .ice, .sandstone, .mud, .dryGrass, .jungleGrass, .mossGrass,
+             .slate, .deepRock, .obsidian, .ashStone, .farmland, .coal, .copper, .iron, .tin, .saltpeter: return true
+        default: return false
+        }
+    }
+
+    /// How many monsters may be about at once (surface or underground) at this night-danger setting
+    func monsterCap(_ place: SpawnPlace) -> Int {
+        let d: Int = clampI(settings.nightDanger, 0, 2)
+        if place == .surface || place == .ocean { return [3, 6, 10][d] }
+        return [6, 9, 12][d]
+    }
+
     func updateSpawning(_ dt: Double) {
         villagerTimer -= dt
         if villagerTimer <= 0 {
             villagerTimer = 2.5
             ensureVillagers()
         }
+        if monsterSpawnCD > 0 { monsterSpawnCD -= dt }
         spawnTimer -= dt
         if spawnTimer > 0 { return }
         spawnTimer = Double.random(in: 0.45...1.0)
         if dead { return }
         var passive: Int = 0
         var hostile: Int = 0
+        var predators: Int = 0
         var aquatic: Int = 0
         for m in mobs {
-            if m.hp <= 0 || m.tame || m.persistent { continue }
-            if abs(m.b.x - pb.x) > 100 { continue }
+            if m.hp <= 0 || m.removed || m.tame || m.persistent { continue }
+            let dx: Double = abs(m.b.x - pb.x)
+            if dx > 100 { continue }
             if m.kind == .fish { aquatic += 1 }
-            else if m.def.hostile { hostile += 1 }
+            else if m.def.hostile {
+                // only creatures still in play hold a place: bosses, lair guards and crews have their own
+                // rules, and one standing frozen far off-screen is about to leave
+                if m.isBoss || m.boat >= 0 || m.lair != 0 || dx > 72 || abs(m.b.y - pb.y) > 56 { continue }
+                if m.kind.isPredator { predators += 1 } else { hostile += 1 }
+            }
             else if m.kind != .villager { passive += 1 }
         }
         let px: Int = Int(floor(pb.x))
@@ -14306,11 +14630,12 @@ extension Game {
             let depth: Int = Int(pb.y) - sh
             if depth > 18 && !open { place = .cave }
         }
+        // just past the edge of the screen, so what comes is soon in sight
         let half: Double = viewTilesW * 0.5 + 3.0
         let side: Double = Bool.random() ? 1.0 : -1.0
-        let sx: Double = pb.x + side * (half + Double.random(in: 2...24))
+        let sx: Double = pb.x + side * (half + Double.random(in: 1...16))
         let ix: Int = Int(floor(sx))
-        if !world.isLoaded(ix) { return }
+        if !world.isLoaded(ix) { spawnNote("spot not loaded"); return }
         if !gen.infinite && (ix < 4 || ix > gen.width - 5) { return }
         var sy: Double = 0
         var eff: SpawnPlace = place
@@ -14322,12 +14647,12 @@ extension Game {
                 var wy: Int = h + 1
                 var dep: Int = 0
                 while world.tile(ix, wy) == .water && dep < 40 { wy += 1; dep += 1 }
-                if dep < 5 { return }
+                if dep < 5 { spawnNote("shallow water"); return }
                 sy = Double(h + 2 + Int.random(in: 0..<max(1, dep - 3)))
             } else if ht.solid {
-                if world.solid(ix, h - 1) || world.solid(ix, h - 2) || world.tile(ix, h - 1).liquid { return }
+                if world.solid(ix, h - 1) || world.solid(ix, h - 2) || world.tile(ix, h - 1).liquid { spawnNote("no headroom"); return }
                 sy = Double(h)
-            } else { return }
+            } else { spawnNote("no ground"); return }
         } else {
             let startY: Int = Int(pb.y) + Int.random(in: -20...20)
             var found: Bool = false
@@ -14341,15 +14666,27 @@ extension Game {
                 y += 1
                 tries += 1
             }
-            if !found { return }
-            if place == .cave && world.isSkyExposed(ix, y) { return }
-            if light.valid && light.covers(ix, y, ix, y) && light.brightness(ix, y) > 6 && !fullBright { return }
+            if !found { spawnNote("no floor"); return }
+            if place == .cave && world.isSkyExposed(ix, y) { spawnNote("open sky"); return }
+            if light.valid && light.covers(ix, y, ix, y) && light.brightness(ix, y) > 6 && !fullBright { spawnNote("too bright"); return }
             sy = Double(y + 1)
         }
         let biome: Biome = world.dim == .overworld ? gen.col(ix).biome : .umbral
         // under a dark storm by day, now and then the night's creatures come out too
         let stormDark: Bool = world.dim == .overworld && settings.weatherOn && wxHere.cloud > 0.9 && wxHere.precip > 0.6 && Double.random(in: 0...1) < 0.35
         let night: Bool = isNight || stormDark
+        // on the surface, monsters stay out of lamplight, off roofs and away from ground far above or
+        // below the player (somewhere they could never reach them from)
+        var monsterBlock: String = ""
+        if eff == .surface {
+            let gy: Int = Int(sy)
+            if litSpot(ix, gy - 1) { monsterBlock = "lit by a lamp" }
+            else if !naturalGround(world.tile(ix, gy)) { monsterBlock = "on a building" }
+            else if abs(sy - pb.y) > 30 { monsterBlock = "out of reach" }
+            else if monsterSpawnCD > 0 { monsterBlock = "pacing" }
+        }
+        let cap: Int = monsterCap(eff)
+        var capped: Bool = false
         var cands: [SpawnRule] = []
         var total: Double = 0
         for r in spawnRules {
@@ -14363,9 +14700,13 @@ extension Game {
             let d: MobDef = mobDef(r.kind)
             if d.hostile {
                 if !monstersEnabled || settings.peaceful { continue }
-                let cap: Int = (eff == .cave || eff == .umbral) ? 9 : 6
-                if hostile >= cap { continue }
-                if eff == .surface && !night && d.behavior == .hostile && r.kind == .zombie { continue }
+                if r.kind.isPredator {
+                    // wild predators have their own small number and come by day too
+                    if predators >= 3 { continue }
+                } else {
+                    if hostile >= cap { capped = true; continue }
+                    if !monsterBlock.isEmpty { continue }
+                }
             } else if r.kind == .fish {
                 if aquatic >= 9 { continue }
             } else {
@@ -14374,15 +14715,23 @@ extension Game {
             cands.append(r)
             total += r.weight
         }
-        if cands.isEmpty || total <= 0 { return }
+        if cands.isEmpty || total <= 0 {
+            if capped { spawnNote("monster limit reached") }
+            else if !monsterBlock.isEmpty && night { spawnNote(monsterBlock) }
+            else { spawnNote(night ? "nothing for this place" : "nothing for this place by day") }
+            return
+        }
         var pick: Double = Double.random(in: 0..<total)
         var chosen: SpawnRule = cands[0]
         for r in cands {
             pick -= r.weight
             if pick <= 0 { chosen = r; break }
         }
-        let n: Int = 1 + Int.random(in: 0..<max(1, chosen.group))
         let def: MobDef = mobDef(chosen.kind)
+        let monster: Bool = def.hostile && !chosen.kind.isPredator
+        var n: Int = 1 + Int.random(in: 0..<max(1, chosen.group))
+        if monster { n = min(n, cap - hostile) }
+        var made: Int = 0
         for k in 0..<n {
             let ox: Double = Double(k) * 1.1 * side + Double.random(in: -0.4...0.4)
             let x: Double = sx + ox
@@ -14399,7 +14748,16 @@ extension Game {
             let m: Mob = addMob(chosen.kind, x, y)
             m.homeX = x
             m.homeY = y
+            // the night's monsters on the surface come looking for the player
+            if monster && eff == .surface && night { m.hunter = true }
             if chosen.kind == .sheep && Double.random(in: 0...1) < 0.1 { m.sheared = true }
+            made += 1
+        }
+        if made == 0 { spawnNote("no room to stand"); return }
+        spawnNote(joinText("spawned ", def.name))
+        if monster && eff == .surface {
+            let d: Int = clampI(settings.nightDanger, 0, 2)
+            monsterSpawnCD = [8.0, 4.0, 2.0][d] * Double.random(in: 0.8...1.25)
         }
     }
 
@@ -23134,6 +23492,35 @@ struct WeatherSettingsSection: View {
     }
 }
 
+/// How dangerous nights are, and when wiring is drawn
+struct NightSettingsSection: View {
+    @Binding var settings: Settings
+
+    func choice(_ title: String, _ on: Bool, _ act: @escaping () -> Void) -> some View {
+        SmallButton(title: title, color: on ? Color(hex: 0x4E8A3E) : Color(hex: 0x555555), action: act)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("NIGHTS").font(.pixel(15)).foregroundColor(Color(hex: 0xFFE066))
+            Text("How many monsters come out at night, and how quickly").font(.pixel(11, .semibold))
+            HStack(spacing: 6) {
+                choice("CALM", settings.nightDanger == 0) { settings.nightDanger = 0 }
+                choice("NORMAL", settings.nightDanger == 1) { settings.nightDanger = 1 }
+                choice("DEADLY", settings.nightDanger == 2) { settings.nightDanger = 2 }
+            }
+            Text("POWER WIRING").font(.pixel(15)).foregroundColor(Color(hex: 0xFFE066))
+            HStack(spacing: 6) {
+                choice("WHEN BUILDING", settings.showWires == 0) { settings.showWires = 0 }
+                choice("ALWAYS", settings.showWires == 1) { settings.showWires = 1 }
+                choice("HIDDEN", settings.showWires == 2) { settings.showWires = 2 }
+            }
+        }
+        .font(.pixel(13, .bold))
+        .foregroundColor(Color.white)
+    }
+}
+
 /// A weather station's screen, read live from the simulation
 struct WeatherPanel: View {
     @ObservedObject var game: Game
@@ -23271,6 +23658,44 @@ extension Game {
         weather.wind = p.wind * weather.windDir
         fillPlan()
         say(joinText("Weather: ", weatherLabel(k, snow: wxHere.snow)), 1.5)
+    }
+
+    /// Counts the monsters that hold a place right now (the same count the spawner uses)
+    func monstersAbout() -> Int {
+        var n: Int = 0
+        for m in mobs where m.hp > 0 && !m.removed && m.def.hostile && !m.kind.isPredator && !m.tame && !m.persistent && !m.isBoss && m.boat < 0 && m.lair == 0 {
+            if abs(m.b.x - pb.x) <= 72 && abs(m.b.y - pb.y) <= 56 { n += 1 }
+        }
+        return n
+    }
+
+    func spawnDebugLines() -> [String] {
+        var out: [String] = []
+        let place: String = world.dim == .umbral ? "umbral" : (Int(pb.y) - gen.col(Int(floor(pb.x))).h > 18 ? "cave" : "surface")
+        let cap: Int = monsterCap(place == "surface" ? .surface : .cave)
+        out.append(joinText(isNight ? "Night" : "Day", "  ", place, "  monsters ", String(monstersAbout()), " / ", String(cap), String(format: "  next in %.1fs", max(0, monsterSpawnCD))))
+        if !spawnLast.isEmpty { out.append(joinText("Last attempt: ", spawnLast)) }
+        let top: [(String, Int)] = spawnLog.sorted { $0.value > $1.value }.prefix(6).map { ($0.key, $0.value) }
+        for t in top { out.append(joinText("  ", t.0, " ×", String(t.1))) }
+        return out
+    }
+
+    /// Debug: makes it night and runs forty spawn attempts at once (the pacing between monsters is
+    /// skipped), then reports what came out and what stopped the rest
+    func debugSpawnTest() {
+        if world.dim == .overworld { debugSetTime(0.62) }
+        spawnLog = [:]
+        let before: Set<Int> = Set(mobs.map { $0.id })
+        for _ in 0..<40 {
+            spawnTimer = 0
+            monsterSpawnCD = 0
+            updateSpawning(0.0)
+        }
+        var made: [String: Int] = [:]
+        for m in mobs where !before.contains(m.id) && m.def.hostile { made[m.def.name, default: 0] += 1 }
+        let list: String = made.isEmpty ? "no monsters" : made.sorted { $0.value > $1.value }.map { joinText(String($0.value), " ", $0.key) }.joined(separator: ", ")
+        say(joinText("Spawn test: ", list), 4.0)
+        bumpHUD()
     }
 
     func debugStrikeNearby() {
@@ -23840,21 +24265,21 @@ extension Game {
             }
         case 4:
             m.t3 -= dt
-            if abs(dyP) < 1.4 { contactHurt(m, d.dmg * 1.3) }
+            contactHurt(m, d.dmg * 1.3)
             if (m.b.onGround && m.t3 < 0.55) || m.t3 <= 0 {
                 m.st = 0
                 m.cd = 1.3
             }
         default:
             if aggro {
-                chase(m, pb.x, 1.0, dt)
+                chase(m, m.aimX, 1.0, dt)
                 // scrambles up ledges
                 if m.b.hitWall && m.b.onGround { m.b.vy = -11.5 }
-                if m.b.onGround && m.cd <= 0 && dist > 1.8 && dist < 4.6 && abs(dyP) < 2.0 {
+                if m.ai == .chase && m.b.onGround && m.cd <= 0 && dist > 1.8 && dist < 4.6 && abs(dyP) < 2.0 {
                     m.st = 3
                     m.t3 = 0.28
                 }
-                if abs(dyP) < 1.0 { contactHurt(m, d.dmg) }
+                if m.ai == .chase { contactHurt(m, d.dmg) }
             } else {
                 wander(m, dt, 0.6)
             }
@@ -23898,8 +24323,8 @@ extension Game {
             }
         default:
             if aggro {
-                chase(m, pb.x, 1.0, dt)
-                if m.cd <= 0 && m.b.onGround {
+                chase(m, m.aimX, 1.0, dt)
+                if m.ai == .chase && m.cd <= 0 && m.b.onGround {
                     if dist < 3.3 && abs(dyP) < 2.4 {
                         m.st = 3
                         m.t3 = 0.75
@@ -23907,13 +24332,14 @@ extension Game {
                         let x0: Double = m.dir > 0 ? m.b.x - 0.6 : m.b.x - 3.9
                         let x1: Double = m.dir > 0 ? m.b.x + 3.9 : m.b.x + 0.6
                         warn(x0, m.b.y - 2.4, x1, m.b.y, 0.75, 0xFF8A2A)
-                    } else if dist > 4.5 && dist < 11 && Double.random(in: 0...1) < 0.02
-                                && world.lineClear(m.b.x, m.b.top + 0.3, pb.x, pb.y - pb.h * 0.6) {
+                    } else if dist > 4.5 && dist < 11 && Double.random(in: 0...(m.blockedT > 0 ? 0.3 : 1.0)) < 0.02
+                                && world.lineClear(m.b.x, m.b.top - 1.5, pb.x, pb.y - pb.h * 0.6) {
+                        // lobbed, so it clears a low wall: thrown over anything it can see over
                         m.st = 5
                         m.t3 = 0.6
                     }
                 }
-                if abs(dyP) < 1.8 { contactHurt(m, d.dmg * 0.5) }
+                if m.ai == .chase { contactHurt(m, d.dmg * 0.5) }
             } else {
                 wander(m, dt, 0.35)
             }
@@ -23950,9 +24376,17 @@ extension Game {
             accelX(m, 0, 40, dt)
             m.dir = pb.x >= m.b.x ? 1 : -1
             if m.t3 <= 0 {
-                shootArrowAtPlayer(m)
-                m.st = 6
-                m.t3 = 0.25
+                if clearShot(m) {
+                    shootArrowAtPlayer(m)
+                    m.st = 6
+                    m.t3 = 0.25
+                } else if m.t3 < -0.8 {
+                    // the target went behind cover: the draw is let down, and next time it climbs for a
+                    // better spot (see think)
+                    m.st = 0
+                    m.cd = 0.4
+                    m.blockedT += 0.6
+                }
             }
         case 6:
             m.t3 -= dt
@@ -23960,18 +24394,19 @@ extension Game {
             if m.t3 <= 0 { m.st = 0; m.cd = Double.random(in: 1.4...2.2) }
         default:
             if aggro {
-                let sees: Bool = world.lineClear(m.b.x, m.b.top + 0.3, pb.x, pb.y - pb.h * 0.6)
-                if dist < 5.0 {
+                // keeps its distance from the moment it notices the player; shoots once it is fighting
+                let sees: Bool = m.sees && (m.ai == .chase || m.ai == .alert)
+                if dist < 5.0 && sees {
                     // too close: back off, hopping away now and then
                     flee(m, pb.x, dt, 1.1)
                     if m.b.onGround && Double.random(in: 0...1) < 0.025 { m.b.vy = -10; m.b.vx = Double(m.dir) * 5.5 }
-                } else if dist > 12.0 || !sees {
-                    chase(m, pb.x, 0.9, dt)
+                } else if dist > 12.0 || !sees || m.blockedT > 0.5 || !m.b.onGround {
+                    chase(m, m.aimX, 0.9, dt)
                 } else {
                     accelX(m, 0, 20, dt)
                     m.dir = pb.x >= m.b.x ? 1 : -1
                 }
-                if m.cd <= 0 && sees && dist >= 3.0 && dist < 18 && abs(dyP) < 10 {
+                if m.ai == .chase && m.cd <= 0 && sees && m.b.onGround && dist >= 3.0 && dist < 18 && abs(dyP) < 10 {
                     m.st = 3
                     m.t3 = 0.6
                 }
@@ -23982,11 +24417,28 @@ extension Game {
         stepMob(m, dt)
     }
 
+    /// A clear line from where a shot leaves to the player's chest, checked at the moment of release
+    func clearShot(_ m: Mob) -> Bool {
+        let ox: Double = m.b.x + Double(m.dir) * 0.6
+        return world.lineClear(ox, shotY(m), pb.x, shotAimY(m))
+    }
+
+    /// Where a creature's shot leaves (its shoulder) and the part of the player it aims for: the chest,
+    /// or the head when only the head shows over cover
+    func shotY(_ m: Mob) -> Double { return m.b.top + 0.45 }
+
+    func shotAimY(_ m: Mob) -> Double {
+        let ox: Double = m.b.x + Double(m.dir) * 0.6
+        let chest: Double = pb.y - pb.h * 0.55
+        if world.lineClear(ox, shotY(m), pb.x, chest) { return chest }
+        return pb.top + 0.25
+    }
+
     func shootArrowAtPlayer(_ m: Mob) {
         let ox: Double = m.b.x + Double(m.dir) * 0.6
-        let oy: Double = m.b.y - m.b.h * 0.6
+        let oy: Double = shotY(m)
         let tx: Double = pb.x + pb.vx * 0.2
-        let ty: Double = pb.y - pb.h * 0.55
+        let ty: Double = shotAimY(m)
         let grav: Double = 15.0
         let dx: Double = tx - ox
         let dy: Double = ty - oy
@@ -24779,7 +25231,7 @@ enum WorldRenderer {
         drawOverlays(&ctx, W, H, g, v)
         drawWeatherOverlay(&ctx, W, H, g, v)
         drawFloats(&ctx, g, v)
-        if g.showChunks || g.showHitboxes { drawDebug(&ctx, H, g, v) }
+        if g.showChunks || g.showHitboxes || g.showAI { drawDebug(&ctx, H, g, v) }
         if g.settings.showFPS {
             let fpsN: Int = Int(g.renderFPS.rounded())
             let pf: Perf = Perf.shared
@@ -25231,6 +25683,11 @@ enum WorldRenderer {
                 let blink: Bool = Int(g.clock * 8.0) % 2 == 0
                 let col: Color = blink ? Color(hex: 0xFF3030) : Color(hex: 0xFFE040)
                 drawLabel(&ctx, "!", v.sx(m.b.x), v.sy(m.b.top) - 20.0, 30, col)
+            }
+            // the moment a monster notices the player
+            if m.ai == .alert {
+                let pop: Double = min(1.0, m.aiT / 0.12)
+                drawLabel(&ctx, "!", v.sx(m.b.x), v.sy(m.b.top) - 14.0 - 6.0 * pop, 22, Color(hex: 0xFFD838))
             }
         }
     }
@@ -26000,6 +26457,26 @@ enum WorldRenderer {
             }
             for veh in g.vehicles {
                 strokeRect(&ctx, v.rect(veh.b.left, veh.b.top, veh.b.w, veh.b.h), Color.purple, 1)
+            }
+        }
+        if g.showAI {
+            for m in g.mobs where m.def.hostile && m.hp > 0 && v.visible(m.b.x, m.b.y, 4) {
+                let dist: Double = abs(g.pb.x - m.b.x)
+                var st: String = m.ai.name
+                if m.st == 3 || m.st == 5 { st = "attack" } else if m.st == 4 || m.st == 6 { st = "recover" }
+                if !m.kind.thinks { st = m.angry ? "angry" : "wild" }
+                let reach: (Double, Double, Bool) = g.attackReach(m)
+                let line1: String = joinText(st, String(format: "  %.1fm", dist), m.sees ? "  sees" : "  blind", m.cd > 0 ? String(format: "  cd %.1f", m.cd) : "")
+                let line2: String = joinText(dist <= reach.0 ? "in range" : "out of range", m.why == .none ? "" : joinText(" | ", m.why.name))
+                let x: Double = v.sx(m.b.x)
+                let y: Double = v.sy(m.b.top) - 30.0
+                let col: Color = m.ai == .chase ? Color(hex: 0xFF7060) : (m.ai == .search ? Color(hex: 0xFFD060) : Color(hex: 0xC0C0C0))
+                fillRect(&ctx, mkRect(x - 78.0, y - 9.0, 156.0, 26.0), Color.black.opacity(0.55))
+                drawLabel(&ctx, line1, x, y - 1.0, 10, col)
+                drawLabel(&ctx, line2, x, y + 10.0, 9, Color.white)
+                if m.ai == .search || m.ai == .back {
+                    strokeLine(&ctx, x, v.sy(m.b.cy), v.sx(m.aimX), v.sy(m.b.cy), Color(hex: 0xFFD060, alpha: 0.5), 1)
+                }
             }
         }
     }
@@ -27330,6 +27807,7 @@ struct PauseView: View {
                 toggles
                 CameraSettingsSection(settings: settingsBinding, onChange: { game.tilePx = game.settings.tilePx })
                 WeatherSettingsSection(settings: settingsBinding, onChange: { game.bumpHUD() })
+                NightSettingsSection(settings: settingsBinding)
                 PixelButton(title: "SAVE & QUIT", color: Color(hex: 0xA03030)) { quit() }
                 if !savedNote.isEmpty { Text(savedNote).font(.pixel(12)).foregroundColor(Color.white) }
             }
@@ -27429,6 +27907,7 @@ struct DebugPanel: View {
                 multiplierSection
                 hazardSection
                 weatherSection
+                nightSection
                 if showPerf { perfSection }
                 SmallButton(title: showSystems ? "Hide systems" : "Systems...") { showSystems.toggle() }
                 if showSystems { systemsSection }
@@ -27697,6 +28176,22 @@ struct DebugPanel: View {
 // ===== u05_menu =====
 
 extension DebugPanel {
+    /// Night monsters: what the spawner is doing and why, a forced test, and the AI overlay
+    var nightSection: some View {
+        let lines: [String] = game.spawnDebugLines()
+        return VStack(alignment: .leading, spacing: 6) {
+            section("MONSTERS")
+            Toggle("AI overlay (state, sight, range, why not attacking)", isOn: $game.showAI)
+            ForEach(0..<lines.count, id: \.self) { i in
+                Text(verbatim: lines[i]).font(.pixel(10, .semibold))
+            }
+            HStack(spacing: 6) {
+                SmallButton(title: "Night + spawn test") { game.debugSpawnTest() }
+                SmallButton(title: "Clear log") { game.spawnLog = [:]; game.bumpHUD() }
+            }
+        }
+    }
+
     /// Make any kind of weather start now (events come with their usual warning), or call down a bolt
     var weatherSection: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -28187,6 +28682,7 @@ struct SettingsView: View {
             Slider(value: $settings.rareChance, in: 0.0...0.8, step: 0.02)
             CameraSettingsSection(settings: $settings)
             WeatherSettingsSection(settings: $settings)
+            NightSettingsSection(settings: $settings)
             PixelButton(title: "DONE", color: Color(hex: 0x4E8A3E)) { done() }
         }
         .font(.pixel(14, .bold))

@@ -419,6 +419,14 @@ enum Tile: UInt8, CaseIterable, Codable {
     /// sandbags, storm shutters (closed and open), reinforced walls and storm shingles
     case weatherStation, dopplerStation, stormSiren, lightningRod, windTurbine, rainBarrel, rainCistern, weatherVane, heater
     case sandbag, shutterClosed, shutterOpen, stormBrick, shingles
+    /// Sparkworks power and automation (appended): generators, storage, power control, pulse sources
+    /// and logic, sensors, and machines (lamps and gates have on and off forms)
+    case crankGen, solarPanel, fuelGen, waterWheel, emberDynamo
+    case battery, accumulator
+    case powerSwitch, breaker, powerMeter
+    case lever, pushButton, pressurePlate, pulseTimer, repeater, inverter, logicGate
+    case motionSensor, daySensor, weatherSensor, itemSensor, proximitySensor
+    case gateClosed, gateOpen, lampOff, lampOn, arcTrap, autoDrill, conveyor, collector, autoCrafter, sumpPump, signalLight
 
     static let defTable: [TileDef] = Tile.allCases.map { Tile.makeDef($0) }
     static let solidTable: [Bool] = Tile.allCases.map { Tile.makeDef($0).solid }
@@ -435,6 +443,7 @@ enum Tile: UInt8, CaseIterable, Codable {
     /// rain, hail and lightning stop at these (anything solid, glass, platforms, leaves, water)
     static let rainStopTable: [Bool] = Tile.allCases.map { Tile.makeDef($0).solid || Tile.makeDef($0).platform || Tile.makeDef($0).liquid || isLeafTile($0) }
     static let deviceTable: [Bool] = Tile.allCases.map { isWeatherDevice($0) }
+    static let powerTable: [Bool] = Tile.allCases.map { powerRole($0) != .none }
 
     var idx: Int { return i8(rawValue) }
     var def: TileDef { return Tile.defTable[i8(rawValue)] }
@@ -448,6 +457,8 @@ enum Tile: UInt8, CaseIterable, Codable {
     var isPlatform: Bool { return Tile.platformTable[i8(rawValue)] }
     var hardness: Double { return Tile.hardTable[i8(rawValue)] }
     var supportsThings: Bool { return Tile.supportTable[i8(rawValue)] }
+    /// a Sparkworks device (or the wind turbine, which feeds power cable too)
+    var isPower: Bool { return Tile.powerTable[i8(rawValue)] }
 
     /// The tile a held block becomes when placed: a log item builds a solid log block, not a tree trunk
     var placedForm: Tile {
@@ -665,6 +676,72 @@ enum Tile: UInt8, CaseIterable, Codable {
             return TileDef(name: "Reinforced Wall", hard: 3.0, tier: 2, style: .custom, colors: [0x6A6E78])
         case .shingles:
             return TileDef(name: "Storm Shingles", hard: 1.1, tier: 1, style: .custom, colors: [0x7A4A3A])
+        case .crankGen:
+            return TileDef(name: "Hand Crank Generator", hard: 1.0, solid: false, opaque: false, style: .custom, colors: [0x5A6270])
+        case .solarPanel:
+            return TileDef(name: "Solar Panel", hard: 1.0, tier: 1, solid: false, opaque: false, style: .custom, colors: [0x2A5A9A])
+        case .fuelGen:
+            return TileDef(name: "Fuel Generator", hard: 1.4, tier: 1, solid: false, opaque: false, style: .custom, colors: [0x5A6270])
+        case .waterWheel:
+            return TileDef(name: "Water Wheel", hard: 0.9, solid: false, opaque: false, style: .custom, colors: [0x8F6732])
+        case .emberDynamo:
+            return TileDef(name: "Ember Dynamo", hard: 2.4, tier: 4, solid: false, opaque: false, light: 5, style: .custom, colors: [0x2A1E2E])
+        case .battery:
+            return TileDef(name: "Copper Cell", hard: 1.0, tier: 1, solid: false, opaque: false, style: .custom, colors: [0x5A6270])
+        case .accumulator:
+            return TileDef(name: "Crystal Accumulator", hard: 1.8, tier: 2, solid: false, opaque: false, light: 3, style: .custom, colors: [0x30A0A0])
+        case .powerSwitch:
+            return TileDef(name: "Power Switch", hard: 0.6, solid: false, opaque: false, style: .custom, colors: [0x5A6270])
+        case .breaker:
+            return TileDef(name: "Circuit Breaker", hard: 0.8, solid: false, opaque: false, style: .custom, colors: [0x5A6270])
+        case .powerMeter:
+            return TileDef(name: "Power Meter", hard: 0.6, solid: false, opaque: false, style: .custom, colors: [0xE8E4D8])
+        case .lever:
+            return TileDef(name: "Lever", hard: 0.5, solid: false, opaque: false, style: .custom, colors: [0x5A6270])
+        case .pushButton:
+            return TileDef(name: "Push Button", hard: 0.5, solid: false, opaque: false, style: .custom, colors: [0x30B0C0])
+        case .pressurePlate:
+            return TileDef(name: "Pressure Plate", hard: 0.5, solid: false, opaque: false, style: .custom, colors: [0x8A94A4])
+        case .pulseTimer:
+            return TileDef(name: "Pulse Timer", hard: 0.6, solid: false, opaque: false, style: .custom, colors: [0xE8E4D8])
+        case .repeater:
+            return TileDef(name: "Pulse Relay", hard: 0.6, solid: false, opaque: false, style: .custom, colors: [0x5A6270])
+        case .inverter:
+            return TileDef(name: "Inverter", hard: 0.6, solid: false, opaque: false, style: .custom, colors: [0x6A4A7A])
+        case .logicGate:
+            return TileDef(name: "Logic Gate", hard: 0.6, solid: false, opaque: false, style: .custom, colors: [0x3A6A6A])
+        case .motionSensor:
+            return TileDef(name: "Motion Sensor", hard: 0.7, solid: false, opaque: false, style: .custom, colors: [0xC86A3A])
+        case .daySensor:
+            return TileDef(name: "Daylight Sensor", hard: 0.7, solid: false, opaque: false, style: .custom, colors: [0x5A8AC8])
+        case .weatherSensor:
+            return TileDef(name: "Weather Sensor", hard: 0.7, solid: false, opaque: false, style: .custom, colors: [0x3B7BE0])
+        case .itemSensor:
+            return TileDef(name: "Item Sensor", hard: 0.7, solid: false, opaque: false, style: .custom, colors: [0xA97B45])
+        case .proximitySensor:
+            return TileDef(name: "Proximity Sensor", hard: 0.7, solid: false, opaque: false, style: .custom, colors: [0x30E0D0])
+        case .gateClosed:
+            return TileDef(name: "Steel Gate", hard: 2.2, tier: 2, opaque: false, style: .custom, colors: [0x8A94A4], drop: .block(.gateClosed))
+        case .gateOpen:
+            return TileDef(name: "Open Steel Gate", hard: 2.2, tier: 2, solid: false, opaque: false, style: .custom, colors: [0x8A94A4], drop: .block(.gateClosed))
+        case .lampOff:
+            return TileDef(name: "Spark Lamp", hard: 0.8, opaque: false, style: .custom, colors: [0x8A9AA0], drop: .block(.lampOff))
+        case .lampOn:
+            return TileDef(name: "Lit Spark Lamp", hard: 0.8, opaque: false, light: 15, style: .custom, colors: [0xFFF4C0], drop: .block(.lampOff))
+        case .arcTrap:
+            return TileDef(name: "Arc Trap", hard: 1.8, tier: 2, style: .custom, colors: [0x5A6270])
+        case .autoDrill:
+            return TileDef(name: "Auto Drill", hard: 2.0, tier: 2, style: .custom, colors: [0xE8C020])
+        case .conveyor:
+            return TileDef(name: "Conveyor Belt", hard: 1.2, tier: 1, style: .custom, colors: [0x2A2A2E])
+        case .collector:
+            return TileDef(name: "Item Collector", hard: 1.2, tier: 1, style: .custom, colors: [0x8A94A4])
+        case .autoCrafter:
+            return TileDef(name: "Auto Crafter", hard: 1.6, tier: 2, style: .custom, colors: [0xB0A060])
+        case .sumpPump:
+            return TileDef(name: "Sump Pump", hard: 1.4, tier: 1, style: .custom, colors: [0x3B7BE0])
+        case .signalLight:
+            return TileDef(name: "Pulse Indicator", hard: 0.4, solid: false, opaque: false, style: .custom, colors: [0x30E0D0])
         }
     }
 }
@@ -841,6 +918,107 @@ func customTileRows(_ t: Tile) -> ([String], [Character: UInt32])? {
     case .shingles:
         return (["rRrrRrrR", "rrrrrrrr", "kkkkkkkk", "RrrRrrRr", "rrrrrrrr", "kkkkkkkk", "rRrrRrrR", "rrrrrrrr"],
                 ["r": 0x7A4A3A, "R": 0x9A6250, "k": 0x4A2A20])
+    // Sparkworks: slate casings with copper fittings and teal or amber lights; switch handles, dials,
+    // arrows, charge bars and moving parts are drawn live over the tile
+    case .crankGen:
+        return (["......hH", "...mm.h.", "..mMMmh.", "kmmmmmmk", "kmccccmk", "kmcaacmk", "kmmmmmmk", "kk....kk"],
+                ["k": 0x2E323A, "m": 0x5A6270, "M": 0x8A94A4, "c": 0xD2793A, "a": 0xFFC020, "h": 0x8A5A2A, "H": 0xC89040])
+    case .solarPanel:
+        return (["........", "bBbBbBbB", "BbBbBbBb", "bBbBbBbB", "mmmmmmmm", "...pp...", "...pp...", "..mmmm.."],
+                ["b": 0x1A3A6A, "B": 0x2E62A8, "m": 0x8A94A4, "p": 0x5A6270])
+    case .fuelGen:
+        return ([".pp.....", ".pp.....", "kkkkkkkk", "kmmmmmmk", "kmrrrrmk", "kmrrrrmk", "kmmmmmmk", "kk....kk"],
+                ["k": 0x2E323A, "m": 0x5A6270, "r": 0x1A1A1E, "p": 0x6A6E78])
+    case .waterWheel:
+        return (["..wwww..", ".wWwwWw.", "wWw..wWw", "ww.pp.ww", "ww.pp.ww", "wWw..wWw", ".wWwwWw.", "..wwww.."],
+                ["w": 0x8F6732, "W": 0xB98A4E, "p": 0x5A5E68])
+    case .emberDynamo:
+        return (["kkkkkkkk", "kOOOOOOk", "kOeEEeOk", "kOEyyEOk", "kOEyyEOk", "kOeEEeOk", "kOOOOOOk", "kkkkkkkk"],
+                ["k": 0x16121A, "O": 0x2A1E2E, "e": 0xC04010, "E": 0xFF7020, "y": 0xFFD060])
+    case .battery:
+        return (["..cccc..", ".kkkkkk.", ".kmmmmk.", ".kmmmmk.", ".kmmmmk.", ".kmmmmk.", ".kmmmmk.", ".kkkkkk."],
+                ["k": 0x2E323A, "m": 0x4A515E, "c": 0xD2793A])
+    case .accumulator:
+        return (["kkkkkkkk", "kgGggGgk", "kGtttTGk", "kgtTttgk", "kgtttTgk", "kGTtttGk", "kgGggGgk", "kkkkkkkk"],
+                ["k": 0x2E323A, "g": 0x5A8A90, "G": 0x8AC8C8, "t": 0x30A0A0, "T": 0x8AF0E8])
+    case .powerSwitch:
+        return (["........", ".kkkkkk.", ".kmmmmk.", ".km..mk.", ".km..mk.", ".kmmmmk.", ".kkkkkk.", "........"],
+                ["k": 0x2E323A, "m": 0x6A7280])
+    case .breaker:
+        return (["kkkkkkkk", "kyykyykk", "kmmmmmmk", "kmk..kmk", "kmk..kmk", "kmkkkkmk", "kmmmmmmk", "kkkkkkkk"],
+                ["k": 0x2E323A, "m": 0x5A6270, "y": 0xE8C020])
+    case .powerMeter:
+        return ([".kkkkkk.", "kwwwwwwk", "kwnwwwwk", "kwwnwwwk", "kwwwnwwk", "kkkkkkkk", "kmmmmmmk", ".kkkkkk."],
+                ["k": 0x2E323A, "w": 0xE8E4D8, "n": 0x3A3A40, "m": 0x5A6270])
+    case .lever:
+        return (["........", "........", "........", "........", "........", "..kkkk..", ".kmmmmk.", "kkkkkkkk"],
+                ["k": 0x2E323A, "m": 0x6A7280])
+    case .pushButton:
+        return (["........", "........", "..kkkk..", ".kmmmmk.", ".kmBBmk.", ".kmBBmk.", ".kmmmmk.", "..kkkk.."],
+                ["k": 0x2E323A, "m": 0x6A7280, "B": 0x30B0C0])
+    case .pressurePlate:
+        return (["........", "........", "........", "........", "........", "........", ".mMMMMm.", "kkkkkkkk"],
+                ["k": 0x2E323A, "m": 0x6A7280, "M": 0x9AA4B4])
+    case .pulseTimer:
+        return (["kkkkkkkk", "kmwwwwmk", "kwwnwwwk", "kwwnnnwk", "kwwwwwwk", "kmwwwwmk", "kmmmmmmk", "kkkkkkkk"],
+                ["k": 0x2E323A, "m": 0x5A6270, "w": 0xE8E4D8, "n": 0x3A3A40])
+    case .repeater:
+        return (["........", "........", "kkkkkkkk", "kmmmmmmk", "kmmmmmmk", "kmmmmmmk", "kkkkkkkk", "........"],
+                ["k": 0x2E323A, "m": 0x5A6270])
+    case .inverter:
+        return (["........", "........", "kkkkkkkk", "kiiiiiik", "kiiiiiik", "kiiiiiik", "kkkkkkkk", "........"],
+                ["k": 0x2E323A, "i": 0x6A4A7A])
+    case .logicGate:
+        return (["........", "kkkkkkkk", "kqqqqqqk", "kqqqqqqk", "kqqqqqqk", "kqqqqqqk", "kkkkkkkk", "........"],
+                ["k": 0x2E323A, "q": 0x3A6A6A])
+    case .motionSensor:
+        return (["..gggg..", ".gGggGg.", ".gggggg.", "kkkkkkkk", "kmmmmmmk", "kmmmmmmk", "kkkkkkkk", "........"],
+                ["k": 0x2E323A, "m": 0x5A6270, "g": 0xC86A3A, "G": 0xF0A070])
+    case .daySensor:
+        return (["kkkkkkkk", "kssSSssk", "ksSyySsk", "ksSyySsk", "kssSSssk", "kmmmmmmk", "kmmmmmmk", "kkkkkkkk"],
+                ["k": 0x2E323A, "m": 0x5A6270, "s": 0x3A5A8A, "S": 0xE8C040, "y": 0xFFF0A0])
+    case .weatherSensor:
+        return ([".c...c..", ".ccpcc..", "...p....", "kkkkkkkk", "kmdmmmmk", "kdddmmmk", "kmdmmmmk", "kkkkkkkk"],
+                ["k": 0x2E323A, "m": 0x5A6270, "c": 0xC8CCD4, "p": 0x8A8E98, "d": 0x3B7BE0])
+    case .itemSensor:
+        return (["kkkkkkkk", "kmmmmmmk", "kmbbbbmk", "kmbBBbmk", "kmbbbbmk", "kmmmmmmk", "kmmmmmmk", "kkkkkkkk"],
+                ["k": 0x2E323A, "m": 0x5A6270, "b": 0xA97B45, "B": 0xE8C060])
+    case .proximitySensor:
+        return (["..tttt..", ".t....t.", "t..tt..t", "..t..t..", "...tt...", "kkkkkkkk", "kmmmmmmk", "kkkkkkkk"],
+                ["k": 0x2E323A, "m": 0x5A6270, "t": 0x30E0D0])
+    case .gateClosed:
+        return (["kkkkkkkk", "kM.M.M.k", "kM.M.M.k", "kkkkkkkk", "kM.M.M.k", "kM.M.M.k", "kM.M.M.k", "kkkkkkkk"],
+                ["k": 0x4A515E, "M": 0x9AA4B4])
+    case .gateOpen:
+        return (["kk....kk", "k......k", "k......k", "k......k", "k......k", "k......k", "k......k", "kk....kk"],
+                ["k": 0x4A515E])
+    case .lampOff:
+        return (["kmmmmmmk", "mgggggGm", "mggGgggm", "mgggggGm", "mgGggggm", "mgggggGm", "mggggggm", "kmmmmmmk"],
+                ["k": 0x2E323A, "m": 0x6A7280, "g": 0x7A8A90, "G": 0x9AAAB0])
+    case .lampOn:
+        return (["kmmmmmmk", "myyyyyWm", "myyWyyym", "myyyyyWm", "myWyyyym", "myyyyyWm", "myyyyyym", "kmmmmmmk"],
+                ["k": 0x2E323A, "m": 0x8A94A4, "y": 0xFFF0B0, "W": 0xFFFFFF])
+    case .arcTrap:
+        return (["cCcCcCcC", "kkkkkkkk", "kmmmmmmk", "kmcmcmck", "kmmmmmmk", "kmcmcmck", "kmmmmmmk", "kkkkkkkk"],
+                ["k": 0x2E323A, "m": 0x5A6270, "c": 0xD2793A, "C": 0x8AF0E8])
+    case .autoDrill:
+        return (["kkkkkkkk", "kmmmmmmk", "kmyyyymk", "kmykkymk", "kmykkymk", "kmyyyymk", "kmmmmmmk", "kkkkkkkk"],
+                ["k": 0x2E323A, "m": 0x5A6270, "y": 0xE8C020])
+    case .conveyor:
+        return (["bBbbBbbB", "bbbbbbbb", "kkkkkkkk", "kmRmmRmk", "kRMRRMRk", "kmRmmRmk", "kkkkkkkk", "k......k"],
+                ["b": 0x2A2A2E, "B": 0x4A4A52, "k": 0x2E323A, "m": 0x5A6270, "R": 0x9AA0AC, "M": 0x6A7280])
+    case .collector:
+        return (["MMMMMMMM", ".mMMMMm.", "..mMMm..", "kkkkkkkk", "kmmmmmmk", "kmbbbbmk", "kmmmmmmk", "kkkkkkkk"],
+                ["k": 0x2E323A, "m": 0x5A6270, "M": 0x9AA4B4, "b": 0x1A1A1E])
+    case .autoCrafter:
+        return (["kkkkkkkk", "kmmmmmmk", "kmGmmGmk", "kmmGGmmk", "kmmGGmmk", "kmGmmGmk", "kmmmmmmk", "kkkkkkkk"],
+                ["k": 0x2E323A, "m": 0x5A6270, "G": 0xC8B060])
+    case .sumpPump:
+        return (["...pp...", "...pp...", "kkkkkkkk", "kmddddmk", "kmdDDdmk", "kmddddmk", "kmmmmmmk", "kkkkkkkk"],
+                ["k": 0x2E323A, "m": 0x5A6270, "p": 0x6A6E78, "d": 0x2A5AB0, "D": 0x5A9AE8])
+    case .signalLight:
+        return (["........", "..gggg..", ".gGggGg.", ".gggggg.", "..gggg..", "..kkkk..", ".kmmmmk.", "kkkkkkkk"],
+                ["k": 0x2E323A, "m": 0x5A6270, "g": 0x2A5A5A, "G": 0x4A8A8A])
     default:
         return nil
     }
@@ -1389,8 +1567,22 @@ enum Gadget: Int, Codable, CaseIterable {
     case fireFlask
     /// appended: a pocket barometer, and a flask of rainwater from a rain barrel
     case barometer, waterFlask
+    /// Sparkworks (appended): spools of power cable and pulse wire (two colours), snips that take wire
+    /// back up, and the probe that reads and sets up devices and networks
+    case powerCable, pulseWire, pulseWireB, wireSnips, probe
+
+    /// a wiring tool: taps lay or cut wire instead of using what is under them
+    var wiring: Bool { return self == .powerCable || self == .pulseWire || self == .pulseWireB || self == .wireSnips }
+    /// the wire layer a spool lays (0 power, 1 amber pulse, 2 teal pulse)
+    var wireLayer: Int { return self == .powerCable ? 0 : (self == .pulseWire ? 1 : 2) }
+
     var name: String {
         switch self {
+        case .powerCable: return "Power Cable"
+        case .pulseWire: return "Pulse Wire (amber)"
+        case .pulseWireB: return "Pulse Wire (teal)"
+        case .wireSnips: return "Wire Snips"
+        case .probe: return "Spark Probe"
         case .barometer: return "Barometer"
         case .waterFlask: return "Water Flask"
         case .fireFlask: return "Fire Flask"
@@ -1528,6 +1720,10 @@ enum Item: Hashable, Codable {
             if g == .bomb { return ["Throw it: explodes after a moment", "Breaks blocks"] }
             if g == .barometer { return ["Hold it to read the air pressure", "Falling fast: a storm is coming"] }
             if g == .waterFlask { return ["Rainwater: pour it on a young crop", "to help it grow, or on a fire"] }
+            if g == .powerCable { return ["Carries power from generators", "to batteries and machines: drag to lay"] }
+            if g == .pulseWire || g == .pulseWireB { return ["Carries on/off pulses from switches,", "sensors and logic to machines: drag to lay"] }
+            if g == .wireSnips { return ["Drag over wire to take it back up"] }
+            if g == .probe { return ["Tap a device to set it up, or a wire", "to see its whole network and its power"] }
             return ["Gadget: use it from the hotbar"]
         case .block(let t): return [t.solid ? "Building block" : "Placeable", t.light > 0 ? "Gives light" : (t.hardness >= 99 ? "Unbreakable" : String(format: "Hardness %.1f", t.hardness))]
         case .wall: return ["Background wall"]
@@ -1591,7 +1787,7 @@ enum Item: Hashable, Codable {
         switch self {
         case .block, .mat, .food, .ammo, .wall: return 99
         case .part: return 20
-        case .gadget(let g): return g == .bomb ? 30 : (g == .fireFlask ? 20 : (g == .waterFlask ? 10 : 1))
+        case .gadget(let g): return g == .bomb ? 30 : (g == .fireFlask ? 20 : (g == .waterFlask ? 10 : ((g == .powerCable || g == .pulseWire || g == .pulseWireB) ? 250 : 1)))
         default: return 1
         }
     }
@@ -2129,6 +2325,19 @@ func iconMisc(_ it: Item) -> PixelBuf {
         }
     case .gadget(let g):
         switch g {
+        case .powerCable, .pulseWire, .pulseWireB:
+            // a spool of wire with a loose end
+            let c: UInt32 = g == .powerCable ? 0xD2793A : (g == .pulseWire ? 0xFFC020 : 0x30E0D0)
+            let dk: UInt32 = shadeRGB(c, 0.6)
+            b.ellipse(5.5, 6.0, 4.4, 4.4, dk); b.ellipse(5.5, 6.0, 3.6, 3.6, c); b.ellipse(5.5, 6.0, 1.4, 1.4, 0x5A4030)
+            b.line(2, 4, 9, 4, dk); b.line(2, 7, 9, 7, dk); b.line(9, 6, 11, 10, c); b.set(11, 11, 0xE8E8EC)
+        case .wireSnips:
+            b.line(2, 2, 7, 7, 0xC8CCD4); b.line(9, 2, 4, 7, 0xA8AEB8); b.rect(5, 6, 2, 2, 0x6A6E78)
+            b.line(3, 8, 1, 11, 0xD2793A); b.line(8, 8, 10, 11, 0xD2793A); b.line(4, 8, 2, 11, 0xA85A28); b.line(7, 8, 9, 11, 0xA85A28)
+        case .probe:
+            // a hand meter with a dial and a probe lead
+            b.rect(2, 1, 7, 9, 0x3A3F4A); b.rect(3, 2, 5, 4, 0xE8E4D8); b.line(4, 5, 6, 3, 0x2A2A30); b.set(5, 7, 0x30E0D0); b.set(7, 7, 0xFFC020)
+            b.line(8, 9, 10, 11, 0xD2793A); b.set(11, 11, 0xE8E8EC)
         case .fireFlask: break
         case .shears: b.line(2, 9, 8, 3, 0xC8C8D0); b.line(3, 3, 9, 9, 0xA8A8B0); b.ellipse(2.5, 9.5, 1.6, 1.6, 0xD04A3A); b.ellipse(9.5, 9.5, 1.6, 1.6, 0xD04A3A)
         case .wrench: b.line(2, 10, 8, 4, 0xB8B8C0); b.line(3, 10, 9, 4, 0x8A8A94); b.ellipse(9, 3, 2.2, 2.2, 0xB8B8C0); b.rect(9, 1, 2, 2, 0)
@@ -2232,8 +2441,11 @@ enum RecipeCat: Int, CaseIterable {
     case basic, build, tools, weapons, armor, gear, smelt, food, vehicle
     /// appended: weather devices and storm building
     case weather
+    /// appended: Sparkworks power, pulses and machines
+    case power
     var name: String {
         switch self {
+        case .power: return "Power"
         case .weather: return "Weather"
         case .basic: return "Basics"
         case .build: return "Building"
@@ -2432,6 +2644,51 @@ enum RecipeBook {
         add(.gear(.winterCoat), 1, [(.mat(.fur), 3), (.mat(.leather), 2)], .bench, .weather)
         add(.gear(.snowBoots), 1, [(.mat(.leather), 3), (.mat(.wool), 2)], .bench, .weather)
         add(.block(.mud), 2, [(.block(.dirt), 2), (.gadget(.waterFlask), 1)], .hand, .weather)
+        // Sparkworks. First steps at the workbench: wire, a crank, a battery, switches and lamps.
+        let cu: Item = .mat(.copperBar)
+        let fe: Item = .mat(.ironBar)
+        let bz: Item = .mat(.bronzeBar)
+        let ag: Item = .mat(.silverBar)
+        let glass: Item = .block(.glass)
+        let stone: Item = .block(.stone)
+        add(.gadget(.powerCable), 12, [(cu, 1)], .bench, .power)
+        add(.gadget(.pulseWire), 12, [(bz, 1)], .bench, .power)
+        add(.gadget(.pulseWireB), 12, [(bz, 1), (glass, 1)], .bench, .power)
+        add(.gadget(.wireSnips), 1, [(fe, 1), (cu, 1)], .bench, .power)
+        add(.gadget(.probe), 1, [(cu, 2), (glass, 1)], .bench, .power)
+        add(.block(.crankGen), 1, [(planks, 4), (cu, 2), (stick, 2)], .bench, .power)
+        add(.block(.waterWheel), 1, [(planks, 8), (fe, 1)], .bench, .power)
+        add(.block(.battery), 1, [(cu, 4), (fe, 1), (coal, 2)], .bench, .power)
+        add(.block(.powerSwitch), 1, [(cu, 1), (stone, 2)], .bench, .power)
+        add(.block(.lever), 1, [(stick, 1), (stone, 1)], .hand, .power)
+        add(.block(.pushButton), 2, [(stone, 2)], .hand, .power)
+        add(.block(.pressurePlate), 1, [(stone, 2), (cu, 1)], .bench, .power)
+        add(.block(.lampOff), 2, [(glass, 2), (cu, 1)], .bench, .power)
+        add(.block(.signalLight), 2, [(glass, 1), (cu, 1)], .bench, .power)
+        // Then metalwork and machinery: solar, fuel, breakers and meters, logic, sensors, machines.
+        add(.block(.solarPanel), 1, [(glass, 3), (ag, 1), (cu, 2)], .tinker, .power)
+        add(.block(.fuelGen), 1, [(fe, 6), (.block(.furnace), 1), (cu, 2)], .anvil, .power)
+        add(.block(.breaker), 1, [(fe, 1), (cu, 2), (bz, 1)], .tinker, .power)
+        add(.block(.powerMeter), 1, [(glass, 1), (cu, 2), (fe, 1)], .tinker, .power)
+        add(.block(.repeater), 2, [(bz, 1), (stone, 2), (cu, 1)], .tinker, .power)
+        add(.block(.inverter), 2, [(bz, 1), (stone, 2), (.mat(.saltpeter), 1)], .tinker, .power)
+        add(.block(.logicGate), 2, [(bz, 2), (ag, 1), (stone, 2)], .tinker, .power)
+        add(.block(.pulseTimer), 1, [(bz, 2), (glass, 1), (cu, 1)], .tinker, .power)
+        add(.block(.motionSensor), 1, [(ag, 1), (glass, 1), (cu, 2)], .tinker, .power)
+        add(.block(.daySensor), 1, [(glass, 2), (ag, 1), (cu, 1)], .tinker, .power)
+        add(.block(.weatherSensor), 1, [(cu, 2), (glass, 1), (.mat(.feather), 1)], .tinker, .power)
+        add(.block(.itemSensor), 1, [(cu, 2), (fe, 1), (.block(.chest), 1)], .tinker, .power)
+        add(.block(.proximitySensor), 1, [(ag, 1), (.mat(.amethyst), 1), (cu, 2)], .tinker, .power)
+        add(.block(.gateClosed), 1, [(fe, 4), (cu, 1)], .anvil, .power)
+        add(.block(.arcTrap), 1, [(fe, 3), (cu, 4), (ag, 1)], .anvil, .power)
+        add(.block(.conveyor), 4, [(fe, 2), (.mat(.leather), 2), (cu, 1)], .tinker, .power)
+        add(.block(.collector), 1, [(fe, 3), (cu, 2), (.block(.chest), 1)], .tinker, .power)
+        add(.block(.sumpPump), 1, [(fe, 4), (bz, 1), (glass, 1)], .tinker, .power)
+        // Late: big storage, automation that mines and makes things, and the Umbral-fired dynamo.
+        add(.block(.accumulator), 1, [(.block(.battery), 2), (.mat(.crystalShard), 4), (.mat(.goldBar), 2)], .tinker, .power)
+        add(.block(.autoDrill), 1, [(fe, 6), (.mat(.diamond), 1), (cu, 3)], .anvil, .power)
+        add(.block(.autoCrafter), 1, [(.block(.workbench), 1), (fe, 4), (.mat(.goldBar), 2), (.mat(.crystalShard), 1)], .tinker, .power)
+        add(.block(.emberDynamo), 1, [(.mat(.emberBar), 4), (.block(.obsidian), 6), (.mat(.crystalShard), 2), (.block(.accumulator), 1)], .forge, .power)
         return list
     }
 }
@@ -5587,6 +5844,9 @@ final class Chunk {
     var ceilY: [Int] = [Int](repeating: 0, count: chunkW)
     var back: [UInt8] = []
     var walls: [UInt8] = []
+    /// Sparkworks wiring over each cell (see Wire), and how many cells have any
+    var wires: [UInt8] = []
+    var wireCount: Int = 0
     var backRev: Int = -1
     /// change counter per 16-row section (the renderer only rebuilds sections that changed)
     var secRev: [Int]
@@ -8307,6 +8567,10 @@ final class World {
         }
     }
     var chests: [ChestKey: [Stack]] = [:]
+    /// Sparkworks devices by place (settings and charge), and a counter bumped whenever wiring or
+    /// devices change, so the networks are worked out again
+    var devs: [ChestKey: PowerDev] = [:]
+    var powerRev: Int = 0
     var version: Int = 0
     var loadedCount: Int { return chunks.count }
     private var cacheCX: Int = Int.min
@@ -8351,6 +8615,7 @@ final class World {
         chunks[cx] = c
         cacheCX = Int.min
         version += 1
+        if c.wireCount > 0 { powerRev &+= 1 }
         noteEdit(cx * chunkW, 0)
         noteEdit(cx * chunkW + chunkW - 1, H - 1)
         gen.cache.trim()
@@ -8360,6 +8625,7 @@ final class World {
     func unloadChunk(_ cx: Int) {
         guard let c = chunks[cx] else { return }
         if c.dirty { parked[dim.rawValue][cx] = c }
+        if c.wireCount > 0 { powerRev &+= 1 }
         chunks[cx] = nil
         cacheCX = Int.min
         version += 1
@@ -8404,6 +8670,7 @@ final class World {
         for (k, c) in chunks { if c.dirty { parked[dim.rawValue][k] = c } }
         chunks.removeAll()
         cacheCX = Int.min
+        powerRev &+= 1
         dim = nd
         H = dimHeight(nd)
         version += 1
@@ -8458,6 +8725,7 @@ final class World {
             if before != after { c.bumpRows(min(before, after) - 1, max(before, after) + 13) }
         }
         noteEdit(x, y)
+        if Tile.powerTable[i8(old.rawValue)] || Tile.powerTable[i8(t.rawValue)] { powerTileChanged(x, y, old, t) }
         return old
     }
 
@@ -8466,6 +8734,7 @@ final class World {
         switch t {
         case .workbench, .furnace, .chest, .campfire, .wheat1, .wheat2, .wheat3, .carrot1, .carrot2, .carrot3, .doorClosed, .doorOpen, .oreCart: return true
         case .weatherStation, .dopplerStation, .stormSiren, .lightningRod, .windTurbine, .rainBarrel, .rainCistern, .weatherVane, .heater: return true
+        case .crankGen, .solarPanel, .fuelGen, .emberDynamo, .battery, .accumulator, .pressurePlate, .lever: return true
         default: return false
         }
     }
@@ -10413,7 +10682,7 @@ struct Settings: Codable {
     var reduceFlashes: Bool = false
     /// how dangerous nights are: 0 calm, 1 normal, 2 deadly (how many monsters, how quickly they come)
     var nightDanger: Int = 1
-    /// what wiring is drawn: 0 only while building with power parts in hand, 1 always, 2 never
+    /// how wiring is drawn: 0 only while a wiring tool or the probe is in hand, 1 always, 2 always but faint
     var showWires: Int = 0
 
     var shakeScale: Double { return shakeOn ? shakeIntensity : 0 }
@@ -10507,7 +10776,7 @@ final class FrameTicker: ObservableObject, @unchecked Sendable {
     @Published var frame: Int = 0
 }
 
-struct IntPair: Equatable {
+struct IntPair: Hashable {
     var x: Int
     var y: Int
 }
@@ -10672,6 +10941,8 @@ final class Game: ObservableObject, @unchecked Sendable {
     var ships: [PirateShip] = []
     var nextID: Int = 1
     var spawnTimer: Double = 2.0
+    /// Sparkworks networks and their live state
+    let power: PowerSim = PowerSim()
     /// time before the next monster may come out on the surface (sets the pace of a night)
     var monsterSpawnCD: Double = 0
     /// debug: how spawn attempts ended, by reason, and the last one
@@ -10744,6 +11015,13 @@ final class Game: ObservableObject, @unchecked Sendable {
     /// the weather station whose screen is open
     var stationAt: DeviceSpot? = nil
     @Published var showWeather: Bool = false
+    /// a Sparkworks device's panel, and which device
+    @Published var showPower: Bool = false
+    var powerAt: ChestKey? = nil
+    /// the last cell a wire drag reached, the network the probe lit up
+    var wireLast: IntPair? = nil
+    var wireSoundT: Double = 0
+    var inspect: PowerInspect? = nil
     /// the landing squash and the last frame's water state (for splashes)
     var landT: Double = 0
     var wasInWater: Bool = false
@@ -10986,6 +11264,8 @@ extension Game {
         if !pauseParticles { updateParticles(dt) }
         updateFlashes(dt)
         updateWeather(dt)
+        if !pauseWorldTicks { updatePower(dt) }
+        updatePowerUI(dt)
         updateAudio()
         updateStreaming()
         updateCamera(dt)
@@ -11688,6 +11968,10 @@ extension Game {
         let tx: Int = Int(floor(wx))
         let ty: Int = Int(floor(wy))
         let t: Tile = world.tile(tx, ty)
+        // with wire in hand every tap lays or cuts wire, even over a door or a lever
+        if holdingWireSpool { return false }
+        if case .gadget(.probe)? = heldItem { return t.isPower || world.wireAt(tx, ty) != 0 }
+        if t.isPower { return true }
         switch t {
         case .chest, .workbench, .furnace, .campfire, .portalOff, .doorClosed, .doorOpen, .anvil, .tinkerBench, .riftForge: return true
         case .weatherStation, .dopplerStation, .stormSiren, .lightningRod, .windTurbine, .rainBarrel, .rainCistern, .weatherVane, .heater, .shutterClosed, .shutterOpen: return true
@@ -11713,6 +11997,14 @@ extension Game {
             return
         }
         let t: Tile = world.tile(tx, ty)
+        if case .gadget(.probe)? = heldItem {
+            probeAt(wx, wy)
+            return
+        }
+        if t.isPower && t != .windTurbine {
+            usePowerDevice(tx, ty, t)
+            return
+        }
         switch t {
         case .chest:
             if tryMimic(tx, ty) { return }
@@ -12150,7 +12442,7 @@ extension Game {
         for t in Tile.allCases {
             switch t {
             case .air, .water, .lava, .bedrock, .portalFrame, .portalOff, .portalOn, .wheat1, .wheat2, .carrot1, .carrot2, .doorOpen,
-                 .logBlock, .jungleLogBlock, .palmLogBlock, .birchLogBlock, .shutterOpen: continue
+                 .logBlock, .jungleLogBlock, .palmLogBlock, .birchLogBlock, .shutterOpen, .lampOn, .gateOpen: continue
             default: out.append(.block(t))
             }
         }
@@ -12283,6 +12575,7 @@ extension Game {
         if !useHeld {
             mining = false
             mineP = max(0, mineP - dt * 2.0)
+            wireLast = nil
         }
         // bow release logic works on edges
         if case .bow? = held {
@@ -12643,6 +12936,8 @@ extension Game {
         // plants / crops need special support handled in canPlaceAt through needsSupport
         world.set(tx, ty, placed)
         if t == .chest { world.setChestItems(tx, ty, []) }
+        // parts that point a way face the way the player does
+        if powerDirectional(placed), let d = world.powerDev(tx, ty) { d.dir = facing >= 0 ? 0 : 2 }
         if !isCreative { inv.removeAt(sel, 1) }
         sfx(.place, 0.6)
         placeCD = 0.11
@@ -12963,6 +13258,10 @@ extension Game {
             if pressed { say(barometerReading(), 2.5) }
         case .waterFlask:
             useWaterFlask(pressed)
+        case .powerCable, .pulseWire, .pulseWireB, .wireSnips:
+            useWiring(g, pressed)
+        case .probe:
+            if pressed { probeAt(aimX, aimY) }
         }
     }
 
@@ -13474,7 +13773,7 @@ extension Game {
 
     /// Once a frame: releases the controls when something covers them
     func updateInputGate() {
-        let blocked: Bool = paused || showInventory || showMap || showJournal || showWeather || tradeWith != nil || dead
+        let blocked: Bool = paused || showInventory || showMap || showJournal || showWeather || showPower || tradeWith != nil || dead
         if blocked && !inputBlocked { releaseAllInput() }
         inputBlocked = blocked
     }
@@ -17589,6 +17888,8 @@ struct ChunkSave: Codable {
     var cx: Int
     var data: Data
     var walls: Data? = nil
+    /// Sparkworks wiring (nil in older saves and chunks with none)
+    var wires: Data? = nil
 }
 
 struct SaveMeta: Codable {
@@ -17636,6 +17937,8 @@ struct SaveData: Codable {
     var weather: WeatherSim? = nil
     /// how cold the player was
     var bodyCold: Double? = nil
+    /// Sparkworks devices: settings and charge (nil in saves made before power)
+    var power: [PowerDevSave]? = nil
 }
 
 func mobToSave(_ m: Mob) -> MobSave {
@@ -17733,12 +18036,12 @@ extension Game {
                 let i: Int = (ox - c.x0) * c.H + oy
                 if i >= 0 && i < tiles.count && tiles[i] == Tile.air.rawValue { tiles[i] = Tile.chest.rawValue }
             }
-            cs.append(ChunkSave(dim: cur, cx: k, data: Data(World.rle(tiles)), walls: c.walls.isEmpty ? nil : Data(World.rle(c.walls))))
+            cs.append(ChunkSave(dim: cur, cx: k, data: Data(World.rle(tiles)), walls: c.walls.isEmpty ? nil : Data(World.rle(c.walls)), wires: c.wireCount == 0 ? nil : Data(World.rle(c.wires))))
         }
         for d in 0..<2 {
             for (k, c) in world.parked[d] {
                 if d == cur && world.chunks[k] != nil { continue }
-                cs.append(ChunkSave(dim: d, cx: k, data: Data(World.rle(c.tiles)), walls: c.walls.isEmpty ? nil : Data(World.rle(c.walls))))
+                cs.append(ChunkSave(dim: d, cx: k, data: Data(World.rle(c.tiles)), walls: c.walls.isEmpty ? nil : Data(World.rle(c.walls)), wires: c.wireCount == 0 ? nil : Data(World.rle(c.wires))))
             }
         }
         var chestList: [ChestEntry] = []
@@ -17764,7 +18067,7 @@ extension Game {
         if let r = mounted { px = r.b.x; py = r.b.y }
         if let v = inVehicle { px = v.b.x; py = v.b.y - v.b.h }
         let meta = SaveMeta(slot: slot, name: worldName, mode: mode, infinite: gen.infinite, seed: seedValue, day: dayCount, playSeconds: playSeconds, dim: cur, genVersion: gen.genVersion, options: gen.options)
-        return SaveData(meta: meta, settings: settings, px: px, py: py, hp: max(1, hp), maxHP: maxHP, hunger: hunger, timeOfDay: timeOfDay, kills: kills, spawnX: spawnX, spawnY: spawnY, inv: inv, sel: sel, defeated: Array(defeated), gotMap: gotMap, portalOpened: portalOpened, chests: chestList, chunks: cs, vehicles: vs, pets: pets, rex: rs, nextID: nextID, journal: journal, weather: weather, bodyCold: bodyCold)
+        return SaveData(meta: meta, settings: settings, px: px, py: py, hp: max(1, hp), maxHP: maxHP, hunger: hunger, timeOfDay: timeOfDay, kills: kills, spawnX: spawnX, spawnY: spawnY, inv: inv, sel: sel, defeated: Array(defeated), gotMap: gotMap, portalOpened: portalOpened, chests: chestList, chunks: cs, vehicles: vs, pets: pets, rex: rs, nextID: nextID, journal: journal, weather: weather, bodyCold: bodyCold, power: powerSave())
     }
 
     @discardableResult
@@ -17813,12 +18116,31 @@ extension Game {
             ch.tiles = World.unrle([UInt8](c.data), chunkW * H)
             if ch.tiles.count > chunkW * H { ch.tiles = Array(ch.tiles.prefix(chunkW * H)) }
             if let wd = c.walls { ch.walls = World.unrle([UInt8](wd), chunkW * H) }
+            if let wr = c.wires {
+                ch.wires = World.unrle([UInt8](wr), chunkW * H)
+                if ch.wires.count != chunkW * H { ch.wires = [] }
+                ch.wireCount = ch.wires.reduce(0) { $0 + ($1 != 0 ? 1 : 0) }
+            }
             ch.dirty = true
             ch.rebuildSky()
             fillSurface(ch, g.gen, c.dim == 0 ? .overworld : .umbral)
             w.parked[c.dim][c.cx] = ch
         }
         for e in s.chests { w.chests[e.key] = e.items }
+        for p in s.power ?? [] {
+            guard let t = Tile(rawValue: UInt8(clampI(p.t, 0, 255))), t.isPower else { continue }
+            let k: ChestKey = ChestKey(d: p.d, x: p.x, y: p.y)
+            let d: PowerDev = PowerDev(key: k, tile: t)
+            d.dir = clampI(p.dir, 0, 3)
+            d.mode = p.mode
+            d.param = p.param
+            d.charge = max(0, p.charge)
+            d.on = p.on
+            d.flag = p.flag
+            d.item = p.item
+            w.devs[k] = d
+        }
+        w.powerRev &+= 1
         let dim: Dimension = Dimension(rawValue: s.meta.dim) ?? .overworld
         if dim != w.dim {
             w.dim = dim
@@ -19331,6 +19653,1995 @@ extension Game {
             if same { return true }
         }
         return false
+    }
+}
+
+// ===== p27_power =====
+
+// MARK: - Sparkworks: power and automation
+//
+// Power (measured in sparks) runs through power cable from generators to batteries and machines.
+// On/off pulses run separately through pulse wire, in two colours (amber and teal) so two circuits can
+// cross. Both are an overlay over the tiles, stored per chunk like background walls, so they are saved,
+// parked and reloaded with the chunk. Devices are ordinary tiles; their settings and charge live in
+// World.devs. Networks are worked out again only when wiring or devices change (World.powerRev).
+// Power is shared out four times a second. Pulses step twenty times a second from a queue of changes,
+// and every logic part adds at least one step of delay, so a loop can never run away within a frame
+// (one that flips too fast burns out for a moment instead).
+
+/// The overlay bits on a cell
+enum Wire {
+    static let power: UInt8 = 1
+    static let pulseA: UInt8 = 2
+    static let pulseB: UInt8 = 4
+    /// the bit for layer 0 (power), 1 (amber) or 2 (teal)
+    static func bit(_ layer: Int) -> UInt8 { return UInt8(1 << layer) }
+}
+
+/// What a device does on the networks
+enum PowerRole {
+    case none, generator, storage, conductor, meter, source, logic, sensor, machine, indicator
+}
+
+func powerRole(_ t: Tile) -> PowerRole {
+    switch t {
+    case .crankGen, .solarPanel, .fuelGen, .waterWheel, .emberDynamo, .windTurbine: return .generator
+    case .battery, .accumulator: return .storage
+    case .powerSwitch, .breaker: return .conductor
+    case .powerMeter: return .meter
+    case .lever, .pushButton, .pressurePlate: return .source
+    case .pulseTimer, .repeater, .inverter, .logicGate: return .logic
+    case .motionSensor, .daySensor, .weatherSensor, .itemSensor, .proximitySensor: return .sensor
+    case .gateClosed, .gateOpen, .lampOff, .lampOn, .arcTrap, .autoDrill, .conveyor, .collector, .autoCrafter, .sumpPump: return .machine
+    case .signalLight: return .indicator
+    default: return .none
+    }
+}
+
+/// The two forms of a device (a lamp lit or dark, a gate open or shut) are the same device
+func powerFamily(_ t: Tile) -> Tile {
+    switch t {
+    case .lampOn: return .lampOff
+    case .gateOpen: return .gateClosed
+    default: return t
+    }
+}
+
+/// Parts that point a way (their output side; inputs at the back or the sides)
+func powerDirectional(_ t: Tile) -> Bool {
+    switch t {
+    case .pulseTimer, .repeater, .inverter, .logicGate, .autoDrill, .conveyor, .autoCrafter: return true
+    default: return false
+    }
+}
+
+/// Plain tiles that follow a pulse on their cell without needing power: wooden doors open, storm
+/// shutters close, a storm siren sounds
+func pulseFollower(_ t: Tile) -> Bool {
+    return t == .doorClosed || t == .doorOpen || t == .shutterClosed || t == .shutterOpen || t == .stormSiren
+}
+
+/// Steps of 90 degrees: 0 right, 1 down, 2 left, 3 up
+let sideDX: [Int] = [1, 0, -1, 0]
+let sideDY: [Int] = [0, 1, 0, -1]
+
+/// A placed device: its settings and charge (saved), and what the simulation knows of it right now
+final class PowerDev {
+    let key: ChestKey
+    var tile: Tile
+    /// facing (the output side for parts that point a way)
+    var dir: Int = 0
+    /// a setting chosen in its panel (gate type, sensor mode, breaker rating and so on)
+    var mode: Int = 0
+    /// a number set in its panel (a delay, a period, a range)
+    var param: Double = 0
+    /// stored energy (batteries, a crank's flywheel) or fuel left in seconds (generators)
+    var charge: Double = 0
+    /// a lever or switch position, a breaker closed
+    var on: Bool = false
+    /// a second setting (a trap that hurts the player too, a breaker that has tripped)
+    var flag: Bool = false
+    /// an auto crafter's recipe
+    var item: Int = -1
+    // live state (not saved)
+    var pnet: Int = -1
+    /// pulse nets on its own cell (amber, teal)
+    var snets: [Int] = [-1, -1]
+    /// pulse nets at each side (right, down, left, up), amber then teal, for parts that point a way
+    var ports: [Int] = [-1, -1, -1, -1, -1, -1, -1, -1]
+    var out: Bool = false
+    var pend: [(Int, Bool)] = []
+    var powered: Bool = false
+    var want: Double = 0
+    var made: Double = 0
+    var timer: Double = 0
+    var flips: Int = 0
+    var flipT: Double = 0
+    var burnT: Double = 0
+    var lastSwap: Double = -10
+    var work: Double = 0
+    var enabled: Bool = true
+    /// index among the logic parts (for the evaluation queue)
+    var li: Int = -1
+
+    init(key: ChestKey, tile: Tile) {
+        self.key = key
+        self.tile = tile
+        switch tile {
+        case .pushButton: param = 1.0
+        case .pulseTimer: param = 1.0
+        case .repeater: param = 1
+        case .motionSensor, .proximitySensor: param = 5
+        case .breaker: mode = 1; on = true
+        case .powerSwitch: on = true
+        case .autoCrafter: item = -1
+        default: break
+        }
+    }
+
+    var x: Int { return key.x }
+    var y: Int { return key.y }
+    var role: PowerRole { return powerRole(tile) }
+}
+
+struct PowerDevSave: Codable {
+    var d: Int
+    var x: Int
+    var y: Int
+    var t: Int
+    var dir: Int
+    var mode: Int
+    var param: Double
+    var charge: Double
+    var on: Bool
+    var flag: Bool
+    var item: Int
+}
+
+final class PowerNet {
+    var devs: [PowerDev] = []
+    var cells: Int = 0
+    /// last share-out: made, used, asked for, stored and room (sparks per second and sparks)
+    var made: Double = 0
+    var used: Double = 0
+    var asked: Double = 0
+    var stored: Double = 0
+    var cap: Double = 0
+    var short: Bool = false
+}
+
+final class PulseNet {
+    var sources: [PowerDev] = []
+    var readers: [PowerDev] = []
+    /// doors, shutters and sirens on its wire
+    var followers: [IntPair] = []
+    var cells: Int = 0
+    var on: Bool = false
+    var dirty: Bool = true
+}
+
+/// Everything the simulation works out from the wiring, rebuilt when the wiring changes
+final class PowerSim {
+    var builtRev: Int = -1
+    var builtDim: Int = -1
+    var pnets: [PowerNet] = []
+    var snets: [PulseNet] = []
+    /// net index of each wired cell, by layer and position
+    var cellNet: [Int: Int] = [:]
+    var devs: [PowerDev] = []
+    var logic: [PowerDev] = []
+    var polled: [PowerDev] = []
+    var machines: [PowerDev] = []
+    var conveyors: [PowerDev] = []
+    var queue: Set<Int> = []
+    var tickNo: Int = 0
+    var powerT: Double = 0
+    var pulseT: Double = 0
+    var machineT: Double = 0
+    /// tile swaps left this step (lamps, gates, doors), so a fast clock can't relight the world every frame
+    var swaps: Int = 0
+    var sirens: Set<IntPair> = []
+    /// devices that flipped too fast and burnt out (for a warning)
+    var burnNote: Double = 0
+    var rebuilds: Int = 0
+    /// after a rebuild every reader and follower is brought in line with its net once
+    var settle: Bool = false
+
+    static func cellKey(_ layer: Int, _ x: Int, _ y: Int) -> Int {
+        return (((x &+ (1 << 30)) << 12) | (y & 4095)) << 2 | layer
+    }
+}
+
+/// Fuel for generators: seconds of burning per item (the dynamo only takes ember)
+func fuelSeconds(_ it: Item, dynamo: Bool) -> Double {
+    if dynamo {
+        switch it {
+        case .mat(.emberBar): return 300
+        case .mat(.emberOre): return 70
+        default: return 0
+        }
+    }
+    switch it {
+    case .mat(.coal): return 60
+    case .block(.log), .block(.jungleLog), .block(.palmLog), .block(.birchLog): return 20
+    case .block(.planks): return 6
+    case .mat(.stick): return 2
+    default: return 0
+    }
+}
+
+/// How much a device makes or uses, its storage, and a breaker's limit
+enum PowerSpec {
+    static func capacity(_ t: Tile) -> Double {
+        switch t {
+        case .battery: return 600
+        case .accumulator: return 5000
+        case .crankGen: return 60
+        default: return 0
+        }
+    }
+    static func rate(_ t: Tile) -> Double {
+        switch t {
+        case .battery: return 15
+        case .accumulator: return 60
+        default: return 0
+        }
+    }
+    /// sparks per second while running
+    static func draw(_ t: Tile) -> Double {
+        switch t {
+        case .lampOff, .lampOn: return 1
+        case .gateClosed, .gateOpen: return 0.5
+        case .arcTrap: return 3
+        case .autoDrill: return 8
+        case .conveyor: return 1.5
+        case .collector: return 1
+        case .autoCrafter: return 5
+        case .sumpPump: return 4
+        case .motionSensor, .daySensor, .weatherSensor, .itemSensor, .proximitySensor: return 0.5
+        default: return 0
+        }
+    }
+    static let breakerLimits: [Double] = [10, 25, 50, 100, 250]
+    static let fuelRate: Double = 12
+    static let dynamoRate: Double = 40
+}
+
+// MARK: - Wires in the world
+
+extension World {
+    func wireAt(_ x: Int, _ y: Int) -> UInt8 {
+        if y < 0 || y >= H { return 0 }
+        let cx: Int = floorDiv(x, chunkW)
+        guard let c = chunk(cx), c.wireCount > 0 else { return 0 }
+        return c.wires[(x - cx * chunkW) * H + y]
+    }
+
+    /// Sets the wire bits on a cell; returns false if the cell is not loaded
+    @discardableResult
+    func setWire(_ x: Int, _ y: Int, _ bits: UInt8) -> Bool {
+        if y < 1 || y >= H - 1 { return false }
+        let cx: Int = floorDiv(x, chunkW)
+        guard let c = chunk(cx) else { return false }
+        if c.wires.isEmpty {
+            if bits == 0 { return true }
+            c.wires = [UInt8](repeating: 0, count: chunkW * H)
+        }
+        let i: Int = (x - cx * chunkW) * H + y
+        let old: UInt8 = c.wires[i]
+        if old == bits { return true }
+        if old == 0 { c.wireCount += 1 }
+        if bits == 0 { c.wireCount -= 1 }
+        c.wires[i] = bits
+        c.dirty = true
+        c.bumpRows(y - 1, y + 1)
+        powerRev &+= 1
+        return true
+    }
+
+    func powerKey(_ x: Int, _ y: Int) -> ChestKey { return ChestKey(d: dim.rawValue, x: x, y: y) }
+
+    func powerDev(_ x: Int, _ y: Int) -> PowerDev? { return devs[powerKey(x, y)] }
+
+    /// Keeps the device list in step with the tiles (called from set): a new device gets its default
+    /// settings, a removed one is forgotten, and switching between a device's two forms keeps it
+    func powerTileChanged(_ x: Int, _ y: Int, _ old: Tile, _ new: Tile) {
+        let k: ChestKey = powerKey(x, y)
+        if new.isPower {
+            if let d = devs[k], powerFamily(d.tile) == powerFamily(new) {
+                d.tile = new
+                return
+            }
+            devs[k] = PowerDev(key: k, tile: new)
+        } else if old.isPower {
+            devs[k] = nil
+        }
+        powerRev &+= 1
+    }
+}
+
+// MARK: - The simulation
+
+extension Game {
+    /// Called every frame
+    func updatePower(_ dt: Double) {
+        let sim: PowerSim = power
+        if world.devs.isEmpty && sim.devs.isEmpty { return }
+        if sim.builtRev != world.powerRev || sim.builtDim != world.dim.rawValue { rebuildPower() }
+        if sim.devs.isEmpty { return }
+        sim.powerT += dt
+        if sim.powerT >= 0.25 {
+            let step: Double = min(sim.powerT, 1.0)
+            sim.powerT = 0
+            powerTick(step)
+        }
+        sim.pulseT += dt
+        var n: Int = 0
+        while sim.pulseT >= 0.05 && n < 3 {
+            sim.pulseT -= 0.05
+            n += 1
+            pulseTick()
+        }
+        if sim.pulseT > 0.15 { sim.pulseT = 0 }
+        sim.machineT += dt
+        if sim.machineT >= 0.1 {
+            let step: Double = min(sim.machineT, 0.3)
+            sim.machineT = 0
+            machineTick(step)
+        }
+        if !sim.conveyors.isEmpty { runConveyors(dt) }
+        if sim.burnNote > 0 { sim.burnNote -= dt }
+    }
+
+    /// Works out every network from the wiring and devices in loaded chunks
+    func rebuildPower() {
+        let sim: PowerSim = power
+        let w: World = world
+        sim.builtRev = w.powerRev
+        sim.builtDim = w.dim.rawValue
+        sim.rebuilds += 1
+        sim.pnets.removeAll()
+        sim.snets.removeAll()
+        sim.cellNet.removeAll(keepingCapacity: true)
+        sim.devs.removeAll()
+        sim.logic.removeAll()
+        sim.polled.removeAll()
+        sim.machines.removeAll()
+        sim.conveyors.removeAll()
+        sim.sirens.removeAll()
+        sim.queue.removeAll()
+        let dim: Int = w.dim.rawValue
+        var gone: [ChestKey] = []
+        for (k, d) in w.devs where k.d == dim {
+            if !w.isLoaded(k.x) { continue }
+            let t: Tile = w.tile(k.x, k.y)
+            if !t.isPower || powerFamily(t) != powerFamily(d.tile) { gone.append(k); continue }
+            d.tile = t
+            d.pnet = -1
+            d.snets = [-1, -1]
+            d.ports = [-1, -1, -1, -1, -1, -1, -1, -1]
+            sim.devs.append(d)
+        }
+        for k in gone { w.devs[k] = nil }
+        sim.devs.sort { $0.x != $1.x ? $0.x < $1.x : $0.y < $1.y }
+        // flood every wired cell into networks, layer by layer, in a fixed order
+        let cks: [Int] = w.chunks.keys.sorted()
+        for cx in cks {
+            guard let c = w.chunks[cx], c.wireCount > 0 else { continue }
+            let H: Int = c.H
+            for lx in 0..<chunkW {
+                let base: Int = lx * H
+                for y in 0..<H {
+                    let b: UInt8 = c.wires[base + y]
+                    if b == 0 { continue }
+                    let x: Int = c.x0 + lx
+                    for layer in 0..<3 where b & Wire.bit(layer) != 0 {
+                        if sim.cellNet[PowerSim.cellKey(layer, x, y)] == nil && conducts(layer, x, y) { floodNet(layer, x, y) }
+                    }
+                }
+            }
+        }
+        // hook the devices onto the networks
+        for d in sim.devs {
+            let role: PowerRole = d.role
+            if role == .generator || role == .storage || role == .meter || role == .sensor || role == .machine || role == .conductor {
+                if let p = sim.cellNet[PowerSim.cellKey(0, d.x, d.y)] {
+                    d.pnet = p
+                    sim.pnets[p].devs.append(d)
+                }
+            }
+            if role == .logic {
+                // inputs and the output are the cells around it; its own cell joins nothing
+                for side in 0..<4 {
+                    let nx: Int = d.x + sideDX[side]
+                    let ny: Int = d.y + sideDY[side]
+                    for c in 0..<2 {
+                        if let s = sim.cellNet[PowerSim.cellKey(c + 1, nx, ny)] {
+                            d.ports[side * 2 + c] = s
+                            if side == d.dir { sim.snets[s].sources.append(d) } else if isLogicInput(d, side) { sim.snets[s].readers.append(d) }
+                        }
+                    }
+                }
+                d.li = sim.logic.count
+                sim.logic.append(d)
+            } else {
+                for c in 0..<2 {
+                    if let s = sim.cellNet[PowerSim.cellKey(c + 1, d.x, d.y)] {
+                        d.snets[c] = s
+                        if role == .source || role == .sensor { sim.snets[s].sources.append(d) } else { sim.snets[s].readers.append(d) }
+                    }
+                }
+            }
+            if role == .sensor || d.tile == .pressurePlate || d.tile == .pushButton { sim.polled.append(d) }
+            if role == .machine || role == .conductor { sim.machines.append(d) }
+            if d.tile == .conveyor { sim.conveyors.append(d) }
+            if d.tile == .pushButton && d.timer <= 0 { d.out = false }
+            if d.tile == .lever { d.out = d.on }
+        }
+        // every pulse net starts dirty so its followers and readers settle on the wiring as it is now
+        for n in sim.snets { n.dirty = true }
+        for i in 0..<sim.logic.count { sim.queue.insert(i) }
+        sim.settle = true
+    }
+
+    /// Whether a layer passes through a cell: power stops at an open switch or a tripped breaker,
+    /// pulses stop at logic parts (their sides are separate inputs and an output)
+    func conducts(_ layer: Int, _ x: Int, _ y: Int) -> Bool {
+        let t: Tile = world.tile(x, y)
+        if layer == 0 {
+            if t == .powerSwitch || t == .breaker {
+                return world.powerDev(x, y)?.on ?? true
+            }
+            return true
+        }
+        return powerRole(t) != .logic
+    }
+
+    func floodNet(_ layer: Int, _ sx: Int, _ sy: Int) {
+        let sim: PowerSim = power
+        let id: Int
+        let pn: PowerNet? = layer == 0 ? PowerNet() : nil
+        let sn: PulseNet? = layer == 0 ? nil : PulseNet()
+        if let p = pn { id = sim.pnets.count; sim.pnets.append(p) } else { id = sim.snets.count; sim.snets.append(sn!) }
+        let bit: UInt8 = Wire.bit(layer)
+        var stack: [IntPair] = [IntPair(x: sx, y: sy)]
+        sim.cellNet[PowerSim.cellKey(layer, sx, sy)] = id
+        var n: Int = 0
+        while let c = stack.popLast() {
+            n += 1
+            if let s = sn {
+                let t: Tile = world.tile(c.x, c.y)
+                if pulseFollower(t) {
+                    s.followers.append(c)
+                    if t == .stormSiren { sim.sirens.insert(c) }
+                }
+            }
+            // a very long line still works, but stops growing past this many cells
+            if n > 20000 { continue }
+            for side in 0..<4 {
+                let nx: Int = c.x + sideDX[side]
+                let ny: Int = c.y + sideDY[side]
+                if world.wireAt(nx, ny) & bit == 0 { continue }
+                let k: Int = PowerSim.cellKey(layer, nx, ny)
+                if sim.cellNet[k] != nil { continue }
+                if !conducts(layer, nx, ny) { continue }
+                sim.cellNet[k] = id
+                stack.append(IntPair(x: nx, y: ny))
+            }
+        }
+        if let p = pn { p.cells = n } else { sn!.cells = n }
+    }
+
+    /// The sides a logic part reads: the back for a relay, inverter or timer; both sides for a gate
+    func isLogicInput(_ d: PowerDev, _ side: Int) -> Bool {
+        if d.tile == .logicGate { return side == (d.dir + 1) % 4 || side == (d.dir + 3) % 4 }
+        return side == (d.dir + 2) % 4
+    }
+
+    // MARK: power
+
+    /// Shares the power out on every network: generators first, batteries make up the difference or
+    /// take the surplus, fuel is only burnt for what is actually needed, and if there still isn't
+    /// enough the machines are served in a fixed order and the rest stop
+    func powerTick(_ dt: Double) {
+        let sim: PowerSim = power
+        for d in sim.devs where d.pnet < 0 {
+            // not on any power line
+            d.made = 0
+            if d.powered { d.powered = false; powerChanged(d) }
+            if d.tile == .crankGen { d.charge = max(0, d.charge - 6.0 * dt) }
+        }
+        for net in sim.pnets {
+            var made: Double = 0
+            var asked: Double = 0
+            var room: Double = 0
+            var avail: Double = 0
+            var stored: Double = 0
+            var cap: Double = 0
+            var burners: [PowerDev] = []
+            var loads: [PowerDev] = []
+            var stores: [PowerDev] = []
+            var breakers: [PowerDev] = []
+            for d in net.devs {
+                switch d.role {
+                case .generator:
+                    if d.tile == .fuelGen || d.tile == .emberDynamo || d.tile == .windTurbine {
+                        burners.append(d)
+                    } else {
+                        let r: Double = generatorRate(d, dt)
+                        d.made = r
+                        made += r
+                    }
+                case .storage:
+                    stores.append(d)
+                    let c: Double = PowerSpec.capacity(d.tile)
+                    let r: Double = PowerSpec.rate(d.tile)
+                    room += min(r, max(0, c - d.charge) / dt)
+                    avail += min(r, d.charge / dt)
+                    stored += d.charge
+                    cap += c
+                case .conductor:
+                    if d.tile == .breaker { breakers.append(d) }
+                case .machine, .sensor:
+                    d.want = d.enabled ? PowerSpec.draw(d.tile) : 0
+                    if d.want > 0 { loads.append(d) } else if d.powered {
+                        d.powered = false
+                        powerChanged(d)
+                    }
+                    asked += d.want
+                default:
+                    break
+                }
+            }
+            // generators that burn fuel cover only what the others can't (and topping up batteries); a
+            // wind turbine gives from its own charge, which the wind keeps topping up (see the weather
+            // devices), so what isn't needed stays in it for its Doppler station and storm rod
+            var need: Double = max(0, asked + room - made)
+            for f in burners {
+                if f.tile == .windTurbine {
+                    let k: String = deviceKey(DeviceSpot(x: f.x, y: f.y, t: .windTurbine))
+                    let have: Double = weather.store[k] ?? 0
+                    let r: Double = min(8.0, have / dt, need)
+                    weather.store[k] = max(0, have - r * dt)
+                    f.made = r
+                    made += r
+                    need -= r
+                    continue
+                }
+                let top: Double = f.tile == .emberDynamo ? PowerSpec.dynamoRate : PowerSpec.fuelRate
+                if f.charge > 0 && need > 0.01 {
+                    let r: Double = min(top, need)
+                    f.charge = max(0, f.charge - dt * r / top)
+                    f.made = r
+                    made += r
+                    need -= r
+                } else {
+                    f.made = 0
+                }
+            }
+            var supply: Double = made + avail
+            var used: Double = 0
+            for d in loads {
+                let ok: Bool = supply + 1e-9 >= d.want
+                if ok {
+                    supply -= d.want
+                    used += d.want
+                }
+                if ok != d.powered {
+                    d.powered = ok
+                    powerChanged(d)
+                }
+            }
+            // what is left over charges the batteries; a shortfall drains them (the first ones first)
+            var flow: Double = made - used
+            for b in stores {
+                let c: Double = PowerSpec.capacity(b.tile)
+                let r: Double = PowerSpec.rate(b.tile)
+                if flow > 0 {
+                    let take: Double = min(flow, r, max(0, c - b.charge) / dt)
+                    b.charge += take * dt
+                    flow -= take
+                } else if flow < 0 {
+                    let give: Double = min(-flow, r, b.charge / dt)
+                    b.charge = max(0, b.charge - give * dt)
+                    flow += give
+                }
+            }
+            net.made = made
+            net.used = used
+            net.asked = asked
+            net.stored = stored
+            net.cap = cap
+            net.short = used + 1e-6 < asked
+            // a breaker opens when the machines on its line ask for more than its limit
+            for b in breakers where b.on {
+                let limit: Double = PowerSpec.breakerLimits[clampI(b.mode, 0, PowerSpec.breakerLimits.count - 1)]
+                if asked > limit {
+                    b.on = false
+                    b.flag = true
+                    world.powerRev &+= 1
+                    sfx(.zap, at: Double(b.x), 0.6)
+                    spawnParticles(Double(b.x) + 0.5, Double(b.y) + 0.4, 0xFFE070, 8, 3.0, 0.4, 10)
+                    floatText("Breaker tripped: overload", Double(b.x) + 0.5, Double(b.y) - 0.6, 0xFF8040)
+                }
+            }
+        }
+    }
+
+    /// Sparks per second a generator makes right now (fuel burners are worked out separately)
+    func generatorRate(_ d: PowerDev, _ dt: Double) -> Double {
+        switch d.tile {
+        case .crankGen:
+            // a flywheel spun up by hand: it gives its charge back steadily
+            let r: Double = min(6.0, d.charge / dt)
+            d.charge = max(0, d.charge - r * dt)
+            return r
+        case .solarPanel:
+            // needs open sky above (glass lets the light through)
+            if world.dim != .overworld || d.y >= world.skyTop(d.x) { return 0 }
+            let cloud: Double = settings.weatherOn ? weatherAt(Double(d.x) + 0.5, Double(d.y)).cloud : 0
+            return 4.0 * dayFactor * (1.0 - 0.75 * clampD(cloud, 0, 1))
+        case .waterWheel:
+            var n: Int = 0
+            for dy in -1...1 { for dx in -1...1 where !(dx == 0 && dy == 0) { if world.tile(d.x + dx, d.y + dy) == .water { n += 1 } } }
+            var r: Double = Double(n) * 0.75
+            if settings.weatherOn && world.dim == .overworld && d.y < world.rainTop(d.x) + 1 {
+                r += weatherAt(Double(d.x) + 0.5, Double(d.y)).precip * 1.5
+            }
+            return min(6.0, r)
+        default:
+            return 0
+        }
+    }
+
+    /// A machine just gained or lost power
+    func powerChanged(_ d: PowerDev) {
+        applyMachine(d)
+    }
+
+    // MARK: pulses
+
+    func pulseTick() {
+        let sim: PowerSim = power
+        sim.tickNo += 1
+        sim.swaps = 48
+        let now: Int = sim.tickNo
+        // sources that watch the world
+        for d in sim.polled {
+            if d.tile == .pushButton {
+                if d.timer > 0 {
+                    d.timer -= 0.05
+                    if d.timer <= 0 { setOut(d, false) }
+                }
+                continue
+            }
+            if d.tile == .pressurePlate {
+                if (now &+ d.x) % 2 == 0 { setOut(d, plateDown(d)) }
+                continue
+            }
+            // sensors look four times a second, staggered, and only with power
+            if (now &+ d.x &+ d.y) % 5 != 0 { continue }
+            setOut(d, d.powered && sensorReads(d))
+        }
+        // logic outputs whose delay has run out
+        for d in sim.logic {
+            if d.burnT > 0 {
+                d.burnT -= 0.05
+                if d.burnT <= 0 { d.burnT = 0; sim.queue.insert(d.li) }
+                continue
+            }
+            if d.tile == .pulseTimer && d.mode == 0 { clockStep(d) }
+            while let p = d.pend.first, p.0 <= now {
+                d.pend.removeFirst()
+                setOut(d, p.1)
+            }
+        }
+        // nets whose drivers changed
+        var changed: [PulseNet] = []
+        for n in sim.snets where n.dirty {
+            n.dirty = false
+            var on: Bool = false
+            for s in n.sources where s.out && s.burnT <= 0 { on = true; break }
+            if on != n.on || sim.settle {
+                n.on = on
+                changed.append(n)
+            }
+        }
+        sim.settle = false
+        for n in changed {
+            for r in n.readers {
+                if r.role == .logic {
+                    if r.li >= 0 { sim.queue.insert(r.li) }
+                } else {
+                    controlChanged(r)
+                }
+            }
+            for c in n.followers { followPulse(c, n.on) }
+        }
+        // logic parts whose inputs changed: work out the new output, due after its delay
+        if !sim.queue.isEmpty {
+            let list: [Int] = sim.queue.sorted()
+            sim.queue.removeAll()
+            var budget: Int = 3000
+            for i in list {
+                if i >= sim.logic.count { continue }
+                budget -= 1
+                if budget < 0 { sim.queue.insert(i); continue }
+                evalLogic(sim.logic[i], now)
+            }
+        }
+    }
+
+    /// Whether any pulse net on a device's own cell is on (a lamp, gate or machine's control)
+    func pulseHere(_ d: PowerDev) -> Bool? {
+        var wired: Bool = false
+        var on: Bool = false
+        for c in 0..<2 where d.snets[c] >= 0 {
+            wired = true
+            if power.snets[d.snets[c]].on { on = true }
+        }
+        return wired ? on : nil
+    }
+
+    /// Reads a logic part's input on one side (either colour)
+    func portOn(_ d: PowerDev, _ side: Int) -> Bool? {
+        var wired: Bool = false
+        var on: Bool = false
+        for c in 0..<2 {
+            let s: Int = d.ports[side * 2 + c]
+            if s >= 0 {
+                wired = true
+                if power.snets[s].on { on = true }
+            }
+        }
+        return wired ? on : nil
+    }
+
+    func evalLogic(_ d: PowerDev, _ now: Int) {
+        if d.burnT > 0 { return }
+        let back: Int = (d.dir + 2) % 4
+        var target: Bool = d.out
+        var delay: Int = 1
+        switch d.tile {
+        case .inverter:
+            target = !(portOn(d, back) ?? false)
+        case .repeater:
+            target = portOn(d, back) ?? false
+            delay = clampI(Int(d.param.rounded()), 1, 4)
+        case .logicGate:
+            let a: Bool = portOn(d, (d.dir + 1) % 4) ?? false
+            let b: Bool = portOn(d, (d.dir + 3) % 4) ?? false
+            switch d.mode {
+            case 0: target = a && b
+            case 1: target = a || b
+            case 2: target = a != b
+            case 3: target = !(a && b)
+            default: target = !(a || b)
+            }
+        case .pulseTimer:
+            if d.mode == 1 {
+                // delay: the output repeats the input's changes after the set time
+                target = portOn(d, back) ?? false
+                delay = max(1, Int((d.param / 0.05).rounded()))
+            } else {
+                // clock: an input wired to the back switches it on and off
+                return
+            }
+        default:
+            return
+        }
+        let last: Bool = d.pend.last?.1 ?? d.out
+        if target == last { return }
+        if d.pend.count >= 16 { d.pend.removeFirst() }
+        d.pend.append((now + delay, target))
+    }
+
+    /// A clock timer: on for half its period, off for the other half, while enabled
+    func clockStep(_ d: PowerDev) {
+        let enabled: Bool = portOn(d, (d.dir + 2) % 4) ?? true
+        if !enabled {
+            d.timer = 0
+            if d.out { setOut(d, false) }
+            return
+        }
+        d.timer += 0.05
+        let half: Double = max(0.1, d.param * 0.5)
+        if d.timer >= half - 1e-9 {
+            d.timer = 0
+            setOut(d, !d.out)
+        }
+    }
+
+    /// Changes what a device sends out, marking the nets it drives. A part that flips more than about
+    /// twenty-five times a second (a loop with no delay worth the name) burns out for three seconds.
+    func setOut(_ d: PowerDev, _ v: Bool) {
+        if d.out == v { return }
+        let sim: PowerSim = power
+        if clock - d.flipT > 1.0 {
+            d.flipT = clock
+            d.flips = 0
+        }
+        d.flips += 1
+        if d.flips > 25 {
+            d.burnT = 3.0
+            d.out = false
+            d.pend.removeAll()
+            if sim.burnNote <= 0 {
+                sim.burnNote = 4.0
+                floatText("Circuit overloaded: flipping too fast", Double(d.x) + 0.5, Double(d.y) - 0.6, 0xFF8040)
+                spawnParticles(Double(d.x) + 0.5, Double(d.y) + 0.3, 0x8A8A8A, 6, 1.5, 0.8, -4)
+            }
+        } else {
+            d.out = v
+        }
+        if d.role == .logic {
+            for c in 0..<2 {
+                let s: Int = d.ports[d.dir * 2 + c]
+                if s >= 0 { sim.snets[s].dirty = true }
+            }
+        } else {
+            for c in 0..<2 where d.snets[c] >= 0 { sim.snets[d.snets[c]].dirty = true }
+        }
+    }
+
+    /// Something stands on a pressure plate: anyone, only the player, or only creatures
+    func plateDown(_ d: PowerDev) -> Bool {
+        let x0: Double = Double(d.x) + 0.1
+        let x1: Double = Double(d.x) + 0.9
+        let y0: Double = Double(d.y) + 0.3
+        let y1: Double = Double(d.y) + 1.05
+        if d.mode != 2 && !dead && pb.right > x0 && pb.left < x1 && pb.y > y0 && pb.y < y1 + 0.1 { return true }
+        if d.mode == 1 { return false }
+        for m in mobsNear(x0 - 2, x1 + 2) where m.hp > 0 {
+            if m.b.right > x0 && m.b.left < x1 && m.b.y > y0 && m.b.y < y1 + 0.1 { return true }
+        }
+        return false
+    }
+
+    /// What a sensor sees (it only reports with power)
+    func sensorReads(_ d: PowerDev) -> Bool {
+        let cx: Double = Double(d.x) + 0.5
+        let cy: Double = Double(d.y) + 0.5
+        switch d.tile {
+        case .daySensor:
+            let day: Bool = world.dim == .overworld && dayFactor > 0.5
+            return d.mode == 0 ? day : !day
+        case .weatherSensor:
+            if !settings.weatherOn || world.dim != .overworld { return false }
+            let L: LocalWeather = weatherAt(cx, cy)
+            switch d.mode {
+            case 0: return L.precip > 0.12
+            case 1: return L.thunder > 0.3 || L.hail > 0.1
+            case 2: return abs(L.wind) > 10
+            default: return sirenWorthy() || L.tornado > 0.05 || L.hurricane > 0.05
+            }
+        case .motionSensor, .proximitySensor:
+            // motion: 0 anything moving, 1 creatures only, 2 the player only
+            // proximity: 0 the player, 1 hostile creatures, 2 any creature, 3 anyone
+            let r: Double = clampD(d.param, 2, 12)
+            let moving: Bool = d.tile == .motionSensor
+            let player: Bool = moving ? d.mode != 1 : (d.mode == 0 || d.mode == 3)
+            let creatures: Bool = moving ? d.mode != 2 : d.mode != 0
+            let hostileOnly: Bool = !moving && d.mode == 1
+            if player && !dead {
+                let dx: Double = pb.x - cx
+                let dy: Double = pb.cy - cy
+                if dx * dx + dy * dy <= r * r && (!moving || abs(pb.vx) > 0.6 || abs(pb.vy) > 0.6) { return true }
+            }
+            if !creatures { return false }
+            for m in mobsNear(cx - r, cx + r) where m.hp > 0 && !m.removed {
+                let dx: Double = m.b.x - cx
+                let dy: Double = m.b.cy - cy
+                if dx * dx + dy * dy > r * r { continue }
+                if moving && abs(m.b.vx) < 0.6 && abs(m.b.vy) < 0.6 { continue }
+                if hostileOnly && !(m.def.hostile && !m.tame) { continue }
+                return true
+            }
+            return false
+        case .itemSensor:
+            var n: Int = 0
+            var full: Bool = false
+            for side in 0..<4 {
+                let nx: Int = d.x + sideDX[side]
+                let ny: Int = d.y + sideDY[side]
+                if world.tile(nx, ny) == .chest {
+                    let items: [Stack] = world.chestItems(nx, ny)
+                    for s in items { n += s.count }
+                    if items.count >= 27 && items.allSatisfy({ $0.count >= $0.item.maxStack }) { full = true }
+                }
+            }
+            for dr in drops where abs(dr.x - cx) < 0.7 && abs(dr.y - cy) < 0.8 { n += dr.stack.count }
+            switch d.mode {
+            case 0: return n >= 1
+            case 1: return n >= 16
+            case 2: return n >= 64
+            default: return full
+            }
+        default:
+            return false
+        }
+    }
+
+    /// The pulse on a machine's cell changed
+    func controlChanged(_ d: PowerDev) {
+        applyMachine(d)
+    }
+
+    /// Brings a machine, switch or light in line with its power and its pulse. Lamps and gates change
+    /// their tile; a few such changes are allowed per step, the rest wait for the next one.
+    func applyMachine(_ d: PowerDev) {
+        let sim: PowerSim = power
+        let pulse: Bool? = pulseHere(d)
+        switch d.tile {
+        case .powerSwitch:
+            if let p = pulse, p != d.on {
+                d.on = p
+                world.powerRev &+= 1
+            }
+            return
+        case .lampOff, .lampOn:
+            d.enabled = pulse ?? true
+            let lit: Bool = d.enabled && d.powered
+            let want: Tile = lit ? .lampOn : .lampOff
+            if d.tile != want && clock - d.lastSwap > 0.12 && sim.swaps > 0 {
+                sim.swaps -= 1
+                d.lastSwap = clock
+                world.set(d.x, d.y, want)
+            }
+        case .gateClosed, .gateOpen:
+            if let p = pulse {
+                d.enabled = true
+                d.on = p
+            }
+            // a powered gate needs power to move; with no pulse wire, its own setting (tap it) decides
+            let open: Bool = d.on && d.powered
+            let want: Tile = open ? .gateOpen : .gateClosed
+            if d.tile != want && clock - d.lastSwap > 0.12 && sim.swaps > 0 {
+                if want == .gateClosed && doorBlocked(d.x, d.y, d.y) { return }
+                sim.swaps -= 1
+                d.lastSwap = clock
+                world.set(d.x, d.y, want)
+                sfx(.door, at: Double(d.x), 0.4)
+            }
+        default:
+            // a machine runs while its pulse wire is on (or always, with none); a sensor's own cell carries
+            // its own output, so sensors are never switched by it
+            if d.role == .machine || d.role == .indicator { d.enabled = pulse ?? true }
+        }
+    }
+
+    /// A door, shutter or siren on a pulse wire
+    func followPulse(_ c: IntPair, _ on: Bool) {
+        let t: Tile = world.tile(c.x, c.y)
+        let sim: PowerSim = power
+        if sim.swaps <= 0 { return }
+        switch t {
+        case .doorClosed, .doorOpen:
+            let open: Bool = t == .doorOpen
+            if open != on {
+                sim.swaps -= 1
+                setDoor(c.x, c.y, open: on)
+            }
+        case .shutterClosed, .shutterOpen:
+            let closed: Bool = t == .shutterClosed
+            if closed != on {
+                sim.swaps -= 1
+                world.set(c.x, c.y, on ? .shutterClosed : .shutterOpen)
+            }
+        default:
+            break
+        }
+    }
+
+    /// Whether a pulse is on at a cell (sirens ask this)
+    func pulseOnAt(_ x: Int, _ y: Int) -> Bool {
+        let sim: PowerSim = power
+        for layer in 1...2 {
+            if let s = sim.cellNet[PowerSim.cellKey(layer, x, y)], s < sim.snets.count, sim.snets[s].on { return true }
+        }
+        return false
+    }
+
+    // MARK: machines
+
+    /// Machines at work (ten times a second): traps, drills, collectors, crafters and pumps
+    func machineTick(_ dt: Double) {
+        let sim: PowerSim = power
+        for d in sim.machines {
+            // a lamp or gate that was held back by the limit on tile changes catches up
+            if d.tile == .lampOff || d.tile == .lampOn || d.tile == .gateClosed || d.tile == .gateOpen { applyMachine(d) }
+            let running: Bool = d.enabled && d.powered
+            if !running {
+                d.work = 0
+                continue
+            }
+            switch d.tile {
+            case .arcTrap: runArcTrap(d, dt)
+            case .autoDrill: runDrill(d, dt)
+            case .collector: runCollector(d, dt)
+            case .autoCrafter: runCrafter(d, dt)
+            case .sumpPump: runPump(d, dt)
+            default: break
+            }
+        }
+    }
+
+    /// An arc trap zaps whatever stands on it, once a second (the player only if set to)
+    func runArcTrap(_ d: PowerDev, _ dt: Double) {
+        d.work -= dt
+        if d.work > 0 { return }
+        let x0: Double = Double(d.x) + 0.05
+        let x1: Double = Double(d.x) + 0.95
+        let y0: Double = Double(d.y) - 2.0
+        let y1: Double = Double(d.y) + 0.05
+        var hit: Bool = false
+        var info = DamageInfo(amount: 7, type: .shock, source: .environment)
+        info.knock = 3.0
+        info.originX = Double(d.x) + 0.5
+        info.key = d.key.hashValue
+        info.cooldown = 0.9
+        for m in mobsNear(x0 - 2, x1 + 2) where m.hp > 0 && !m.tame && m.kind != .villager {
+            if m.b.right > x0 && m.b.left < x1 && m.b.y > y0 && m.b.y <= y1 + 0.1 {
+                if applyMobDamage(m, info) { hit = true }
+            }
+        }
+        if d.flag && !dead && pb.right > x0 && pb.left < x1 && pb.y > y0 && pb.y <= y1 + 0.1 {
+            if hurtPlayer(info) { hit = true }
+        }
+        if hit {
+            d.work = 1.0
+            sfx(.zap, at: Double(d.x), 0.5)
+            spawnParticles(Double(d.x) + 0.5, Double(d.y) - 0.3, 0x8AF0E8, 8, 4.0, 0.25, 0)
+            addLightFlash(Double(d.x) + 0.5, Double(d.y) - 0.5, peak: 9, dur: 0.25, radius: 1.6, color: 0x8AF0E8)
+        }
+    }
+
+    /// An auto drill bores out the block it faces, as fast as the block's hardness allows. It digs what
+    /// an iron pickaxe could, and what it breaks drops as if mined by hand.
+    func runDrill(_ d: PowerDev, _ dt: Double) {
+        let tx: Int = d.x + sideDX[d.dir]
+        let ty: Int = d.y + sideDY[d.dir]
+        let t: Tile = world.tile(tx, ty)
+        if t == .air || t.liquid || t.hardness >= 50 || t.def.tier > 3 || t == .chest || t.isPower || t == .portalFrame || t == .portalOn || t == .portalOff || t == .bedrock {
+            d.work = 0
+            return
+        }
+        d.work += dt
+        let need: Double = 0.6 + t.hardness * 0.9
+        if Int(d.work * 6.0) != Int((d.work - dt) * 6.0) {
+            spawnParticles(Double(tx) + 0.5, Double(ty) + 0.5, t.def.colors.first ?? 0x888888, 1, 2.0, 0.3, 10)
+        }
+        if d.work >= need {
+            d.work = 0
+            breakTile(tx, ty, false)
+            sfx(.digStone, at: Double(tx), 0.4)
+        }
+    }
+
+    /// An item collector draws loose items within two blocks into a chest beside it, as far as they fit
+    func runCollector(_ d: PowerDev, _ dt: Double) {
+        d.work -= dt
+        if d.work > 0 { return }
+        d.work = 0.25
+        var chest: IntPair? = nil
+        for side in 0..<4 where world.tile(d.x + sideDX[side], d.y + sideDY[side]) == .chest {
+            chest = IntPair(x: d.x + sideDX[side], y: d.y + sideDY[side])
+            break
+        }
+        guard let c = chest else { return }
+        let cx: Double = Double(d.x) + 0.5
+        let cy: Double = Double(d.y) + 0.5
+        var items: [Stack] = world.chestItems(c.x, c.y)
+        var changed: Bool = false
+        var i: Int = 0
+        while i < drops.count {
+            let dr: DropItem = drops[i]
+            if abs(dr.x - cx) > 2.0 || abs(dr.y - cy) > 2.0 || dr.age < 0.3 { i += 1; continue }
+            let left: Int = chestAdd(&items, dr.stack)
+            if left == dr.stack.count { i += 1; continue }
+            changed = true
+            spawnParticles(dr.x, dr.y, 0xE8E0C0, 2, 1.5, 0.2, 0)
+            if left == 0 {
+                drops.remove(at: i)
+            } else {
+                drops[i].stack.count = left
+                i += 1
+            }
+        }
+        if changed { world.setChestItems(c.x, c.y, items) }
+    }
+
+    /// An auto crafter makes its chosen recipe every two seconds from the chest behind it into the chest
+    /// in front of it, but only when every ingredient is there and the result fits
+    func runCrafter(_ d: PowerDev, _ dt: Double) {
+        d.work += dt
+        if d.work < 2.0 { return }
+        d.work = 0
+        if d.item < 0 || d.item >= RecipeBook.all.count { return }
+        let r: Recipe = RecipeBook.all[d.item]
+        if !crafterCan(r.station) { return }
+        let side: Int = d.dir == 2 ? 2 : 0
+        let ix: Int = d.x - sideDX[side]
+        let ox: Int = d.x + sideDX[side]
+        if world.tile(ix, d.y) != .chest || world.tile(ox, d.y) != .chest { return }
+        var input: [Stack] = world.chestItems(ix, d.y)
+        var output: [Stack] = world.chestItems(ox, d.y)
+        for c in r.cost where chestCount(input, c.item) < c.n { return }
+        var trial: [Stack] = output
+        if chestAdd(&trial, Stack(item: r.out, count: r.outCount)) > 0 { return }
+        for c in r.cost { chestTake(&input, c.item, c.n) }
+        _ = chestAdd(&output, Stack(item: r.out, count: r.outCount))
+        world.setChestItems(ix, d.y, input)
+        world.setChestItems(ox, d.y, output)
+        sfx(.craft, at: Double(d.x), 0.4)
+        spawnParticles(Double(d.x) + 0.5, Double(d.y) + 0.2, 0xC8B060, 4, 2.0, 0.3, 6)
+    }
+
+    /// The stations an auto crafter stands in for: hand work, the workbench, the anvil and the
+    /// tinker's bench (not the furnace, campfire or Rift Forge, which need heat or the Umbral fire)
+    func crafterCan(_ s: Station) -> Bool {
+        return s == .hand || s == .bench || s == .anvil || s == .tinker
+    }
+
+    /// A sump pump drains the nearest water within four blocks, a block at a time, into a rain barrel
+    /// or cistern beside it if there is one
+    func runPump(_ d: PowerDev, _ dt: Double) {
+        d.work += dt
+        if d.work < 0.4 { return }
+        d.work = 0
+        var best: IntPair? = nil
+        var bd: Int = 999
+        for dy in -4...4 {
+            for dx in -4...4 {
+                let x: Int = d.x + dx
+                let y: Int = d.y + dy
+                if world.tile(x, y) != .water { continue }
+                let dist: Int = abs(dx) + abs(dy)
+                if dist < bd || (dist == bd && y < (best?.y ?? 0)) { bd = dist; best = IntPair(x: x, y: y) }
+            }
+        }
+        guard let w = best else { return }
+        world.set(w.x, w.y, .air)
+        spawnParticles(Double(w.x) + 0.5, Double(w.y) + 0.5, 0x3B7BE0, 3, 1.5, 0.3, 8)
+        for side in 0..<4 {
+            let nx: Int = d.x + sideDX[side]
+            let ny: Int = d.y + sideDY[side]
+            let t: Tile = world.tile(nx, ny)
+            if t == .rainBarrel || t == .rainCistern {
+                let k: String = deviceKey(DeviceSpot(x: nx, y: ny, t: t))
+                let cap: Double = t == .rainBarrel ? 8 : 32
+                weather.store[k] = min(cap, (weather.store[k] ?? 0) + 1)
+                break
+            }
+        }
+    }
+
+    /// Running conveyor belts carry what lies on them (and walk anyone standing on them along)
+    func runConveyors(_ dt: Double) {
+        let sim: PowerSim = power
+        var belts: [Int: Int] = [:]
+        for d in sim.conveyors where d.enabled && d.powered {
+            belts[PowerSim.cellKey(0, d.x, d.y)] = d.dir == 2 ? -1 : 1
+        }
+        if belts.isEmpty { return }
+        let speed: Double = 2.4
+        for i in 0..<drops.count {
+            let dr: DropItem = drops[i]
+            let k: Int = PowerSim.cellKey(0, Int(floor(dr.x)), Int(floor(dr.y + 0.1)))
+            if let s = belts[k] {
+                drops[i].x += Double(s) * speed * dt
+                drops[i].vx = 0
+            }
+        }
+        if !dead && inVehicle == nil && pb.onGround {
+            let k: Int = PowerSim.cellKey(0, Int(floor(pb.x)), Int(floor(pb.y + 0.1)))
+            if let s = belts[k] { pb.x += Double(s) * speed * 0.8 * dt }
+        }
+        for m in mobs where m.hp > 0 && m.b.onGround && !m.def.flying {
+            let k: Int = PowerSim.cellKey(0, Int(floor(m.b.x)), Int(floor(m.b.y + 0.1)))
+            if let s = belts[k] { m.b.x += Double(s) * speed * 0.8 * dt }
+        }
+    }
+
+    /// The devices' settings and charge for the save (wiring is saved with each chunk)
+    func powerSave() -> [PowerDevSave]? {
+        if world.devs.isEmpty { return nil }
+        var out: [PowerDevSave] = []
+        for (k, d) in world.devs {
+            out.append(PowerDevSave(d: k.d, x: k.x, y: k.y, t: Int(d.tile.rawValue), dir: d.dir, mode: d.mode, param: d.param, charge: d.charge, on: d.on, flag: d.flag, item: d.item))
+        }
+        out.sort { $0.d != $1.d ? $0.d < $1.d : ($0.x != $1.x ? $0.x < $1.x : $0.y < $1.y) }
+        return out
+    }
+
+    // MARK: chests as machine storage (27 stacks, stacked up to each item's limit)
+
+    func chestCount(_ items: [Stack], _ it: Item) -> Int {
+        var n: Int = 0
+        for s in items where s.item == it { n += s.count }
+        return n
+    }
+
+    /// Adds a stack to a chest's contents; returns how many did not fit
+    func chestAdd(_ items: inout [Stack], _ st: Stack) -> Int {
+        var left: Int = st.count
+        let ms: Int = st.item.maxStack
+        if ms > 1 {
+            for i in 0..<items.count where left > 0 && items[i].item == st.item && items[i].extra == st.extra && items[i].count < ms {
+                let put: Int = min(ms - items[i].count, left)
+                items[i].count += put
+                left -= put
+            }
+        }
+        while left > 0 && items.count < 27 {
+            let put: Int = min(ms, left)
+            items.append(Stack(item: st.item, count: put, extra: st.extra))
+            left -= put
+        }
+        return left
+    }
+
+    func chestTake(_ items: inout [Stack], _ it: Item, _ n: Int) {
+        var left: Int = n
+        var i: Int = items.count - 1
+        while i >= 0 && left > 0 {
+            if items[i].item == it {
+                let take: Int = min(items[i].count, left)
+                items[i].count -= take
+                left -= take
+                if items[i].count <= 0 { items.remove(at: i) }
+            }
+            i -= 1
+        }
+    }
+}
+
+// MARK: - Sparkworks: wiring by touch, the probe, tapping devices
+
+/// The network the probe last looked at, lit up on screen for a few seconds
+struct PowerInspect {
+    var layer: Int
+    var cells: [IntPair]
+    var t: Double
+}
+
+struct PanelLine {
+    var text: String
+    var color: UInt32
+}
+
+extension Game {
+    /// A wiring tool or the probe is in hand (wiring is drawn in full)
+    var holdingWiringTool: Bool {
+        if case .gadget(let g)? = heldItem { return g.wiring || g == .probe }
+        return false
+    }
+
+    var holdingWireSpool: Bool {
+        if case .gadget(let g)? = heldItem { return g.wiring }
+        return false
+    }
+
+    /// Dragging with a spool lays wire cell by cell (a fast drag leaves no gaps); snips take it back up
+    func useWiring(_ g: Gadget, _ pressed: Bool) {
+        let tx: Int = Int(floor(aimX))
+        let ty: Int = Int(floor(aimY))
+        let here: IntPair = IntPair(x: tx, y: ty)
+        guard let last = wireLast, !pressed else {
+            wireLast = here
+            _ = wireCell(g, tx, ty)
+            return
+        }
+        if last == here { return }
+        var x: Int = last.x
+        var y: Int = last.y
+        var n: Int = 0
+        while (x != tx || y != ty) && n < 64 {
+            // step along whichever way is further to go, so a diagonal drag makes a staircase
+            if abs(tx - x) >= abs(ty - y) { x += tx > x ? 1 : -1 } else { y += ty > y ? 1 : -1 }
+            n += 1
+            if !wireCell(g, x, y) { break }
+        }
+        wireLast = IntPair(x: x, y: y)
+    }
+
+    /// Lays (or with snips, removes) wire on one cell; false stops the drag (out of reach or of wire)
+    func wireCell(_ g: Gadget, _ x: Int, _ y: Int) -> Bool {
+        let dx: Double = Double(x) + 0.5 - pb.x
+        let dy: Double = Double(y) + 0.5 - (pb.y - pb.h * 0.6)
+        let r: Double = reachDistance() + 2.5
+        if dx * dx + dy * dy > r * r || !world.isLoaded(x) { return false }
+        let cur: UInt8 = world.wireAt(x, y)
+        if g == .wireSnips {
+            if cur == 0 { return true }
+            if !isCreative {
+                let back: [Gadget] = [.powerCable, .pulseWire, .pulseWireB]
+                for layer in 0..<3 where cur & Wire.bit(layer) != 0 { giveItem(.gadget(back[layer]), 1) }
+            }
+            world.setWire(x, y, 0)
+            spawnParticles(Double(x) + 0.5, Double(y) + 0.5, 0xD2793A, 2, 1.5, 0.25, 10)
+            wireSound()
+            return true
+        }
+        let bit: UInt8 = Wire.bit(g.wireLayer)
+        if cur & bit != 0 { return true }
+        // a logic part's own cell takes no pulse wire: its sides are its inputs and its output
+        if g.wireLayer > 0 && powerRole(world.tile(x, y)) == .logic { return true }
+        if !isCreative {
+            guard let st = heldStack, st.item == .gadget(g), st.count > 0 else {
+                say(joinText("Out of ", g.name.lowercased(), "."), 1.5)
+                return false
+            }
+            inv.removeAt(sel, 1)
+        }
+        world.setWire(x, y, cur | bit)
+        wireSound()
+        bumpHUD()
+        return true
+    }
+
+    func wireSound() {
+        if clock - wireSoundT > 0.06 {
+            wireSoundT = clock
+            sfx(.tap, 0.3)
+        }
+    }
+
+    // MARK: the probe
+
+    /// The probe on a device opens its panel; on a wire it lights up the whole network and says how it is
+    func probeAt(_ wx: Double, _ wy: Double) {
+        let tx: Int = Int(floor(wx))
+        let ty: Int = Int(floor(wy))
+        if let d = world.powerDev(tx, ty), world.tile(tx, ty).isPower {
+            openPowerPanel(d)
+            let layer: Int = d.pnet >= 0 ? 0 : (d.snets[0] >= 0 ? 1 : (d.snets[1] >= 0 ? 2 : -1))
+            if layer >= 0 { inspectNet(layer, tx, ty) }
+            return
+        }
+        let bits: UInt8 = world.wireAt(tx, ty)
+        if bits == 0 {
+            say("Nothing wired here. Tap a device or a wire.", 1.5)
+            return
+        }
+        // several layers on one cell: each tap shows the next
+        var layer: Int = -1
+        let start: Int = (inspect?.cells.contains(IntPair(x: tx, y: ty)) ?? false) ? ((inspect?.layer ?? -1) + 1) : 0
+        for k in 0..<3 {
+            let l: Int = (start + k) % 3
+            if bits & Wire.bit(l) != 0 { layer = l; break }
+        }
+        if layer < 0 { return }
+        inspectNet(layer, tx, ty)
+        say(netSummary(layer, tx, ty), 4.0)
+        sfx(.tap, 0.5)
+    }
+
+    /// Lights up every cell of one network
+    func inspectNet(_ layer: Int, _ x: Int, _ y: Int) {
+        let bit: UInt8 = Wire.bit(layer)
+        var seen: Set<IntPair> = [IntPair(x: x, y: y)]
+        var stack: [IntPair] = [IntPair(x: x, y: y)]
+        var cells: [IntPair] = []
+        while let c = stack.popLast(), cells.count < 4000 {
+            cells.append(c)
+            if !conducts(layer, c.x, c.y) && !(c.x == x && c.y == y) { continue }
+            for side in 0..<4 {
+                let n: IntPair = IntPair(x: c.x + sideDX[side], y: c.y + sideDY[side])
+                if seen.contains(n) || world.wireAt(n.x, n.y) & bit == 0 { continue }
+                seen.insert(n)
+                stack.append(n)
+            }
+        }
+        inspect = PowerInspect(layer: layer, cells: cells, t: 8.0)
+    }
+
+    /// One line about a network: what it makes, uses and stores, or whether a pulse is on
+    func netSummary(_ layer: Int, _ x: Int, _ y: Int) -> String {
+        let sim: PowerSim = power
+        guard let i = sim.cellNet[PowerSim.cellKey(layer, x, y)] else { return "This wire is not connected to anything yet." }
+        if layer == 0 {
+            if i >= sim.pnets.count { return "Power cable" }
+            let n: PowerNet = sim.pnets[i]
+            var s: String = joinText("Power line: makes ", sparks(n.made), ", uses ", sparks(n.used))
+            if n.cap > 0 { s = joinText(s, ", stored ", String(Int(n.stored)), "/", String(Int(n.cap))) }
+            if n.short { s = joinText(s, ". NOT ENOUGH POWER: machines want ", sparks(n.asked)) }
+            if n.devs.isEmpty { s = "Power cable with nothing on it yet." }
+            return s
+        }
+        if i >= sim.snets.count { return "Pulse wire" }
+        let n: PulseNet = sim.snets[i]
+        let col: String = layer == 1 ? "Amber" : "Teal"
+        return joinText(col, " pulse line: ", n.on ? "ON" : "off", " · ", String(n.sources.count), " sending, ", String(n.readers.count + n.followers.count), " listening")
+    }
+
+    func sparks(_ v: Double) -> String { return String(format: "%.1f sparks/s", v) }
+
+    // MARK: tapping a device
+
+    /// A device does its own thing when tapped: levers flip, buttons press, a crank winds up, a
+    /// breaker resets, fuel goes in; anything else opens its panel
+    func usePowerDevice(_ x: Int, _ y: Int, _ t: Tile) {
+        guard let d = world.powerDev(x, y) else { return }
+        switch t {
+        case .lever:
+            d.on.toggle()
+            setOut(d, d.on)
+            sfx(.tap, at: Double(x), 0.8)
+            spawnParticles(Double(x) + 0.5, Double(y) + 0.6, 0xC8CCD4, 2, 1.0, 0.2, 6)
+        case .pushButton:
+            d.timer = max(0.25, d.param)
+            setOut(d, true)
+            sfx(.tap, at: Double(x), 0.8)
+        case .crankGen:
+            // winding by hand is work: a little hunger for every turn
+            let cap: Double = PowerSpec.capacity(.crankGen)
+            if d.charge >= cap - 0.5 {
+                say("The flywheel is spinning as fast as it can.", 1.2)
+                return
+            }
+            d.charge = min(cap, d.charge + 15)
+            if !isCreative { hunger = max(0, hunger - 0.08) }
+            sfx(.swingLight, at: Double(x), 0.5)
+            spawnParticles(Double(x) + 0.8, Double(y) + 0.2, 0xFFC020, 3, 2.0, 0.3, 6)
+            floatText(joinText(String(Int(d.charge)), " / ", String(Int(cap))), Double(x) + 0.5, Double(y) - 0.4, 0xFFD060)
+        case .breaker:
+            if !d.on {
+                d.on = true
+                d.flag = false
+                world.powerRev &+= 1
+                say("Breaker reset. If the line is still overloaded it will trip again.", 2.0)
+            } else {
+                d.on = false
+                world.powerRev &+= 1
+                say("Breaker opened: the line is cut here.", 1.5)
+            }
+            sfx(.tap, at: Double(x), 0.8)
+        case .powerSwitch:
+            if d.snets[0] >= 0 || d.snets[1] >= 0 {
+                say("This switch follows its pulse wire.", 1.5)
+            } else {
+                d.on.toggle()
+                world.powerRev &+= 1
+                sfx(.tap, at: Double(x), 0.8)
+            }
+        case .fuelGen, .emberDynamo:
+            if let it = heldItem, fuelSeconds(it, dynamo: t == .emberDynamo) > 0 {
+                let secs: Double = fuelSeconds(it, dynamo: t == .emberDynamo)
+                if d.charge + secs > 3600 {
+                    say("It is full of fuel.", 1.2)
+                    return
+                }
+                d.charge += secs
+                if !isCreative { inv.removeAt(sel, 1) }
+                sfx(.place, at: Double(x), 0.5)
+                floatText(joinText("Fuel: ", fuelText(d.charge)), Double(x) + 0.5, Double(y) - 0.4, 0xFFB050)
+                bumpHUD()
+            } else {
+                openPowerPanel(d)
+            }
+        case .gateClosed, .gateOpen:
+            if pulseHere(d) != nil {
+                say("This gate follows its pulse wire.", 1.5)
+            } else if !d.powered {
+                say("The gate needs power to move.", 1.5)
+            } else {
+                d.on.toggle()
+                applyMachine(d)
+            }
+        default:
+            openPowerPanel(d)
+        }
+        bumpHUD()
+    }
+
+    func fuelText(_ s: Double) -> String {
+        if s >= 60 { return joinText(String(Int(s / 60)), " min ", String(Int(s.truncatingRemainder(dividingBy: 60))), " s") }
+        return joinText(String(Int(s)), " s")
+    }
+
+    func openPowerPanel(_ d: PowerDev) {
+        powerAt = d.key
+        showPower = true
+        sfx(.tap, 0.6)
+        bumpHUD()
+    }
+
+    var powerDevOpen: PowerDev? {
+        guard let k = powerAt else { return nil }
+        return world.devs[k]
+    }
+
+    // MARK: the device panel
+
+    func modeNames(_ t: Tile) -> [String] {
+        switch t {
+        case .logicGate: return ["AND", "OR", "XOR", "NAND", "NOR"]
+        case .pulseTimer: return ["CLOCK", "DELAY"]
+        case .pressurePlate: return ["ANYONE", "PLAYER", "CREATURES"]
+        case .motionSensor: return ["ANYTHING", "CREATURES", "PLAYER"]
+        case .proximitySensor: return ["PLAYER", "HOSTILE", "ANY CREATURE", "ANYONE"]
+        case .daySensor: return ["ON BY DAY", "ON AT NIGHT"]
+        case .weatherSensor: return ["RAIN/SNOW", "STORM", "STRONG WIND", "SEVERE"]
+        case .itemSensor: return ["ANY ITEM", "16+", "64+", "FULL"]
+        case .breaker: return PowerSpec.breakerLimits.map { String(Int($0)) }
+        default: return []
+        }
+    }
+
+    func modeTitle(_ t: Tile) -> String {
+        switch t {
+        case .logicGate: return "Gate type (inputs at the two sides, output where the arrow points)"
+        case .pulseTimer: return "Mode"
+        case .breaker: return "Trips above (sparks per second asked)"
+        case .itemSensor: return "On when the chest beside it holds"
+        default: return "Responds to"
+        }
+    }
+
+    /// The number a device's panel sets: its label, range and step
+    func paramSpec(_ d: PowerDev) -> (String, Double, Double, Double)? {
+        switch d.tile {
+        case .pushButton: return ("Pulse length (s)", 0.25, 5, 0.25)
+        case .pulseTimer: return (d.mode == 0 ? "Period (s)" : "Delay (s)", 0.1, 10, 0.1)
+        case .repeater: return ("Delay (steps of 0.05 s)", 1, 4, 1)
+        case .motionSensor, .proximitySensor: return ("Range (blocks)", 2, 12, 1)
+        default: return nil
+        }
+    }
+
+    func setPowerMode(_ d: PowerDev, _ m: Int) {
+        d.mode = m
+        if d.role == .logic {
+            d.pend.removeAll()
+            if d.li >= 0 { power.queue.insert(d.li) }
+        }
+        if d.tile == .breaker { world.powerRev &+= 1 }
+        bumpHUD()
+    }
+
+    func stepPowerParam(_ d: PowerDev, _ dir: Double) {
+        guard let p = paramSpec(d) else { return }
+        d.param = clampD(((d.param + dir * p.3) / p.3).rounded() * p.3, p.1, p.2)
+        bumpHUD()
+    }
+
+    /// Turns a device a quarter (conveyors and crafters only turn round)
+    func rotatePower(_ d: PowerDev) {
+        if d.tile == .conveyor || d.tile == .autoCrafter {
+            d.dir = d.dir == 0 ? 2 : 0
+        } else {
+            d.dir = (d.dir + 1) % 4
+        }
+        d.pend.removeAll()
+        world.powerRev &+= 1
+        bumpHUD()
+    }
+
+    /// What the panel says about a device and the line it is on
+    func powerPanelLines(_ d: PowerDev) -> [PanelLine] {
+        var out: [PanelLine] = []
+        let good: UInt32 = 0x8AF0B0
+        let bad: UInt32 = 0xFF8060
+        let plain: UInt32 = 0xE8E4D8
+        switch d.role {
+        case .generator:
+            switch d.tile {
+            case .crankGen:
+                out.append(PanelLine(text: joinText("Flywheel: ", String(Int(d.charge)), " / 60 sparks. Tap it to crank."), color: plain))
+            case .fuelGen, .emberDynamo:
+                let what: String = d.tile == .emberDynamo ? "ember bars or ember ore" : "coal, logs, planks or sticks"
+                out.append(PanelLine(text: joinText("Fuel: ", fuelText(d.charge), ". Tap it holding ", what, " to add more."), color: d.charge > 0 ? plain : bad))
+                out.append(PanelLine(text: "It only burns fuel for power that is actually needed.", color: plain))
+            case .solarPanel:
+                out.append(PanelLine(text: "Makes up to 4 sparks/s in full sun under open sky; clouds and night cut it.", color: plain))
+            case .waterWheel:
+                out.append(PanelLine(text: "Turns with water around it (up to 6 sparks/s), more in the rain.", color: plain))
+            case .windTurbine:
+                let k: String = deviceKey(DeviceSpot(x: d.x, y: d.y, t: .windTurbine))
+                out.append(PanelLine(text: joinText("Charge: ", String(Int(weather.store[k] ?? 0)), " / 100 (the wind fills it)."), color: plain))
+            default:
+                break
+            }
+            out.append(PanelLine(text: joinText("Making ", sparks(d.made)), color: d.made > 0 ? good : plain))
+        case .storage:
+            let c: Double = PowerSpec.capacity(d.tile)
+            out.append(PanelLine(text: joinText("Charge: ", String(Int(d.charge)), " / ", String(Int(c)), " sparks (", String(Int(100 * d.charge / max(1, c))), "%)"), color: d.charge > 1 ? good : plain))
+            out.append(PanelLine(text: joinText("Charges and gives back up to ", String(Int(PowerSpec.rate(d.tile))), " sparks/s. Taken down, it loses its charge."), color: plain))
+        case .conductor:
+            if d.tile == .breaker {
+                if d.flag && !d.on { out.append(PanelLine(text: "TRIPPED: too much was asked of this line. Tap it to reset.", color: bad)) }
+                else { out.append(PanelLine(text: d.on ? "Closed: power passes." : "Open: the line is cut here.", color: d.on ? good : bad)) }
+            } else {
+                out.append(PanelLine(text: d.on ? "On: power passes." : "Off: the line is cut here.", color: d.on ? good : bad))
+            }
+        case .source, .sensor, .logic:
+            out.append(PanelLine(text: joinText("Sending: ", d.out ? "ON" : "off"), color: d.out ? good : plain))
+            if d.burnT > 0 { out.append(PanelLine(text: "Burnt out for a moment: it was flipping too fast (a loop with no delay?)", color: bad)) }
+            if d.role == .logic {
+                let back: Int = (d.dir + 2) % 4
+                if d.tile == .logicGate {
+                    let a: String = (portOn(d, (d.dir + 1) % 4) ?? false) ? "ON" : "off"
+                    let b: String = (portOn(d, (d.dir + 3) % 4) ?? false) ? "ON" : "off"
+                    out.append(PanelLine(text: joinText("Inputs: ", a, " and ", b), color: plain))
+                } else if let i = portOn(d, back) {
+                    out.append(PanelLine(text: joinText("Input: ", i ? "ON" : "off"), color: plain))
+                } else if d.tile != .pulseTimer || d.mode == 1 {
+                    out.append(PanelLine(text: "No pulse wire at its back (the input).", color: bad))
+                }
+            }
+        case .machine:
+            let wants: Double = PowerSpec.draw(d.tile)
+            if !d.enabled { out.append(PanelLine(text: "Off: its pulse wire is off.", color: plain)) }
+            else if d.powered { out.append(PanelLine(text: joinText("Running on ", sparks(wants)), color: good)) }
+            else { out.append(PanelLine(text: joinText("NO POWER: it needs ", sparks(wants)), color: bad)) }
+            out.append(PanelLine(text: machineHelp(d.tile), color: plain))
+        case .meter:
+            out.append(PanelLine(text: "Reads the power line it sits on.", color: plain))
+        case .indicator:
+            out.append(PanelLine(text: joinText("Shows its pulse wire: ", (pulseHere(d) ?? false) ? "ON" : "off"), color: plain))
+        case .none:
+            break
+        }
+        if d.role == .sensor && !d.powered { out.append(PanelLine(text: "Sensors need a little power (0.5 sparks/s) to work.", color: bad)) }
+        // the power line it is on
+        let usesPower: Bool = d.role == .generator || d.role == .storage || d.role == .machine || d.role == .sensor || d.role == .meter
+        if usesPower {
+            if d.pnet >= 0 && d.pnet < power.pnets.count {
+                let n: PowerNet = power.pnets[d.pnet]
+                out.append(PanelLine(text: joinText("Line: makes ", sparks(n.made), " · uses ", sparks(n.used), n.cap > 0 ? joinText(" · stored ", String(Int(n.stored)), "/", String(Int(n.cap))) : ""), color: plain))
+                if n.short { out.append(PanelLine(text: joinText("NOT ENOUGH POWER on this line: machines want ", sparks(n.asked)), color: bad)) }
+            } else {
+                out.append(PanelLine(text: "Not on a power line: lay power cable through it.", color: bad))
+            }
+        }
+        if let p = pulseHere(d), d.role != .logic {
+            out.append(PanelLine(text: joinText("Pulse wire here: ", p ? "ON" : "off"), color: p ? good : plain))
+        }
+        return out
+    }
+
+    func machineHelp(_ t: Tile) -> String {
+        switch t {
+        case .lampOff, .lampOn: return "Lights up while powered (and while its pulse wire is on, if it has one)."
+        case .gateClosed, .gateOpen: return "Opens while its pulse wire is on; with none, tap it. Needs power to move."
+        case .arcTrap: return "Zaps whatever stands on it, once a second."
+        case .autoDrill: return "Bores out the block it faces (what an iron pickaxe could). Drops land as if mined."
+        case .conveyor: return "Carries items (and anyone) along the way the arrow points."
+        case .collector: return "Draws loose items within two blocks into a chest beside it."
+        case .autoCrafter: return "Makes its recipe from the chest behind it into the chest in front, every 2 s."
+        case .sumpPump: return "Drains water within four blocks, into a rain barrel or cistern beside it if there is one."
+        default: return ""
+        }
+    }
+
+    /// Recipes an auto crafter can make
+    func crafterRecipes() -> [Recipe] {
+        return RecipeBook.all.filter { crafterCan($0.station) }
+    }
+
+    func updatePowerUI(_ dt: Double) {
+        if var i = inspect {
+            i.t -= dt
+            inspect = i.t > 0 ? i : nil
+        }
+        if showPower, let k = powerAt, world.devs[k] == nil {
+            showPower = false
+            powerAt = nil
+            bumpHUD()
+        }
+    }
+}
+
+// MARK: - Sparkworks drawing
+
+extension WorldRenderer {
+    /// Wiring over the tiles: copper power cable (bright when the line has power, red flashes when it is
+    /// short), and thinner pulse wire in amber and teal that glows while on. Shown in full while a
+    /// wiring tool is in hand, and otherwise as the settings say.
+    static func drawWiring(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
+        let mode: Int = g.settings.showWires
+        let tool: Bool = g.holdingWiringTool
+        if mode == 0 && !tool && g.inspect == nil { return }
+        let faint: Bool = !tool && mode == 2
+        let sim: PowerSim = g.power
+        let x0: Int = Int(floor(v.left)) - 1
+        let x1: Int = Int(ceil(v.left + v.wTiles)) + 1
+        let y0: Int = max(0, Int(floor(v.top)) - 1)
+        let y1: Int = min(g.world.H - 1, Int(ceil(v.top + v.hTiles)) + 1)
+        let tp: Double = v.tp
+        var paths: [Path] = [Path(), Path(), Path(), Path(), Path(), Path(), Path()]
+        var used: [Bool] = [false, false, false, false, false, false, false]
+        var cx: Int = floorDiv(x0, chunkW)
+        let blink: Bool = Int(g.clock * 3.0) % 2 == 0
+        while cx <= floorDiv(x1, chunkW) {
+            defer { cx += 1 }
+            guard let c = g.world.chunk(cx), c.wireCount > 0 else { continue }
+            let H: Int = c.H
+            let ax: Int = max(x0, c.x0)
+            let bx: Int = min(x1, c.x0 + chunkW - 1)
+            if ax > bx { continue }
+            for x in ax...bx {
+                let base: Int = (x - c.x0) * H
+                for y in y0...y1 {
+                    let b: UInt8 = c.wires[base + y]
+                    if b == 0 { continue }
+                    for layer in 0..<3 where b & Wire.bit(layer) != 0 {
+                        let off: Double = layer == 0 ? 0 : (layer == 1 ? -0.2 : 0.2)
+                        let px: Double = v.sx(Double(x) + 0.5 + off)
+                        let py: Double = v.sy(Double(y) + 0.5 + off)
+                        var slot: Int = layer == 0 ? 0 : (layer == 1 ? 2 : 4)
+                        if let n = sim.cellNet[PowerSim.cellKey(layer, x, y)] {
+                            if layer == 0, n < sim.pnets.count {
+                                let net: PowerNet = sim.pnets[n]
+                                if net.short && blink { slot = 6 } else if net.made > 0 || net.stored > 1 { slot = 1 }
+                            } else if layer > 0, n < sim.snets.count, sim.snets[n].on {
+                                slot += 1
+                            }
+                        }
+                        let bit: UInt8 = Wire.bit(layer)
+                        // a stub to each wired neighbour to the right and below (each joint drawn once)
+                        if g.world.wireAt(x + 1, y) & bit != 0 {
+                            paths[slot].move(to: mkPoint(px, py))
+                            paths[slot].addLine(to: mkPoint(px + tp, py))
+                        }
+                        if g.world.wireAt(x, y + 1) & bit != 0 {
+                            paths[slot].move(to: mkPoint(px, py))
+                            paths[slot].addLine(to: mkPoint(px, py + tp))
+                        }
+                        let r: Double = layer == 0 ? tp * 0.11 : tp * 0.08
+                        paths[slot].addEllipse(in: mkRect(px - r, py - r, r * 2, r * 2))
+                        used[slot] = true
+                    }
+                }
+            }
+        }
+        let a: Double = faint ? 0.35 : 1.0
+        let cols: [UInt32] = [0x8A5A30, 0xFFA040, 0x6A5010, 0xFFD040, 0x1A6A66, 0x50FFF0, 0xFF4030]
+        let widths: [Double] = [0.16, 0.16, 0.09, 0.11, 0.09, 0.11, 0.16]
+        for i in 0..<7 where used[i] {
+            ctx.stroke(paths[i], with: .color(Color(hex: 0x14100C, alpha: 0.7 * a)), lineWidth: tp * widths[i] + 2.0)
+            ctx.stroke(paths[i], with: .color(Color(hex: cols[i], alpha: a)), lineWidth: tp * widths[i])
+        }
+        // the network the probe is looking at
+        if let ins = g.inspect {
+            let pulse: Double = 0.35 + 0.25 * sin(g.clock * 6.0)
+            let col: UInt32 = ins.layer == 0 ? 0xFFC060 : (ins.layer == 1 ? 0xFFE060 : 0x80FFF0)
+            var hp: Path = Path()
+            for c in ins.cells where v.visible(Double(c.x), Double(c.y), 2) {
+                hp.addRect(v.rect(Double(c.x) + 0.12, Double(c.y) + 0.12, 0.76, 0.76))
+            }
+            ctx.stroke(hp, with: .color(Color(hex: col, alpha: pulse * min(1.0, ins.t))), lineWidth: 2)
+        }
+    }
+
+    /// What each device in view is doing: lever handles, lights, arrows on parts that point a way,
+    /// charge bars, moving parts, and a red bolt on a machine that wants power and has none
+    static func drawPowerDevices(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
+        let sim: PowerSim = g.power
+        if sim.devs.isEmpty { return }
+        let tp: Double = v.tp
+        let blink: Bool = Int(g.clock * 2.5) % 2 == 0
+        var dark: Path = Path()
+        var amber: Path = Path()
+        var teal: Path = Path()
+        var red: Path = Path()
+        var green: Path = Path()
+        var white: Path = Path()
+        var fire: Path = Path()
+        for d in sim.devs {
+            if !v.visible(Double(d.x), Double(d.y), 2) { continue }
+            let L: Double = v.sx(Double(d.x))
+            let T: Double = v.sy(Double(d.y))
+            let cx: Double = L + tp * 0.5
+            let cy: Double = T + tp * 0.5
+            func led(_ on: Bool, _ px: Double, _ py: Double, _ onPath: inout Path) {
+                let r: Double = max(1.5, tp * 0.07)
+                if on { onPath.addEllipse(in: mkRect(px - r, py - r, r * 2, r * 2)) } else { dark.addEllipse(in: mkRect(px - r, py - r, r * 2, r * 2)) }
+            }
+            func arrow(_ dir: Int, _ path: inout Path) {
+                let ax: Double = Double(sideDX[dir])
+                let ay: Double = Double(sideDY[dir])
+                let s: Double = tp * 0.22
+                let tipX: Double = cx + ax * tp * 0.34
+                let tipY: Double = cy + ay * tp * 0.34
+                path.move(to: mkPoint(tipX, tipY))
+                path.addLine(to: mkPoint(tipX - ax * s - ay * s, tipY - ay * s + ax * s))
+                path.addLine(to: mkPoint(tipX - ax * s + ay * s, tipY - ay * s - ax * s))
+                path.closeSubpath()
+            }
+            switch d.tile {
+            case .lever:
+                let ang: Double = d.on ? -0.6 : -2.5
+                white.move(to: mkPoint(cx, T + tp * 0.7))
+                white.addLine(to: mkPoint(cx + cos(ang) * tp * 0.45, T + tp * 0.7 + sin(ang) * tp * 0.45))
+                led(d.on, cx + cos(ang) * tp * 0.45, T + tp * 0.7 + sin(ang) * tp * 0.45, &amber)
+            case .pushButton:
+                if d.out { teal.addRect(mkRect(L + tp * 0.375, T + tp * 0.5, tp * 0.25, tp * 0.25)) }
+            case .pressurePlate:
+                if d.out { amber.addRect(mkRect(L + tp * 0.15, T + tp * 0.8, tp * 0.7, tp * 0.06)) }
+            case .repeater, .inverter, .logicGate, .pulseTimer:
+                if d.burnT > 0 { arrow(d.dir, &red) } else if d.out { arrow(d.dir, &amber) } else { arrow(d.dir, &white) }
+                if d.tile == .logicGate {
+                    let names: [String] = ["AND", "OR", "XOR", "NAND", "NOR"]
+                    drawLabel(&ctx, names[clampI(d.mode, 0, 4)], cx, T + tp * 0.12, max(6.0, tp * 0.26), Color(hex: 0xC8F0E8))
+                }
+                if d.tile == .pulseTimer {
+                    let a: Double = d.mode == 0 ? g.clock * 3.0 : (d.out ? 0 : 3.14)
+                    white.move(to: mkPoint(cx, cy))
+                    white.addLine(to: mkPoint(cx + cos(a) * tp * 0.25, cy + sin(a) * tp * 0.25))
+                }
+            case .autoDrill:
+                if d.enabled && d.powered { arrow(d.dir, &amber) } else { arrow(d.dir, &white) }
+            case .conveyor, .autoCrafter:
+                if d.enabled && d.powered { arrow(d.dir, &amber) } else { arrow(d.dir, &white) }
+                if d.tile == .conveyor && d.enabled && d.powered {
+                    let shift: Double = (g.clock * 2.4).truncatingRemainder(dividingBy: 1.0) * (d.dir == 2 ? -1.0 : 1.0)
+                    for k in 0..<3 {
+                        var fx: Double = (Double(k) / 3.0 + shift).truncatingRemainder(dividingBy: 1.0)
+                        if fx < 0 { fx += 1.0 }
+                        white.addRect(mkRect(L + fx * tp, T + tp * 0.02, max(1.5, tp * 0.06), tp * 0.1))
+                    }
+                }
+            case .motionSensor, .daySensor, .weatherSensor, .itemSensor, .proximitySensor:
+                led(d.out, L + tp * 0.85, T + tp * 0.15, &teal)
+            case .signalLight:
+                if g.pulseHere(d) ?? false {
+                    let glow: Double = tp * 0.32
+                    teal.addEllipse(in: mkRect(cx - glow, T + tp * 0.4 - glow, glow * 2, glow * 2))
+                }
+            case .crankGen:
+                let spin: Double = g.clock * min(12.0, d.charge * 0.4)
+                white.move(to: mkPoint(L + tp * 0.8, T + tp * 0.25))
+                white.addLine(to: mkPoint(L + tp * 0.8 + cos(spin) * tp * 0.2, T + tp * 0.25 + sin(spin) * tp * 0.2))
+                led(d.made > 0, L + tp * 0.5, T + tp * 0.65, &green)
+            case .waterWheel:
+                let spin: Double = g.clock * (d.made > 0 ? 1.5 : 0)
+                for k in 0..<4 {
+                    let a: Double = spin + Double(k) * 1.5708
+                    dark.move(to: mkPoint(cx, cy))
+                    dark.addLine(to: mkPoint(cx + cos(a) * tp * 0.45, cy + sin(a) * tp * 0.45))
+                }
+            case .fuelGen, .emberDynamo:
+                if d.made > 0 {
+                    let f: Double = 0.7 + 0.3 * sin(g.clock * 17.0 + Double(d.x))
+                    fire.addEllipse(in: mkRect(cx - tp * 0.22 * f, T + tp * 0.45, tp * 0.44 * f, tp * 0.3 * f))
+                }
+                led(d.charge > 0, L + tp * 0.85, T + tp * 0.85, &green)
+            case .solarPanel, .windTurbine:
+                led(d.made > 0, L + tp * 0.85, T + tp * 0.92, &green)
+            case .battery, .accumulator:
+                let f: Double = clampD(d.charge / max(1, PowerSpec.capacity(d.tile)), 0, 1)
+                let h: Double = tp * 0.6 * f
+                if f > 0.01 {
+                    let col: Path = Path(mkRect(L + tp * 0.32, T + tp * 0.85 - h, tp * 0.36, h))
+                    ctx.fill(col, with: .color(Color(hex: f > 0.5 ? 0x50E070 : (f > 0.2 ? 0xE8D040 : 0xE05030), alpha: 0.9)))
+                }
+            case .powerMeter:
+                var frac: Double = 0
+                var short: Bool = false
+                if d.pnet >= 0 && d.pnet < sim.pnets.count {
+                    let n: PowerNet = sim.pnets[d.pnet]
+                    frac = n.made > 0 ? clampD(n.used / n.made, 0, 1) : (n.used > 0 ? 1 : 0)
+                    short = n.short
+                }
+                let a: Double = 3.4 + frac * 2.6
+                white.move(to: mkPoint(cx, T + tp * 0.6))
+                white.addLine(to: mkPoint(cx + cos(a) * tp * 0.35, T + tp * 0.6 + sin(a) * tp * 0.35))
+                if short { led(true, L + tp * 0.85, T + tp * 0.8, &red) } else { led(true, L + tp * 0.85, T + tp * 0.8, &green) }
+            case .powerSwitch:
+                let r: CGRect = mkRect(L + tp * 0.375, T + (d.on ? tp * 0.32 : tp * 0.5), tp * 0.25, tp * 0.18)
+                if d.on { green.addRect(r) } else { red.addRect(r) }
+            case .breaker:
+                if d.on { led(true, cx, T + tp * 0.5, &green) } else { led(true, cx, T + tp * 0.5, &red) }
+            default:
+                break
+            }
+            // a machine or sensor that wants power and has none
+            if (d.role == .machine || d.role == .sensor) && d.enabled && !d.powered && blink {
+                let s: Double = tp * 0.18
+                red.move(to: mkPoint(cx + s * 0.3, T - s * 2.2))
+                red.addLine(to: mkPoint(cx - s * 0.6, T - s * 0.9))
+                red.addLine(to: mkPoint(cx + s * 0.2, T - s * 0.9))
+                red.addLine(to: mkPoint(cx - s * 0.4, T + s * 0.4))
+            }
+        }
+        let lw: Double = max(1.5, tp * 0.07)
+        ctx.stroke(dark, with: .color(Color(hex: 0x1A1A20, alpha: 0.9)), lineWidth: lw)
+        ctx.fill(dark, with: .color(Color(hex: 0x1A1A20, alpha: 0.9)))
+        ctx.stroke(white, with: .color(Color(hex: 0xE8ECF0)), lineWidth: lw)
+        ctx.fill(amber, with: .color(Color(hex: 0xFFC020)))
+        ctx.fill(teal, with: .color(Color(hex: 0x50FFF0, alpha: 0.9)))
+        ctx.fill(green, with: .color(Color(hex: 0x50F080)))
+        ctx.fill(fire, with: .color(Color(hex: 0xFF8A20, alpha: 0.85)))
+        ctx.stroke(red, with: .color(Color(hex: 0xFF4030)), lineWidth: lw * 1.3)
+        ctx.fill(red, with: .color(Color(hex: 0xFF4030, alpha: 0.8)))
+    }
+}
+
+// MARK: - Sparkworks panel
+
+/// A device's panel: how it is doing, the line it is on, and its settings
+struct PowerPanel: View {
+    @ObservedObject var game: Game
+    @ObservedObject var hud: HUDSignal
+
+    func pick(_ on: Bool, _ title: String, _ act: @escaping () -> Void) -> some View {
+        SmallButton(title: title, color: on ? Color(hex: 0x3A8A7A) : Color(hex: 0x4A4E58), action: act)
+    }
+
+    var body: some View {
+        let dev: PowerDev? = game.powerDevOpen
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(verbatim: dev?.tile.name.uppercased() ?? "DEVICE").font(.pixel(17)).foregroundColor(Color(hex: 0x80F0E0))
+                Spacer()
+                SmallButton(title: "CLOSE", color: Color(hex: 0xA03030)) {
+                    game.showPower = false
+                    game.bumpHUD()
+                }
+            }
+            if let d = dev {
+                let lines: [PanelLine] = game.powerPanelLines(d)
+                ForEach(0..<lines.count, id: \.self) { i in
+                    Text(verbatim: lines[i].text).font(.pixel(12, .semibold)).foregroundColor(Color(hex: lines[i].color))
+                }
+                controls(d)
+            }
+        }
+        .padding(16)
+        .background(PixelBox(color: Color(hex: 0x182024)).opacity(0.96))
+        .frame(maxWidth: 600)
+        .padding(16)
+    }
+
+    @ViewBuilder
+    func controls(_ d: PowerDev) -> some View {
+        let modes: [String] = game.modeNames(d.tile)
+        if !modes.isEmpty {
+            Text(verbatim: game.modeTitle(d.tile)).font(.pixel(12)).foregroundColor(Color(hex: 0xFFE066))
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 96), spacing: 6)], alignment: .leading, spacing: 6) {
+                ForEach(0..<modes.count, id: \.self) { i in
+                    pick(d.mode == i, modes[i]) { game.setPowerMode(d, i) }
+                }
+            }
+        }
+        if let p = game.paramSpec(d) {
+            HStack(spacing: 8) {
+                Text(verbatim: joinText(p.0, ": ", String(format: p.3 < 1 ? "%.2f" : "%.0f", d.param))).font(.pixel(12)).foregroundColor(Color.white)
+                SmallButton(title: "-") { game.stepPowerParam(d, -1) }
+                SmallButton(title: "+") { game.stepPowerParam(d, 1) }
+            }
+        }
+        if powerDirectional(d.tile) {
+            HStack(spacing: 8) {
+                Text(verbatim: joinText("Facing: ", ["right", "down", "left", "up"][clampI(d.dir, 0, 3)])).font(.pixel(12)).foregroundColor(Color.white)
+                SmallButton(title: "ROTATE") { game.rotatePower(d) }
+            }
+        }
+        if d.tile == .arcTrap {
+            pick(d.flag, d.flag ? "HURTS THE PLAYER TOO" : "CREATURES ONLY") {
+                d.flag.toggle()
+                game.bumpHUD()
+            }
+        }
+        if d.tile == .autoCrafter {
+            let list: [Recipe] = game.crafterRecipes()
+            let cur: String = (d.item >= 0 && d.item < RecipeBook.all.count) ? RecipeBook.all[d.item].out.name : "nothing yet"
+            Text(verbatim: joinText("Making: ", cur, " (chest behind = ingredients, chest in front = results)")).font(.pixel(12)).foregroundColor(Color(hex: 0xFFE066))
+            ScrollView {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 6)], alignment: .leading, spacing: 6) {
+                    ForEach(0..<list.count, id: \.self) { i in
+                        pick(list[i].id == d.item, joinText(list[i].out.name, list[i].outCount > 1 ? joinText(" x", String(list[i].outCount)) : "")) {
+                            d.item = list[i].id
+                            d.work = 0
+                            game.bumpHUD()
+                        }
+                    }
+                }
+            }
+            .frame(maxHeight: 220)
+        }
     }
 }
 
@@ -23140,7 +25451,8 @@ extension Game {
                     weather.store[tk] = max(0, (weather.store[tk] ?? 0) - 0.1 * step)
                 }
             case .stormSiren:
-                if warn {
+                // sounds by itself for a dangerous storm, or whenever a pulse wire through it is on
+                if warn || pulseOnAt(d.x, d.y) {
                     let dist: Double = abs(Double(d.x) - pb.x)
                     sirenLevel = max(sirenLevel, clampD(1.0 - dist / 64.0, 0, 1))
                 }
@@ -23513,7 +25825,7 @@ struct NightSettingsSection: View {
             HStack(spacing: 6) {
                 choice("WHEN BUILDING", settings.showWires == 0) { settings.showWires = 0 }
                 choice("ALWAYS", settings.showWires == 1) { settings.showWires = 1 }
-                choice("HIDDEN", settings.showWires == 2) { settings.showWires = 2 }
+                choice("FAINT", settings.showWires == 2) { settings.showWires = 2 }
             }
         }
         .font(.pixel(13, .bold))
@@ -25211,6 +27523,8 @@ enum WorldRenderer {
         drawGroundWeather(&ctx, g, v)
         drawWaves(&ctx, g, v)
         drawRift(&ctx, g, v)
+        drawWiring(&ctx, g, v)
+        drawPowerDevices(&ctx, g, v)
         drawShips(&ctx, g, v)
         drawVehicles(&ctx, g, v)
         drawDrops(&ctx, g, v)
@@ -28892,13 +31206,19 @@ struct GameView: View {
     var body: some View {
         ZStack {
             worldLayer
-            if !game.showInventory && !game.showMap && !game.showJournal && !game.showWeather && game.tradeWith == nil && !game.dead {
+            if !game.showInventory && !game.showMap && !game.showJournal && !game.showWeather && !game.showPower && game.tradeWith == nil && !game.dead {
                 HUDView(game: game, hud: game.hud)
             }
             if game.showWeather {
                 Color.black.opacity(0.4).ignoresSafeArea()
                 ScrollView {
                     WeatherPanel(game: game, hud: game.hud)
+                }
+            }
+            if game.showPower {
+                Color.black.opacity(0.4).ignoresSafeArea()
+                ScrollView {
+                    PowerPanel(game: game, hud: game.hud)
                 }
             }
             if game.showInventory {

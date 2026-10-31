@@ -1,0 +1,2 @@
+-I/opt/pixelrealm/shim
+-parse-as-library

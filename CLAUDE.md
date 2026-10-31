@@ -11,6 +11,9 @@ Swift 6.0.3 under `/opt/pixelrealm` and builds stand-ins for SwiftUI and AVFound
 compiles and runs headless on Linux. If `/opt/pixelrealm` is missing, run `tools/setup.sh` (about a minute).
 
 - `tools/typecheck.sh`: about 25 s. Run it after every batch of edits.
+- The swift-lsp plugin (if loaded) checks the file as it is edited: `compile_flags.txt` points
+  sourcekit-lsp at the stand-ins, and setup.sh installs it. A full check of the file takes about
+  30 s, so wait for its diagnostics; `tools/typecheck.sh` remains the check of record.
 - `tools/run-tests.sh [suite ...]`: builds and runs suites from `tools/tests`, four at a time (all
   of them take several minutes). Pass only the suites you touched while iterating, and run them all
   before committing. Full output is in `/tmp/pixelrealm-build/<suite>/out.log`.

@@ -506,12 +506,15 @@ do {
     check(si.heights == [WorldGen.flatSurface], "infinite flat world: every one of \(far.count * chunkW) columns has its surface at row \(WorldGen.flatSurface) (heights \(si.heights.sorted()))")
     check(si.bad.isEmpty, "infinite flat world: the same layers in all \(si.cols) open columns, out to 100 000 blocks: surface, 4 topsoil, stone to 300, slate to 430, deep rock, bedrock; no caves, water or lava \(si.bad.prefix(4))")
     check(si.decor > 200, "trees and plants grow on it (\(si.decor) tiles)")
-    var vill = 0, ruins = 0
-    var villageGround = Set<Int>()
-    for v in gi.villages(overlapping: -2100, 2100) { vill += 1; villageGround.insert(v.ground) }
-    ruins = gi.rareSites(overlapping: -2100, 2100).count
+    let ruins = gi.rareSites(overlapping: -2100, 2100).count
     let lairs = gi.lairCenters(near: 0).count
-    check(vill > 0 && ruins > 0 && lairs > 0 && villageGround == [WorldGen.flatSurface], "structures on: \(vill) villages (all built at the flat surface), \(ruins) ruins and \(lairs) boss lairs within 2100 blocks")
+    check(gi.villages(overlapping: -2100, 2100).isEmpty && ruins > 0 && lairs > 0, "structures on: no villages, \(ruins) ruins and \(lairs) boss lairs within 2100 blocks")
+    // a flat world saved before generator version 5 keeps the villages it already has, at the flat surface
+    let g4 = WorldGen(seed: 4242, infinite: true, rareChance: 0.28, genVersion: 4, options: full)
+    var villageGround = Set<Int>()
+    var vill = 0
+    for v in g4.villages(overlapping: -2100, 2100) { vill += 1; villageGround.insert(v.ground) }
+    check(vill > 0 && villageGround == [WorldGen.flatSurface], "a version-4 flat world keeps its \(vill) villages, all built at the flat surface")
     // a classic flat world, edge to edge
     let gc = WorldGen(seed: 777, infinite: false, rareChance: 0.28, options: full)
     let sc = flatScan(gc, Array(0..<(WorldGen.finiteWidth / chunkW)))

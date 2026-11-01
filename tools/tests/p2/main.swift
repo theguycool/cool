@@ -292,8 +292,7 @@ func walkFar(_ g: Game, _ dir: Double, _ dist: Double, _ maxT: Double) -> (moved
             let ix = Int(floor(g.pb.x))
             var what = ""
             if let L = g.gen.lairAt(ix, radius: 70) { what = " near the \(L.kind) lair" }
-            for v in g.gen.villages(overlapping: ix - 2, ix + 2) { what += " in the village at \(v.x)" }
-            for r in g.gen.rareSites(overlapping: ix - 40, ix + 40) where abs(r.x - ix) < 40 { what += " at a \(r.kind) ruin" }
+                        for r in g.gen.rareSites(overlapping: ix - 40, ix + 40) where abs(r.x - ix) < 40 { what += " at a \(r.kind) ruin" }
             let feetRow = Int(floor(g.pb.y)) - 1
             let blockers = (0..<4).map { "\(g.world.tile(ix + Int(dir), feetRow - $0))" }.joined(separator: ",")
             stuck.append(String(format: "x %.1f y %.2f%@ (in front: %@; at feet %@, water %@)", g.pb.x, g.pb.y, what, blockers, "\(g.world.tile(ix, Int(floor(g.pb.y))))", g.pb.inWater ? "yes" : "no"))
@@ -884,22 +883,16 @@ do {
     check(recipes.allSatisfy { recipe(.part($0)) != nil }, "all four new parts can be crafted")
 }
 
-// ---------------------------------------------------------------- I. journal, villagers, trades
-print("== journal and villagers")
+// ---------------------------------------------------------------- I. journal
+print("== journal")
 do {
     let g = Game(mode: .survival, infinite: true, seed: 4242, settings: Settings())
     g.viewW = 1100; g.viewH = 800
     g.godMode = true
     g.monstersEnabled = false
     check(g.journal.places.isEmpty && !g.journalAims()[0].done, "a new world starts with an empty journal and open goals")
-    // a rumour points at a real place
-    let r0 = g.villagerRumour() ?? ""
-    check(r0.contains("blocks") && (r0.contains("east") || r0.contains("west")), "a villager's rumour gives a direction and a distance: \"\(r0)\"")
     // walking into places writes them down, with their story
-    let v = g.gen.villages(overlapping: -3000, 3000).first!
-    g.debugTeleport(Double(v.x) + 0.5, Double(g.gen.col(v.x).h) - 1)
-    step(g, 1.0)
-    check(g.journal.hasKind("village:") && g.journal.lore.contains("village"), "walking into a village records it, and its lore")
+    check(g.gen.villages(overlapping: -3000, 3000).isEmpty && g.journalAims().allSatisfy { !$0.title.lowercased().contains("village") }, "a new world has no villages, and no goal asks for one")
     let m = (-30...30).compactMap { g.gen.mineSite(cell: $0) }.first!
     g.debugTeleport(Double(m.x + 1) + 0.5, Double(m.ground) - 0.01)
     step(g, 1.0)
@@ -912,7 +905,7 @@ do {
     step(g, 0.1)
     // the aims tick off from what has happened
     let aims = g.journalAims()
-    check(aims[2].done && aims[3].done && aims[4].done && !aims[5].done, "goals: village, mine and grotto ticked off; Ursavor still open")
+    check(aims[2].done && aims[3].done && !aims[4].done, "goals: mine and grotto ticked off; Ursavor still open")
     // relic fragments counted as they are picked up
     g.drops.append(DropItem(stack: Stack(item: .mat(.relicFragment), count: 3), x: g.pb.x, y: g.pb.y - 0.5, vx: 0, vy: 0, pickDelay: 0))
     step(g, 0.5)
@@ -932,38 +925,10 @@ do {
     let oldData = try! JSONSerialization.data(withJSONObject: obj)
     let old = try? JSONDecoder().decode(SaveData.self, from: oldData)
     check(old != nil && Game.load(old!, settings: Settings()).journal.places.isEmpty, "a save from before the journal loads with an empty one")
-    // both panels build their views
+    // the panel builds its view
     _ = JournalPanel(game: g, hud: g.hud).body
-    let vil = g.addMob(.villager, g.pb.x + 1, g.pb.y)
-    _ = TradePanel(game: g, hud: g.hud, villager: vil).body
-    check(true, "the journal and trade panels build")
+    check(true, "the journal panel builds")
 }
-do {
-    // trading with villagers
-    let g = arena()
-    g.godMode = true
-    let smith = g.addMob(.villager, g.pb.x + 1.5, 100)
-    smith.variant = 1
-    smith.persistent = true
-    g.interactMob(smith)
-    check(g.tradeWith === smith && !g.journal.rumours.isEmpty, "tapping a villager shares a rumour and opens their trades")
-    let ore = g.villagerTrades(1)[0]
-    check(!g.canTrade(ore), "without the goods, a trade can't be made")
-    g.inv.slots = [Stack?](repeating: nil, count: Inventory.size)
-    _ = g.inv.add(.mat(.ironOre), 8); _ = g.inv.add(.mat(.coal), 2)
-    g.doTrade(ore)
-    check(g.inv.total(.mat(.ironBar)) == 4 && g.inv.total(.mat(.ironOre)) == 0, "the smith smelts 8 iron ore and 2 coal into 4 iron bars")
-    let carto = g.villagerTrades(2)[0]
-    _ = g.inv.add(.mat(.relicFragment), 2)
-    let n0 = g.journal.rumours.count
-    g.doTrade(carto)
-    check(g.inv.total(.mat(.relicFragment)) == 0 && g.journal.rumours.count >= n0, "the cartographer takes two relic fragments for a rumour written in the journal")
-    // walking off ends the conversation
-    smith.b.x = g.pb.x + 30
-    step(g, 0.6)
-    check(g.tradeWith == nil, "walking away from the villager closes the trades")
-}
-
 // ---------------------------------------------------------------- J. weather, light, settings
 print("== weather, light and settings")
 do {

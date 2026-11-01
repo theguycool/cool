@@ -3049,7 +3049,6 @@ struct HumanStyle {
     var beard: UInt32 = 0
     var patch: Bool = false
     var coat: Bool = false
-    var robe: Bool = false
     var tail: Bool = false
 }
 
@@ -3091,15 +3090,7 @@ func humanoidFrame(_ s: HumanStyle, legs: Int, pose: Int) -> PixelBuf {
     rows += [".aattttaa.", ".aattttaa.", ".ssttttss."]
     rows.append("..xxxxxx..")
     rows.append(s.coat ? ".aappppaa." : "..pppppp..")
-    if s.robe {
-        if legs == 1 {
-            rows += ["..pppppp..", ".ppppppp..", ".pppppppp.", ".oo....oo."]
-        } else if legs == 2 {
-            rows += ["..pppppp..", "..pppppp..", "...ppppp..", "...oooo..."]
-        } else {
-            rows += ["..pppppp..", "..pppppp..", "..pppppp..", "..oo..oo.."]
-        }
-    } else if legs == 1 {
+    if legs == 1 {
         rows += [".pp....pp.", ".pp....pp.", ".pp....pp.", ".oo....oo."]
     } else if legs == 2 {
         rows += ["...pppp...", "...pppp...", "...pppp...", "...oooo..."]
@@ -3337,23 +3328,6 @@ func pirateGunnerStyle() -> HumanStyle {
     s.sleeve = 0x324F84
     s.hat = 0x2E4E86
     s.patch = false
-    return s
-}
-
-/// Four villagers: robed (0 and 2), a bearded elder (1) and a worker (3)
-func villagerStyle(_ v: Int) -> HumanStyle {
-    var s = HumanStyle()
-    let robes: [UInt32] = [0x8A64B0, 0x5E9A5E, 0xC08440, 0x4E86B8]
-    let i: Int = ((v % 4) + 4) % 4
-    s.skin = 0xE8BC8C
-    s.hair = [0x5A3A20, 0xC8C0B0, 0x2A2A2A, 0x9A5E2A][i]
-    s.shirt = robes[i]
-    s.sleeve = shadeRGB(robes[i], 0.86)
-    s.pants = shadeRGB(robes[i], 0.72)
-    s.belt = 0xD8B868
-    s.boots = 0x5A4632
-    s.robe = i % 2 == 0
-    if v == 1 { s.beard = 0xC8C0B0 }
     return s
 }
 
@@ -3604,7 +3578,8 @@ func creatureArt(_ k: MobKind, _ v: Int) -> ([PixelBuf], CreatureAnim) {
     case .bat: a.cycle = [0, 1, 2, 1]; return (spriteCaveBat(), a)
     case .scorpion: a.attack = 3; return (spriteScorpion(), a)
     case .wraith: a.cycle = [0, 1]; a.attack = 2; return (spriteWraith(), a)
-    case .villager: return (humanoidFrames(villagerStyle(v)), a)
+    // a retired kind (villagers are gone): kept so saved creature numbers stay the same
+    case .villager: return (humanoidFrames(zombieStyle(v)), a)
     case .pirate: return (humanoidFrames(pirateStyle(false)), a)
     case .pirateGunner: return (humanoidFrames(pirateGunnerStyle()), a)
     case .pirateCaptain: return (humanoidFrames(pirateStyle(true)), a)
@@ -5250,7 +5225,7 @@ struct WorldOptions: Codable, Equatable {
     var flat: Bool = false
     /// flat worlds only: trees and plants on the surface
     var trees: Bool = true
-    /// flat worlds only: villages, ruins and boss lairs (the buried portal chamber is always there)
+    /// flat worlds only: ruins, mines and boss lairs (the buried portal chamber is always there)
     var structures: Bool = true
     /// flat worlds only: caves, underground lakes and deep lava, all below an unbroken crust
     var caves: Bool = false
@@ -5286,9 +5261,10 @@ struct WorldGen {
     /// 1 = original rules (kept for worlds saved before ocean basins), 2 = with ocean basins,
     /// 3 = buildings and lairs that never wall off the way along the ground, birch and pine trees,
     /// surface landmarks, crystal grottos and abandoned mines, 4 = mines grown into branching networks
-    /// (side rooms, drifts down ladders, dead ends, collapses hiding chests, a great chamber)
+    /// (side rooms, drifts down ladders, dead ends, collapses hiding chests, a great chamber),
+    /// 5 = no villages (worlds saved earlier keep the villages they already have, empty of villagers)
     let genVersion: Int
-    static let currentVersion: Int = 4
+    static let currentVersion: Int = 5
     let options: WorldOptions
     let rareChance: Double
     let zones: [Int]
@@ -5312,6 +5288,9 @@ struct WorldGen {
     /// flat worlds, where a wall across the only way along is a dead end.
     var passableStructures: Bool { return genVersion >= 3 || options.flat }
     var hasStructures: Bool { return !options.flat || options.structures }
+    /// Villages are only generated for worlds saved before generator version 5, so their unexplored
+    /// ground matches what they already have. New worlds have none.
+    var hasVillages: Bool { return genVersion < 5 && hasStructures }
 
     /// Finite worlds lay biome zones out in a seeded order so every biome is always present.
     /// climate ids: 0 tundra, 1 plains, 2 forest, 3 desert, 4 jungle, 5 savanna, 6 swamp
@@ -5647,7 +5626,7 @@ struct WorldGen {
     }
 
     func computeVillageSite(cell c: Int) -> VillageSite? {
-        if !hasStructures { return nil }
+        if !hasVillages { return nil }
         let cellW: Int = WorldGen.villageCell
         let spawnCell: Bool = floorDiv(spawnX, cellW) == c
         if !spawnCell && hash2(c, 99, seed) > 0.62 { return nil }
@@ -9038,7 +9017,7 @@ func generateChestLoot(_ g: WorldGen, _ dim: Dimension, _ x: Int, _ y: Int) -> [
             return MineLoot.roll(&rng, .room, lv)
         }
     }
-    // villages
+    // chests in the villages of worlds saved before generator version 5 (new worlds have none)
     if y < 200, let v = g.nearestVillage(to: x), abs(x - v.x) <= v.halfW + 12 {
         add(.food(.bread), 2, 5, 0.9)
         add(.food(.carrot), 2, 5, 0.6)
@@ -9907,7 +9886,7 @@ func makeMobDef(_ k: MobKind) -> MobDef {
     case .bat: return MobDef(name: "Cave Bat", w: 0.6, h: 0.4, hp: 6, speed: 4.2, dmg: 4, behavior: .flyer, flying: true, aggro: 12, hostile: true)
     case .scorpion: return MobDef(name: "Scorpion", w: 1.2, h: 0.6, hp: 26, speed: 2.6, dmg: 8, behavior: .hostile, aggro: 11, hostile: true)
     case .wraith: return MobDef(name: "Wraith", w: 0.9, h: 1.5, hp: 44, speed: 2.8, dmg: 12, behavior: .flyer, flying: true, aggro: 18, hostile: true)
-    case .villager: return MobDef(name: "Villager", w: 0.7, h: 1.7, hp: 20, speed: 1.4, dmg: 0, behavior: .passive)
+    case .villager: return MobDef(name: "Villager", w: 0.7, h: 1.7, hp: 20, speed: 1.4, dmg: 0, behavior: .passive)  // retired: never spawns
     case .pirate: return MobDef(name: "Pirate", w: 0.7, h: 1.8, hp: 48, speed: 2.5, dmg: 11, behavior: .hostile, aggro: 20, hostile: true)
     case .pirateGunner: return MobDef(name: "Pirate Gunner", w: 0.7, h: 1.8, hp: 40, speed: 1.9, dmg: 9, behavior: .ranged, aggro: 20, hostile: true)
     case .pirateCaptain: return MobDef(name: "Pirate Captain", w: 0.8, h: 1.9, hp: 140, speed: 2.5, dmg: 15, behavior: .hostile, aggro: 22, hostile: true)
@@ -10792,8 +10771,6 @@ final class Game: ObservableObject, @unchecked Sendable {
     @Published var showDebug: Bool = false
     @Published var showMap: Bool = false
     @Published var showJournal: Bool = false
-    /// the villager whose trades are open
-    @Published var tradeWith: Mob? = nil
     @Published var paused: Bool = false
     @Published var openChest: IntPair? = nil
     @Published var message: String? = nil
@@ -10915,7 +10892,6 @@ final class Game: ObservableObject, @unchecked Sendable {
     var pointerStartY: Double = 0
     var carry: Stack? = nil
     var placeCD: Double = 0
-    var villagerTimer: Double = 1.0
     var decksCache: [Deck] = []
     var mineNeed: Double = 1
 
@@ -10949,7 +10925,6 @@ final class Game: ObservableObject, @unchecked Sendable {
     var spawnLog: [String: Int] = [:]
     var spawnLast: String = ""
     var shipTimer: Double = 20.0
-    var villagerCells: Set<Int> = []
     var fallingBlocks: [FallingBlock] = []
     var decayZones: [DecayZone] = []
     /// short-lived lights from explosions (fed into the light map as moving lights, then removed)
@@ -11897,7 +11872,7 @@ extension Game {
 
     /// a hostile (or angered) creature under or right next to a point
     func hostileAt(_ wx: Double, _ wy: Double) -> Bool {
-        for m in mobsNear(wx - 4, wx + 4) where m.hp > 0 && !m.tame && m.kind != .villager && (m.def.hostile || m.angry) {
+        for m in mobsNear(wx - 4, wx + 4) where m.hp > 0 && !m.tame && (m.def.hostile || m.angry) {
             if wx >= m.b.left - 0.4 && wx <= m.b.right + 0.4 && wy >= m.b.top - 0.4 && wy <= m.b.y + 0.4 { return true }
         }
         return false
@@ -11978,7 +11953,7 @@ extension Game {
         default: break
         }
         if let m = mobAtPoint(wx, wy, 0.15) {
-            if m.kind == .villager || m.tame || (m.kind == .rex && m.tame) { return true }
+            if m.tame { return true }
         }
         if vehicleAtPoint(wx, wy) != nil {
             if let it = heldItem, case .part = it { return false }
@@ -12069,14 +12044,6 @@ extension Game {
 
     func interactMob(_ m: Mob) {
         switch m.kind {
-        case .villager:
-            // a word of what they've heard, then their trades
-            if let r = villagerRumour() {
-                recordRumour(r)
-                say(professionName(profession(m)) + ": \"" + r + "\"", 5.0)
-            }
-            tradeWith = m
-            bumpHUD()
         case .rex:
             if m.tame { mountRex(m) }
         case .wolf, .cat:
@@ -12684,7 +12651,7 @@ extension Game {
         var best: Mob? = nil
         var bd: Double = 1e9
         for m in mobsNear(aimX - 6, aimX + 6) {
-            if m.hp <= 0 || m.removed || m.tame || m.kind == .villager || m.downed { continue }
+            if m.hp <= 0 || m.removed || m.tame || m.downed { continue }
             let x0: Double = m.b.left - pad
             let x1: Double = m.b.right + pad
             let y0: Double = m.b.top - pad
@@ -13497,7 +13464,7 @@ extension Game {
         let ox: Double = shoulderX
         var out: [(Mob, Double)] = []
         for m in mobsNear(ox - p.reach - 4, ox + p.reach + 4) {
-            if m.hp <= 0 || m.removed || m.tame || m.kind == .villager || m.downed { continue }
+            if m.hp <= 0 || m.removed || m.tame || m.downed { continue }
             if let d = meleeReach(m, dirx, diry, p) { out.append((m, d)) }
         }
         if out.count > 1 { out.sort { $0.1 < $1.1 } }
@@ -13659,7 +13626,7 @@ extension Game {
         var best: Mob? = nil
         var bs: Double = 1e9
         for m in mobsNear(ox - range - 4, ox + range + 4) {
-            if m.hp <= 0 || m.removed || m.tame || m.kind == .villager || m.downed { continue }
+            if m.hp <= 0 || m.removed || m.tame || m.downed { continue }
             let foe: Bool = m.def.hostile || m.angry
             if !foe && !weapon { continue }
             let d: Double = boxDistance(m, ox, oy)
@@ -13773,7 +13740,7 @@ extension Game {
 
     /// Once a frame: releases the controls when something covers them
     func updateInputGate() {
-        let blocked: Bool = paused || showInventory || showMap || showJournal || showWeather || showPower || tradeWith != nil || dead
+        let blocked: Bool = paused || showInventory || showMap || showJournal || showWeather || showPower || dead
         if blocked && !inputBlocked { releaseAllInput() }
         inputBlocked = blocked
     }
@@ -14275,11 +14242,11 @@ extension Game {
         var engaged: Bool = near && !peaceful
         if m.kind.thinks { engaged = think(m, dt, dist, dyP) }
         switch m.kind {
-        case .pig, .cow, .sheep, .villager:
+        case .pig, .cow, .sheep, .villager:  // (villagers are retired and never appear)
             if m.t2 > 0 {
                 m.t2 -= dt
                 flee(m, m.tx, dt, 1.9)
-            } else if m.kind == .villager || !animalLife(m, dt) {
+            } else if !animalLife(m, dt) {
                 wander(m, dt, 0.55)
             }
             stepMob(m, dt)
@@ -14857,7 +14824,7 @@ extension Game {
 
 // ===== p15b_spawn =====
 
-// MARK: - Mob spawning, villagers
+// MARK: - Mob spawning
 
 extension Game {
     /// Notes how a spawn attempt ended (the debug panel shows the tally)
@@ -14892,11 +14859,6 @@ extension Game {
     }
 
     func updateSpawning(_ dt: Double) {
-        villagerTimer -= dt
-        if villagerTimer <= 0 {
-            villagerTimer = 2.5
-            ensureVillagers()
-        }
         if monsterSpawnCD > 0 { monsterSpawnCD -= dt }
         spawnTimer -= dt
         if spawnTimer > 0 { return }
@@ -14917,7 +14879,7 @@ extension Game {
                 if m.isBoss || m.boat >= 0 || m.lair != 0 || dx > 72 || abs(m.b.y - pb.y) > 56 { continue }
                 if m.kind.isPredator { predators += 1 } else { hostile += 1 }
             }
-            else if m.kind != .villager { passive += 1 }
+            else { passive += 1 }
         }
         let px: Int = Int(floor(pb.x))
         var place: SpawnPlace = .surface
@@ -15073,31 +15035,6 @@ extension Game {
         for tx in l...r where world.solid(tx, gy) || world.tile(tx, gy).isPlatform { footing += 1 }
         return footing * 2 >= (r - l + 1)
     }
-
-    func ensureVillagers() {
-        if world.dim != .overworld { return }
-        let px: Int = Int(floor(pb.x))
-        for v in gen.villages(overlapping: px - 80, px + 80) {
-            if villagerCells.contains(v.cell) { continue }
-            if !world.isLoaded(v.x) { continue }
-            villagerCells.insert(v.cell)
-            let n: Int = 3 + Int.random(in: 0...2)
-            let vdef: MobDef = mobDef(.villager)
-            for _ in 0..<n {
-                // a few tries for a spot clear of walls and furniture
-                for _ in 0..<6 {
-                    let x: Double = Double(v.x) + Double.random(in: -Double(v.halfW - 6)...Double(v.halfW - 6))
-                    if !spawnSpotClear(vdef, x, Double(v.ground)) { continue }
-                    let m: Mob = addMob(.villager, x, Double(v.ground))
-                    m.homeX = x
-                    m.persistent = false
-                    break
-                }
-            }
-            let c: Mob = addMob(.cat, Double(v.x) + Double.random(in: -8...8), Double(v.ground))
-            c.homeX = c.b.x
-        }
-    }
 }
 
 // ===== p16a_combat =====
@@ -15195,7 +15132,6 @@ extension Game {
     func addMob(_ kind: MobKind, _ x: Double, _ y: Double) -> Mob {
         let m = Mob(id: newID(), kind: kind, x: x, y: y)
         if kind == .zombie { m.variant = Int.random(in: 0...2) }
-        if kind == .villager { m.variant = Int.random(in: 0...2); m.persistent = false }
         if mobHealthMult != 1.0 {
             m.maxHP *= mobHealthMult
             m.hp = m.maxHP
@@ -15727,7 +15663,7 @@ extension Game {
     // MARK: sides
 
     func faction(of m: Mob) -> Faction {
-        if m.tame || m.kind == .villager { return .ally }
+        if m.tame { return .ally }
         switch m.kind {
         case .pirate, .pirateGunner, .pirateCaptain: return .pirate
         case .imp, .emberSlime, .cinderBat: return .umbral
@@ -16612,7 +16548,7 @@ extension Game {
             var bestM: Mob? = nil
             var bd: Double = 6.5
             for o in mobs {
-                if o === r || o.hp <= 0 || o.tame || o.kind == .villager { continue }
+                if o === r || o.hp <= 0 || o.tame { continue }
                 let dx: Double = (o.b.x - r.b.x) * Double(r.dir)
                 if dx < -1.0 { continue }
                 let d: Double = abs(o.b.x - r.b.x) - o.b.w * 0.5
@@ -17120,7 +17056,7 @@ extension Game {
         let src: DamageSource = v.rider ? .player : .environment
         let nudge: Double = 0.15
         for m in mobsNear(v.b.left - 1, v.b.right + 1) {
-            if m.hp <= 0 || m.tame || m.kind == .villager { continue }
+            if m.hp <= 0 || m.tame { continue }
             if m.b.right < v.b.left - nudge || m.b.left > v.b.right + nudge || m.b.y < v.b.top || m.b.top > v.b.y { continue }
             // must actually touch a part, not just the box
             let cell: PartCell = v.cellAt(m.b.x, m.b.cy)
@@ -17187,7 +17123,7 @@ extension Game {
                 }
             }
             // creatures caught in the bit get hurt
-            for m in mobsNear(tip.0 - 1, tip.0 + 1) where m.hp > 0 && !m.tame && m.kind != .villager {
+            for m in mobsNear(tip.0 - 1, tip.0 + 1) where m.hp > 0 && !m.tame {
                 if abs(m.b.x - tip.0) < m.b.w * 0.5 + 0.3 && tip.1 > m.b.top - 0.2 && tip.1 < m.b.y + 0.2 {
                     var info = DamageInfo(amount: 5, type: .melee, source: .player)
                     info.originX = v.px
@@ -17640,7 +17576,6 @@ extension Game {
         ships.removeAll()
         shipTimer = 30
         activeBoss = nil
-        villagerCells.removeAll()
         decksCache = []
         world.switchDimension(dim)
         world.loadAround(centerX: Int(floor(arriveX)), radius: 3)
@@ -17731,7 +17666,7 @@ extension Game {
 
 struct MapMarker {
     var x: Int
-    var kind: Int      // 0 spawn, 1 bear lair, 2 rex lair, 3 village, 4 ruin
+    var kind: Int      // 0 spawn, 1 bear lair, 2 rex lair, 4 ruin, 5 mine shaft
     var label: String
 }
 
@@ -17816,9 +17751,6 @@ extension Game {
         for L in g.lairCenters(near: (x0 + x1) / 2) {
             if L.cx < x0 || L.cx > x1 { continue }
             markers.append(MapMarker(x: L.cx, kind: L.kind == .bear ? 1 : 2, label: L.kind == .bear ? "Bear Den" : "Bone Nest"))
-        }
-        for v in g.villages(overlapping: x0, x1) {
-            markers.append(MapMarker(x: v.x, kind: 3, label: "Village"))
         }
         var ruins: [RareSite] = []
         for r in g.rareSites(overlapping: x0, x1) {
@@ -20682,7 +20614,7 @@ extension Game {
         info.originX = Double(d.x) + 0.5
         info.key = d.key.hashValue
         info.cooldown = 0.9
-        for m in mobsNear(x0 - 2, x1 + 2) where m.hp > 0 && !m.tame && m.kind != .villager {
+        for m in mobsNear(x0 - 2, x1 + 2) where m.hp > 0 && !m.tame {
             if m.b.right > x0 && m.b.left < x1 && m.b.y > y0 && m.b.y <= y1 + 0.1 {
                 if applyMobDamage(m, info) { hit = true }
             }
@@ -21921,7 +21853,7 @@ final class Art: @unchecked Sendable {
     func mobSet(_ m: Mob) -> SpriteSet {
         var variant: Int = 0
         switch m.kind {
-        case .zombie, .villager: variant = m.variant
+        case .zombie: variant = m.variant
         case .sheep: variant = m.sheared ? 1 : 0
         case .wolf: variant = m.tame ? 1 : 0
         default: variant = 0
@@ -26075,7 +26007,7 @@ extension WorldRenderer {
     }
 }
 
-// MARK: - Journal: places found, what they tell, rumours, and goals worth chasing
+// MARK: - Journal: places found, what they tell, and goals worth chasing
 
 struct JournalPlace: Codable {
     var key: String
@@ -26090,7 +26022,6 @@ struct Journal: Codable {
     var places: [JournalPlace] = []
     /// lore entries unlocked, in the order they were found
     var lore: [String] = []
-    var rumours: [String] = []
     var relics: Int = 0
     /// names of things the player has crafted (for the goals list)
     var crafted: [String] = []
@@ -26105,7 +26036,6 @@ struct Journal: Codable {
 /// The story each kind of place tells, a line or two each
 func loreEntry(_ key: String) -> (String, String) {
     switch key {
-    case "village": return ("Villages", "They keep their wells deep and their doors in pairs. The old ones remember a time before the walls, and won't say what the walls were for.")
     case "ruin.house": return ("A Ruined House", "A cellar ladder, a cold hearth, a child's carving of a bear above the door. Whoever lived here left in a hurry, and went down rather than out.")
     case "ruin.tower": return ("A Ruined Tower", "The watch log's last entry: 'Lights under the hill again. Nobody goes down there now.'")
     case "ruin.fort": return ("An Old Fort", "Every arrowhead in these walls points outward and down. Whatever they fought came up out of the caves.")
@@ -26150,9 +26080,8 @@ extension Game {
         return [
             JournalAim(title: "Set up a workbench", hint: "Eight planks. Chop a tree with your hands or an axe, then make planks from the logs.", done: j.crafted.contains("Workbench")),
             JournalAim(title: "Forge iron on an anvil", hint: "Smelt iron ore in a furnace, then build an anvil (6 iron bars, 4 stone) at the workbench.", done: j.crafted.contains("Anvil")),
-            JournalAim(title: "Find a village", hint: "Villagers trade, and they hear about places you haven't seen.", done: j.hasKind("village:")),
             JournalAim(title: "Explore an old mine", hint: "Look for a timber headframe over a covered shaft. The treasure map marks them.", done: j.hasKind("mine:")),
-            JournalAim(title: "Find a crystal grotto", hint: "Deep underground, sometimes with a cave mouth leading down. Villagers know rumours.", done: j.hasKind("grotto:")),
+            JournalAim(title: "Find a crystal grotto", hint: "Deep underground, sometimes with a cave mouth leading down.", done: j.hasKind("grotto:")),
             JournalAim(title: "Defeat Ursavor", hint: "The great bear's den holds the Portal Key.", done: bear),
             JournalAim(title: "Open the sealed gate", hint: "The Portal Key opens the rift chamber far below the surface. The treasure map narrows it down.", done: portalOpened),
             JournalAim(title: "Defeat Tyrannax", hint: "Something nests among enormous bones in the jungle.", done: rexDown),
@@ -26160,7 +26089,7 @@ extension Game {
             JournalAim(title: "Reach the Warden's citadel", hint: "In the Umbral Realm, several hundred blocks from the rift.", done: j.has("citadel")),
             JournalAim(title: "Defeat the Hollow Warden", hint: "Watch the ground: its strikes are marked before they land.", done: defeated.contains(WorldGen.wardenKey)),
             JournalAim(title: "Forge the Warden's Sigil", hint: "The Warden's heart, 4 voidium bars and 4 crystal shards at a rift forge.", done: sigil),
-            JournalAim(title: "Recover relic fragments (\(min(j.relics, 10))/10)", hint: "Found in ruins, mines, grottos and with the bosses. Cartographers pay for them in rumours.", done: j.relics >= 10),
+            JournalAim(title: "Recover relic fragments (\(min(j.relics, 10))/10)", hint: "Found in ruins, mines, grottos and with the bosses.", done: j.relics >= 10),
         ]
     }
 
@@ -26187,8 +26116,6 @@ extension Game {
         discoverT -= dt
         if discoverT > 0 || dead { return }
         discoverT = 0.5
-        // walking away from a villager (or losing them) ends the trade
-        if let v = tradeWith, v.hp <= 0 || v.removed || abs(v.b.x - pb.x) > 8 || abs(v.b.y - pb.y) > 5 { tradeWith = nil }
         let px: Int = Int(floor(pb.x))
         let py: Double = pb.y
         if world.dim == .umbral {
@@ -26199,9 +26126,6 @@ extension Game {
             return
         }
         if world.dim != .overworld { return }
-        for v in gen.villages(overlapping: px - 2, px + 2) where abs(px - v.x) < v.halfW {
-            discover("village:\(v.cell)", "Village", v.x, lore: "village")
-        }
         for r in gen.rareSites(overlapping: px - 20, px + 20) where abs(px - r.x) < 14 && abs(py - Double(gen.col(r.x).h)) < 14 {
             let k: String = "\(r.kind)"
             discover("ruin:\(r.cell)", rareName(r.kind), r.x, lore: "ruin." + k)
@@ -26219,116 +26143,6 @@ extension Game {
             discover("portal", "The Sealed Gate", gen.portalX, lore: "portal")
         }
     }
-
-    /// Where something is, roughly, from the player
-    func roughDirection(_ x: Int) -> String {
-        let d: Int = x - Int(floor(pb.x))
-        if abs(d) < 40 { return "close by" }
-        return "about " + roughDistance(abs(d)) + " blocks " + (d > 0 ? "east" : "west")
-    }
-
-    /// Something a villager has heard about: the nearest kind of place the player hasn't found yet
-    func villagerRumour() -> String? {
-        let px: Int = Int(floor(pb.x))
-        var options: [(Int, String)] = []
-        if let m = gen.mineSites(overlapping: px - 1600, px + 1600).filter({ !journal.has("mine:\($0.cell)") }).min(by: { abs($0.x - px) < abs($1.x - px) }) {
-            options.append((abs(m.x - px), "They say an old mine shaft stands " + roughDirection(m.x) + ". Nobody's been down it in years."))
-        }
-        if let g = gen.grottoSites(overlapping: px - 2000, px + 2000).filter({ !journal.has("grotto:\($0.cell)") }).min(by: { abs($0.x - px) < abs($1.x - px) }) {
-            let mouth: String = g.open ? " A cave mouth leads down to it." : " You'd have to dig."
-            options.append((abs(g.x - px) + 200, "A miner swore he saw crystal light deep under the ground " + roughDirection(g.x) + "." + mouth))
-        }
-        if let r = gen.rareSites(overlapping: px - 1200, px + 1200).filter({ !journal.has("ruin:\($0.cell)") }).min(by: { abs($0.x - px) < abs($1.x - px) }) {
-            options.append((abs(r.x - px) + 100, "There's a " + rareName(r.kind).lowercased() + " " + roughDirection(r.x) + ". Folk leave it alone."))
-        }
-        for L in gen.lairCenters(near: px) where !defeated.contains(lairKey(L)) && abs(L.cx - px) < 3000 {
-            let what: String = L.kind == .bear ? "a bear the size of a house sleeps in a stone ring" : "something nests among bones bigger than trees"
-            options.append((abs(L.cx - px) + 400, "Hunters won't go near it, but " + what + ", " + roughDirection(L.cx) + "."))
-        }
-        if portalOpened && !defeated.contains(WorldGen.wardenKey) {
-            options.append((5000, "Beyond the rift, the stories go, a hollow knight keeps a hall of red stone and will let no one pass."))
-        }
-        let pick: (Int, String)? = options.sorted { $0.0 < $1.0 }.first { !journal.rumours.contains($0.1) } ?? options.first
-        return pick?.1
-    }
-
-    func recordRumour(_ r: String) {
-        if !journal.rumours.contains(r) { journal.rumours.append(r) }
-    }
-
-    // MARK: villagers
-
-    func profession(_ m: Mob) -> Int { return ((m.variant % 3) + 3) % 3 }
-
-    func professionName(_ p: Int) -> String {
-        switch p {
-        case 0: return "Farmer"
-        case 1: return "Smith"
-        default: return "Cartographer"
-        }
-    }
-
-    func villagerTrades(_ p: Int) -> [VillagerTrade] {
-        func t(_ give: [(Item, Int)], _ get: Item, _ n: Int, rumour: Bool = false) -> VillagerTrade {
-            return VillagerTrade(give: give.map { CostLine(item: $0.0, n: $0.1) }, get: Stack(item: get, count: n), rumour: rumour)
-        }
-        switch p {
-        case 0:
-            return [
-                t([(.food(.wheat), 6)], .food(.bread), 3),
-                t([(.mat(.copperBar), 1)], .food(.carrot), 4),
-                t([(.mat(.goldBar), 1)], .food(.cookedMeat), 4),
-                t([(.mat(.wool), 4)], .mat(.goldBar), 1),
-                t([(.mat(.leather), 4)], .mat(.goldBar), 1),
-            ]
-        case 1:
-            return [
-                t([(.mat(.ironOre), 8), (.mat(.coal), 2)], .mat(.ironBar), 4),
-                t([(.mat(.copperOre), 6), (.mat(.coal), 1)], .mat(.copperBar), 3),
-                t([(.mat(.goldBar), 3)], .block(.anvil), 1),
-                t([(.mat(.goldBar), 2)], .ammo(.bullet), 12),
-                t([(.mat(.goldBar), 5)], .hammer(.iron), 1),
-            ]
-        default:
-            return [
-                t([(.mat(.relicFragment), 2)], .mat(.relicFragment), 0, rumour: true),
-                t([(.mat(.goldBar), 4)], .gadget(.treasureMap), 1),
-                t([(.mat(.goldBar), 1)], .block(.torch), 12),
-                t([(.mat(.relicFragment), 3)], .gear(.headlamp), 1),
-                t([(.mat(.goldBar), 2)], .block(.ladder), 8),
-            ]
-        }
-    }
-
-    func canTrade(_ t: VillagerTrade) -> Bool {
-        if isCreative { return true }
-        if !inv.canAfford(t.give) { return false }
-        return t.rumour || inv.canFit(t.get.item, t.get.count)
-    }
-
-    func doTrade(_ t: VillagerTrade) {
-        if !canTrade(t) { say(inv.canAfford(t.give) ? "No room in your bag." : "You don't have enough for that.", 1.6); return }
-        if !isCreative { for c in t.give { _ = inv.remove(c.item, c.n) } }
-        if t.rumour {
-            if let r = villagerRumour() {
-                recordRumour(r)
-                say("The cartographer marks it in your journal: " + r, 6.0)
-            } else {
-                say("\"I've told you all I know.\"", 2.5)
-            }
-        } else {
-            giveItem(t.get.item, t.get.count)
-            floatText("+" + String(t.get.count) + " " + t.get.item.name, pb.x, pb.y - 2.2, 0xFFE070)
-        }
-        bumpHUD()
-    }
-}
-
-struct VillagerTrade {
-    var give: [CostLine]
-    var get: Stack
-    /// pays for a rumour (written into the journal) instead of an item
-    var rumour: Bool = false
 }
 
 // MARK: - Animal life: herds, rest, water, predators and prey
@@ -27212,7 +27026,7 @@ extension Game {
 
 func isHumanoid(_ k: MobKind) -> Bool {
     switch k {
-    case .zombie, .skeleton, .villager, .pirate, .pirateGunner, .pirateCaptain, .imp, .archer: return true
+    case .zombie, .skeleton, .pirate, .pirateGunner, .pirateCaptain, .imp, .archer: return true
     default: return false
     }
 }
@@ -28033,7 +27847,7 @@ enum WorldRenderer {
                 }
             }
             let damaged: Bool = m.hp < m.maxHP && m.hp > 0
-            if !m.isBoss && damaged && m.kind != .villager {
+            if !m.isBoss && damaged {
                 let w: Double = max(0.9, m.b.w)
                 let bx: Double = m.b.x - w * 0.5
                 let byy: Double = m.b.top - 0.45
@@ -29808,7 +29622,7 @@ extension InventoryPanel {
 // MARK: - Treasure map
 
 
-// MARK: - Journal and trading panels
+// MARK: - Journal panel
 
 let parchment: UInt32 = 0xE8D4A0
 let parchmentInk: UInt32 = 0x3A2410
@@ -29826,8 +29640,7 @@ struct JournalPanel: View {
                 tabButton(0, "GOALS")
                 tabButton(1, "PLACES")
                 tabButton(2, "LORE")
-                tabButton(3, "RUMOURS")
-                tabButton(4, "WEATHER")
+                tabButton(3, "WEATHER")
                 SmallButton(title: "CLOSE", color: Color(hex: 0xA03030)) { game.showJournal = false }
             }
             ScrollView {
@@ -29836,7 +29649,6 @@ struct JournalPanel: View {
                     case 0: aims(ink)
                     case 1: places(ink)
                     case 2: lore(ink)
-                    case 3: rumours(ink)
                     default: WeatherJournalPage(game: game, ink: ink)
                     }
                 }
@@ -29876,7 +29688,7 @@ struct JournalPanel: View {
         let ps: [JournalPlace] = game.journal.places
         return VStack(alignment: .leading, spacing: 6) {
             if ps.isEmpty {
-                Text("Nothing yet. The world is wide: villages, ruins, old mines and stranger places are out there.").font(.pixel(12, .semibold)).foregroundColor(ink)
+                Text("Nothing yet. The world is wide: ruins, old mines and stranger places are out there.").font(.pixel(12, .semibold)).foregroundColor(ink)
             }
             ForEach(0..<ps.count, id: \.self) { i in
                 HStack {
@@ -29908,74 +29720,6 @@ struct JournalPanel: View {
                 }
             }
         }
-    }
-
-    func rumours(_ ink: Color) -> some View {
-        let rs: [String] = game.journal.rumours
-        return VStack(alignment: .leading, spacing: 8) {
-            if rs.isEmpty {
-                Text("Talk to villagers. They hear about places long before you see them.").font(.pixel(12, .semibold)).foregroundColor(ink)
-            }
-            ForEach(0..<rs.count, id: \.self) { i in
-                Text(verbatim: "• " + rs[i]).font(.pixel(12, .semibold)).foregroundColor(ink)
-            }
-        }
-    }
-}
-
-struct TradePanel: View {
-    @ObservedObject var game: Game
-    @ObservedObject var hud: HUDSignal
-    let villager: Mob
-    var body: some View {
-        let prof: Int = game.profession(villager)
-        let trades: [VillagerTrade] = game.villagerTrades(prof)
-        return VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text(verbatim: "VILLAGE " + game.professionName(prof).uppercased()).font(.pixel(16))
-                Spacer()
-                SmallButton(title: "CLOSE", color: Color(hex: 0xA03030)) { game.tradeWith = nil }
-            }
-            Text(verbatim: greeting(prof)).font(.pixel(11, .semibold)).foregroundColor(Color.white.opacity(0.75))
-            ForEach(0..<trades.count, id: \.self) { i in
-                tradeRow(trades[i])
-            }
-        }
-        .padding(14)
-        .background(PixelBox(color: Color(hex: 0x3A3A44)).opacity(0.96))
-        .frame(maxWidth: 520)
-        .padding(16)
-    }
-
-    func greeting(_ p: Int) -> String {
-        switch p {
-        case 0: return "\"Fresh from the fields. I'll take wool and leather off your hands, too.\""
-        case 1: return "\"Bring me ore and I'll smelt it cheaper than your furnace. Gold buys the rest.\""
-        default: return "\"Old relics fetch me old stories. Some of them are even true.\""
-        }
-    }
-
-    func tradeRow(_ t: VillagerTrade) -> some View {
-        let ok: Bool = game.canTrade(t)
-        return HStack(spacing: 6) {
-            ForEach(0..<t.give.count, id: \.self) { k in
-                HStack(spacing: 1) {
-                    Art.shared.icon(t.give[k].item).resizable().frame(width: 22, height: 22)
-                    Text(verbatim: "x" + String(t.give[k].n)).font(.pixel(11)).foregroundColor(game.inv.total(t.give[k].item) >= t.give[k].n || game.isCreative ? Color.white : Color(hex: 0xFF7060))
-                }
-            }
-            Text("→").font(.pixel(14))
-            if t.rumour {
-                Text("A rumour, written in your journal").font(.pixel(11, .semibold))
-            } else {
-                Art.shared.icon(t.get.item).resizable().frame(width: 22, height: 22)
-                Text(verbatim: t.get.item.name + (t.get.count > 1 ? " x" + String(t.get.count) : "")).font(.pixel(11, .semibold)).lineLimit(1)
-            }
-            Spacer(minLength: 4)
-            SmallButton(title: "TRADE", color: Color(hex: ok ? 0x4E8A3E : 0x555555)) { game.doTrade(t) }.opacity(ok ? 1.0 : 0.6)
-        }
-        .padding(4)
-        .background(Color.black.opacity(0.25))
     }
 }
 
@@ -30091,9 +29835,6 @@ enum MapDrawer {
             case 2:
                 sym = "☠"
                 col = Color(hex: 0x5A3A8A)
-            case 3:
-                sym = "⌂"
-                col = Color(hex: 0x6A4A1A)
             case 5:
                 sym = "▼"
                 col = Color(hex: 0x7A4A20)
@@ -30834,7 +30575,7 @@ struct MenuView: View {
     var flatDetail: String {
         var parts: [String] = []
         parts.append(flatTrees ? "Trees, plants and ponds (water level with the ground)." : "Bare ground: no trees, plants or ponds.")
-        parts.append(flatStructures ? "Villages, ruins and the two boss lairs (open arenas)." : "No villages, ruins or boss lairs.")
+        parts.append(flatStructures ? "Ruins, old mines and the two boss lairs (open arenas)." : "No ruins, mines or boss lairs.")
         parts.append(flatCaves ? "Caves open only deep below an unbroken crust." : "Solid underground: dig your own tunnels.")
         return parts.joined(separator: " ")
     }
@@ -31108,8 +30849,8 @@ struct HelpView: View {
         "Weapons: swords sweep everything in front; spears reach far and run through two; hammers are slow and heavy and slow you as they swing; knives are quick, every third stab in a run hits double, and they cut deep from behind; clubs leave foes dazed.",
         "Ranged: the bow is drawn and loosed; the sling throws any stone you carry; crossbows fire with a tap and reload themselves; the blunderbuss blasts a cone of pellets up close; the storm rod's lightning leaps between foes and recharges by itself. Thrown flasks and slung stones come down where you tap.",
         "Two gear slots hold a headlamp, swift boots, a diving mask, a silver charm and more.",
-        "LOG (or J) opens your journal: places you have found, their stories, villagers' rumours and goals worth chasing.",
-        "Villagers trade (farmers, smiths and cartographers) and tell you about places you haven't seen. Some old chests underground are not what they seem.",
+        "LOG (or J) opens your journal: places you have found, their stories and goals worth chasing.",
+        "Some old chests underground are not what they seem.",
         "Torches, lanterns and campfires light the dark. Caves get darker and more dangerous the deeper you go.",
         "Old mines (a timber headframe on the surface) run deep: galleries, storage rooms up short ladders, drifts down and up, dead ends, sometimes a great chamber. Look for chests in rooms and at dead ends; the best are hidden behind fallen rock.",
         "Eat to stay fed. Cook meat at a campfire. Hunger at zero hurts you.",
@@ -31255,7 +30996,7 @@ struct GameView: View {
     var body: some View {
         ZStack {
             worldLayer
-            if !game.showInventory && !game.showMap && !game.showJournal && !game.showWeather && !game.showPower && game.tradeWith == nil && !game.dead {
+            if !game.showInventory && !game.showMap && !game.showJournal && !game.showWeather && !game.showPower && !game.dead {
                 HUDView(game: game, hud: game.hud)
             }
             if game.showWeather {
@@ -31288,10 +31029,6 @@ struct GameView: View {
             if game.showJournal {
                 Color.black.opacity(0.45).ignoresSafeArea()
                 JournalPanel(game: game, hud: game.hud)
-            }
-            if let v = game.tradeWith, !game.showJournal {
-                Color.black.opacity(0.35).ignoresSafeArea()
-                TradePanel(game: game, hud: game.hud, villager: v)
             }
             if game.showDebug && !game.showInventory && !game.showMap {
                 HStack {

@@ -208,23 +208,49 @@ do {
 // ---------------------------------------------------------------- 4. clouds
 print("== clouds")
 do {
-    let a = CloudField.clouds(4242, 7.5, -500, 500)
-    let b = CloudField.clouds(4242, 7.5, -500, 500)
-    check(a.count > 8 && a.count == b.count && zip(a, b).allSatisfy { $0.x == $1.x && $0.y == $1.y && $0.kind == $1.kind }, "clouds are placed deterministically (\(a.count) across 1000 blocks)")
-    let kinds = Set(a.map { $0.kind })
-    check(kinds.count >= 4 && CloudArt.shared.shapes.count == 5, "clouds reuse a small set of shapes (\(kinds.count) of \(CloudArt.shared.shapes.count) used)")
-    let later = CloudField.clouds(4242, 17.5, -500, 500)
-    let moved = later.first { $0.kind == a[3].kind && abs($0.y - a[3].y) < 0.001 && $0.x > a[3].x }
-    check(moved.map { near($0.x - a[3].x, 10.0, 0.01) } ?? false, "clouds move with their drift (10 blocks of drift moves them 10 blocks)")
-    var overlap = false
-    let s = a.sorted { $0.x < $1.x }
-    for i in 1..<s.count where s[i].x < s[i - 1].x + Double(CloudArt.shared.shapes[s[i - 1].kind].w) / 8.0 { overlap = true }
-    check(!overlap, "clouds never overlap each other")
-    // pixel-exact inside test, and no collision: the player flies straight through a cloud
-    let c = a[2]
-    let sh = CloudArt.shared.shapes[c.kind]
-    let cx = c.x + Double(sh.w) / 16.0, cy = c.y + Double(sh.h) / 8.0 - 0.6
-    check(CloudField.contains(4242, 7.5, cx, cy) && !CloudField.contains(4242, 7.5, cx, c.y - 2), "the inside test follows the cloud's shape")
+    let layers = CloudField.layers.count
+    func all(_ seed: UInt64, _ d: Double, _ x0: Double, _ x1: Double, _ fill: Double) -> [[CloudField.Cloud]] {
+        return (0..<layers).map { CloudField.clouds(seed, $0, d, x0, x1, fill: fill) }
+    }
+    let a = all(4242, 7.5, -500, 500, 0.6)
+    let b = all(4242, 7.5, -500, 500, 0.6)
+    let n = a.reduce(0) { $0 + $1.count }
+    check(n > 150 && a.indices.allSatisfy { i in a[i].count == b[i].count && zip(a[i], b[i]).allSatisfy { $0.x == $1.x && $0.y == $1.y && $0.kind == $1.kind } }, "clouds are placed deterministically (\(n) across 1000 blocks)")
+    let kinds = Set(a.flatMap { $0 }.map { $0.kind })
+    check(kinds.count >= 18 && CloudArt.shared.shapes.count == 24, "clouds come in many shapes (\(kinds.count) of \(CloudArt.shared.shapes.count) used)")
+    let widths = CloudArt.shared.shapes.map { $0.w }
+    check((widths.min() ?? 0) <= 46 && (widths.max() ?? 0) >= 190, "sizes run from small puffs (\(widths.min() ?? 0) px) to huge formations (\(widths.max() ?? 0) px)")
+    // a bigger sky than the old single row: the big class is at least four times the old widest cloud
+    check(CloudArt.shared.classes.count == 5 && CloudArt.shared.classes.allSatisfy { !$0.isEmpty }, "all five size classes have templates")
+    let later = all(4242, 17.5, -500, 500, 0.6)
+    var movedOK = true
+    for li in 0..<layers {
+        let sp = CloudField.layers[li].speed
+        if let c0 = a[li].first(where: { $0.alpha == 1 }), let c1 = later[li].first(where: { $0.kind == c0.kind && abs($0.y - c0.y) < 0.001 && $0.x > c0.x }) {
+            if !near(c1.x - c0.x, 10.0 * sp, 0.01) { movedOK = false }
+        } else { movedOK = false }
+    }
+    check(movedOK, "every layer drifts with the wind at its own speed")
+    // groups: some cells hold a loose formation of several clouds close together
+    var grouped = false
+    for l in a { let s = l.sorted { $0.x < $1.x }; for i in 4..<max(4, s.count) where s[i].x - s[i - 4].x < 30 && abs(s[i].y - s[i - 4].y) < 8 { grouped = true } }
+    check(grouped, "clouds sometimes gather in formations")
+    // the sky is never empty and never solid
+    var emptyWindow = false, solidWindow = false
+    var wx = -400.0
+    while wx < 400 {
+        let w = all(4242, 7.5, wx, wx + 40, 0.46)
+        let cnt = w.reduce(0) { $0 + $1.count }
+        if cnt < 2 { emptyWindow = true }
+        let wc = all(4242, 7.5, wx, wx + 40, 0.0)
+        if wc.reduce(0, { $0 + $1.count }) > 0 { solidWindow = true }
+        wx += 40
+    }
+    check(!emptyWindow, "a clear-sky window always has some cloud in it")
+    check(!solidWindow, "fill 0 means no cloud at all")
+    let thin = all(4242, 7.5, -200, 200, 0.46).reduce(0) { $0 + $1.count }
+    let thick = all(4242, 7.5, -200, 200, 0.92).reduce(0) { $0 + $1.count }
+    check(thick > thin * 3 / 2, "an overcast sky holds more cloud than a clear one (\(thin) vs \(thick))")
     let g = arena()
     g.flying = true
     g.pb.x = 0; g.pb.y = 78
@@ -232,11 +258,11 @@ do {
     let x0 = g.pb.x
     for _ in 0..<60 { g.stick = 1; g.tick(1.0 / 60.0) }
     g.stick = 0
-    check(g.pb.x - x0 > 6, "flying through the cloud layer is not blocked")
+    check(g.pb.x - x0 > 6, "flying through the sky is not blocked by clouds")
     let t0 = perfNow()
-    for i in 0..<2000 { _ = CloudField.clouds(4242, Double(i) * 0.1, Double(i), Double(i) + 60) }
-    let ms = (perfNow() - t0) * 1000 / 2000
-    check(ms < 0.05, String(format: "placing the visible clouds costs %.4f ms per frame", ms))
+    for i in 0..<500 { _ = all(4242, Double(i) * 0.1, Double(i), Double(i) + 60, 0.9) }
+    let ms = (perfNow() - t0) * 1000 / 500
+    check(ms < 0.3, String(format: "placing every visible cloud costs %.4f ms per frame", ms))
 }
 
 // ---------------------------------------------------------------- 5. creature art

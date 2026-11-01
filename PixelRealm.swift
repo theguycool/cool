@@ -24852,47 +24852,10 @@ extension WorldRenderer {
         if L.snow && L.precip > 0.4 { fillRect(&ctx, full, Color(hex: 0xD8E0EA, alpha: 0.3 * L.precip * day)) }
     }
 
-    /// The weather in front of the distant hills: a deck of storm cloud gathering across the top of the
-    /// sky (drifting with the wind, parallax with the camera), a hurricane's wall coming in off the sea,
-    /// and dust blown across dry country
-    static func drawSkyWeatherFront(_ ctx: inout GraphicsContext, _ W: Double, _ H: Double, _ g: Game, _ v: View2D, _ day: Double) {
-        let L: LocalWeather = g.wxHere
-        let deck: Double = clampD((L.cloud - 0.35) / 0.55, 0, 1)
-        if deck > 0.02 { drawCloudDeck(&ctx, W, H, g, v, day, deck) }
+    /// The weather on the horizon: a hurricane's wall of cloud coming in off the sea
+    static func drawSkyWeatherFront(_ ctx: inout GraphicsContext, _ W: Double, _ H: Double, _ g: Game) {
         if let h = g.weather.hurricane, h.stage.rawValue <= HurricaneStage.intensifying.rawValue {
             drawStormWall(&ctx, W, H, g, h)
-        }
-    }
-
-    /// Low cloud across the top of the view, drawn with the cloud templates: more and darker the heavier
-    /// the sky, in two rows that drift with the wind at different speeds
-    static func drawCloudDeck(_ ctx: inout GraphicsContext, _ W: Double, _ H: Double, _ g: Game, _ v: View2D, _ day: Double, _ deck: Double) {
-        let art: CloudArt = CloudArt.shared
-        let px: Double = max(2.0, floor(v.tp / 8.0 * 1.25))
-        let night: UInt32 = 0x30343C
-        let tintDay: UInt32 = mixRGB(0xB8C0CC, 0x4A505A, clampD((deck - 0.4) * 1.4, 0, 1))
-        let tint: UInt32 = mixRGB(night, tintDay, day)
-        for row in 0..<2 {
-            let speed: Double = row == 0 ? 0.6 : 1.0
-            let par: Double = row == 0 ? 0.25 : 0.4
-            let yBase: Double = row == 0 ? -px * 4.0 : H * 0.06
-            let cellW: Double = 70.0 * px
-            let off: Double = (v.left * v.tp * par + g.weather.cloudDrift * v.tp * speed) / cellW
-            let c0: Int = Int(floor(off)) - 1
-            let c1: Int = c0 + Int(W / cellW) + 3
-            var c: GraphicsContext = ctx
-            c.opacity = min(1.0, deck * (row == 0 ? 0.95 : 0.85))
-            c.addFilter(.colorMultiply(rgbColor(row == 0 ? tint : mixRGB(tint, 0xFFFFFF, 0.12))))
-            for ci in c0...c1 {
-                let hsh: Double = hash2(ci, 51 + row, 707)
-                if hsh > 0.35 + 0.65 * deck { continue }
-                let kind: Int = Int(hash2(ci, 53 + row, 707) * Double(art.shapes.count)) % art.shapes.count
-                let b: PixelBuf = art.shapes[kind]
-                let x: Double = (Double(ci) - off) * cellW + hash2(ci, 55, 707) * cellW * 0.3
-                let y: Double = yBase + floor(hash2(ci, 57 + row, 707) * 6.0) * px
-                let img: Image = hash2(ci, 59, 707) < 0.5 ? art.images[kind] : art.flipped[kind]
-                c.draw(img, in: mkRect(floor(x / px) * px, y, Double(b.w) * px, Double(b.h) * px))
-            }
         }
     }
 
@@ -27390,96 +27353,171 @@ func edgeVignette(_ ctx: inout GraphicsContext, _ W: Double, _ H: Double, _ c: U
     ctx.fill(Path(mkRect(W - band, 0, band, H)), with: .linearGradient(g, startPoint: mkPoint(W, 0), endPoint: mkPoint(W - band, 0)))
 }
 
-/// Clouds placed in world space: at most one cloud per 44-block cell, high above the sea, drifting
-/// slowly with the wind. They are drawn from a small set of hand-shaped pixel-art templates (see
-/// CloudArt) and have no collision; anything can pass through them.
+/// The sky's clouds, in four layers. A layer is a row of cells along the sky; a cell holds nothing, a
+/// single cloud, or now and then a loose formation of several. Far layers are small, pale and slow and
+/// follow the camera least; near layers are big and quick and follow it most, so the sky has depth.
+/// Clouds are drawn behind the terrain and everything else, and have no collision. The fourth layer is
+/// the low storm deck, which only builds under a heavy sky.
 enum CloudField {
-    static let cell: Double = 38.0
     /// blocks per second: slow enough not to pull the eye
     static let wind: Double = 0.25
     /// art pixels per block (the same grid as terrain, creatures and the player)
     static let pxPerTile: Double = 8.0
 
     struct Cloud {
-        /// top-left corner in world blocks
+        /// top-left corner in the layer's own sideways blocks, and blocks below the top of the sky band
         var x: Double
         var y: Double
         var kind: Int
         var flip: Bool
+        /// fades a cloud in and out as the weather changes how many cells are filled
         var alpha: Double = 1.0
     }
 
-    /// Every cloud overlapping the world x range [x0, x1]. `d` is how far the clouds have drifted (the
-    /// weather keeps it, moving with the wind); `fill` is the share of cells with a cloud in them (more
-    /// under a grey sky); clouds near the cut-off fade in and out rather than popping.
-    static func clouds(_ seed: UInt64, _ d: Double, _ x0: Double, _ x1: Double, fill: Double = 0.58, rowTop: Double = 66.0, rows: Double = 20.0) -> [Cloud] {
-        let maxW: Double = 16.0
-        let c0: Int = Int(floor((x0 - d - maxW) / cell))
-        let c1: Int = Int(floor((x1 - d) / cell))
+    struct Layer {
+        /// how much of the camera's sideways travel the layer follows (1 would be fixed to the world)
+        let par: Double
+        /// how fast it drifts compared with the wind
+        let speed: Double
+        /// blocks between cells
+        let cell: Double
+        /// the band the clouds sit in, in blocks below the top of the sky band
+        let rowTop: Double
+        let rows: Double
+        /// which sizes it uses (indices into CloudArt.classes)
+        let pool: [Int]
+        /// the share of cells that hold a formation instead of one cloud
+        let groups: Double
+        /// how much the layer follows the camera going up and down
+        let lift: Double
+        /// haze toward the sky colour (far clouds are paler) and the layer's base opacity
+        let haze: Double
+        let opacity: Double
+    }
+
+    static let layers: [Layer] = [
+        Layer(par: 0.30, speed: 0.45, cell: 7.0, rowTop: 0.0, rows: 9.0, pool: [0, 1, 2], groups: 0.14, lift: 0.05, haze: 0.30, opacity: 0.80),
+        Layer(par: 0.55, speed: 0.75, cell: 12.0, rowTop: 1.0, rows: 12.0, pool: [1, 2, 3], groups: 0.20, lift: 0.08, haze: 0.14, opacity: 0.90),
+        Layer(par: 0.80, speed: 1.00, cell: 22.0, rowTop: 3.0, rows: 12.0, pool: [1, 3, 4, 4], groups: 0.25, lift: 0.12, haze: 0.0, opacity: 0.96),
+        Layer(par: 0.70, speed: 1.35, cell: 16.0, rowTop: -2.0, rows: 7.0, pool: [2, 4, 4], groups: 0.30, lift: 0.10, haze: 0.0, opacity: 0.94)
+    ]
+
+    /// Every cloud of one layer overlapping the layer's sideways range [x0, x1]. `d` is how far the sky
+    /// has drifted (the weather keeps it, moving with the wind); `fill` is the share of cells with
+    /// something in them (more under a grey sky).
+    static func clouds(_ seed: UInt64, _ layer: Int, _ d: Double, _ x0: Double, _ x1: Double, fill: Double) -> [Cloud] {
+        let L: Layer = layers[layer]
+        let shift: Double = d * L.speed
+        let reach: Double = 60.0
+        let c0: Int = Int(floor((x0 - shift - reach) / L.cell))
+        let c1: Int = Int(floor((x1 - shift) / L.cell))
         var out: [Cloud] = []
         if c1 < c0 { return out }
-        let shapes: [PixelBuf] = CloudArt.shared.shapes
+        let art: CloudArt = CloudArt.shared
+        let s: UInt64 = seed &+ UInt64(layer + 1) &* 7919
         for ci in c0...c1 {
-            let presence: Double = hash2(ci, 11, seed) - (1.0 - fill)
+            let presence: Double = hash2(ci, 11, s) - (1.0 - fill)
             if presence <= 0 { continue }
-            let kind: Int = Int(hash2(ci, 15, seed) * Double(shapes.count)) % shapes.count
-            let w: Double = Double(shapes[kind].w) / pxPerTile
-            // keep the cloud inside its cell so neighbours never overlap
-            let slack: Double = max(0, cell - w - 2.0)
-            let x: Double = Double(ci) * cell + 1.0 + hash2(ci, 12, seed) * slack + d
-            // low enough to be seen from the surface, high enough to clear most hills
-            let y: Double = rowTop + floor(hash2(ci, 13, seed) * rows)
-            out.append(Cloud(x: x, y: y, kind: kind, flip: hash2(ci, 14, seed) < 0.5, alpha: clampD(presence / 0.08, 0, 1)))
+            let alpha: Double = clampD(presence / 0.1, 0, 1)
+            let formation: Bool = hash2(ci, 21, s) < L.groups
+            let n: Int = formation ? 3 + Int(hash2(ci, 22, s) * 3.0) : 1
+            let bx: Double = Double(ci) * L.cell + hash2(ci, 12, s) * L.cell * 0.8 + shift
+            let by: Double = L.rowTop + hash2(ci, 13, s) * L.rows
+            for k in 0..<n {
+                let cls: Int = L.pool[Int(hash2(ci, 30 + k, s) * Double(L.pool.count)) % L.pool.count]
+                let ids: [Int] = art.classes[cls]
+                let kind: Int = ids[Int(hash2(ci, 50 + k, s) * Double(ids.count)) % ids.count]
+                let dx: Double = k == 0 ? 0 : (hash2(ci, 60 + k, s) - 0.35) * 26.0
+                let dy: Double = k == 0 ? 0 : (hash2(ci, 70 + k, s) - 0.5) * 7.0
+                out.append(Cloud(x: bx + dx, y: by + dy, kind: kind, flip: hash2(ci, 80 + k, s) < 0.5, alpha: alpha))
+            }
         }
         return out
     }
-
-    /// True when (x, y) is inside the visible shape of a cloud (pixel exact)
-    static func contains(_ seed: UInt64, _ d: Double, _ x: Double, _ y: Double) -> Bool {
-        if y < 64.0 || y > 92.0 { return false }
-        let shapes: [PixelBuf] = CloudArt.shared.shapes
-        for c in clouds(seed, d, x - 1.0, x + 1.0) {
-            let b: PixelBuf = shapes[c.kind]
-            var px: Int = Int(floor((x - c.x) * pxPerTile))
-            let py: Int = Int(floor((y - c.y) * pxPerTile))
-            if c.flip { px = b.w - 1 - px }
-            if (b.get(px, py) >> 24) != 0 { return true }
-        }
-        return false
-    }
 }
 
-/// The cloud templates: soft cumulus silhouettes built from a few round lobes on a flat base,
-/// shaded with three restrained tones (bright top, body, cool underside) and no outline.
+/// The cloud templates: soft silhouettes built from round lobes sitting on a flat base, in five size
+/// classes (small puffs, ordinary cumulus, long low banks, towering heaps and huge formations), several
+/// variants of each, shaded with a few restrained tones (bright top, body, cool underside), no outline.
 final class CloudArt: @unchecked Sendable {
     static let shared: CloudArt = CloudArt()
     let shapes: [PixelBuf]
     let images: [Image]
     let flipped: [Image]
+    /// shape indices by size class: 0 small, 1 ordinary, 2 long and low, 3 towering, 4 huge
+    let classes: [[Int]]
 
     init() {
-        // (width, height, lobes as (centre x, centre y, radius x, radius y)); the first lobe is the
-        // flat base the others sit on
-        let specs: [(Int, Int, [(Double, Double, Double, Double)])] = [
-            (48, 18, [(24, 13, 17.5, 5), (14, 10, 7, 6), (25, 7.5, 9, 7), (35, 10.5, 7, 5)]),
-            (84, 26, [(42, 20, 34, 6), (16, 16, 9, 7), (32, 11.5, 12, 10), (50, 10, 11, 9.5), (66, 14.5, 10, 8)]),
-            (116, 22, [(58, 17, 50, 5), (16, 14, 8, 6), (32, 10.5, 10, 8), (52, 9.5, 12, 9), (72, 11.5, 10, 8), (90, 13.5, 9, 7), (104, 15.5, 6, 5)]),
-            (74, 32, [(37, 26, 29, 6), (17, 21, 10, 8), (35, 15, 13, 12.5), (51, 18.5, 11, 10), (62, 22, 8, 6.5)]),
-            (62, 14, [(31, 10, 24, 4), (16, 8.5, 8, 5), (31, 6.5, 10, 6), (46, 8.5, 8, 5)])
-        ]
         var out: [PixelBuf] = []
-        for s in specs { out.append(CloudArt.makeShape(s.0, s.1, s.2)) }
+        var cls: [[Int]] = []
+        let counts: [Int] = [5, 6, 5, 4, 4]
+        for c in 0..<counts.count {
+            var ids: [Int] = []
+            for n in 0..<counts[c] {
+                ids.append(out.count)
+                out.append(CloudArt.build(c, n))
+            }
+            cls.append(ids)
+        }
         shapes = out
+        classes = cls
         images = out.map { pixImage($0) }
         flipped = out.map { pixImage($0.flipped()) }
     }
 
-    static func makeShape(_ w: Int, _ h: Int, _ lobes: [(Double, Double, Double, Double)]) -> PixelBuf {
+    /// One template: variant `n` of size class `cls`. The same numbers always give the same cloud.
+    static func build(_ cls: Int, _ n: Int) -> PixelBuf {
+        let seed: UInt64 = UInt64(0xC10D + cls * 97)
+        func r(_ k: Int) -> Double { return hash2(n, k, seed) }
+        // (width range, height range, lobe count range, flat base height)
+        let spec: [(Double, Double, Double, Double, Int, Int, Double)] = [
+            (28, 46, 12, 17, 2, 3, 4),
+            (54, 88, 20, 28, 4, 5, 5),
+            (110, 170, 14, 20, 7, 10, 4),
+            (68, 100, 38, 52, 5, 6, 6),
+            (190, 260, 36, 52, 12, 16, 6)
+        ]
+        let sp: (Double, Double, Double, Double, Int, Int, Double) = spec[cls]
+        let w: Int = Int(sp.0 + (sp.1 - sp.0) * r(1))
+        let h: Int = Int(sp.2 + (sp.3 - sp.2) * r(2))
+        let lobes: Int = sp.4 + Int(r(3) * Double(sp.5 - sp.4 + 1))
+        let baseH: Double = sp.6 * (0.8 + 0.4 * r(4))
+        let wd: Double = Double(w)
+        let bl: Double = Double(h) - baseH
         var mask = PixelBuf(w: w, h: h)
-        for l in lobes { mask.ellipse(l.0, l.1, l.2, l.3, 0xFFFFFF) }
+        // the flat base: one long ellipse, so the underside is level and slightly rounded at the ends
+        mask.ellipse(wd * 0.5, Double(h) - baseH, wd * 0.5 - 1.0, baseH, 0xFFFFFF)
+        // the heaps: round lobes walked along the base, tallest toward the middle (a long bank stays
+        // low), each a little different in size, so the top reads as separate puffs
+        let maxR: Double = (bl - 1.0) / 1.35 * (cls == 2 ? 0.45 : 1.0)
+        var x: Double = wd * 0.06
+        var i: Int = 0
+        while x < wd * 0.94 && i < 40 {
+            let u: Double = x / wd
+            let env: Double = sin(Double.pi * min(0.98, max(0.02, u)))
+            var rr: Double = maxR * (0.30 + 0.70 * env * (0.45 + 0.55 * r(20 + i)))
+            rr = max(2.5, rr)
+            let rx: Double = rr * (0.92 + 0.28 * r(60 + i))
+            let cx: Double = x + rx * 0.5
+            let rxc: Double = max(2.0, min(rx, min(cx, wd - cx) - 1.0))
+            // a lobe squeezed by the end of the template stays round instead of becoming a slab
+            rr = min(rr, rxc * 1.2)
+            mask.ellipse(cx, bl - rr * 0.35, rxc, rr, 0xFFFFFF)
+            x += rxc * (0.9 + 0.5 * r(100 + i))
+            i += 1
+        }
+        // small bumps along the top edge
+        let bumps: Int = max(2, w / 30)
+        for k in 0..<bumps {
+            let bx: Int = Int(wd * (0.08 + 0.84 * r(140 + k)))
+            var topY: Int = -1
+            for yy in 0..<h where (mask.get(bx, yy) >> 24) != 0 { topY = yy; break }
+            if topY < 0 { continue }
+            let br: Double = max(2.0, maxR * (0.16 + 0.20 * r(180 + k)))
+            mask.ellipse(Double(bx), Double(topY) + br * 0.55, br * 1.1, br, 0xFFFFFF)
+        }
         // nothing hangs below the base line: a flat bottom
         for x in 0..<w { mask.clear(x, h - 1) }
-        // three soft bands, a one-pixel bright top edge and a cool underside, no outline
         let edge: UInt32 = 0xFFFFFF
         let body: UInt32 = 0xF6F9FC
         let mid: UInt32 = 0xE7EEF6
@@ -27487,10 +27525,11 @@ final class CloudArt: @unchecked Sendable {
         let rim: UInt32 = 0xC8D3E1
         var b = PixelBuf(w: w, h: h)
         func filled(_ x: Int, _ y: Int) -> Bool { return (mask.get(x, y) >> 24) != 0 }
-        let midRow: Int = Int(Double(h) * 0.62)
+        let midRow: Int = Int(Double(h) * 0.6)
         for y in 0..<h {
             for x in 0..<w where filled(x, y) {
                 var c: UInt32 = y >= midRow ? mid : body
+                if y == midRow - 1 && (x + y) % 2 == 0 { c = mid }
                 if !filled(x, y - 1) { c = edge }
                 if !filled(x, y + 1) { c = rim } else if !filled(x, y + 2) || !filled(x, y + 3) { c = under }
                 b.set(x, y, c)
@@ -27580,7 +27619,6 @@ enum WorldRenderer {
         drawParticles(&ctx, g, v)
         drawWeatherDevices(&ctx, g, v)
         drawTornado(&ctx, g, v)
-        drawClouds(&ctx, W, H, g, v)
         drawPrecip(&ctx, g, v)
         drawLight(&ctx, g, v, cache)
         drawAmbientLife(&ctx, g, v)
@@ -27714,45 +27752,11 @@ enum WorldRenderer {
             fillRect(&sc, mkRect(bx - 8.0, by - 12.0, 10.0, 10.0), Color(hex: 0xC0C6D0))
             fillRect(&sc, mkRect(bx + 6.0, by + 4.0, 8.0, 8.0), Color(hex: 0xC0C6D0))
         }
-        // lightning lights up the whole sky behind the hills
+        // clouds drift in front of the sun and moon and behind everything else
+        if g.world.dim == .overworld { drawClouds(&ctx, W, H, g, v, day, dusk) }
+        // lightning lights up the whole sky
         if g.skyFlash > 0.01 { fillRect(&ctx, full, Color(hex: 0xDDE8FF, alpha: g.skyFlash * (g.settings.reduceFlashes ? 0.3 : 0.5))) }
-        // (clouds now live in the world itself: see CloudField / drawClouds)
-        // parallax background: two layers of hills, or in a flat world a level horizon of distant tree
-        // lines (it would be odd to see mountains behind ground that never rises)
-        let flat: Bool = g.gen.options.flat
-        let baseY: Double = flat ? v.sy(Double(WorldGen.flatSurface) + 1.0) : v.sy(Double(WorldGen.sea) + 6.0)
-        if baseY > -200.0 {
-            for k in 0..<2 {
-                let factor: Double = k == 0 ? 0.2 : 0.45
-                let amp: Double = flat ? (k == 0 ? 1.6 : 1.0) : (k == 0 ? 36.0 : 22.0)
-                let squash: Double = flat ? 1.0 : (k == 0 ? 0.6 : 0.8)
-                var colr: UInt32 = k == 0 ? 0x7FA0B8 : 0x5E8A6A
-                if biome == .desert { colr = k == 0 ? 0xC8B080 : 0xB09060 }
-                if biome == .tundra { colr = k == 0 ? 0xC0D0E0 : 0xA0B4C8 }
-                if biome == .mountain { colr = k == 0 ? 0x8890A0 : 0x6A7080 }
-                colr = mixRGB(0x101624, colr, max(0.2, day))
-                let c: Color = rgbColor(colr)
-                let step: Double = v.tp * 0.5
-                let seed: UInt64 = UInt64(700 + k)
-                let drop: Double = flat ? Double(k) * v.tp * 0.6 : Double(k) * 30.0
-                var sx: Double = 0
-                var path: Path = Path()
-                while sx < W {
-                    let wx: Double = v.left * factor + sx / v.tp
-                    // flat worlds: small, close-packed crowns instead of broad hills
-                    let n: Double = flat ? fbm1(wx / 3.0, seed, 2) : fbm1(wx / 40.0, seed, 3)
-                    let h: Double = flat ? (n * amp + (k == 0 ? 3.2 : 2.2)) : (n * amp + 6.0)
-                    let lift: Double = h * v.tp * squash
-                    let topY: Double = baseY - lift + drop
-                    let snap: Double = floor(topY / 4.0) * 4.0
-                    let hh: Double = max(0.0, H - snap)
-                    path.addRect(mkRect(sx, snap, step + 1.0, hh))
-                    sx += step
-                }
-                ctx.fill(path, with: .color(c))
-            }
-        }
-        if g.settings.weatherOn { drawSkyWeatherFront(&ctx, W, H, g, v, day) }
+        if g.settings.weatherOn { drawSkyWeatherFront(&ctx, W, H, g) }
     }
 
     // MARK: terrain
@@ -28420,62 +28424,47 @@ enum WorldRenderer {
         ctx.fill(p, with: .color(c))
     }
 
-    /// World-space clouds: one cached image per cloud, drawn over creatures and the player at partial
-    /// opacity, so anything inside or behind a cloud stays visible. Positions snap to the art pixel grid,
-    /// and the colour follows the time of day. As the weather clouds over, more cells fill, the clouds
-    /// turn storm-grey, and a second, lower deck of cloud gathers under a heavy sky.
-    static func drawClouds(_ ctx: inout GraphicsContext, _ W: Double, _ H: Double, _ g: Game, _ v: View2D) {
-        if g.world.dim != .overworld { return }
-        if v.top > 92.0 || v.top + v.hTiles < 56.0 { return }
+    /// The sky's clouds: a few layers of cached cloud images, drawn behind the terrain. Far layers are
+    /// small and pale and follow the camera least. A clear sky keeps a scattering of cloud; the heavier
+    /// the weather, the more cells fill, the clouds turn storm-grey, and a low, dark deck of big cloud
+    /// builds across the top of the sky. Dusk warms the clouds and night cools them.
+    static func drawClouds(_ ctx: inout GraphicsContext, _ W: Double, _ H: Double, _ g: Game, _ v: View2D, _ day: Double, _ dusk: Double) {
         let seed: UInt64 = g.gen.seed
         let drift: Double = g.weather.cloudDrift
         let cover: Double = g.settings.weatherOn ? g.wxHere.cloud : 0
-        let day: Double = g.dayFactor
-        // white by day, cool grey-blue at night, storm-grey under heavy cloud (dusk is left to the sky)
-        var tint: UInt32 = mixRGB(0x5A6480, 0xFFFFFF, max(day, 0.0))
-        let storm: Double = clampD((cover - 0.45) * 1.6, 0, 0.8)
-        if storm > 0 { tint = mixRGB(tint, mixRGB(0x2A3038, 0x6A707C, day), storm) }
-        let base: [CloudField.Cloud] = CloudField.clouds(seed, drift, v.left, v.left + v.wTiles, fill: 0.58 + 0.38 * cover)
-        drawCloudList(&ctx, g, v, base, tint, 0.85 + 0.1 * cover)
-        // the low storm deck: denser, darker and quicker
-        let deck: Double = clampD((cover - 0.4) / 0.5, 0, 1)
-        if deck > 0.02 {
-            let low: [CloudField.Cloud] = CloudField.clouds(seed ^ 0x5707, drift * 1.4 + 19.0, v.left, v.left + v.wTiles, fill: 0.85 * deck, rowTop: 56.0, rows: 12.0)
-            drawCloudList(&ctx, g, v, low, mixRGB(tint, 0x30363E, 0.35), 0.9 * deck)
-        }
-        // standing inside a cloud: a soft haze over the view
-        let pyMid: Double = g.pb.y - g.pb.h * 0.5
-        if CloudField.contains(seed, drift, g.pb.x, pyMid) {
-            fillRect(&ctx, mkRect(0, 0, W, H), rgbColor(tint, 0.12))
-        }
-    }
-
-    static func drawCloudList(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D, _ list: [CloudField.Cloud], _ tint: UInt32, _ opacity: Double) {
-        if list.isEmpty { return }
-        let art: CloudArt = CloudArt.shared
+        let wet: Double = g.settings.weatherOn ? g.wxHere.precip : 0
+        // white by day, cool blue-grey at night, warm at dusk, storm-grey under heavy cloud
+        var tint: UInt32 = mixRGB(0x58628A, 0xFFFFFF, day)
+        tint = mixRGB(tint, 0xFFC4A0, dusk * 0.5)
+        let storm: Double = clampD((cover - 0.4) * 1.7, 0, 0.85) * (0.75 + 0.25 * wet)
+        if storm > 0 { tint = mixRGB(tint, mixRGB(0x262B33, 0x6C727E, day), storm) }
+        let sky: UInt32 = mixRGB(0x18223E, 0xB4DCFF, day)
+        let camMid: Double = v.top + v.hTiles * 0.5
         let px: Double = v.tp / CloudField.pxPerTile
-        for cl in list {
-            let b: PixelBuf = art.shapes[cl.kind]
-            // where a hill or mountain reaches into a cloud it thins to a light fog instead of
-            // sitting on the terrain as a solid shape (eases in and out as the cloud drifts)
-            let wT: Double = Double(b.w) / CloudField.pxPerTile
-            let bottom: Double = cl.y + Double(b.h) / CloudField.pxPerTile
-            var ground: Double = 1e9
-            var k: Int = 0
-            while k <= 6 {
-                let gx: Int = Int(floor(cl.x + wT * Double(k) / 6.0))
-                ground = min(ground, Double(g.gen.col(gx).h))
-                k += 1
-            }
-            let clear: Double = clampD((ground - bottom) / 4.0, 0, 1)
+        let art: CloudArt = CloudArt.shared
+        let fills: [Double] = [0.46 + 0.45 * cover, 0.40 + 0.52 * cover, 0.26 + 0.60 * cover, clampD((cover - 0.35) / 0.5, 0, 1) * 0.95]
+        for li in 0..<CloudField.layers.count {
+            let L: CloudField.Layer = CloudField.layers[li]
+            if fills[li] <= 0.02 { continue }
+            let left: Double = v.left * L.par
+            let list: [CloudField.Cloud] = CloudField.clouds(seed, li, drift, left, left + v.wTiles, fill: fills[li])
+            if list.isEmpty { continue }
+            var layerTint: UInt32 = mixRGB(tint, sky, L.haze)
+            if li == 3 { layerTint = mixRGB(layerTint, 0x30363E, 0.4) }
+            // the sky band follows the camera up and down a little, so clouds stay in view on hills
+            let rise: Double = clampD((112.0 - camMid) * L.lift, -3.0, 9.0)
             var c: GraphicsContext = ctx
-            c.opacity = opacity * (0.3 + 0.7 * clear) * cl.alpha
-            if tint != 0xFFFFFF { c.addFilter(.colorMultiply(rgbColor(tint))) }
-            // snap to the cloud's own pixel grid so its pixels line up with the terrain's
-            let sx: Double = (v.sx(cl.x) / px).rounded() * px
-            let sy: Double = (v.sy(cl.y) / px).rounded() * px
-            let img: Image = cl.flip ? art.flipped[cl.kind] : art.images[cl.kind]
-            c.draw(img, in: mkRect(sx, sy, Double(b.w) * px, Double(b.h) * px))
+            c.addFilter(.colorMultiply(rgbColor(layerTint)))
+            for cl in list {
+                let b: PixelBuf = art.shapes[cl.kind]
+                let sx: Double = ((cl.x - left) * v.tp / px).rounded() * px
+                let sy: Double = ((cl.y + rise) * v.tp / px).rounded() * px
+                let cw: Double = Double(b.w) * px
+                if sx > W || sx + cw < 0 || sy > H || sy + Double(b.h) * px < 0 { continue }
+                c.opacity = L.opacity * cl.alpha
+                let img: Image = cl.flip ? art.flipped[cl.kind] : art.images[cl.kind]
+                c.draw(img, in: mkRect(sx, sy, cw, Double(b.h) * px))
+            }
         }
     }
 
@@ -30678,33 +30667,23 @@ struct MenuBackground: View {
         let sunX: Double = W * 0.78
         fillRect(&ctx, mkRect(sunX, 70, 56, 56), Color(hex: 0xFFD84A))
         fillRect(&ctx, mkRect(sunX + 12.0, 82, 32, 32), Color(hex: 0xFFF2A0))
-        let cloud: Color = Color.white.opacity(0.9)
-        let span: Double = W + 300.0
-        for i in 0..<5 {
+        // a handful of the game's own clouds drifting past at different sizes and speeds
+        let clouds: CloudArt = CloudArt.shared
+        let pool: [Int] = clouds.classes[0] + clouds.classes[1] + clouds.classes[2] + clouds.classes[3]
+        let span: Double = W + 900.0
+        for i in 0..<7 {
             let speed: Double = 8.0 + Double(i) * 3.0
             var cx: Double = hash2(i, 1, 9) * span + t * speed
-            cx = cx.truncatingRemainder(dividingBy: span) - 150.0
-            let cy: Double = 40.0 + hash2(i, 2, 9) * H * 0.3
-            fillRect(&ctx, mkRect(cx, cy, 120, 20), cloud)
-            fillRect(&ctx, mkRect(cx + 20.0, cy - 16.0, 70, 16), cloud)
+            cx = cx.truncatingRemainder(dividingBy: span) - 450.0
+            let cy: Double = 30.0 + hash2(i, 2, 9) * H * 0.32
+            let kind: Int = pool[(i * 5 + 2) % pool.count]
+            let b: PixelBuf = clouds.shapes[kind]
+            let scale: Double = i % 2 == 0 ? 2.0 : 3.0
+            var cc: GraphicsContext = ctx
+            cc.opacity = 0.92
+            cc.draw(clouds.images[kind], in: mkRect((cx / scale).rounded() * scale, (cy / scale).rounded() * scale, Double(b.w) * scale, Double(b.h) * scale))
         }
         let ground: Double = H - 130.0
-        for layer in 0..<2 {
-            let speed: Double = layer == 0 ? 10.0 : 25.0
-            let col: Color = layer == 0 ? Color(hex: 0x7FA7B8) : Color(hex: 0x5E9A62)
-            let lift: Double = layer == 0 ? 110.0 : 50.0
-            let ph: Double = Double(layer)
-            var hx: Double = 0
-            while hx < W {
-                let wx: Double = (hx + t * speed) * 0.012
-                let w1: Double = sin(wx * 2.0 + ph) * 30.0
-                let w2: Double = sin(wx * 5.0) * 10.0
-                let raw: Double = ground - lift + w1 + w2
-                let top: Double = floor(raw / 8.0) * 8.0
-                fillRect(&ctx, mkRect(hx, top, 12, H - top), col)
-                hx += 12.0
-            }
-        }
         let ts: Double = 32.0
         let off: Double = (t * 60.0).truncatingRemainder(dividingBy: ts)
         let rows: [Tile] = [.grass, .dirt, .dirt, .stone, .stone]

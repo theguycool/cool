@@ -313,8 +313,8 @@ do {
 // ---------------------------------------------------------------- clouds, camera
 print("== clouds and camera")
 do {
-    let a = CloudField.clouds(99, 12.5, 0, 400).map { $0.x }
-    let b = CloudField.clouds(99, 12.5, 0, 400).map { $0.x }
+    let a = CloudField.clouds(99, 1, 12.5, 0, 400, fill: 0.7).map { $0.x }
+    let b = CloudField.clouds(99, 1, 12.5, 0, 400, fill: 0.7).map { $0.x }
     check(!a.isEmpty && a == b, "clouds are deterministic for a seed and time")
     let g = arena()
     g.settings.camDeadZone = 1.0

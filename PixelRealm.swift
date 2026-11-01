@@ -37,8 +37,6 @@ final class Perf: @unchecked Sendable {
     var physMs: Double = 0
     var lightMs: Double = 0
     var renderMs: Double = 0
-    var frameMs: Double = 0
-    var frameWorstMs: Double = 0
     /// per-frame counts (the last finished frame)
     var moveCalls: Int = 0
     var boxChecks: Int = 0
@@ -144,56 +142,6 @@ func vnoise(_ x: Double, _ y: Double, _ s: UInt64) -> Double {
     return top + (bot - top) * v
 }
 
-/// Value noise with the four lattice corners cached. Gives exactly the same values as
-/// vnoise() but skips the hashing while consecutive samples stay inside one lattice cell
-/// (world generation walks down columns, so most samples do).
-struct VNoiseCache {
-    let s: UInt64
-    var cx: Int = Int.min
-    var cy: Int = Int.min
-    var a: Double = 0
-    var b: Double = 0
-    var c: Double = 0
-    var d: Double = 0
-    /// smallest / largest corner of the current cell: the interpolated value always lies between
-    /// them, which lets callers skip work exactly (no change to the generated world)
-    var lo: Double = 0
-    var hi: Double = 0
-    init(_ seed: UInt64) { s = seed }
-
-    @inline(__always) mutating func load(_ xi: Int, _ yi: Int) {
-        if xi != cx || yi != cy {
-            cx = xi
-            cy = yi
-            a = hash2(xi, yi, s)
-            b = hash2(xi + 1, yi, s)
-            c = hash2(xi, yi + 1, s)
-            d = hash2(xi + 1, yi + 1, s)
-            lo = min(min(a, b), min(c, d))
-            hi = max(max(a, b), max(c, d))
-        }
-    }
-
-    /// Loads the cell containing (x, y) and returns its corner range
-    mutating func bounds(_ x: Double, _ y: Double) -> (Double, Double) {
-        load(Int(floor(x)), Int(floor(y)))
-        return (lo, hi)
-    }
-
-    mutating func at(_ x: Double, _ y: Double) -> Double {
-        let fx0: Double = floor(x)
-        let fy0: Double = floor(y)
-        let xi: Int = Int(fx0)
-        let yi: Int = Int(fy0)
-        load(xi, yi)
-        let u: Double = smooth(x - fx0)
-        let v: Double = smooth(y - fy0)
-        let top: Double = a + (b - a) * u
-        let bot: Double = c + (d - c) * u
-        return top + (bot - top) * v
-    }
-}
-
 func clampD(_ v: Double, _ lo: Double, _ hi: Double) -> Double { return max(lo, min(hi, v)) }
 func lerpD(_ a: Double, _ b: Double, _ t: Double) -> Double { return a + (b - a) * t }
 func clampI(_ v: Int, _ lo: Int, _ hi: Int) -> Int { return max(lo, min(hi, v)) }
@@ -202,11 +150,6 @@ func floorDiv(_ a: Int, _ b: Int) -> Int {
     var q: Int = a / b
     if (a % b != 0) && ((a < 0) != (b < 0)) { q -= 1 }
     return q
-}
-
-func floorMod(_ a: Int, _ b: Int) -> Int {
-    let m: Int = a % b
-    return m < 0 ? m + b : m
 }
 
 func mixRGB(_ a: UInt32, _ b: UInt32, _ t: Double) -> UInt32 {
@@ -1605,7 +1548,7 @@ enum SwingStyle: Int {
 
 /// How a melee weapon strikes. One table drives the hit test, the timing, the animation and the
 /// effects, so a weapon reaches exactly as far and as wide whether the player taps a foe, holds the
-/// action button or swings at empty air.
+/// attack stick or swings at empty air.
 struct MeleeProfile {
     var damage: Double
     var cooldown: Double
@@ -1816,18 +1759,6 @@ enum Item: Hashable, Codable {
         }
     }
 
-    var tierValue: Tier? {
-        switch self {
-        case .tool(_, let t): return t
-        case .sword(let t): return t
-        case .spear(let t): return t
-        case .hammer(let t): return t
-        case .knife(let t): return t
-        case .armor(_, let t): return t
-        default: return nil
-        }
-    }
-
     /// How this item strikes when swung (anything can be swung; weapons are made for it)
     var melee: MeleeProfile {
         switch self {
@@ -1873,14 +1804,6 @@ enum Item: Hashable, Codable {
     var meleeDamage: Double { return melee.damage }
     var meleeCooldown: Double { return melee.cooldown }
     var meleeReach: Double { return melee.reach }
-
-    var isFood: Bool {
-        if case .food = self { return true }
-        return false
-    }
-
-    /// Knockback a melee hit gives
-    var meleeKnock: Double { return melee.knock }
 
     /// how long the swing animation of a melee attack lasts
     var swingTime: Double { return melee.swingTime }
@@ -2847,10 +2770,6 @@ struct Inventory: Codable {
         return d
     }
 
-    var hasAnyRecognizedItems: Bool {
-        for s in slots { if s != nil { return true } }
-        return false
-    }
 }
 
 // ===== p05a_humanoid =====
@@ -5854,10 +5773,6 @@ final class Chunk {
         }
     }
 
-    func bumpAll() {
-        for i in 0..<secRev.count { secRev[i] &+= 1 }
-    }
-
     var x0: Int { return cx * chunkW }
 
     @inline(__always) func get(_ lx: Int, _ y: Int) -> Tile {
@@ -8551,7 +8466,6 @@ final class World {
     var devs: [ChestKey: PowerDev] = [:]
     var powerRev: Int = 0
     var version: Int = 0
-    var loadedCount: Int { return chunks.count }
     private var cacheCX: Int = Int.min
     private var cacheChunk: Chunk? = nil
 
@@ -8679,8 +8593,6 @@ final class World {
     }
 
     func solid(_ x: Int, _ y: Int) -> Bool { return tile(x, y).solid }
-
-    func liquidAt(_ x: Int, _ y: Int) -> Bool { return tile(x, y).liquid }
 
     /// Returns the previous tile. Handles dependent tiles (unsupported plants) and sky light columns.
     @discardableResult
@@ -9099,7 +9011,6 @@ final class LightMap {
     var blkBase: [Int] = []
     var opq: [Bool] = []
     var drawn: [Bool] = []
-    var ambientFloor: Double = 0
     var valid: Bool = false
     var stamp: Int = -1
     var skyUsed: Int = -1
@@ -9720,24 +9631,6 @@ extension World {
         b.inLava = lf.1 > 0.2
     }
 
-    /// Light-weight ray test used by projectiles: tile-step along a short segment.
-    func segmentHitsSolid(_ x0: Double, _ y0: Double, _ x1: Double, _ y1: Double) -> (Int, Int)? {
-        let dx: Double = x1 - x0
-        let dy: Double = y1 - y0
-        let dist: Double = sqrt(dx * dx + dy * dy)
-        let n: Int = max(1, Int(ceil(dist / 0.4)))
-        var i: Int = 1
-        while i <= n {
-            let t: Double = Double(i) / Double(n)
-            let px: Double = x0 + dx * t
-            let py: Double = y0 + dy * t
-            let tx: Int = Int(floor(px))
-            let ty: Int = Int(floor(py))
-            if tile(tx, ty).solid { return (tx, ty) }
-            i += 1
-        }
-        return nil
-    }
 }
 
 // MARK: - Projectiles
@@ -10042,7 +9935,6 @@ final class Mob {
     var sheared: Bool = false
     var blocking: Bool = false
     var boat: Int = -1
-    var boatOffX: Double = 0
     var raiding: Bool = false
     var burn: Double = 0
     var stuckT: Double = 0
@@ -10556,14 +10448,6 @@ final class Vehicle {
 
 // MARK: - Pirate ships
 
-struct ShipSave: Codable {
-    var id: Int
-    var x: Double
-    var hp: Double
-    var dir: Int
-    var looted: Bool
-}
-
 final class PirateShip {
     let id: Int
     var x: Double
@@ -10582,7 +10466,6 @@ final class PirateShip {
     var speed: Double = 0
 
     static let deckHalf: Double = 4.0
-    static let deckAbove: Double = 1.0
     static let spriteW: Double = 9.5
     static let spriteH: Double = 5.0
     static let waterRow: Double = 3.6
@@ -10766,7 +10649,6 @@ final class Game: ObservableObject, @unchecked Sendable {
     let ticker: FrameTicker = FrameTicker()
     var lastHudKey: Int = 0
     var renderFPS: Double = 0
-    var hudTick: Int { return hud.tick }
     @Published var showInventory: Bool = false
     @Published var showDebug: Bool = false
     @Published var showMap: Bool = false
@@ -10879,13 +10761,10 @@ final class Game: ObservableObject, @unchecked Sendable {
     var aimX: Double = 0
     var aimY: Double = 0
     var aimValid: Bool = false
-    var tapPending: Bool = false
     var useWasHeld: Bool = false
     var lavaT: Double = 0
     var drownT: Double = 0
     var hardcoreOver: Bool = false
-    var tapT: Double = 0
-    var holdT: Double = 0
     var pendingInteract: Bool = false
     var downTime: Double = 0
     var pointerStartX: Double = 0
@@ -11040,12 +10919,10 @@ final class Game: ObservableObject, @unchecked Sendable {
     var lightGlow: [UInt32] = []
     var lightRev: Int = 0
     var lightTimer: Double = 0
-    var dynLights: [(Int, Int, Int)] = []
 
     // bosses & progress
     var defeated: Set<Int> = []
     var rex: Mob? = nil
-    var rexSave: MobSave? = nil
     var activeBoss: Mob? = nil
     var bossBarName: String = ""
     var bossBarFrac: Double = 0
@@ -11059,7 +10936,6 @@ final class Game: ObservableObject, @unchecked Sendable {
     var fadeT: Double = 0
     var mounted: Mob? = nil
     var inVehicle: Vehicle? = nil
-    var steerTick: Double = 0
     var vehicleStash: [[Vehicle]] = [[], []]
     var mapCache: TreasureMap? = nil
     var hintT: Double = 0
@@ -11179,6 +11055,8 @@ final class Game: ObservableObject, @unchecked Sendable {
     func setSel(_ i: Int) {
         let n: Int = clampI(i, 0, Inventory.hotbarCount - 1)
         if n != sel, let it = heldItem, it.isWeapon { lastWeaponSel = sel }
+        // switching while the attack control is down must not fire the new weapon in the same instant
+        if n != sel && actState.held { useCD = max(useCD, 0.15) }
         sel = n
         bowCharge = 0
         mining = false
@@ -11189,10 +11067,6 @@ final class Game: ObservableObject, @unchecked Sendable {
         bumpHUD()
     }
 
-    var playerCenterX: Double { return pb.x }
-    var playerCenterY: Double { return pb.y - pb.h * 0.5 }
-
-    func tileCoord(_ v: Double) -> Int { return Int(floor(v)) }
 }
 
 // ===== p14b_player =====
@@ -11312,7 +11186,7 @@ extension Game {
         }
         if swingT > 0 || useHeld {
             if aimValid {
-                facing = aimX >= pb.x ? 1 : -1
+                facing = aimFacing()
             }
         }
         if flying || noclip {
@@ -12666,19 +12540,6 @@ extension Game {
         return best
     }
 
-    func targetMob() -> Mob? {
-        let p: MeleeProfile = heldItem?.melee ?? Item.bareHands
-        if let m = mobUnderAim(p), boxDistance(m, shoulderX, shoulderY) <= p.reach { return m }
-        return nil
-    }
-
-    func meleeHit(_ it: Item?, _ target: Mob) {
-        aimX = target.b.x
-        aimY = target.b.cy
-        aimValid = true
-        startMelee(it, target: target)
-    }
-
     // MARK: mining & breaking
 
     func mineStep(_ tx: Int, _ ty: Int, _ kind: ToolType?, _ tier: Tier?, _ dt: Double) {
@@ -12689,7 +12550,7 @@ extension Game {
             mineP = 0
             if useCD <= 0 && kind != nil && kind != .hoe {
                 swingT = 0.2
-                swingDir = aimX >= pb.x ? 1 : -1
+                swingDir = aimFacing()
                 facing = swingDir
                 useCD = 0.3
             }
@@ -12714,7 +12575,7 @@ extension Game {
                     say(kind == .pickaxe ? "This needs a stronger pickaxe." : "You need a pickaxe for that.", 1.5)
                     useCD = 0.8
                     swingT = 0.2
-                    swingDir = aimX >= pb.x ? 1 : -1
+                    swingDir = aimFacing()
                 }
                 return
             }
@@ -12732,7 +12593,7 @@ extension Game {
         mineP += dt * speed
         if useCD <= 0 {
             swingT = 0.22
-            swingDir = aimX >= pb.x ? 1 : -1
+            swingDir = aimFacing()
             facing = swingDir
             useCD = 0.26
             let col: UInt32 = def.colors.first ?? 0x888888
@@ -12909,12 +12770,10 @@ extension Game {
         sfx(.place, 0.6)
         placeCD = 0.11
         swingT = 0.14
-        swingDir = aimX >= pb.x ? 1 : -1
+        swingDir = aimFacing()
         facing = swingDir
         bumpHUD()
     }
-
-    var placeCDValue: Double { return placeCD }
 
     func usePlant(_ crop: Tile, _ it: Item, _ pressed: Bool) {
         if placeCD > 0 { return }
@@ -12982,7 +12841,7 @@ extension Game {
             }
             if useCD > 0 && bowCharge == 0 { return }
             bowCharge = min(1.0, max(bowCharge, 0.01) + dt / st.chargeTime)
-            facing = aimX >= pb.x ? 1 : -1
+            facing = aimFacing()
             if bowCharge >= 1.0 && useCD <= 0 {
                 fireArrow(1.0)
                 bowCharge = 0.3
@@ -13079,11 +12938,6 @@ extension Game {
 
     // MARK: guns
 
-    func gunStack() -> Stack? {
-        if case .gun? = heldItem { return heldStack }
-        return nil
-    }
-
     func updateReload(_ dt: Double) {
         if reloadT <= 0 { return }
         if reloadSlot != sel {
@@ -13147,7 +13001,7 @@ extension Game {
             bumpHUD()
             return
         }
-        facing = aimX >= pb.x ? 1 : -1
+        facing = aimFacing()
         let ox: Double = pb.x + Double(facing) * 0.7
         let oy: Double = pb.y - 1.2
         // bolts drop a little: they are raised just enough to fly through the spot aimed at
@@ -13387,6 +13241,14 @@ let throwGravity: Double = 22.0
 extension Game {
     // MARK: geometry
 
+    /// The way the player turns to face the aim: toward it, but aiming straight up or down (within a third
+    /// of a block of the player's own column) keeps the way they already face
+    func aimFacing() -> Int {
+        let d: Double = aimX - pb.x
+        if abs(d) < 0.3 { return facing }
+        return d >= 0 ? 1 : -1
+    }
+
     /// where melee blows start from
     var shoulderX: Double { return pb.x }
     var shoulderY: Double { return pb.y - pb.h * 0.55 }
@@ -13484,7 +13346,8 @@ extension Game {
         swingDur = p.swingTime
         swingT = p.swingTime
         let ang: Double = attackAngle()
-        swingDir = cos(ang) >= 0 ? 1 : -1
+        // a blow straight up or down keeps the way the player already faces
+        swingDir = abs(cos(ang)) < 0.25 ? facing : (cos(ang) >= 0 ? 1 : -1)
         facing = swingDir
         strikeItem = it
         strikeSel = sel
@@ -13720,7 +13583,7 @@ extension Game {
     /// mid-press, and a button that disappears never hears its finger lift, so without this an attack,
     /// a walk or a jump could carry on by itself once the panel closes.
     func releaseAllInput() {
-        actState.held = false
+        actState.stickReleased()
         actState.was = false
         stick = 0
         stickY = 0
@@ -13758,7 +13621,7 @@ extension Game {
             }
         }
         if let t = ammo { _ = inv.remove(.block(t), 1) }
-        facing = aimX >= pb.x ? 1 : -1
+        facing = aimFacing()
         let ox: Double = pb.x + Double(facing) * 0.4
         let oy: Double = pb.y - 1.3
         // the stone is lobbed so that it comes down on the spot aimed at
@@ -13783,7 +13646,7 @@ extension Game {
     func throwFlask() {
         if useCD > 0 { return }
         if !isCreative { inv.removeAt(sel, 1) }
-        facing = aimX >= pb.x ? 1 : -1
+        facing = aimFacing()
         let ox: Double = pb.x + Double(facing) * 0.4
         let oy: Double = pb.y - 1.3
         let a: Double = lobAngle(aimX - ox, aimY - oy, throwSpeed, throwGravity)
@@ -13823,7 +13686,7 @@ extension Game {
     func fireStormRod() {
         let ox: Double = pb.x + Double(facing) * 0.4
         let oy: Double = pb.y - 1.25
-        facing = aimX >= pb.x ? 1 : -1
+        facing = aimFacing()
         let ang: Double = atan2(aimY - oy, aimX - ox)
         let dx: Double = cos(ang)
         let dy: Double = sin(ang)
@@ -15369,7 +15232,7 @@ extension Game {
     func throwBomb() {
         if useCD > 0 { return }
         if !isCreative { inv.removeAt(sel, 1) }
-        facing = aimX >= pb.x ? 1 : -1
+        facing = aimFacing()
         let ox: Double = pb.x + Double(facing) * 0.4
         let oy: Double = pb.y - 1.3
         // thrown on the arc that lands it on the spot aimed at (then it may bounce a little)
@@ -17938,17 +17801,6 @@ enum SaveStore {
         return best
     }
 
-    static func mostRecent() -> SaveMeta? {
-        var best: SaveMeta? = nil
-        var bt: Date = .distantPast
-        for i in 0..<slotCount {
-            guard let m = meta(i) else { continue }
-            let attrs = try? FileManager.default.attributesOfItem(atPath: url(i).path)
-            let t: Date = (attrs?[.modificationDate] as? Date) ?? .distantPast
-            if best == nil || t > bt { best = m; bt = t }
-        }
-        return best
-    }
 }
 
 extension Game {
@@ -18137,9 +17989,42 @@ extension Game {
 
 // MARK: - Action button (auto-aim), debug commands, info for the HUD
 
+/// The attack control. `held` is true while it is down (the combat stick, or the F key). The combat stick
+/// also reports where the thumb is: `power` is how far out (0 to 1), `dirX`/`dirY` the unit direction, and
+/// `manual` whether it is out far enough to aim by hand. Inside the dead zone the game aims for itself.
 final class ActState: @unchecked Sendable {
     var held: Bool = false
     var was: Bool = false
+    var dirX: Double = 0
+    var dirY: Double = 0
+    var power: Double = 0
+    var manual: Bool = false
+    /// the dead zone, as a share of the stick's radius: a thumb has to leave `deadIn` to start aiming by
+    /// hand, and come back inside `deadOut` to hand the aim back (the gap stops it flickering at the edge)
+    static let deadIn: Double = 0.26
+    static let deadOut: Double = 0.17
+
+    /// A finger is on the combat stick at (x, y), measured from its centre in stick radii (any length;
+    /// anything past the edge counts as the edge). Diagonals are as strong as straight lines.
+    func stickAt(_ x: Double, _ y: Double) {
+        let len: Double = sqrt(x * x + y * y)
+        power = min(1.0, len)
+        manual = power > (manual ? ActState.deadOut : ActState.deadIn)
+        if manual && len > 0.0001 {
+            dirX = x / len
+            dirY = y / len
+        }
+        held = true
+    }
+
+    /// The finger left the combat stick
+    func stickReleased() {
+        held = false
+        manual = false
+        power = 0
+        dirX = 0
+        dirY = 0
+    }
 }
 
 let actState = ActState()
@@ -18166,6 +18051,17 @@ extension Game {
             return
         }
         let it: Item? = heldItem
+        if actState.manual {
+            // the thumb is out past the dead zone: aim where it points, with this weapon's own rules
+            let a: (Double, Double) = stickAim(it, actState.dirX, actState.dirY, actState.power)
+            aimX = a.0
+            aimY = a.1
+            aimValid = true
+            lockTarget = nil
+            if abs(actState.dirX) > 0.25 { facing = actState.dirX >= 0 ? 1 : -1 }
+            holdAction()
+            return
+        }
         var tx: Double = pb.x + Double(facing) * 1.1
         var ty: Double = pb.y - 1.3
         var aimed: Bool = false
@@ -18211,13 +18107,90 @@ extension Game {
         aimX = tx
         aimY = ty
         aimValid = true
+        holdAction()
+    }
+
+    /// Keeps the action going; the first frame of a press starts it fresh
+    func holdAction() {
         if !actState.was {
-            useHeld = true
             useWasHeld = false
             usePressedFlag = false
-        } else {
-            useHeld = true
         }
+        useHeld = true
+    }
+
+    /// The point the combat stick aims at, from the direction (dx, dy) (a unit vector) and how far out
+    /// the thumb is (0 to 1). Each kind of item reads it its own way: a blade or spear swings along the
+    /// direction, bows and guns shoot along it, slings and thrown flasks land further out the further
+    /// the thumb is pushed, tools and fists work on the first creature or block along it, and blocks go
+    /// down against the first surface along it.
+    func stickAim(_ it: Item?, _ dx: Double, _ dy: Double, _ power: Double) -> (Double, Double) {
+        let ox: Double = shoulderX
+        let oy: Double = shoulderY
+        let reach: Double = min(reachDistance(), 5.5) - 0.3
+        guard let item = it else { return stickDigPoint(dx, dy, reach) }
+        switch item {
+        case .sword, .spear, .hammer, .knife, .club, .relic:
+            let d: Double = max(1.0, item.melee.reach)
+            return (ox + dx * d, oy + dy * d)
+        case .bow, .gun:
+            return (ox + dx * 14.0, oy + dy * 14.0)
+        case .sling:
+            let d: Double = 4.0 + 9.0 * power
+            return (ox + dx * d, oy + dy * d)
+        case .gadget(let g):
+            if g == .bomb || g == .fireFlask {
+                let d: Double = 3.0 + 9.0 * power
+                return (ox + dx * d, oy + dy * d)
+            }
+            return stickDigPoint(dx, dy, reach)
+        case .tool:
+            return stickDigPoint(dx, dy, reach)
+        case .block, .wall, .part:
+            return stickPlacePoint(dx, dy, reach)
+        default:
+            return (ox + dx * 1.5, oy + dy * 1.5)
+        }
+    }
+
+    /// The first creature, or failing that the first block, along a direction from the shoulder within
+    /// `r` blocks: what a pickaxe or a fist works on. With nothing in the way, the point at full reach.
+    func stickDigPoint(_ dx: Double, _ dy: Double, _ r: Double) -> (Double, Double) {
+        let ox: Double = shoulderX
+        let oy: Double = shoulderY
+        let near: [Mob] = mobsNear(ox - r - 1.0, ox + r + 1.0)
+        var d: Double = 0.7
+        while d <= r {
+            let x: Double = ox + dx * d
+            let y: Double = oy + dy * d
+            for m in near where m.hp > 0 && !m.removed && !m.tame && !m.downed {
+                if x >= m.b.left - 0.2 && x <= m.b.right + 0.2 && y >= m.b.top - 0.2 && y <= m.b.y + 0.2 { return (m.b.x, m.b.cy) }
+            }
+            let tx: Int = Int(floor(x))
+            let ty: Int = Int(floor(y))
+            let t: Tile = world.tile(tx, ty)
+            if t != .air && !t.liquid { return (Double(tx) + 0.5, Double(ty) + 0.5) }
+            d += 0.25
+        }
+        return (ox + dx * r, oy + dy * r)
+    }
+
+    /// The empty block just in front of the first solid one along a direction: where a block would go
+    /// to build against what the stick points at
+    func stickPlacePoint(_ dx: Double, _ dy: Double, _ r: Double) -> (Double, Double) {
+        let ox: Double = shoulderX
+        let oy: Double = shoulderY
+        var last: (Int, Int)? = nil
+        var d: Double = 0.7
+        while d <= r {
+            let tx: Int = Int(floor(ox + dx * d))
+            let ty: Int = Int(floor(oy + dy * d))
+            if world.solid(tx, ty) { break }
+            last = (tx, ty)
+            d += 0.25
+        }
+        if let l = last { return (Double(l.0) + 0.5, Double(l.1) + 0.5) }
+        return (ox + dx * 1.2, oy + dy * 1.2)
     }
 
     // MARK: debug
@@ -18810,7 +18783,7 @@ extension Game {
             if !isCreative { inv.removeAt(sel, 1) }
             placeCD = 0.06
             swingT = 0.12
-            swingDir = aimX >= pb.x ? 1 : -1
+            swingDir = aimFacing()
             facing = swingDir
             bumpHUD()
         }
@@ -18828,7 +18801,7 @@ extension Game {
         mineP += dt * sp
         if useCD <= 0 {
             swingT = 0.22
-            swingDir = aimX >= pb.x ? 1 : -1
+            swingDir = aimFacing()
             facing = swingDir
             useCD = 0.26
         }
@@ -21865,14 +21838,6 @@ final class Art: @unchecked Sendable {
         return s
     }
 
-    func kindSet(_ k: MobKind) -> SpriteSet {
-        let key: Int = k.rawValue * 16
-        if let s = mobSets[key] { return s }
-        let s: SpriteSet = buildMobSet(k, 0)
-        mobSets[key] = s
-        return s
-    }
-
     func buildMobSet(_ k: MobKind, _ v: Int) -> SpriteSet {
         return creatureSpriteSet(k, v)
     }
@@ -22549,22 +22514,6 @@ enum WeatherKind: Int, Codable, CaseIterable {
         }
     }
 
-    /// 0 calm ... 1 the worst there is (drives the barometer and the forecast's wording)
-    var severity: Double {
-        switch self {
-        case .clear: return 0
-        case .partlyCloudy: return 0.1
-        case .overcast: return 0.25
-        case .lightRain, .snowfall: return 0.35
-        case .strongWind: return 0.4
-        case .heavyRain: return 0.5
-        case .windstorm: return 0.7
-        case .thunderstorm: return 0.75
-        case .hailstorm: return 0.8
-        case .blizzard: return 0.85
-        case .tornado, .hurricane: return 1.0
-        }
-    }
 
     /// What a spell of it brings at full strength (before the settings and the place are applied)
     var profile: WeatherProfile {
@@ -27283,19 +27232,18 @@ final class CloudArt: @unchecked Sendable {
     static func build(_ cls: Int, _ n: Int) -> PixelBuf {
         let seed: UInt64 = UInt64(0xC10D + cls * 97)
         func r(_ k: Int) -> Double { return hash2(n, k, seed) }
-        // (width range, height range, lobe count range, flat base height)
-        let spec: [(Double, Double, Double, Double, Int, Int, Double)] = [
-            (28, 46, 12, 17, 2, 3, 4),
-            (54, 88, 20, 28, 4, 5, 5),
-            (110, 170, 14, 20, 7, 10, 4),
-            (68, 100, 38, 52, 5, 6, 6),
-            (190, 260, 36, 52, 12, 16, 6)
+        // (width range, height range, flat base height)
+        let spec: [(Double, Double, Double, Double, Double)] = [
+            (28, 46, 12, 17, 4),
+            (54, 88, 20, 28, 5),
+            (110, 170, 14, 20, 4),
+            (68, 100, 38, 52, 6),
+            (190, 260, 36, 52, 6)
         ]
-        let sp: (Double, Double, Double, Double, Int, Int, Double) = spec[cls]
+        let sp: (Double, Double, Double, Double, Double) = spec[cls]
         let w: Int = Int(sp.0 + (sp.1 - sp.0) * r(1))
         let h: Int = Int(sp.2 + (sp.3 - sp.2) * r(2))
-        let lobes: Int = sp.4 + Int(r(3) * Double(sp.5 - sp.4 + 1))
-        let baseH: Double = sp.6 * (0.8 + 0.4 * r(4))
+        let baseH: Double = sp.4 * (0.8 + 0.4 * r(4))
         let wd: Double = Double(w)
         let bl: Double = Double(h) - baseH
         var mask = PixelBuf(w: w, h: h)
@@ -28501,6 +28449,20 @@ enum WorldRenderer {
         strokeLine(&ctx, x1, y1, x1 - l, y1, c, w); strokeLine(&ctx, x1, y1, x1, y1 - l, c, w)
     }
 
+    /// Four short dashes leading away from the player along the way the combat stick is aiming
+    static func drawStickAim(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
+        if !actState.manual || g.dead || g.inVehicle != nil { return }
+        let dx: Double = actState.dirX
+        let dy: Double = actState.dirY
+        let ox: Double = g.shoulderX
+        let oy: Double = g.shoulderY
+        for k in 0..<4 {
+            let d0: Double = 1.5 + Double(k) * 0.65
+            let a: Double = 0.85 - Double(k) * 0.16
+            strokeLine(&ctx, v.sx(ox + dx * d0), v.sy(oy + dy * d0), v.sx(ox + dx * (d0 + 0.3)), v.sy(oy + dy * (d0 + 0.3)), Color(hex: 0xFFE080, alpha: a), 3)
+        }
+    }
+
     static func drawParticles(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
         for p in g.particles {
             if !v.visible(p.x, p.y, 1) { continue }
@@ -28567,6 +28529,7 @@ enum WorldRenderer {
             strokeRect(&ctx, v.rect(tx, ty, 1, 1), col, 2)
         }
         drawTargetMarker(&ctx, g, v)
+        drawStickAim(&ctx, g, v)
         let full: CGRect = mkRect(0, 0, W, H)
         let headY: Double = g.pb.y - g.pb.h * 0.9
         let headT: Tile = g.world.tile(Int(floor(g.pb.x)), Int(floor(headY)))
@@ -28926,6 +28889,104 @@ struct StickView: View {
     }
 }
 
+// MARK: - Combat stick
+
+/// The attack stick, on the right beside JUMP. Touch and hold to attack; with the thumb in the middle the
+/// game picks the target, and sliding it out aims by hand in any direction (what that means depends on
+/// the weapon: see Game.stickAim). Letting go stops. It has its own touch, so it works at the same time
+/// as the walking stick and the JUMP button, and releasing one never affects the others.
+struct CombatStickView: View {
+    let label: String
+    var radius: CGFloat = 68
+    @State var thumb: CGSize = CGSize.zero
+    @State var down: Bool = false
+    @State var manual: Bool = false
+    var box: CGFloat { return radius * 2 + 34 }
+
+    var body: some View {
+        ZStack {
+            Canvas { ctx, size in
+                CombatStickView.paint(&ctx, size, Double(radius), Double(thumb.width), Double(thumb.height), down, manual)
+            }
+            .frame(width: box, height: box)
+            if !down {
+                Text(label).font(.pixel(13)).foregroundColor(Color.white.opacity(0.85))
+            }
+        }
+        .frame(width: box, height: box)
+        .contentShape(Rectangle())
+        .gesture(stickGesture)
+    }
+
+    var stickGesture: some Gesture {
+        DragGesture(minimumDistance: 0, coordinateSpace: .local)
+            .onChanged { v in moved(v.location) }
+            .onEnded { _ in released() }
+    }
+
+    func moved(_ p: CGPoint) {
+        let r: Double = Double(radius)
+        let c: Double = Double(box) * 0.5
+        var dx: Double = Double(p.x) - c
+        var dy: Double = Double(p.y) - c
+        let len: Double = sqrt(dx * dx + dy * dy)
+        if len > r {
+            dx = dx / len * r
+            dy = dy / len * r
+        }
+        thumb = CGSize(width: CGFloat(dx), height: CGFloat(dy))
+        actState.stickAt(dx / r, dy / r)
+        down = true
+        manual = actState.manual
+    }
+
+    func released() {
+        thumb = CGSize.zero
+        down = false
+        manual = false
+        actState.stickReleased()
+    }
+
+    /// The dial: a ring with eight notches and the dead zone marked, an arrow toward the thumb while it
+    /// aims by hand, and the thumb itself (amber while attacking)
+    static func paint(_ ctx: inout GraphicsContext, _ size: CGSize, _ r: Double, _ tx: Double, _ ty: Double, _ down: Bool, _ manual: Bool) {
+        let cx: Double = Double(size.width) * 0.5
+        let cy: Double = Double(size.height) * 0.5
+        let ring: Color = down ? Color(hex: 0xFFC850, alpha: 0.75) : Color(hex: 0xE0B060, alpha: 0.45)
+        fillOval(&ctx, mkRect(cx - r, cy - r, r * 2.0, r * 2.0), Color(hex: 0x2A1A0C, alpha: 0.30))
+        ctx.stroke(Path(ellipseIn: mkRect(cx - r, cy - r, r * 2.0, r * 2.0)), with: .color(ring), lineWidth: 3)
+        let dz: Double = r * ActState.deadIn
+        ctx.stroke(Path(ellipseIn: mkRect(cx - dz, cy - dz, dz * 2.0, dz * 2.0)), with: .color(Color.white.opacity(0.22)), lineWidth: 2)
+        for k in 0..<8 {
+            let a: Double = Double(k) * Double.pi / 4.0
+            let c: Double = cos(a)
+            let s: Double = sin(a)
+            strokeLine(&ctx, cx + c * r * 0.80, cy + s * r * 0.80, cx + c * r * 0.95, cy + s * r * 0.95, Color.white.opacity(0.30), 2)
+        }
+        if manual {
+            let len: Double = sqrt(tx * tx + ty * ty)
+            if len > 1.0 {
+                let ux: Double = tx / len
+                let uy: Double = ty / len
+                let arrow: Color = Color(hex: 0xFFE080, alpha: 0.9)
+                strokeLine(&ctx, cx + ux * dz, cy + uy * dz, cx + ux * r * 0.78, cy + uy * r * 0.78, arrow, 4)
+                var head: Path = Path()
+                let bx: Double = cx + ux * r * 0.78
+                let by: Double = cy + uy * r * 0.78
+                head.move(to: mkPoint(cx + ux * r * 0.98, cy + uy * r * 0.98))
+                head.addLine(to: mkPoint(bx - uy * 9.0, by + ux * 9.0))
+                head.addLine(to: mkPoint(bx + uy * 9.0, by - ux * 9.0))
+                head.closeSubpath()
+                ctx.fill(head, with: .color(arrow))
+            }
+        }
+        let tr: Double = 29.0
+        let tc: Color = down ? Color(hex: 0xFFC850, alpha: 0.85) : Color.white.opacity(0.5)
+        fillOval(&ctx, mkRect(cx + tx - tr, cy + ty - tr, tr * 2.0, tr * 2.0), tc)
+        ctx.stroke(Path(ellipseIn: mkRect(cx + tx - tr, cy + ty - tr, tr * 2.0, tr * 2.0)), with: .color(Color.black.opacity(0.35)), lineWidth: 2)
+    }
+}
+
 // MARK: - Vehicle checklist
 
 struct VehicleHelpBox: View {
@@ -29145,12 +29206,14 @@ struct HUDView: View {
             }
             Spacer(minLength: 0)
             if game.settings.touchControls {
-                VStack(alignment: .trailing, spacing: 8) {
-                    if let next = game.nextWeaponSlot(), let st = game.inv.slots[next] {
-                        WeaponSwapButton(stack: st) { game.cycleWeapon() }
+                HStack(alignment: .bottom, spacing: 6) {
+                    VStack(alignment: .trailing, spacing: 8) {
+                        if let next = game.nextWeaponSlot(), let st = game.inv.slots[next] {
+                            WeaponSwapButton(stack: st) { game.cycleWeapon() }
+                        }
+                        HoldButton(label: "JUMP", size: 82, color: Color(hex: 0x4E8A3E)) { down in game.jumpHeld = down }
                     }
-                    HoldButton(label: game.useLabel, size: 76, color: Color(hex: 0xA06A2A)) { down in actState.held = down }
-                    HoldButton(label: "JUMP", size: 82, color: Color(hex: 0x4E8A3E)) { down in game.jumpHeld = down }
+                    CombatStickView(label: game.useLabel)
                 }
             }
         }
@@ -30840,7 +30903,7 @@ struct HelpView: View {
     let lines: [String] = [
         "Move with the left stick (or A/D). JUMP button (W/Space). Pull the stick down to drop through platforms.",
         "Touch the world to mine, attack, place or use the item in your hand. A blow goes where you touch: tap a foe (or near it) to hit it, tap above you to swing up. Hold to keep attacking a foe in reach.",
-        "The ATTACK button aims for you: it picks the nearest hostile creature (not the cow beside it), turns you to face it and keeps hitting while it is in reach. Yellow corners mark the foe you are fighting.",
+        "The round attack stick on the right: touch and hold to attack, and let go to stop. With your thumb in the middle it aims for you: it picks the nearest hostile creature (not the cow beside it), turns you to face it and keeps hitting while it is in reach. Slide your thumb out to aim yourself in any direction, up, down or diagonal: blades swing that way, bows and guns shoot that way, slings and thrown flasks land further the further you push, pickaxes dig the first block that way and blocks go against it. It works at the same time as the walking stick and JUMP.",
         "The ⇄ button (or Q) switches to the next weapon in your hotbar; from a tool it goes straight back to the weapon you used last.",
         "Hotbar: tap a slot. BAG opens your inventory, armor and crafting. Hold a slot to split a stack.",
         "Craft a workbench, then a furnace. Near the top you find coal, copper, saltpeter and (in some lands) tin; iron and silver lie deeper, gold, diamond and mythril deepest. Amethyst geodes are rare.",
@@ -30929,7 +30992,7 @@ struct KeyInput: ViewModifier {
         case "d": game.keyR = isDown
         case "w": game.jumpHeld = isDown
         case "s": game.downHeld = isDown
-        case "f": actState.held = isDown
+        case "f": if isDown { actState.held = true } else { actState.stickReleased() }
         case "e":
             if isDown {
                 if game.showInventory {
@@ -30965,7 +31028,6 @@ final class LoopClock: @unchecked Sendable {
     var last: Double = 0
     var skip: Bool = false
     var pending: Double = 0
-    var fpsT: Double = 0
     var fpsN: Int = 0
 }
 
@@ -31166,7 +31228,7 @@ struct RootView: View {
             SettingsStore.save(settings)
             if g.mode == .hardcore && g.hardcoreOver { SaveStore.delete(g.slot) }
         }
-        actState.held = false
+        actState.stickReleased()
         game = nil
     }
 }

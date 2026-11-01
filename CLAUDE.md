@@ -17,14 +17,14 @@ compiles and runs headless on Linux. If `/opt/pixelrealm` is missing, run `tools
 - `tools/run-tests.sh [suite ...]`: builds and runs suites from `tools/tests`, four at a time (all
   of them take several minutes). Pass only the suites you touched while iterating, and run them all
   before committing. Full output is in `/tmp/pixelrealm-build/<suite>/out.log`.
-- `tools/shots.sh power|weather [folder]`: PNG screenshots from the game's own renderer.
+- `tools/shots.sh power|weather|sky|cloudsheet|stick [folder]`: PNG screenshots from the game's own renderer (`sky`: clouds by day, dusk, night and storm; `cloudsheet`: every cloud template; `stick`: the combat stick's dial).
 - `tools/bench.sh`: chunk generation, painting, lighting and tick timings (debug build; compare
   with `GAME_SRC=<old file> tools/bench.sh`).
 
 Suites: `tests`, `round2`, `p2` (general gameplay), `portal`, `boat`, `veh` (vehicles), `combat`,
-`mines`, `weather`, `nightai` (night spawning and monster AI), `power` (Sparkworks), `snd` (sound
+`mines`, `weather`, `nightai` (night spawning and monster AI), `stick` (the combat stick), `power` (Sparkworks), `snd` (sound
 effects ≤ 1.2 s, thunder ≤ 3.2 s), `oldsave` (saves from an older version still load; uses
-`tools/fixtures`), and `det` and `det2` (world generation fingerprints).
+`tools/fixtures`), and `det` and `det2` (world generation fingerprints for generator versions 1 to 4).
 
 What the stand-ins can't tell you:
 - They only declare the SwiftUI and AVFoundation API the game uses. If you use a new API, add it to
@@ -43,7 +43,9 @@ What the stand-ins can't tell you:
   like) only get new cases appended at the end. Never reorder or remove cases. New `SaveData`
   fields are optional; new `Settings` fields are decoded with `decodeIfPresent` and a default.
 - **World generation is frozen for existing worlds.** `det` and `det2` must pass unchanged. Changes
-  to generation go behind a new generator version.
+  to generation go behind a new generator version. Version 5 (current) has no villages; versions 1 to 4
+  still generate them (`WorldGen.hasVillages`) so saved worlds keep matching, but nothing in the game
+  uses villagers, trades or village goals any more (`MobKind.villager` stays only for saved numbering).
 - **A new tile needs:** an appended case, a `Tile.makeDef` entry, 8x8 art in `customTileRows`, and,
   as relevant, `needsSupport`, `toolClass`, `isInteractive`/`interact`, and the exclusions in
   `creativeItems` for on/off variants.
@@ -67,6 +69,17 @@ chunks, `set`), `p11_light`, `p12_phys`, `p13a_mobdefs` (MobKind, MobDef, spawn 
 (`WorldRenderer.draw` sets the draw order), `u03_hud`, `u04_panels`, `u05_menu`, `u06_root`.
 
 ## Systems in brief
+
+- **Sky.** `drawSky` paints gradient, stars, sun and moon, then the clouds (`drawClouds`), all behind
+  the terrain. There are no background hills. Clouds are `CloudField.layers` (four layers: far, middle,
+  near, storm deck), each a row of cells holding nothing, a cloud or a formation; the templates are
+  generated once in `CloudArt` (five size classes) and drawn as cached images. Weather sets how many
+  cells fill (`wxHere.cloud`) and how dark they are.
+- **Attack control.** `CombatStickView` (right side of the HUD) feeds `actState` (`stickAt`,
+  `stickReleased`); `applyActButton` runs every frame before `tick`. Inside the dead zone the game
+  auto-aims as before; past it `stickAim` turns the direction into an aim point per item kind. The
+  walking stick, JUMP and the attack stick each have their own `DragGesture`, so they work together;
+  `releaseAllInput` clears all of them when a panel covers the controls.
 
 - **Weather.** One `WeatherSim` for the world. `weatherAt(x, y)` gives a `LocalWeather`, and
   weather devices update in `updateWeatherDevices`.

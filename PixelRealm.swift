@@ -370,23 +370,54 @@ enum Tile: UInt8, CaseIterable, Codable {
     case lever, pushButton, pressurePlate, pulseTimer, repeater, inverter, logicGate
     case motionSensor, daySensor, weatherSensor, itemSensor, proximitySensor
     case gateClosed, gateOpen, lampOff, lampOn, arcTrap, autoDrill, conveyor, collector, autoCrafter, sumpPump, signalLight
+    /// reserved for blocks from mods (appended): what each one is depends on the mods the world uses
+    /// (see ModRuntime); each world remembers which block has which number
+    case mod00, mod01, mod02, mod03, mod04, mod05, mod06, mod07, mod08, mod09, mod10, mod11, mod12, mod13, mod14, mod15, mod16, mod17, mod18, mod19, mod20, mod21, mod22, mod23, mod24, mod25, mod26, mod27, mod28, mod29, mod30, mod31, mod32, mod33, mod34, mod35, mod36, mod37, mod38, mod39, mod40, mod41, mod42, mod43, mod44, mod45, mod46, mod47, mod48, mod49, mod50, mod51, mod52, mod53, mod54, mod55, mod56, mod57, mod58, mod59, mod60, mod61, mod62, mod63
 
-    static let defTable: [TileDef] = Tile.allCases.map { Tile.makeDef($0) }
-    static let solidTable: [Bool] = Tile.allCases.map { Tile.makeDef($0).solid }
-    static let opaqueTable: [Bool] = Tile.allCases.map { Tile.makeDef($0).opaque }
-    static let lightTable: [Int] = Tile.allCases.map { Tile.makeDef($0).light }
-    static let liquidTable: [Bool] = Tile.allCases.map { Tile.makeDef($0).liquid }
-    static let hurtTable: [Bool] = Tile.allCases.map { Tile.makeDef($0).hurt }
-    static let platformTable: [Bool] = Tile.allCases.map { Tile.makeDef($0).platform }
-    static let plantTable: [Bool] = Tile.allCases.map { Tile.makeDef($0).plant }
-    static let hardTable: [Double] = Tile.allCases.map { Tile.makeDef($0).hard }
-    static let tierTable: [Int] = Tile.allCases.map { Tile.makeDef($0).tier }
+    // the tables are built once; the reserved mod tiles are rewritten when a world's mods are switched
+    // on (see `patch`), the game's own tiles never change
+    static var defTable: [TileDef] = Tile.allCases.map { Tile.makeDef($0) }
+    static var solidTable: [Bool] = Tile.allCases.map { Tile.makeDef($0).solid }
+    static var opaqueTable: [Bool] = Tile.allCases.map { Tile.makeDef($0).opaque }
+    static var lightTable: [Int] = Tile.allCases.map { Tile.makeDef($0).light }
+    static var liquidTable: [Bool] = Tile.allCases.map { Tile.makeDef($0).liquid }
+    static var hurtTable: [Bool] = Tile.allCases.map { Tile.makeDef($0).hurt }
+    static var platformTable: [Bool] = Tile.allCases.map { Tile.makeDef($0).platform }
+    static var plantTable: [Bool] = Tile.allCases.map { Tile.makeDef($0).plant }
+    static var hardTable: [Double] = Tile.allCases.map { Tile.makeDef($0).hard }
+    static var tierTable: [Int] = Tile.allCases.map { Tile.makeDef($0).tier }
     /// things can rest on or hang from these (solid tiles, plus tree trunks, which have no collision)
-    static let supportTable: [Bool] = Tile.allCases.map { Tile.makeDef($0).solid || isLogTile($0) }
+    static var supportTable: [Bool] = Tile.allCases.map { Tile.makeDef($0).solid || isLogTile($0) }
     /// rain, hail and lightning stop at these (anything solid, glass, platforms, leaves, water)
-    static let rainStopTable: [Bool] = Tile.allCases.map { Tile.makeDef($0).solid || Tile.makeDef($0).platform || Tile.makeDef($0).liquid || isLeafTile($0) }
+    static var rainStopTable: [Bool] = Tile.allCases.map { Tile.makeDef($0).solid || Tile.makeDef($0).platform || Tile.makeDef($0).liquid || isLeafTile($0) }
     static let deviceTable: [Bool] = Tile.allCases.map { isWeatherDevice($0) }
     static let powerTable: [Bool] = Tile.allCases.map { powerRole($0) != .none }
+    /// the tool that mines each reserved mod tile at full speed
+    static var modToolTable: [ToolType] = [ToolType](repeating: .pickaxe, count: ModLimits.blockSlots)
+    /// the first tile number reserved for mods
+    static let modBase: UInt8 = Tile.mod00.rawValue
+
+    /// a tile reserved for a mod block
+    var isMod: Bool { return rawValue >= Tile.modBase }
+
+    /// Rewrites one reserved mod tile in every table
+    static func patch(_ t: Tile, _ d: TileDef, tool: ToolType) {
+        let i: Int = Int(t.rawValue)
+        if !t.isMod || i >= defTable.count { return }
+        defTable[i] = d
+        solidTable[i] = d.solid
+        opaqueTable[i] = d.opaque
+        lightTable[i] = d.light
+        liquidTable[i] = false
+        hurtTable[i] = d.hurt
+        platformTable[i] = d.platform
+        plantTable[i] = false
+        hardTable[i] = d.hard
+        tierTable[i] = d.tier
+        supportTable[i] = d.solid
+        rainStopTable[i] = d.solid || d.platform
+        modToolTable[i - Int(modBase)] = tool
+    }
 
     var idx: Int { return i8(rawValue) }
     var def: TileDef { return Tile.defTable[i8(rawValue)] }
@@ -685,6 +716,9 @@ enum Tile: UInt8, CaseIterable, Codable {
             return TileDef(name: "Sump Pump", hard: 1.4, tier: 1, style: .custom, colors: [0x3B7BE0])
         case .signalLight:
             return TileDef(name: "Pulse Indicator", hard: 0.4, solid: false, opaque: false, style: .custom, colors: [0x30E0D0])
+        default:
+            // the tiles reserved for mods, until a world's mods give them a meaning (see ModRuntime)
+            return TileDef(name: "Unused Mod Block", hard: 9999, style: .custom, colors: [0xFF00FF, 0x200020, 0xFF00FF, 0x200020, 0xFF00FF], noDrop: true)
         }
     }
 }
@@ -968,6 +1002,10 @@ func customTileRows(_ t: Tile) -> ([String], [Character: UInt32])? {
 }
 
 func tileBuf(_ t: Tile) -> PixelBuf {
+    if t.isMod {
+        let i: Int = Int(t.rawValue - Tile.modBase)
+        return ModRuntime.shared.slotArt[i] ?? missingTileBuf()
+    }
     var b = PixelBuf(w: 8, h: 8)
     let d: TileDef = t.def
     if d.style == .custom {
@@ -1609,6 +1647,8 @@ enum Item: Hashable, Codable {
     case sling
     /// one of a kind, found and never made
     case relic(Relic)
+    /// appended: an item from a player's mod ("mod:id"); see ModRuntime
+    case custom(String)
 
     /// Order used by inventory sorting: gear first, then building blocks, materials and the rest
     var sortGroup: Int {
@@ -1625,6 +1665,7 @@ enum Item: Hashable, Codable {
         case .block: return 8
         case .wall: return 9
         case .mat: return 10
+        case .custom(let k): return ModRuntime.shared.item(k)?.sortGroup ?? 10
         }
     }
 
@@ -1671,6 +1712,7 @@ enum Item: Hashable, Codable {
         case .block(let t): return [t.solid ? "Building block" : "Placeable", t.light > 0 ? "Gives light" : (t.hardness >= 99 ? "Unbreakable" : String(format: "Hardness %.1f", t.hardness))]
         case .wall: return ["Background wall"]
         case .mat(let m): return [m.use]
+        case .custom(let k): return ModRuntime.shared.item(k)?.infoLines ?? ["From a mod that is not installed", "Kept safe until the mod is back"]
         }
     }
 
@@ -1723,11 +1765,13 @@ enum Item: Hashable, Codable {
         case .part(let p): return p.name
         case .gadget(let g): return g.name
         case .wall(let k): return wallName(k)
+        case .custom(let k): return ModRuntime.shared.item(k)?.def.name ?? "Missing item"
         }
     }
 
     var maxStack: Int {
         switch self {
+        case .custom(let k): return ModRuntime.shared.item(k)?.def.stack ?? 99
         case .block, .mat, .food, .ammo, .wall: return 99
         case .part: return 20
         case .gadget(let g): return g == .bomb ? 30 : (g == .fireFlask ? 20 : (g == .waterFlask ? 10 : ((g == .powerCable || g == .pulseWire || g == .pulseWireB) ? 250 : 1)))
@@ -1737,6 +1781,7 @@ enum Item: Hashable, Codable {
 
     var isWeapon: Bool {
         switch self {
+        case .custom(let k): return ModRuntime.shared.item(k)?.def.kind.isWeapon ?? false
         case .sword, .spear, .hammer, .knife, .club, .relic, .bow, .gun, .sling: return true
         case .gadget(let g): return g == .bomb || g == .fireFlask
         default: return false
@@ -1746,6 +1791,7 @@ enum Item: Hashable, Codable {
     /// a hand-held melee weapon (tools are not, though they can still hit)
     var isMeleeWeapon: Bool {
         switch self {
+        case .custom(let k): return ModRuntime.shared.item(k)?.def.kind == .melee
         case .sword, .spear, .hammer, .knife, .club, .relic: return true
         default: return false
         }
@@ -1753,6 +1799,7 @@ enum Item: Hashable, Codable {
 
     var isRanged: Bool {
         switch self {
+        case .custom(let k): return ModRuntime.shared.item(k)?.def.kind.isRanged ?? false
         case .bow, .gun, .sling: return true
         case .gadget(let g): return g == .bomb || g == .fireFlask
         default: return false
@@ -1792,6 +1839,8 @@ enum Item: Hashable, Codable {
             return MeleeProfile(damage: d, cooldown: k == .axe ? 0.55 : 0.5, reach: 2.4, halfArc: 0.8, style: .slash, knock: 5, swingTime: 0.25, trail: 0xE0E0E0)
         case .gun, .bow, .sling:
             return MeleeProfile(damage: 2.0, cooldown: 0.4, reach: 1.9, halfArc: 0.7, style: .bash, knock: 4, swingTime: 0.22, trail: 0xD0D0D0)
+        case .custom(let k):
+            return ModRuntime.shared.item(k)?.melee ?? Item.bareHands
         default:
             return Item.bareHands
         }
@@ -2314,8 +2363,18 @@ func itemBuf(_ it: Item) -> PixelBuf {
     case .mat(let m): return iconMat(m)
     case .food(let f): return iconFood(f)
     case .wall(let k): return wallIcon(k)
+    case .custom(let k): return ModRuntime.shared.item(k)?.icon ?? missingItemBuf()
     default: return iconMisc(it)
     }
+}
+
+/// The icon of an item whose mod is missing: a question mark on magenta
+func missingItemBuf() -> PixelBuf {
+    let rows: [String] = [".mmmmmm.", "mmkkkkmm", "mkmmmmkm", "mmmmmkmm", "mmmmkmmm", "mmmkmmmm", "mmmmmmmm", ".mmkmmm."]
+    var b: PixelBuf = bufFromRows(rows, ["m": 0xE040E0, "k": 0x200020])
+    b = padBuf(b)
+    b.outline(0x101010)
+    return b
 }
 
 // ===== p04_recipes =====
@@ -2366,8 +2425,11 @@ enum RecipeCat: Int, CaseIterable {
     case weather
     /// appended: Sparkworks power, pulses and machines
     case power
+    /// appended: recipes from mods
+    case mods
     var name: String {
         switch self {
+        case .mods: return "Mods"
         case .power: return "Power"
         case .weather: return "Weather"
         case .basic: return "Basics"
@@ -2395,6 +2457,8 @@ struct Recipe: Identifiable {
     let cost: [CostLine]
     let station: Station
     let cat: RecipeCat
+    /// a mod block that must be nearby instead of a game station (mod recipes only)
+    var modStation: Tile? = nil
 }
 
 func tierMaterial(_ t: Tier) -> Item {
@@ -2417,7 +2481,10 @@ func armorMaterial(_ t: Tier) -> Item {
 }
 
 enum RecipeBook {
-    static let all: [Recipe] = RecipeBook.build()
+    /// the game's own recipes
+    static let base: [Recipe] = RecipeBook.build()
+    /// what the crafting screens show: the game's recipes, then those of the world's mods
+    static var all: [Recipe] = RecipeBook.base
 
     static func build() -> [Recipe] {
         var list: [Recipe] = []
@@ -2766,6 +2833,7 @@ struct Inventory: Codable {
         var d: Double = 0
         for s in armor {
             if let st = s, case .armor(let slot, let tier) = st.item { d += tier.defense * slot.weight }
+            if let st = s, case .custom(let k) = st.item, let r = ModRuntime.shared.item(k), r.def.kind == .armor { d += r.def.defense }
         }
         return d
     }
@@ -3513,6 +3581,7 @@ func creatureArt(_ k: MobKind, _ v: Int) -> ([PixelBuf], CreatureAnim) {
     case .sentinel: a.cycle = [0, 1]; return (spriteCrystalSentinel(), a)
     case .mimic: return (spriteMimic(), a)
     case .warden: return (spriteHollowWarden(), a)
+    case .custom: return creatureArt(.zombie, 0)
     }
 }
 
@@ -9668,6 +9737,8 @@ struct Projectile {
     var trail: Int = 0
     /// knockback on hit (0: the kind's usual push)
     var knock: Double = 0
+    /// a shot from a mod (index into ModRuntime.shots; -1 for the game's own shots)
+    var mod: Int = -1
     var angle: Double { return atan2(vy, vx) }
 }
 
@@ -9717,6 +9788,8 @@ enum MobKind: Int, Codable, CaseIterable {
     case bearBoss, rex
     /// appended, so saved creature kinds keep their numbers
     case crawler, golem, archer, sentinel, mimic, warden
+    /// a creature from a player's mod (which one: `Mob.cslot`, see ModRuntime)
+    case custom
 
     /// wild hunters that roam by day as well: they have their own small number in the spawner, so
     /// they never use up the night's monsters
@@ -9794,6 +9867,7 @@ func makeMobDef(_ k: MobKind) -> MobDef {
     case .sentinel: return MobDef(name: "Crystal Sentinel", w: 1.4, h: 2.0, hp: 320, speed: 3.0, dmg: 12, behavior: .boss, flying: true, aggro: 30, hostile: true)
     case .mimic: return MobDef(name: "Mimic", w: 1.0, h: 0.95, hp: 90, speed: 3.2, dmg: 13, behavior: .hostile, aggro: 16, jump: 12, hostile: true)
     case .warden: return MobDef(name: "The Hollow Warden", w: 3.0, h: 4.6, hp: 2200, speed: 2.6, dmg: 26, behavior: .boss, flying: true, aggro: 60, hostile: true)
+    case .custom: return MobDef(name: "Custom Creature", w: 0.8, h: 1.6, hp: 20, speed: 2, dmg: 4, behavior: .hostile, hostile: true)
     }
 }
 
@@ -9852,6 +9926,9 @@ func mobDrops(_ k: MobKind, _ rng: inout RNG, _ sheared: Bool) -> [Stack] {
     case .warden:
         add(.mat(.umbralHeart), 1, 1, 1.0); add(.mat(.voidBar), 6, 10, 1.0); add(.mat(.diamond), 4, 8, 1.0)
         add(.mat(.emberBar), 4, 8, 1.0); add(.mat(.relicFragment), 3, 3, 1.0)
+    case .custom:
+        // a custom creature's drops come from its mod (see dropModLoot)
+        break
     }
     return out
 }
@@ -10008,6 +10085,8 @@ final class Mob {
     /// came out at night to look for the player; how long it has been far away and forgotten
     var hunter: Bool = false
     var farT: Double = 0
+    /// a custom creature's slot in ModRuntime.mobs (-1 for the game's own creatures)
+    var cslot: Int = -1
     static let turnDur: Double = 0.14
     static let atkDur: Double = 0.28
 
@@ -10025,7 +10104,10 @@ final class Mob {
         self.t1 = Double.random(in: 0.5...3.0)
     }
 
-    var def: MobDef { return mobDef(kind) }
+    var def: MobDef {
+        if kind == .custom, let r = ModRuntime.shared.mob(cslot) { return r.mdef }
+        return mobDef(kind)
+    }
     var x: Double { return b.x }
     var y: Double { return b.y }
     /// a boss or guardian kind (worked out once: this is checked for every creature every frame)
@@ -10909,6 +10991,14 @@ final class Game: ObservableObject, @unchecked Sendable {
     var playerHitStamps: [Int: Double] = [:]
     var playerBurn: Double = 0
     var playerBurnTick: Double = 0
+    /// the mods this world uses (see ModRuntime; nil for a world without mods)
+    var modInfo: ModWorldInfo? = nil
+    /// the id of the mod being tried out in a mod test world ("" in a real world)
+    var testMod: String = ""
+    /// effects from potions, food and armour (see PlayerEffects)
+    var effects: PlayerEffects = PlayerEffects()
+    /// a healing shrine rests between uses
+    var healerCD: Double = 0
     /// debug multipliers: damage the player deals / takes
     var dmgOutMult: Double = 1.0
     var dmgInMult: Double = 1.0
@@ -11092,6 +11182,7 @@ extension Game {
         updateInputEdges()
         updatePlayer(dt)
         updateUse(dt)
+        updateModPlay(dt)
         // a landed blow holds the creatures still for a frame or two (the player keeps moving), which
         // is what makes a hit feel like it connected
         let frozen: Bool = hitStopT > 0
@@ -11178,7 +11269,7 @@ extension Game {
             rideRex(r, ix, jumpPressed, dt)
             return
         }
-        var runMax: Double = 7.4 * speedMult * (wearing(.swiftBoots) ? 1.18 : 1.0) * wxSlow
+        var runMax: Double = 7.4 * speedMult * (wearing(.swiftBoots) ? 1.18 : 1.0) * wxSlow * (1.0 + effects.value(.speed) / 100.0)
         // heavy weapons commit you to the blow: slower on your feet while it lasts
         if swingT > 0 || strikeT > 0, let it = heldItem, it.isMeleeWeapon { runMax *= it.melee.moveScale }
         if ix != 0 {
@@ -11261,7 +11352,8 @@ extension Game {
         if pb.onGround { coyote = 0.11 } else { coyote -= dt }
         if jumpPressed { jumpBuf = 0.13 } else { jumpBuf -= dt }
         if jumpBuf > 0 && coyote > 0 && !swimming {
-            pb.vy = -15.9
+            // a jump boost raises the jump's height by its percentage
+            pb.vy = -15.9 * sqrt(1.0 + effects.value(.jump) / 100.0)
             coyote = 0
             jumpBuf = 0
             pb.onGround = false
@@ -11353,8 +11445,9 @@ extension Game {
         if mode == .creative || godMode { return }
         // spikes underfoot, cactus touched from the side (cactus is solid, so test a slightly wider box)
         if let t = world.boxHurts(pb.left + 0.05, pb.top + 0.1, pb.right - 0.05, pb.y - 0.02) ?? world.boxHurts(pb.left - 0.04, pb.top + 0.2, pb.right + 0.04, pb.y - 0.1) {
-            if t == .spikes || t == .cactus {
-                var info = DamageInfo(amount: t == .spikes ? 6 : 3, type: .hazard, source: .environment)
+            if t == .spikes || t == .cactus || t.isMod {
+                let dmg: Double = t.isMod ? (ModRuntime.shared.blockDef(t)?.power ?? 4) : (t == .spikes ? 6 : 3)
+                var info = DamageInfo(amount: dmg, type: .hazard, source: .environment)
                 info.originX = pb.x + Double(-facing)
                 info.knock = 5
                 _ = hurtPlayer(info)
@@ -11543,6 +11636,7 @@ extension Game {
     }
 
     func heldLightLevel() -> Int {
+        if let it = heldItem, case .custom(let k) = it, let r = ModRuntime.shared.item(k), r.def.light > 0 { return r.def.light }
         if let it = heldItem, case .block(let t) = it {
             let l: Int = t.light
             if l >= 9 { return l - 2 }
@@ -11558,6 +11652,7 @@ extension Game {
         let pcy: Int = Int(floor(pb.y - pb.h * 0.6))
         var hl: Int = heldLightLevel()
         hl = max(hl, wearing(.headlamp) ? 11 : 5)
+        hl = max(hl, Int(effects.value(.glow)))
         dyn.append((pcx, pcy, hl))
         for m in mobs {
             var lv: Int = 0
@@ -11573,6 +11668,10 @@ extension Game {
             }
             if m.burn > 0 { lv = max(lv, 6) }
             if lv > 0 { dyn.append((Int(floor(m.b.x)), Int(floor(m.b.y - m.b.h * 0.5)), lv)) }
+        }
+        for p in projectiles where p.mod >= 0 && p.mod < ModRuntime.shared.shots.count {
+            let gl: Int = ModRuntime.shared.shots[p.mod].glow
+            if gl > 0 { dyn.append((Int(floor(p.x)), Int(floor(p.y)), gl)) }
         }
         for p in projectiles where p.kind == .fireball || p.kind == .bomb {
             // fireballs glow; a bomb's lit fuse gives a small light
@@ -11821,6 +11920,10 @@ extension Game {
         if holdingWireSpool { return false }
         if case .gadget(.probe)? = heldItem { return t.isPower || world.wireAt(tx, ty) != 0 }
         if t.isPower { return true }
+        if t.isMod {
+            guard let b = ModRuntime.shared.blockDef(t) else { return true }
+            if b.function != .none && b.function != .bounce && b.function != .trap { return true }
+        }
         switch t {
         case .chest, .workbench, .furnace, .campfire, .portalOff, .doorClosed, .doorOpen, .anvil, .tinkerBench, .riftForge: return true
         case .weatherStation, .dopplerStation, .stormSiren, .lightningRod, .windTurbine, .rainBarrel, .rainCistern, .weatherVane, .heater, .shutterClosed, .shutterOpen: return true
@@ -11854,6 +11957,7 @@ extension Game {
             usePowerDevice(tx, ty, t)
             return
         }
+        if t.isMod && interactModBlock(tx, ty, t) { return }
         switch t {
         case .chest:
             if tryMimic(tx, ty) { return }
@@ -12138,6 +12242,9 @@ extension Game {
         switch it {
         case .armor(let slot, _): return slot.rawValue == i
         case .gear: return i >= Inventory.firstGearSlot && i < inv.armor.count
+        case .custom(let k):
+            guard let r = ModRuntime.shared.item(k), r.def.kind == .armor else { return false }
+            return r.def.slot == i
         default: return false
         }
     }
@@ -12171,6 +12278,9 @@ extension Game {
                 if inv.armor[k] == nil && free < 0 { free = k }
             }
             if free >= 0 { target = free }
+        case .custom(let k):
+            guard let r = ModRuntime.shared.item(k), r.def.kind == .armor else { return }
+            target = clampI(r.def.slot, 0, 2)
         default: return
         }
         if target < 0 || target >= inv.armor.count { return }
@@ -12240,6 +12350,8 @@ extension Game {
         for dy in -4...3 {
             for dx in -5...5 {
                 let t: Tile = world.tile(px + dx, py + dy)
+                // a mod block that works as this station
+                if t.isMod, let b = ModRuntime.shared.blockDef(t), b.function == .station, b.station == s.rawValue { return true }
                 switch s {
                 case .bench: if t == .workbench { return true }
                 case .furnace: if t == .furnace { return true }
@@ -12255,14 +12367,14 @@ extension Game {
     }
 
     func canCraft(_ r: Recipe) -> Bool {
-        if !stationAvailable(r.station) { return false }
+        if !recipeStationOK(r) { return false }
         if !inv.canAfford(r.cost) { return false }
         return inv.canFit(r.out, r.outCount)
     }
 
     func craft(_ r: Recipe) {
         if !canCraft(r) {
-            if !stationAvailable(r.station) { say("Needs a " + r.station.name + " nearby.", 2.0) }
+            if !recipeStationOK(r) { say("Needs a " + recipeStationName(r) + " nearby.", 2.0) }
             return
         }
         for c in r.cost { _ = inv.remove(c.item, c.n) }
@@ -12278,36 +12390,9 @@ extension Game {
 
     // MARK: creative palette
 
+    /// Everything the creative palette offers: the game's items, then those of the world's mods
     func creativeItems() -> [Item] {
-        var out: [Item] = []
-        for t in Tile.allCases {
-            switch t {
-            case .air, .water, .lava, .bedrock, .portalFrame, .portalOff, .portalOn, .wheat1, .wheat2, .carrot1, .carrot2, .doorOpen,
-                 .logBlock, .jungleLogBlock, .palmLogBlock, .birchLogBlock, .shutterOpen, .lampOn, .gateOpen: continue
-            default: out.append(.block(t))
-            }
-        }
-        for tier in Tier.allCases {
-            for k in ToolType.allCases { out.append(.tool(k, tier)) }
-            out.append(.sword(tier))
-            out.append(.spear(tier))
-            out.append(.hammer(tier))
-            if tier != .wood { out.append(.knife(tier)) }
-            for s in ArmorSlot.allCases { out.append(.armor(s, tier)) }
-        }
-        for g in Gear.allCases { out.append(.gear(g)) }
-        out.append(.bow)
-        out.append(.sling)
-        for c in ClubKind.allCases { out.append(.club(c)) }
-        for r in Relic.allCases { out.append(.relic(r)) }
-        for gt in GunType.allCases { out.append(.gun(gt)) }
-        for a in AmmoType.allCases { out.append(.ammo(a)) }
-        for g in Gadget.allCases { out.append(.gadget(g)) }
-        for k in wallKinds { out.append(.wall(k)) }
-        for p in PartType.allCases { out.append(.part(p)) }
-        for f in Food.allCases { out.append(.food(f)) }
-        for m in Mat.allCases { out.append(.mat(m)) }
-        return out
+        return allGameItems() + ModRuntime.shared.paletteItems()
     }
 
     func creativeGive(_ it: Item) {
@@ -12318,8 +12403,43 @@ extension Game {
 
     func gunLoad(_ it: Item) -> Int {
         if case .gun(let g) = it { return g.magazine }
+        if case .custom(let k) = it, let r = ModRuntime.shared.item(k), r.def.kind == .gun { return r.def.magazine }
         return 0
     }
+}
+
+/// Every item of the game itself (no mod content), in palette order
+func allGameItems() -> [Item] {
+    var out: [Item] = []
+    for t in Tile.allCases {
+        if t.isMod { continue }
+        switch t {
+        case .air, .water, .lava, .bedrock, .portalFrame, .portalOff, .portalOn, .wheat1, .wheat2, .carrot1, .carrot2, .doorOpen,
+             .logBlock, .jungleLogBlock, .palmLogBlock, .birchLogBlock, .shutterOpen, .lampOn, .gateOpen: continue
+        default: out.append(.block(t))
+        }
+    }
+    for tier in Tier.allCases {
+        for k in ToolType.allCases { out.append(.tool(k, tier)) }
+        out.append(.sword(tier))
+        out.append(.spear(tier))
+        out.append(.hammer(tier))
+        if tier != .wood { out.append(.knife(tier)) }
+        for s in ArmorSlot.allCases { out.append(.armor(s, tier)) }
+    }
+    for g in Gear.allCases { out.append(.gear(g)) }
+    out.append(.bow)
+    out.append(.sling)
+    for c in ClubKind.allCases { out.append(.club(c)) }
+    for r in Relic.allCases { out.append(.relic(r)) }
+    for gt in GunType.allCases { out.append(.gun(gt)) }
+    for a in AmmoType.allCases { out.append(.ammo(a)) }
+    for g in Gadget.allCases { out.append(.gadget(g)) }
+    for k in wallKinds { out.append(.wall(k)) }
+    for p in PartType.allCases { out.append(.part(p)) }
+    for f in Food.allCases { out.append(.food(f)) }
+    for m in Mat.allCases { out.append(.mat(m)) }
+    return out
 }
 
 // ===== p14d_tools =====
@@ -12327,6 +12447,7 @@ extension Game {
 // MARK: - Item use: mining, placing, melee, ranged weapons, eating, farming
 
 func toolClass(_ t: Tile) -> ToolType {
+    if t.isMod { return Tile.modToolTable[Int(t.rawValue - Tile.modBase)] }
     switch t {
     case .log, .jungleLog, .palmLog, .logBlock, .jungleLogBlock, .palmLogBlock, .planks, .workbench, .chest, .platform, .leaves, .jungleLeaves, .cactus, .hay, .reed, .lantern, .torch, .ladder, .tinkerBench,
          .birchLog, .birchLogBlock, .birchLeaves, .pineLeaves, .weatherStation, .rainBarrel, .shutterClosed, .shutterOpen:
@@ -12422,6 +12543,9 @@ extension Game {
         if case .bow? = held {
             handleBow(dt, pressed, released)
             return
+        } else if case .custom(let k)? = held, let r = ModRuntime.shared.item(k), r.def.kind == .bow {
+            handleModBow(r, dt, pressed, released)
+            return
         } else if bowCharge > 0 {
             bowCharge = 0
         }
@@ -12444,6 +12568,7 @@ extension Game {
         case .wall(let k): usePlaceWall(k)
         case .armor, .gear:
             if pressed { quickEquip(sel); say("Equipped.", 1.0) }
+        case .custom(let k): useModItem(k, dt, pressed)
         default: break
         }
     }
@@ -12542,7 +12667,7 @@ extension Game {
 
     // MARK: mining & breaking
 
-    func mineStep(_ tx: Int, _ ty: Int, _ kind: ToolType?, _ tier: Tier?, _ dt: Double) {
+    func mineStep(_ tx: Int, _ ty: Int, _ kind: ToolType?, _ tier: Tier?, _ dt: Double, speed toolSpeed: Double? = nil) {
         let t: Tile = world.tile(tx, ty)
         if t == .air && mineWall(tx, ty, kind, tier, dt) { return }
         if t == .air || t.liquid {
@@ -12568,11 +12693,13 @@ extension Game {
         }
         let cls: ToolType = toolClass(t)
         if def.tier > 0 && !isCreative {
-            let pt: Int = (kind == .pickaxe) ? (tier?.rawValue ?? 0) : 0
+            // a tier asks for a strong enough tool of the block's own kind (a pickaxe for the game's ores)
+            let pt: Int = (kind == cls) ? (tier?.rawValue ?? 0) : 0
             if pt < def.tier {
                 mining = false
                 if useCD <= 0 {
-                    say(kind == .pickaxe ? "This needs a stronger pickaxe." : "You need a pickaxe for that.", 1.5)
+                    let tn: String = cls.name.lowercased()
+                    say(kind == cls ? "This needs a stronger " + tn + "." : "You need a " + tn + " for that.", 1.5)
                     useCD = 0.8
                     swingT = 0.2
                     swingDir = aimFacing()
@@ -12587,7 +12714,7 @@ extension Game {
         }
         mining = true
         var speed: Double = 1.0
-        if let k = kind, let tr = tier { speed = tr.mineSpeed * (k == cls ? 1.0 : 0.35) }
+        if let k = kind, let tr = tier { speed = (toolSpeed ?? tr.mineSpeed) * (k == cls ? 1.0 : 0.35) }
         if isCreative { speed = 1000 }
         mineNeed = max(0.05, def.hard * 1.5)
         mineP += dt * speed
@@ -12610,6 +12737,14 @@ extension Game {
     }
 
     func tileDropStacks(_ t: Tile, _ x: Int, _ y: Int) -> [Stack] {
+        if t.isMod, let st = ModRuntime.shared.blockDrops(t) {
+            var mod: [Stack] = st
+            // a custom storage block spills what it held
+            if ModRuntime.shared.blockDef(t)?.function == .storage, world.chests[world.chestKey(x, y)] != nil {
+                mod.append(contentsOf: world.removeChest(x, y))
+            }
+            return mod
+        }
         var out: [Stack] = []
         let r: Double = Double.random(in: 0...1)
         switch t {
@@ -12764,6 +12899,7 @@ extension Game {
         // plants / crops need special support handled in canPlaceAt through needsSupport
         world.set(tx, ty, placed)
         if t == .chest { world.setChestItems(tx, ty, []) }
+        if placed.isMod, ModRuntime.shared.blockDef(placed)?.function == .storage { world.setChestItems(tx, ty, []) }
         // parts that point a way face the way the player does
         if powerDirectional(placed), let d = world.powerDev(tx, ty) { d.dir = facing >= 0 ? 0 : 2 }
         if !isCreative { inv.removeAt(sel, 1) }
@@ -12959,12 +13095,18 @@ extension Game {
                 inv.slots[sel] = st
                 if g.isBoltThrower { sfx(.tap, 0.5) }
                 bumpHUD()
+            } else if let st = inv.slots[sel], case .custom(let k) = st.item, let r = ModRuntime.shared.item(k), r.def.kind == .gun {
+                finishModReload(r)
             }
             reloadSlot = -1
         }
     }
 
     func startReload() {
+        if let st = heldStack, case .custom(let k) = st.item, let r = ModRuntime.shared.item(k), r.def.kind == .gun {
+            startModReload(r, st)
+            return
+        }
         guard let st = heldStack, case .gun(let g) = st.item, let a = g.ammo else { return }
         if reloadT > 0 || st.extra >= g.magazine { return }
         if !isCreative && inv.total(.ammo(a)) <= 0 {
@@ -14084,6 +14226,10 @@ extension Game {
     }
 
     func updateMob(_ m: Mob, _ dt: Double) {
+        if m.kind == .custom {
+            updateCustomMob(m, dt)
+            return
+        }
         let d: MobDef = m.def
         if m.kind == .bearBoss || m.kind == .rex {
             updateBossMob(m, dt)
@@ -14105,6 +14251,9 @@ extension Game {
         var engaged: Bool = near && !peaceful
         if m.kind.thinks { engaged = think(m, dt, dist, dyP) }
         switch m.kind {
+        case .custom:
+            // run by updateCustomMob (never reaches here)
+            stepMob(m, dt)
         case .pig, .cow, .sheep, .villager:  // (villagers are retired and never appear)
             if m.t2 > 0 {
                 m.t2 -= dt
@@ -15026,6 +15175,7 @@ extension Game {
     func stepProjectile(_ p: inout Projectile, _ dt: Double) -> Bool {
         p.life -= dt
         if p.life <= 0 {
+            if p.mod >= 0 { modShotLanded(p, p.x, p.y, mob: nil, player: false) }
             if p.kind == .bomb { explode(p.x, p.y, radius: 3.4, power: p.dmg, source: p.source, breakBlocks: true) }
             if p.kind == .flask { burstFlask(p.x, p.y, p.source) }
             return false
@@ -15069,6 +15219,14 @@ extension Game {
                 if p.kind == .fireball { info.type = .fire }
                 if let m = target.mob {
                     if applyMobDamage(m, info) {
+                        if p.mod >= 0 {
+                            let s: ModProjectile? = p.mod < ModRuntime.shared.shots.count ? ModRuntime.shared.shots[p.mod] : nil
+                            if let sh = s, sh.explode > 0 {
+                                modShotLanded(p, hx, hy, mob: m, player: false)
+                                return false
+                            }
+                            if let sh = s, sh.burn > 0 { m.burn = max(m.burn, sh.burn) }
+                        }
                         if p.kind == .fireball { m.burn = max(m.burn, 2.5) }
                         spawnParticles(hx, hy, p.kind == .fireball ? 0xFF8030 : 0xE8E0D0, 3, 2.5, 0.25, 8)
                         if p.source.kind == .player {
@@ -15081,6 +15239,10 @@ extension Game {
                     p.lastHit = m.id
                 } else {
                     _ = hurtPlayer(info)
+                    if p.mod >= 0 {
+                        modShotLanded(p, hx, hy, mob: nil, player: true)
+                        return false
+                    }
                     if p.kind == .fireball { playerBurn = max(playerBurn, 1.5); spawnParticles(hx, hy, 0xFF8030, 8, 4.0, 0.4, 6) }
                 }
                 if p.pierce > 0 && target.mob != nil {
@@ -15094,6 +15256,10 @@ extension Game {
         if wallT <= 1.0 {
             let hx: Double = p.x + (nx - p.x) * wallT
             let hy: Double = p.y + (ny - p.y) * wallT
+            if p.mod >= 0 {
+                modShotLanded(p, hx, hy, mob: nil, player: false)
+                return false
+            }
             switch p.kind {
             case .flask:
                 burstFlask(hx, hy, p.source)
@@ -15581,7 +15747,7 @@ extension Game {
         var amount: Double = info.amount * damageResist(m.kind, info.type)
         if info.heavy && m.kind == .golem { amount *= 1.9 }
         if info.source.kind == .player {
-            amount *= dmgOutMult
+            amount *= dmgOutMult * (1.0 + effects.value(.strength) / 100.0)
             if wearing(.wardenSigil) { amount *= 1.2 }
             if isUndead(m.kind) && wearing(.silverCharm) { amount *= 1.25 }
         }
@@ -15605,8 +15771,10 @@ extension Game {
             playerHitStamps[info.key] = clock
             if playerHitStamps.count > 24 { playerHitStamps = playerHitStamps.filter { clock - $0.value < 4.0 } }
         }
+        if effects.value(.fireproof) > 0 && (info.type == .fire || info.type == .lava) { return false }
         let before: Double = hp
         var ward: Double = wearing(.wardenSigil) ? 0.85 : 1.0
+        ward *= 1.0 - clampD(effects.value(.resistance), 0, 90) / 100.0
         if info.source.kind == .mob && wearing(.silverCharm), let src = mobs.first(where: { $0.id == info.source.id }), isUndead(src.kind) { ward *= 0.75 }
         damagePlayer(info.amount * dmgInMult * ward, from: info.originX, knock: info.knock, ignoreArmor: info.type.bypassesArmor)
         return hp < before
@@ -15678,6 +15846,7 @@ extension Game {
                     let t: Tile = world.tile(tx + dx, ty + dy)
                     if t == .air || t.liquid || t.hardness > 2.7 || Tile.tierTable[t.idx] > 4 { continue }
                     if t == .chest || t == .portalOff || t == .portalOn || t == .portalFrame { continue }
+                    if t.isMod && (ModRuntime.shared.blockDef(t)?.blastProof ?? true) { continue }
                     breakTile(tx + dx, ty + dy, false, dropChance: 0.35)
                 }
             }
@@ -15740,9 +15909,10 @@ extension Game {
         // apply damage on a 0.6 s timer anyway)
         if !def.flying && m.hazardT <= 0 && (frameNo &+ m.id) & 3 == 0 {
             if let t = world.boxHurts(x0 + 0.05, m.b.y - 0.6, x1 - 0.05, m.b.y + 0.05) ?? world.boxHurts(x0 - 0.02, m.b.top + 0.1, x1 + 0.02, m.b.y - 0.1) {
-                if t == .spikes || t == .cactus {
+                if t == .spikes || t == .cactus || t.isMod {
                     m.hazardT = 0.6
-                    var info = DamageInfo(amount: t == .spikes ? 5 : 2, type: .hazard, source: .environment)
+                    let dmg: Double = t.isMod ? (ModRuntime.shared.blockDef(t)?.power ?? 4) : (t == .spikes ? 5 : 2)
+                    var info = DamageInfo(amount: dmg, type: .hazard, source: .environment)
                     info.originX = m.b.x - Double(m.dir)
                     info.knock = 3.0
                     applyMobDamage(m, info)
@@ -17734,6 +17904,8 @@ struct SaveData: Codable {
     var bodyCold: Double? = nil
     /// Sparkworks devices: settings and charge (nil in saves made before power)
     var power: [PowerDevSave]? = nil
+    /// the mods the world was made with and its custom blocks' tile numbers (nil: no mods)
+    var mods: ModWorldInfo? = nil
 }
 
 func mobToSave(_ m: Mob) -> MobSave {
@@ -17851,11 +18023,16 @@ extension Game {
         if let r = mounted { px = r.b.x; py = r.b.y }
         if let v = inVehicle { px = v.b.x; py = v.b.y - v.b.h }
         let meta = SaveMeta(slot: slot, name: worldName, mode: mode, infinite: gen.infinite, seed: seedValue, day: dayCount, playSeconds: playSeconds, dim: cur, genVersion: gen.genVersion, options: gen.options)
-        return SaveData(meta: meta, settings: settings, px: px, py: py, hp: max(1, hp), maxHP: maxHP, hunger: hunger, timeOfDay: timeOfDay, kills: kills, spawnX: spawnX, spawnY: spawnY, inv: inv, sel: sel, defeated: Array(defeated), gotMap: gotMap, portalOpened: portalOpened, chests: chestList, chunks: cs, vehicles: vs, pets: pets, rex: rs, nextID: nextID, journal: journal, weather: weather, bodyCold: bodyCold, power: powerSave())
+        // the world's mods: those it was made with (a missing one stays listed, so it is never forgotten)
+        var mi: ModWorldInfo? = modInfo
+        if ModRuntime.shared.active { mi = ModRuntime.shared.worldInfo() }
+        return SaveData(meta: meta, settings: settings, px: px, py: py, hp: max(1, hp), maxHP: maxHP, hunger: hunger, timeOfDay: timeOfDay, kills: kills, spawnX: spawnX, spawnY: spawnY, inv: inv, sel: sel, defeated: Array(defeated), gotMap: gotMap, portalOpened: portalOpened, chests: chestList, chunks: cs, vehicles: vs, pets: pets, rex: rs, nextID: nextID, journal: journal, weather: weather, bodyCold: bodyCold, power: powerSave(), mods: mi)
     }
 
     @discardableResult
     func saveNow() -> Bool {
+        // a mod test world is never saved (it would overwrite a real world's slot)
+        if !testMod.isEmpty || slot < 0 { return false }
         if mode == .hardcore && hardcoreOver { return false }
         if dead { return false }
         return SaveStore.write(makeSave())
@@ -17886,6 +18063,7 @@ extension Game {
         // it was saved)
         if let w = s.weather { g.weather = w }
         g.bodyCold = clampD(s.bodyCold ?? 0, 0, 1)
+        g.modInfo = s.mods
         g.gotMap = s.gotMap
         g.portalOpened = s.portalOpened
         g.nextID = max(g.nextID, s.nextID)
@@ -18510,6 +18688,7 @@ extension Game {
         var r: [Tier?] = [nil, nil, nil]
         for i in 0..<3 {
             if let s = inv.armor[i], case .armor(_, let t) = s.item { r[i] = t }
+            if let s = inv.armor[i], case .custom(let k) = s.item, let m = ModRuntime.shared.item(k), m.def.kind == .armor { r[i] = Tier(rawValue: m.def.look) }
         }
         return (r[0], r[1], r[2])
     }
@@ -19006,6 +19185,27 @@ final class SectionPainter: @unchecked Sendable {
         wallBufs = ws
         wallPx = wp
         wallCount = srcs.count
+    }
+
+    /// Redraws the art of the tiles reserved for mods (their meaning changes with a world's mods)
+    func refreshModTiles() {
+        let base: Int = Int(Tile.modBase)
+        for i in 0..<ModLimits.blockSlots {
+            let raw: Int = base + i
+            guard raw < tileBufs.count, let t = Tile(rawValue: UInt8(raw)) else { continue }
+            let b: PixelBuf = tileBuf(t)
+            tileBufs[raw] = b
+            var allClear: Bool = true
+            var allSolid: Bool = true
+            for k in 0..<64 {
+                let c: UInt32 = k < b.px.count ? b.px[k] : 0
+                tilePx[raw * 64 + k] = c
+                let a: UInt32 = c >> 24
+                if a != 0 { allClear = false }
+                if a != 255 { allSolid = false }
+            }
+            tileKind[raw] = allClear ? 0 : (allSolid ? 1 : 2)
+        }
     }
 
     /// Paints section `sy` (rows sy*16 ..< sy*16+16) of a chunk. Returns 128x128 premultiplied ARGB.
@@ -21595,6 +21795,3158 @@ struct PowerPanel: View {
     }
 }
 
+// ===== p28_mods =====
+
+// MARK: - Mods: what a player-made mod is made of
+//
+// A mod is one JSON file in Documents/PixelRealmMods: who made it and the custom blocks, items,
+// creatures, shots, recipes, loot tables, ores and structures it adds. Nothing in a mod is code: every
+// behaviour is picked from what the game already does, and every number is held to a safe range when
+// the mod is read. `ModRuntime` turns the mods a world uses into ordinary game content (tiles, items,
+// creatures, recipes), so custom content is mined, fought, crafted, drawn and saved by the same code
+// as everything else.
+
+extension KeyedDecodingContainer {
+    /// The value under a key, or `d` when the key is missing or holds something unreadable
+    func val<T: Decodable>(_ k: Key, _ d: T) -> T {
+        return (try? decodeIfPresent(T.self, forKey: k)) ?? d
+    }
+
+    /// A list where entries that cannot be read are left out (and counted in `skipped`)
+    func list<T: Decodable>(_ k: Key, _ skipped: inout Int) -> [T] {
+        guard let raw = try? decodeIfPresent([Lenient<T>].self, forKey: k) else { return [] }
+        var out: [T] = []
+        for e in raw {
+            if let v = e.value { out.append(v) } else { skipped += 1 }
+        }
+        return out
+    }
+}
+
+/// One entry of a list that may fail to decode without spoiling the rest of the list
+struct Lenient<T: Decodable>: Decodable {
+    let value: T?
+    init(from decoder: Decoder) throws {
+        value = try? T(from: decoder)
+    }
+}
+
+/// Limits that keep a mod from hurting the game: how much a mod may hold, how many custom creatures
+/// may be about at once, how big art and structures may be. Numbers inside content have their own
+/// ranges (see `ModRange`), wider when a mod is set to sandbox mode.
+enum ModLimits {
+    static let maxMods: Int = 12
+    /// custom blocks across every mod a world uses (each takes one of the reserved tile numbers)
+    static let blockSlots: Int = 64
+    static let maxBlocks: Int = 48
+    static let maxItems: Int = 120
+    static let maxMobs: Int = 40
+    static let maxShots: Int = 16
+    static let maxRecipes: Int = 240
+    static let maxLoot: Int = 40
+    static let maxOres: Int = 16
+    static let maxStructures: Int = 16
+    static let maxStructW: Int = 48
+    static let maxStructH: Int = 32
+    static let maxMobArt: Int = 32
+    static let maxFrames: Int = 4
+    /// custom creatures alive at once (spawning stops at this many; test spawning too)
+    static let maxActiveMobs: Int = 24
+    /// shots fired by custom creatures and weapons that may be in the air at once
+    static let maxShotsLive: Int = 80
+    static let maxEffects: Int = 4
+    static let maxAttacks: Int = 4
+    static let maxDrops: Int = 8
+    static let maxLootEntries: Int = 16
+    static let maxCost: Int = 6
+}
+
+/// The range a number may take: normal play and sandbox mode
+struct ModRange {
+    var lo: Double
+    var hi: Double
+    var sandboxHi: Double
+
+    func clamp(_ v: Double, _ sandbox: Bool) -> Double {
+        if !v.isFinite { return lo }
+        return clampD(v, lo, sandbox ? sandboxHi : hi)
+    }
+
+    static let hardness: ModRange = ModRange(lo: 0.05, hi: 40, sandboxHi: 200)
+    static let mobHP: ModRange = ModRange(lo: 1, hi: 400, sandboxHi: 20000)
+    static let bossHP: ModRange = ModRange(lo: 50, hi: 4000, sandboxHi: 20000)
+    static let damage: ModRange = ModRange(lo: 0, hi: 60, sandboxHi: 500)
+    static let mobSpeed: ModRange = ModRange(lo: 0, hi: 8, sandboxHi: 20)
+    static let detect: ModRange = ModRange(lo: 2, hi: 32, sandboxHi: 64)
+    static let reach: ModRange = ModRange(lo: 0.5, hi: 6, sandboxHi: 12)
+    static let cooldown: ModRange = ModRange(lo: 0.15, hi: 10, sandboxHi: 10)
+    static let knock: ModRange = ModRange(lo: 0, hi: 16, sandboxHi: 40)
+    static let scale: ModRange = ModRange(lo: 0.5, hi: 2.5, sandboxHi: 4)
+    static let shotSpeed: ModRange = ModRange(lo: 4, hi: 60, sandboxHi: 90)
+    static let gravity: ModRange = ModRange(lo: 0, hi: 40, sandboxHi: 60)
+    static let defense: ModRange = ModRange(lo: 0, hi: 12, sandboxHi: 40)
+    static let toolSpeed: ModRange = ModRange(lo: 0.3, hi: 30, sandboxHi: 200)
+    static let heal: ModRange = ModRange(lo: 0, hi: 40, sandboxHi: 400)
+    static let seconds: ModRange = ModRange(lo: 0, hi: 300, sandboxHi: 1800)
+    static let radius: ModRange = ModRange(lo: 0.5, hi: 6, sandboxHi: 12)
+    static let jump: ModRange = ModRange(lo: 0, hi: 20, sandboxHi: 30)
+}
+
+/// Pixel art stored in a mod: width, height and RGBA bytes, row by row (alpha 0 is see-through)
+struct ModPixels: Codable, Equatable {
+    var w: Int
+    var h: Int
+    var rgba: Data
+
+    init(w: Int, h: Int) {
+        self.w = max(1, w)
+        self.h = max(1, h)
+        self.rgba = Data(count: self.w * self.h * 4)
+    }
+
+    init(buf: PixelBuf) {
+        self.init(w: buf.w, h: buf.h)
+        for y in 0..<h {
+            for x in 0..<w { setARGB(x, y, buf.px[y * buf.w + x]) }
+        }
+    }
+
+    /// Big enough to draw on, small enough to stay cheap, and the bytes match the size
+    var valid: Bool { return w >= 1 && h >= 1 && w <= 64 && h <= 64 && rgba.count == w * h * 4 }
+
+    /// The pixel as 0xAARRGGBB (0 outside the picture)
+    func argb(_ x: Int, _ y: Int) -> UInt32 {
+        if x < 0 || y < 0 || x >= w || y >= h || !valid { return 0 }
+        let i: Int = (y * w + x) * 4
+        let a: UInt32 = UInt32(rgba[i + 3])
+        if a < 128 { return 0 }
+        let r: UInt32 = UInt32(rgba[i])
+        let g: UInt32 = UInt32(rgba[i + 1])
+        let b: UInt32 = UInt32(rgba[i + 2])
+        return 0xFF000000 | (r << 16) | (g << 8) | b
+    }
+
+    mutating func setARGB(_ x: Int, _ y: Int, _ c: UInt32) {
+        if x < 0 || y < 0 || x >= w || y >= h || !valid { return }
+        let i: Int = (y * w + x) * 4
+        let on: Bool = (c >> 24) != 0
+        rgba[i] = UInt8((c >> 16) & 0xFF)
+        rgba[i + 1] = UInt8((c >> 8) & 0xFF)
+        rgba[i + 2] = UInt8(c & 0xFF)
+        rgba[i + 3] = on ? 255 : 0
+    }
+
+    /// The picture as a game pixel buffer
+    func buf() -> PixelBuf {
+        var b = PixelBuf(w: w, h: h)
+        for y in 0..<h {
+            for x in 0..<w { b.px[y * w + x] = argb(x, y) }
+        }
+        return b
+    }
+
+    var isBlank: Bool {
+        if !valid { return true }
+        var i: Int = 3
+        while i < rgba.count {
+            if rgba[i] >= 128 { return false }
+            i += 4
+        }
+        return true
+    }
+
+    /// The same picture at another size (cropped or padded, anchored to the bottom centre)
+    func resized(_ nw: Int, _ nh: Int) -> ModPixels {
+        var o = ModPixels(w: nw, h: nh)
+        let ox: Int = (nw - w) / 2
+        let oy: Int = nh - h
+        for y in 0..<h {
+            for x in 0..<w { o.setARGB(x + ox, y + oy, argb(x, y)) }
+        }
+        return o
+    }
+}
+
+// MARK: blocks
+
+enum ModBlockCategory: Int, Codable, CaseIterable {
+    case terrain, building, decorative, storage, interactive, machine, light
+    var name: String {
+        switch self {
+        case .terrain: return "Terrain"
+        case .building: return "Building"
+        case .decorative: return "Decorative"
+        case .storage: return "Storage"
+        case .interactive: return "Interactive"
+        case .machine: return "Machine"
+        case .light: return "Light source"
+        }
+    }
+}
+
+enum ModCollision: Int, Codable, CaseIterable {
+    case solid, platform, none
+    var name: String {
+        switch self {
+        case .solid: return "Solid"
+        case .platform: return "Platform (stand on top)"
+        case .none: return "No collision"
+        }
+    }
+}
+
+/// What tapping (or touching) a block does. Doors and switches use a second tile number for their
+/// other state (open, lit).
+enum ModBlockFunction: Int, Codable, CaseIterable {
+    case none, storage, station, lamp, door, healer, bounce, trap, sign
+    var name: String {
+        switch self {
+        case .none: return "Nothing"
+        case .storage: return "Storage chest"
+        case .station: return "Crafting station"
+        case .lamp: return "Light switch"
+        case .door: return "Door"
+        case .healer: return "Healing shrine"
+        case .bounce: return "Jump pad"
+        case .trap: return "Damage trap"
+        case .sign: return "Sign"
+        }
+    }
+    var help: String {
+        switch self {
+        case .none: return "An ordinary block."
+        case .storage: return "Tap it to store 27 stacks, like a chest."
+        case .station: return "Recipes can need it nearby, or it works as a game station."
+        case .lamp: return "Tap it to turn its light on and off."
+        case .door: return "Tap it to open (walk through) and close."
+        case .healer: return "Tap it to heal (rests between uses)."
+        case .bounce: return "Throws you up when you land on it."
+        case .trap: return "Hurts anything that touches it."
+        case .sign: return "Tap it to read its text."
+        }
+    }
+    /// functions that need a second tile number for the other state
+    var paired: Bool { return self == .lamp || self == .door }
+}
+
+struct ModBlock: Codable, Identifiable, Equatable {
+    var id: String = ""
+    var name: String = "New Block"
+    var desc: String = ""
+    var category: ModBlockCategory = .building
+    /// 8 x 8 picture
+    var art: ModPixels = ModPixels(w: 8, h: 8)
+    /// seconds of mining with bare hands is about hardness x 1.5
+    var hardness: Double = 1.0
+    var unbreakable: Bool = false
+    /// the tool that mines it at full speed (ToolType number)
+    var tool: Int = 0
+    /// tool tier needed (0: anything can break it)
+    var tier: Int = 0
+    var collision: ModCollision = .solid
+    var transparent: Bool = false
+    /// light given off, 0 to 15
+    var light: Int = 0
+    var dropSelf: Bool = true
+    /// what it drops instead of itself (nil with dropSelf off: nothing)
+    var drop: Item? = nil
+    var dropCount: Int = 1
+    /// explosions leave it standing
+    var blastProof: Bool = false
+    var function: ModBlockFunction = .none
+    /// station number (Station) it works as; -1: its own station for this mod's recipes
+    var station: Int = -1
+    /// heal amount, jump pad strength or trap damage
+    var power: Double = 6
+    var text: String = ""
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = c.val(.id, "")
+        name = c.val(.name, "Block")
+        desc = c.val(.desc, "")
+        category = c.val(.category, .building)
+        art = c.val(.art, ModPixels(w: 8, h: 8))
+        hardness = c.val(.hardness, 1.0)
+        unbreakable = c.val(.unbreakable, false)
+        tool = c.val(.tool, 0)
+        tier = c.val(.tier, 0)
+        collision = c.val(.collision, .solid)
+        transparent = c.val(.transparent, false)
+        light = c.val(.light, 0)
+        dropSelf = c.val(.dropSelf, true)
+        drop = c.val(.drop, nil)
+        dropCount = c.val(.dropCount, 1)
+        blastProof = c.val(.blastProof, false)
+        function = c.val(.function, .none)
+        station = c.val(.station, -1)
+        power = c.val(.power, 6)
+        text = c.val(.text, "")
+    }
+}
+
+// MARK: items
+
+enum ModItemKind: Int, Codable, CaseIterable {
+    case material, food, consumable, tool, melee, bow, gun, thrown, magic, armor, ammo, special
+    var name: String {
+        switch self {
+        case .material: return "Material"
+        case .food: return "Food"
+        case .consumable: return "Potion / consumable"
+        case .tool: return "Tool"
+        case .melee: return "Melee weapon"
+        case .bow: return "Bow"
+        case .gun: return "Gun / crossbow"
+        case .thrown: return "Thrown weapon"
+        case .magic: return "Projectile weapon"
+        case .armor: return "Armor"
+        case .ammo: return "Ammunition"
+        case .special: return "Special item"
+        }
+    }
+    var help: String {
+        switch self {
+        case .material: return "A crafting ingredient."
+        case .food: return "Eaten from the hotbar: fills hunger and can give effects."
+        case .consumable: return "Used up for its effects (healing, speed, strength...)."
+        case .tool: return "Mines blocks: pickaxe, axe, shovel or hoe."
+        case .melee: return "Swung at foes, aimed with the attack stick."
+        case .bow: return "Hold to draw, release to shoot."
+        case .gun: return "Fires shots, reloads from ammunition."
+        case .thrown: return "Lobs a shot in an arc, further the further you aim."
+        case .magic: return "Fires its shot on every use (no ammunition)."
+        case .armor: return "Worn for defense (and an effect while worn)."
+        case .ammo: return "Used up by bows and guns."
+        case .special: return "Gives light when held, or an effect when used."
+        }
+    }
+    var isWeapon: Bool { return self == .melee || self == .bow || self == .gun || self == .thrown || self == .magic }
+    var isRanged: Bool { return self == .bow || self == .gun || self == .thrown || self == .magic }
+}
+
+/// Effects an item can give, taken from a fixed list (no custom code)
+enum ModEffectKind: Int, Codable, CaseIterable {
+    case heal, feed, speed, strength, resistance, regen, glow, jump, fireproof, cure
+    var name: String {
+        switch self {
+        case .heal: return "Restore health"
+        case .feed: return "Restore hunger"
+        case .speed: return "Speed boost"
+        case .strength: return "Strength boost"
+        case .resistance: return "Resistance"
+        case .regen: return "Regeneration"
+        case .glow: return "Glow (light)"
+        case .jump: return "Jump boost"
+        case .fireproof: return "Fire protection"
+        case .cure: return "Cure (fire, cold)"
+        }
+    }
+    /// lasts for a while (the others act at once)
+    var timed: Bool {
+        switch self {
+        case .heal, .feed, .cure: return false
+        default: return true
+        }
+    }
+    /// what the amount means, for the editor
+    var amountLabel: String {
+        switch self {
+        case .heal: return "Health"
+        case .feed: return "Hunger"
+        case .speed, .strength, .jump: return "Extra %"
+        case .resistance: return "Damage blocked %"
+        case .regen: return "Health per second"
+        case .glow: return "Light level"
+        case .fireproof, .cure: return "Strength"
+        }
+    }
+    var amountRange: ModRange {
+        switch self {
+        case .heal, .feed: return ModRange.heal
+        case .speed, .jump: return ModRange(lo: 0, hi: 60, sandboxHi: 200)
+        case .strength: return ModRange(lo: 0, hi: 100, sandboxHi: 400)
+        case .resistance: return ModRange(lo: 0, hi: 60, sandboxHi: 90)
+        case .regen: return ModRange(lo: 0, hi: 4, sandboxHi: 40)
+        case .glow: return ModRange(lo: 1, hi: 15, sandboxHi: 15)
+        case .fireproof, .cure: return ModRange(lo: 0, hi: 1, sandboxHi: 1)
+        }
+    }
+}
+
+struct ModEffect: Codable, Equatable {
+    var kind: ModEffectKind = .heal
+    var amount: Double = 6
+    var seconds: Double = 20
+
+    init() {}
+    init(_ k: ModEffectKind, _ a: Double, _ s: Double) {
+        kind = k
+        amount = a
+        seconds = s
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        kind = c.val(.kind, .heal)
+        amount = c.val(.amount, 6)
+        seconds = c.val(.seconds, 20)
+    }
+}
+
+struct ModItem: Codable, Identifiable, Equatable {
+    var id: String = ""
+    var name: String = "New Item"
+    var desc: String = ""
+    var kind: ModItemKind = .material
+    /// 16 x 16 picture; when blank, `baseIcon` (an item of the game) is drawn, tinted
+    var icon: ModPixels = ModPixels(w: 16, h: 16)
+    var baseIcon: Item? = nil
+    var tint: UInt32 = 0xFFFFFF
+    var tintAmt: Double = 0
+    var stack: Int = 99
+    /// 0 common, 1 uncommon, 2 rare, 3 epic, 4 legendary (the colour of its name)
+    var rarity: Int = 0
+    // food and consumables
+    var hunger: Double = 0
+    var effects: [ModEffect] = []
+    var useTime: Double = 0.6
+    // tools
+    var toolType: Int = 0
+    var toolTier: Int = 3
+    var toolSpeed: Double = 4
+    // melee (also how a tool swings)
+    var style: Int = 0
+    var damage: Double = 6
+    var cooldown: Double = 0.45
+    var reach: Double = 3
+    /// half the swing's angle (radians)
+    var arc: Double = 1.0
+    var knock: Double = 6
+    var maxHits: Int = 99
+    var heavy: Bool = false
+    var daze: Double = 0
+    var burn: Double = 0
+    var windup: Double = 0
+    var combo: Bool = false
+    var backstab: Double = 1
+    var undeadMult: Double = 1
+    var crit: Double = 0.1
+    var trail: UInt32 = 0xFFFFFF
+    // ranged
+    /// a shot of this mod (empty: the game shot `shot`)
+    var projectile: String = ""
+    var shot: Int = 0
+    var speed: Double = 30
+    var gravity: Double = 0
+    var pierce: Int = 0
+    /// shots per use, spread in a fan
+    var spread: Int = 1
+    var magazine: Int = 6
+    var reload: Double = 1.5
+    /// what each shot uses up (nil: nothing)
+    var ammo: Item? = nil
+    var needsPress: Bool = false
+    // armor
+    var slot: Int = 0
+    var defense: Double = 2
+    /// the game armour tier it is drawn as
+    var look: Int = 4
+    var wornEffect: ModEffect? = nil
+    // special
+    /// light it gives when held (0: none)
+    var light: Int = 0
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        var skip: Int = 0
+        id = c.val(.id, "")
+        name = c.val(.name, "Item")
+        desc = c.val(.desc, "")
+        kind = c.val(.kind, .material)
+        icon = c.val(.icon, ModPixels(w: 16, h: 16))
+        baseIcon = c.val(.baseIcon, nil)
+        tint = c.val(.tint, 0xFFFFFF)
+        tintAmt = c.val(.tintAmt, 0)
+        stack = c.val(.stack, 99)
+        rarity = c.val(.rarity, 0)
+        hunger = c.val(.hunger, 0)
+        effects = c.list(.effects, &skip)
+        useTime = c.val(.useTime, 0.6)
+        toolType = c.val(.toolType, 0)
+        toolTier = c.val(.toolTier, 3)
+        toolSpeed = c.val(.toolSpeed, 4)
+        style = c.val(.style, 0)
+        damage = c.val(.damage, 6)
+        cooldown = c.val(.cooldown, 0.45)
+        reach = c.val(.reach, 3)
+        arc = c.val(.arc, 1.0)
+        knock = c.val(.knock, 6)
+        maxHits = c.val(.maxHits, 99)
+        heavy = c.val(.heavy, false)
+        daze = c.val(.daze, 0)
+        burn = c.val(.burn, 0)
+        windup = c.val(.windup, 0)
+        combo = c.val(.combo, false)
+        backstab = c.val(.backstab, 1)
+        undeadMult = c.val(.undeadMult, 1)
+        crit = c.val(.crit, 0.1)
+        trail = c.val(.trail, 0xFFFFFF)
+        projectile = c.val(.projectile, "")
+        shot = c.val(.shot, 0)
+        speed = c.val(.speed, 30)
+        gravity = c.val(.gravity, 0)
+        pierce = c.val(.pierce, 0)
+        spread = c.val(.spread, 1)
+        magazine = c.val(.magazine, 6)
+        reload = c.val(.reload, 1.5)
+        ammo = c.val(.ammo, nil)
+        needsPress = c.val(.needsPress, false)
+        slot = c.val(.slot, 0)
+        defense = c.val(.defense, 2)
+        look = c.val(.look, 4)
+        wornEffect = c.val(.wornEffect, nil)
+        light = c.val(.light, 0)
+    }
+}
+
+// MARK: shots
+
+enum ModShotShape: Int, Codable, CaseIterable {
+    case orb, arrow, bolt, shard, rock
+    var name: String {
+        switch self {
+        case .orb: return "Orb"
+        case .arrow: return "Arrow"
+        case .bolt: return "Bolt"
+        case .shard: return "Shard"
+        case .rock: return "Rock"
+        }
+    }
+}
+
+/// A projectile of a mod: how it looks, how it flies and what it does when it lands
+struct ModProjectile: Codable, Identifiable, Equatable {
+    var id: String = ""
+    var name: String = "New Shot"
+    var shape: ModShotShape = .orb
+    var color: UInt32 = 0x8AF0FF
+    var size: Double = 0.3
+    var glow: Int = 6
+    var gravity: Double = 0
+    var pierce: Int = 0
+    var life: Double = 2
+    /// blast radius when it lands (0: no blast)
+    var explode: Double = 0
+    var breakBlocks: Bool = false
+    /// seconds of fire it sets on what it hits
+    var burn: Double = 0
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = c.val(.id, "")
+        name = c.val(.name, "Shot")
+        shape = c.val(.shape, .orb)
+        color = c.val(.color, 0x8AF0FF)
+        size = c.val(.size, 0.3)
+        glow = c.val(.glow, 6)
+        gravity = c.val(.gravity, 0)
+        pierce = c.val(.pierce, 0)
+        life = c.val(.life, 2)
+        explode = c.val(.explode, 0)
+        breakBlocks = c.val(.breakBlocks, false)
+        burn = c.val(.burn, 0)
+    }
+}
+
+// MARK: creatures
+
+enum ModMobCategory: Int, Codable, CaseIterable {
+    case passive, neutral, hostile, boss, flying, water
+    var name: String {
+        switch self {
+        case .passive: return "Passive animal"
+        case .neutral: return "Neutral creature"
+        case .hostile: return "Hostile enemy"
+        case .boss: return "Boss"
+        case .flying: return "Flying creature"
+        case .water: return "Water creature"
+        }
+    }
+    var help: String {
+        switch self {
+        case .passive: return "Never attacks; runs when hurt."
+        case .neutral: return "Leaves you alone until you hit it."
+        case .hostile: return "Hunts the player."
+        case .boss: return "A big fight with a health bar at the top of the screen."
+        case .flying: return "Flies freely."
+        case .water: return "Lives in water."
+        }
+    }
+}
+
+enum ModAttackKind: Int, Codable, CaseIterable {
+    case melee, charge, ranged, area, jump, stomp, multiHit
+    var name: String {
+        switch self {
+        case .melee: return "Melee"
+        case .charge: return "Charge"
+        case .ranged: return "Ranged shot"
+        case .area: return "Area burst"
+        case .jump: return "Jump attack"
+        case .stomp: return "Stomp"
+        case .multiHit: return "Multi-hit"
+        }
+    }
+    var help: String {
+        switch self {
+        case .melee: return "A blow at whatever is in front of it."
+        case .charge: return "Rushes forward, hurting what it runs into."
+        case .ranged: return "Fires shots at the target."
+        case .area: return "Hurts everything around it."
+        case .jump: return "Leaps at the target and lands on it."
+        case .stomp: return "Slams the ground: a shockwave along it."
+        case .multiHit: return "A flurry of quick blows."
+        }
+    }
+}
+
+enum ModAttackAim: Int, Codable, CaseIterable {
+    case forward, atTarget, around, down
+    var name: String {
+        switch self {
+        case .forward: return "Forward"
+        case .atTarget: return "At the target"
+        case .around: return "All around"
+        case .down: return "Downward"
+        }
+    }
+}
+
+struct ModAttack: Codable, Equatable {
+    var kind: ModAttackKind = .melee
+    var damage: Double = 6
+    var range: Double = 1.6
+    var cooldown: Double = 1.2
+    var aim: ModAttackAim = .forward
+    /// a shot of this mod (empty: the game shot `shot`)
+    var projectile: String = ""
+    var shot: Int = 2
+    var speed: Double = 16
+    var knock: Double = 6
+    var radius: Double = 2.5
+    var hits: Int = 3
+    /// the warning before the blow lands
+    var windup: Double = 0.3
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        kind = c.val(.kind, .melee)
+        damage = c.val(.damage, 6)
+        range = c.val(.range, 1.6)
+        cooldown = c.val(.cooldown, 1.2)
+        aim = c.val(.aim, .forward)
+        projectile = c.val(.projectile, "")
+        shot = c.val(.shot, 2)
+        speed = c.val(.speed, 16)
+        knock = c.val(.knock, 6)
+        radius = c.val(.radius, 2.5)
+        hits = c.val(.hits, 3)
+        windup = c.val(.windup, 0.3)
+    }
+}
+
+/// Behaviour switches; the game's creature AI (senses, chase, search, return) does the rest
+struct ModBehavior: Codable, Equatable {
+    var wander: Bool = true
+    var standStill: Bool = false
+    var patrol: Bool = false
+    var patrolRange: Double = 8
+    var followPlayer: Bool = false
+    var runAway: Bool = false
+    var chase: Bool = false
+    var attackPlayer: Bool = false
+    var attackMobs: Bool = false
+    var retaliate: Bool = true
+    var defendArea: Bool = false
+    var defendRadius: Double = 10
+    /// stays beside the nearest creature of this kind ("mod:id", or a game creature's name)
+    var guardKey: String = ""
+    var fly: Bool = false
+    var swim: Bool = false
+    var stayInBiome: Bool = false
+    var burnsInSun: Bool = false
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        wander = c.val(.wander, true)
+        standStill = c.val(.standStill, false)
+        patrol = c.val(.patrol, false)
+        patrolRange = c.val(.patrolRange, 8)
+        followPlayer = c.val(.followPlayer, false)
+        runAway = c.val(.runAway, false)
+        chase = c.val(.chase, false)
+        attackPlayer = c.val(.attackPlayer, false)
+        attackMobs = c.val(.attackMobs, false)
+        retaliate = c.val(.retaliate, true)
+        defendArea = c.val(.defendArea, false)
+        defendRadius = c.val(.defendRadius, 10)
+        guardKey = c.val(.guardKey, "")
+        fly = c.val(.fly, false)
+        swim = c.val(.swim, false)
+        stayInBiome = c.val(.stayInBiome, false)
+        burnsInSun = c.val(.burnsInSun, false)
+    }
+}
+
+enum ModSpawnPlace: Int, Codable, CaseIterable {
+    case surface, cave, ocean, umbral, sky
+    var name: String {
+        switch self {
+        case .surface: return "Surface"
+        case .cave: return "Caves"
+        case .ocean: return "Ocean"
+        case .umbral: return "Umbral Realm"
+        case .sky: return "In the sky"
+        }
+    }
+}
+
+struct ModSpawn: Codable, Equatable {
+    var enabled: Bool = true
+    var place: ModSpawnPlace = .surface
+    /// 0 any time, 1 by day, 2 at night
+    var when: Int = 0
+    /// Biome numbers (empty: every biome)
+    var biomes: [Int] = []
+    var minY: Int = 0
+    var maxY: Int = 560
+    /// how common it is next to the game's creatures (the zombie is 7)
+    var weight: Double = 3
+    var group: Int = 1
+    var maxNearby: Int = 4
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = c.val(.enabled, true)
+        place = c.val(.place, .surface)
+        when = c.val(.when, 0)
+        biomes = c.val(.biomes, [])
+        minY = c.val(.minY, 0)
+        maxY = c.val(.maxY, 560)
+        weight = c.val(.weight, 3)
+        group = c.val(.group, 1)
+        maxNearby = c.val(.maxNearby, 4)
+    }
+}
+
+struct ModDrop: Codable, Equatable {
+    var item: Item = .mat(.string)
+    var min: Int = 1
+    var max: Int = 1
+    var chance: Double = 0.5
+
+    init() {}
+    init(_ it: Item, _ lo: Int, _ hi: Int, _ p: Double) {
+        item = it
+        min = lo
+        max = hi
+        chance = p
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        item = c.val(.item, .mat(.string))
+        min = c.val(.min, 1)
+        max = c.val(.max, 1)
+        chance = c.val(.chance, 0.5)
+    }
+}
+
+struct ModMob: Codable, Identifiable, Equatable {
+    var id: String = ""
+    var name: String = "New Creature"
+    var desc: String = ""
+    var category: ModMobCategory = .hostile
+    /// the game creature its body (and hit box) starts from
+    var base: Int = MobKind.zombie.rawValue
+    /// draw `frames` instead of the recoloured base body
+    var customArt: Bool = false
+    /// up to 4 frames: standing, two walking, attacking
+    var frames: [ModPixels] = []
+    /// colour changes for the base body: hue turn (degrees), saturation and brightness, and a tint
+    var hue: Double = 0
+    var saturation: Double = 1
+    var brightness: Double = 1
+    var tint: UInt32 = 0xFFFFFF
+    var tintAmt: Double = 0
+    var scale: Double = 1
+    var hp: Double = 30
+    var damage: Double = 6
+    var speed: Double = 2
+    var detect: Double = 14
+    var jump: Double = 12
+    /// share of incoming damage shrugged off (0 ... 0.9)
+    var defense: Double = 0
+    var knockResist: Double = 0
+    var fireproof: Bool = false
+    var behavior: ModBehavior = ModBehavior()
+    var attacks: [ModAttack] = [ModAttack()]
+    var spawn: ModSpawn = ModSpawn()
+    var drops: [ModDrop] = []
+    /// a loot table of this mod, rolled as well as `drops`
+    var loot: String = ""
+    var glow: Int = 0
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        var skip: Int = 0
+        id = c.val(.id, "")
+        name = c.val(.name, "Creature")
+        desc = c.val(.desc, "")
+        category = c.val(.category, .hostile)
+        base = c.val(.base, MobKind.zombie.rawValue)
+        customArt = c.val(.customArt, false)
+        frames = c.list(.frames, &skip)
+        hue = c.val(.hue, 0)
+        saturation = c.val(.saturation, 1)
+        brightness = c.val(.brightness, 1)
+        tint = c.val(.tint, 0xFFFFFF)
+        tintAmt = c.val(.tintAmt, 0)
+        scale = c.val(.scale, 1)
+        hp = c.val(.hp, 30)
+        damage = c.val(.damage, 6)
+        speed = c.val(.speed, 2)
+        detect = c.val(.detect, 14)
+        jump = c.val(.jump, 12)
+        defense = c.val(.defense, 0)
+        knockResist = c.val(.knockResist, 0)
+        fireproof = c.val(.fireproof, false)
+        behavior = c.val(.behavior, ModBehavior())
+        attacks = c.list(.attacks, &skip)
+        spawn = c.val(.spawn, ModSpawn())
+        drops = c.list(.drops, &skip)
+        loot = c.val(.loot, "")
+        glow = c.val(.glow, 0)
+    }
+}
+
+// MARK: recipes, loot, ores, structures
+
+struct ModCost: Codable, Equatable {
+    var item: Item = .block(.planks)
+    var n: Int = 1
+
+    init() {}
+    init(_ it: Item, _ k: Int) {
+        item = it
+        n = k
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        item = c.val(.item, .block(.planks))
+        n = c.val(.n, 1)
+    }
+}
+
+struct ModRecipe: Codable, Identifiable, Equatable {
+    var id: String = ""
+    var out: Item = .block(.planks)
+    var count: Int = 1
+    var cost: [ModCost] = []
+    /// Station number; -1: near a block of this mod (`stationBlock`)
+    var station: Int = 0
+    var stationBlock: String = ""
+    /// crafting tab (RecipeCat number)
+    var cat: Int = RecipeCat.mods.rawValue
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        var skip: Int = 0
+        id = c.val(.id, "")
+        out = c.val(.out, .block(.planks))
+        count = c.val(.count, 1)
+        cost = c.list(.cost, &skip)
+        station = c.val(.station, 0)
+        stationBlock = c.val(.stationBlock, "")
+        cat = c.val(.cat, RecipeCat.mods.rawValue)
+    }
+}
+
+struct ModLootEntry: Codable, Equatable {
+    var item: Item = .mat(.coal)
+    var min: Int = 1
+    var max: Int = 1
+    /// 0 common, 1 uncommon, 2 rare, 3 very rare
+    var rarity: Int = 0
+    /// a weight of its own instead of the rarity's (0: use the rarity)
+    var weight: Double = 0
+
+    init() {}
+    init(_ it: Item, _ lo: Int, _ hi: Int, _ r: Int) {
+        item = it
+        min = lo
+        max = hi
+        rarity = r
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        item = c.val(.item, .mat(.coal))
+        min = c.val(.min, 1)
+        max = c.val(.max, 1)
+        rarity = c.val(.rarity, 0)
+        weight = c.val(.weight, 0)
+    }
+
+    static let rarityNames: [String] = ["Common", "Uncommon", "Rare", "Very rare"]
+    static let rarityWeights: [Double] = [60, 25, 10, 3]
+    static let rarityColors: [UInt32] = [0xE8E8E8, 0x6AD86A, 0x5AA8FF, 0xC070FF]
+
+    var effectiveWeight: Double {
+        if weight > 0 { return weight }
+        return ModLootEntry.rarityWeights[clampI(rarity, 0, 3)]
+    }
+}
+
+/// A weighted loot table: each roll picks one entry (or nothing) by weight
+struct ModLootTable: Codable, Identifiable, Equatable {
+    var id: String = ""
+    var name: String = "New Loot Table"
+    var rolls: Int = 2
+    /// weight of rolling nothing
+    var nothing: Double = 0
+    var entries: [ModLootEntry] = []
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        var skip: Int = 0
+        id = c.val(.id, "")
+        name = c.val(.name, "Loot")
+        rolls = c.val(.rolls, 2)
+        nothing = c.val(.nothing, 0)
+        entries = c.list(.entries, &skip)
+    }
+
+    var totalWeight: Double {
+        var t: Double = max(0, nothing)
+        for e in entries { t += max(0, e.effectiveWeight) }
+        return t
+    }
+
+    /// Chance (0...1) that one roll gives entry i
+    func chance(_ i: Int) -> Double {
+        let t: Double = totalWeight
+        if t <= 0 || i < 0 || i >= entries.count { return 0 }
+        return max(0, entries[i].effectiveWeight) / t
+    }
+}
+
+struct ModOre: Codable, Identifiable, Equatable {
+    var id: String = ""
+    var name: String = "New Ore"
+    /// a block of this mod
+    var block: String = ""
+    /// 0 overworld, 1 Umbral Realm
+    var dim: Int = 0
+    /// rows from the top of the world (the sea is at 120, the bottom at 559)
+    var minY: Int = 150
+    var maxY: Int = 330
+    /// veins in an average 16-wide stretch of ground
+    var veins: Double = 1.5
+    /// blocks in a vein
+    var size: Int = 6
+    /// 0 any rock, 1 stone, 2 slate and deep rock, 3 dirt and sand, 4 any natural ground
+    var host: Int = 0
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = c.val(.id, "")
+        name = c.val(.name, "Ore")
+        block = c.val(.block, "")
+        dim = c.val(.dim, 0)
+        minY = c.val(.minY, 150)
+        maxY = c.val(.maxY, 330)
+        veins = c.val(.veins, 1.5)
+        size = c.val(.size, 6)
+        host = c.val(.host, 0)
+    }
+
+    static let hostNames: [String] = ["Any rock", "Stone", "Slate and deep rock", "Dirt and sand", "Any natural ground"]
+}
+
+enum ModPlacement: Int, Codable, CaseIterable {
+    case surface, underground, sky
+    var name: String {
+        switch self {
+        case .surface: return "On the surface"
+        case .underground: return "Underground"
+        case .sky: return "Floating in the sky"
+        }
+    }
+}
+
+/// A structure captured from the world: its cells, where it may appear and how often
+struct ModStructure: Codable, Identifiable, Equatable {
+    var id: String = ""
+    var name: String = "New Structure"
+    var w: Int = 0
+    var h: Int = 0
+    /// row by row: -1 leaves the ground as it is, 0...255 a game tile, 1000 + k the custom block palette[k]
+    var cells: [Int] = []
+    /// custom blocks it uses ("mod:block")
+    var palette: [String] = []
+    var placement: ModPlacement = .surface
+    var minY: Int = 150
+    var maxY: Int = 400
+    var biomes: [Int] = []
+    /// chance that a possible site holds one
+    var chance: Double = 0.35
+    /// blocks between possible sites
+    var spacing: Int = 300
+    var dim: Int = 0
+    /// loot table of this mod for chests inside
+    var loot: String = ""
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = c.val(.id, "")
+        name = c.val(.name, "Structure")
+        w = c.val(.w, 0)
+        h = c.val(.h, 0)
+        cells = c.val(.cells, [])
+        palette = c.val(.palette, [])
+        placement = c.val(.placement, .surface)
+        minY = c.val(.minY, 150)
+        maxY = c.val(.maxY, 400)
+        biomes = c.val(.biomes, [])
+        chance = c.val(.chance, 0.35)
+        spacing = c.val(.spacing, 300)
+        dim = c.val(.dim, 0)
+        loot = c.val(.loot, "")
+    }
+
+    func cell(_ x: Int, _ y: Int) -> Int {
+        if x < 0 || y < 0 || x >= w || y >= h { return -1 }
+        let i: Int = y * w + x
+        return i < cells.count ? cells[i] : -1
+    }
+}
+
+// MARK: the mod
+
+struct ModPack: Codable, Identifiable, Equatable {
+    static let currentFormat: Int = 1
+    var format: Int = ModPack.currentFormat
+    var id: String = ""
+    var name: String = "My Mod"
+    var desc: String = ""
+    var author: String = ""
+    var version: String = "1.0"
+    var created: Double = 0
+    var edited: Double = 0
+    /// sandbox mode: wider limits on the numbers inside
+    var sandbox: Bool = false
+    var blocks: [ModBlock] = []
+    var items: [ModItem] = []
+    var mobs: [ModMob] = []
+    var projectiles: [ModProjectile] = []
+    var recipes: [ModRecipe] = []
+    var loot: [ModLootTable] = []
+    var ores: [ModOre] = []
+    var structures: [ModStructure] = []
+    /// entries left out because they could not be read (not saved)
+    var skipped: Int = 0
+
+    enum CodingKeys: String, CodingKey {
+        case format, id, name, desc, author, version, created, edited, sandbox
+        case blocks, items, mobs, projectiles, recipes, loot, ores, structures
+    }
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        var skip: Int = 0
+        format = c.val(.format, ModPack.currentFormat)
+        id = c.val(.id, "")
+        name = c.val(.name, "Mod")
+        desc = c.val(.desc, "")
+        author = c.val(.author, "")
+        version = c.val(.version, "1.0")
+        created = c.val(.created, 0)
+        edited = c.val(.edited, 0)
+        sandbox = c.val(.sandbox, false)
+        blocks = c.list(.blocks, &skip)
+        items = c.list(.items, &skip)
+        mobs = c.list(.mobs, &skip)
+        projectiles = c.list(.projectiles, &skip)
+        recipes = c.list(.recipes, &skip)
+        loot = c.list(.loot, &skip)
+        ores = c.list(.ores, &skip)
+        structures = c.list(.structures, &skip)
+        skipped = skip
+    }
+
+    /// The key other content uses for something of this mod
+    func key(_ contentID: String) -> String { return id + ":" + contentID }
+
+    var contentCount: Int {
+        return blocks.count + items.count + mobs.count + projectiles.count + recipes.count + loot.count + ores.count + structures.count
+    }
+
+    /// "3 creatures, 2 weapons, 5 blocks..." for the mod list
+    var summary: String {
+        var parts: [String] = []
+        func add(_ n: Int, _ one: String, _ many: String) {
+            if n > 0 { parts.append(String(n) + " " + (n == 1 ? one : many)) }
+        }
+        let weapons: Int = items.filter { $0.kind.isWeapon }.count
+        add(blocks.count, "block", "blocks")
+        add(items.count - weapons, "item", "items")
+        add(weapons, "weapon", "weapons")
+        add(mobs.count, "creature", "creatures")
+        add(recipes.count, "recipe", "recipes")
+        add(ores.count, "ore", "ores")
+        add(structures.count, "structure", "structures")
+        add(loot.count, "loot table", "loot tables")
+        add(projectiles.count, "shot", "shots")
+        return parts.isEmpty ? "Empty" : parts.joined(separator: ", ")
+    }
+
+    /// A content id not used yet ("b1", "b2"...)
+    func freshID(_ prefix: String) -> String {
+        var used: Set<String> = []
+        for b in blocks { used.insert(b.id) }
+        for i in items { used.insert(i.id) }
+        for m in mobs { used.insert(m.id) }
+        for p in projectiles { used.insert(p.id) }
+        for r in recipes { used.insert(r.id) }
+        for l in loot { used.insert(l.id) }
+        for o in ores { used.insert(o.id) }
+        for s in structures { used.insert(s.id) }
+        var n: Int = 1
+        while used.contains(prefix + String(n)) { n += 1 }
+        return prefix + String(n)
+    }
+}
+
+/// A new random mod id (lowercase letters and digits)
+func newModID() -> String {
+    let chars: [Character] = Array("abcdefghijkmnpqrstuvwxyz23456789")
+    var s: String = "m"
+    for _ in 0..<9 { s.append(chars[Int.random(in: 0..<chars.count)]) }
+    return s
+}
+
+/// The mod and content parts of a key ("m2k4x:b3" -> ("m2k4x", "b3"))
+func splitModKey(_ key: String) -> (String, String) {
+    guard let i = key.firstIndex(of: ":") else { return ("", key) }
+    let a: String = String(key[key.startIndex..<i])
+    let b: String = String(key[key.index(after: i)...])
+    return (a, b)
+}
+
+// MARK: - Mods on disk
+
+/// Which mods are switched on for new worlds, and the order they load in (later mods win when two
+/// change the same thing)
+struct ModIndex: Codable {
+    var order: [String] = []
+    var enabled: [String] = []
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        order = c.val(.order, [])
+        enabled = c.val(.enabled, [])
+    }
+}
+
+/// A mod file: the mod, or why it could not be read
+struct ModEntry: Identifiable {
+    var id: String
+    var pack: ModPack?
+    var error: String
+    var enabled: Bool
+}
+
+/// A mod packed for sharing: a header the importer checks, the mod, and a checksum of its content
+struct ModPackage: Codable {
+    var kind: String = "PixelRealmMod"
+    var format: Int = ModPack.currentFormat
+    var mod: ModPack
+    var check: Int = 0
+}
+
+/// A cheap, stable checksum (FNV-1a) of some bytes
+func modChecksum(_ d: Data) -> Int {
+    var h: UInt64 = 0xcbf29ce484222325
+    for b in d {
+        h ^= UInt64(b)
+        h = h &* 0x100000001b3
+    }
+    return Int(truncatingIfNeeded: h & 0x7FFF_FFFF_FFFF)
+}
+
+enum ModStore {
+    /// tests point this at a scratch folder
+    static var overrideDir: URL? = nil
+
+    static var dir: URL {
+        let fm = FileManager.default
+        if let o = overrideDir {
+            try? fm.createDirectory(at: o, withIntermediateDirectories: true)
+            return o
+        }
+        if let d = fm.urls(for: .documentDirectory, in: .userDomainMask).first {
+            let u = d.appendingPathComponent("PixelRealmMods", isDirectory: true)
+            try? fm.createDirectory(at: u, withIntermediateDirectories: true)
+            return u
+        }
+        return URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("PixelRealmMods", isDirectory: true)
+    }
+
+    /// shared mod packages are written here (and read from here to import)
+    static var packageDir: URL {
+        let u = dir.appendingPathComponent("Packages", isDirectory: true)
+        try? FileManager.default.createDirectory(at: u, withIntermediateDirectories: true)
+        return u
+    }
+
+    static func url(_ id: String) -> URL { return dir.appendingPathComponent(id + ".json") }
+    static var indexURL: URL { return dir.appendingPathComponent("index.json") }
+
+    static func loadIndex() -> ModIndex {
+        guard let d = try? Data(contentsOf: indexURL), let ix = try? JSONDecoder().decode(ModIndex.self, from: d) else { return ModIndex() }
+        return ix
+    }
+
+    static func saveIndex(_ ix: ModIndex) {
+        if let d = try? JSONEncoder().encode(ix) { try? d.write(to: indexURL, options: .atomic) }
+    }
+
+    /// Ids of every mod file in the folder
+    static func fileIDs() -> [String] {
+        let names: [String] = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+        var out: [String] = []
+        for n in names where n.hasSuffix(".json") && n != "index.json" {
+            out.append(String(n.dropLast(5)))
+        }
+        return out.sorted()
+    }
+
+    static func read(_ id: String) -> ModEntry {
+        let on: Bool = loadIndex().enabled.contains(id)
+        guard let d = try? Data(contentsOf: url(id)) else {
+            return ModEntry(id: id, pack: nil, error: "The file could not be opened.", enabled: on)
+        }
+        do {
+            var p: ModPack = try JSONDecoder().decode(ModPack.self, from: d)
+            if p.id.isEmpty { p.id = id }
+            if p.id != id {
+                // the file name is the mod's identity; a mismatch (a copied file) takes the file's name
+                p.id = id
+            }
+            return ModEntry(id: id, pack: p, error: "", enabled: on)
+        } catch {
+            return ModEntry(id: id, pack: nil, error: "This file is not a readable mod (it may be damaged).", enabled: on)
+        }
+    }
+
+    static func pack(_ id: String) -> ModPack? { return read(id).pack }
+
+    /// Every mod, in load order (mods not in the order yet come last, by name)
+    static func entries() -> [ModEntry] {
+        let ix: ModIndex = loadIndex()
+        let ids: [String] = fileIDs()
+        var out: [ModEntry] = []
+        var seen: Set<String> = []
+        for id in ix.order where ids.contains(id) && !seen.contains(id) {
+            out.append(read(id))
+            seen.insert(id)
+        }
+        var rest: [ModEntry] = []
+        for id in ids where !seen.contains(id) { rest.append(read(id)) }
+        rest.sort { ($0.pack?.name ?? $0.id) < ($1.pack?.name ?? $1.id) }
+        out.append(contentsOf: rest)
+        return out
+    }
+
+    @discardableResult
+    static func save(_ p0: ModPack) -> Bool {
+        var p: ModPack = p0
+        if p.id.isEmpty { p.id = newModID() }
+        let now: Double = Date().timeIntervalSince1970
+        if p.created == 0 { p.created = now }
+        p.edited = now
+        let enc = JSONEncoder()
+        guard let d = try? enc.encode(p) else { return false }
+        do {
+            try d.write(to: url(p.id), options: .atomic)
+        } catch {
+            return false
+        }
+        var ix: ModIndex = loadIndex()
+        if !ix.order.contains(p.id) {
+            ix.order.append(p.id)
+            saveIndex(ix)
+        }
+        return true
+    }
+
+    static func delete(_ id: String) {
+        try? FileManager.default.removeItem(at: url(id))
+        var ix: ModIndex = loadIndex()
+        ix.order.removeAll { $0 == id }
+        ix.enabled.removeAll { $0 == id }
+        saveIndex(ix)
+    }
+
+    /// A copy with a new identity (its content keeps the same ids, under the new mod)
+    static func duplicate(_ p: ModPack) -> ModPack? {
+        var c: ModPack = p
+        c.id = newModID()
+        c.name = p.name + " (copy)"
+        c.created = 0
+        // keys inside the copy that pointed at the original now point at the copy
+        c = rekey(c, from: p.id, to: c.id)
+        return save(c) ? pack(c.id) : nil
+    }
+
+    static func isEnabled(_ id: String) -> Bool { return loadIndex().enabled.contains(id) }
+
+    static func setEnabled(_ id: String, _ on: Bool) {
+        var ix: ModIndex = loadIndex()
+        ix.enabled.removeAll { $0 == id }
+        if on { ix.enabled.append(id) }
+        if !ix.order.contains(id) { ix.order.append(id) }
+        saveIndex(ix)
+    }
+
+    /// Moves a mod earlier (-1) or later (+1) in the load order
+    static func move(_ id: String, by delta: Int) {
+        var ix: ModIndex = loadIndex()
+        var order: [String] = entries().map { $0.id }
+        guard let i = order.firstIndex(of: id) else { return }
+        let j: Int = clampI(i + delta, 0, order.count - 1)
+        if i == j { return }
+        order.remove(at: i)
+        order.insert(id, at: j)
+        ix.order = order
+        saveIndex(ix)
+    }
+
+    /// The mods switched on for new worlds, readable ones only, in load order
+    static func enabledPacks() -> [ModPack] {
+        var out: [ModPack] = []
+        for e in entries() where e.enabled {
+            if let p = e.pack { out.append(p) }
+            if out.count >= ModLimits.maxMods { break }
+        }
+        return out
+    }
+
+    // MARK: sharing (local files only)
+
+    /// Writes the mod as a package file and returns where it went
+    static func exportPackage(_ p: ModPack) -> URL? {
+        guard let body = try? JSONEncoder().encode(p) else { return nil }
+        let pkg = ModPackage(mod: p, check: modChecksum(body))
+        guard let d = try? JSONEncoder().encode(pkg) else { return nil }
+        var safe: String = ""
+        for ch in p.name where ch.isLetter || ch.isNumber { safe.append(ch) }
+        if safe.isEmpty { safe = "Mod" }
+        let u: URL = packageDir.appendingPathComponent(safe + "-" + p.version + ".prmod")
+        do {
+            try d.write(to: u, options: .atomic)
+            return u
+        } catch {
+            return nil
+        }
+    }
+
+    /// Package files waiting in the packages folder
+    static func packageFiles() -> [URL] {
+        let names: [String] = (try? FileManager.default.contentsOfDirectory(atPath: packageDir.path)) ?? []
+        return names.filter { $0.hasSuffix(".prmod") }.sorted().map { packageDir.appendingPathComponent($0) }
+    }
+
+    /// Reads a package, checks it and installs the mod (as a copy when the id is already used).
+    /// Returns the installed mod, or why it was refused.
+    static func importPackage(_ data: Data) -> (ModPack?, String) {
+        guard let pkg = try? JSONDecoder().decode(ModPackage.self, from: data) else {
+            return (nil, "That file is not a Pixel Realm mod package.")
+        }
+        if pkg.kind != "PixelRealmMod" { return (nil, "That file is not a Pixel Realm mod package.") }
+        if pkg.format > ModPack.currentFormat { return (nil, "This mod was made with a newer version of the game.") }
+        var p: ModPack = pkg.mod
+        let report: ModReport = ModValidator.check(&p, known: ModCatalog.installed().keys)
+        if report.fatal { return (nil, "The mod is too damaged to use: " + (report.issues.first?.text ?? "")) }
+        let oldID: String = p.id
+        if p.id.isEmpty || !p.id.allSatisfy({ $0.isLetter || $0.isNumber }) || FileManager.default.fileExists(atPath: url(p.id).path) {
+            p.id = newModID()
+            p = rekey(p, from: oldID, to: p.id)
+            if FileManager.default.fileExists(atPath: url(oldID).path) { p.name += " (imported)" }
+        }
+        if !save(p) { return (nil, "The mod could not be saved.") }
+        return (pack(p.id), "Installed " + p.name + ".")
+    }
+
+    /// Points every key of mod `from` inside the mod at mod `to`
+    static func rekey(_ p0: ModPack, from: String, to: String) -> ModPack {
+        if from.isEmpty || from == to { return p0 }
+        var p: ModPack = p0
+        func fix(_ it: Item) -> Item {
+            if case .custom(let k) = it {
+                let s: (String, String) = splitModKey(k)
+                if s.0 == from { return .custom(to + ":" + s.1) }
+            }
+            return it
+        }
+        func fixKey(_ k: String) -> String {
+            let s: (String, String) = splitModKey(k)
+            return s.0 == from ? to + ":" + s.1 : k
+        }
+        for i in p.blocks.indices { if let d = p.blocks[i].drop { p.blocks[i].drop = fix(d) } }
+        for i in p.items.indices {
+            if let a = p.items[i].ammo { p.items[i].ammo = fix(a) }
+            if let b = p.items[i].baseIcon { p.items[i].baseIcon = fix(b) }
+        }
+        for i in p.mobs.indices {
+            for k in p.mobs[i].drops.indices { p.mobs[i].drops[k].item = fix(p.mobs[i].drops[k].item) }
+            p.mobs[i].behavior.guardKey = fixKey(p.mobs[i].behavior.guardKey)
+        }
+        for i in p.recipes.indices {
+            p.recipes[i].out = fix(p.recipes[i].out)
+            for k in p.recipes[i].cost.indices { p.recipes[i].cost[k].item = fix(p.recipes[i].cost[k].item) }
+        }
+        for i in p.loot.indices {
+            for k in p.loot[i].entries.indices { p.loot[i].entries[k].item = fix(p.loot[i].entries[k].item) }
+        }
+        for i in p.structures.indices { p.structures[i].palette = p.structures[i].palette.map { fixKey($0) } }
+        return p
+    }
+}
+
+// MARK: - Every installed mod's content, by key (for checks and the editor)
+
+struct ModCatalog {
+    /// key -> what it is ("block", "item", "mob", "shot", "loot")
+    var keys: [String: String] = [:]
+    var names: [String: String] = [:]
+    var packs: [ModPack] = []
+
+    static func build(_ packs: [ModPack]) -> ModCatalog {
+        var c = ModCatalog()
+        c.packs = packs
+        for p in packs {
+            for b in p.blocks { c.keys[p.key(b.id)] = "block"; c.names[p.key(b.id)] = b.name }
+            for i in p.items { c.keys[p.key(i.id)] = "item"; c.names[p.key(i.id)] = i.name }
+            for m in p.mobs { c.keys[p.key(m.id)] = "mob"; c.names[p.key(m.id)] = m.name }
+            for s in p.projectiles { c.keys[p.key(s.id)] = "shot"; c.names[p.key(s.id)] = s.name }
+            for l in p.loot { c.keys[p.key(l.id)] = "loot"; c.names[p.key(l.id)] = l.name }
+        }
+        return c
+    }
+
+    static func installed() -> ModCatalog {
+        var ps: [ModPack] = []
+        for e in ModStore.entries() { if let p = e.pack { ps.append(p) } }
+        return build(ps)
+    }
+
+    func block(_ key: String) -> ModBlock? {
+        let s: (String, String) = splitModKey(key)
+        for p in packs where p.id == s.0 { return p.blocks.first { $0.id == s.1 } }
+        return nil
+    }
+
+    func item(_ key: String) -> ModItem? {
+        let s: (String, String) = splitModKey(key)
+        for p in packs where p.id == s.0 { return p.items.first { $0.id == s.1 } }
+        return nil
+    }
+
+    func mob(_ key: String) -> ModMob? {
+        let s: (String, String) = splitModKey(key)
+        for p in packs where p.id == s.0 { return p.mobs.first { $0.id == s.1 } }
+        return nil
+    }
+}
+
+// MARK: - Checking a mod
+
+/// A problem found in a mod. Level 0 is a note, 1 a warning (the content still works, perhaps
+/// changed), 2 an error (that content is left out until it is fixed).
+struct ModIssue: Identifiable {
+    var id: Int
+    var level: Int
+    var mod: String
+    var place: String
+    var text: String
+}
+
+struct ModReport {
+    var issues: [ModIssue] = []
+    /// content ids of this mod left out because they cannot work
+    var disabled: Set<String> = []
+    /// the mod as a whole cannot be used
+    var fatal: Bool = false
+
+    var errors: Int { return issues.filter { $0.level >= 2 }.count }
+    var warnings: Int { return issues.filter { $0.level == 1 }.count }
+
+    mutating func add(_ level: Int, _ mod: String, _ place: String, _ text: String) {
+        issues.append(ModIssue(id: issues.count, level: level, mod: mod, place: place, text: text))
+    }
+}
+
+enum ModValidator {
+    /// Cleans a mod in place (numbers into their ranges, ids unique, sizes legal, broken references
+    /// removed where that is safe) and reports what was wrong. Content that cannot work at all is
+    /// listed in `disabled` and left out when the mod is used, so a mistake never stops the game.
+    /// `known` holds every key of every installed mod (for references to other mods).
+    static func check(_ p: inout ModPack, known: [String: String]) -> ModReport {
+        var r = ModReport()
+        let mn: String = p.name.isEmpty ? "Mod" : p.name
+        let sb: Bool = p.sandbox
+        if p.format > ModPack.currentFormat {
+            r.add(2, mn, "Mod", "Made with a newer version of the game.")
+            r.fatal = true
+            return r
+        }
+        if p.name.trimmingCharacters(in: .whitespaces).isEmpty { p.name = "Untitled Mod"; r.add(0, mn, "Mod", "It had no name.") }
+        if p.name.count > 40 { p.name = String(p.name.prefix(40)) }
+        if p.author.count > 40 { p.author = String(p.author.prefix(40)) }
+        if p.desc.count > 500 { p.desc = String(p.desc.prefix(500)) }
+        if p.version.isEmpty { p.version = "1.0" }
+        if p.version.count > 12 { p.version = String(p.version.prefix(12)) }
+        if p.skipped > 0 { r.add(1, mn, "Mod", String(p.skipped) + " damaged entries could not be read and were left out.") }
+        trim(&p.blocks, ModLimits.maxBlocks, "blocks", mn, &r)
+        trim(&p.items, ModLimits.maxItems, "items", mn, &r)
+        trim(&p.mobs, ModLimits.maxMobs, "creatures", mn, &r)
+        trim(&p.projectiles, ModLimits.maxShots, "shots", mn, &r)
+        trim(&p.recipes, ModLimits.maxRecipes, "recipes", mn, &r)
+        trim(&p.loot, ModLimits.maxLoot, "loot tables", mn, &r)
+        trim(&p.ores, ModLimits.maxOres, "ores", mn, &r)
+        trim(&p.structures, ModLimits.maxStructures, "structures", mn, &r)
+        uniqueIDs(&p, mn, &r)
+        // what this mod's own content is, by key
+        var own: [String: String] = [:]
+        for b in p.blocks { own[p.key(b.id)] = "block" }
+        for i in p.items { own[p.key(i.id)] = "item" }
+        for m in p.mobs { own[p.key(m.id)] = "mob" }
+        for s in p.projectiles { own[p.key(s.id)] = "shot" }
+        for l in p.loot { own[p.key(l.id)] = "loot" }
+        func exists(_ it: Item) -> Bool {
+            if case .custom(let k) = it {
+                let kind: String = own[k] ?? known[k] ?? ""
+                return kind == "block" || kind == "item"
+            }
+            return true
+        }
+        let shotIDs: Set<String> = Set(p.projectiles.map { $0.id })
+        let lootIDs: Set<String> = Set(p.loot.map { $0.id })
+        // blocks
+        for i in p.blocks.indices {
+            var b: ModBlock = p.blocks[i]
+            let place: String = "Block \u{201C}" + b.name + "\u{201D}"
+            if b.name.trimmingCharacters(in: .whitespaces).isEmpty { b.name = "Block" }
+            if b.name.count > 32 { b.name = String(b.name.prefix(32)) }
+            if !b.art.valid || b.art.w != 8 || b.art.h != 8 {
+                b.art = b.art.valid ? b.art.resized(8, 8) : ModPixels(w: 8, h: 8)
+                r.add(1, mn, place, "Its picture was not 8 x 8 and was fitted.")
+            }
+            if b.art.isBlank { r.add(0, mn, place, "It has no picture yet (it shows as grey).") }
+            b.hardness = ModRange.hardness.clamp(b.hardness, sb)
+            b.tool = clampI(b.tool, 0, 3)
+            b.tier = clampI(b.tier, 0, 9)
+            b.light = clampI(b.light, 0, 15)
+            b.dropCount = clampI(b.dropCount, 1, 16)
+            b.station = clampI(b.station, -1, 6)
+            b.power = clampD(b.power.isFinite ? b.power : 0, 0, sb ? 400 : 40)
+            if b.text.count > 200 { b.text = String(b.text.prefix(200)) }
+            if let d = b.drop, !exists(d) {
+                b.drop = nil
+                b.dropSelf = true
+                r.add(1, mn, place, "It dropped something that does not exist; it drops itself now.")
+            }
+            p.blocks[i] = b
+        }
+        // shots
+        for i in p.projectiles.indices {
+            var s: ModProjectile = p.projectiles[i]
+            if s.name.trimmingCharacters(in: .whitespaces).isEmpty { s.name = "Shot" }
+            s.size = clampD(s.size.isFinite ? s.size : 0.3, 0.1, 1.0)
+            s.glow = clampI(s.glow, 0, 12)
+            s.gravity = ModRange.gravity.clamp(s.gravity, sb)
+            s.pierce = clampI(s.pierce, 0, 5)
+            s.life = clampD(s.life.isFinite ? s.life : 2, 0.2, 6)
+            s.explode = clampD(s.explode.isFinite ? s.explode : 0, 0, sb ? 12 : 6)
+            s.burn = clampD(s.burn.isFinite ? s.burn : 0, 0, 10)
+            p.projectiles[i] = s
+        }
+        // items
+        for i in p.items.indices {
+            var it: ModItem = p.items[i]
+            let place: String = "Item \u{201C}" + it.name + "\u{201D}"
+            if it.name.trimmingCharacters(in: .whitespaces).isEmpty { it.name = "Item" }
+            if it.name.count > 32 { it.name = String(it.name.prefix(32)) }
+            if !it.icon.valid || it.icon.w > 32 || it.icon.h > 32 {
+                it.icon = ModPixels(w: 16, h: 16)
+                r.add(1, mn, place, "Its picture was too big or damaged and was cleared.")
+            }
+            if let b = it.baseIcon, !exists(b) { it.baseIcon = nil }
+            if it.icon.isBlank && it.baseIcon == nil { r.add(0, mn, place, "It has no picture yet.") }
+            it.stack = clampI(it.stack, 1, sb ? 999 : 99)
+            if it.kind.isWeapon || it.kind == .tool || it.kind == .armor { it.stack = 1 }
+            it.rarity = clampI(it.rarity, 0, 4)
+            it.tintAmt = clampD(it.tintAmt.isFinite ? it.tintAmt : 0, 0, 1)
+            it.hunger = clampD(it.hunger.isFinite ? it.hunger : 0, 0, 20)
+            if it.effects.count > ModLimits.maxEffects { it.effects = Array(it.effects.prefix(ModLimits.maxEffects)) }
+            for k in it.effects.indices {
+                it.effects[k].amount = it.effects[k].kind.amountRange.clamp(it.effects[k].amount, sb)
+                it.effects[k].seconds = ModRange.seconds.clamp(it.effects[k].seconds, sb)
+            }
+            if var we = it.wornEffect {
+                we.amount = we.kind.amountRange.clamp(we.amount, sb)
+                it.wornEffect = we
+            }
+            it.useTime = clampD(it.useTime.isFinite ? it.useTime : 0.6, 0.1, 5)
+            it.toolType = clampI(it.toolType, 0, 3)
+            it.toolTier = clampI(it.toolTier, 1, 9)
+            it.toolSpeed = ModRange.toolSpeed.clamp(it.toolSpeed, sb)
+            it.style = clampI(it.style, 0, 4)
+            it.damage = ModRange.damage.clamp(it.damage, sb)
+            it.cooldown = ModRange.cooldown.clamp(it.cooldown, sb)
+            it.reach = ModRange.reach.clamp(it.reach, sb)
+            it.arc = clampD(it.arc.isFinite ? it.arc : 1, 0.1, 1.6)
+            it.knock = ModRange.knock.clamp(it.knock, sb)
+            it.maxHits = clampI(it.maxHits, 1, 99)
+            it.daze = clampD(it.daze.isFinite ? it.daze : 0, 0, 3)
+            it.burn = clampD(it.burn.isFinite ? it.burn : 0, 0, 8)
+            it.windup = clampD(it.windup.isFinite ? it.windup : 0, 0, 0.6)
+            it.backstab = clampD(it.backstab.isFinite ? it.backstab : 1, 1, 3)
+            it.undeadMult = clampD(it.undeadMult.isFinite ? it.undeadMult : 1, 0.5, 3)
+            it.crit = clampD(it.crit.isFinite ? it.crit : 0.1, 0, 0.6)
+            it.shot = clampI(it.shot, 0, 12)
+            it.speed = ModRange.shotSpeed.clamp(it.speed, sb)
+            it.gravity = ModRange.gravity.clamp(it.gravity, sb)
+            it.pierce = clampI(it.pierce, 0, 5)
+            it.spread = clampI(it.spread, 1, sb ? 12 : 7)
+            it.magazine = clampI(it.magazine, 1, sb ? 99 : 30)
+            it.reload = clampD(it.reload.isFinite ? it.reload : 1.5, 0.2, 6)
+            it.slot = clampI(it.slot, 0, 2)
+            it.defense = ModRange.defense.clamp(it.defense, sb)
+            it.look = clampI(it.look, 1, 9)
+            it.light = clampI(it.light, 0, 15)
+            if !it.projectile.isEmpty && !shotIDs.contains(it.projectile) {
+                it.projectile = ""
+                r.add(1, mn, place, "Its shot no longer exists; it fires a game shot.")
+            }
+            if let a = it.ammo, !exists(a) {
+                it.ammo = nil
+                r.add(1, mn, place, "Its ammunition does not exist; it needs none now.")
+            }
+            p.items[i] = it
+        }
+        // creatures
+        for i in p.mobs.indices {
+            var m: ModMob = p.mobs[i]
+            let place: String = "Creature \u{201C}" + m.name + "\u{201D}"
+            if m.name.trimmingCharacters(in: .whitespaces).isEmpty { m.name = "Creature" }
+            if m.name.count > 32 { m.name = String(m.name.prefix(32)) }
+            if MobKind(rawValue: m.base) == nil || m.base == MobKind.custom.rawValue || m.base == MobKind.villager.rawValue {
+                m.base = MobKind.zombie.rawValue
+                r.add(1, mn, place, "Its body was unknown; it uses the zombie body.")
+            }
+            var frames: [ModPixels] = []
+            for f in m.frames.prefix(ModLimits.maxFrames) {
+                if f.valid && f.w <= ModLimits.maxMobArt && f.h <= ModLimits.maxMobArt { frames.append(f) }
+            }
+            if frames.count != m.frames.count { r.add(1, mn, place, "Some of its pictures were too big or damaged and were left out.") }
+            m.frames = frames
+            if m.customArt && (frames.isEmpty || frames[0].isBlank) {
+                m.customArt = false
+                r.add(1, mn, place, "Its own picture is empty; it uses its base body.")
+            }
+            m.hue = clampD(m.hue.isFinite ? m.hue : 0, -180, 180)
+            m.saturation = clampD(m.saturation.isFinite ? m.saturation : 1, 0, 2)
+            m.brightness = clampD(m.brightness.isFinite ? m.brightness : 1, 0.4, 1.6)
+            m.tintAmt = clampD(m.tintAmt.isFinite ? m.tintAmt : 0, 0, 1)
+            m.scale = ModRange.scale.clamp(m.scale, sb || m.category == .boss)
+            m.hp = (m.category == .boss ? ModRange.bossHP : ModRange.mobHP).clamp(m.hp, sb)
+            m.damage = ModRange.damage.clamp(m.damage, sb)
+            m.speed = ModRange.mobSpeed.clamp(m.speed, sb)
+            m.detect = ModRange.detect.clamp(m.detect, sb)
+            m.jump = ModRange.jump.clamp(m.jump, sb)
+            m.defense = clampD(m.defense.isFinite ? m.defense : 0, 0, 0.9)
+            m.knockResist = clampD(m.knockResist.isFinite ? m.knockResist : 0, 0, 1)
+            m.glow = clampI(m.glow, 0, 10)
+            m.behavior.patrolRange = clampD(m.behavior.patrolRange.isFinite ? m.behavior.patrolRange : 8, 2, 40)
+            m.behavior.defendRadius = clampD(m.behavior.defendRadius.isFinite ? m.behavior.defendRadius : 10, 3, 40)
+            if m.category == .flying { m.behavior.fly = true }
+            if m.category == .water { m.behavior.swim = true }
+            if !m.behavior.guardKey.isEmpty {
+                let gk: String = m.behavior.guardKey
+                let native: Bool = MobKind.allCases.contains { mobDef($0).name == gk }
+                if !native && (own[gk] ?? known[gk] ?? "") != "mob" {
+                    m.behavior.guardKey = ""
+                    r.add(1, mn, place, "The creature it guarded does not exist.")
+                }
+            }
+            if m.attacks.count > ModLimits.maxAttacks { m.attacks = Array(m.attacks.prefix(ModLimits.maxAttacks)) }
+            for k in m.attacks.indices {
+                var a: ModAttack = m.attacks[k]
+                a.damage = ModRange.damage.clamp(a.damage, sb)
+                a.range = clampD(a.range.isFinite ? a.range : 1.6, 0.5, a.kind == .ranged ? 30 : (sb ? 12 : 8))
+                a.cooldown = clampD(a.cooldown.isFinite ? a.cooldown : 1.2, 0.2, 20)
+                a.shot = clampI(a.shot, 0, 12)
+                a.speed = ModRange.shotSpeed.clamp(a.speed, sb)
+                a.knock = ModRange.knock.clamp(a.knock, sb)
+                a.radius = ModRange.radius.clamp(a.radius, sb)
+                a.hits = clampI(a.hits, 1, sb ? 12 : 6)
+                a.windup = clampD(a.windup.isFinite ? a.windup : 0.3, 0, 2)
+                if !a.projectile.isEmpty && !shotIDs.contains(a.projectile) {
+                    a.projectile = ""
+                    r.add(1, mn, place, "An attack's shot no longer exists; it fires a game shot.")
+                }
+                m.attacks[k] = a
+            }
+            if m.drops.count > ModLimits.maxDrops { m.drops = Array(m.drops.prefix(ModLimits.maxDrops)) }
+            var drops: [ModDrop] = []
+            for d0 in m.drops {
+                var d: ModDrop = d0
+                if !exists(d.item) {
+                    r.add(1, mn, place, "A drop that does not exist was removed.")
+                    continue
+                }
+                d.min = clampI(d.min, 0, 64)
+                d.max = clampI(d.max, d.min, 64)
+                d.chance = clampD(d.chance.isFinite ? d.chance : 0, 0, 1)
+                drops.append(d)
+            }
+            m.drops = drops
+            if !m.loot.isEmpty && !lootIDs.contains(m.loot) {
+                m.loot = ""
+                r.add(1, mn, place, "Its loot table no longer exists.")
+            }
+            var sp: ModSpawn = m.spawn
+            sp.when = clampI(sp.when, 0, 2)
+            sp.biomes = sp.biomes.filter { Biome(rawValue: $0) != nil }
+            sp.minY = clampI(sp.minY, 0, 559)
+            sp.maxY = clampI(sp.maxY, sp.minY, 559)
+            sp.weight = clampD(sp.weight.isFinite ? sp.weight : 1, 0.1, 10)
+            sp.group = clampI(sp.group, 1, m.category == .boss ? 1 : 4)
+            sp.maxNearby = clampI(sp.maxNearby, 1, m.category == .boss ? 1 : 8)
+            m.spawn = sp
+            p.mobs[i] = m
+        }
+        // recipes
+        for i in p.recipes.indices {
+            var rc: ModRecipe = p.recipes[i]
+            let place: String = "Recipe for " + itemLabel(rc.out, own: p, known: known)
+            rc.count = clampI(rc.count, 1, 99)
+            if rc.cost.count > ModLimits.maxCost { rc.cost = Array(rc.cost.prefix(ModLimits.maxCost)) }
+            for k in rc.cost.indices { rc.cost[k].n = clampI(rc.cost[k].n, 1, 999) }
+            rc.station = clampI(rc.station, -1, 6)
+            rc.cat = clampI(rc.cat, 0, RecipeCat.allCases.count - 1)
+            var bad: String = ""
+            if !exists(rc.out) { bad = "It makes something that does not exist." }
+            else if rc.cost.isEmpty { bad = "It needs at least one ingredient." }
+            else if rc.cost.contains(where: { !exists($0.item) }) { bad = "One of its ingredients does not exist." }
+            else if rc.cost.contains(where: { $0.item == rc.out && $0.n >= rc.count }) { bad = "It uses up as much as it makes (a loop that makes nothing)." }
+            if rc.station == -1 {
+                let blk: ModBlock? = p.blocks.first { $0.id == rc.stationBlock }
+                if blk == nil || blk?.function != .station {
+                    rc.station = 0
+                    r.add(1, mn, place, "Its station block is missing or is not a station; it is made by hand.")
+                }
+            }
+            if !bad.isEmpty {
+                r.add(2, mn, place, bad)
+                r.disabled.insert(rc.id)
+            }
+            p.recipes[i] = rc
+        }
+        // loot tables
+        for i in p.loot.indices {
+            var lt: ModLootTable = p.loot[i]
+            let place: String = "Loot table \u{201C}" + lt.name + "\u{201D}"
+            lt.rolls = clampI(lt.rolls, 1, 6)
+            lt.nothing = clampD(lt.nothing.isFinite ? lt.nothing : 0, 0, 1000)
+            if lt.entries.count > ModLimits.maxLootEntries { lt.entries = Array(lt.entries.prefix(ModLimits.maxLootEntries)) }
+            var ents: [ModLootEntry] = []
+            for e0 in lt.entries {
+                var e: ModLootEntry = e0
+                if !exists(e.item) {
+                    r.add(1, mn, place, "An entry for something that does not exist was removed.")
+                    continue
+                }
+                e.min = clampI(e.min, 1, 64)
+                e.max = clampI(e.max, e.min, 64)
+                e.rarity = clampI(e.rarity, 0, 3)
+                e.weight = clampD(e.weight.isFinite ? e.weight : 0, 0, 1000)
+                ents.append(e)
+            }
+            lt.entries = ents
+            if lt.entries.isEmpty {
+                r.add(2, mn, place, "It has nothing in it.")
+                r.disabled.insert(lt.id)
+            }
+            p.loot[i] = lt
+        }
+        // ores
+        for i in p.ores.indices {
+            var o: ModOre = p.ores[i]
+            let place: String = "Ore \u{201C}" + o.name + "\u{201D}"
+            o.dim = clampI(o.dim, 0, 1)
+            let bottom: Int = o.dim == 0 ? WorldGen.H - 2 : umbralH - 2
+            o.minY = clampI(o.minY, 2, bottom)
+            o.maxY = clampI(o.maxY, o.minY, bottom)
+            o.veins = clampD(o.veins.isFinite ? o.veins : 1, 0.05, 8)
+            o.size = clampI(o.size, 1, 24)
+            o.host = clampI(o.host, 0, 4)
+            if !p.blocks.contains(where: { $0.id == o.block }) {
+                r.add(2, mn, place, "Choose which block of this mod it is made of.")
+                r.disabled.insert(o.id)
+            }
+            p.ores[i] = o
+        }
+        // structures
+        for i in p.structures.indices {
+            var s: ModStructure = p.structures[i]
+            let place: String = "Structure \u{201C}" + s.name + "\u{201D}"
+            s.chance = clampD(s.chance.isFinite ? s.chance : 0.3, 0.01, 1)
+            s.spacing = clampI(s.spacing, 64, 4096)
+            s.dim = clampI(s.dim, 0, 1)
+            s.minY = clampI(s.minY, 4, 550)
+            s.maxY = clampI(s.maxY, s.minY, 550)
+            s.biomes = s.biomes.filter { Biome(rawValue: $0) != nil }
+            if s.w < 1 || s.h < 1 || s.w > ModLimits.maxStructW || s.h > ModLimits.maxStructH || s.cells.count != s.w * s.h {
+                r.add(2, mn, place, "It has no captured blocks, or its size is wrong. Capture it again.")
+                r.disabled.insert(s.id)
+            } else {
+                for k in s.cells.indices {
+                    let v: Int = s.cells[k]
+                    if v >= 1000 {
+                        let pi: Int = v - 1000
+                        let key: String = pi < s.palette.count ? s.palette[pi] : ""
+                        if (own[key] ?? known[key] ?? "") != "block" { s.cells[k] = -1 }
+                    } else if v > 255 || v < -1 {
+                        s.cells[k] = -1
+                    } else if v >= 0, let t = Tile(rawValue: UInt8(v)), t == .portalOn || t == .portalOff || t == .portalFrame {
+                        // the rift gate exists once per world
+                        s.cells[k] = -1
+                    }
+                }
+            }
+            if !s.loot.isEmpty && !lootIDs.contains(s.loot) {
+                s.loot = ""
+                r.add(1, mn, place, "Its loot table no longer exists.")
+            }
+            p.structures[i] = s
+        }
+        return r
+    }
+
+    static func trim<T>(_ a: inout [T], _ n: Int, _ what: String, _ mn: String, _ r: inout ModReport) {
+        if a.count > n {
+            r.add(1, mn, "Mod", "Only " + String(n) + " " + what + " fit in one mod; the rest were left out.")
+            a = Array(a.prefix(n))
+        }
+    }
+
+    /// Gives empty or repeated ids fresh ones
+    static func uniqueIDs(_ p: inout ModPack, _ mn: String, _ r: inout ModReport) {
+        var used: Set<String> = []
+        var fixed: Int = 0
+        func fresh(_ id: String, _ prefix: String) -> String {
+            let ok: Bool = !id.isEmpty && id.count <= 24 && !id.contains(":") && !used.contains(id)
+            if ok {
+                used.insert(id)
+                return id
+            }
+            var n: Int = 1
+            while used.contains(prefix + String(n)) { n += 1 }
+            used.insert(prefix + String(n))
+            fixed += 1
+            return prefix + String(n)
+        }
+        for i in p.blocks.indices { p.blocks[i].id = fresh(p.blocks[i].id, "b") }
+        for i in p.items.indices { p.items[i].id = fresh(p.items[i].id, "i") }
+        for i in p.mobs.indices { p.mobs[i].id = fresh(p.mobs[i].id, "c") }
+        for i in p.projectiles.indices { p.projectiles[i].id = fresh(p.projectiles[i].id, "s") }
+        for i in p.recipes.indices { p.recipes[i].id = fresh(p.recipes[i].id, "r") }
+        for i in p.loot.indices { p.loot[i].id = fresh(p.loot[i].id, "l") }
+        for i in p.ores.indices { p.ores[i].id = fresh(p.ores[i].id, "o") }
+        for i in p.structures.indices { p.structures[i].id = fresh(p.structures[i].id, "t") }
+        if fixed > 0 { r.add(1, mn, "Mod", String(fixed) + " content ids were missing or repeated and were renumbered.") }
+    }
+
+    /// A readable name for an item in a message
+    static func itemLabel(_ it: Item, own: ModPack, known: [String: String]) -> String {
+        if case .custom(let k) = it {
+            let s: (String, String) = splitModKey(k)
+            if s.0 == own.id {
+                if let b = own.blocks.first(where: { $0.id == s.1 }) { return b.name }
+                if let i = own.items.first(where: { $0.id == s.1 }) { return i.name }
+            }
+            return known[k] != nil ? k : "missing " + k
+        }
+        return it.name
+    }
+}
+
+extension Game {
+    /// A custom creature's turn (see the creature AI section for the full behaviour)
+    func updateCustomMob(_ m: Mob, _ dt: Double) {
+        wander(m, dt, 0.5)
+        stepMob(m, dt)
+    }
+}
+
+// MARK: - The mods a world uses, turned into game content
+
+/// Which mods a world was made with, and which tile number each of their blocks has in it. Saved with
+/// the world, so its blocks keep their numbers whatever else is installed.
+struct ModWorldInfo: Codable, Equatable {
+    var mods: [ModDep] = []
+    /// block key ("mod:id", or "mod:id#alt" for a door's open or a lamp's lit state) -> tile number
+    var blocks: [String: Int] = [:]
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        var skip: Int = 0
+        mods = c.list(.mods, &skip)
+        blocks = c.val(.blocks, [:])
+    }
+}
+
+/// A mod a world depends on
+struct ModDep: Codable, Equatable, Identifiable {
+    var id: String
+    var name: String
+    var author: String
+    var version: String
+}
+
+/// A custom item ready to use: its checked definition plus everything worked out once
+final class ModItemRT {
+    let key: String
+    let def: ModItem
+    let modName: String
+    var melee: MeleeProfile
+    var ammo: Item? = nil
+    /// index into ModRuntime.shots, or -1 for a game shot
+    var shot: Int = -1
+    var icon: PixelBuf
+
+    init(key: String, def: ModItem, modName: String) {
+        self.key = key
+        self.def = def
+        self.modName = modName
+        let st: SwingStyle = SwingStyle(rawValue: def.style) ?? .slash
+        var p = MeleeProfile(damage: def.damage, cooldown: def.cooldown, reach: def.reach, halfArc: def.arc, style: st)
+        p.band = 0.55
+        p.maxHits = def.maxHits
+        p.knock = def.knock
+        p.heavy = def.heavy
+        p.daze = def.daze
+        p.windup = def.windup
+        p.swingTime = clampD(def.cooldown * 0.6, 0.14, 0.5)
+        p.moveScale = def.heavy ? 0.6 : 1.0
+        p.critChance = def.crit
+        p.burn = def.burn
+        p.undeadMult = def.undeadMult
+        p.combo = def.combo
+        p.backstab = def.backstab
+        p.trail = def.trail
+        if def.kind != .melee && def.kind != .tool {
+            // bows, guns and the rest only bash when swung
+            p = MeleeProfile(damage: 2.0, cooldown: 0.4, reach: 1.9, halfArc: 0.7, style: .bash, knock: 4, swingTime: 0.22, trail: 0xD0D0D0)
+        }
+        melee = p
+        icon = PixelBuf(w: 16, h: 16)
+    }
+}
+
+extension ModItemRT {
+    /// where it sorts in the bag (weapons first, materials last), like the game's own items
+    var sortGroup: Int {
+        switch def.kind {
+        case .melee: return 0
+        case .bow, .gun, .thrown, .magic: return 1
+        case .ammo: return 2
+        case .tool: return 3
+        case .armor: return 4
+        case .food, .consumable: return 5
+        case .special: return 6
+        case .material: return 10
+        }
+    }
+
+    /// Tooltip lines: what it is, its numbers, and which mod it comes from
+    var infoLines: [String] {
+        let d: ModItem = def
+        var lines: [String] = [d.desc.isEmpty ? d.kind.name : d.desc]
+        switch d.kind {
+        case .melee:
+            lines.append(String(format: "Damage %.1f · every %.2f s · reach %.1f", d.damage, d.cooldown, d.reach))
+        case .bow, .gun, .thrown, .magic:
+            var l: String = String(format: "Damage %.1f · every %.2f s", d.damage, d.cooldown)
+            if d.kind == .gun { l += " · " + String(d.magazine) + " loaded" }
+            lines.append(l)
+            if let a = ammo { lines.append("Uses " + a.name) }
+        case .tool:
+            let tt: ToolType = ToolType(rawValue: d.toolType) ?? .pickaxe
+            lines.append(tt.name + String(format: " · tier %d · speed x%.1f", d.toolTier, d.toolSpeed))
+        case .armor:
+            let sl: ArmorSlot = ArmorSlot(rawValue: d.slot) ?? .head
+            lines.append(sl.name + String(format: " · defense +%.1f", d.defense))
+        case .food, .consumable:
+            var parts: [String] = []
+            if d.hunger > 0 { parts.append(String(format: "+%.0f hunger", d.hunger)) }
+            for e in d.effects { parts.append(e.kind.name) }
+            if !parts.isEmpty { lines.append(parts.joined(separator: " · ")) }
+        default:
+            break
+        }
+        lines.append("From " + modName)
+        return lines
+    }
+}
+
+/// A resolved attack of a custom creature
+struct ModAttackRT {
+    var def: ModAttack
+    var shot: Int
+}
+
+/// A custom creature ready to use
+final class ModMobRT {
+    let key: String
+    let def: ModMob
+    let modName: String
+    var mdef: MobDef
+    var base: MobKind
+    var attacks: [ModAttackRT] = []
+    var drops: [ModDrop] = []
+    var loot: String = ""
+    var faction: Faction = .hostile
+    var boss: Bool = false
+    /// kind it guards: a game creature, or a custom one (slot)
+    var guardKind: MobKind? = nil
+    var guardSlot: Int = -1
+
+    init(key: String, def: ModMob, modName: String) {
+        self.key = key
+        self.def = def
+        self.modName = modName
+        let b: MobKind = MobKind(rawValue: def.base) ?? .zombie
+        base = b
+        let bd: MobDef = mobDef(b)
+        var beh: Behavior = .hostile
+        switch def.category {
+        case .passive: beh = .passive
+        case .neutral: beh = .defensive
+        case .hostile: beh = .hostile
+        case .boss: beh = .boss
+        case .flying: beh = .flyer
+        case .water: beh = .swimmer
+        }
+        let hostile: Bool = def.category == .hostile || def.category == .boss || (def.category == .flying && def.behavior.attackPlayer)
+        let fly: Bool = def.behavior.fly || def.category == .flying
+        mdef = MobDef(name: def.name, w: clampD(bd.w * def.scale, 0.3, 8), h: clampD(bd.h * def.scale, 0.3, 8), hp: def.hp, speed: def.speed,
+                        dmg: def.damage, behavior: beh, flying: fly, aggro: def.detect, jump: def.jump, hostile: hostile)
+        boss = def.category == .boss
+        switch def.category {
+        case .boss: faction = .boss
+        case .hostile: faction = .hostile
+        default: faction = hostile ? .hostile : .wild
+        }
+    }
+}
+
+/// A custom ore, resolved to its tile
+struct ModOreRT {
+    var tile: Tile
+    var dim: Int
+    var minY: Int
+    var maxY: Int
+    var veins: Double
+    var size: Int
+    var host: Int
+    var salt: UInt64
+}
+
+/// A custom structure with its cells turned into tile numbers (-1: leave the ground as it is)
+struct ModStructRT {
+    var key: String
+    var def: ModStructure
+    var cells: [Int]
+    var salt: UInt64
+    var loot: String
+}
+
+/// A custom creature's spawning, resolved
+struct ModSpawnRT {
+    var slot: Int
+    var spawn: ModSpawn
+}
+
+final class ModRuntime {
+    /// what the current world uses (empty in the menu and in worlds without mods)
+    static var shared: ModRuntime = ModRuntime()
+
+    var packs: [ModPack] = []
+    var reports: [ModReport] = []
+    /// mods the world needs that are not installed
+    var missing: [ModDep] = []
+    /// content left out by the checks, by key
+    var disabled: Set<String> = []
+    // blocks: per reserved slot (0 ..< blockSlots) its key, definition and art
+    var slotKey: [String?] = [String?](repeating: nil, count: ModLimits.blockSlots)
+    var slotDef: [ModBlock?] = [ModBlock?](repeating: nil, count: ModLimits.blockSlots)
+    /// true for the second state of a door (open) or a lamp (lit)
+    var slotAlt: [Bool] = [Bool](repeating: false, count: ModLimits.blockSlots)
+    var slotArt: [PixelBuf?] = [PixelBuf?](repeating: nil, count: ModLimits.blockSlots)
+    var slotDrop: [Stack?] = [Stack?](repeating: nil, count: ModLimits.blockSlots)
+    var slotTool: [ToolType] = [ToolType](repeating: .pickaxe, count: ModLimits.blockSlots)
+    var tileForKey: [String: Tile] = [:]
+    var items: [String: ModItemRT] = [:]
+    var itemOrder: [String] = []
+    var mobs: [ModMobRT] = []
+    var mobSlot: [String: Int] = [:]
+    var shots: [ModProjectile] = []
+    var shotIndex: [String: Int] = [:]
+    var loot: [String: ModLootTable] = [:]
+    var recipes: [Recipe] = []
+    var ores: [ModOreRT] = []
+    var structures: [ModStructRT] = []
+    var spawns: [ModSpawnRT] = []
+    /// names of missing mods by id (for "Missing block" labels)
+    var missingNames: [String: String] = [:]
+
+    var active: Bool { return !packs.isEmpty || !missing.isEmpty }
+    var hasWorldGen: Bool { return !ores.isEmpty || !structures.isEmpty }
+
+    // MARK: switching mods on
+
+    /// Builds the runtime for these mods (in load order) and installs it: tiles, recipes and art all
+    /// change to match. `world` is the saved mapping of an existing world (nil for a new world).
+    /// Nothing here can stop the game: broken content is left out and reported.
+    @discardableResult
+    static func activate(_ list: [ModPack], world: ModWorldInfo?) -> ModRuntime {
+        let rt = ModRuntime()
+        let known: [String: String] = ModCatalog.build(list).keys
+        var seen: Set<String> = []
+        for p0 in list {
+            if rt.packs.count >= ModLimits.maxMods { break }
+            if p0.id.isEmpty || seen.contains(p0.id) { continue }
+            seen.insert(p0.id)
+            var p: ModPack = p0
+            let rep: ModReport = ModValidator.check(&p, known: known)
+            rt.reports.append(rep)
+            if rep.fatal { continue }
+            rt.packs.append(p)
+            for d in rep.disabled { rt.disabled.insert(p.key(d)) }
+        }
+        if let w = world {
+            for d in w.mods where !rt.packs.contains(where: { $0.id == d.id }) {
+                rt.missing.append(d)
+                rt.missingNames[d.id] = d.name
+            }
+        }
+        rt.assignBlocks(world)
+        rt.buildShots()
+        rt.buildItems()
+        rt.buildLoot()
+        rt.buildMobs()
+        rt.buildRecipes()
+        rt.buildOres()
+        rt.buildStructures()
+        shared = rt
+        rt.install()
+        return rt
+    }
+
+    /// Back to no mods (the menu, a world without mods)
+    static func deactivate() {
+        activate([], world: nil)
+    }
+
+    /// Every issue of every active mod
+    var issues: [ModIssue] {
+        var out: [ModIssue] = []
+        for r in reports { out.append(contentsOf: r.issues) }
+        return out
+    }
+
+    /// What a world made now should remember
+    func worldInfo() -> ModWorldInfo {
+        var w = ModWorldInfo()
+        for p in packs { w.mods.append(ModDep(id: p.id, name: p.name, author: p.author, version: p.version)) }
+        for d in missing { w.mods.append(d) }
+        for i in 0..<ModLimits.blockSlots {
+            if let k = slotKey[i] { w.blocks[k] = Int(Tile.modBase) + i }
+        }
+        return w
+    }
+
+    // MARK: blocks
+
+    func assignBlocks(_ world: ModWorldInfo?) {
+        // the keys each mod block needs: one, or two for doors and lamps
+        var wanted: [(String, ModBlock, Bool)] = []
+        for p in packs {
+            for b in p.blocks where !disabled.contains(p.key(b.id)) {
+                wanted.append((p.key(b.id), b, false))
+                if b.function.paired { wanted.append((p.key(b.id) + "#alt", b, true)) }
+            }
+        }
+        var taken: [Bool] = [Bool](repeating: false, count: ModLimits.blockSlots)
+        let base: Int = Int(Tile.modBase)
+        // first the numbers the world already gave them (and the slots of blocks that are missing now)
+        if let w = world {
+            for (k, raw) in w.blocks {
+                let i: Int = raw - base
+                if i < 0 || i >= ModLimits.blockSlots || taken[i] { continue }
+                taken[i] = true
+                slotKey[i] = k
+            }
+        }
+        var free: Int = 0
+        var overflow: Int = 0
+        for (k, b, alt) in wanted {
+            var i: Int = -1
+            if let found = slotKey.firstIndex(where: { $0 == k }) { i = found }
+            if i < 0 {
+                while free < ModLimits.blockSlots && taken[free] { free += 1 }
+                if free >= ModLimits.blockSlots {
+                    overflow += 1
+                    continue
+                }
+                i = free
+                taken[i] = true
+                slotKey[i] = k
+            }
+            slotDef[i] = b
+            slotAlt[i] = alt
+            slotTool[i] = ToolType(rawValue: b.tool) ?? .pickaxe
+            if let t = Tile(rawValue: UInt8(base + i)) { if !alt { tileForKey[k] = t } else { tileForKey[k] = t } }
+        }
+        if overflow > 0 {
+            var rep = ModReport()
+            rep.add(2, "Mods", "Blocks", String(overflow) + " custom blocks did not fit (a world holds " + String(ModLimits.blockSlots) + ") and were left out.")
+            reports.append(rep)
+        }
+    }
+
+    /// The tile of a block key (nil if it has none in this world)
+    func tile(_ key: String) -> Tile? { return tileForKey[key] }
+
+    /// Slot index of a tile (nil for game tiles)
+    @inline(__always) func slot(_ t: Tile) -> Int? {
+        let i: Int = Int(t.rawValue) - Int(Tile.modBase)
+        return i >= 0 && i < ModLimits.blockSlots ? i : nil
+    }
+
+    func blockDef(_ t: Tile) -> ModBlock? {
+        guard let i = slot(t) else { return nil }
+        return slotDef[i]
+    }
+
+    func isAlt(_ t: Tile) -> Bool {
+        guard let i = slot(t) else { return false }
+        return slotAlt[i]
+    }
+
+    /// The other state of a door or lamp tile
+    func partner(_ t: Tile) -> Tile? {
+        guard let i = slot(t), let k = slotKey[i] else { return nil }
+        if slotAlt[i] { return tileForKey[String(k.dropLast(4))] }
+        return tileForKey[k + "#alt"]
+    }
+
+    /// A game item for a mod reference: blocks become their tile, items stay custom
+    func resolve(_ it: Item) -> Item {
+        if case .custom(let k) = it, let t = tileForKey[k] { return .block(t) }
+        return it
+    }
+
+    /// The tile definition the game uses for a slot
+    func tileDef(_ i: Int) -> TileDef {
+        guard let b = slotDef[i] else {
+            var d = TileDef(name: missingLabel(i))
+            d.hard = 9999
+            d.style = .custom
+            d.colors = [0xFF00FF, 0x200020, 0xFF00FF, 0x200020, 0xFF00FF]
+            d.noDrop = true
+            return d
+        }
+        let alt: Bool = slotAlt[i]
+        var d = TileDef(name: b.name)
+        d.hard = b.unbreakable ? 9999 : b.hardness
+        d.tier = b.tier
+        d.solid = b.collision == .solid
+        d.platform = b.collision == .platform
+        d.opaque = d.solid && !b.transparent
+        d.light = b.light
+        d.hurt = b.function == .trap
+        d.style = .custom
+        if b.function == .door && alt {
+            d.solid = false
+            d.opaque = false
+        }
+        if b.function == .lamp {
+            d.light = alt ? max(b.light, 12) : 0
+        }
+        let art: PixelBuf = b.art.buf()
+        d.colors = [averageColor(art), averageColor(art), averageColor(art), averageColor(art), averageColor(art)]
+        d.noDrop = !b.dropSelf && b.drop == nil
+        if alt { d.drop = .block(tileForKey[String((slotKey[i] ?? "").dropLast(4))] ?? .stone) }
+        return d
+    }
+
+    func missingLabel(_ i: Int) -> String {
+        guard let k = slotKey[i] else { return "Unused Mod Block" }
+        let m: String = splitModKey(k).0
+        return "Missing block (" + (missingNames[m] ?? "a mod") + ")"
+    }
+
+    /// What breaking a custom block drops (nil: the game's usual rule)
+    func blockDrops(_ t: Tile) -> [Stack]? {
+        guard let i = slot(t) else { return nil }
+        guard let b = slotDef[i] else { return [] }
+        if slotAlt[i] {
+            if let main = partner(t) { return [Stack(item: .block(main), count: 1)] }
+            return []
+        }
+        if b.dropSelf { return [Stack(item: .block(t), count: max(1, b.dropCount))] }
+        if let d = b.drop { return [Stack(item: resolve(d), count: max(1, b.dropCount))] }
+        return []
+    }
+
+    // MARK: items
+
+    func buildItems() {
+        for p in packs {
+            for it in p.items where !disabled.contains(p.key(it.id)) {
+                let k: String = p.key(it.id)
+                let r = ModItemRT(key: k, def: it, modName: p.name)
+                if let a = it.ammo { r.ammo = resolve(a) }
+                if !it.projectile.isEmpty { r.shot = shotIndex[p.key(it.projectile)] ?? -1 }
+                r.icon = itemIconBuf(it)
+                items[k] = r
+                itemOrder.append(k)
+            }
+        }
+    }
+
+    func item(_ key: String) -> ModItemRT? { return items[key] }
+
+    /// The icon of a custom item: its own picture, or the chosen game item's icon tinted
+    func itemIconBuf(_ it: ModItem) -> PixelBuf {
+        if !it.icon.isBlank {
+            var b: PixelBuf = it.icon.buf()
+            b = padBuf(b)
+            b.outline(0x1A1410)
+            return b
+        }
+        if let base = it.baseIcon {
+            var b: PixelBuf = itemBuf(resolve(base))
+            if it.tintAmt > 0.01 { b = b.tinted(it.tint & 0xFFFFFF, it.tintAmt) }
+            return b
+        }
+        var b = PixelBuf(w: 12, h: 12)
+        b.rect(2, 2, 8, 8, 0x9A8A70)
+        b.rect(4, 4, 4, 4, 0xC8B898)
+        b.outline(0x1A1410)
+        return b
+    }
+
+    // MARK: shots, loot, creatures, recipes, ores, structures
+
+    func buildShots() {
+        for p in packs {
+            for s in p.projectiles {
+                shotIndex[p.key(s.id)] = shots.count
+                shots.append(s)
+            }
+        }
+    }
+
+    func buildLoot() {
+        for p in packs {
+            for l0 in p.loot where !disabled.contains(p.key(l0.id)) {
+                var l: ModLootTable = l0
+                for k in l.entries.indices { l.entries[k].item = resolve(l.entries[k].item) }
+                loot[p.key(l.id)] = l
+            }
+        }
+    }
+
+    /// Rolls a loot table: each roll picks one entry (or nothing) by weight
+    func roll(_ key: String, _ rng: inout RNG) -> [Stack] {
+        guard let l = loot[key] else { return [] }
+        let total: Double = l.totalWeight
+        if total <= 0 { return [] }
+        var out: [Stack] = []
+        for _ in 0..<l.rolls {
+            var r: Double = rng.double() * total
+            r -= max(0, l.nothing)
+            if r < 0 { continue }
+            for e in l.entries {
+                r -= max(0, e.effectiveWeight)
+                if r < 0 {
+                    let n: Int = e.min + rng.int(max(1, e.max - e.min + 1))
+                    out.append(Stack(item: e.item, count: max(1, n)))
+                    break
+                }
+            }
+        }
+        return out
+    }
+
+    func buildMobs() {
+        for p in packs {
+            for m in p.mobs where !disabled.contains(p.key(m.id)) {
+                let k: String = p.key(m.id)
+                let r = ModMobRT(key: k, def: m, modName: p.name)
+                for a in m.attacks {
+                    let si: Int = a.projectile.isEmpty ? -1 : (shotIndex[p.key(a.projectile)] ?? -1)
+                    r.attacks.append(ModAttackRT(def: a, shot: si))
+                }
+                for d0 in m.drops {
+                    var d: ModDrop = d0
+                    d.item = resolve(d.item)
+                    r.drops.append(d)
+                }
+                if !m.loot.isEmpty && loot[p.key(m.loot)] != nil { r.loot = p.key(m.loot) }
+                mobSlot[k] = mobs.count
+                mobs.append(r)
+                if m.spawn.enabled { spawns.append(ModSpawnRT(slot: mobs.count - 1, spawn: m.spawn)) }
+            }
+        }
+        // who guards whom (custom kinds are known only now)
+        for r in mobs where !r.def.behavior.guardKey.isEmpty {
+            let gk: String = r.def.behavior.guardKey
+            if let s = mobSlot[gk] { r.guardSlot = s } else { r.guardKind = MobKind.allCases.first { mobDef($0).name == gk } }
+        }
+    }
+
+    func mob(_ slot: Int) -> ModMobRT? { return slot >= 0 && slot < mobs.count ? mobs[slot] : nil }
+
+    func buildRecipes() {
+        var list: [Recipe] = []
+        var nextID: Int = RecipeBook.base.count
+        for p in packs {
+            for r in p.recipes where !disabled.contains(p.key(r.id)) {
+                let out: Item = resolve(r.out)
+                var lines: [CostLine] = []
+                for c in r.cost { lines.append(CostLine(item: resolve(c.item), n: c.n)) }
+                let st: Station = Station(rawValue: max(0, r.station)) ?? .hand
+                var rec = Recipe(id: nextID, out: out, outCount: r.count, cost: lines, station: r.station < 0 ? .hand : st, cat: RecipeCat(rawValue: r.cat) ?? .mods)
+                if r.station < 0 { rec.modStation = tileForKey[p.key(r.stationBlock)] }
+                list.append(rec)
+                nextID += 1
+            }
+        }
+        recipes = list
+    }
+
+    func buildOres() {
+        for p in packs {
+            for o in p.ores where !disabled.contains(p.key(o.id)) {
+                guard let t = tileForKey[p.key(o.block)] else { continue }
+                let salt: UInt64 = UInt64(truncatingIfNeeded: modChecksum(Data((p.id + o.id).utf8)))
+                ores.append(ModOreRT(tile: t, dim: o.dim, minY: o.minY, maxY: o.maxY, veins: o.veins, size: o.size, host: o.host, salt: salt))
+            }
+        }
+    }
+
+    func buildStructures() {
+        for p in packs {
+            for s in p.structures where !disabled.contains(p.key(s.id)) {
+                var cells: [Int] = []
+                cells.reserveCapacity(s.cells.count)
+                for v in s.cells {
+                    if v >= 1000 {
+                        let pi: Int = v - 1000
+                        let k: String = pi < s.palette.count ? s.palette[pi] : ""
+                        if let t = tileForKey[k] { cells.append(Int(t.rawValue)) } else { cells.append(-1) }
+                    } else {
+                        cells.append(v)
+                    }
+                }
+                let salt: UInt64 = UInt64(truncatingIfNeeded: modChecksum(Data((p.id + s.id).utf8)))
+                structures.append(ModStructRT(key: p.key(s.id), def: s, cells: cells, salt: salt, loot: s.loot.isEmpty ? "" : p.key(s.loot)))
+            }
+        }
+    }
+
+    // MARK: installing
+
+    /// Puts this runtime's blocks into the tile tables and art, and its recipes into the recipe book
+    func install() {
+        let base: Int = Int(Tile.modBase)
+        for i in 0..<ModLimits.blockSlots {
+            guard let t = Tile(rawValue: UInt8(base + i)) else { continue }
+            slotArt[i] = slotArtBuf(i)
+            Tile.patch(t, tileDef(i), tool: slotTool[i])
+            if let b = slotDef[i], !slotAlt[i], !b.dropSelf, let d = b.drop {
+                slotDrop[i] = Stack(item: resolve(d), count: b.dropCount)
+            }
+        }
+        RecipeBook.all = RecipeBook.base + recipes
+        SectionPainter.shared.refreshModTiles()
+        Art.shared.refreshModArt()
+    }
+
+    /// The picture a slot draws: the block's art (an open door shows its edge, an unlit lamp is darker)
+    func slotArtBuf(_ i: Int) -> PixelBuf {
+        guard let b = slotDef[i] else { return missingTileBuf() }
+        var art: PixelBuf = b.art.isBlank ? greyTileBuf() : b.art.buf()
+        if b.function == .door && slotAlt[i] {
+            var o = PixelBuf(w: 8, h: 8)
+            for y in 0..<8 {
+                for x in 0..<2 { o.px[y * 8 + x] = art.px[y * 8 + x] }
+            }
+            art = o
+        }
+        if b.function == .lamp && !slotAlt[i] {
+            for k in 0..<art.px.count where (art.px[k] >> 24) != 0 {
+                art.px[k] = 0xFF000000 | shadeRGB(art.px[k] & 0xFFFFFF, 0.55)
+            }
+        }
+        return art
+    }
+}
+
+extension ModRuntime {
+    /// The custom blocks and items the creative palette and the test tools offer
+    func paletteItems() -> [Item] {
+        var out: [Item] = []
+        for i in 0..<ModLimits.blockSlots where slotDef[i] != nil && !slotAlt[i] {
+            if let t = Tile(rawValue: UInt8(Int(Tile.modBase) + i)) { out.append(.block(t)) }
+        }
+        for k in itemOrder { out.append(.custom(k)) }
+        return out
+    }
+}
+
+/// Whether a saved world's mods are all installed (checked before it is loaded)
+struct ModLoadCheck {
+    var save: SaveData
+    var packs: [ModPack] = []
+    var missing: [ModDep] = []
+    /// mods installed in a different version than the world was made with
+    var changed: [String] = []
+
+    static func check(_ s: SaveData) -> ModLoadCheck {
+        var c = ModLoadCheck(save: s)
+        guard let info = s.mods else { return c }
+        for d in info.mods {
+            if let p = ModStore.pack(d.id) {
+                c.packs.append(p)
+                if p.version != d.version { c.changed.append(p.name) }
+            } else {
+                c.missing.append(d)
+            }
+        }
+        return c
+    }
+}
+
+/// Mod testing: a flat creative world with the mod switched on, separate from real worlds and never
+/// saved, with tools to spawn, give, place and clear things
+enum ModTest {
+    static let seed: UInt64 = 777_000_111
+
+    static func makeWorld(_ p: ModPack, settings: Settings) -> Game {
+        var list: [ModPack] = [p]
+        for e in ModStore.enabledPacks() where e.id != p.id { list.append(e) }
+        ModRuntime.activate(list, world: nil)
+        var opts: WorldOptions = .standard
+        opts.flat = true
+        opts.trees = true
+        opts.ponds = true
+        opts.structures = true
+        opts.caves = true
+        let g = Game(mode: .creative, infinite: true, seed: seed, settings: settings, options: opts)
+        g.testMod = p.id
+        g.slot = -1
+        g.worldName = "Mod test: " + p.name
+        g.modInfo = ModRuntime.shared.worldInfo()
+        g.timeOfDay = 0.3
+        return g
+    }
+}
+
+/// The magenta and black checks of a block whose mod is missing
+func missingTileBuf() -> PixelBuf {
+    var b = PixelBuf(w: 8, h: 8)
+    for y in 0..<8 {
+        for x in 0..<8 { b.set(x, y, ((x / 4) + (y / 4)) % 2 == 0 ? 0xFF00FF : 0x200020) }
+    }
+    return b
+}
+
+/// A plain grey block (a custom block nobody has painted yet)
+func greyTileBuf() -> PixelBuf {
+    var b = PixelBuf(w: 8, h: 8)
+    for y in 0..<8 {
+        for x in 0..<8 { b.set(x, y, (x == 0 || y == 0) ? 0x9A9A9A : ((x == 7 || y == 7) ? 0x5A5A5A : 0x7A7A7A)) }
+    }
+    return b
+}
+
+/// The average colour of a picture's visible pixels (for particles and maps)
+func averageColor(_ b: PixelBuf) -> UInt32 {
+    var r: Int = 0
+    var g: Int = 0
+    var bl: Int = 0
+    var n: Int = 0
+    for c in b.px where (c >> 24) != 0 {
+        r += Int((c >> 16) & 0xFF)
+        g += Int((c >> 8) & 0xFF)
+        bl += Int(c & 0xFF)
+        n += 1
+    }
+    if n == 0 { return 0x8A8A8A }
+    return UInt32(r / n) << 16 | UInt32(g / n) << 8 | UInt32(bl / n)
+}
+
+// MARK: - Custom creature art
+
+/// Red, green and blue (0...1) to hue (0...1), saturation and value
+func rgbToHSV(_ c: UInt32) -> (Double, Double, Double) {
+    let r: Double = Double((c >> 16) & 0xFF) / 255.0
+    let g: Double = Double((c >> 8) & 0xFF) / 255.0
+    let b: Double = Double(c & 0xFF) / 255.0
+    let mx: Double = max(r, max(g, b))
+    let mn: Double = min(r, min(g, b))
+    let d: Double = mx - mn
+    var h: Double = 0
+    if d > 0.00001 {
+        if mx == r { h = (g - b) / d } else if mx == g { h = 2.0 + (b - r) / d } else { h = 4.0 + (r - g) / d }
+        h /= 6.0
+        if h < 0 { h += 1.0 }
+    }
+    let s: Double = mx <= 0 ? 0 : d / mx
+    return (h, s, mx)
+}
+
+func hsvToRGB(_ h0: Double, _ s: Double, _ v: Double) -> UInt32 {
+    let h: Double = (h0 - floor(h0)) * 6.0
+    let i: Int = Int(floor(h)) % 6
+    let f: Double = h - floor(h)
+    let p: Double = v * (1 - s)
+    let q: Double = v * (1 - s * f)
+    let t: Double = v * (1 - s * (1 - f))
+    var r: Double = v
+    var g: Double = t
+    var b: Double = p
+    switch i {
+    case 1: r = q; g = v; b = p
+    case 2: r = p; g = v; b = t
+    case 3: r = p; g = q; b = v
+    case 4: r = t; g = p; b = v
+    case 5: r = v; g = p; b = q
+    default: break
+    }
+    let ri: UInt32 = UInt32(clampD(r * 255.0, 0, 255).rounded())
+    let gi: UInt32 = UInt32(clampD(g * 255.0, 0, 255).rounded())
+    let bi: UInt32 = UInt32(clampD(b * 255.0, 0, 255).rounded())
+    return (ri << 16) | (gi << 8) | bi
+}
+
+/// Turns the hue, scales saturation and brightness, then mixes in a tint, on every visible pixel.
+/// Near-black pixels (outlines) stay dark so the creature keeps its shape.
+func recolorBuf(_ b: PixelBuf, hue: Double, sat: Double, bright: Double, tint: UInt32, amt: Double) -> PixelBuf {
+    if abs(hue) < 0.5 && abs(sat - 1) < 0.01 && abs(bright - 1) < 0.01 && amt < 0.01 { return b }
+    var o: PixelBuf = b
+    let turn: Double = hue / 360.0
+    for i in 0..<o.px.count {
+        let c: UInt32 = o.px[i]
+        if (c >> 24) == 0 { continue }
+        let hsv: (Double, Double, Double) = rgbToHSV(c & 0xFFFFFF)
+        if hsv.2 < 0.14 { continue }
+        let s2: Double = clampD(hsv.1 * sat, 0, 1)
+        let v2: Double = clampD(hsv.2 * bright, 0, 1)
+        var rgb: UInt32 = hsvToRGB(hsv.0 + turn, s2, v2)
+        if amt > 0.01 { rgb = mixRGB(rgb, tint & 0xFFFFFF, amt) }
+        o.px[i] = 0xFF000000 | rgb
+    }
+    return o
+}
+
+/// A custom creature's frames: its own pictures (outlined, all the size of the first), or its base
+/// creature's frames recoloured
+func modMobFrames(_ m: ModMob) -> ([PixelBuf], CreatureAnim) {
+    if m.customArt && !m.frames.isEmpty && !m.frames[0].isBlank {
+        let w0: Int = m.frames[0].w
+        let h0: Int = m.frames[0].h
+        var out: [PixelBuf] = []
+        for f in m.frames.prefix(ModLimits.maxFrames) {
+            let same: ModPixels = (f.w == w0 && f.h == h0) ? f : f.resized(w0, h0)
+            var b: PixelBuf = padBuf(same.buf())
+            b.outline(0x101010)
+            out.append(b)
+        }
+        var a = CreatureAnim()
+        if out.count >= 4 { a.attack = 3 }
+        if m.behavior.fly || m.behavior.swim || m.category == .flying || m.category == .water {
+            if out.count >= 3 { a.cycle = [0, 1, 2, 1] } else if out.count == 2 { a.cycle = [0, 1] }
+        }
+        return (out, a)
+    }
+    let base: MobKind = MobKind(rawValue: m.base) ?? .zombie
+    let art: ([PixelBuf], CreatureAnim) = creatureArt(base == .custom ? .zombie : base, 0)
+    var out: [PixelBuf] = []
+    for f in art.0 { out.append(recolorBuf(f, hue: m.hue, sat: m.saturation, bright: m.brightness, tint: m.tint, amt: m.tintAmt)) }
+    return (out, art.1)
+}
+
+/// The sprites of a custom creature, sized to its hit box
+func modMobSpriteSet(_ m: ModMob) -> SpriteSet {
+    let fr: ([PixelBuf], CreatureAnim) = modMobFrames(m)
+    let base: MobKind = MobKind(rawValue: m.base) ?? .zombie
+    let h: Double = clampD(mobDef(base == .custom ? .zombie : base).h * m.scale, 0.3, 8)
+    if m.customArt && !m.frames.isEmpty && !m.frames[0].isBlank, let f0 = fr.0.first {
+        let bb: (Int, Int, Int, Int) = opaqueBounds(f0)
+        let oh: Double = Double(bb.3 - bb.1 + 1)
+        return makeSpriteSet(fr.0, hitH: h, fixedScale: h * 1.05 / max(1.0, oh), anim: fr.1)
+    }
+    return makeSpriteSet(fr.0, hitH: h, fixedScale: creatureScale * m.scale, anim: fr.1)
+}
+
+// MARK: - Custom content in play
+
+/// Effects on the player from potions, food and the armour worn: each kind has a strength and the
+/// seconds it has left. The strongest of the same kind wins.
+struct PlayerEffects {
+    var amount: [Double] = [Double](repeating: 0, count: ModEffectKind.allCases.count)
+    var time: [Double] = [Double](repeating: 0, count: ModEffectKind.allCases.count)
+    var regenAcc: Double = 0
+
+    func value(_ k: ModEffectKind) -> Double {
+        let i: Int = k.rawValue
+        return time[i] > 0 ? amount[i] : 0
+    }
+
+    mutating func add(_ k: ModEffectKind, _ a: Double, _ secs: Double) {
+        let i: Int = k.rawValue
+        if time[i] <= 0 || a >= amount[i] { amount[i] = a }
+        time[i] = max(time[i], secs)
+    }
+
+    mutating func tick(_ dt: Double) {
+        for i in 0..<time.count where time[i] > 0 { time[i] = max(0, time[i] - dt) }
+    }
+
+    mutating func clear() {
+        for i in 0..<time.count { time[i] = 0 }
+    }
+
+    /// What is active, for the HUD: name and seconds left (worn effects show no time)
+    var list: [(String, Double)] {
+        var out: [(String, Double)] = []
+        for k in ModEffectKind.allCases where k.timed && time[k.rawValue] > 0 {
+            out.append((k.name, time[k.rawValue]))
+        }
+        return out
+    }
+}
+
+/// Reloading data for a gun of a mod: magazine, time and ammunition (nil: it needs none)
+struct ModGunSpec {
+    var magazine: Int
+    var time: Double
+    var ammo: Item?
+}
+
+extension Game {
+    /// Once a frame: effects run down, worn armour keeps its effect up, regeneration heals, fire
+    /// protection puts fires out, jump pads throw the player up
+    func updateModPlay(_ dt: Double) {
+        effects.tick(dt)
+        if healerCD > 0 { healerCD -= dt }
+        let rt: ModRuntime = ModRuntime.shared
+        if !rt.active { return }
+        for i in 0..<min(3, inv.armor.count) {
+            if let s = inv.armor[i], case .custom(let k) = s.item, let r = rt.item(k), r.def.kind == .armor, let e = r.def.wornEffect {
+                effects.add(e.kind, e.amount, 0.3)
+            }
+        }
+        let regen: Double = effects.value(.regen)
+        if regen > 0 && !dead && hp < maxHP {
+            effects.regenAcc += regen * dt
+            if effects.regenAcc >= 1 {
+                let n: Double = floor(effects.regenAcc)
+                effects.regenAcc -= n
+                hp = min(maxHP, hp + n)
+                bumpHUD()
+            }
+        }
+        if effects.value(.fireproof) > 0 { playerBurn = 0 }
+        // a jump pad under the feet
+        if pb.onGround && !dead && inVehicle == nil {
+            let under: Tile = world.tile(Int(floor(pb.x)), Int(floor(pb.y + 0.05)))
+            if under.isMod, let b = rt.blockDef(under), b.function == .bounce {
+                pb.vy = -max(4.0, b.power)
+                pb.onGround = false
+                fallPeak = 0
+                sfx(.land, 0.7)
+                spawnParticles(pb.x, pb.y, averageColor(b.art.buf()), 6, 3.0, 0.4, 10)
+            }
+        }
+    }
+
+    // MARK: using custom items
+
+    func useModItem(_ k: String, _ dt: Double, _ pressed: Bool) {
+        guard let r = ModRuntime.shared.item(k) else {
+            if pressed { say("This item's mod is not installed.", 1.5) }
+            return
+        }
+        let d: ModItem = r.def
+        switch d.kind {
+        case .tool: useModTool(r, dt, pressed)
+        case .melee: useMeleeWeapon(.custom(k), pressed)
+        case .gun: useModGun(r, pressed)
+        case .thrown, .magic: useModShooter(r, pressed)
+        case .bow: break
+        case .food, .consumable: useModConsumable(r, pressed)
+        case .armor:
+            if pressed {
+                quickEquip(sel)
+                say("Equipped.", 1.0)
+            }
+        case .special:
+            if pressed && !d.effects.isEmpty && useCD <= 0 {
+                applyEffects(d.effects)
+                useCD = max(2.0, d.cooldown)
+                sfx(.zap, 0.5)
+                spawnParticles(pb.x, pb.y - 1.0, 0xC8E8FF, 8, 3.0, 0.5, -2)
+            }
+        case .material, .ammo: break
+        }
+    }
+
+    /// A custom tool: fights a creature under the aim, tills with a hoe, otherwise mines with its own
+    /// tier and speed
+    func useModTool(_ r: ModItemRT, _ dt: Double, _ pressed: Bool) {
+        let it: Item = .custom(r.key)
+        let tx: Int = Int(floor(aimX))
+        let ty: Int = Int(floor(aimY))
+        if let m = mobUnderAim(it.melee) {
+            if pressed || (useCD <= 0 && !meleeCandidates(it.melee).isEmpty) { startMelee(it, target: m) }
+            return
+        }
+        let tt: ToolType = ToolType(rawValue: r.def.toolType) ?? .pickaxe
+        if tt == .hoe && useCD <= 0 {
+            let t: Tile = world.tile(tx, ty)
+            if (t == .grass || t == .dirt || t == .dryGrass || t == .mossGrass) && inReach(Double(tx) + 0.5, Double(ty) + 0.5) && !world.tile(tx, ty - 1).solid {
+                world.set(tx, ty, .farmland)
+                if world.tile(tx, ty - 1).isPlant { world.set(tx, ty - 1, .air) }
+                useCD = 0.25
+                swingT = 0.2
+                swingDir = facing
+                return
+            }
+        }
+        let tier: Tier = Tier(rawValue: clampI(r.def.toolTier, 1, 9)) ?? .wood
+        mineStep(tx, ty, tt, tier, dt, speed: r.def.toolSpeed)
+    }
+
+    /// What reloading a custom gun takes
+    func modGunSpec(_ r: ModItemRT) -> ModGunSpec {
+        return ModGunSpec(magazine: max(1, r.def.magazine), time: r.def.reload, ammo: r.ammo)
+    }
+
+    func useModGun(_ r: ModItemRT, _ pressed: Bool) {
+        guard var st = inv.slots[sel] else { return }
+        if reloadT > 0 { return }
+        if st.extra <= 0 {
+            if pressed || useCD <= 0 { startReload() }
+            return
+        }
+        if useCD > 0 { return }
+        if r.def.needsPress && !pressed { return }
+        st.extra -= 1
+        inv.slots[sel] = st
+        fireModShots(r, charge: 1.0, useAmmo: false)
+        if st.extra <= 0 {
+            let spec: ModGunSpec = modGunSpec(r)
+            if spec.ammo == nil || isCreative || inv.total(spec.ammo!) > 0 { startReload() }
+        }
+        bumpHUD()
+    }
+
+    func startModReload(_ r: ModItemRT, _ st: Stack) {
+        let spec: ModGunSpec = modGunSpec(r)
+        if reloadT > 0 || st.extra >= spec.magazine { return }
+        if let a = spec.ammo, !isCreative && inv.total(a) <= 0 {
+            say("Out of " + a.name.lowercased() + "!", 1.5)
+            return
+        }
+        reloadT = spec.time
+        reloadSlot = sel
+        if spec.magazine > 1 { say("Reloading...", 1.0) }
+    }
+
+    /// The end of a custom gun's reload: the magazine fills from the bag (or freely without ammunition)
+    func finishModReload(_ r: ModItemRT) {
+        guard var st = inv.slots[sel] else { return }
+        let spec: ModGunSpec = modGunSpec(r)
+        let need: Int = spec.magazine - st.extra
+        var take: Int = need
+        if let a = spec.ammo, !isCreative {
+            take = min(need, inv.total(a))
+            _ = inv.remove(a, take)
+        }
+        st.extra += max(0, take)
+        inv.slots[sel] = st
+        sfx(.tap, 0.5)
+        bumpHUD()
+    }
+
+    /// Thrown weapons and projectile weapons: one use, one volley
+    func useModShooter(_ r: ModItemRT, _ pressed: Bool) {
+        if useCD > 0 { return }
+        if r.def.needsPress && !pressed { return }
+        if let a = r.ammo, !isCreative && inv.total(a) <= 0 {
+            if pressed { say("No " + a.name.lowercased() + "!", 1.2) }
+            return
+        }
+        fireModShots(r, charge: 1.0, useAmmo: true)
+        if r.def.kind == .thrown && r.ammo == nil && !isCreative { inv.removeAt(sel, 1) }
+        bumpHUD()
+    }
+
+    /// A custom bow: hold to draw, release to shoot (a full draw keeps firing while held)
+    func handleModBow(_ r: ModItemRT, _ dt: Double, _ pressed: Bool, _ released: Bool) {
+        var hasAmmo: Bool = true
+        if let a = r.ammo, !isCreative { hasAmmo = inv.total(a) > 0 }
+        if useHeld {
+            if !hasAmmo {
+                if pressed { say("No " + (r.ammo?.name.lowercased() ?? "ammunition") + "!", 1.2) }
+                bowCharge = 0
+                return
+            }
+            if useCD > 0 && bowCharge == 0 { return }
+            bowCharge = min(1.0, max(bowCharge, 0.01) + dt / 0.55)
+            facing = aimFacing()
+            if bowCharge >= 1.0 && useCD <= 0 {
+                fireModShots(r, charge: 1.0, useAmmo: true)
+                bowCharge = 0.3
+            }
+        } else if released && bowCharge > 0 && hasAmmo {
+            fireModShots(r, charge: max(0.45, bowCharge), useAmmo: true)
+            bowCharge = 0
+        } else {
+            bowCharge = 0
+        }
+    }
+
+    /// Fires a custom weapon's volley toward the aim, through the game's projectiles (so its shots
+    /// hurt, pierce and knock back like every other shot)
+    func fireModShots(_ r: ModItemRT, charge: Double, useAmmo: Bool) {
+        let d: ModItem = r.def
+        if useAmmo, let a = r.ammo, !isCreative { _ = inv.remove(a, 1) }
+        facing = aimFacing()
+        let bow: Bool = d.kind == .bow
+        let speed: Double = d.speed * (bow ? 0.55 + 0.45 * charge : 1.0)
+        let dmg: Double = d.damage * (bow ? 0.4 + 0.6 * charge : 1.0)
+        var grav: Double = d.gravity
+        var life: Double = 3.0
+        var kind: ProjKind = ProjKind(rawValue: d.shot) ?? .arrow
+        var w: Double = 0.24
+        if r.shot >= 0 && r.shot < ModRuntime.shared.shots.count {
+            let s: ModProjectile = ModRuntime.shared.shots[r.shot]
+            grav = s.gravity
+            life = s.life
+            kind = .spit
+            w = s.size
+        }
+        let ox: Double = pb.x + Double(facing) * 0.6
+        let oy: Double = pb.y - 1.2
+        let base: Double = lobAngle(aimX - ox, aimY - oy, speed, grav)
+        let n: Int = max(1, d.spread)
+        let live: Int = projectiles.filter { $0.mod >= 0 }.count
+        if live >= ModLimits.maxShotsLive { return }
+        for i in 0..<n {
+            var a: Double = base
+            if n > 1 { a += (Double(i) / Double(n - 1) - 0.5) * min(1.2, 0.18 * Double(n)) }
+            var p = Projectile(kind: kind, x: ox, y: oy, vx: cos(a) * speed, vy: sin(a) * speed, dmg: dmg, fromPlayer: true, gravity: grav)
+            p.life = life
+            p.source = .player
+            p.uid = newID()
+            p.pierce = d.pierce
+            p.knock = d.knock
+            p.w = w
+            p.mod = r.shot
+            if r.shot < 0 && kind == .fireball { p.life = 2.5 }
+            projectiles.append(p)
+        }
+        useCD = d.cooldown
+        swingT = 0.14
+        swingDir = facing
+        switch d.kind {
+        case .bow: sfx(.bow, 0.7); bowRecoil = 0.12
+        case .gun: sfx(kind == .quarrel ? .crossbow : .gun, 0.75); muzzleT = 0.08; addShake(0.08)
+        case .thrown: sfx(.sling, 0.6)
+        default: sfx(.zap, 0.6)
+        }
+    }
+
+    /// Food, potions and other consumables: hunger, effects, then one is used up
+    func useModConsumable(_ r: ModItemRT, _ pressed: Bool) {
+        if !pressed || eatT > 0 { return }
+        let d: ModItem = r.def
+        if d.kind == .food && d.effects.isEmpty && hunger >= 19.5 && hp >= maxHP && !isCreative {
+            say("You're not hungry.", 1.2)
+            return
+        }
+        if d.hunger > 0 {
+            hunger = min(20, hunger + d.hunger)
+            floatText("+" + String(Int(d.hunger)), pb.x, pb.y - pb.h - 0.4, 0xE0A040)
+        }
+        applyEffects(d.effects)
+        if !isCreative { inv.removeAt(sel, 1) }
+        eatT = d.useTime
+        useCD = d.useTime
+        sfx(.eat, 0.6)
+        spawnParticles(pb.x + Double(facing) * 0.4, pb.y - 1.4, 0xC8A0E0, 6, 2.0, 0.4, 6)
+        bumpHUD()
+    }
+
+    /// Applies effects: healing, food and cures at once, the rest for their time
+    func applyEffects(_ list: [ModEffect]) {
+        for e in list {
+            switch e.kind {
+            case .heal: heal(e.amount)
+            case .feed: hunger = min(20, hunger + e.amount)
+            case .cure:
+                playerBurn = 0
+                bodyCold = 0
+            default: effects.add(e.kind, e.amount, e.seconds)
+            }
+        }
+        bumpHUD()
+    }
+
+    // MARK: custom blocks
+
+    /// Tapping a custom block: storage opens, doors and lamps switch, shrines heal, signs speak.
+    /// Returns false for blocks that do nothing when tapped.
+    func interactModBlock(_ tx: Int, _ ty: Int, _ t: Tile) -> Bool {
+        guard let b = ModRuntime.shared.blockDef(t) else {
+            say(t.name + ": its mod is not installed.", 2.0)
+            return true
+        }
+        switch b.function {
+        case .storage:
+            sfx(.chestOpen, 0.7)
+            if world.chests[world.chestKey(tx, ty)] == nil { world.setChestItems(tx, ty, []) }
+            openChest = IntPair(x: tx, y: ty)
+            showInventory = true
+            bumpHUD()
+        case .station:
+            if b.station >= 1, let s = Station(rawValue: b.station) { craftStation = s } else { craftStation = .hand }
+            showInventory = true
+            bumpHUD()
+        case .lamp, .door:
+            guard let other = ModRuntime.shared.partner(t) else { return false }
+            if b.function == .door && ModRuntime.shared.isAlt(t) {
+                // closing a door the player stands in would trap them
+                if pb.right > Double(tx) && pb.left < Double(tx + 1) && pb.y > Double(ty) && pb.top < Double(ty + 1) { return true }
+            }
+            world.set(tx, ty, other)
+            sfx(b.function == .door ? .door : .tap, 0.6)
+        case .healer:
+            if healerCD > 0 {
+                say("The shrine is resting.", 1.2)
+            } else {
+                heal(b.power)
+                healerCD = 5
+                sfx(.discovery, 0.5)
+                spawnParticles(Double(tx) + 0.5, Double(ty) + 0.2, 0x80FF90, 12, 3.0, 0.8, -3)
+            }
+        case .sign:
+            say(b.text.isEmpty ? b.name : b.text, 4.0)
+        default:
+            return false
+        }
+        return true
+    }
+
+    /// True if a recipe's station (a game station or a mod block) is close enough
+    func recipeStationOK(_ r: Recipe) -> Bool {
+        if let ms = r.modStation {
+            if isCreative { return true }
+            let px: Int = Int(floor(pb.x))
+            let py: Int = Int(floor(pb.y - 1))
+            for dy in -4...3 {
+                for dx in -5...5 where world.tile(px + dx, py + dy) == ms { return true }
+            }
+            return false
+        }
+        return stationAvailable(r.station)
+    }
+
+    func recipeStationName(_ r: Recipe) -> String {
+        if let ms = r.modStation { return ms.name }
+        return r.station.name
+    }
+
+    // MARK: custom shots
+
+    /// A custom shot came down (on a creature, the player or a block): its blast and its fire
+    func modShotLanded(_ p: Projectile, _ x: Double, _ y: Double, mob: Mob?, player: Bool) {
+        guard p.mod >= 0 && p.mod < ModRuntime.shared.shots.count else { return }
+        let s: ModProjectile = ModRuntime.shared.shots[p.mod]
+        if s.burn > 0 {
+            if let m = mob { m.burn = max(m.burn, s.burn) }
+            if player && effects.value(.fireproof) <= 0 { playerBurn = max(playerBurn, s.burn * 0.5) }
+        }
+        if s.explode > 0 {
+            explode(x, y, radius: s.explode, power: p.dmg, source: p.source, breakBlocks: s.breakBlocks)
+        } else {
+            spawnParticles(x, y, s.color & 0xFFFFFF, 5, 3.0, 0.3, 6)
+        }
+    }
+}
+
 // ===== u01_art =====
 
 // MARK: - Art store (converts the procedural PixelBufs into SwiftUI images)
@@ -21762,6 +25114,8 @@ final class Art: @unchecked Sendable {
     /// weather symbols (see weatherIcon)
     var wxIcons: [Int: Image] = [:]
     private var mobSets: [Int: SpriteSet] = [:]
+    /// sprites of custom creatures, by slot (rebuilt when the mods change)
+    var modMobSets: [Int: SpriteSet] = [:]
     private var playerSets: [Int: SpriteSet] = [:]
     var crack: [Image] = []
 
@@ -21799,6 +25153,28 @@ final class Art: @unchecked Sendable {
     }
 
     func tile(_ t: Tile) -> Image { return tiles[Int(t.rawValue)] }
+
+    /// After a world's mods change: new pictures for the reserved tiles, and forget every cached icon
+    /// and sprite of custom content
+    func refreshModArt() {
+        let painter: SectionPainter = SectionPainter.shared
+        let base: Int = Int(Tile.modBase)
+        for i in 0..<ModLimits.blockSlots where base + i < tiles.count && base + i < painter.tileBufs.count {
+            tiles[base + i] = pixImage(painter.tileBufs[base + i])
+            tileBufs[base + i] = painter.tileBufs[base + i]
+        }
+        var keep: [Item: Image] = [:]
+        for (k, v) in icons {
+            switch k {
+            case .custom: continue
+            case .block(let t): if t.isMod { continue }
+            default: break
+            }
+            keep[k] = v
+        }
+        icons = keep
+        modMobSets.removeAll()
+    }
 
     func icon(_ it: Item) -> Image {
         if let i = icons[it] { return i }
@@ -21840,6 +25216,15 @@ final class Art: @unchecked Sendable {
 
     func buildMobSet(_ k: MobKind, _ v: Int) -> SpriteSet {
         return creatureSpriteSet(k, v)
+    }
+
+    /// A game creature's sprites (the Mod Creator's body picker)
+    func creaturePreview(_ k: MobKind) -> SpriteSet {
+        let key: Int = k.rawValue * 16
+        if let s = mobSets[key] { return s }
+        let s: SpriteSet = buildMobSet(k, 0)
+        mobSets[key] = s
+        return s
     }
 }
 
@@ -28268,12 +31653,45 @@ enum WorldRenderer {
         }
     }
 
+    /// A mod's shot: its shape in its colour, with a faint trail
+    static func drawModShot(_ ctx: inout GraphicsContext, _ p: Projectile, _ x: Double, _ y: Double, _ tp: Double) {
+        let rt: ModRuntime = ModRuntime.shared
+        guard p.mod >= 0 && p.mod < rt.shots.count else { return }
+        let s: ModProjectile = rt.shots[p.mod]
+        let col: Color = Color(hex: s.color & 0xFFFFFF)
+        let hi: Color = Color(hex: mixRGB(s.color & 0xFFFFFF, 0xFFFFFF, 0.5))
+        let ang: Double = atan2(p.vy, p.vx)
+        let dx: Double = cos(ang)
+        let dy: Double = sin(ang)
+        let r: Double = max(3.0, s.size * tp * 0.5)
+        strokeLine(&ctx, x - dx * r * 3.0, y - dy * r * 3.0, x, y, Color(hex: s.color & 0xFFFFFF, alpha: 0.3), max(2.0, r * 0.8))
+        switch s.shape {
+        case .orb:
+            fillOval(&ctx, mkRect(x - r, y - r, r * 2, r * 2), col)
+            fillOval(&ctx, mkRect(x - r * 0.5, y - r * 0.6, r * 0.8, r * 0.8), hi)
+        case .arrow, .bolt:
+            let len: Double = r * (s.shape == .arrow ? 3.2 : 2.2)
+            strokeLine(&ctx, x - dx * len, y - dy * len, x + dx * len * 0.3, y + dy * len * 0.3, s.shape == .arrow ? Color(hex: 0x8A6A40) : col, max(2.0, r * 0.6))
+            strokeLine(&ctx, x, y, x + dx * len * 0.5, y + dy * len * 0.5, hi, max(2.5, r * 0.9))
+        case .shard:
+            strokeLine(&ctx, x - dx * r * 2.0, y - dy * r * 2.0, x + dx * r * 1.5, y + dy * r * 1.5, col, max(2.5, r))
+            strokeLine(&ctx, x - dx * r, y - dy * r, x + dx * r, y + dy * r, hi, max(1.5, r * 0.4))
+        case .rock:
+            fillRect(&ctx, mkRect(x - r, y - r, r * 2, r * 2), col)
+            fillRect(&ctx, mkRect(x - r, y - r, r, r * 0.8), hi)
+        }
+    }
+
     static func drawProjectiles(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
         let tp: Double = v.tp
         for p in g.projectiles {
             if !v.visible(p.x, p.y, 2) { continue }
             let x: Double = v.sx(p.x)
             let y: Double = v.sy(p.y)
+            if p.mod >= 0 {
+                drawModShot(&ctx, p, x, y, tp)
+                continue
+            }
             switch p.kind {
             case .quarrel:
                 // a short, heavy bolt with a bronze head
@@ -29603,7 +33021,7 @@ struct RecipeRow: View {
     let recipe: Recipe
     var body: some View {
         let ok: Bool = game.canCraft(recipe)
-        let stationOK: Bool = game.stationAvailable(recipe.station)
+        let stationOK: Bool = game.recipeStationOK(recipe)
         return HStack(spacing: 6) {
             SlotView(stack: Stack(item: recipe.out, count: recipe.outCount), size: 34)
             VStack(alignment: .leading, spacing: 2) {
@@ -29614,7 +33032,7 @@ struct RecipeRow: View {
                     }
                 }
                 if !stationOK {
-                    Text(verbatim: joinText("Needs ", recipe.station.name)).font(.pixel(9, .bold)).foregroundColor(Color(hex: 0xFF8A60))
+                    Text(verbatim: joinText("Needs ", game.recipeStationName(recipe))).font(.pixel(9, .bold)).foregroundColor(Color(hex: 0xFF8A60))
                 }
             }
             Spacer(minLength: 2)
@@ -30524,6 +33942,8 @@ struct MenuBackground: View {
 
 enum MenuScreen {
     case main, newWorld, load, character, settings, help
+    /// the Mod Creator (shown full screen)
+    case mods
 }
 
 struct MenuView: View {
@@ -30540,10 +33960,25 @@ struct MenuView: View {
     @State var flatCaves: Bool = true
     @State var splash: String = ""
     @State var metas: [SaveMeta] = []
+    /// a world whose mods are not all installed, waiting for the player's choice
+    @State var missingMods: ModLoadCheck? = nil
     let splashes: [String] = ["Now with pirates!", "Beware the Bear!", "Find the hidden gate!", "Ride a T-Rex!",
-                              "Build a car. Then a boat.", "Torches keep the dark away!", "Infinite worlds!"]
+                              "Build a car. Then a boat.", "Torches keep the dark away!", "Infinite worlds!", "Make your own mods!"]
 
     var body: some View {
+        ZStack {
+            if screen == .mods {
+                ModCreatorView(test: { p in start(ModTest.makeWorld(p, settings: settings)) }, done: { screen = .main })
+            } else {
+                menuBody
+            }
+            if let mc = missingMods {
+                ModMissingView(check: mc, load: { loadAnyway(mc) }, cancel: { missingMods = nil })
+            }
+        }
+    }
+
+    var menuBody: some View {
         ZStack {
             MenuBackground(hair: settings.hair, scarf: settings.scarf)
             ScrollView {
@@ -30594,6 +34029,7 @@ struct MenuView: View {
         case .character: CharacterView(settings: $settings, done: backToMain)
         case .settings: SettingsView(settings: $settings, done: backToMain)
         case .help: HelpView(done: backToMain)
+        case .mods: EmptyView()
         }
     }
 
@@ -30620,7 +34056,10 @@ struct MenuView: View {
                 PixelButton(title: "CHARACTER", color: Color(hex: 0x8A5A2E)) { screen = .character }
                 PixelButton(title: "SETTINGS") { screen = .settings }
             }
-            PixelButton(title: "HOW TO PLAY") { screen = .help }
+            HStack(spacing: 10) {
+                PixelButton(title: "HOW TO PLAY") { screen = .help }
+                PixelButton(title: "MOD CREATOR", color: Color(hex: 0x6A3AA0)) { screen = .mods }
+            }
         }
     }
 
@@ -30756,20 +34195,39 @@ struct MenuView: View {
             opts.structures = flatStructures
             opts.caves = flatCaves
         }
+        // the mods switched on now become part of the world (it remembers them from here on)
+        ModRuntime.activate(ModStore.enabledPacks(), world: nil)
         let g = Game(mode: mode, infinite: infinite, seed: seed, settings: settings, options: opts)
         g.worldName = nm
         g.slot = SaveStore.freeSlot()
+        g.modInfo = ModRuntime.shared.active ? ModRuntime.shared.worldInfo() : nil
         _ = g.saveNow()
         start(g)
     }
 
     func load(_ slot: Int) {
         if let s = SaveStore.read(slot) {
+            let mc: ModLoadCheck = ModLoadCheck.check(s)
+            if !mc.missing.isEmpty {
+                // never load a world without its mods behind the player's back
+                missingMods = mc
+                return
+            }
+            ModRuntime.activate(mc.packs, world: s.mods)
             let g: Game = Game.load(s, settings: settings)
             start(g)
         } else {
             refreshSaves()
         }
+    }
+
+    /// Loads a world even though some of its mods are missing: their blocks and items are kept as
+    /// placeholders (nothing is deleted), so the world is whole again once the mods are back
+    func loadAnyway(_ mc: ModLoadCheck) {
+        missingMods = nil
+        ModRuntime.activate(mc.packs, world: mc.save.mods)
+        let g: Game = Game.load(mc.save, settings: settings)
+        start(g)
     }
 }
 
@@ -30947,6 +34405,2855 @@ struct HelpView: View {
         .foregroundColor(Color.white)
         .padding(18)
         .background(PixelBox(color: Color(hex: 0x2C2C30)).opacity(0.95))
+    }
+}
+
+// ===== u07_mods =====
+
+// MARK: - Mod Creator: shared pieces
+
+/// The Mod Creator's working copy of one mod. Every edit marks it changed; it is written to disk
+/// when you leave the editor, press SAVE, or test it.
+final class ModSession: ObservableObject, @unchecked Sendable {
+    @Published var mod: ModPack
+    @Published var dirty: Bool = false
+    @Published var report: ModReport = ModReport()
+    /// bumped on every edit (previews key their caches on it)
+    @Published var rev: Int = 0
+
+    init(_ p: ModPack) {
+        mod = p
+        recheck()
+    }
+
+    func touch() {
+        dirty = true
+        rev &+= 1
+    }
+
+    @discardableResult
+    func save() -> Bool {
+        let ok: Bool = ModStore.save(mod)
+        if ok {
+            if let p = ModStore.pack(mod.id) { mod = p }
+            dirty = false
+        }
+        recheck()
+        return ok
+    }
+
+    func recheck() {
+        var p: ModPack = mod
+        report = ModValidator.check(&p, known: ModCatalog.installed().keys)
+    }
+
+    /// A binding to one field of one piece of content (looked up by id each time, so lists can change)
+    func bind<C: Identifiable, T>(_ list: WritableKeyPath<ModPack, [C]>, _ id: String, _ kp: WritableKeyPath<C, T>, _ fallback: T) -> Binding<T> where C.ID == String {
+        return Binding<T>(get: {
+            guard let i = self.mod[keyPath: list].firstIndex(where: { $0.id == id }) else { return fallback }
+            return self.mod[keyPath: list][i][keyPath: kp]
+        }, set: { v in
+            guard let i = self.mod[keyPath: list].firstIndex(where: { $0.id == id }) else { return }
+            self.mod[keyPath: list][i][keyPath: kp] = v
+            self.touch()
+        })
+    }
+
+    /// A binding to a field of the mod itself
+    func modBind<T>(_ kp: WritableKeyPath<ModPack, T>) -> Binding<T> {
+        return Binding<T>(get: { self.mod[keyPath: kp] }, set: { v in
+            self.mod[keyPath: kp] = v
+            self.touch()
+        })
+    }
+
+    var catalog: ModCatalog {
+        var ps: [ModPack] = [mod]
+        for e in ModStore.entries() where e.id != mod.id { if let p = e.pack { ps.append(p) } }
+        return ModCatalog.build(ps)
+    }
+}
+
+/// Colours and sizes shared by the Mod Creator screens
+enum ModUI {
+    static let panel: Color = Color(hex: 0x2C2C30)
+    static let card: Color = Color(hex: 0x3A3A40)
+    static let accent: Color = Color(hex: 0x4E8A3E)
+    static let blue: Color = Color(hex: 0x3E6FAA)
+    static let red: Color = Color(hex: 0xA03030)
+    static let gold: Color = Color(hex: 0xFFE066)
+    static let dim: Color = Color.white.opacity(0.7)
+    static let rarityColors: [UInt32] = [0xE8E8E8, 0x6AD86A, 0x5AA8FF, 0xC070FF, 0xFFB030]
+    static let rarityNames: [String] = ["Common", "Uncommon", "Rare", "Epic", "Legendary"]
+}
+
+/// A titled block of controls
+struct ModSection<C: View>: View {
+    let title: String
+    var help: String = ""
+    @ViewBuilder var content: () -> C
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(verbatim: title).font(.pixel(15)).foregroundColor(ModUI.gold)
+            if !help.isEmpty {
+                Text(verbatim: help).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+            }
+            content()
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(PixelBox(color: ModUI.card).opacity(0.95))
+    }
+}
+
+/// A number with a big slider: its name, its value, and the range it may take
+struct StatSlider: View {
+    let label: String
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    var step: Double = 0
+    var format: String = "%.1f"
+    var unit: String = ""
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack {
+                Text(verbatim: label).font(.pixel(13, .bold)).foregroundColor(Color.white)
+                Spacer()
+                Text(verbatim: String(format: format, value) + unit).font(.pixel(13)).foregroundColor(ModUI.gold)
+            }
+            Slider(value: clamped, in: range, step: step)
+                .frame(minHeight: 34)
+        }
+    }
+
+    var clamped: Binding<Double> {
+        let r: ClosedRange<Double> = range
+        let b: Binding<Double> = $value
+        return Binding<Double>(get: { clampD(b.wrappedValue, r.lowerBound, r.upperBound) }, set: { b.wrappedValue = $0 })
+    }
+}
+
+/// A whole number on a slider
+struct IntSlider: View {
+    let label: String
+    @Binding var value: Int
+    let range: ClosedRange<Int>
+    var unit: String = ""
+    var body: some View {
+        StatSlider(label: label, value: asDouble, range: Double(range.lowerBound)...Double(range.upperBound), step: 1, format: "%.0f", unit: unit)
+    }
+
+    var asDouble: Binding<Double> {
+        let b: Binding<Int> = $value
+        return Binding<Double>(get: { Double(b.wrappedValue) }, set: { b.wrappedValue = Int($0.rounded()) })
+    }
+}
+
+/// A row of large choices (one is picked)
+struct ChoiceRow: View {
+    let options: [String]
+    @Binding var selected: Int
+    var columns: Int = 3
+    var body: some View {
+        let cols: [GridItem] = [GridItem](repeating: GridItem(.flexible(), spacing: 6), count: max(1, min(columns, options.count)))
+        return LazyVGrid(columns: cols, spacing: 6) {
+            ForEach(0..<options.count, id: \.self) { i in
+                chip(i)
+            }
+        }
+    }
+
+    func chip(_ i: Int) -> some View {
+        let on: Bool = selected == i
+        let col: Color = on ? ModUI.accent : Color(hex: 0x555555)
+        return Button {
+            selected = i
+        } label: {
+            Text(verbatim: options[i])
+                .font(.pixel(12))
+                .foregroundColor(Color.white)
+                .lineLimit(2)
+                .minimumScaleFactor(0.7)
+                .frame(maxWidth: .infinity, minHeight: 40)
+                .background(PixelBox(color: col))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// An on/off switch with a line of explanation
+struct ModToggle: View {
+    let label: String
+    var help: String = ""
+    @Binding var isOn: Bool
+    var body: some View {
+        Button {
+            isOn.toggle()
+        } label: {
+            HStack(spacing: 10) {
+                Text(verbatim: isOn ? "ON" : "OFF")
+                    .font(.pixel(12))
+                    .foregroundColor(Color.white)
+                    .frame(width: 50, height: 32)
+                    .background(PixelBox(color: isOn ? ModUI.accent : Color(hex: 0x555555)))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(verbatim: label).font(.pixel(13, .bold)).foregroundColor(Color.white)
+                    if !help.isEmpty { Text(verbatim: help).font(.pixel(10, .semibold)).foregroundColor(ModUI.dim) }
+                }
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// A labelled text box
+struct ModTextField: View {
+    let label: String
+    @Binding var text: String
+    var placeholder: String = ""
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(verbatim: label).font(.pixel(12, .bold)).foregroundColor(ModUI.dim)
+            TextField(placeholder, text: $text)
+                .font(.pixel(15, .bold))
+                .foregroundColor(Color.white)
+                .padding(10)
+                .background(Color.black.opacity(0.6))
+        }
+    }
+}
+
+/// "Are you sure?" over the screen
+struct ModConfirm: View {
+    let title: String
+    let text: String
+    let yes: String
+    let yesAction: () -> Void
+    let noAction: () -> Void
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.6).ignoresSafeArea()
+            VStack(spacing: 12) {
+                Text(verbatim: title).font(.pixel(18)).foregroundColor(Color.white)
+                Text(verbatim: text).font(.pixel(12, .semibold)).foregroundColor(ModUI.dim).multilineTextAlignment(.center)
+                HStack(spacing: 10) {
+                    PixelButton(title: "CANCEL") { noAction() }
+                    PixelButton(title: yes, color: ModUI.red) { yesAction() }
+                }
+            }
+            .padding(18)
+            .frame(maxWidth: 420)
+            .background(PixelBox(color: ModUI.panel))
+        }
+    }
+}
+
+/// Picture of a mod pixel grid, drawn crisp at any size
+func modImage(_ p: ModPixels) -> Image {
+    return pixImage(p.buf())
+}
+
+func shortDate(_ t: Double) -> String {
+    if t <= 0 { return "never" }
+    let f = DateFormatter()
+    f.dateStyle = .medium
+    f.timeStyle = .short
+    return f.string(from: Date(timeIntervalSince1970: t))
+}
+
+/// Shown before loading a world whose mods are not all installed
+struct ModMissingView: View {
+    let check: ModLoadCheck
+    var load: () -> Void
+    var cancel: () -> Void
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.75).ignoresSafeArea()
+            VStack(alignment: .leading, spacing: 10) {
+                Text("MODS MISSING").font(.pixel(22)).foregroundColor(Color(hex: 0xFF9060))
+                Text(verbatim: "\u{201C}" + check.save.meta.name + "\u{201D} was made with mods that are not on this iPad:").font(.pixel(13, .semibold)).foregroundColor(Color.white)
+                ForEach(check.missing) { d in
+                    Text(verbatim: joinText("• ", d.name, " v", d.version, d.author.isEmpty ? "" : " by " + d.author)).font(.pixel(13)).foregroundColor(ModUI.gold)
+                }
+                Text("You can load it anyway: their blocks show as magenta placeholders that cannot be broken, and their items wait in your bag. Nothing is deleted, so it all comes back when the mods are installed again.")
+                    .font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+                HStack(spacing: 10) {
+                    PixelButton(title: "BACK") { cancel() }
+                    PixelButton(title: "LOAD ANYWAY", color: Color(hex: 0x8A5A2E)) { load() }
+                }
+            }
+            .padding(18)
+            .frame(maxWidth: 560)
+            .background(PixelBox(color: ModUI.panel))
+        }
+    }
+}
+
+// MARK: - Mod Creator: the list of mods
+
+enum ModScreen: Equatable {
+    case list
+    case edit(String)
+    case info(String)
+    case packages
+}
+
+struct ModCreatorView: View {
+    /// starts a test world for a mod (see ModTest)
+    var test: (ModPack) -> Void
+    var done: () -> Void
+    @State var screen: ModScreen = .list
+    @State var entries: [ModEntry] = []
+    @State var confirmDelete: String? = nil
+    @State var note: String = ""
+    @State var session: ModSession? = nil
+
+    var body: some View {
+        ZStack {
+            Color(hex: 0x1C1C22).ignoresSafeArea()
+            content
+            if let id = confirmDelete {
+                ModConfirm(title: "DELETE MOD?", text: "This removes the mod from this iPad. Worlds that use it will warn that it is missing.", yes: "DELETE",
+                           yesAction: { deleteMod(id) }, noAction: { confirmDelete = nil })
+            }
+        }
+        .onAppear { refresh() }
+    }
+
+    @ViewBuilder
+    var content: some View {
+        switch screen {
+        case .list: listScreen
+        case .edit:
+            if let s = session {
+                ModEditorView(session: s, test: { p in test(p) }, close: { closeEditor() })
+            } else {
+                listScreen
+            }
+        case .info(let id): ModInfoScreen(id: id, back: { screen = .list })
+        case .packages: ModPackagesScreen(back: { refresh(); screen = .list })
+        }
+    }
+
+    var listScreen: some View {
+        VStack(spacing: 10) {
+            HStack(spacing: 8) {
+                SmallButton(title: "< MENU") { done() }
+                Spacer()
+                Text("MOD CREATOR").font(.pixel(24)).foregroundColor(ModUI.gold)
+                Spacer()
+                SmallButton(title: "IMPORT / SHARE", color: ModUI.blue) { screen = .packages }
+            }
+            Text("Make your own blocks, items, weapons, creatures, bosses, ores, recipes and structures. Mods switched on are used by new worlds; every world remembers the mods it was made with.")
+                .font(.pixel(11, .semibold)).foregroundColor(ModUI.dim).multilineTextAlignment(.center)
+            if !note.isEmpty { Text(verbatim: note).font(.pixel(12)).foregroundColor(ModUI.gold) }
+            ScrollView {
+                VStack(spacing: 8) {
+                    PixelButton(title: "+ CREATE NEW MOD", color: ModUI.accent) { createMod() }
+                    ForEach(entries) { e in
+                        ModCard(entry: e, actions: cardActions(e))
+                    }
+                    if entries.isEmpty {
+                        Text("No mods yet. Create one to start!").font(.pixel(13)).foregroundColor(ModUI.dim).padding(.top, 20)
+                    }
+                }
+                .padding(.bottom, 20)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: 900)
+    }
+
+    func cardActions(_ e: ModEntry) -> ModCardActions {
+        return ModCardActions(edit: { openEditor(e.id) }, test: { testMod(e.id) }, copy: { duplicateMod(e.id) },
+                              delete: { confirmDelete = e.id }, info: { screen = .info(e.id) },
+                              toggle: { toggleMod(e.id) }, up: { moveMod(e.id, -1) }, down: { moveMod(e.id, 1) })
+    }
+
+    func refresh() {
+        entries = ModStore.entries()
+    }
+
+    func createMod() {
+        var p = ModPack()
+        p.id = newModID()
+        p.name = "My Mod " + String(entries.count + 1)
+        if ModStore.save(p) {
+            refresh()
+            openEditor(p.id)
+        } else {
+            note = "The mod could not be saved."
+        }
+    }
+
+    func openEditor(_ id: String) {
+        guard let p = ModStore.pack(id) else {
+            note = "That mod could not be opened."
+            return
+        }
+        session = ModSession(p)
+        screen = .edit(id)
+    }
+
+    func closeEditor() {
+        if let s = session, s.dirty { _ = s.save() }
+        session = nil
+        refresh()
+        screen = .list
+    }
+
+    func testMod(_ id: String) {
+        guard let p = ModStore.pack(id) else { return }
+        test(p)
+    }
+
+    func duplicateMod(_ id: String) {
+        guard let p = ModStore.pack(id) else { return }
+        if let c = ModStore.duplicate(p) { note = "Made " + c.name + "." } else { note = "The copy could not be saved." }
+        refresh()
+    }
+
+    func deleteMod(_ id: String) {
+        ModStore.delete(id)
+        confirmDelete = nil
+        note = "Mod deleted."
+        refresh()
+    }
+
+    func toggleMod(_ id: String) {
+        let on: Bool = !ModStore.isEnabled(id)
+        if on && ModStore.enabledPacks().count >= ModLimits.maxMods {
+            note = "At most " + String(ModLimits.maxMods) + " mods can be on at once."
+            return
+        }
+        ModStore.setEnabled(id, on)
+        refresh()
+    }
+
+    func moveMod(_ id: String, _ d: Int) {
+        ModStore.move(id, by: d)
+        refresh()
+    }
+}
+
+struct ModCardActions {
+    var edit: () -> Void
+    var test: () -> Void
+    var copy: () -> Void
+    var delete: () -> Void
+    var info: () -> Void
+    var toggle: () -> Void
+    var up: () -> Void
+    var down: () -> Void
+}
+
+/// One mod in the list: what it is, whether it is on, and what you can do with it
+struct ModCard: View {
+    let entry: ModEntry
+    let actions: ModCardActions
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let p = entry.pack {
+                header(p)
+                Text(verbatim: p.summary).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+                buttons
+            } else {
+                Text(verbatim: "Damaged mod: " + entry.id).font(.pixel(14)).foregroundColor(Color(hex: 0xFF8060))
+                Text(verbatim: entry.error).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+                SmallButton(title: "DELETE", color: ModUI.red) { actions.delete() }
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(PixelBox(color: entry.enabled ? Color(hex: 0x34503A) : ModUI.card))
+    }
+
+    func header(_ p: ModPack) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Button { actions.toggle() } label: {
+                Text(verbatim: entry.enabled ? "ON" : "OFF")
+                    .font(.pixel(13))
+                    .foregroundColor(Color.white)
+                    .frame(width: 58, height: 44)
+                    .background(PixelBox(color: entry.enabled ? ModUI.accent : Color(hex: 0x555555)))
+            }
+            .buttonStyle(.plain)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(verbatim: p.name).font(.pixel(17)).foregroundColor(Color.white)
+                Text(verbatim: byline(p)).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+            }
+            Spacer(minLength: 4)
+            VStack(spacing: 4) {
+                SmallButton(title: "▲") { actions.up() }
+                SmallButton(title: "▼") { actions.down() }
+            }
+        }
+    }
+
+    func byline(_ p: ModPack) -> String {
+        let who: String = p.author.isEmpty ? "unknown author" : p.author
+        return joinText("v", p.version, " · by ", who, " · edited ", shortDate(p.edited))
+    }
+
+    var buttons: some View {
+        HStack(spacing: 6) {
+            SmallButton(title: "EDIT", color: ModUI.blue) { actions.edit() }
+            SmallButton(title: "TEST", color: ModUI.accent) { actions.test() }
+            SmallButton(title: "INFO") { actions.info() }
+            SmallButton(title: "COPY") { actions.copy() }
+            Spacer(minLength: 0)
+            SmallButton(title: "DELETE", color: ModUI.red) { actions.delete() }
+        }
+    }
+}
+
+/// Everything about one mod: details, content, and the problems the checks found
+struct ModInfoScreen: View {
+    let id: String
+    var back: () -> Void
+    var body: some View {
+        let e: ModEntry = ModStore.read(id)
+        return VStack(spacing: 10) {
+            HStack {
+                SmallButton(title: "< BACK") { back() }
+                Spacer()
+                Text("MOD INFO").font(.pixel(20)).foregroundColor(ModUI.gold)
+                Spacer()
+            }
+            ScrollView {
+                if let p = e.pack {
+                    ModInfoBody(pack: p)
+                } else {
+                    Text(verbatim: e.error).font(.pixel(13)).foregroundColor(Color(hex: 0xFF8060))
+                }
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: 900)
+    }
+}
+
+struct ModInfoBody: View {
+    let pack: ModPack
+    var body: some View {
+        var copy: ModPack = pack
+        let rep: ModReport = ModValidator.check(&copy, known: ModCatalog.installed().keys)
+        return VStack(alignment: .leading, spacing: 10) {
+            ModSection(title: pack.name) {
+                infoLine("Author", pack.author.isEmpty ? "unknown" : pack.author)
+                infoLine("Version", pack.version)
+                infoLine("Created", shortDate(pack.created))
+                infoLine("Last edited", shortDate(pack.edited))
+                infoLine("Sandbox limits", pack.sandbox ? "on" : "off")
+                if !pack.desc.isEmpty { Text(verbatim: pack.desc).font(.pixel(12, .semibold)).foregroundColor(Color.white) }
+            }
+            ModSection(title: "CONTENT") {
+                contentList
+            }
+            ModIssueList(report: rep)
+        }
+    }
+
+    func infoLine(_ a: String, _ b: String) -> some View {
+        HStack {
+            Text(verbatim: a).font(.pixel(12, .bold)).foregroundColor(ModUI.dim)
+            Spacer()
+            Text(verbatim: b).font(.pixel(12)).foregroundColor(Color.white)
+        }
+    }
+
+    var contentList: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            ForEach(pack.blocks) { b in Text(verbatim: "Block: " + b.name).font(.pixel(12, .semibold)).foregroundColor(Color.white) }
+            ForEach(pack.items) { i in Text(verbatim: i.kind.name + ": " + i.name).font(.pixel(12, .semibold)).foregroundColor(Color.white) }
+            ForEach(pack.mobs) { m in Text(verbatim: m.category.name + ": " + m.name).font(.pixel(12, .semibold)).foregroundColor(Color.white) }
+            ForEach(pack.projectiles) { s in Text(verbatim: "Shot: " + s.name).font(.pixel(12, .semibold)).foregroundColor(Color.white) }
+            ForEach(pack.ores) { o in Text(verbatim: "Ore: " + o.name).font(.pixel(12, .semibold)).foregroundColor(Color.white) }
+            ForEach(pack.structures) { s in Text(verbatim: "Structure: " + s.name).font(.pixel(12, .semibold)).foregroundColor(Color.white) }
+            ForEach(pack.loot) { l in Text(verbatim: "Loot table: " + l.name).font(.pixel(12, .semibold)).foregroundColor(Color.white) }
+            Text(verbatim: String(pack.recipes.count) + " recipes").font(.pixel(12, .semibold)).foregroundColor(Color.white)
+        }
+    }
+}
+
+/// The checks' findings, worst first
+struct ModIssueList: View {
+    let report: ModReport
+    var body: some View {
+        let list: [ModIssue] = report.issues.sorted { $0.level > $1.level }
+        return ModSection(title: report.issues.isEmpty ? "NO PROBLEMS FOUND" : "PROBLEMS (" + String(report.errors) + " errors, " + String(report.warnings) + " warnings)",
+                          help: report.issues.isEmpty ? "Everything in this mod checks out." : "Errors switch that content off until it is fixed; warnings were fixed for you.") {
+            ForEach(list) { i in
+                HStack(alignment: .top, spacing: 8) {
+                    Text(verbatim: i.level >= 2 ? "✕" : (i.level == 1 ? "!" : "i"))
+                        .font(.pixel(14))
+                        .foregroundColor(Color(hex: i.level >= 2 ? 0xFF6060 : (i.level == 1 ? 0xFFC040 : 0x90C0FF)))
+                        .frame(width: 18)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(verbatim: i.place).font(.pixel(12, .bold)).foregroundColor(Color.white)
+                        Text(verbatim: i.text).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Exporting a mod as a package file, and installing packages found in the packages folder
+struct ModPackagesScreen: View {
+    var back: () -> Void
+    @State var note: String = ""
+    @State var files: [URL] = []
+    @State var mods: [ModEntry] = []
+    var body: some View {
+        VStack(spacing: 10) {
+            HStack {
+                SmallButton(title: "< BACK") { back() }
+                Spacer()
+                Text("SHARE MODS").font(.pixel(20)).foregroundColor(ModUI.gold)
+                Spacer()
+            }
+            Text("Exported mods are saved as .prmod files in the PixelRealmMods/Packages folder of this app's documents. Put a .prmod file there to install it. Every package is checked before it is installed.")
+                .font(.pixel(11, .semibold)).foregroundColor(ModUI.dim).multilineTextAlignment(.center)
+            if !note.isEmpty { Text(verbatim: note).font(.pixel(12)).foregroundColor(ModUI.gold) }
+            ScrollView {
+                VStack(spacing: 8) {
+                    ModSection(title: "EXPORT A MOD") {
+                        ForEach(mods) { e in exportRow(e) }
+                    }
+                    ModSection(title: "INSTALL A PACKAGE", help: files.isEmpty ? "No package files found." : "") {
+                        ForEach(files, id: \.self) { u in importRow(u) }
+                    }
+                }
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: 900)
+        .onAppear { reload() }
+    }
+
+    func reload() {
+        files = ModStore.packageFiles()
+        mods = ModStore.entries().filter { $0.pack != nil }
+    }
+
+    func exportRow(_ e: ModEntry) -> some View {
+        HStack {
+            Text(verbatim: e.pack?.name ?? e.id).font(.pixel(13)).foregroundColor(Color.white)
+            Spacer()
+            SmallButton(title: "EXPORT", color: ModUI.blue) {
+                if let p = e.pack, let u = ModStore.exportPackage(p) {
+                    note = "Saved " + u.lastPathComponent
+                } else {
+                    note = "Export failed."
+                }
+                reload()
+            }
+        }
+    }
+
+    func importRow(_ u: URL) -> some View {
+        HStack {
+            Text(verbatim: u.lastPathComponent).font(.pixel(13)).foregroundColor(Color.white)
+            Spacer()
+            SmallButton(title: "INSTALL", color: ModUI.accent) {
+                if let d = try? Data(contentsOf: u) {
+                    let r: (ModPack?, String) = ModStore.importPackage(d)
+                    note = r.1
+                } else {
+                    note = "That file could not be read."
+                }
+                reload()
+            }
+        }
+    }
+}
+
+// MARK: - Mod Creator: editing a mod
+
+enum ModTab: Int, CaseIterable {
+    case info, blocks, items, mobs, shots, recipes, loot, ores, structures, check
+    var name: String {
+        switch self {
+        case .info: return "INFO"
+        case .blocks: return "BLOCKS"
+        case .items: return "ITEMS & WEAPONS"
+        case .mobs: return "CREATURES"
+        case .shots: return "SHOTS"
+        case .recipes: return "RECIPES"
+        case .loot: return "LOOT"
+        case .ores: return "ORES"
+        case .structures: return "STRUCTURES"
+        case .check: return "CHECK"
+        }
+    }
+}
+
+/// What the editor is showing: a tab's list, or one piece of content
+enum ModEditTarget: Equatable {
+    case none
+    case block(String)
+    case item(String)
+    case mob(String)
+    case shot(String)
+    case recipe(String)
+    case loot(String)
+    case ore(String)
+    case structure(String)
+}
+
+struct ModEditorView: View {
+    @ObservedObject var session: ModSession
+    var test: (ModPack) -> Void
+    var close: () -> Void
+    @State var tab: ModTab = .info
+    @State var target: ModEditTarget = .none
+    @State var confirm: (String, () -> Void)? = nil
+
+    var body: some View {
+        ZStack {
+            VStack(spacing: 8) {
+                topBar
+                if target == .none { tabBar }
+                ScrollView {
+                    VStack(spacing: 10) {
+                        page
+                    }
+                    .padding(.bottom, 30)
+                }
+            }
+            .padding(12)
+            .frame(maxWidth: 1000)
+            if let c = confirm {
+                ModConfirm(title: "DELETE?", text: c.0, yes: "DELETE", yesAction: { c.1(); confirm = nil }, noAction: { confirm = nil })
+            }
+        }
+    }
+
+    var topBar: some View {
+        HStack(spacing: 8) {
+            if target == .none {
+                SmallButton(title: "< MODS") { close() }
+            } else {
+                SmallButton(title: "< " + tab.name) { target = .none; session.recheck() }
+            }
+            Spacer()
+            Text(verbatim: session.mod.name).font(.pixel(18)).foregroundColor(Color.white).lineLimit(1)
+            Spacer()
+            Text(verbatim: session.dirty ? "unsaved" : "saved").font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+            SmallButton(title: "SAVE", color: ModUI.blue) { _ = session.save() }
+            SmallButton(title: "TEST", color: ModUI.accent) {
+                _ = session.save()
+                test(session.mod)
+            }
+        }
+    }
+
+    var tabBar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(ModTab.allCases, id: \.self) { t in
+                    tabButton(t)
+                }
+            }
+        }
+    }
+
+    func tabButton(_ t: ModTab) -> some View {
+        let on: Bool = tab == t
+        var label: String = t.name
+        if t == .check && session.report.errors > 0 { label += " (" + String(session.report.errors) + ")" }
+        return Button {
+            tab = t
+            target = .none
+            if t == .check { session.recheck() }
+        } label: {
+            Text(verbatim: label)
+                .font(.pixel(12))
+                .foregroundColor(Color.white)
+                .padding(.horizontal, 12)
+                .frame(minHeight: 40)
+                .background(PixelBox(color: on ? ModUI.accent : Color(hex: 0x4A4A50)))
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    var page: some View {
+        switch target {
+        case .none: tabPage
+        case .block(let id): BlockEditorView(s: session, id: id)
+        case .item(let id): ItemEditorView(s: session, id: id)
+        case .mob(let id): MobEditorView(s: session, id: id)
+        case .shot(let id): ShotEditorView(s: session, id: id)
+        case .recipe(let id): RecipeEditorView(s: session, id: id)
+        case .loot(let id): LootEditorView(s: session, id: id)
+        case .ore(let id): OreEditorView(s: session, id: id)
+        case .structure(let id): StructureEditorView(s: session, id: id)
+        }
+    }
+
+    @ViewBuilder
+    var tabPage: some View {
+        switch tab {
+        case .info: ModInfoEditor(s: session)
+        case .blocks: blockList
+        case .items: itemList
+        case .mobs: mobList
+        case .shots: shotList
+        case .recipes: recipeList
+        case .loot: lootList
+        case .ores: oreList
+        case .structures: structureList
+        case .check: ModIssueList(report: session.report)
+        }
+    }
+
+    // MARK: lists
+
+    func addButton(_ title: String, _ action: @escaping () -> Void) -> some View {
+        PixelButton(title: title, color: ModUI.accent, action: action)
+    }
+
+    var blockList: some View {
+        VStack(spacing: 8) {
+            addButton("+ NEW BLOCK") {
+                var b = ModBlock()
+                b.id = session.mod.freshID("b")
+                b.name = "Block " + String(session.mod.blocks.count + 1)
+                b.art = ModPixels(buf: tileBuf(.stone))
+                session.mod.blocks.append(b)
+                session.touch()
+                target = .block(b.id)
+            }
+            ForEach(session.mod.blocks) { b in
+                ModRow(image: modImage(b.art), title: b.name, sub: b.category.name + " · hardness " + String(format: "%.1f", b.hardness),
+                       open: { target = .block(b.id) }, copy: { copyBlock(b) },
+                       delete: { ask("Delete the block " + b.name + "?") { session.mod.blocks.removeAll { $0.id == b.id }; session.touch() } })
+            }
+        }
+    }
+
+    var itemList: some View {
+        VStack(spacing: 8) {
+            ItemTemplateRow { kind in addItem(kind) }
+            ForEach(session.mod.items) { it in
+                ModRow(image: ModPreview.itemIcon(it, session.catalog), title: it.name, sub: it.kind.name,
+                       open: { target = .item(it.id) }, copy: { copyItem(it) },
+                       delete: { ask("Delete " + it.name + "?") { session.mod.items.removeAll { $0.id == it.id }; session.touch() } })
+            }
+        }
+    }
+
+    var mobList: some View {
+        VStack(spacing: 8) {
+            addButton("+ NEW CREATURE") {
+                var m = ModMob()
+                m.id = session.mod.freshID("c")
+                m.name = "Creature " + String(session.mod.mobs.count + 1)
+                m.behavior.chase = true
+                m.behavior.attackPlayer = true
+                session.mod.mobs.append(m)
+                session.touch()
+                target = .mob(m.id)
+            }
+            ForEach(session.mod.mobs) { m in
+                ModRow(image: ModPreview.mobImage(m), title: m.name, sub: m.category.name + " · " + String(format: "%.0f HP", m.hp),
+                       open: { target = .mob(m.id) }, copy: { copyMob(m) },
+                       delete: { ask("Delete " + m.name + "?") { session.mod.mobs.removeAll { $0.id == m.id }; session.touch() } })
+            }
+        }
+    }
+
+    var shotList: some View {
+        VStack(spacing: 8) {
+            Text("Shots are what bows, guns, wands and creatures fire: how they look, fly and land.").font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+            addButton("+ NEW SHOT") {
+                var s = ModProjectile()
+                s.id = session.mod.freshID("s")
+                s.name = "Shot " + String(session.mod.projectiles.count + 1)
+                session.mod.projectiles.append(s)
+                session.touch()
+                target = .shot(s.id)
+            }
+            ForEach(session.mod.projectiles) { s in
+                ModRow(image: ModPreview.shotImage(s), title: s.name, sub: s.shape.name + (s.explode > 0 ? " · explodes" : ""),
+                       open: { target = .shot(s.id) }, copy: nil,
+                       delete: { ask("Delete the shot " + s.name + "?") { session.mod.projectiles.removeAll { $0.id == s.id }; session.touch() } })
+            }
+        }
+    }
+
+    var recipeList: some View {
+        let cat: ModCatalog = session.catalog
+        return VStack(spacing: 8) {
+            addButton("+ NEW RECIPE") {
+                var r = ModRecipe()
+                r.id = session.mod.freshID("r")
+                if let it = session.mod.items.first { r.out = .custom(session.mod.key(it.id)) }
+                else if let b = session.mod.blocks.first { r.out = .custom(session.mod.key(b.id)) }
+                r.cost = [ModCost(.block(.planks), 2)]
+                session.mod.recipes.append(r)
+                session.touch()
+                target = .recipe(r.id)
+            }
+            ForEach(session.mod.recipes) { r in
+                ModRow(image: ModPreview.icon(r.out, cat), title: ModPreview.name(r.out, cat) + (r.count > 1 ? " x" + String(r.count) : ""),
+                       sub: recipeLine(r, cat), open: { target = .recipe(r.id) }, copy: nil,
+                       delete: { ask("Delete this recipe?") { session.mod.recipes.removeAll { $0.id == r.id }; session.touch() } })
+            }
+        }
+    }
+
+    func recipeLine(_ r: ModRecipe, _ cat: ModCatalog) -> String {
+        var parts: [String] = []
+        for c in r.cost { parts.append(String(c.n) + " " + ModPreview.name(c.item, cat)) }
+        return parts.joined(separator: " + ")
+    }
+
+    var lootList: some View {
+        VStack(spacing: 8) {
+            addButton("+ NEW LOOT TABLE") {
+                var l = ModLootTable()
+                l.id = session.mod.freshID("l")
+                l.name = "Loot " + String(session.mod.loot.count + 1)
+                l.entries = [ModLootEntry(.mat(.coal), 1, 3, 0)]
+                session.mod.loot.append(l)
+                session.touch()
+                target = .loot(l.id)
+            }
+            ForEach(session.mod.loot) { l in
+                ModRow(image: nil, title: l.name, sub: String(l.entries.count) + " entries · " + String(l.rolls) + " rolls",
+                       open: { target = .loot(l.id) }, copy: nil,
+                       delete: { ask("Delete the loot table " + l.name + "?") { session.mod.loot.removeAll { $0.id == l.id }; session.touch() } })
+            }
+        }
+    }
+
+    var oreList: some View {
+        VStack(spacing: 8) {
+            Text("An ore is one of this mod's blocks that forms in veins underground. Make the block first (BLOCKS), then add its ore here.").font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+            addButton("+ NEW ORE") {
+                var o = ModOre()
+                o.id = session.mod.freshID("o")
+                o.name = "Ore " + String(session.mod.ores.count + 1)
+                o.block = session.mod.blocks.first(where: { $0.category == .terrain })?.id ?? (session.mod.blocks.first?.id ?? "")
+                session.mod.ores.append(o)
+                session.touch()
+                target = .ore(o.id)
+            }
+            ForEach(session.mod.ores) { o in
+                let blk: ModBlock? = session.mod.blocks.first { $0.id == o.block }
+                ModRow(image: blk.map { modImage($0.art) }, title: o.name, sub: "rows " + String(o.minY) + "-" + String(o.maxY) + String(format: " · %.1f veins per chunk", o.veins),
+                       open: { target = .ore(o.id) }, copy: nil,
+                       delete: { ask("Delete the ore " + o.name + "?") { session.mod.ores.removeAll { $0.id == o.id }; session.touch() } })
+            }
+        }
+    }
+
+    var structureList: some View {
+        VStack(spacing: 8) {
+            Text("To make a structure: build it in a world (a test world is easiest), pause, choose CAPTURE STRUCTURE, tap two corners around it, and save it to this mod. Its settings are edited here.")
+                .font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+            ForEach(session.mod.structures) { st in
+                ModRow(image: nil, title: st.name, sub: String(st.w) + " x " + String(st.h) + " · " + st.placement.name,
+                       open: { target = .structure(st.id) }, copy: nil,
+                       delete: { ask("Delete the structure " + st.name + "?") { session.mod.structures.removeAll { $0.id == st.id }; session.touch() } })
+            }
+            if session.mod.structures.isEmpty {
+                Text("No structures captured yet.").font(.pixel(13)).foregroundColor(ModUI.dim)
+            }
+        }
+    }
+
+    // MARK: actions
+
+    func ask(_ text: String, _ action: @escaping () -> Void) {
+        confirm = (text, action)
+    }
+
+    func copyBlock(_ b: ModBlock) {
+        var c: ModBlock = b
+        c.id = session.mod.freshID("b")
+        c.name = b.name + " copy"
+        session.mod.blocks.append(c)
+        session.touch()
+    }
+
+    func copyItem(_ it: ModItem) {
+        var c: ModItem = it
+        c.id = session.mod.freshID("i")
+        c.name = it.name + " copy"
+        session.mod.items.append(c)
+        session.touch()
+    }
+
+    func copyMob(_ m: ModMob) {
+        var c: ModMob = m
+        c.id = session.mod.freshID("c")
+        c.name = m.name + " copy"
+        session.mod.mobs.append(c)
+        session.touch()
+    }
+
+    func addItem(_ kind: ModItemKind) {
+        var it: ModItem = ModItem.template(kind)
+        it.id = session.mod.freshID("i")
+        it.name = "New " + kind.name
+        session.mod.items.append(it)
+        session.touch()
+        target = .item(it.id)
+    }
+}
+
+/// One piece of content in a list
+struct ModRow: View {
+    let image: Image?
+    let title: String
+    let sub: String
+    let open: () -> Void
+    let copy: (() -> Void)?
+    let delete: () -> Void
+    var body: some View {
+        HStack(spacing: 10) {
+            Button { open() } label: {
+                HStack(spacing: 10) {
+                    ZStack {
+                        Rectangle().fill(Color.black.opacity(0.4))
+                        if let img = image { img.resizable().interpolation(.none).frame(width: 38, height: 38) }
+                    }
+                    .frame(width: 46, height: 46)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(verbatim: title).font(.pixel(14)).foregroundColor(Color.white).lineLimit(1)
+                        Text(verbatim: sub).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim).lineLimit(2)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            if let c = copy { SmallButton(title: "COPY") { c() } }
+            SmallButton(title: "EDIT", color: ModUI.blue) { open() }
+            SmallButton(title: "✕", color: ModUI.red) { delete() }
+        }
+        .padding(8)
+        .background(PixelBox(color: ModUI.card))
+    }
+}
+
+/// Buttons to start a new item from a sensible template of each kind
+struct ItemTemplateRow: View {
+    var add: (ModItemKind) -> Void
+    var body: some View {
+        let cols: [GridItem] = [GridItem(.adaptive(minimum: 150), spacing: 6)]
+        return VStack(alignment: .leading, spacing: 4) {
+            Text("NEW ITEM:").font(.pixel(13)).foregroundColor(ModUI.gold)
+            LazyVGrid(columns: cols, spacing: 6) {
+                ForEach(ModItemKind.allCases, id: \.self) { k in
+                    SmallButton(title: "+ " + k.name, color: ModUI.accent) { add(k) }
+                }
+            }
+        }
+    }
+}
+
+extension ModItem {
+    /// A ready-to-use starting point for each kind of item
+    static func template(_ k: ModItemKind) -> ModItem {
+        var it = ModItem()
+        it.kind = k
+        switch k {
+        case .material:
+            it.baseIcon = .mat(.diamond)
+            it.tintAmt = 0.4
+            it.tint = 0xFF60A0
+        case .food:
+            it.baseIcon = .food(.apple)
+            it.hunger = 6
+            it.effects = [ModEffect(.heal, 2, 0)]
+        case .consumable:
+            it.baseIcon = .gadget(.waterFlask)
+            it.tint = 0xFF4060
+            it.tintAmt = 0.5
+            it.effects = [ModEffect(.heal, 8, 0), ModEffect(.speed, 30, 20)]
+            it.stack = 20
+        case .tool:
+            it.baseIcon = .tool(.pickaxe, .iron)
+            it.toolType = 0
+            it.toolTier = 5
+            it.toolSpeed = 6
+            it.damage = 5
+            it.stack = 1
+        case .melee:
+            it.baseIcon = .sword(.iron)
+            it.damage = 9
+            it.cooldown = 0.42
+            it.reach = 3
+            it.arc = 1.1
+            it.stack = 1
+        case .bow:
+            it.baseIcon = .bow
+            it.damage = 9
+            it.cooldown = 0.6
+            it.speed = 30
+            it.gravity = 12
+            it.ammo = .ammo(.arrow)
+            it.stack = 1
+            it.shot = ProjKind.arrow.rawValue
+        case .gun:
+            it.baseIcon = .gun(.pistol)
+            it.damage = 10
+            it.cooldown = 0.35
+            it.speed = 36
+            it.magazine = 6
+            it.reload = 1.3
+            it.ammo = .ammo(.bullet)
+            it.stack = 1
+            it.shot = ProjKind.bullet.rawValue
+        case .thrown:
+            it.baseIcon = .gadget(.bomb)
+            it.damage = 8
+            it.cooldown = 0.6
+            it.speed = 20
+            it.gravity = 18
+            it.stack = 30
+            it.shot = ProjKind.rock.rawValue
+        case .magic:
+            it.baseIcon = .gun(.stormRod)
+            it.damage = 7
+            it.cooldown = 0.5
+            it.speed = 26
+            it.stack = 1
+            it.shot = ProjKind.fireball.rawValue
+        case .armor:
+            it.baseIcon = .armor(.chest, .iron)
+            it.slot = 1
+            it.defense = 3
+            it.look = 4
+            it.stack = 1
+        case .ammo:
+            it.baseIcon = .ammo(.arrow)
+            it.stack = 99
+        case .special:
+            it.baseIcon = .block(.glowCrystal)
+            it.light = 12
+            it.stack = 1
+        }
+        return it
+    }
+}
+
+/// The mod's name, author, version, description and sandbox switch
+struct ModInfoEditor: View {
+    @ObservedObject var s: ModSession
+    var body: some View {
+        VStack(spacing: 10) {
+            ModSection(title: "ABOUT THIS MOD") {
+                ModTextField(label: "Mod name", text: s.modBind(\.name), placeholder: "My Mod")
+                ModTextField(label: "Author", text: s.modBind(\.author), placeholder: "Your name")
+                ModTextField(label: "Version", text: s.modBind(\.version), placeholder: "1.0")
+                ModTextField(label: "Description (optional)", text: s.modBind(\.desc), placeholder: "What does it add?")
+            }
+            ModSection(title: "LIMITS", help: "Normal limits keep numbers fair for survival. Sandbox mode allows much bigger numbers (giant bosses, huge damage) for creative play.") {
+                ModToggle(label: "Sandbox mode (fewer limits)", help: "Health up to 20000, damage up to 500, faster creatures", isOn: s.modBind(\.sandbox))
+            }
+            ModSection(title: "CONTENT") {
+                Text(verbatim: s.mod.summary).font(.pixel(13, .semibold)).foregroundColor(Color.white)
+                Text(verbatim: joinText("Created ", shortDate(s.mod.created), " · edited ", shortDate(s.mod.edited))).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+            }
+        }
+    }
+}
+
+// MARK: - Mod Creator: previews, the pixel editor and the item picker
+
+/// Pictures and names of content in the editor (no world needs to be running)
+enum ModPreview {
+    static func itemIconBuf(_ it: ModItem, _ cat: ModCatalog) -> PixelBuf {
+        if !it.icon.isBlank {
+            var b: PixelBuf = padBuf(it.icon.buf())
+            b.outline(0x1A1410)
+            return b
+        }
+        if let base = it.baseIcon {
+            var b: PixelBuf = buf(base, cat, depth: 1)
+            if it.tintAmt > 0.01 { b = b.tinted(it.tint & 0xFFFFFF, it.tintAmt) }
+            return b
+        }
+        return missingItemBuf()
+    }
+
+    static func itemIcon(_ it: ModItem, _ cat: ModCatalog) -> Image {
+        return pixImage(itemIconBuf(it, cat))
+    }
+
+    /// The picture of any item reference: the game's items, or a mod's block or item
+    static func buf(_ it: Item, _ cat: ModCatalog, depth: Int = 0) -> PixelBuf {
+        if case .custom(let k) = it {
+            if let b = cat.block(k) { return b.art.isBlank ? greyTileBuf() : b.art.buf() }
+            if let i = cat.item(k), depth < 2 {
+                if !i.icon.isBlank { return itemIconBuf(i, cat) }
+                if let base = i.baseIcon {
+                    var b: PixelBuf = buf(base, cat, depth: depth + 1)
+                    if i.tintAmt > 0.01 { b = b.tinted(i.tint & 0xFFFFFF, i.tintAmt) }
+                    return b
+                }
+            }
+            return missingItemBuf()
+        }
+        return itemBuf(it)
+    }
+
+    static func icon(_ it: Item, _ cat: ModCatalog) -> Image {
+        if case .custom = it { return pixImage(buf(it, cat)) }
+        return Art.shared.icon(it)
+    }
+
+    static func name(_ it: Item, _ cat: ModCatalog) -> String {
+        if case .custom(let k) = it {
+            if let n = cat.names[k] { return n }
+            return "Missing (" + k + ")"
+        }
+        return it.name
+    }
+
+    static func mobImage(_ m: ModMob) -> Image {
+        let fr: ([PixelBuf], CreatureAnim) = modMobFrames(m)
+        return pixImage(fr.0.first ?? PixelBuf(w: 1, h: 1))
+    }
+
+    static func shotBuf(_ s: ModProjectile) -> PixelBuf {
+        var b = PixelBuf(w: 12, h: 12)
+        let c: UInt32 = s.color & 0xFFFFFF
+        let hi: UInt32 = mixRGB(c, 0xFFFFFF, 0.5)
+        switch s.shape {
+        case .orb:
+            b.ellipse(6, 6, 4, 4, c)
+            b.ellipse(5, 5, 1.6, 1.6, hi)
+        case .arrow:
+            b.line(1, 6, 9, 6, 0x8A6A40)
+            b.line(9, 4, 11, 6, c); b.line(9, 8, 11, 6, c)
+            b.set(1, 5, 0xE0E0E0); b.set(1, 7, 0xE0E0E0)
+        case .bolt:
+            b.rect(2, 5, 8, 2, c)
+            b.rect(9, 4, 2, 4, hi)
+        case .shard:
+            b.line(2, 9, 10, 2, c); b.line(3, 9, 10, 3, hi); b.line(2, 8, 9, 2, c)
+        case .rock:
+            b.ellipse(6, 6, 3.4, 3.0, c)
+            b.set(5, 5, hi)
+        }
+        b.outline(0x101010)
+        return b
+    }
+
+    static func shotImage(_ s: ModProjectile) -> Image { return pixImage(shotBuf(s)) }
+}
+
+/// A pixel-art palette that suits the game: earth, stone, metals, gems, plants and skin tones
+let modPalette: [UInt32] = [
+    0x000000, 0x1D2B53, 0x7E2553, 0x008751, 0xAB5236, 0x5F574F, 0xC2C3C7, 0xFFF1E8,
+    0xFF004D, 0xFFA300, 0xFFEC27, 0x00E436, 0x29ADFF, 0x83769C, 0xFF77A8, 0xFFCCAA,
+    0x5DAA3A, 0x4B9230, 0x7A5230, 0x5A3A1E, 0x8A8A8A, 0x6A6A6A, 0x3A3A3E, 0xE8E0C8,
+    0xD2793A, 0xD0D4DA, 0xF5D142, 0x4FE3E8, 0x8A7CFF, 0xFF6A1E, 0xB04CFF, 0xC02040
+]
+
+/// Paints a ModPixels grid with a finger: pen, eraser, fill and colour picker, with a mirror switch,
+/// undo, clear, a palette and a colour mixer
+struct PixelEditorView: View {
+    @Binding var pixels: ModPixels
+    var maxSide: CGFloat = 320
+    @State var color: UInt32 = 0xFF5DAA3A
+    @State var tool: Int = 0
+    @State var mirror: Bool = false
+    @State var undo: [ModPixels] = []
+    @State var stroking: Bool = false
+    @State var lastCell: Int = -1
+    @State var mixR: Double = 120
+    @State var mixG: Double = 160
+    @State var mixB: Double = 90
+    @State var showMixer: Bool = false
+
+    var cell: CGFloat { return floor(maxSide / CGFloat(max(pixels.w, pixels.h))) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 12) {
+                grid
+                VStack(alignment: .leading, spacing: 6) {
+                    toolButtons
+                    preview
+                }
+            }
+            palette
+            if showMixer { mixer }
+        }
+    }
+
+    var grid: some View {
+        let c: CGFloat = cell
+        let w: Int = pixels.w
+        let h: Int = pixels.h
+        let px: ModPixels = pixels
+        return Canvas { ctx, size in
+            for y in 0..<h {
+                for x in 0..<w {
+                    let r: CGRect = CGRect(x: CGFloat(x) * c, y: CGFloat(y) * c, width: c, height: c)
+                    let argb: UInt32 = px.argb(x, y)
+                    if (argb >> 24) == 0 {
+                        let checker: Bool = (x + y) % 2 == 0
+                        ctx.fill(Path(r), with: .color(Color(hex: checker ? 0x3A3A3A : 0x2A2A2A)))
+                    } else {
+                        ctx.fill(Path(r), with: .color(Color(hex: argb & 0xFFFFFF)))
+                    }
+                }
+            }
+            if c >= 10 {
+                for x in 0...w {
+                    var p = Path()
+                    p.move(to: CGPoint(x: CGFloat(x) * c, y: 0))
+                    p.addLine(to: CGPoint(x: CGFloat(x) * c, y: CGFloat(h) * c))
+                    ctx.stroke(p, with: .color(Color.white.opacity(0.12)), lineWidth: 1)
+                }
+                for y in 0...h {
+                    var p = Path()
+                    p.move(to: CGPoint(x: 0, y: CGFloat(y) * c))
+                    p.addLine(to: CGPoint(x: CGFloat(w) * c, y: CGFloat(y) * c))
+                    ctx.stroke(p, with: .color(Color.white.opacity(0.12)), lineWidth: 1)
+                }
+            }
+        }
+        .frame(width: c * CGFloat(w), height: c * CGFloat(h))
+        .contentShape(Rectangle())
+        .gesture(DragGesture(minimumDistance: 0).onChanged { v in touched(v.location) }.onEnded { _ in stroking = false; lastCell = -1 })
+    }
+
+    func touched(_ p: CGPoint) {
+        let c: CGFloat = cell
+        let x: Int = Int(floor(p.x / c))
+        let y: Int = Int(floor(p.y / c))
+        if x < 0 || y < 0 || x >= pixels.w || y >= pixels.h { return }
+        let idx: Int = y * pixels.w + x
+        if !stroking {
+            stroking = true
+            undo.append(pixels)
+            if undo.count > 20 { undo.removeFirst() }
+        } else if idx == lastCell {
+            return
+        }
+        lastCell = idx
+        var px: ModPixels = pixels
+        switch tool {
+        case 1:
+            px.setARGB(x, y, 0)
+            if mirror { px.setARGB(px.w - 1 - x, y, 0) }
+        case 2:
+            floodFill(&px, x, y, color)
+        case 3:
+            let picked: UInt32 = px.argb(x, y)
+            if (picked >> 24) != 0 { color = picked }
+            tool = 0
+            return
+        default:
+            px.setARGB(x, y, color)
+            if mirror { px.setARGB(px.w - 1 - x, y, color) }
+        }
+        pixels = px
+    }
+
+    func floodFill(_ px: inout ModPixels, _ sx: Int, _ sy: Int, _ col: UInt32) {
+        let target: UInt32 = px.argb(sx, sy)
+        if target == col { return }
+        var stack: [(Int, Int)] = [(sx, sy)]
+        var guardN: Int = 0
+        while let cur = stack.popLast() {
+            guardN += 1
+            if guardN > 5000 { break }
+            let (x, y) = cur
+            if x < 0 || y < 0 || x >= px.w || y >= px.h { continue }
+            if px.argb(x, y) != target { continue }
+            px.setARGB(x, y, col)
+            stack.append((x + 1, y))
+            stack.append((x - 1, y))
+            stack.append((x, y + 1))
+            stack.append((x, y - 1))
+        }
+    }
+
+    var toolButtons: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            toolButton("PEN", 0)
+            toolButton("ERASE", 1)
+            toolButton("FILL", 2)
+            toolButton("PICK", 3)
+            SmallButton(title: mirror ? "MIRROR ON" : "MIRROR OFF", color: mirror ? ModUI.accent : Color(hex: 0x555555)) { mirror.toggle() }
+            HStack(spacing: 6) {
+                SmallButton(title: "UNDO") {
+                    if let last = undo.popLast() { pixels = last }
+                }
+                SmallButton(title: "CLEAR", color: ModUI.red) {
+                    undo.append(pixels)
+                    pixels = ModPixels(w: pixels.w, h: pixels.h)
+                }
+            }
+        }
+    }
+
+    func toolButton(_ title: String, _ t: Int) -> some View {
+        SmallButton(title: title, color: tool == t ? ModUI.accent : Color(hex: 0x555555)) { tool = t }
+    }
+
+    var preview: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("PREVIEW").font(.pixel(11)).foregroundColor(ModUI.dim)
+            modImage(pixels).resizable().interpolation(.none).frame(width: 64, height: 64 * CGFloat(pixels.h) / CGFloat(max(1, pixels.w)))
+                .background(Color.black.opacity(0.4))
+            HStack(spacing: 6) {
+                Rectangle().fill(Color(hex: color & 0xFFFFFF)).frame(width: 30, height: 30)
+                    .overlay(Rectangle().stroke(Color.white, lineWidth: 2))
+                Text("colour").font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+            }
+        }
+    }
+
+    var palette: some View {
+        let cols: [GridItem] = [GridItem](repeating: GridItem(.fixed(34), spacing: 4), count: 16)
+        return VStack(alignment: .leading, spacing: 4) {
+            LazyVGrid(columns: cols, spacing: 4) {
+                ForEach(0..<modPalette.count, id: \.self) { i in
+                    swatch(modPalette[i])
+                }
+            }
+            SmallButton(title: showMixer ? "HIDE COLOUR MIXER" : "MIX A COLOUR...") { showMixer.toggle() }
+        }
+    }
+
+    func swatch(_ c: UInt32) -> some View {
+        let on: Bool = (color & 0xFFFFFF) == c
+        return Rectangle().fill(Color(hex: c))
+            .frame(width: 34, height: 34)
+            .overlay(Rectangle().stroke(on ? Color.white : Color.black, lineWidth: on ? 3 : 1))
+            .onTapGesture {
+                color = 0xFF000000 | c
+                if tool == 1 || tool == 3 { tool = 0 }
+            }
+    }
+
+    var mixer: some View {
+        VStack(spacing: 4) {
+            StatSlider(label: "Red", value: mixBind(0), range: 0...255, step: 1, format: "%.0f")
+            StatSlider(label: "Green", value: mixBind(1), range: 0...255, step: 1, format: "%.0f")
+            StatSlider(label: "Blue", value: mixBind(2), range: 0...255, step: 1, format: "%.0f")
+        }
+    }
+
+    func mixBind(_ k: Int) -> Binding<Double> {
+        return Binding<Double>(get: {
+            k == 0 ? mixR : (k == 1 ? mixG : mixB)
+        }, set: { v in
+            if k == 0 { mixR = v } else if k == 1 { mixG = v } else { mixB = v }
+            let r: UInt32 = UInt32(clampD(mixR, 0, 255))
+            let g: UInt32 = UInt32(clampD(mixG, 0, 255))
+            let b: UInt32 = UInt32(clampD(mixB, 0, 255))
+            color = 0xFF000000 | (r << 16) | (g << 8) | b
+            if tool != 0 && tool != 2 { tool = 0 }
+        })
+    }
+}
+
+/// Every item a mod may refer to: the game's own and the content of installed mods
+struct ItemPickerView: View {
+    let catalog: ModCatalog
+    var title: String = "CHOOSE AN ITEM"
+    var blocksOnly: Bool = false
+    var pick: (Item) -> Void
+    var cancel: () -> Void
+    @State var search: String = ""
+    @State var group: Int = 0
+
+    static let groups: [String] = ["All", "Blocks", "Tools", "Weapons", "Armor", "Materials", "Food", "Mods"]
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.7).ignoresSafeArea()
+            VStack(spacing: 8) {
+                HStack {
+                    Text(verbatim: title).font(.pixel(18)).foregroundColor(ModUI.gold)
+                    Spacer()
+                    SmallButton(title: "CANCEL", color: ModUI.red) { cancel() }
+                }
+                TextField("Search", text: $search)
+                    .font(.pixel(15, .bold))
+                    .foregroundColor(Color.white)
+                    .padding(10)
+                    .background(Color.black.opacity(0.6))
+                if !blocksOnly { ChoiceRow(options: ItemPickerView.groups, selected: $group, columns: 8) }
+                ScrollView {
+                    grid
+                }
+            }
+            .padding(14)
+            .frame(maxWidth: 900, maxHeight: 700)
+            .background(PixelBox(color: ModUI.panel))
+            .padding(10)
+        }
+    }
+
+    var grid: some View {
+        let list: [Item] = filtered()
+        let cols: [GridItem] = [GridItem(.adaptive(minimum: 82), spacing: 6)]
+        return LazyVGrid(columns: cols, spacing: 6) {
+            ForEach(0..<list.count, id: \.self) { i in
+                cell(list[i])
+            }
+        }
+    }
+
+    func cell(_ it: Item) -> some View {
+        Button {
+            pick(it)
+        } label: {
+            VStack(spacing: 2) {
+                ModPreview.icon(it, catalog).resizable().interpolation(.none).frame(width: 36, height: 36)
+                Text(verbatim: ModPreview.name(it, catalog)).font(.pixel(9, .semibold)).foregroundColor(Color.white).lineLimit(2).multilineTextAlignment(.center)
+            }
+            .frame(width: 82, height: 74)
+            .background(PixelBox(color: ModUI.card))
+        }
+        .buttonStyle(.plain)
+    }
+
+    func filtered() -> [Item] {
+        var all: [Item] = []
+        var modItems: [Item] = []
+        for p in catalog.packs {
+            for b in p.blocks { modItems.append(.custom(p.key(b.id))) }
+            if !blocksOnly { for i in p.items { modItems.append(.custom(p.key(i.id))) } }
+        }
+        let game: [Item] = allGameItems()
+        switch blocksOnly ? 1 : group {
+        case 1:
+            for it in game { if case .block = it { all.append(it) } }
+            for it in modItems { if case .custom(let k) = it, catalog.keys[k] == "block" { all.append(it) } }
+        case 2:
+            for it in game { if case .tool = it { all.append(it) } }
+        case 3:
+            all = game.filter { $0.isWeapon }
+        case 4:
+            for it in game { if case .armor = it { all.append(it) } else if case .gear = it { all.append(it) } }
+        case 5:
+            for it in game {
+                switch it {
+                case .mat, .ammo, .part: all.append(it)
+                default: break
+                }
+            }
+        case 6:
+            for it in game { if case .food = it { all.append(it) } }
+        case 7:
+            all = modItems
+        default:
+            all = modItems + game
+        }
+        let q: String = search.trimmingCharacters(in: .whitespaces).lowercased()
+        if q.isEmpty { return all }
+        return all.filter { ModPreview.name($0, catalog).lowercased().contains(q) }
+    }
+}
+
+// MARK: - Mod Creator: block, shot and item editors
+
+/// Editing one custom block: picture, name, what it is, how it mines, collision, light, drops and
+/// what it does when tapped
+struct BlockEditorView: View {
+    @ObservedObject var s: ModSession
+    let id: String
+    @State var picking: Bool = false
+    @State var copyFrom: Bool = false
+
+    func b<T>(_ kp: WritableKeyPath<ModBlock, T>, _ d: T) -> Binding<T> { return s.bind(\ModPack.blocks, id, kp, d) }
+
+    var block: ModBlock { return s.mod.blocks.first { $0.id == id } ?? ModBlock() }
+
+    var body: some View {
+        ZStack {
+            VStack(spacing: 10) {
+                ModSection(title: "PICTURE", help: "8 x 8 pixels. Paint with your finger, or start from a game block.") {
+                    PixelEditorView(pixels: b(\.art, ModPixels(w: 8, h: 8)), maxSide: 280)
+                    SmallButton(title: "START FROM A GAME BLOCK...") { copyFrom = true }
+                }
+                ModSection(title: "ABOUT") {
+                    ModTextField(label: "Name", text: b(\.name, ""), placeholder: "Ruby Ore")
+                    ModTextField(label: "Description", text: b(\.desc, ""), placeholder: "Optional")
+                    ChoiceRow(options: ModBlockCategory.allCases.map { $0.name }, selected: catBind, columns: 4)
+                }
+                ModSection(title: "MINING", help: "Hardness sets how long it takes to break; a tier asks for a strong enough tool of that kind.") {
+                    ModToggle(label: "Unbreakable", help: "Like bedrock: nothing can break it", isOn: b(\.unbreakable, false))
+                    StatSlider(label: "Hardness", value: b(\.hardness, 1), range: 0.05...(s.mod.sandbox ? 200 : 40), step: 0.05, format: "%.2f")
+                    Text("Best tool").font(.pixel(12, .bold)).foregroundColor(ModUI.dim)
+                    ChoiceRow(options: ToolType.allCases.map { $0.name }, selected: b(\.tool, 0), columns: 4)
+                    IntSlider(label: "Tool tier needed (0 = any)", value: b(\.tier, 0), range: 0...9)
+                    Text(verbatim: tierLine).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+                    ModToggle(label: "Blast proof", help: "Explosions do not break it", isOn: b(\.blastProof, false))
+                }
+                ModSection(title: "BODY") {
+                    ChoiceRow(options: ModCollision.allCases.map { $0.name }, selected: collisionBind, columns: 3)
+                    ModToggle(label: "See-through", help: "Light passes it and you see the wall behind", isOn: b(\.transparent, false))
+                    IntSlider(label: "Light given off", value: b(\.light, 0), range: 0...15)
+                }
+                ModSection(title: "DROPS", help: "What you get when you break it.") {
+                    ModToggle(label: "Drops itself", isOn: b(\.dropSelf, true))
+                    if !block.dropSelf {
+                        HStack(spacing: 10) {
+                            if let d = block.drop {
+                                ModPreview.icon(d, s.catalog).resizable().interpolation(.none).frame(width: 36, height: 36)
+                                Text(verbatim: ModPreview.name(d, s.catalog)).font(.pixel(13)).foregroundColor(Color.white)
+                            } else {
+                                Text("Drops nothing").font(.pixel(13)).foregroundColor(ModUI.dim)
+                            }
+                            Spacer()
+                            SmallButton(title: "CHOOSE...", color: ModUI.blue) { picking = true }
+                            SmallButton(title: "NOTHING") { b(\.drop, nil).wrappedValue = nil }
+                        }
+                    }
+                    IntSlider(label: "How many", value: b(\.dropCount, 1), range: 1...16)
+                }
+                ModSection(title: "WHEN TAPPED", help: block.function.help) {
+                    ChoiceRow(options: ModBlockFunction.allCases.map { $0.name }, selected: functionBind, columns: 3)
+                    functionSettings
+                }
+            }
+            if picking {
+                ItemPickerView(catalog: s.catalog, title: "IT DROPS...", pick: { it in
+                    b(\.drop, nil).wrappedValue = it
+                    picking = false
+                }, cancel: { picking = false })
+            }
+            if copyFrom {
+                ItemPickerView(catalog: s.catalog, title: "COPY A BLOCK'S PICTURE", blocksOnly: true, pick: { it in
+                    let pic: PixelBuf = ModPreview.buf(it, s.catalog)
+                    b(\.art, ModPixels(w: 8, h: 8)).wrappedValue = ModPixels(buf: pic).resized(8, 8)
+                    copyFrom = false
+                }, cancel: { copyFrom = false })
+            }
+        }
+    }
+
+    var tierLine: String {
+        let t: Int = block.tier
+        if t <= 0 { return "Any tool (or bare hands) can break it." }
+        let tier: Tier = Tier(rawValue: t) ?? .wood
+        return "Needs a " + tier.name + " " + (ToolType(rawValue: block.tool) ?? .pickaxe).name.lowercased() + " or better."
+    }
+
+    var catBind: Binding<Int> {
+        let base: Binding<ModBlockCategory> = b(\.category, .building)
+        return Binding<Int>(get: { base.wrappedValue.rawValue }, set: { base.wrappedValue = ModBlockCategory(rawValue: $0) ?? .building })
+    }
+
+    var collisionBind: Binding<Int> {
+        let base: Binding<ModCollision> = b(\.collision, .solid)
+        return Binding<Int>(get: { base.wrappedValue.rawValue }, set: { base.wrappedValue = ModCollision(rawValue: $0) ?? .solid })
+    }
+
+    var functionBind: Binding<Int> {
+        let base: Binding<ModBlockFunction> = b(\.function, .none)
+        return Binding<Int>(get: { base.wrappedValue.rawValue }, set: { base.wrappedValue = ModBlockFunction(rawValue: $0) ?? .none })
+    }
+
+    @ViewBuilder
+    var functionSettings: some View {
+        switch block.function {
+        case .station:
+            Text("Works as").font(.pixel(12, .bold)).foregroundColor(ModUI.dim)
+            ChoiceRow(options: ["Its own station", "Workbench", "Furnace", "Campfire", "Anvil", "Tinker's Bench", "Rift Forge"], selected: stationBind, columns: 4)
+        case .healer:
+            StatSlider(label: "Health restored", value: b(\.power, 6), range: 1...40, step: 1, format: "%.0f")
+        case .bounce:
+            StatSlider(label: "Bounce strength", value: b(\.power, 6), range: 4...30, step: 1, format: "%.0f")
+        case .trap:
+            StatSlider(label: "Damage", value: b(\.power, 6), range: 1...40, step: 1, format: "%.0f")
+        case .sign:
+            ModTextField(label: "Sign text", text: b(\.text, ""), placeholder: "Welcome!")
+        default:
+            EmptyView()
+        }
+    }
+
+    var stationBind: Binding<Int> {
+        let base: Binding<Int> = b(\.station, -1)
+        // -1 own, 1 bench, 2 furnace, 3 campfire, 4 anvil, 5 tinker, 6 forge
+        return Binding<Int>(get: { base.wrappedValue < 1 ? 0 : base.wrappedValue }, set: { base.wrappedValue = $0 == 0 ? -1 : $0 })
+    }
+}
+
+/// Editing a shot: looks, flight and what happens when it lands
+struct ShotEditorView: View {
+    @ObservedObject var s: ModSession
+    let id: String
+
+    func b<T>(_ kp: WritableKeyPath<ModProjectile, T>, _ d: T) -> Binding<T> { return s.bind(\ModPack.projectiles, id, kp, d) }
+    var shot: ModProjectile { return s.mod.projectiles.first { $0.id == id } ?? ModProjectile() }
+
+    var body: some View {
+        VStack(spacing: 10) {
+            ModSection(title: "LOOK") {
+                HStack(spacing: 12) {
+                    ModPreview.shotImage(shot).resizable().interpolation(.none).frame(width: 72, height: 72).background(Color.black.opacity(0.5))
+                    VStack(alignment: .leading) {
+                        ModTextField(label: "Name", text: b(\.name, ""), placeholder: "Fire Bolt")
+                    }
+                }
+                ChoiceRow(options: ModShotShape.allCases.map { $0.name }, selected: shapeBind, columns: 5)
+                ModColorRow(label: "Colour", color: b(\.color, 0x8AF0FF))
+                StatSlider(label: "Size", value: b(\.size, 0.3), range: 0.1...1.0, step: 0.05, format: "%.2f")
+                IntSlider(label: "Glow (light)", value: b(\.glow, 6), range: 0...12)
+            }
+            ModSection(title: "FLIGHT") {
+                StatSlider(label: "Drop (gravity)", value: b(\.gravity, 0), range: 0...40, step: 1, format: "%.0f")
+                StatSlider(label: "Flies for (seconds)", value: b(\.life, 2), range: 0.2...6, step: 0.1, format: "%.1f")
+                IntSlider(label: "Passes through foes", value: b(\.pierce, 0), range: 0...5)
+            }
+            ModSection(title: "ON HIT") {
+                StatSlider(label: "Blast radius (0 = none)", value: b(\.explode, 0), range: 0...(s.mod.sandbox ? 12 : 6), step: 0.5, format: "%.1f")
+                ModToggle(label: "Blast breaks blocks", isOn: b(\.breakBlocks, false))
+                StatSlider(label: "Sets on fire (seconds)", value: b(\.burn, 0), range: 0...10, step: 0.5, format: "%.1f")
+            }
+        }
+    }
+
+    var shapeBind: Binding<Int> {
+        let base: Binding<ModShotShape> = b(\.shape, .orb)
+        return Binding<Int>(get: { base.wrappedValue.rawValue }, set: { base.wrappedValue = ModShotShape(rawValue: $0) ?? .orb })
+    }
+}
+
+/// A colour chosen from the palette
+struct ModColorRow: View {
+    let label: String
+    @Binding var color: UInt32
+    var body: some View {
+        let cols: [GridItem] = [GridItem](repeating: GridItem(.fixed(30), spacing: 4), count: 16)
+        return VStack(alignment: .leading, spacing: 4) {
+            Text(verbatim: label).font(.pixel(12, .bold)).foregroundColor(ModUI.dim)
+            LazyVGrid(columns: cols, spacing: 4) {
+                ForEach(0..<modPalette.count, id: \.self) { i in
+                    swatch(modPalette[i])
+                }
+            }
+        }
+    }
+
+    func swatch(_ c: UInt32) -> some View {
+        let on: Bool = (color & 0xFFFFFF) == c
+        return Rectangle().fill(Color(hex: c)).frame(width: 30, height: 30)
+            .overlay(Rectangle().stroke(on ? Color.white : Color.black, lineWidth: on ? 3 : 1))
+            .onTapGesture { color = c }
+    }
+}
+
+/// Editing one custom item; the sections shown depend on what kind of item it is
+struct ItemEditorView: View {
+    @ObservedObject var s: ModSession
+    let id: String
+    @State var picker: Int = 0
+
+    func b<T>(_ kp: WritableKeyPath<ModItem, T>, _ d: T) -> Binding<T> { return s.bind(\ModPack.items, id, kp, d) }
+    var item: ModItem { return s.mod.items.first { $0.id == id } ?? ModItem() }
+    var sb: Bool { return s.mod.sandbox }
+
+    var body: some View {
+        ZStack {
+            VStack(spacing: 10) {
+                header
+                ModSection(title: "KIND", help: item.kind.help) {
+                    ChoiceRow(options: ModItemKind.allCases.map { $0.name }, selected: kindBind, columns: 4)
+                }
+                kindSections
+                ModSection(title: "ICON", help: "Paint 16 x 16 pixels, or leave it empty to use a game item's icon in a colour of your choice.") {
+                    PixelEditorView(pixels: b(\.icon, ModPixels(w: 16, h: 16)), maxSide: 300)
+                    HStack {
+                        Text("Base icon:").font(.pixel(12, .bold)).foregroundColor(ModUI.dim)
+                        if let bi = item.baseIcon {
+                            ModPreview.icon(bi, s.catalog).resizable().interpolation(.none).frame(width: 30, height: 30)
+                        }
+                        SmallButton(title: "CHOOSE...", color: ModUI.blue) { picker = 1 }
+                    }
+                    ModColorRow(label: "Tint colour", color: b(\.tint, 0xFFFFFF))
+                    StatSlider(label: "Tint amount", value: b(\.tintAmt, 0), range: 0...1, step: 0.05, format: "%.2f")
+                }
+            }
+            if picker == 1 {
+                ItemPickerView(catalog: s.catalog, title: "ICON BASED ON...", pick: { it in
+                    b(\.baseIcon, nil).wrappedValue = it
+                    picker = 0
+                }, cancel: { picker = 0 })
+            }
+            if picker == 2 {
+                ItemPickerView(catalog: s.catalog, title: "AMMUNITION", pick: { it in
+                    b(\.ammo, nil).wrappedValue = it
+                    picker = 0
+                }, cancel: { picker = 0 })
+            }
+        }
+    }
+
+    var header: some View {
+        ModSection(title: "ABOUT") {
+            HStack(spacing: 12) {
+                ModPreview.itemIcon(item, s.catalog).resizable().interpolation(.none).frame(width: 64, height: 64).background(Color.black.opacity(0.4))
+                VStack(spacing: 6) {
+                    ModTextField(label: "Name", text: b(\.name, ""), placeholder: "Ruby Sword")
+                    ModTextField(label: "Description", text: b(\.desc, ""), placeholder: "Optional")
+                }
+            }
+            Text("Rarity").font(.pixel(12, .bold)).foregroundColor(ModUI.dim)
+            ChoiceRow(options: ModUI.rarityNames, selected: b(\.rarity, 0), columns: 5)
+            if !item.kind.isWeapon && item.kind != .tool && item.kind != .armor {
+                IntSlider(label: "Stack size", value: b(\.stack, 99), range: 1...(sb ? 999 : 99))
+            }
+        }
+    }
+
+    var kindBind: Binding<Int> {
+        let base: Binding<ModItemKind> = b(\.kind, .material)
+        return Binding<Int>(get: { base.wrappedValue.rawValue }, set: { base.wrappedValue = ModItemKind(rawValue: $0) ?? .material })
+    }
+
+    @ViewBuilder
+    var kindSections: some View {
+        switch item.kind {
+        case .food, .consumable: useSection
+        case .tool: toolSection
+        case .melee: meleeSection
+        case .bow, .gun, .thrown, .magic: rangedSection
+        case .armor: armorSection
+        case .special: specialSection
+        default: EmptyView()
+        }
+    }
+
+    var useSection: some View {
+        ModSection(title: "WHEN USED", help: "Effects come from a fixed list, so they always work safely.") {
+            StatSlider(label: "Hunger restored", value: b(\.hunger, 0), range: 0...20, step: 1, format: "%.0f")
+            StatSlider(label: "Time to use (seconds)", value: b(\.useTime, 0.6), range: 0.1...5, step: 0.1, format: "%.1f")
+            ModEffectsEditor(effects: b(\.effects, []), sandbox: sb)
+        }
+    }
+
+    var toolSection: some View {
+        ModSection(title: "TOOL") {
+            ChoiceRow(options: ToolType.allCases.map { $0.name }, selected: b(\.toolType, 0), columns: 4)
+            IntSlider(label: "Tier (what it can break)", value: b(\.toolTier, 3), range: 1...9)
+            Text(verbatim: "Breaks what a " + (Tier(rawValue: item.toolTier) ?? .wood).name + " tool breaks").font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+            StatSlider(label: "Mining speed", value: b(\.toolSpeed, 4), range: 0.3...(sb ? 200 : 30), step: 0.1, format: "x%.1f")
+            StatSlider(label: "Damage when swung", value: b(\.damage, 4), range: 0...(sb ? 500 : 60), step: 0.5, format: "%.1f")
+        }
+    }
+
+    var meleeSection: some View {
+        ModSection(title: "MELEE", help: "Aimed with the attack stick like the game's own weapons.") {
+            ChoiceRow(options: ["Slash (sword)", "Thrust (spear)", "Smash (hammer)", "Stab (knife)", "Bash (club)"], selected: b(\.style, 0), columns: 5)
+            StatSlider(label: "Damage", value: b(\.damage, 6), range: 0...(sb ? 500 : 60), step: 0.5, format: "%.1f")
+            StatSlider(label: "Time between swings", value: b(\.cooldown, 0.45), range: 0.15...3, step: 0.01, format: "%.2f s")
+            StatSlider(label: "Reach", value: b(\.reach, 3), range: 0.5...(sb ? 12 : 6), step: 0.1, format: "%.1f")
+            StatSlider(label: "Swing width", value: b(\.arc, 1), range: 0.1...1.6, step: 0.05, format: "%.2f")
+            StatSlider(label: "Knockback", value: b(\.knock, 6), range: 0...(sb ? 40 : 16), step: 0.5, format: "%.1f")
+            IntSlider(label: "Foes hit per swing", value: b(\.maxHits, 99), range: 1...99)
+            StatSlider(label: "Wind-up before the blow", value: b(\.windup, 0), range: 0...0.6, step: 0.02, format: "%.2f s")
+            ModToggle(label: "Heavy (breaks guards, cracks stone)", isOn: b(\.heavy, false))
+            StatSlider(label: "Dazes for", value: b(\.daze, 0), range: 0...3, step: 0.1, format: "%.1f s")
+            StatSlider(label: "Sets on fire for", value: b(\.burn, 0), range: 0...8, step: 0.5, format: "%.1f s")
+            StatSlider(label: "Critical chance", value: b(\.crit, 0.1), range: 0...0.6, step: 0.01, format: "%.2f")
+            ModToggle(label: "Combo (every 3rd blow hits twice)", isOn: b(\.combo, false))
+            StatSlider(label: "Blow from behind", value: b(\.backstab, 1), range: 1...3, step: 0.1, format: "x%.1f")
+            StatSlider(label: "Against the undead", value: b(\.undeadMult, 1), range: 0.5...3, step: 0.1, format: "x%.1f")
+            ModColorRow(label: "Swing trail colour", color: b(\.trail, 0xFFFFFF))
+        }
+    }
+
+    var rangedSection: some View {
+        ModSection(title: "SHOOTING", help: rangedHelp) {
+            StatSlider(label: "Damage", value: b(\.damage, 6), range: 0...(sb ? 500 : 60), step: 0.5, format: "%.1f")
+            StatSlider(label: "Time between shots", value: b(\.cooldown, 0.45), range: 0.15...3, step: 0.01, format: "%.2f s")
+            StatSlider(label: "Shot speed", value: b(\.speed, 30), range: 4...(sb ? 90 : 60), step: 1, format: "%.0f")
+            StatSlider(label: "Shot drop", value: b(\.gravity, 0), range: 0...40, step: 1, format: "%.0f")
+            StatSlider(label: "Knockback", value: b(\.knock, 6), range: 0...(sb ? 40 : 16), step: 0.5, format: "%.1f")
+            IntSlider(label: "Shots per use (a fan)", value: b(\.spread, 1), range: 1...(sb ? 12 : 7))
+            IntSlider(label: "Passes through foes", value: b(\.pierce, 0), range: 0...5)
+            shotChoice
+            if item.kind == .gun {
+                IntSlider(label: "Magazine", value: b(\.magazine, 6), range: 1...(sb ? 99 : 30))
+                StatSlider(label: "Reload time", value: b(\.reload, 1.5), range: 0.2...6, step: 0.1, format: "%.1f s")
+                ModToggle(label: "Tap for every shot", help: "Off: holding keeps firing", isOn: b(\.needsPress, false))
+            }
+            ammoRow
+        }
+    }
+
+    var rangedHelp: String {
+        switch item.kind {
+        case .bow: return "Hold to draw, release to shoot; a longer draw flies further and hits harder."
+        case .gun: return "Fires while loaded, then reloads from its ammunition."
+        case .thrown: return "Lobbed in an arc to where you aim. Each throw uses one from the stack."
+        default: return "Fires on every use and needs no ammunition unless you pick one."
+        }
+    }
+
+    var shotChoice: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Shot").font(.pixel(12, .bold)).foregroundColor(ModUI.dim)
+            let opts: [String] = ["Game shot"] + s.mod.projectiles.map { $0.name }
+            ChoiceRow(options: opts, selected: shotIndexBind, columns: 4)
+            if item.projectile.isEmpty {
+                ChoiceRow(options: ModGameShots.names, selected: gameShotBind, columns: 5)
+            }
+        }
+    }
+
+    var shotIndexBind: Binding<Int> {
+        let base: Binding<String> = b(\.projectile, "")
+        let list: [String] = s.mod.projectiles.map { $0.id }
+        return Binding<Int>(get: {
+            guard let i = list.firstIndex(of: base.wrappedValue) else { return 0 }
+            return i + 1
+        }, set: { v in base.wrappedValue = v <= 0 || v > list.count ? "" : list[v - 1] })
+    }
+
+    var gameShotBind: Binding<Int> {
+        let base: Binding<Int> = b(\.shot, 0)
+        return Binding<Int>(get: { ModGameShots.kinds.firstIndex(of: base.wrappedValue) ?? 0 }, set: { base.wrappedValue = ModGameShots.kinds[clampI($0, 0, ModGameShots.kinds.count - 1)] })
+    }
+
+    var ammoRow: some View {
+        HStack(spacing: 8) {
+            Text("Ammunition:").font(.pixel(12, .bold)).foregroundColor(ModUI.dim)
+            if let a = item.ammo {
+                ModPreview.icon(a, s.catalog).resizable().interpolation(.none).frame(width: 30, height: 30)
+                Text(verbatim: ModPreview.name(a, s.catalog)).font(.pixel(12)).foregroundColor(Color.white)
+            } else {
+                Text(item.kind == .thrown ? "itself" : "none").font(.pixel(12)).foregroundColor(Color.white)
+            }
+            Spacer()
+            SmallButton(title: "CHOOSE...", color: ModUI.blue) { picker = 2 }
+            SmallButton(title: "NONE") { b(\.ammo, nil).wrappedValue = nil }
+        }
+    }
+
+    var armorSection: some View {
+        ModSection(title: "ARMOR") {
+            ChoiceRow(options: ArmorSlot.allCases.map { $0.name }, selected: b(\.slot, 0), columns: 3)
+            StatSlider(label: "Defense", value: b(\.defense, 2), range: 0...(sb ? 40 : 12), step: 0.5, format: "%.1f")
+            IntSlider(label: "Looks like (tier)", value: b(\.look, 4), range: 1...9)
+            Text(verbatim: "Drawn as " + (Tier(rawValue: item.look) ?? .iron).armorName + " armour").font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+            ModOptionalEffect(label: "While worn", effect: b(\.wornEffect, nil), sandbox: sb)
+        }
+    }
+
+    var specialSection: some View {
+        ModSection(title: "SPECIAL") {
+            IntSlider(label: "Light when held", value: b(\.light, 0), range: 0...15)
+            ModEffectsEditor(effects: b(\.effects, []), sandbox: sb)
+        }
+    }
+}
+
+/// The game's own shots a mod item or attack can fire
+enum ModGameShots {
+    static let kinds: [Int] = [ProjKind.arrow.rawValue, ProjKind.bullet.rawValue, ProjKind.fireball.rawValue, ProjKind.rock.rawValue,
+                               ProjKind.spit.rawValue, ProjKind.bolt.rawValue, ProjKind.shard.rawValue, ProjKind.quarrel.rawValue,
+                               ProjKind.pellet.rawValue, ProjKind.pebble.rawValue]
+    static let names: [String] = ["Arrow", "Bullet", "Fireball", "Rock", "Spit", "Bolt", "Shard", "Crossbow bolt", "Pellet", "Pebble"]
+}
+
+/// A list of up to four effects, each with its strength and length
+struct ModEffectsEditor: View {
+    @Binding var effects: [ModEffect]
+    var sandbox: Bool
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(0..<effects.count, id: \.self) { i in
+                effectRow(i)
+            }
+            if effects.count < ModLimits.maxEffects {
+                SmallButton(title: "+ ADD EFFECT", color: ModUI.accent) { effects.append(ModEffect(.heal, 6, 20)) }
+            }
+        }
+    }
+
+    func effectRow(_ i: Int) -> some View {
+        let e: ModEffect = i < effects.count ? effects[i] : ModEffect()
+        let r: ModRange = e.kind.amountRange
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(verbatim: "Effect " + String(i + 1)).font(.pixel(12)).foregroundColor(ModUI.gold)
+                Spacer()
+                SmallButton(title: "REMOVE", color: ModUI.red) { if i < effects.count { effects.remove(at: i) } }
+            }
+            ChoiceRow(options: ModEffectKind.allCases.map { $0.name }, selected: kindBind(i), columns: 5)
+            if r.hi > r.lo {
+                StatSlider(label: e.kind.amountLabel, value: field(i, \.amount), range: r.lo...(sandbox ? r.sandboxHi : r.hi), step: r.hi <= 4 ? 0.1 : 1, format: r.hi <= 4 ? "%.1f" : "%.0f")
+            }
+            if e.kind.timed {
+                StatSlider(label: "Lasts (seconds)", value: field(i, \.seconds), range: 1...(sandbox ? 1800 : 300), step: 1, format: "%.0f")
+            }
+        }
+        .padding(8)
+        .background(Color.black.opacity(0.25))
+    }
+
+    func field(_ i: Int, _ kp: WritableKeyPath<ModEffect, Double>) -> Binding<Double> {
+        let b: Binding<[ModEffect]> = $effects
+        return Binding<Double>(get: { i < b.wrappedValue.count ? b.wrappedValue[i][keyPath: kp] : 0 }, set: { v in
+            var list: [ModEffect] = b.wrappedValue
+            if i < list.count { list[i][keyPath: kp] = v; b.wrappedValue = list }
+        })
+    }
+
+    func kindBind(_ i: Int) -> Binding<Int> {
+        let b: Binding<[ModEffect]> = $effects
+        return Binding<Int>(get: { i < b.wrappedValue.count ? b.wrappedValue[i].kind.rawValue : 0 }, set: { v in
+            var list: [ModEffect] = b.wrappedValue
+            if i < list.count {
+                let k: ModEffectKind = ModEffectKind(rawValue: v) ?? .heal
+                list[i].kind = k
+                list[i].amount = clampD(list[i].amount, k.amountRange.lo, k.amountRange.hi)
+                b.wrappedValue = list
+            }
+        })
+    }
+}
+
+/// An effect that may be switched off (armour's effect while worn)
+struct ModOptionalEffect: View {
+    let label: String
+    @Binding var effect: ModEffect?
+    var sandbox: Bool
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ModToggle(label: label, help: effect == nil ? "No effect" : (effect?.kind.name ?? ""), isOn: onBind)
+            if effect != nil {
+                ModEffectsEditor(effects: listBind, sandbox: sandbox)
+            }
+        }
+    }
+
+    var onBind: Binding<Bool> {
+        let b: Binding<ModEffect?> = $effect
+        return Binding<Bool>(get: { b.wrappedValue != nil }, set: { v in b.wrappedValue = v ? ModEffect(.speed, 15, 0) : nil })
+    }
+
+    var listBind: Binding<[ModEffect]> {
+        let b: Binding<ModEffect?> = $effect
+        return Binding<[ModEffect]>(get: { b.wrappedValue.map { [$0] } ?? [] }, set: { v in b.wrappedValue = v.first })
+    }
+}
+
+// MARK: - Mod Creator: creature editor
+
+/// The game creatures a custom creature's body can start from
+let modBodyKinds: [MobKind] = [.zombie, .skeleton, .pirate, .imp, .archer, .golem, .pig, .cow, .sheep, .chicken, .wolf, .bear, .tiger,
+                               .cat, .frog, .crow, .bat, .slime, .emberSlime, .scorpion, .crawler, .wraith, .fish, .elephant,
+                               .giraffe, .mimic, .bearBoss, .rex, .sentinel, .warden]
+
+struct MobEditorView: View {
+    @ObservedObject var s: ModSession
+    let id: String
+    @State var page: Int = 0
+    @State var picking: Int = -1
+    @State var frame: Int = 0
+
+    func b<T>(_ kp: WritableKeyPath<ModMob, T>, _ d: T) -> Binding<T> { return s.bind(\ModPack.mobs, id, kp, d) }
+    var mob: ModMob { return s.mod.mobs.first { $0.id == id } ?? ModMob() }
+    var sb: Bool { return s.mod.sandbox }
+
+    static let pages: [String] = ["BASICS", "LOOK", "STATS", "BEHAVIOUR", "ATTACKS", "SPAWNING", "DROPS"]
+
+    var body: some View {
+        ZStack {
+            VStack(spacing: 10) {
+                previewHeader
+                ChoiceRow(options: MobEditorView.pages, selected: $page, columns: 7)
+                pageView
+            }
+            if picking >= 0 {
+                ItemPickerView(catalog: s.catalog, title: "DROPS...", pick: { it in
+                    var list: [ModDrop] = mob.drops
+                    if picking < list.count { list[picking].item = it } else { list.append(ModDrop(it, 1, 1, 0.5)) }
+                    b(\.drops, []).wrappedValue = list
+                    picking = -1
+                }, cancel: { picking = -1 })
+            }
+        }
+    }
+
+    var previewHeader: some View {
+        let set: SpriteSet = modMobSpriteSet(mob)
+        let img: Image = set.frame(0, left: false, hurt: false)
+        let hb: (Double, Double) = hitBox
+        return HStack(spacing: 14) {
+            img.resizable().interpolation(.none).frame(width: CGFloat(set.w) * 2.0, height: CGFloat(set.h) * 2.0)
+                .frame(width: 140, height: 140)
+                .background(Color(hex: 0x5A7A9A).opacity(0.6))
+            VStack(alignment: .leading, spacing: 4) {
+                Text(verbatim: mob.name).font(.pixel(20)).foregroundColor(Color.white)
+                Text(verbatim: mob.category.name).font(.pixel(12)).foregroundColor(ModUI.gold)
+                Text(verbatim: String(format: "%.0f health · %.1f damage · speed %.1f", mob.hp, mob.damage, mob.speed)).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+                Text(verbatim: String(format: "Size %.1f x %.1f blocks", hb.0, hb.1)).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(10)
+        .background(PixelBox(color: ModUI.card))
+    }
+
+    var hitBox: (Double, Double) {
+        let base: MobKind = MobKind(rawValue: mob.base) ?? .zombie
+        let d: MobDef = mobDef(base)
+        return (d.w * mob.scale, d.h * mob.scale)
+    }
+
+    @ViewBuilder
+    var pageView: some View {
+        switch page {
+        case 1: lookPage
+        case 2: statsPage
+        case 3: behaviourPage
+        case 4: attacksPage
+        case 5: spawnPage
+        case 6: dropsPage
+        default: basicsPage
+        }
+    }
+
+    var basicsPage: some View {
+        VStack(spacing: 10) {
+            ModSection(title: "BASICS") {
+                ModTextField(label: "Name", text: b(\.name, ""), placeholder: "Crystal Wolf")
+                ModTextField(label: "Description", text: b(\.desc, ""), placeholder: "Optional")
+            }
+            ModSection(title: "CATEGORY", help: mob.category.help) {
+                ChoiceRow(options: ModMobCategory.allCases.map { $0.name }, selected: categoryBind, columns: 3)
+                SmallButton(title: "USE TYPICAL SETTINGS FOR THIS CATEGORY", color: ModUI.blue) { applyPreset() }
+            }
+        }
+    }
+
+    var categoryBind: Binding<Int> {
+        let base: Binding<ModMobCategory> = b(\.category, .hostile)
+        return Binding<Int>(get: { base.wrappedValue.rawValue }, set: { base.wrappedValue = ModMobCategory(rawValue: $0) ?? .hostile })
+    }
+
+    /// Behaviour and numbers that suit the category (a quick start for beginners)
+    func applyPreset() {
+        var m: ModMob = mob
+        var bh = ModBehavior()
+        switch m.category {
+        case .passive:
+            bh.wander = true; bh.runAway = true; bh.retaliate = false
+            m.hp = 12; m.damage = 0; m.speed = 1.6; m.attacks = []
+        case .neutral:
+            bh.wander = true; bh.retaliate = true; bh.chase = true
+            m.hp = 30; m.damage = 6; m.speed = 2.6; m.attacks = [ModAttack()]
+        case .hostile:
+            bh.wander = true; bh.chase = true; bh.attackPlayer = true
+            m.hp = 30; m.damage = 7; m.speed = 2.2; m.attacks = [ModAttack()]
+            m.spawn.when = 2
+        case .boss:
+            bh.wander = false; bh.chase = true; bh.attackPlayer = true; bh.defendArea = true; bh.defendRadius = 24
+            m.hp = 800; m.damage = 18; m.speed = 2.6; m.scale = 2.2
+            var slam = ModAttack(); slam.kind = .stomp; slam.damage = 14; slam.radius = 4; slam.cooldown = 4; slam.windup = 0.8
+            var hit = ModAttack(); hit.kind = .melee; hit.damage = 18; hit.range = 2.4; hit.cooldown = 1.6
+            m.attacks = [hit, slam]
+            m.spawn.enabled = false
+        case .flying:
+            bh.wander = true; bh.fly = true; bh.chase = true; bh.attackPlayer = true
+            m.base = MobKind.bat.rawValue; m.hp = 12; m.damage = 4; m.speed = 4
+            m.attacks = [ModAttack()]
+        case .water:
+            bh.wander = true; bh.swim = true; bh.runAway = true
+            m.base = MobKind.fish.rawValue; m.hp = 6; m.damage = 0; m.attacks = []
+            m.spawn.place = .ocean
+        }
+        m.behavior = bh
+        if let i = s.mod.mobs.firstIndex(where: { $0.id == id }) {
+            s.mod.mobs[i] = m
+            s.touch()
+        }
+    }
+
+    var lookPage: some View {
+        VStack(spacing: 10) {
+            ModSection(title: "BODY", help: "The body sets the shape, animations and hit box. Pick one, then change its colours and size.") {
+                bodyGrid
+                StatSlider(label: "Size", value: b(\.scale, 1), range: 0.5...((sb || mob.category == .boss) ? 4 : 2.5), step: 0.05, format: "x%.2f")
+            }
+            ModSection(title: "COLOURS") {
+                StatSlider(label: "Hue turn", value: b(\.hue, 0), range: -180...180, step: 5, format: "%.0f°")
+                StatSlider(label: "Colour strength", value: b(\.saturation, 1), range: 0...2, step: 0.05, format: "%.2f")
+                StatSlider(label: "Brightness", value: b(\.brightness, 1), range: 0.4...1.6, step: 0.05, format: "%.2f")
+                ModColorRow(label: "Tint", color: b(\.tint, 0xFFFFFF))
+                StatSlider(label: "Tint amount", value: b(\.tintAmt, 0), range: 0...1, step: 0.05, format: "%.2f")
+                IntSlider(label: "Glow (light)", value: b(\.glow, 0), range: 0...10)
+            }
+            ModSection(title: "OWN PIXEL ART (OPTIONAL)", help: "Draw up to 4 frames (standing, two walking, attacking) of up to 32 x 32 pixels. The body above still sets the hit box.") {
+                ModToggle(label: "Use my own pictures", isOn: customArtBind)
+                if mob.customArt { frameEditor }
+            }
+        }
+    }
+
+    var bodyGrid: some View {
+        let cols: [GridItem] = [GridItem(.adaptive(minimum: 76), spacing: 6)]
+        return LazyVGrid(columns: cols, spacing: 6) {
+            ForEach(0..<modBodyKinds.count, id: \.self) { i in
+                bodyCell(modBodyKinds[i])
+            }
+        }
+    }
+
+    func bodyCell(_ k: MobKind) -> some View {
+        let on: Bool = mob.base == k.rawValue
+        let set: SpriteSet = Art.shared.creaturePreview(k)
+        return Button {
+            b(\.base, MobKind.zombie.rawValue).wrappedValue = k.rawValue
+        } label: {
+            VStack(spacing: 1) {
+                set.frame(0, left: false, hurt: false).resizable().interpolation(.none).frame(width: 52, height: 52)
+                Text(verbatim: mobDef(k).name).font(.pixel(8, .semibold)).foregroundColor(Color.white).lineLimit(1).minimumScaleFactor(0.6)
+            }
+            .frame(width: 76, height: 72)
+            .background(PixelBox(color: on ? ModUI.accent : ModUI.card))
+        }
+        .buttonStyle(.plain)
+    }
+
+    var customArtBind: Binding<Bool> {
+        let base: Binding<Bool> = b(\.customArt, false)
+        let fr: Binding<[ModPixels]> = b(\.frames, [])
+        return Binding<Bool>(get: { base.wrappedValue }, set: { v in
+            if v && fr.wrappedValue.isEmpty { fr.wrappedValue = [ModPixels(w: 24, h: 24)] }
+            base.wrappedValue = v
+        })
+    }
+
+    var frameEditor: some View {
+        let n: Int = mob.frames.count
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                ForEach(0..<n, id: \.self) { i in
+                    SmallButton(title: ["STAND", "WALK 1", "WALK 2", "ATTACK"][min(i, 3)], color: frame == i ? ModUI.accent : Color(hex: 0x555555)) { frame = i }
+                }
+                if n < ModLimits.maxFrames {
+                    SmallButton(title: "+ FRAME", color: ModUI.blue) {
+                        var list: [ModPixels] = mob.frames
+                        list.append(list.last ?? ModPixels(w: 24, h: 24))
+                        b(\.frames, []).wrappedValue = list
+                        frame = list.count - 1
+                    }
+                }
+            }
+            HStack(spacing: 6) {
+                Text("Size:").font(.pixel(12, .bold)).foregroundColor(ModUI.dim)
+                ForEach([16, 24, 32], id: \.self) { sz in
+                    SmallButton(title: String(sz) + " x " + String(sz)) { resizeFrames(sz) }
+                }
+            }
+            if frame < n {
+                PixelEditorView(pixels: frameBind(frame), maxSide: 360)
+            }
+        }
+    }
+
+    func frameBind(_ i: Int) -> Binding<ModPixels> {
+        let fr: Binding<[ModPixels]> = b(\.frames, [])
+        return Binding<ModPixels>(get: { i < fr.wrappedValue.count ? fr.wrappedValue[i] : ModPixels(w: 24, h: 24) }, set: { v in
+            var list: [ModPixels] = fr.wrappedValue
+            if i < list.count { list[i] = v; fr.wrappedValue = list }
+        })
+    }
+
+    func resizeFrames(_ sz: Int) {
+        let list: [ModPixels] = mob.frames.map { $0.resized(sz, sz) }
+        b(\.frames, []).wrappedValue = list
+    }
+
+    var statsPage: some View {
+        let hpR: ModRange = mob.category == .boss ? ModRange.bossHP : ModRange.mobHP
+        return ModSection(title: "STATS", help: "Numbers are held to fair ranges (sandbox mode allows more).") {
+            StatSlider(label: "Health", value: b(\.hp, 30), range: hpR.lo...(sb ? hpR.sandboxHi : hpR.hi), step: 1, format: "%.0f")
+            StatSlider(label: "Contact damage", value: b(\.damage, 6), range: 0...(sb ? 500 : 60), step: 0.5, format: "%.1f")
+            StatSlider(label: "Speed", value: b(\.speed, 2), range: 0...(sb ? 20 : 8), step: 0.1, format: "%.1f")
+            StatSlider(label: "Notices you within", value: b(\.detect, 14), range: 2...(sb ? 64 : 32), step: 1, format: "%.0f blocks")
+            StatSlider(label: "Jump", value: b(\.jump, 12), range: 0...(sb ? 30 : 20), step: 0.5, format: "%.1f")
+            StatSlider(label: "Toughness (damage shrugged off)", value: b(\.defense, 0), range: 0...0.9, step: 0.05, format: "%.2f")
+            StatSlider(label: "Knockback resistance", value: b(\.knockResist, 0), range: 0...1, step: 0.05, format: "%.2f")
+            ModToggle(label: "Fireproof", help: "Fire and lava do not hurt it", isOn: b(\.fireproof, false))
+        }
+    }
+
+    func bh<T>(_ kp: WritableKeyPath<ModBehavior, T>, _ d: T) -> Binding<T> {
+        let base: Binding<ModBehavior> = b(\.behavior, ModBehavior())
+        return Binding<T>(get: { base.wrappedValue[keyPath: kp] }, set: { v in
+            var x: ModBehavior = base.wrappedValue
+            x[keyPath: kp] = v
+            base.wrappedValue = x
+        })
+    }
+
+    var behaviourPage: some View {
+        VStack(spacing: 10) {
+            ModSection(title: "MOVING", help: "Switch on what it should do; the game's creature AI handles senses, paths and memory.") {
+                ModToggle(label: "Wander", help: "Strolls around its home", isOn: bh(\.wander, true))
+                ModToggle(label: "Stand still", help: "Stays where it is until something happens", isOn: bh(\.standStill, false))
+                ModToggle(label: "Patrol", help: "Walks back and forth", isOn: bh(\.patrol, false))
+                if mob.behavior.patrol { StatSlider(label: "Patrol distance", value: bh(\.patrolRange, 8), range: 2...40, step: 1, format: "%.0f blocks") }
+                ModToggle(label: "Follow the player", help: "Keeps close to you without attacking", isOn: bh(\.followPlayer, false))
+                ModToggle(label: "Run away", help: "From the player and from monsters", isOn: bh(\.runAway, false))
+                ModToggle(label: "Fly", isOn: bh(\.fly, false))
+                ModToggle(label: "Swim", isOn: bh(\.swim, false))
+                ModToggle(label: "Stay in its biome", isOn: bh(\.stayInBiome, false))
+                ModToggle(label: "Burns in sunlight", isOn: bh(\.burnsInSun, false))
+            }
+            ModSection(title: "FIGHTING") {
+                ModToggle(label: "Chase the player", isOn: bh(\.chase, false))
+                ModToggle(label: "Attack the player", isOn: bh(\.attackPlayer, false))
+                ModToggle(label: "Fight back when hit", isOn: bh(\.retaliate, true))
+                ModToggle(label: "Attack monsters nearby", help: "Hunts hostile creatures (a guardian)", isOn: bh(\.attackMobs, false))
+                ModToggle(label: "Defend an area", help: "Attacks anyone who comes near its home", isOn: bh(\.defendArea, false))
+                if mob.behavior.defendArea { StatSlider(label: "Area radius", value: bh(\.defendRadius, 10), range: 3...40, step: 1, format: "%.0f blocks") }
+                guardRow
+            }
+        }
+    }
+
+    var guardRow: some View {
+        let others: [ModMob] = s.mod.mobs.filter { $0.id != id }
+        var names: [String] = ["Nobody"]
+        var keys: [String] = [""]
+        for o in others { names.append(o.name); keys.append(s.mod.key(o.id)) }
+        for k in [MobKind.pig, .cow, .sheep, .villager] where k != .villager { names.append(mobDef(k).name); keys.append(mobDef(k).name) }
+        let base: Binding<String> = bh(\.guardKey, "")
+        let sel: Binding<Int> = Binding<Int>(get: { keys.firstIndex(of: base.wrappedValue) ?? 0 }, set: { base.wrappedValue = keys[clampI($0, 0, keys.count - 1)] })
+        return VStack(alignment: .leading, spacing: 4) {
+            Text("Guards (stays beside)").font(.pixel(12, .bold)).foregroundColor(ModUI.dim)
+            ChoiceRow(options: names, selected: sel, columns: 4)
+        }
+    }
+
+    var attacksPage: some View {
+        VStack(spacing: 10) {
+            Text("Attacks use the same damage rules as every weapon and monster in the game.").font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+            ForEach(0..<mob.attacks.count, id: \.self) { i in
+                attackEditor(i)
+            }
+            if mob.attacks.count < ModLimits.maxAttacks {
+                PixelButton(title: "+ ADD ATTACK", color: ModUI.accent) {
+                    var list: [ModAttack] = mob.attacks
+                    list.append(ModAttack())
+                    b(\.attacks, []).wrappedValue = list
+                }
+            }
+        }
+    }
+
+    func at<T>(_ i: Int, _ kp: WritableKeyPath<ModAttack, T>, _ d: T) -> Binding<T> {
+        let base: Binding<[ModAttack]> = b(\.attacks, [])
+        return Binding<T>(get: { i < base.wrappedValue.count ? base.wrappedValue[i][keyPath: kp] : d }, set: { v in
+            var list: [ModAttack] = base.wrappedValue
+            if i < list.count { list[i][keyPath: kp] = v; base.wrappedValue = list }
+        })
+    }
+
+    func attackEditor(_ i: Int) -> some View {
+        let a: ModAttack = i < mob.attacks.count ? mob.attacks[i] : ModAttack()
+        let kindB: Binding<Int> = Binding<Int>(get: { a.kind.rawValue }, set: { v in at(i, \.kind, .melee).wrappedValue = ModAttackKind(rawValue: v) ?? .melee })
+        let aimB: Binding<Int> = Binding<Int>(get: { a.aim.rawValue }, set: { v in at(i, \.aim, .forward).wrappedValue = ModAttackAim(rawValue: v) ?? .forward })
+        return ModSection(title: "ATTACK " + String(i + 1) + ": " + a.kind.name.uppercased(), help: a.kind.help) {
+            ChoiceRow(options: ModAttackKind.allCases.map { $0.name }, selected: kindB, columns: 4)
+            StatSlider(label: "Damage", value: at(i, \.damage, 6), range: 0...(sb ? 500 : 60), step: 0.5, format: "%.1f")
+            StatSlider(label: a.kind == .ranged ? "Range" : "Reach", value: at(i, \.range, 1.6), range: 0.5...(a.kind == .ranged ? 30 : 8), step: 0.1, format: "%.1f")
+            StatSlider(label: "Time between attacks", value: at(i, \.cooldown, 1.2), range: 0.2...20, step: 0.1, format: "%.1f s")
+            StatSlider(label: "Warning before it lands", value: at(i, \.windup, 0.3), range: 0...2, step: 0.05, format: "%.2f s")
+            StatSlider(label: "Knockback", value: at(i, \.knock, 6), range: 0...(sb ? 40 : 16), step: 0.5, format: "%.1f")
+            if a.kind == .area || a.kind == .stomp {
+                StatSlider(label: "Area radius", value: at(i, \.radius, 2.5), range: 0.5...(sb ? 12 : 6), step: 0.1, format: "%.1f")
+            }
+            if a.kind == .multiHit {
+                IntSlider(label: "Blows", value: at(i, \.hits, 3), range: 1...(sb ? 12 : 6))
+            }
+            if a.kind == .ranged {
+                Text("Aim").font(.pixel(12, .bold)).foregroundColor(ModUI.dim)
+                ChoiceRow(options: ModAttackAim.allCases.map { $0.name }, selected: aimB, columns: 4)
+                StatSlider(label: "Shot speed", value: at(i, \.speed, 16), range: 4...(sb ? 90 : 60), step: 1, format: "%.0f")
+                attackShot(i, a)
+            }
+            SmallButton(title: "REMOVE ATTACK", color: ModUI.red) {
+                var list: [ModAttack] = mob.attacks
+                if i < list.count { list.remove(at: i) }
+                b(\.attacks, []).wrappedValue = list
+            }
+        }
+    }
+
+    func attackShot(_ i: Int, _ a: ModAttack) -> some View {
+        let ids: [String] = s.mod.projectiles.map { $0.id }
+        let opts: [String] = ["Game shot"] + s.mod.projectiles.map { $0.name }
+        let pb: Binding<String> = at(i, \.projectile, "")
+        let sel: Binding<Int> = Binding<Int>(get: { (ids.firstIndex(of: pb.wrappedValue) ?? -1) + 1 }, set: { v in pb.wrappedValue = v <= 0 || v > ids.count ? "" : ids[v - 1] })
+        let gs: Binding<Int> = at(i, \.shot, 2)
+        let gsel: Binding<Int> = Binding<Int>(get: { ModGameShots.kinds.firstIndex(of: gs.wrappedValue) ?? 0 }, set: { gs.wrappedValue = ModGameShots.kinds[clampI($0, 0, ModGameShots.kinds.count - 1)] })
+        return VStack(alignment: .leading, spacing: 4) {
+            ChoiceRow(options: opts, selected: sel, columns: 4)
+            if a.projectile.isEmpty { ChoiceRow(options: ModGameShots.names, selected: gsel, columns: 5) }
+        }
+    }
+
+    func sp<T>(_ kp: WritableKeyPath<ModSpawn, T>, _ d: T) -> Binding<T> {
+        let base: Binding<ModSpawn> = b(\.spawn, ModSpawn())
+        return Binding<T>(get: { base.wrappedValue[keyPath: kp] }, set: { v in
+            var x: ModSpawn = base.wrappedValue
+            x[keyPath: kp] = v
+            base.wrappedValue = x
+        })
+    }
+
+    var spawnPage: some View {
+        let placeB: Binding<Int> = Binding<Int>(get: { mob.spawn.place.rawValue }, set: { v in sp(\.place, .surface).wrappedValue = ModSpawnPlace(rawValue: v) ?? .surface })
+        return ModSection(title: "SPAWNING", help: "Where and when it appears by itself. It also counts towards the game's limits on monsters.") {
+            ModToggle(label: "Appears in the world", help: mob.category == .boss ? "Bosses are best placed with the test tools or a structure" : "", isOn: sp(\.enabled, true))
+            if mob.spawn.enabled {
+                ChoiceRow(options: ModSpawnPlace.allCases.map { $0.name }, selected: placeB, columns: 5)
+                ChoiceRow(options: ["Any time", "By day", "At night"], selected: sp(\.when, 0), columns: 3)
+                ModBiomePicker(biomes: sp(\.biomes, []))
+                IntSlider(label: "Highest row", value: sp(\.minY, 0), range: 0...559)
+                IntSlider(label: "Lowest row", value: sp(\.maxY, 559), range: 0...559)
+                StatSlider(label: "How common (zombie = 7)", value: sp(\.weight, 3), range: 0.1...10, step: 0.1, format: "%.1f")
+                IntSlider(label: "Group size", value: sp(\.group, 1), range: 1...(mob.category == .boss ? 1 : 4))
+                IntSlider(label: "At most nearby", value: sp(\.maxNearby, 4), range: 1...(mob.category == .boss ? 1 : 8))
+            }
+        }
+    }
+
+    var dropsPage: some View {
+        let lootIDs: [String] = [""] + s.mod.loot.map { $0.id }
+        let lootNames: [String] = ["No loot table"] + s.mod.loot.map { $0.name }
+        let lb: Binding<String> = b(\.loot, "")
+        let lsel: Binding<Int> = Binding<Int>(get: { lootIDs.firstIndex(of: lb.wrappedValue) ?? 0 }, set: { lb.wrappedValue = lootIDs[clampI($0, 0, lootIDs.count - 1)] })
+        return VStack(spacing: 10) {
+            ModSection(title: "DROPS", help: "Each drop has its own chance.") {
+                ForEach(0..<mob.drops.count, id: \.self) { i in
+                    dropRow(i)
+                }
+                if mob.drops.count < ModLimits.maxDrops {
+                    SmallButton(title: "+ ADD DROP", color: ModUI.accent) { picking = mob.drops.count }
+                }
+            }
+            ModSection(title: "LOOT TABLE", help: "Also rolled when it dies (make tables in the LOOT tab).") {
+                ChoiceRow(options: lootNames, selected: lsel, columns: 3)
+            }
+        }
+    }
+
+    func dr<T>(_ i: Int, _ kp: WritableKeyPath<ModDrop, T>, _ d: T) -> Binding<T> {
+        let base: Binding<[ModDrop]> = b(\.drops, [])
+        return Binding<T>(get: { i < base.wrappedValue.count ? base.wrappedValue[i][keyPath: kp] : d }, set: { v in
+            var list: [ModDrop] = base.wrappedValue
+            if i < list.count { list[i][keyPath: kp] = v; base.wrappedValue = list }
+        })
+    }
+
+    func dropRow(_ i: Int) -> some View {
+        let d: ModDrop = i < mob.drops.count ? mob.drops[i] : ModDrop()
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                ModPreview.icon(d.item, s.catalog).resizable().interpolation(.none).frame(width: 30, height: 30)
+                Text(verbatim: ModPreview.name(d.item, s.catalog)).font(.pixel(13)).foregroundColor(Color.white)
+                Spacer()
+                SmallButton(title: "CHANGE", color: ModUI.blue) { picking = i }
+                SmallButton(title: "✕", color: ModUI.red) {
+                    var list: [ModDrop] = mob.drops
+                    if i < list.count { list.remove(at: i) }
+                    b(\.drops, []).wrappedValue = list
+                }
+            }
+            IntSlider(label: "At least", value: dr(i, \.min, 1), range: 0...64)
+            IntSlider(label: "At most", value: dr(i, \.max, 1), range: 0...64)
+            StatSlider(label: "Chance", value: dr(i, \.chance, 0.5), range: 0...1, step: 0.01, format: "%.2f")
+        }
+        .padding(8)
+        .background(Color.black.opacity(0.25))
+    }
+}
+
+/// Biomes to pick from (none picked means every biome)
+struct ModBiomePicker: View {
+    @Binding var biomes: [Int]
+    static let all: [Biome] = [.plains, .forest, .desert, .tundra, .jungle, .savanna, .swamp, .mountain, .ocean, .umbral]
+    var body: some View {
+        let cols: [GridItem] = [GridItem(.adaptive(minimum: 110), spacing: 6)]
+        return VStack(alignment: .leading, spacing: 4) {
+            Text(verbatim: biomes.isEmpty ? "Biomes: every biome" : "Biomes: only those picked").font(.pixel(12, .bold)).foregroundColor(ModUI.dim)
+            LazyVGrid(columns: cols, spacing: 6) {
+                ForEach(0..<ModBiomePicker.all.count, id: \.self) { i in
+                    chip(ModBiomePicker.all[i])
+                }
+            }
+        }
+    }
+
+    func chip(_ bi: Biome) -> some View {
+        let on: Bool = biomes.contains(bi.rawValue)
+        return Button {
+            if on { biomes.removeAll { $0 == bi.rawValue } } else { biomes.append(bi.rawValue) }
+        } label: {
+            Text(verbatim: bi.name).font(.pixel(11)).foregroundColor(Color.white).frame(maxWidth: .infinity, minHeight: 36)
+                .background(PixelBox(color: on ? ModUI.accent : Color(hex: 0x555555)))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Mod Creator: recipes, loot, ores and structures
+
+struct RecipeEditorView: View {
+    @ObservedObject var s: ModSession
+    let id: String
+    @State var picking: Int = -2
+
+    func b<T>(_ kp: WritableKeyPath<ModRecipe, T>, _ d: T) -> Binding<T> { return s.bind(\ModPack.recipes, id, kp, d) }
+    var rec: ModRecipe { return s.mod.recipes.first { $0.id == id } ?? ModRecipe() }
+
+    static let stations: [String] = ["By hand", "Workbench", "Furnace", "Campfire", "Anvil", "Tinker's Bench", "Rift Forge", "A block of this mod"]
+
+    var body: some View {
+        let cat: ModCatalog = s.catalog
+        return ZStack {
+            VStack(spacing: 10) {
+                ModSection(title: "MAKES") {
+                    HStack(spacing: 10) {
+                        ModPreview.icon(rec.out, cat).resizable().interpolation(.none).frame(width: 48, height: 48)
+                        Text(verbatim: ModPreview.name(rec.out, cat)).font(.pixel(15)).foregroundColor(Color.white)
+                        Spacer()
+                        SmallButton(title: "CHOOSE...", color: ModUI.blue) { picking = -1 }
+                    }
+                    IntSlider(label: "How many", value: b(\.count, 1), range: 1...99)
+                }
+                ModSection(title: "INGREDIENTS", help: "Up to " + String(ModLimits.maxCost) + ".") {
+                    ForEach(0..<rec.cost.count, id: \.self) { i in costRow(i, cat) }
+                    if rec.cost.count < ModLimits.maxCost {
+                        SmallButton(title: "+ ADD INGREDIENT", color: ModUI.accent) { picking = rec.cost.count }
+                    }
+                }
+                ModSection(title: "WHERE") {
+                    ChoiceRow(options: RecipeEditorView.stations, selected: stationBind, columns: 4)
+                    if rec.station == -1 { stationBlockRow }
+                    Text("Crafting tab").font(.pixel(12, .bold)).foregroundColor(ModUI.dim)
+                    ChoiceRow(options: RecipeCat.allCases.map { $0.name }, selected: b(\.cat, RecipeCat.mods.rawValue), columns: 6)
+                }
+                ModIssueList(report: recipeReport)
+            }
+            if picking >= -1 {
+                ItemPickerView(catalog: cat, title: picking == -1 ? "IT MAKES..." : "INGREDIENT", pick: { it in
+                    if picking == -1 {
+                        b(\.out, .block(.planks)).wrappedValue = it
+                    } else {
+                        var list: [ModCost] = rec.cost
+                        if picking < list.count { list[picking].item = it } else { list.append(ModCost(it, 1)) }
+                        b(\.cost, []).wrappedValue = list
+                    }
+                    picking = -2
+                }, cancel: { picking = -2 })
+            }
+        }
+    }
+
+    var recipeReport: ModReport {
+        var p: ModPack = s.mod
+        p.recipes = [rec]
+        let full: ModReport = ModValidator.check(&p, known: s.catalog.keys)
+        var r = ModReport()
+        for i in full.issues where i.place.hasPrefix("Recipe") { r.issues.append(i) }
+        return r
+    }
+
+    var stationBind: Binding<Int> {
+        let base: Binding<Int> = b(\.station, 0)
+        return Binding<Int>(get: { base.wrappedValue < 0 ? 7 : base.wrappedValue }, set: { base.wrappedValue = $0 == 7 ? -1 : $0 })
+    }
+
+    var stationBlockRow: some View {
+        let blocks: [ModBlock] = s.mod.blocks.filter { $0.function == .station }
+        let ids: [String] = blocks.map { $0.id }
+        let base: Binding<String> = b(\.stationBlock, "")
+        let sel: Binding<Int> = Binding<Int>(get: { ids.firstIndex(of: base.wrappedValue) ?? 0 }, set: { v in if !ids.isEmpty { base.wrappedValue = ids[clampI(v, 0, ids.count - 1)] } })
+        return VStack(alignment: .leading, spacing: 4) {
+            if blocks.isEmpty {
+                Text("Make a block whose 'When tapped' is Crafting station first.").font(.pixel(11, .semibold)).foregroundColor(Color(hex: 0xFF9060))
+            } else {
+                ChoiceRow(options: blocks.map { $0.name }, selected: sel, columns: 3)
+            }
+        }
+    }
+
+    func costRow(_ i: Int, _ cat: ModCatalog) -> some View {
+        let c: ModCost = i < rec.cost.count ? rec.cost[i] : ModCost()
+        let nB: Binding<Int> = Binding<Int>(get: { c.n }, set: { v in
+            var list: [ModCost] = rec.cost
+            if i < list.count { list[i].n = v; b(\.cost, []).wrappedValue = list }
+        })
+        return VStack(spacing: 4) {
+            HStack(spacing: 8) {
+                ModPreview.icon(c.item, cat).resizable().interpolation(.none).frame(width: 30, height: 30)
+                Text(verbatim: ModPreview.name(c.item, cat)).font(.pixel(13)).foregroundColor(Color.white)
+                Spacer()
+                SmallButton(title: "CHANGE", color: ModUI.blue) { picking = i }
+                SmallButton(title: "✕", color: ModUI.red) {
+                    var list: [ModCost] = rec.cost
+                    if i < list.count { list.remove(at: i) }
+                    b(\.cost, []).wrappedValue = list
+                }
+            }
+            IntSlider(label: "Amount", value: nB, range: 1...99)
+        }
+        .padding(8)
+        .background(Color.black.opacity(0.25))
+    }
+}
+
+struct LootEditorView: View {
+    @ObservedObject var s: ModSession
+    let id: String
+    @State var picking: Int = -1
+
+    func b<T>(_ kp: WritableKeyPath<ModLootTable, T>, _ d: T) -> Binding<T> { return s.bind(\ModPack.loot, id, kp, d) }
+    var table: ModLootTable { return s.mod.loot.first { $0.id == id } ?? ModLootTable() }
+
+    var body: some View {
+        let cat: ModCatalog = s.catalog
+        return ZStack {
+            VStack(spacing: 10) {
+                ModSection(title: "LOOT TABLE", help: "Each roll picks one entry by weight. Rarer entries have smaller weights.") {
+                    ModTextField(label: "Name", text: b(\.name, ""), placeholder: "Treasure")
+                    IntSlider(label: "Rolls", value: b(\.rolls, 2), range: 1...6)
+                    StatSlider(label: "Weight of 'nothing'", value: b(\.nothing, 0), range: 0...200, step: 1, format: "%.0f")
+                }
+                ModSection(title: "ENTRIES") {
+                    ForEach(0..<table.entries.count, id: \.self) { i in entryRow(i, cat) }
+                    if table.entries.count < ModLimits.maxLootEntries {
+                        SmallButton(title: "+ ADD ENTRY", color: ModUI.accent) { picking = table.entries.count }
+                    }
+                }
+            }
+            if picking >= 0 {
+                ItemPickerView(catalog: cat, title: "LOOT ENTRY", pick: { it in
+                    var list: [ModLootEntry] = table.entries
+                    if picking < list.count { list[picking].item = it } else { list.append(ModLootEntry(it, 1, 1, 0)) }
+                    b(\.entries, []).wrappedValue = list
+                    picking = -1
+                }, cancel: { picking = -1 })
+            }
+        }
+    }
+
+    func en<T>(_ i: Int, _ kp: WritableKeyPath<ModLootEntry, T>, _ d: T) -> Binding<T> {
+        let base: Binding<[ModLootEntry]> = b(\.entries, [])
+        return Binding<T>(get: { i < base.wrappedValue.count ? base.wrappedValue[i][keyPath: kp] : d }, set: { v in
+            var list: [ModLootEntry] = base.wrappedValue
+            if i < list.count { list[i][keyPath: kp] = v; base.wrappedValue = list }
+        })
+    }
+
+    func entryRow(_ i: Int, _ cat: ModCatalog) -> some View {
+        let e: ModLootEntry = i < table.entries.count ? table.entries[i] : ModLootEntry()
+        let pct: Double = table.chance(i) * 100.0
+        let col: UInt32 = ModLootEntry.rarityColors[clampI(e.rarity, 0, 3)]
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                ModPreview.icon(e.item, cat).resizable().interpolation(.none).frame(width: 30, height: 30)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(verbatim: ModPreview.name(e.item, cat)).font(.pixel(13)).foregroundColor(Color.white)
+                    Text(verbatim: ModLootEntry.rarityNames[clampI(e.rarity, 0, 3)] + String(format: " · %.1f%% per roll", pct)).font(.pixel(11)).foregroundColor(Color(hex: col))
+                }
+                Spacer()
+                SmallButton(title: "CHANGE", color: ModUI.blue) { picking = i }
+                SmallButton(title: "✕", color: ModUI.red) {
+                    var list: [ModLootEntry] = table.entries
+                    if i < list.count { list.remove(at: i) }
+                    b(\.entries, []).wrappedValue = list
+                }
+            }
+            ChoiceRow(options: ModLootEntry.rarityNames, selected: en(i, \.rarity, 0), columns: 4)
+            IntSlider(label: "At least", value: en(i, \.min, 1), range: 1...64)
+            IntSlider(label: "At most", value: en(i, \.max, 1), range: 1...64)
+            StatSlider(label: "Own weight (0 = by rarity)", value: en(i, \.weight, 0), range: 0...200, step: 1, format: "%.0f")
+        }
+        .padding(8)
+        .background(Color.black.opacity(0.25))
+    }
+}
+
+struct OreEditorView: View {
+    @ObservedObject var s: ModSession
+    let id: String
+
+    func b<T>(_ kp: WritableKeyPath<ModOre, T>, _ d: T) -> Binding<T> { return s.bind(\ModPack.ores, id, kp, d) }
+    var ore: ModOre { return s.mod.ores.first { $0.id == id } ?? ModOre() }
+
+    var body: some View {
+        let blocks: [ModBlock] = s.mod.blocks
+        let ids: [String] = blocks.map { $0.id }
+        let bb: Binding<String> = b(\.block, "")
+        let bsel: Binding<Int> = Binding<Int>(get: { ids.firstIndex(of: bb.wrappedValue) ?? 0 }, set: { v in if !ids.isEmpty { bb.wrappedValue = ids[clampI(v, 0, ids.count - 1)] } })
+        return VStack(spacing: 10) {
+            ModSection(title: "ORE") {
+                ModTextField(label: "Name", text: b(\.name, ""), placeholder: "Ruby veins")
+                if blocks.isEmpty {
+                    Text("Make the ore's block in the BLOCKS tab first.").font(.pixel(12)).foregroundColor(Color(hex: 0xFF9060))
+                } else {
+                    Text("Made of").font(.pixel(12, .bold)).foregroundColor(ModUI.dim)
+                    ChoiceRow(options: blocks.map { $0.name }, selected: bsel, columns: 3)
+                }
+                ChoiceRow(options: ["Overworld", "Umbral Realm"], selected: b(\.dim, 0), columns: 2)
+            }
+            ModSection(title: "DEPTH", help: "Drag the two sliders: the green band shows where veins form. The sea is at row 120.") {
+                HStack(alignment: .top, spacing: 14) {
+                    OreDepthBar(minY: ore.minY, maxY: ore.maxY, bottom: ore.dim == 0 ? WorldGen.H : umbralH)
+                        .frame(width: 120, height: 300)
+                    VStack(spacing: 6) {
+                        IntSlider(label: "Highest row", value: b(\.minY, 150), range: 2...((ore.dim == 0 ? WorldGen.H : umbralH) - 2))
+                        IntSlider(label: "Lowest row", value: b(\.maxY, 330), range: 2...((ore.dim == 0 ? WorldGen.H : umbralH) - 2))
+                        Text(verbatim: depthWords).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+                    }
+                }
+            }
+            ModSection(title: "RARITY") {
+                StatSlider(label: "Veins per 16 blocks of width", value: b(\.veins, 1.5), range: 0.05...8, step: 0.05, format: "%.2f")
+                Text(verbatim: rarityWords).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+                IntSlider(label: "Blocks per vein", value: b(\.size, 6), range: 1...24)
+                Text("Forms in").font(.pixel(12, .bold)).foregroundColor(ModUI.dim)
+                ChoiceRow(options: ModOre.hostNames, selected: b(\.host, 0), columns: 3)
+            }
+        }
+    }
+
+    var depthWords: String {
+        let mid: Int = (ore.minY + ore.maxY) / 2
+        if ore.dim == 1 { return "In the Umbral Realm's ash and rock." }
+        if mid < 130 { return "Near the surface." }
+        if mid < 220 { return "In the upper caves (like coal and copper)." }
+        if mid < 360 { return "Deep underground (like iron and silver)." }
+        if mid < 460 { return "Very deep (like gold)." }
+        return "In the abyss (like diamond and mythril)."
+    }
+
+    var rarityWords: String {
+        let v: Double = ore.veins
+        if v < 0.2 { return "Very rare" }
+        if v < 0.6 { return "Rare" }
+        if v < 1.5 { return "Uncommon" }
+        if v < 3.5 { return "Common" }
+        return "Everywhere"
+    }
+}
+
+/// The world's layers from the sky down, with the band where an ore forms
+struct OreDepthBar: View {
+    let minY: Int
+    let maxY: Int
+    let bottom: Int
+    var body: some View {
+        Canvas { ctx, size in
+            let w: Double = Double(size.width)
+            let h: Double = Double(size.height)
+            let fb: Double = Double(max(1, bottom))
+            let layers: [(Int, UInt32, String)] = [(0, 0x7AB0E8, "sky"), (110, 0x6A8A40, "surface"), (130, 0x8A6A40, "earth"),
+                                                   (200, 0x7A7A7A, "caves"), (330, 0x5A5A68, "deep"), (450, 0x3A3448, "abyss")]
+            for (i, l) in layers.enumerated() where l.0 < bottom {
+                let y0: Double = Double(l.0) / fb * h
+                let y1: Double = i + 1 < layers.count ? min(h, Double(layers[i + 1].0) / fb * h) : h
+                ctx.fill(Path(CGRect(x: 0, y: y0, width: w, height: max(0, y1 - y0))), with: .color(Color(hex: l.1)))
+            }
+            let a: Double = Double(minY) / fb * h
+            let b: Double = Double(maxY) / fb * h
+            ctx.fill(Path(CGRect(x: w * 0.15, y: a, width: w * 0.7, height: max(3, b - a))), with: .color(Color(hex: 0x50E070, alpha: 0.75)))
+            ctx.stroke(Path(CGRect(x: w * 0.15, y: a, width: w * 0.7, height: max(3, b - a))), with: .color(Color.white), lineWidth: 2)
+        }
+        .overlay(Rectangle().stroke(Color.white.opacity(0.5), lineWidth: 2))
+    }
+}
+
+struct StructureEditorView: View {
+    @ObservedObject var s: ModSession
+    let id: String
+
+    func b<T>(_ kp: WritableKeyPath<ModStructure, T>, _ d: T) -> Binding<T> { return s.bind(\ModPack.structures, id, kp, d) }
+    var st: ModStructure { return s.mod.structures.first { $0.id == id } ?? ModStructure() }
+
+    var body: some View {
+        let lootIDs: [String] = [""] + s.mod.loot.map { $0.id }
+        let lootNames: [String] = ["Normal chest loot"] + s.mod.loot.map { $0.name }
+        let lb: Binding<String> = b(\.loot, "")
+        let lsel: Binding<Int> = Binding<Int>(get: { lootIDs.firstIndex(of: lb.wrappedValue) ?? 0 }, set: { lb.wrappedValue = lootIDs[clampI($0, 0, lootIDs.count - 1)] })
+        let placeB: Binding<Int> = Binding<Int>(get: { st.placement.rawValue }, set: { v in b(\.placement, .surface).wrappedValue = ModPlacement(rawValue: v) ?? .surface })
+        return VStack(spacing: 10) {
+            ModSection(title: "STRUCTURE") {
+                ModTextField(label: "Name", text: b(\.name, ""), placeholder: "Ruined Hut")
+                StructurePreview(st: st, catalog: s.catalog).frame(height: 220)
+                Text(verbatim: String(st.w) + " x " + String(st.h) + " blocks").font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+            }
+            ModSection(title: "WHERE IT APPEARS", help: "It never cuts into bedrock or the rift gate, and keeps away from the world's own landmarks.") {
+                ChoiceRow(options: ModPlacement.allCases.map { $0.name }, selected: placeB, columns: 3)
+                ChoiceRow(options: ["Overworld", "Umbral Realm"], selected: b(\.dim, 0), columns: 2)
+                if st.placement == .underground {
+                    IntSlider(label: "Highest row", value: b(\.minY, 150), range: 4...550)
+                    IntSlider(label: "Lowest row", value: b(\.maxY, 400), range: 4...550)
+                }
+                ModBiomePicker(biomes: b(\.biomes, []))
+            }
+            ModSection(title: "HOW OFTEN") {
+                StatSlider(label: "Chance at each site", value: b(\.chance, 0.35), range: 0.01...1, step: 0.01, format: "%.2f")
+                IntSlider(label: "Blocks between sites", value: b(\.spacing, 300), range: 64...2048)
+                Text(verbatim: String(format: "About one every %.0f blocks", Double(st.spacing) / max(0.01, st.chance))).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+            }
+            ModSection(title: "CHESTS INSIDE") {
+                ChoiceRow(options: lootNames, selected: lsel, columns: 3)
+            }
+        }
+    }
+}
+
+/// A side view of a captured structure, drawn with the blocks' pictures
+struct StructurePreview: View {
+    let st: ModStructure
+    let catalog: ModCatalog
+    var body: some View {
+        let w: Int = max(1, st.w)
+        let h: Int = max(1, st.h)
+        let palette: [Image] = st.palette.map { k in pixImage(catalog.block(k).map { $0.art.isBlank ? greyTileBuf() : $0.art.buf() } ?? missingTileBuf()) }
+        let cells: [Int] = st.cells
+        return Canvas { ctx, size in
+            let c: Double = min(Double(size.width) / Double(w), Double(size.height) / Double(h))
+            let ox: Double = (Double(size.width) - c * Double(w)) * 0.5
+            ctx.fill(Path(CGRect(x: ox, y: 0, width: c * Double(w), height: c * Double(h))), with: .color(Color(hex: 0x6A90B8)))
+            for y in 0..<h {
+                for x in 0..<w {
+                    let i: Int = y * w + x
+                    if i >= cells.count { continue }
+                    let v: Int = cells[i]
+                    let r: CGRect = CGRect(x: ox + Double(x) * c, y: Double(y) * c, width: c + 0.5, height: c + 0.5)
+                    if v >= 1000 {
+                        let pi: Int = v - 1000
+                        if pi < palette.count { ctx.draw(palette[pi], in: r) }
+                    } else if v > 0, let t = Tile(rawValue: UInt8(v)), !t.isMod {
+                        ctx.draw(Art.shared.tile(t), in: r)
+                    }
+                }
+            }
+        }
+        .background(Color.black.opacity(0.4))
     }
 }
 
@@ -31230,6 +37537,7 @@ struct RootView: View {
         }
         actState.stickReleased()
         game = nil
+        ModRuntime.deactivate()
     }
 }
 

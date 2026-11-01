@@ -63,6 +63,14 @@ var spawn_point := Vector2.ZERO
 var hair: int = 0
 var scarf: int = 0
 var riding: Node = null
+## how chilled the player is (0 warm .. 1 freezing): cold lands in bad weather draw the warmth out,
+## shelter, heat and warm clothes keep it in
+var body_cold: float = 0.0
+var _cold_warned: bool = false
+var _cold_hurt_t: float = 0.0
+var _warm_t: float = 0.0
+var _warmth: float = 0.0
+var _shelter: int = 0
 var _armor_key: String = ""
 var _pose: String = ""
 
@@ -425,7 +433,8 @@ func _update_survival(delta: float, ix: float) -> void:
 				hurt(1.0, global_position.x, 0.0, true, "hunger")
 	else:
 		starve_t = 0.0
-	if hunger >= 14.0 and hp < max_hp:
+	_update_cold(delta)
+	if hunger >= 14.0 and hp < max_hp and body_cold < 0.9:
 		regen_t += delta
 		if regen_t >= (0.9 if hunger >= 18.0 else 1.6):
 			regen_t = 0.0
@@ -434,6 +443,101 @@ func _update_survival(delta: float, ix: float) -> void:
 			level.hud_dirty = true
 	else:
 		regen_t = 0.0
+
+
+## The strongest heat within reach: a campfire or heater warms most, then a furnace, lava, a
+## lantern, a torch (weaker the further away, nothing beyond 6 blocks)
+func _heat_near() -> float:
+	var best: float = 0.0
+	var c: Vector2i = feet_cell()
+	for dy in range(-5, 3):
+		for dx in range(-6, 7):
+			var heat: float = 0.0
+			match level.world.get_tile(c.x + dx, c.y + dy):
+				T.CAMPFIRE, T.HEATER:
+					heat = 1.0
+				T.FURNACE:
+					heat = 0.7
+				T.LAVA:
+					heat = 0.8
+				T.LANTERN:
+					heat = 0.3
+				T.TORCH:
+					heat = 0.2
+			if heat > 0.0:
+				var d: float = sqrt(float(dx * dx + dy * dy))
+				best = maxf(best, heat * clampf(1.0 - d / 6.5, 0.0, 1.0))
+	return best
+
+
+## How sheltered the player is: 0 out in the open, 1 under a roof, 2 a roof with walls both sides,
+## 3 deep underground
+func _shelter_level() -> int:
+	var w: WorldData = level.world
+	var c: Vector2i = feet_cell()
+	if c.y > w.surface(c.x) + 12:
+		return 3
+	if c.y < w.sky_top(c.x):
+		return 0
+	var walls: int = 0
+	for side in [-1, 1]:
+		for k in range(1, 7):
+			if w.solid(c.x + int(side) * k, c.y) or w.solid(c.x + int(side) * k, c.y - 1):
+				walls += 1
+				break
+	return 2 if walls == 2 else 1
+
+
+func _update_cold(delta: float) -> void:
+	_warm_t -= delta
+	if _warm_t <= 0.0:
+		_warm_t = 0.5
+		_warmth = _heat_near()
+		_shelter = _shelter_level()
+	var wx: Weather = level.weather
+	var on: bool = bool(Game.setting("weather", true))
+	var loss: float = 0.0
+	if on and level.dim == WorldGen.DIM_OVERWORLD and not dead:
+		var b: int = level.gen.biome_at(floori(global_position.x / 8.0))
+		var chill: float = wx.chill
+		if b == WorldGen.TUNDRA:
+			chill += 0.35
+		elif b == WorldGen.MOUNTAIN and global_position.y / 8.0 < 80.0:
+			chill += 0.25
+		var cold: float = clampf((chill - 0.5) * 2.0, 0.0, 1.0)
+		if cold > 0.0:
+			loss = cold * (0.55 + 0.45 * clampf(wx.wind / 12.0, 0.0, 1.0)) + wx.precip * 0.15 * cold
+			loss *= [1.0, 0.6, 0.25, 0.05][_shelter]
+			if inv.wearing("gear:winterCoat"):
+				loss *= 0.35
+			if inv.wearing("gear:snowBoots"):
+				loss *= 0.8
+			if in_water:
+				loss += 0.6 * cold
+	var gain: float = _warmth * 0.12 + (0.05 if loss <= 0.001 else 0.0)
+	# bare in a full blizzard a player freezes in about half a minute; a coat triples that
+	body_cold = clampf(body_cold + (loss * 0.03 - gain) * delta, 0.0, 1.0)
+	if not on:
+		body_cold = maxf(0.0, body_cold - delta * 0.2)
+	if body_cold > 0.4 and not _cold_warned:
+		_cold_warned = true
+		level.say("You're getting cold. Get out of the wind, near a fire, or into warm clothes.", 3.5)
+	if body_cold < 0.2:
+		_cold_warned = false
+	if body_cold >= 0.97 and bool(Game.setting("weather_hurts", true)) and on:
+		_cold_hurt_t += delta
+		if _cold_hurt_t >= 4.0:
+			_cold_hurt_t = 0.0
+			if hp > 1.0 or level.mode == "hardcore":
+				hurt(1.0, global_position.x, 0.0, true, "cold")
+				level.float_text("Freezing", global_position + Vector2(0, -BODY_H - 5.0), Color(0.66, 0.85, 1.0))
+	else:
+		_cold_hurt_t = 0.0
+
+
+## Walking speed lost to the cold (down to 70% when freezing)
+func cold_slow() -> float:
+	return 1.0 - 0.3 * clampf((body_cold - 0.5) * 2.0, 0.0, 1.0)
 
 
 ## Takes damage (armour softens it unless `ignore_armor`); returns true if it landed
@@ -447,6 +551,9 @@ func hurt(amount: float, from_x: float, knock: float = 6.0, ignore_armor: bool =
 		d *= 1.0 - minf(0.75, inv.defense() * 0.045)
 	if inv.wearing("gear:wardenSigil"):
 		d *= 0.85
+	d *= level.dmg_in_mult
+	if d <= 0.0:
+		return false
 	d = maxf(1.0, roundf(d))
 	hp -= d
 	Sfx.play("hurt", 0.8)
@@ -487,6 +594,7 @@ func respawn_at(p: Vector2) -> void:
 	hunger = maxf(hunger, 14.0)
 	air = 10.0
 	burn = 0.0
+	body_cold = 0.0
 	velocity = Vector2.ZERO
 	global_position = p
 	invuln = 3.0

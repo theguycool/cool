@@ -97,7 +97,7 @@ func setup(lv: Level, k: String, v: int = -1) -> void:
 	if v < 0:
 		v = randi() % 3 if k == "zombie" else 0
 	variant = v
-	max_hp = float(def["hp"])
+	max_hp = float(def["hp"]) * (lv.mob_health_mult if lv != null else 1.0)
 	hp = max_hp
 	_w = float(def["w"]) * 8.0
 	_h = float(def["h"]) * 8.0
@@ -174,6 +174,8 @@ func take_damage(info: Dictionary) -> bool:
 	if tame and bool(info.get("by_player", false)):
 		return false
 	var amount: float = float(info.get("amount", 1.0))
+	if bool(info.get("by_player", false)):
+		amount *= level.dmg_out_mult
 	var from: Vector2 = info.get("from", global_position)
 	var knock: float = float(info.get("knock", 4.0))
 	var from_side: int = 1 if global_position.x >= from.x else -1
@@ -219,6 +221,8 @@ func take_damage(info: Dictionary) -> bool:
 
 func _die(by_player: bool) -> void:
 	hp = 0.0
+	if by_player:
+		level.kills += 1
 	dying = 0.0
 	velocity = Vector2(velocity.x * 0.5, -40.0)
 	collision_layer = 0
@@ -232,6 +236,8 @@ func _die(by_player: bool) -> void:
 	if by_player or randf() < 0.5:
 		for s in Loot.mob_drops(key, sheared):
 			level.spawn_drop(String(s["id"]), int(s["n"]), center())
+	if key == "pirateCaptain" and by_player:
+		level.pirate_treasure(center())
 	level.effects.burst(center(), Color(0.85, 0.85, 0.85), 10, 40.0, 0.6)
 	Sfx.play("hit", 0.6)
 
@@ -258,6 +264,8 @@ func _physics_process(delta: float) -> void:
 	if not level.world.is_loaded_x(floori(global_position.x / 8.0)):
 		return
 	if level.hit_stop_t > 0.0 and absf(dx_p) < 80.0:
+		return
+	if level.freeze_mobs:
 		return
 	cd = maxf(0.0, cd - delta)
 	flash_t = maxf(0.0, flash_t - delta)

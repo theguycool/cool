@@ -533,6 +533,12 @@ def resolve_name(ctx, name, line, quiet):
     """type of a bare identifier"""
     if name in ('self',):
         return Ty('inst', ctx.sc.class_name or base_godot(ctx.sc), script=ctx.sc)
+    if name == 'super':
+        chain = list(script_chain(ctx.sc))
+        if len(chain) > 1:
+            par = chain[1]
+            return Ty('inst', par.class_name or base_godot(par), script=par)
+        return Ty('inst', base_godot(ctx.sc))
     if name in ('true', 'false'):
         return Ty('inst', 'bool')
     if name == 'null':

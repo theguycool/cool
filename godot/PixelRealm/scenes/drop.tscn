@@ -1,0 +1,18 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/entities/drop.gd" id="1_drop"]
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_drop"]
+size = Vector2(6, 6)
+
+[node name="Drop" type="Area2D"]
+collision_layer = 16
+collision_mask = 0
+monitoring = false
+script = ExtResource("1_drop")
+
+[node name="Icon" type="Sprite2D" parent="."]
+
+[node name="Shape" type="CollisionShape2D" parent="."]
+position = Vector2(0, -3)
+shape = SubResource("RectangleShape2D_drop")

@@ -9,6 +9,8 @@ The Godot project lives in `godot/PixelRealm/` (open that folder in Xogot / Godo
   generated data scripts in `scripts/data/` (never edit those by hand).
 - `tools/godot_check.py <godot project>` is the static checker (gdparse syntax check of every script,
   res:// paths, scene files, autoload and class references, calls on known classes).
+- `python3 tools/godot_check.py godot/PixelRealm` must report 0 errors before a commit. It was tested by planting
+  mistakes (unknown methods, wrong argument counts, Variant `:=`, bad scene properties); it caught all of them.
 - Godot itself could not be downloaded in the cloud session, so nothing here has been run in Godot.
 
 ## Units and coordinates
@@ -38,3 +40,25 @@ The Godot project lives in `godot/PixelRealm/` (open that folder in Xogot / Godo
 scripts/autoload, scripts/data (generated), scripts/world (gen, chunks, view, light, structures),
 scripts/entities (player, mob, drop, projectile), scripts/systems (combat, spawner, sky, weather,
 inventory, crafting, saves), scripts/ui (hud, sticks, buttons, panels, menu). scenes/*.tscn.
+
+## Touch input (multi-touch)
+- Every HUD control (sticks, buttons, hotbar slots) handles `InputEventScreenTouch`/`ScreenDrag` in
+  `_gui_input`, keyed by the touch index, and accepts the event; Godot routes a touch to the control
+  it started on, so the walking stick, JUMP and the attack stick work at the same time.
+- Emulated mouse events (device -1) are ignored by those controls and by the level; real mouse input
+  still works for desktop testing. Panels use ordinary Buttons (fed by the emulated mouse) plus
+  `ScrollList` and `SlotBoard`, which handle touch themselves (drag to scroll, tap, hold, drag stacks).
+- Taps that hit no control reach `Level._unhandled_input` and become the world pointer.
+
+## UI building blocks (scripts/ui)
+- `PanelBase`: dimmed backdrop, centred framed box that fits the screen, works while paused, Escape closes.
+- `UIKit`: theme, buttons, labels, the settings rows shared by the pause menu and the main menu.
+- `ScrollList`: rows with icons, wrapped text, cost icons, right-hand buttons and ON/OFF switches.
+- `SlotBoard`: bag, hotbar, armour, gear, chest and DROP as one drawn board (tap, hold, drag).
+
+## Not recreated (see the report)
+- Sparkworks power and automation (wires, generators, batteries, logic, machines). Levers and switches
+  toggle lamps and steel gates within 6 blocks instead; the wiring items say they are not available.
+- Pirate ships at sea (replaced by pirate landing parties on coasts; the captain drops the treasure).
+- Building vehicles from parts (the kits work), ground snow and puddles, hurricane surges and wind
+  tearing blocks loose, falling sand as a moving block (sand drops straight to where it lands).

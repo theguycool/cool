@@ -63,6 +63,13 @@ var tick_t: float = 0.0
 var boss: Mob = null
 var free_time: bool = false
 var show_hitboxes: bool = false
+## debug: creatures stand still, their AI state is written over them, multipliers
+var freeze_mobs: bool = false
+var show_ai: bool = false
+var mob_health_mult: float = 1.0
+var dmg_out_mult: float = 1.0
+var dmg_in_mult: float = 1.0
+var kills: int = 0
 var _stream_cx: int = -2147483648
 
 
@@ -95,16 +102,22 @@ func _setup_world(params: Dictionary) -> void:
 	mode = String(params.get("mode", "survival"))
 	infinite = bool(params.get("infinite", true))
 	var s = params.get("seed", null)
-	if s == null or String(s) == "":
+	if s is int or s is float:
+		# a saved world (JSON stores the number as a float)
+		seed_value = int(s)
+	elif s == null or String(s).strip_edges() == "":
 		seed_value = randi() % 2000000000 + 1
-	elif String(s).is_valid_int():
-		seed_value = int(String(s))
+	elif String(s).strip_edges().is_valid_int():
+		seed_value = int(String(s).strip_edges())
 	else:
 		seed_value = absi(String(s).hash()) + 1
 	options = {"flat": bool(params.get("flat", false)), "trees": bool(params.get("trees", true)),
 		"structures": bool(params.get("structures", true)), "caves": bool(params.get("caves", false)),
 		"ponds": bool(params.get("ponds", false))}
-	gen = WorldGen.new(seed_value, infinite, options)
+	# how often abandoned structures appear is chosen when the world is made and kept with it
+	var rare: float = float(params.get("rare_chance", Game.setting("rare_chance", 0.28)))
+	options["rare_chance"] = rare
+	gen = WorldGen.new(seed_value, infinite, options, rare)
 	worlds.clear()
 	_switch_world(WorldGen.DIM_OVERWORLD)
 	player = PlayerScene.instantiate()
@@ -192,6 +205,10 @@ func _process(delta: float) -> void:
 			dyn.append([Vector2i(floori(p.global_position.x / 8.0), floori(p.global_position.y / 8.0)), (p as Projectile).glow])
 	for f in effects.flash_lights():
 		dyn.append(f)
+	for fz in fire_zones:
+		dyn.append([Vector2i(floori(float(fz[0]) / 8.0), floori((float(fz[1]) - 5.0) / 8.0)), 11])
+	effects.fires = fire_zones
+	_debug_overlay()
 	lighting.dynamic = dyn
 	lighting.update_light(world, vr, sky_level(), delta, not dyn.is_empty())
 	_update_camera(delta)
@@ -220,6 +237,7 @@ func _physics_process(delta: float) -> void:
 	_update_portal(delta)
 	_update_discoveries(delta)
 	_update_bosses()
+	_update_zones(delta)
 	player.actions.recharge_rods(delta)
 	if player.dead:
 		return
@@ -228,6 +246,29 @@ func _physics_process(delta: float) -> void:
 		autosave_t = 0.0
 		save_game()
 		float_text("Saved", player.global_position + Vector2(0, -24), Color(0.6, 1.0, 0.6))
+
+
+## The debug menu's AI overlay and hit boxes
+func _debug_overlay() -> void:
+	if not show_ai and not show_hitboxes:
+		if not effects.debug_labels.is_empty() or not effects.debug_boxes.is_empty():
+			effects.debug_labels = []
+			effects.debug_boxes = []
+		return
+	var labels: Array = []
+	var boxes: Array = []
+	for m in mobs:
+		var mm: Mob = m
+		var r: Rect2 = mm.hit_rect()
+		if show_hitboxes:
+			boxes.append(r)
+		if show_ai:
+			var why: String = mm.why
+			labels.append([Vector2(r.get_center().x, r.position.y - 4.0), mm.ai + ("" if why == "" else " · " + why)])
+	if show_hitboxes:
+		boxes.append(player.body_rect())
+	effects.debug_labels = labels
+	effects.debug_boxes = boxes
 
 
 func view_rect() -> Rect2i:
@@ -332,7 +373,7 @@ func held_light() -> int:
 # ---------------------------------------------------------------------------------------------- weather on the player
 
 func weather_walk_scale() -> float:
-	return weather.walk_scale(self)
+	return weather.walk_scale(self) * player.cold_slow()
 
 
 func weather_push(on_floor: bool) -> float:
@@ -650,8 +691,8 @@ func hostile_at(p: Vector2) -> bool:
 func spawn_mob(key: String, pos: Vector2, variant: int = -1) -> Mob:
 	var m: Mob = MobScene.instantiate()
 	m.setup(self, key, variant)
+	m.position = pos
 	entities.add_child(m)
-	m.global_position = pos
 	mobs.append(m)
 	return m
 
@@ -832,13 +873,202 @@ func place_vehicle(kit: String, at: Vector2) -> bool:
 	if kind == "car" and water:
 		say("Put the car on dry ground.", 1.6)
 		return false
+	add_vehicle(kind, Vector2(at.x, cell.y * 8 + 8))
+	say("Tap the %s to get in." % kind, 2.0)
+	return true
+
+
+## Vehicles left in the other world while the player is away: {dim: [[kind, x, y], ...]}
+var parked := {}
+
+
+## Puts this world's vehicles away (crossing the rift) so they wait where they were left
+func _park_vehicles() -> void:
+	var list: Array = parked.get(dim, [])
+	for v in vehicles:
+		var vv: Vehicle = v
+		if is_instance_valid(vv):
+			list.append([vv.kind, vv.global_position.x, vv.global_position.y])
+			vv.queue_free()
+	parked[dim] = list
+	vehicles.clear()
+
+
+## Brings back the vehicles waiting in the world just entered
+func _unpark_vehicles() -> void:
+	var list: Array = parked.get(dim, [])
+	parked.erase(dim)
+	for e in list:
+		var a: Array = e
+		add_vehicle(String(a[0]), Vector2(float(a[1]), float(a[2])))
+
+
+func add_vehicle(kind: String, pos: Vector2) -> Vehicle:
 	var v: Vehicle = VehicleScene.instantiate()
 	v.setup(self, kind)
 	entities.add_child(v)
-	v.global_position = Vector2(at.x, cell.y * 8 + 8)
+	v.global_position = pos
 	vehicles.append(v)
-	say("Tap the %s to get in." % kind, 2.0)
-	return true
+	return v
+
+
+## Every vehicle in both worlds, for saving: [[kind, x, y, dim], ...]
+func all_vehicles() -> Array:
+	var out: Array = []
+	for v in vehicles:
+		var vv: Vehicle = v
+		if is_instance_valid(vv):
+			out.append([vv.kind, vv.global_position.x, vv.global_position.y, dim])
+	for d in parked.keys():
+		for e in parked[d]:
+			var a: Array = e
+			out.append([a[0], a[1], a[2], int(d)])
+	return out
+
+
+## The nearest empty vehicle within `radius` pixels of `pos`, or null
+func vehicle_near(pos: Vector2, radius: float) -> Vehicle:
+	var best: Vehicle = null
+	var bd: float = radius
+	for v in vehicles:
+		var vv: Vehicle = v
+		if not is_instance_valid(vv) or vv.rider:
+			continue
+		var d: float = vv.global_position.distance_to(pos)
+		if d <= bd:
+			bd = d
+			best = vv
+	return best
+
+
+## The vehicle under a point (a tap on it), or null
+func vehicle_at(p: Vector2) -> Vehicle:
+	for v in vehicles:
+		var vv: Vehicle = v
+		if is_instance_valid(vv) and vv.hit_rect().grow(2.0).has_point(p):
+			return vv
+	return null
+
+
+## Gets into a car or boat: the walking stick drives, JUMP gets out once it has stopped
+func drive(v: Vehicle) -> void:
+	if player.riding != null or player.dead or v.rider:
+		return
+	if player.global_position.distance_to(v.global_position) > 48.0:
+		say("Walk up to it first.", 1.2)
+		return
+	player.riding = v
+	v.rider = true
+	v.exit_prev = true
+	player.visible = false
+	player.velocity = Vector2.ZERO
+	say("Drive with the walking stick. JUMP gets out when you have stopped.", 3.0)
+	hud_dirty = true
+
+
+## Packs a vehicle back into its kit
+func pack_up(v: Vehicle) -> void:
+	if v.rider:
+		return
+	var kits := {"car": "gadget:carKit", "boat": "gadget:boatKit", "motorboat": "gadget:motorboatKit"}
+	var kit: String = String(kits.get(v.kind, "gadget:carKit"))
+	var left: int = player.inv.add(kit, 1)
+	if left > 0:
+		spawn_drop(kit, left, v.global_position + Vector2(0, -8))
+	vehicles.erase(v)
+	v.queue_free()
+	Sfx.play("pickup", 0.7)
+	say("Packed up.", 1.2)
+	hud_dirty = true
+
+
+## Patches of fire from thrown flasks: [x, ground y, half width, seconds left, tick, by player]
+var fire_zones: Array = []
+## The Hollow Warden's marked strikes: [position, half width, seconds left, total, damage]
+var danger_zones: Array = []
+
+
+## A fire flask breaks: a patch of fire on the ground below, and everything standing in it burns
+func fire_burst(pos: Vector2, by_player: bool) -> void:
+	var gx: int = floori(pos.x / 8.0)
+	var gy: float = pos.y
+	var y: int = floori(pos.y / 8.0)
+	for k in range(5):
+		if world.solid(gx, y + k):
+			gy = float((y + k) * 8)
+			break
+	if fire_zones.size() >= 6:
+		fire_zones.pop_front()
+	fire_zones.append([pos.x, gy, 17.6, 3.5, 0.35, by_player])
+	Sfx.play("flask", 0.9)
+	effects.burst(Vector2(pos.x, gy - 3.0), Color(1.0, 0.5, 0.19), 14, 40.0, 0.6, -16.0)
+	effects.burst(pos, Color(0.72, 0.88, 0.94), 6, 32.0, 0.3)
+	effects.flashes.append([Vector2(pos.x, gy - 6.0), 24.0, 0.5, 0.5, Color(1.0, 0.6, 0.25)])
+
+
+## A boss slams the ground: a shock runs out along the floor and hurts whoever stands on it
+func quake_from(pos: Vector2, radius_blocks: int, dmg: float) -> void:
+	var r: float = float(radius_blocks) * 8.0
+	for k in range(-radius_blocks, radius_blocks + 1):
+		effects.dust(pos + Vector2(float(k) * 8.0, 0), 2)
+	if player.dead or not player.is_on_floor():
+		return
+	if absf(player.global_position.x - pos.x) <= r and absf(player.global_position.y - pos.y) < 20.0:
+		player.hurt(dmg, pos.x, 7.0)
+
+
+## Marks a strip of ground that will be struck after `delay` seconds (move out of it!)
+func danger_zone(pos: Vector2, half_w: float, delay: float, dmg: float) -> void:
+	danger_zones.append([pos, half_w, delay, delay, dmg])
+	effects.zones = danger_zones
+
+
+func _update_zones(delta: float) -> void:
+	if not danger_zones.is_empty():
+		var keep: Array = []
+		for z in danger_zones:
+			z[2] = float(z[2]) - delta
+			if float(z[2]) > 0.0:
+				keep.append(z)
+				continue
+			var zp: Vector2 = z[0]
+			var hw: float = float(z[1])
+			effects.lightning([zp + Vector2(0, -140), zp], 0.25)
+			effects.burst(zp, Color(0.7, 0.4, 1.0), 16, 50.0, 0.6)
+			Sfx.play("zap", 0.8)
+			if not player.dead and absf(player.global_position.x - zp.x) <= hw + Player.BODY_W * 0.5 and absf(player.global_position.y - zp.y) < 28.0:
+				player.hurt(float(z[4]), zp.x, 6.0)
+		danger_zones = keep
+		effects.zones = danger_zones
+	if fire_zones.is_empty():
+		return
+	var rain: float = weather.rain_here(self)
+	var left: Array = []
+	for f in fire_zones:
+		f[3] = float(f[3]) - delta * (1.0 + (2.0 * rain if rain > 0.05 else 0.0))
+		f[4] = float(f[4]) + delta
+		var fx: float = float(f[0])
+		var fy: float = float(f[1])
+		var hw2: float = float(f[2])
+		if float(f[4]) >= 0.35:
+			f[4] = 0.0
+			for m in mobs_near(fx - hw2 - 16.0, fx + hw2 + 16.0):
+				var mm: Mob = m
+				if mm.hp <= 0.0 or (mm.tame and bool(f[5])):
+					continue
+				if absf(mm.global_position.x - fx) > hw2 + mm.hit_rect().size.x * 0.5:
+					continue
+				if mm.global_position.y < fy - 19.2 or mm.hit_rect().position.y > fy + 3.2:
+					continue
+				mm.take_damage({"amount": 2.0, "from": Vector2(fx, fy), "knock": 0.0, "by_player": bool(f[5]), "burn": 2.5})
+			if not player.dead and absf(player.global_position.x - fx) < hw2 + Player.BODY_W * 0.5 and player.global_position.y > fy - 16.0 and player.global_position.y - Player.BODY_H < fy + 2.4:
+				if not player.inv.wearing("gear:emberCharm"):
+					player.burn = maxf(player.burn, 0.8)
+			if float(f[3]) > 0.3:
+				effects.burst(Vector2(fx + randf_range(-hw2, hw2), fy - 2.4), Color(1.0, 0.63, 0.19), 2, 12.0, 0.45, -40.0)
+		if float(f[3]) > 0.0:
+			left.append(f)
+	fire_zones = left
 
 
 # ---------------------------------------------------------------------------------------------- the rift
@@ -886,6 +1116,7 @@ func _update_portal(delta: float) -> void:
 
 
 func travel(to_dim: int) -> void:
+	dismount()
 	for m in mobs.duplicate():
 		var mm: Mob = m
 		if not mm.tame:
@@ -895,7 +1126,12 @@ func travel(to_dim: int) -> void:
 	for e in entities.get_children():
 		if e is Drop:
 			e.queue_free()
+	_park_vehicles()
+	fire_zones.clear()
+	danger_zones.clear()
+	effects.zones = danger_zones
 	_switch_world(to_dim)
+	_unpark_vehicles()
 	var arrive := Vector2.ZERO
 	if to_dim == WorldGen.DIM_UMBRAL:
 		var fl: int = gen.umbral_portal_floor()
@@ -907,6 +1143,12 @@ func travel(to_dim: int) -> void:
 		arrive = Vector2((gen.portal_x + 6) * 8 + 4, (gen.portal_y + 5) * 8)
 	player.global_position = arrive
 	player.velocity = Vector2.ZERO
+	# pets come through the rift too
+	for m in mobs:
+		var pet: Mob = m
+		if pet.tame:
+			pet.global_position = arrive + Vector2(randf_range(-12.0, 12.0), -2.0)
+			pet.velocity = Vector2.ZERO
 	portal_cool = 2.0
 	portal_needs_exit = true
 	fade = 1.0
@@ -993,6 +1235,20 @@ func on_boss_defeated(m: Mob) -> void:
 	effects.burst(m.center(), Color(1.0, 0.88, 0.44), 40, 72.0, 1.2)
 	add_shake(0.8)
 	hud_dirty = true
+
+
+## A pirate captain's treasure (what looting their ship gave in the original game)
+func pirate_treasure(pos: Vector2) -> void:
+	spawn_drop("mat:goldBar", 3 + randi() % 6, pos)
+	spawn_drop("ammo:bullet", 8 + randi() % 14, pos + Vector2(4, 0))
+	spawn_drop("mat:gunpowder", 2 + randi() % 5, pos + Vector2(-4, 0))
+	if randf() < 0.35:
+		spawn_drop("gun:pistol", 1, pos, Vector2(0, -30), int(DB.gun_info("gun:pistol").get("magazine", 6)))
+	if randf() < 0.5:
+		spawn_drop("mat:diamond", 1 + randi() % 3, pos)
+	spawn_drop("food:cookedFish", 2 + randi() % 4, pos)
+	say("The captain's treasure spills onto the sand!", 3.0)
+	effects.burst(pos, Color(0.96, 0.82, 0.26), 20, 40.0, 0.9)
 
 
 func _has_tame_rex() -> bool:
@@ -1144,8 +1400,10 @@ func _notification(what: int) -> void:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if panel != null:
-		if event is InputEventKey and event.pressed and not event.echo and (event as InputEventKey).keycode == KEY_ESCAPE:
-			close_panel()
+		if event is InputEventKey:
+			var ke: InputEventKey = event
+			if ke.pressed and not ke.echo and ke.keycode == KEY_ESCAPE:
+				close_panel()
 		return
 	var touch_world: bool = false
 	if event is InputEventScreenTouch:

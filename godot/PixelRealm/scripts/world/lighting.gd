@@ -22,6 +22,7 @@ var valid: bool = false
 var _stamp: int = -1
 var _sky_used: int = -1
 var _timer: float = 0.0
+var _dyn_timer: float = 0.0
 var _origin_used := Vector2i(-99999, -99999)
 ## moving lights: [Vector2i cell, level]
 var dynamic: Array = []
@@ -47,13 +48,17 @@ func set_smooth(on: bool) -> void:
 ## Recomputes when the world changed, the camera moved a few blocks, or the daylight changed
 func update_light(world: WorldData, view: Rect2i, sky_level: int, delta: float, force: bool = false) -> void:
 	_timer -= delta
+	_dyn_timer -= delta
 	var margin: int = 12
 	var origin := Vector2i(view.position.x - margin, view.position.y - margin)
 	var size := Vector2i(view.size.x + margin * 2, view.size.y + margin * 2)
 	var moved: bool = absi(origin.x - _origin_used.x) >= 3 or absi(origin.y - _origin_used.y) >= 3 or size.x != lw or size.y != lh
-	if not force and not moved and world.version == _stamp and sky_level == _sky_used and _timer > 0.0:
+	# a torch in hand moves with the player: it updates 20 times a second, not every frame
+	var due: bool = moved or world.version != _stamp or sky_level != _sky_used or _timer <= 0.0 or (force and _dyn_timer <= 0.0)
+	if not due:
 		return
 	_timer = 0.15
+	_dyn_timer = 0.05
 	if not moved and size.x == lw and size.y == lh:
 		origin = _origin_used
 	_compute(world, origin, size, sky_level)

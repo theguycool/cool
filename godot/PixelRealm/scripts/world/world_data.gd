@@ -321,7 +321,10 @@ func chest_items(x: int, y: int) -> Array:
 		for i in range(mini(loot.size(), CHEST_SLOTS)):
 			slots[i] = loot[i]
 		chests[k] = slots
-	return chests[k]
+	var arr: Array = chests[k]
+	if arr.size() < CHEST_SLOTS:
+		arr.resize(CHEST_SLOTS)
+	return arr
 
 
 ## Removes a chest's record and returns what was in it (it spills out when the chest is broken)

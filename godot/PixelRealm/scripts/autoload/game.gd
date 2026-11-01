@@ -18,9 +18,21 @@ var settings := {
 	"zoom": 4.0,
 	"smooth_light": true,
 	"show_fps": false,
+	"show_coords": true,
 	"night_danger": 1,
 	"weather": true,
 	"weather_hurts": true,
+	"weather_alerts": true,
+	"allow_rain": true,
+	"allow_thunder": true,
+	"allow_wind": true,
+	"allow_hail": true,
+	"allow_blizzard": true,
+	"allow_tornado": true,
+	"allow_hurricane": true,
+	"peaceful": false,
+	"fps60": true,
+	"rare_chance": 0.28,
 	"reduce_flashes": false,
 	"shake": 1.0,
 	"hair": 0,
@@ -66,6 +78,7 @@ func apply_settings() -> void:
 	Sfx.sfx_volume = float(settings["sfx_volume"])
 	Sfx.ambience_volume = float(settings["ambience_volume"])
 	Sfx.enabled = bool(settings["sound"])
+	Engine.max_fps = 60 if bool(settings["fps60"]) else 30
 
 
 func setting(key: String, fallback: Variant = null) -> Variant:

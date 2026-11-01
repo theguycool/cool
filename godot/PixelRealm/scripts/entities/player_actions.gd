@@ -1033,6 +1033,8 @@ func is_interactive(cell: Vector2i) -> bool:
 	var t: int = level.world.get_tile(cell.x, cell.y)
 	if INTERACTIVE.has(t):
 		return true
+	if level.vehicle_at(Vector2(cell.x * 8 + 4, cell.y * 8 + 4)) != null:
+		return true
 	var m: Mob = level.mob_at(Vector2(cell.x * 8 + 4, cell.y * 8 + 4))
 	return m != null and (m.tame or m.key == "wolf" or m.key == "cat")
 
@@ -1047,6 +1049,10 @@ func interact(cell: Vector2i) -> void:
 	var m: Mob = level.mob_at(p)
 	if m != null:
 		level.interact_mob(m, held_id(), sel)
+		return
+	var v: Vehicle = level.vehicle_at(p)
+	if v != null:
+		level.drive(v)
 		return
 	match t:
 		T.DOOR_CLOSED, T.DOOR_OPEN:

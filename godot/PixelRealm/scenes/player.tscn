@@ -1,0 +1,42 @@
+[gd_scene load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://scripts/entities/player.gd" id="1_player"]
+[ext_resource type="Script" path="res://scripts/entities/player_actions.gd" id="2_player_actions"]
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_body"]
+size = Vector2(5.6, 14.4)
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_pick"]
+size = Vector2(14, 20)
+
+[node name="Player" type="CharacterBody2D"]
+collision_layer = 4
+collision_mask = 3
+floor_snap_length = 2.0
+script = ExtResource("1_player")
+
+[node name="Shape" type="CollisionShape2D" parent="."]
+position = Vector2(0, -7.2)
+shape = SubResource("RectangleShape2D_body")
+
+[node name="Body" type="AnimatedSprite2D" parent="."]
+
+[node name="ArmorLegs" type="AnimatedSprite2D" parent="."]
+
+[node name="ArmorChest" type="AnimatedSprite2D" parent="."]
+
+[node name="ArmorHead" type="AnimatedSprite2D" parent="."]
+
+[node name="Held" type="Sprite2D" parent="."]
+
+[node name="Pickup" type="Area2D" parent="."]
+collision_layer = 0
+collision_mask = 16
+monitorable = false
+
+[node name="Shape" type="CollisionShape2D" parent="Pickup"]
+position = Vector2(0, -8)
+shape = SubResource("RectangleShape2D_pick")
+
+[node name="Actions" type="Node" parent="."]
+script = ExtResource("2_player_actions")

@@ -6228,6 +6228,7 @@ func generateOverworldChunk(_ g: WorldGen, _ cx: Int) -> Chunk {
     }
     if g.hasLandmarks { placeLandmarks(g, ch, colAt, blocked) }
     applyStructures(g, ch, cols, x0 - m)
+    if ModRuntime.shared.hasWorldGen { applyModGen(g, ch, .overworld) }
     ch.rebuildSky()
     return ch
 }
@@ -8339,6 +8340,7 @@ func generateUmbralChunk(_ g: WorldGen, _ cx: Int) -> Chunk {
     }
     if abs(g.portalX - (x0 + chunkW / 2)) < 30 { buildUmbralPortal(g, ch) }
     if let c = g.citadel, abs(c.x - (x0 + chunkW / 2)) < 60 { buildCitadel(g, ch, c) }
+    if ModRuntime.shared.hasWorldGen { applyModGen(g, ch, .umbral) }
     ch.rebuildSky()
     return ch
 }
@@ -8478,6 +8480,359 @@ func buildUmbralPortal(_ g: WorldGen, _ ch: Chunk) {
     ch.put(px - 12, gy - 1, .glowCrystal)
     ch.put(px + 12, gy - 1, .glowCrystal)
     ch.put(px + 7, gy - 1, .chest)
+}
+
+/// What the world's mods add to a freshly made chunk: veins of their ores (and their structures, see
+/// applyModStructures). It all comes from the world seed and the chunk's place, so a chunk always comes
+/// out the same; the work is done once, when the chunk is first made, never per frame.
+func applyModGen(_ g: WorldGen, _ ch: Chunk, _ dim: Dimension) {
+    let rt: ModRuntime = ModRuntime.shared
+    let d: Int = dim == .overworld ? 0 : 1
+    let H: Int = ch.H
+    for o in rt.ores where o.dim == d {
+        var rng = RNG(hashU(ch.cx, 0x51ED, g.seed &+ o.salt))
+        let whole: Int = Int(o.veins)
+        let n: Int = min(24, whole + (rng.double() < o.veins - Double(whole) ? 1 : 0))
+        let y0: Int = clampI(o.minY, 1, H - 2)
+        let y1: Int = clampI(o.maxY, y0, H - 2)
+        var v: Int = 0
+        while v < n {
+            var lx: Int = rng.int(chunkW)
+            var y: Int = y0 + rng.int(y1 - y0 + 1)
+            var k: Int = 0
+            // a short random walk keeps each vein in one lump, inside this chunk and the ore's depths
+            while k < o.size {
+                if modOreHost(ch.get(lx, y), o.host) { ch.setLocal(lx, y, o.tile) }
+                switch rng.int(4) {
+                case 0: lx = min(chunkW - 1, lx + 1)
+                case 1: lx = max(0, lx - 1)
+                case 2: y = min(y1, y + 1)
+                default: y = max(y0, y - 1)
+                }
+                k += 1
+            }
+            v += 1
+        }
+    }
+    applyModStructures(g, ch, dim)
+}
+
+/// The ground a custom ore may take the place of: 0 any rock, 1 stone, 2 slate and deep rock,
+/// 3 dirt and sand, 4 any natural ground
+func modOreHost(_ t: Tile, _ host: Int) -> Bool {
+    switch host {
+    case 1: return t == .stone
+    case 2: return t == .slate || t == .deepRock
+    case 3: return t == .dirt || t == .sand || t == .mud
+    case 4:
+        switch t {
+        case .stone, .slate, .deepRock, .ashStone, .sandstone, .dirt, .sand, .mud, .snow: return true
+        default: return false
+        }
+    default:
+        switch t {
+        case .stone, .slate, .deepRock, .ashStone, .sandstone: return true
+        default: return false
+        }
+    }
+}
+
+/// True where a custom structure must not go: the spawn point, the rift gate, and the world's own
+/// villages, ruins, mines, lairs and landmarks, and (for one underground) the crystal grottos; on the
+/// surface only a grotto's cave mouth matters (Umbral: the gate, the citadel and the ruins)
+func modSiteBlocked(_ g: WorldGen, _ dim: Dimension, _ xa: Int, _ xb: Int, _ placement: ModPlacement = .surface) -> Bool {
+    func hits(_ a: Int, _ b: Int) -> Bool { return xb > a && xa < b }
+    if dim == .umbral {
+        if hits(g.portalX - 40, g.portalX + 40) { return true }
+        if let c = g.citadel, hits(c.x - 90, c.x + 90) { return true }
+        for c in floorDiv(xa - 40, 260)...floorDiv(xb + 40, 260) {
+            if let rx = g.uRuinSite(cell: c), hits(rx - 30, rx + 30) { return true }
+        }
+        return false
+    }
+    if hits(g.spawnX - 16, g.spawnX + 16) || hits(g.portalX - 50, g.portalX + 50) { return true }
+    for v in g.villages(overlapping: xa - 20, xb + 20) where hits(v.x - v.halfW - 6, v.x + v.halfW + 6) { return true }
+    for r in g.rareSites(overlapping: xa - 30, xb + 30) where hits(r.x - 16, r.x + 16) { return true }
+    for mn in g.mineSites(overlapping: xa - 20, xb + 20) where hits(mn.x - 8, mn.x + 14) { return true }
+    for s in g.grottoSites(overlapping: xa - 60, xb + 60) {
+        if placement == .underground {
+            let p0: Int = min(s.x - s.rx, s.passStartX + min(0, s.dir * s.passLen))
+            let p1: Int = max(s.x + s.rx, s.passStartX + max(0, s.dir * s.passLen))
+            if hits(p0 - 8, p1 + 8) { return true }
+        } else if placement == .surface && s.open {
+            let mouth: Int = s.passStartX + s.dir * s.passLen
+            if hits(mouth - 16, mouth + 16) { return true }
+        }
+    }
+    for L in g.lairCenters(near: (xa + xb) / 2) where hits(L.cx - 70, L.cx + 70) { return true }
+    if placement != .underground {
+        let cw: Int = WorldGen.landmarkCell
+        for c in floorDiv(xa - 8, cw)...floorDiv(xb + 8, cw) {
+            if hash2(c, 701, g.seed) > 0.5 { continue }
+            let lx: Int = c * cw + 8 + Int(hash2(c, 702, g.seed) * Double(cw - 16))
+            if hits(lx - 7, lx + 7) { return true }
+        }
+    }
+    return false
+}
+
+/// A custom structure's site in one of its spacing cells: its left column and top row, or nil when the
+/// cell holds none. It comes from the seed and the generator's own ground heights only, so every chunk
+/// agrees on it, however the world is explored.
+func modStructSite(_ g: WorldGen, _ s: ModStructRT, _ dim: Dimension, _ cell: Int) -> (Int, Int)? {
+    let d: ModStructure = s.def
+    let sp: Int = max(64, d.spacing)
+    let key: UInt64 = g.seed &+ s.salt
+    if hash2(cell, 1907, key) >= d.chance { return nil }
+    let room: Int = max(1, sp - d.w - 16)
+    let sx: Int = cell * sp + 8 + Int(hash2(cell, 1913, key) * Double(room))
+    if !g.infinite && (sx < 24 || sx + d.w > g.width - 24) { return nil }
+    if modSiteBlocked(g, dim, sx - 4, sx + d.w + 4, d.placement) { return nil }
+    let mid: Int = sx + d.w / 2
+    let pick: Double = hash2(cell, 1931, key)
+    let H: Int = dim == .overworld ? WorldGen.H : umbralH
+    var top: Int = 0
+    if dim == .overworld {
+        let c: Col = g.col(mid)
+        if !d.biomes.isEmpty && !d.biomes.contains(c.biome.rawValue) { return nil }
+        switch d.placement {
+        case .surface:
+            // on dry land only; its bottom row takes the place of the ground's top
+            if c.biome == .ocean || c.h >= WorldGen.sea { return nil }
+            top = c.h - d.h + 1
+        case .underground:
+            let lo: Int = max(d.minY, c.h + 6)
+            let hi: Int = max(lo, d.maxY - d.h)
+            top = lo + Int(pick * Double(hi - lo + 1))
+        case .sky:
+            top = c.h - d.h - 18 - Int(pick * 14.0)
+        }
+    } else {
+        switch d.placement {
+        case .surface: top = g.uFloor(mid) - d.h + 1
+        case .underground:
+            let hi: Int = max(d.minY, d.maxY - d.h)
+            top = d.minY + Int(pick * Double(hi - d.minY + 1))
+        case .sky: top = g.uCeil(mid) + 1
+        }
+    }
+    top = clampI(top, 2, H - 3 - d.h)
+    return (sx, top)
+}
+
+/// Builds the custom structures of the world's mods into a freshly made chunk, clipped to it (each chunk
+/// builds its own part, so a structure across several chunks comes out whole). Bedrock is never touched;
+/// a structure on the surface gets a foundation of earth under it so it never floats.
+func applyModStructures(_ g: WorldGen, _ ch: Chunk, _ dim: Dimension) {
+    let rt: ModRuntime = ModRuntime.shared
+    if rt.structures.isEmpty { return }
+    if dim == .overworld && !g.hasLandmarks { return }
+    let d: Int = dim == .overworld ? 0 : 1
+    let x0: Int = ch.x0
+    let x1: Int = x0 + chunkW - 1
+    for s in rt.structures where s.def.dim == d {
+        let sp: Int = max(64, s.def.spacing)
+        for cell in floorDiv(x0 - ModLimits.maxStructW - 16, sp)...floorDiv(x1, sp) {
+            guard let site = modStructSite(g, s, dim, cell) else { continue }
+            if site.0 + s.def.w - 1 < x0 || site.0 > x1 { continue }
+            buildModStructure(ch, s, site.0, site.1, foundation: s.def.placement == .surface)
+        }
+    }
+}
+
+func buildModStructure(_ ch: Chunk, _ s: ModStructRT, _ sx: Int, _ top: Int, foundation: Bool) {
+    let w: Int = s.def.w
+    let h: Int = s.def.h
+    var cx: Int = 0
+    while cx < w {
+        let lx: Int = sx + cx - ch.x0
+        if lx < 0 || lx >= chunkW {
+            cx += 1
+            continue
+        }
+        var cy: Int = 0
+        while cy < h {
+            let v: Int = s.cells[cy * w + cx]
+            let y: Int = top + cy
+            if v >= 0 && v < 256 && y >= 1 && y < ch.H - 1 && ch.get(lx, y) != .bedrock {
+                ch.setLocal(lx, y, Tile.make(UInt8(v)))
+            }
+            cy += 1
+        }
+        if foundation {
+            // earth under a solid bottom block, down to the ground (at most 12 rows)
+            let bottom: Int = s.cells[(h - 1) * w + cx]
+            if bottom > 0 && bottom < 256 && Tile.make(UInt8(bottom)).solid {
+                var y: Int = top + h
+                var k: Int = 0
+                while k < 12 && y < ch.H - 1 && !ch.get(lx, y).solid {
+                    ch.setLocal(lx, y, .dirt)
+                    y += 1
+                    k += 1
+                }
+            }
+        }
+        cx += 1
+    }
+}
+
+extension ModRuntime {
+    /// The loot table for a chest that one of the mods' structures put there, if any
+    func structureChestLoot(_ g: WorldGen, _ dim: Dimension, _ x: Int, _ y: Int) -> String? {
+        let d: Int = dim == .overworld ? 0 : 1
+        if dim == .overworld && !g.hasLandmarks { return nil }
+        for s in structures where s.def.dim == d && !s.loot.isEmpty {
+            let sp: Int = max(64, s.def.spacing)
+            for cell in floorDiv(x - ModLimits.maxStructW - 16, sp)...floorDiv(x, sp) {
+                guard let site = modStructSite(g, s, dim, cell) else { continue }
+                let cx: Int = x - site.0
+                let cy: Int = y - site.1
+                if cx < 0 || cy < 0 || cx >= s.def.w || cy >= s.def.h { continue }
+                if s.cells[cy * s.def.w + cx] == Int(Tile.chest.rawValue) { return s.loot }
+            }
+        }
+        return nil
+    }
+}
+
+extension Game {
+    // MARK: structure capture
+
+    /// Starts picking a part of the world to save as a structure (two taps on the world)
+    func startCapture() {
+        capturing = true
+        showCapture = false
+        capA = nil
+        capB = nil
+        releaseAllInput()
+        say("Tap two corners of what you built.", 4.0)
+        bumpHUD()
+    }
+
+    func cancelCapture() {
+        capturing = false
+        showCapture = false
+        capA = nil
+        capB = nil
+        bumpHUD()
+    }
+
+    /// A tap while capturing: the first corner, then the second (which opens the save panel); a third
+    /// tap starts again
+    func captureTap(_ wx: Double, _ wy: Double) {
+        let t: (Int, Int) = (Int(floor(wx)), Int(floor(wy)))
+        if capA == nil || capB != nil {
+            capA = t
+            capB = nil
+        } else {
+            capB = t
+            showCapture = true
+        }
+        bumpHUD()
+    }
+
+    /// The selection with its corners in order, held to the largest structure size
+    func captureRect() -> (Int, Int, Int, Int)? {
+        guard let a = capA else { return nil }
+        let b: (Int, Int) = capB ?? (Int(floor(aimX)), Int(floor(aimY)))
+        let x0: Int = min(a.0, b.0)
+        let y0: Int = min(a.1, b.1)
+        let x1: Int = min(max(a.0, b.0), x0 + ModLimits.maxStructW - 1)
+        let y1: Int = min(max(a.1, b.1), y0 + ModLimits.maxStructH - 1)
+        return (x0, y0, x1, y1)
+    }
+
+    /// Turns the selected blocks into a structure. Machines, the rift gate and bedrock are left out (they
+    /// can't be copied safely) and counted; empty space either clears the ground or leaves it as it is.
+    /// Custom blocks are kept by their keys, so the structure works in any world that has their mod.
+    func captureStructure(clearAir: Bool) -> (ModStructure, Int) {
+        var st = ModStructure()
+        guard let r = captureRect() else { return (st, 0) }
+        let rt: ModRuntime = ModRuntime.shared
+        st.w = r.2 - r.0 + 1
+        st.h = r.3 - r.1 + 1
+        st.dim = world.dim == .umbral ? 1 : 0
+        var skipped: Int = 0
+        var cells: [Int] = []
+        cells.reserveCapacity(st.w * st.h)
+        for y in r.1...r.3 {
+            for x in r.0...r.2 {
+                let t: Tile = world.tile(x, y)
+                if t == .air {
+                    cells.append(clearAir ? 0 : -1)
+                } else if t.isMod {
+                    var key: String = rt.slotKey[Int(t.rawValue - Tile.modBase)] ?? ""
+                    if let hash = key.firstIndex(of: "#") { key = String(key[key.startIndex..<hash]) }
+                    if key.isEmpty {
+                        cells.append(-1)
+                        skipped += 1
+                    } else {
+                        if !st.palette.contains(key) { st.palette.append(key) }
+                        cells.append(1000 + (st.palette.firstIndex(of: key) ?? 0))
+                    }
+                } else if !modStructureTileOK(t) {
+                    cells.append(-1)
+                    skipped += 1
+                } else {
+                    cells.append(Int(t.rawValue))
+                }
+            }
+        }
+        st.cells = cells
+        // where it was found decides where it goes: on the surface, underground or up in the sky
+        let mid: Int = (r.0 + r.2) / 2
+        if world.dim == .overworld {
+            let ground: Int = gen.col(mid).h
+            if r.3 > ground + 6 {
+                st.placement = .underground
+                st.minY = clampI(r.1 - 40, 4, 550)
+                st.maxY = clampI(r.3 + 40, st.minY, 550)
+            } else if r.3 < ground - 12 {
+                st.placement = .sky
+            }
+        }
+        return (st, skipped)
+    }
+
+    /// Saves the captured structure into a mod (a new one, switched on, when `modID` is empty) and ends
+    /// the capture. Returns what to tell the player.
+    func saveCapture(name: String, modID: String, newModName: String, placement: ModPlacement, clearAir: Bool) -> String {
+        var cap: (ModStructure, Int) = captureStructure(clearAir: clearAir)
+        if cap.0.w < 1 || cap.0.h < 1 { return "Pick two corners first." }
+        if !cap.0.cells.contains(where: { $0 > 0 }) { return "There are no blocks in that area." }
+        var p: ModPack = ModPack()
+        var isNew: Bool = true
+        if !modID.isEmpty, let existing = ModStore.pack(modID) {
+            p = existing
+            isNew = false
+        } else {
+            p.id = newModID()
+            let nm: String = newModName.trimmingCharacters(in: .whitespaces)
+            p.name = nm.isEmpty ? "My Structures" : String(nm.prefix(32))
+        }
+        if p.structures.count >= ModLimits.maxStructures { return joinText(p.name, " already holds the most structures a mod can.") }
+        let nm: String = name.trimmingCharacters(in: .whitespaces)
+        cap.0.name = nm.isEmpty ? "Structure" : String(nm.prefix(32))
+        cap.0.placement = placement
+        cap.0.id = p.freshID("structure")
+        p.structures.append(cap.0)
+        if !ModStore.save(p) { return "The mod could not be saved." }
+        if isNew { ModStore.setEnabled(p.id, true) }
+        cancelCapture()
+        let note: String = cap.1 > 0 ? " Machines, bedrock and the rift gate were left out." : ""
+        return joinText("Saved \u{201C}", cap.0.name, "\u{201D} in ", p.name, ". New worlds with this mod will have it.", note)
+    }
+}
+
+/// Blocks a structure may hold: not machines (their wiring and settings can't come along), the rift gate
+/// (one per world) or bedrock
+func modStructureTileOK(_ t: Tile) -> Bool {
+    if t.isPower || t == .bedrock || t == .portalFrame || t == .portalOff || t == .portalOn { return false }
+    if Tile(rawValue: t.rawValue) == nil { return false }
+    switch t {
+    case .weatherStation, .dopplerStation, .stormSiren, .lightningRod, .windTurbine, .rainBarrel, .rainCistern, .weatherVane, .heater: return false
+    default: return true
+    }
 }
 
 func generateChunk(_ g: WorldGen, _ dim: Dimension, _ cx: Int) -> Chunk {
@@ -8747,7 +9102,15 @@ final class World {
     func chestItems(_ x: Int, _ y: Int) -> [Stack] {
         let k: ChestKey = chestKey(x, y)
         if let it = chests[k] { return it }
-        let it: [Stack] = generateChestLoot(gen, dim, x, y)
+        let rt: ModRuntime = ModRuntime.shared
+        var it: [Stack] = []
+        if rt.active, let key = rt.structureChestLoot(gen, dim, x, y) {
+            var rng = RNG(hashU(x, y, gen.seed &+ 4441))
+            it = rt.roll(key, &rng)
+        } else {
+            it = generateChestLoot(gen, dim, x, y)
+        }
+        if rt.active { it = rt.addChestLoot(it, gen, dim, x, y) }
         chests[k] = it
         return it
     }
@@ -9799,7 +10162,7 @@ enum MobKind: Int, Codable, CaseIterable {
     var thinks: Bool {
         switch self {
         case .zombie, .skeleton, .pirate, .pirateCaptain, .pirateGunner, .imp, .slime, .emberSlime,
-             .bat, .cinderBat, .wraith, .crawler, .golem, .archer: return true
+             .bat, .cinderBat, .wraith, .crawler, .golem, .archer, .custom: return true
         default: return false
         }
     }
@@ -9947,6 +10310,11 @@ struct SpawnRule {
     var group: Int
     var minY: Int = 0
     var maxY: Int = 9999
+    /// a custom creature's slot (-1 for the game's creatures), how many of it may be about at once, and
+    /// whether it appears high in the sky
+    var slot: Int = -1
+    var maxNearby: Int = 99
+    var sky: Bool = false
 }
 
 let spawnRules: [SpawnRule] = [
@@ -10087,6 +10455,23 @@ final class Mob {
     var farT: Double = 0
     /// a custom creature's slot in ModRuntime.mobs (-1 for the game's own creatures)
     var cslot: Int = -1
+    /// custom creatures: each attack's cooldown, the creature it guards, the monster it fights or runs
+    /// from (and timers for looking for them), its home biome, the blow under way (its key, target and
+    /// whether that is the player) and how long a water creature has been on land
+    var modCD: [Double] = []
+    weak var ward: Mob? = nil
+    var wardT: Double = 0
+    weak var foe: Mob? = nil
+    weak var threat: Mob? = nil
+    var foeT: Double = 0
+    var homeBiome: Int = -1
+    var biomeT: Double = 0
+    var strayed: Bool = false
+    var atkKey: Int = 0
+    var atkX: Double = 0
+    var atkY: Double = 0
+    var vsPlayer: Bool = true
+    var dryT: Double = 0
     static let turnDur: Double = 0.14
     static let atkDur: Double = 0.28
 
@@ -10111,9 +10496,17 @@ final class Mob {
     var x: Double { return b.x }
     var y: Double { return b.y }
     /// a boss or guardian kind (worked out once: this is checked for every creature every frame)
-    private(set) lazy var bossKind: Bool = kind == .bearBoss || kind == .rex || kind == .sentinel || kind == .warden
+    private(set) lazy var bossKind: Bool = Mob.isBossKind(kind, cslot)
     /// bosses never become tame, except the T-rex, which then stops being one
     var isBoss: Bool { return bossKind && !tame }
+
+    static func isBossKind(_ k: MobKind, _ slot: Int) -> Bool {
+        switch k {
+        case .bearBoss, .rex, .sentinel, .warden: return true
+        case .custom: return ModRuntime.shared.mob(slot)?.boss ?? false
+        default: return false
+        }
+    }
 }
 
 /// What a hostile creature is doing. Attack and recover come from its attack routine (a wind-up, the
@@ -10995,6 +11388,11 @@ final class Game: ObservableObject, @unchecked Sendable {
     var modInfo: ModWorldInfo? = nil
     /// the id of the mod being tried out in a mod test world ("" in a real world)
     var testMod: String = ""
+    /// structure capture: picking two corners on the world, then the save panel (see startCapture)
+    @Published var capturing: Bool = false
+    @Published var showCapture: Bool = false
+    var capA: (Int, Int)? = nil
+    var capB: (Int, Int)? = nil
     /// effects from potions, food and armour (see PlayerEffects)
     var effects: PlayerEffects = PlayerEffects()
     /// a healing shrine rests between uses
@@ -11664,6 +12062,7 @@ extension Game {
             case .bearBoss, .rex: lv = m.isBoss ? 6 : 0
             case .sentinel: lv = 9
             case .warden: lv = 10
+            case .custom: lv = clampI(ModRuntime.shared.mob(m.cslot)?.def.glow ?? 0, 0, 12)
             default: lv = 0
             }
             if m.burn > 0 { lv = max(lv, 6) }
@@ -11799,6 +12198,10 @@ extension Game {
         aimX = wx
         aimY = wy
         aimValid = true
+        if capturing {
+            if !showCapture { captureTap(wx, wy) }
+            return
+        }
         downTime = 0
         usePressedFlag = false
         touchActive = true
@@ -11820,6 +12223,7 @@ extension Game {
         aimX = wx
         aimY = wy
         aimValid = true
+        if capturing { return }
         if pendingInteract {
             let dx: Double = wx - pointerStartX
             let dy: Double = wy - pointerStartY
@@ -11832,6 +12236,11 @@ extension Game {
 
     func pointerUp() {
         touchActive = false
+        if capturing {
+            useHeld = false
+            pendingInteract = false
+            return
+        }
         if pendingInteract {
             if downTime < 0.3 { interact(aimX, aimY) }
             pendingInteract = false
@@ -13541,7 +13950,7 @@ extension Game {
             if applyMobDamage(m, info) {
                 hits += 1
                 if crit { crits += 1 }
-                if p.burn > 0 && !isHeatImmune(m.kind) { m.burn = max(m.burn, p.burn) }
+                if p.burn > 0 && !heatImmune(m) { m.burn = max(m.burn, p.burn) }
                 if p.daze > 0 { dazeMob(m, p.daze) }
                 spawnSparks(m.b.x - info.dirX * m.b.w * 0.3, m.b.cy, info.dirX, p.trail, crit ? 7 : 4)
                 lockTarget = m
@@ -13745,7 +14154,7 @@ extension Game {
 
     /// Once a frame: releases the controls when something covers them
     func updateInputGate() {
-        let blocked: Bool = paused || showInventory || showMap || showJournal || showWeather || showPower || dead
+        let blocked: Bool = paused || showInventory || showMap || showJournal || showWeather || showPower || showCapture || dead
         if blocked && !inputBlocked { releaseAllInput() }
         inputBlocked = blocked
     }
@@ -13965,7 +14374,7 @@ extension Game {
                     info.originX = z.x
                     info.key = z.uid
                     info.cooldown = 0.3
-                    if applyMobDamage(m, info) && !isHeatImmune(m.kind) { m.burn = max(m.burn, 2.5) }
+                    if applyMobDamage(m, info) && !heatImmune(m) { m.burn = max(m.burn, 2.5) }
                 }
                 // the thrower is not spared if they stand in it
                 let hurtsPlayer: Bool = !z.env || settings.weatherHurtsPlayer
@@ -14354,6 +14763,7 @@ extension Game {
         case .archer: return (18.0, 10.0, true)
         case .crawler: return (4.6, 2.0, false)
         case .golem: return (3.3, 2.4, false)
+        case .custom: return ModRuntime.shared.mob(m.cslot)?.reach ?? (m.b.w * 0.5 + 0.5, 1.4, false)
         default: return (m.b.w * 0.5 + 0.5, 1.4, false)
         }
     }
@@ -14962,15 +15372,25 @@ extension Game {
         var capped: Bool = false
         var cands: [SpawnRule] = []
         var total: Double = 0
-        for r in spawnRules {
+        // the custom creatures of the world's mods spawn by the same rules, beside the game's own
+        let rt: ModRuntime = ModRuntime.shared
+        let rules: [SpawnRule] = rt.spawnRules.isEmpty ? spawnRules : spawnRules + rt.spawnRules
+        var customN: Int = -1
+        for r in rules {
             if r.place != eff { continue }
             if r.when == .day && night { continue }
             if r.when == .night && !night { continue }
             if !r.biomes.isEmpty && !r.biomes.contains(biome) { continue }
-            if eff == .cave || eff == .umbral {
+            if eff == .cave || eff == .umbral || r.slot >= 0 {
                 if Int(sy) < r.minY || Int(sy) > r.maxY { continue }
             }
-            let d: MobDef = mobDef(r.kind)
+            var d: MobDef = mobDef(r.kind)
+            if r.slot >= 0 {
+                guard let cr = rt.mob(r.slot) else { continue }
+                d = cr.mdef
+                if customN < 0 { customN = customMobCount() }
+                if customN >= ModLimits.maxActiveMobs || customNearby(r.slot) >= r.maxNearby { continue }
+            }
             if d.hostile {
                 if !monstersEnabled || settings.peaceful { continue }
                 if r.kind.isPredator {
@@ -14980,7 +15400,7 @@ extension Game {
                     if hostile >= cap { capped = true; continue }
                     if !monsterBlock.isEmpty { continue }
                 }
-            } else if r.kind == .fish {
+            } else if r.kind == .fish || (r.slot >= 0 && r.place == .ocean) {
                 if aquatic >= 9 { continue }
             } else {
                 if passive >= 9 { continue }
@@ -15000,7 +15420,7 @@ extension Game {
             pick -= r.weight
             if pick <= 0 { chosen = r; break }
         }
-        let def: MobDef = mobDef(chosen.kind)
+        let def: MobDef = chosen.slot >= 0 ? (rt.mob(chosen.slot)?.mdef ?? mobDef(chosen.kind)) : mobDef(chosen.kind)
         let monster: Bool = def.hostile && !chosen.kind.isPredator
         var n: Int = 1 + Int.random(in: 0..<max(1, chosen.group))
         if monster { n = min(n, cap - hostile) }
@@ -15016,9 +15436,11 @@ extension Game {
                 if world.tile(Int(floor(x)), gyS).liquid || abs(gyS - Int(sy)) > 3 { continue }
                 y = Double(gyS)
             }
-            if def.flying && eff != .ocean { y -= Double.random(in: 1...3) }
+            if def.flying && eff != .ocean { y -= chosen.sky ? Double.random(in: 7...14) : Double.random(in: 1...3) }
             if eff != .ocean && !spawnSpotClear(def, x, y) { continue }
-            let m: Mob = addMob(chosen.kind, x, y)
+            var made1: Mob? = nil
+            if chosen.slot >= 0 { made1 = addCustomMob(chosen.slot, x, y) } else { made1 = addMob(chosen.kind, x, y) }
+            guard let m = made1 else { continue }
             m.homeX = x
             m.homeY = y
             // the night's monsters on the surface come looking for the player
@@ -15032,6 +15454,13 @@ extension Game {
             let d: Int = clampI(settings.nightDanger, 0, 2)
             monsterSpawnCD = [8.0, 4.0, 2.0][d] * Double.random(in: 0.8...1.25)
         }
+    }
+
+    /// How many of one custom creature are about near the player
+    func customNearby(_ slot: Int) -> Int {
+        var n: Int = 0
+        for m in mobs where m.kind == .custom && m.cslot == slot && m.hp > 0 && !m.removed && abs(m.b.x - pb.x) < 100 { n += 1 }
+        return n
     }
 
     /// Room for a creature of this size standing at (x, y): no solid tile inside its box, and (unless it
@@ -15080,6 +15509,7 @@ extension Game {
         if dirX != 0 && kb > 0 { m.lean = clampD(dirX * kb / 9.0, -1, 1) }
         var resist: Double = m.isBoss ? 0.97 : (m.def.w > 2.0 ? 0.6 : 0.0)
         if m.kind == .golem { resist = heavy ? 0.45 : 0.88 }
+        if m.kind == .custom, let r = ModRuntime.shared.mob(m.cslot) { resist = max(resist, clampD(r.def.knockResist, 0, 1)) }
         if dirX != 0 && kb > 0 {
             m.b.vx = dirX * kb * (1.0 - resist)
             if resist < 0.9 { m.b.vy = min(m.b.vy, -3.5) }
@@ -15126,6 +15556,7 @@ extension Game {
         for s in mobDrops(m.kind, &rng, m.sheared) {
             spawnDrop(s, m.b.x, m.b.y - m.b.h * 0.5, Double.random(in: -2...2), -4.5)
         }
+        if m.kind == .custom { dropModLoot(m, &rng) }
         var col: UInt32 = 0xB02828
         if m.kind == .skeleton { col = 0xE8E8E0 }
         if m.kind == .slime { col = 0x60C060 }
@@ -15388,7 +15819,7 @@ extension Game {
 
     /// Fireballs set fire to whatever stands where they burst
     func igniteNear(_ x: Double, _ y: Double, _ src: DamageSource) {
-        for m in mobsNear(x - 1.5, x + 1.5) where m.hp > 0 && !isHeatImmune(m.kind) {
+        for m in mobsNear(x - 1.5, x + 1.5) where m.hp > 0 && !heatImmune(m) {
             if abs(m.b.cy - y) < m.b.h * 0.5 + 1.0 && canHarm(src, targetFaction: faction(of: m), targetID: m.id, area: true) {
                 m.burn = max(m.burn, 2.0)
             }
@@ -15697,6 +16128,7 @@ extension Game {
         case .pirate, .pirateGunner, .pirateCaptain: return .pirate
         case .imp, .emberSlime, .cinderBat: return .umbral
         case .bearBoss, .rex, .sentinel, .warden: return .boss
+        case .custom: return ModRuntime.shared.mob(m.cslot)?.faction ?? .wild
         default: return m.def.hostile ? .hostile : .wild
         }
     }
@@ -15745,6 +16177,7 @@ extension Game {
             if m.hitStamps.count > 24 { m.hitStamps = m.hitStamps.filter { clock - $0.value < 4.0 } }
         }
         var amount: Double = info.amount * damageResist(m.kind, info.type)
+        if m.kind == .custom, let r = ModRuntime.shared.mob(m.cslot) { amount *= r.resist(info.type) }
         if info.heavy && m.kind == .golem { amount *= 1.9 }
         if info.source.kind == .player {
             amount *= dmgOutMult * (1.0 + effects.value(.strength) / 100.0)
@@ -15875,11 +16308,11 @@ extension Game {
         let hw: Double = b.w * 0.5
         let x0: Double = b.x - hw
         let x1: Double = b.x + hw
-        let heatImmune: Bool = isHeatImmune(m.kind)
+        let immune: Bool = heatImmune(m)
         let fx: Int = Int(floor(b.x))
         // lava: physics already worked out whether the body is in lava; also catch feet just touching it
         let inLava: Bool = b.inLava || world.tile(fx, Int(floor(b.y - 0.1))) == .lava
-        if inLava && !heatImmune {
+        if inLava && !immune {
             m.burn = max(m.burn, 3.0)
             if m.hazardT <= 0 {
                 m.hazardT = 0.35
@@ -15891,7 +16324,7 @@ extension Game {
         }
         // burning
         if m.burn > 0 {
-            if heatImmune || m.b.inWater {
+            if immune || m.b.inWater {
                 m.burn = 0
             } else {
                 m.burn -= dt
@@ -15919,7 +16352,7 @@ extension Game {
                 }
             }
             let fy: Int = Int(floor(b.y - 0.5))
-            if world.tile(fx, fy) == .campfire && !heatImmune { m.burn = max(m.burn, 2.0) }
+            if world.tile(fx, fy) == .campfire && !immune { m.burn = max(m.burn, 2.0) }
         }
         // falling (knockback off a ledge counts too)
         if !def.flying && m.kind != .fish {
@@ -21467,7 +21900,7 @@ extension Game {
 
     /// Recipes an auto crafter can make
     func crafterRecipes() -> [Recipe] {
-        return RecipeBook.all.filter { crafterCan($0.station) }
+        return RecipeBook.all.filter { crafterCan($0.station) && $0.modStation == nil }
     }
 
     func updatePowerUI(_ dt: Double) {
@@ -22734,6 +23167,8 @@ struct ModLootTable: Codable, Identifiable, Equatable {
     /// weight of rolling nothing
     var nothing: Double = 0
     var entries: [ModLootEntry] = []
+    /// chance (0 ... 1) that a chest anywhere in the world also gets a roll of this table
+    var chestChance: Double = 0
 
     init() {}
 
@@ -22745,6 +23180,7 @@ struct ModLootTable: Codable, Identifiable, Equatable {
         rolls = c.val(.rolls, 2)
         nothing = c.val(.nothing, 0)
         entries = c.list(.entries, &skip)
+        chestChance = c.val(.chestChance, 0)
     }
 
     var totalWeight: Double {
@@ -23253,6 +23689,56 @@ enum ModStore {
     }
 }
 
+extension ModValidator {
+    /// Recipes that turn one thing into another, chained back to where they started (with the game's own
+    /// recipes too), must never give back more than went in. Returns each mod recipe that closes such a
+    /// loop, with a name for the recipe it loops with; each one found is left out before looking again.
+    static func gainLoops(_ p: ModPack, _ off: Set<String>) -> [(String, String)] {
+        var from: [Item] = []
+        var to: [Item] = []
+        var ratio: [Double] = []
+        var rid: [String] = []
+        var label: [String] = []
+        for r in RecipeBook.base where r.cost.count == 1 && r.cost[0].n > 0 {
+            from.append(r.cost[0].item)
+            to.append(r.out)
+            ratio.append(Double(r.outCount) / Double(r.cost[0].n))
+            rid.append("")
+            label.append("the game's recipe for " + r.out.name)
+        }
+        for r in p.recipes where !off.contains(r.id) && r.cost.count == 1 && r.cost[0].n > 0 {
+            from.append(r.cost[0].item)
+            to.append(r.out)
+            ratio.append(Double(r.count) / Double(r.cost[0].n))
+            rid.append(r.id)
+            label.append("the recipe " + r.id)
+        }
+        var live: [Bool] = [Bool](repeating: true, count: from.count)
+        var out: [(String, String)] = []
+        for e in from.indices where !rid[e].isEmpty {
+            // look for a way back from what it makes to what it uses, three recipes deep at most
+            var stack: [(Item, Double, Int, Int)] = [(to[e], ratio[e], 0, -1)]
+            var found: Int = -2
+            while let top = stack.popLast(), found == -2 {
+                for k in from.indices where live[k] && k != e && from[k] == top.0 {
+                    let gain: Double = top.1 * ratio[k]
+                    let first: Int = top.3 < 0 ? k : top.3
+                    if to[k] == from[e] {
+                        if gain > 1.0001 { found = first; break }
+                    } else if top.2 < 2 {
+                        stack.append((to[k], gain, top.2 + 1, first))
+                    }
+                }
+            }
+            if found >= 0 {
+                live[e] = false
+                out.append((rid[e], label[found]))
+            }
+        }
+        return out
+    }
+}
+
 // MARK: - Every installed mod's content, by key (for checks and the editor)
 
 struct ModCatalog {
@@ -23594,12 +24080,19 @@ enum ModValidator {
             }
             p.recipes[i] = rc
         }
+        for (rid, other) in gainLoops(p, r.disabled) {
+            let rc: ModRecipe? = p.recipes.first { $0.id == rid }
+            let place: String = "Recipe for " + itemLabel(rc?.out ?? .mat(.stick), own: p, known: known)
+            r.add(2, mn, place, "Crafting it and " + other + " back and forth would make things from nothing.")
+            r.disabled.insert(rid)
+        }
         // loot tables
         for i in p.loot.indices {
             var lt: ModLootTable = p.loot[i]
             let place: String = "Loot table \u{201C}" + lt.name + "\u{201D}"
             lt.rolls = clampI(lt.rolls, 1, 6)
             lt.nothing = clampD(lt.nothing.isFinite ? lt.nothing : 0, 0, 1000)
+            lt.chestChance = clampD(lt.chestChance.isFinite ? lt.chestChance : 0, 0, 1)
             if lt.entries.count > ModLimits.maxLootEntries { lt.entries = Array(lt.entries.prefix(ModLimits.maxLootEntries)) }
             var ents: [ModLootEntry] = []
             for e0 in lt.entries {
@@ -23660,8 +24153,10 @@ enum ModValidator {
                         if (own[key] ?? known[key] ?? "") != "block" { s.cells[k] = -1 }
                     } else if v > 255 || v < -1 {
                         s.cells[k] = -1
-                    } else if v >= 0, let t = Tile(rawValue: UInt8(v)), t == .portalOn || t == .portalOff || t == .portalFrame {
-                        // the rift gate exists once per world
+                    } else if v >= 0 {
+                        // custom blocks go by key (their numbers differ per world); machines, bedrock and the
+                        // rift gate (one per world) can't be copied
+                        if let t = Tile(rawValue: UInt8(v)), !t.isMod && modStructureTileOK(t) { continue }
                         s.cells[k] = -1
                     }
                 }
@@ -23724,10 +24219,765 @@ enum ModValidator {
 }
 
 extension Game {
-    /// A custom creature's turn (see the creature AI section for the full behaviour)
+    // MARK: custom creatures in play
+
+    /// Puts a custom creature into the world, sized and given health from its definition. Returns nil
+    /// for an unknown slot, or when as many custom creatures as the limit allows are already about.
+    @discardableResult
+    func addCustomMob(_ slot: Int, _ x: Double, _ y: Double) -> Mob? {
+        guard let r = ModRuntime.shared.mob(slot) else { return nil }
+        if customMobCount() >= ModLimits.maxActiveMobs { return nil }
+        let m = Mob(id: newID(), kind: .custom, x: x, y: y)
+        m.cslot = slot
+        let d: MobDef = r.mdef
+        m.b = Body(x: x, y: y, w: d.w, h: d.h)
+        m.maxHP = d.hp * mobHealthMult
+        m.hp = m.maxHP
+        m.modCD = [Double](repeating: 0, count: r.attacks.count)
+        m.lastAtk = -1
+        if world.dim == .overworld { m.homeBiome = gen.col(Int(floor(x))).biome.rawValue }
+        mobs.append(m)
+        return m
+    }
+
+    /// Custom creatures alive right now
+    func customMobCount() -> Int {
+        var n: Int = 0
+        for m in mobs where m.kind == .custom && m.hp > 0 && !m.removed { n += 1 }
+        return n
+    }
+
+    /// Custom creatures don't feel fire when their maker made them fireproof
+    func heatImmune(_ m: Mob) -> Bool {
+        if m.kind == .custom { return ModRuntime.shared.mob(m.cslot)?.def.fireproof ?? false }
+        return isHeatImmune(m.kind)
+    }
+
+    /// A custom creature's turn. Its behaviour switches (see ModBehavior) decide what it does; the game's
+    /// creature AI gives it senses and memory (`think`), and every attack it makes hurts through the shared
+    /// damage system, so armour, sides, knockback and hit cooldowns work as they do for the game's own.
     func updateCustomMob(_ m: Mob, _ dt: Double) {
-        wander(m, dt, 0.5)
+        guard let r = ModRuntime.shared.mob(m.cslot) else {
+            m.removed = true
+            return
+        }
+        let bh: ModBehavior = r.def.behavior
+        if m.modCD.count != r.attacks.count { m.modCD = [Double](repeating: 0, count: r.attacks.count) }
+        var i: Int = 0
+        while i < m.modCD.count {
+            if m.modCD[i] > 0 { m.modCD[i] -= dt }
+            i += 1
+        }
+        if bh.burnsInSun && !r.def.fireproof && inSunlight(m) { m.burn = 2.0 }
+        if r.guards { followWard(m, r, dt) }
+        if r.aquatic && !m.b.inWater {
+            // out of the water it flops about and slowly suffocates
+            m.dryT += dt
+            if m.dryT > 1.0 { m.dryT = 0; hurtMob(m, 1, 0, 0, false) }
+        }
+        // an attack under way plays out to its end (the warning it showed has to be honest)
+        if m.st >= 3 {
+            stepCustomAttack(m, r, dt)
+            customPhysics(m, r, dt)
+            return
+        }
+        let dist: Double = abs(pb.x - m.b.x)
+        let dyP: Double = (pb.y - pb.h * 0.5) - m.b.cy
+        let armed: Bool = r.canAttack
+        let calm: Bool = dead || settings.peaceful || !armed
+        // after the player: hunting them, paying them back for a hit, or keeping them out of its area
+        let provoked: Bool = bh.retaliate && clock - m.lastHitByPlayer < 12.0
+        var wants: Bool = !calm && (bh.attackPlayer || provoked)
+        if !calm && bh.defendArea {
+            let rr: Double = bh.defendRadius * (m.ai == .chase ? 1.5 : 1.0)
+            wants = abs(pb.x - m.homeX) < rr && abs(pb.y - m.homeY) < rr
+        }
+        var engaged: Bool = false
+        if wants {
+            engaged = think(m, dt, dist, dyP)
+            // one that holds its ground is never "stuck against a wall" (no leaps, no backing off)
+            if bh.standStill || !(bh.chase || provoked || bh.defendArea) {
+                m.leapReq = false
+                m.blockedT = 0
+                m.progX = m.b.x
+            }
+        } else {
+            if m.ai != .idle { m.ai = .idle; m.aiT = 0 }
+            m.why = calm && !armed ? .none : (settings.peaceful ? .peaceful : .none)
+        }
+        let onPlayer: Bool = engaged && (m.ai == .chase || m.ai == .alert)
+        // a creature it fights (guardians go for monsters near them)
+        var foe: Mob? = nil
+        if bh.attackMobs && armed && !onPlayer {
+            if let f = m.foe, f.hp <= 0 || f.removed || f.downed || abs(f.b.x - m.b.x) > max(8.0, r.mdef.aggro) * 1.5 { m.foe = nil }
+            m.foeT -= dt
+            if m.foe == nil && m.foeT <= 0 {
+                m.foeT = 0.5
+                m.foe = findFoe(m, r)
+            }
+            foe = m.foe
+        }
+        // where it heads this frame: 0 stand, 1 go to (gx, gy), 2 run from gx, 3 wander, 4 patrol
+        var mode: Int = 0
+        var gx: Double = m.b.x
+        var gy: Double = m.b.y
+        var spd: Double = 1.0
+        var tgtX: Double = 0
+        var tgtY: Double = 0
+        var hasTarget: Bool = false
+        if onPlayer {
+            tgtX = pb.x
+            tgtY = pb.y - pb.h * 0.55
+            hasTarget = true
+        } else if let f = foe {
+            tgtX = f.b.x
+            tgtY = f.b.cy
+            hasTarget = true
+        }
+        if m.t2 > 0 {
+            // frightened by a hit (passive creatures, see hurtMob)
+            m.t2 -= dt
+            mode = 2
+            gx = m.tx
+            spd = 1.8
+        } else if hasTarget {
+            let adx: Double = abs(tgtX - m.b.x)
+            let shooter: Bool = r.reach.2
+            let pursue: Bool = !bh.standStill && (bh.chase || provoked || bh.defendArea || foe != nil)
+            if bh.runAway && shooter && adx < r.reach.0 * 0.45 {
+                // keeps its distance and shoots
+                mode = 2
+                gx = tgtX
+                spd = 1.1
+            } else if shooter && adx < r.reach.0 * 0.8 && (foe != nil || m.sees) {
+                mode = 0
+            } else if pursue {
+                mode = 1
+                gx = onPlayer ? m.aimX : tgtX
+                gy = tgtY
+                spd = adx > 8.0 ? 1.15 : 1.0
+            }
+            if mode == 0 { m.dir = tgtX >= m.b.x ? 1 : -1 }
+        } else if engaged {
+            // searching where the player was last seen, or going home (see think)
+            if !bh.standStill || m.ai == .back {
+                mode = 1
+                gx = m.aimX
+                gy = m.seenY - 1.0
+                spd = 0.85
+            }
+        } else if bh.runAway, let from = scaryNear(m, r, dt) {
+            mode = 2
+            gx = from
+            spd = 1.5
+        } else if bh.followPlayer && !dead && dist < 48 {
+            if dist > 3.0 || abs(dyP) > 4.0 {
+                mode = 1
+                gx = pb.x - Double(facing) * 1.5
+                gy = pb.y - 1.5
+                spd = dist > 10 ? 1.4 : 1.0
+            }
+        } else if (r.guards && m.ward != nil) || bh.defendArea {
+            // stays by the creature it guards, or in the area it defends
+            let away: Double = abs(m.b.x - m.homeX)
+            if away > (r.guards ? 3.0 : 4.0) {
+                mode = 1
+                gx = m.homeX
+                gy = m.homeY - 1.0
+                spd = away > 10 ? 1.2 : 0.8
+            } else if !bh.standStill && bh.wander {
+                mode = 3
+            }
+        } else if bh.standStill {
+            mode = 0
+        } else if bh.patrol {
+            mode = 4
+        } else if bh.wander {
+            mode = 3
+        }
+        if bh.stayInBiome && (mode == 3 || mode == 4) && strayed(m, dt) {
+            mode = 1
+            gx = m.homeX
+            gy = m.homeY - 1.0
+            spd = 0.8
+        }
+        moveCustom(m, r, mode, gx, gy, spd, dt)
+        // touching it hurts while it is after the player (its contact damage)
+        if onPlayer && m.ai == .chase && r.def.damage > 0 { contactHurt(m, r.def.damage) }
+        if hasTarget && m.cd <= 0 && m.daze <= 0, let k = pickCustomAttack(m, r, tgtX, tgtY, foe) {
+            startCustomAttack(m, r, k, tgtX, tgtY, foe)
+        }
+        customPhysics(m, r, dt)
+    }
+
+    /// A guard keeps its home beside the creature it guards, and looks for another when that one is gone
+    func followWard(_ m: Mob, _ r: ModMobRT, _ dt: Double) {
+        if let w = m.ward, w.hp > 0 && !w.removed {
+            m.homeX = w.b.x
+            m.homeY = w.b.y
+            return
+        }
+        m.ward = nil
+        m.wardT -= dt
+        if m.wardT > 0 { return }
+        m.wardT = 1.0
+        var best: Mob? = nil
+        var bd: Double = 30.0
+        for o in mobs where o !== m && o.hp > 0 && !o.removed {
+            var match: Bool = false
+            if r.guardSlot >= 0 { match = o.kind == .custom && o.cslot == r.guardSlot }
+            else if let gk = r.guardKind { match = o.kind == gk }
+            if !match { continue }
+            let d: Double = abs(o.b.x - m.b.x)
+            if d < bd {
+                bd = d
+                best = o
+            }
+        }
+        m.ward = best
+    }
+
+    /// The nearest monster a guardian may go for: hostile to the player, within its senses, and on a
+    /// side its blows can hurt
+    func findFoe(_ m: Mob, _ r: ModMobRT) -> Mob? {
+        let range: Double = max(8.0, r.mdef.aggro)
+        let src: DamageSource = .mob(m, faction(of: m))
+        var best: Mob? = nil
+        var bd: Double = range * range
+        for o in mobsNear(m.b.x - range, m.b.x + range) {
+            if o === m || o.hp <= 0 || o.removed || o.downed || o.tame { continue }
+            if !(o.def.hostile || o.isBoss) { continue }
+            if o.kind == .custom && o.cslot == m.cslot { continue }
+            if !canHarm(src, targetFaction: faction(of: o), targetID: o.id, area: false) { continue }
+            let dx: Double = o.b.x - m.b.x
+            let dy: Double = o.b.cy - m.b.cy
+            let dd: Double = dx * dx + dy * dy
+            if dd < bd {
+                bd = dd
+                best = o
+            }
+        }
+        return best
+    }
+
+    /// What a timid creature runs from: the player close by, or (looked for twice a second) a monster
+    func scaryNear(_ m: Mob, _ r: ModMobRT, _ dt: Double) -> Double? {
+        if r.mdef.hostile { return nil }
+        if !dead && abs(pb.x - m.b.x) < 6.0 && abs(pb.y - m.b.y) < 4.0 { return pb.x }
+        m.foeT -= dt
+        if m.foeT <= 0 {
+            m.foeT = 0.5
+            m.threat = nearestHostileTo(m.b.x, m.b.cy, 7.0)
+        }
+        if let t = m.threat, t.hp > 0 && !t.removed && t !== m && abs(t.b.x - m.b.x) < 9.0 { return t.b.x }
+        return nil
+    }
+
+    /// True when a creature that keeps to its biome has wandered out of it (checked twice a second)
+    func strayed(_ m: Mob, _ dt: Double) -> Bool {
+        if world.dim != .overworld || m.homeBiome < 0 { return false }
+        m.biomeT -= dt
+        if m.biomeT <= 0 {
+            m.biomeT = 0.5
+            let ahead: Int = Int(floor(m.b.x + Double(m.dir) * 2.0))
+            m.strayed = gen.col(ahead).biome.rawValue != m.homeBiome
+        }
+        return m.strayed
+    }
+
+    /// Moves a custom creature by the plan made in updateCustomMob: walking, flying or swimming
+    func moveCustom(_ m: Mob, _ r: ModMobRT, _ mode: Int, _ gx: Double, _ gy: Double, _ spd: Double, _ dt: Double) {
+        let d: MobDef = r.mdef
+        let bh: ModBehavior = r.def.behavior
+        let swimming: Bool = m.b.inWater && (r.aquatic || bh.swim)
+        if d.flying || swimming {
+            // free movement: a point to head for (a new one now and then when idle)
+            var tx: Double = m.b.x
+            var ty: Double = m.b.y
+            var sp: Double = d.speed * spd
+            switch mode {
+            case 1:
+                tx = gx
+                ty = gy + (d.flying ? sin(clock * 3.0 + Double(m.id)) * 0.8 : 0)
+            case 2:
+                tx = m.b.x + (m.b.x >= gx ? 6.0 : -6.0)
+                ty = m.b.y - (d.flying ? 3.0 : 0)
+            case 3, 4:
+                m.t1 -= dt
+                if m.t1 <= 0 || mode == 4 && abs(m.b.x - m.tx) < 1.0 {
+                    m.t1 = Double.random(in: 1.5...4.0)
+                    if mode == 4 {
+                        m.goal = m.goal >= 0 ? -1 : 1
+                        m.tx = m.homeX + Double(m.goal) * bh.patrolRange
+                        m.ty = m.homeY
+                    } else {
+                        m.tx = m.homeX + Double.random(in: -8...8)
+                        m.ty = m.homeY + Double.random(in: -4...3)
+                    }
+                }
+                tx = m.tx
+                ty = m.ty
+                sp *= 0.6
+            default:
+                sp = 0
+            }
+            var ax: Double = tx - m.b.x
+            var ay: Double = ty - m.b.y
+            let len: Double = sqrt(ax * ax + ay * ay)
+            if len < 0.4 || sp <= 0 {
+                ax = 0
+                ay = 0
+            } else {
+                ax /= len
+                ay /= len
+            }
+            let k: Double = min(1.0, dt * (swimming ? 3.0 : 4.0))
+            m.b.vx += (ax * sp - m.b.vx) * k
+            m.b.vy += (ay * sp * (swimming ? 0.7 : 1.0) - m.b.vy) * k
+            if abs(m.b.vx) > 0.3 { m.dir = m.b.vx > 0 ? 1 : -1 }
+            return
+        }
+        switch mode {
+        case 1:
+            chase(m, gx, spd, dt)
+        case 2:
+            flee(m, gx, dt, spd)
+        case 3:
+            wander(m, dt, 0.5)
+        case 4:
+            if m.goal == 0 { m.goal = m.dir }
+            let end: Double = m.homeX + Double(m.goal) * bh.patrolRange
+            if (m.goal > 0 && m.b.x >= end) || (m.goal < 0 && m.b.x <= end) || cliffAhead(m, m.goal) || (m.b.hitWall && m.b.onGround) {
+                m.goal = -m.goal
+            }
+            m.dir = m.goal
+            accelX(m, Double(m.goal) * d.speed * 0.6, 14, dt)
+        default:
+            accelX(m, 0, 18, dt)
+        }
+    }
+
+    /// Steps a custom creature's body: swimmers glide through water (and never leave it on their own),
+    /// fliers bounce off what they hit, walkers use the game's usual physics
+    func customPhysics(_ m: Mob, _ r: ModMobRT, _ dt: Double) {
+        if r.aquatic && m.b.inWater {
+            let nx: Double = m.b.x + m.b.vx * dt
+            let ny: Double = m.b.y + m.b.vy * dt
+            let hw: Double = m.b.w * 0.45
+            let ix: Int = Int(floor(nx))
+            let midWet: Bool = world.tile(ix, Int(floor(ny - m.b.h * 0.5))) == .water
+            let topWet: Bool = world.tile(ix, Int(floor(ny - m.b.h + 0.1))).liquid
+            let sides: Bool = !world.solid(Int(floor(nx - hw)), Int(floor(ny - m.b.h * 0.5))) && !world.solid(Int(floor(nx + hw)), Int(floor(ny - m.b.h * 0.5)))
+            let floorOK: Bool = !world.solid(ix, Int(floor(ny - 0.05)))
+            if midWet && topWet && sides && floorOK {
+                m.b.x = nx
+                m.b.y = ny
+            } else {
+                m.t1 = 0
+                m.b.vx = -m.b.vx * 0.5
+                m.b.vy = -m.b.vy * 0.5
+            }
+            let fw: Double = m.b.w * 0.5
+            m.b.inWater = world.liquidFraction(m.b.x - fw, m.b.y - m.b.h, m.b.x + fw, m.b.y, false) > 0.3
+            m.anim += dt * 6.0
+            return
+        }
+        if r.def.behavior.swim && m.b.inWater && !r.mdef.flying {
+            world.moveBody(&m.b, dt, stepUp: 1.0, dropThrough: false, decks: decksCache)
+            m.anim += dt * 4.0
+            return
+        }
         stepMob(m, dt)
+        if r.mdef.flying {
+            m.anim += dt * 6.0
+            if m.st < 3 && (m.b.hitWall || m.b.hitCeil || m.b.onGround) {
+                m.b.vy = -1.0
+                m.t1 = 0
+            }
+        }
+    }
+
+    /// Which of its attacks could reach a target this far away now; one is picked at random (not the
+    /// same one twice running when there is a choice)
+    func pickCustomAttack(_ m: Mob, _ r: ModMobRT, _ tx: Double, _ ty: Double, _ foe: Mob?) -> Int? {
+        let dx: Double = abs(tx - m.b.x)
+        let dy: Double = abs(ty - m.b.cy)
+        let hw: Double = m.b.w * 0.5
+        let footing: Bool = m.b.onGround || r.mdef.flying || m.b.inWater
+        var seesFoe: Bool? = nil
+        var opts: [Int] = []
+        var i: Int = 0
+        while i < r.attacks.count && i < m.modCD.count {
+            let a: ModAttack = r.attacks[i].def
+            if m.modCD[i] > 0 {
+                i += 1
+                continue
+            }
+            var ok: Bool = false
+            switch a.kind {
+            case .melee, .multiHit:
+                ok = dx <= a.range + hw + 0.3 && dy <= max(1.8, m.b.h * 0.7 + 0.6)
+            case .charge:
+                ok = footing && dx >= 2.0 && dx <= max(4.0, a.range * 3.0) && dy < max(2.5, m.b.h)
+            case .ranged:
+                if dx <= a.range && dy <= a.range * 0.7 + 1.0 {
+                    if let f = foe {
+                        if seesFoe == nil { seesFoe = world.lineClear(m.b.x, shotY(m), f.b.x, f.b.cy) }
+                        ok = seesFoe ?? false
+                    } else {
+                        ok = m.sees
+                    }
+                }
+            case .area:
+                ok = sqrt(dx * dx + dy * dy) <= a.radius + hw
+            case .jump:
+                ok = footing && dx >= 1.5 && dx <= max(5.0, a.range * 3.0) && dy < 6.0
+            case .stomp:
+                ok = footing && dx <= max(a.radius * 1.5, a.range + 3.0) && dy < max(2.5, m.b.h)
+            }
+            if ok { opts.append(i) }
+            i += 1
+        }
+        if opts.isEmpty { return nil }
+        if opts.count > 1, let k = opts.firstIndex(of: m.lastAtk) { opts.remove(at: k) }
+        return opts[Int.random(in: 0..<opts.count)]
+    }
+
+    /// Begins an attack: it turns to the target, starts the attack's cooldown and shows the warning
+    func startCustomAttack(_ m: Mob, _ r: ModMobRT, _ i: Int, _ tx: Double, _ ty: Double, _ foe: Mob?) {
+        let a: ModAttack = r.attacks[i].def
+        m.atk = i
+        m.lastAtk = i
+        m.modCD[i] = max(0.2, a.cooldown)
+        m.st = 3
+        m.t3 = max(0, a.windup)
+        m.atkX = tx
+        m.atkY = ty
+        m.vsPlayer = foe == nil
+        m.dir = tx >= m.b.x ? 1 : -1
+        m.atkKey = newID()
+        // short wind-ups go unannounced (a warning every fraction of a second would be noise)
+        if a.windup >= 0.25 { warnCustomAttack(m, a) }
+    }
+
+    /// The red (or orange) box where an attack is about to land
+    func warnCustomAttack(_ m: Mob, _ a: ModAttack) {
+        let dirD: Double = Double(m.dir)
+        let hw: Double = m.b.w * 0.5
+        switch a.kind {
+        case .melee, .multiHit:
+            let reach: Double = a.range + hw + 0.3
+            if a.aim == .around {
+                warn(m.b.x - reach, m.b.top - 0.3, m.b.x + reach, m.b.y, a.windup)
+            } else {
+                warn(m.b.x, m.b.top - 0.3, m.b.x + dirD * reach, m.b.y, a.windup)
+            }
+        case .charge:
+            let len: Double = max(4.0, a.range * 3.0) + hw
+            warn(m.b.x, m.b.top, m.b.x + dirD * len, m.b.y, a.windup, 0xFFB030)
+        case .area:
+            let rr: Double = a.radius + hw
+            warn(m.b.x - rr, m.b.cy - rr, m.b.x + rr, m.b.cy + rr, a.windup)
+        case .stomp:
+            let len: Double = max(a.radius * 1.5, a.range + 3.0)
+            warn(m.b.x - len, m.b.y - 1.2, m.b.x + len, m.b.y, a.windup, 0xFF8A2A)
+        case .jump:
+            let rr: Double = max(1.4, hw + 0.9)
+            warn(m.atkX - rr, m.atkY - 1.2, m.atkX + rr, m.atkY + 1.2, a.windup)
+        case .ranged:
+            break
+        }
+    }
+
+    /// Where the target of the attack under way is now (the player, or the creature it fights)
+    func customTargetNow(_ m: Mob) -> (Double, Double)? {
+        if m.vsPlayer { return dead ? nil : (pb.x, pb.y - pb.h * 0.55) }
+        if let f = m.foe, f.hp > 0 && !f.removed { return (f.b.x, f.b.cy) }
+        return nil
+    }
+
+    /// Slows a creature that is winding up or recovering (a flyer or swimmer hangs where it is)
+    func brakeCustom(_ m: Mob, _ r: ModMobRT, _ dt: Double) {
+        if r.mdef.flying || (m.b.inWater && (r.aquatic || r.def.behavior.swim)) {
+            let k: Double = max(0, 1.0 - dt * 6.0)
+            m.b.vx *= k
+            m.b.vy *= k
+        } else {
+            accelX(m, 0, 40, dt)
+        }
+    }
+
+    /// The states of an attack: 3 the wind-up, 4 recovering, 5 charging, 6 a flurry, 7 a leap
+    func stepCustomAttack(_ m: Mob, _ r: ModMobRT, _ dt: Double) {
+        guard m.atk >= 0 && m.atk < r.attacks.count else {
+            m.st = 0
+            return
+        }
+        let ar: ModAttackRT = r.attacks[m.atk]
+        let a: ModAttack = ar.def
+        switch m.st {
+        case 3:
+            m.t3 -= dt
+            brakeCustom(m, r, dt)
+            if a.kind == .ranged, let p = customTargetNow(m) { m.dir = p.0 >= m.b.x ? 1 : -1 }
+            if m.t3 <= 0 { releaseCustomAttack(m, r, ar) }
+        case 4:
+            m.t3 -= dt
+            brakeCustom(m, r, dt)
+            if m.t3 <= 0 {
+                m.st = 0
+                m.cd = 0.3
+            }
+        case 5:
+            // a straight rush that hurts what it runs into (each thing once)
+            m.t3 -= dt
+            let cs: Double = max(8.0, r.mdef.speed * 3.2)
+            m.b.vx = Double(m.dir) * cs
+            if r.mdef.flying { m.b.vy += ((m.atkY - m.b.cy) * 2.0 - m.b.vy) * min(1.0, dt * 4.0) }
+            var info = DamageInfo(amount: a.damage, type: .melee, source: .mob(m, faction(of: m)))
+            info.dirX = Double(m.dir)
+            info.knock = a.knock
+            info.originX = m.b.x
+            info.key = m.atkKey
+            info.cooldown = 1.5
+            damageBox(m.b.left - 0.2, m.b.top - 0.1, m.b.right + 0.2, m.b.y + 0.1, info)
+            if Double.random(in: 0...1) < 0.4 { spawnParticles(m.b.x - Double(m.dir) * m.b.w * 0.5, m.b.y - 0.1, 0xA08860, 1, 1.5, 0.3, 6) }
+            if m.b.hitWall {
+                // into a wall: it reels for a moment, a chance to hit back
+                addShake(abs(pb.x - m.b.x) < 12 ? 0.15 : 0.04)
+                spawnParticles(m.b.x + Double(m.dir) * m.b.w * 0.5, m.b.cy, 0xC0B090, 8, 3.5, 0.4, 10)
+                m.b.vx = -Double(m.dir) * 2.0
+                m.daze = 0.8
+                m.st = 4
+                m.t3 = 0.2
+            } else if m.t3 <= 0 {
+                m.st = 4
+                m.t3 = 0.35
+            }
+        case 6:
+            // a flurry: a blow every 0.16 s
+            m.t3 -= dt
+            brakeCustom(m, r, dt)
+            if m.t3 <= 0 {
+                customBlow(m, a)
+                m.phase -= 1
+                m.t3 = 0.16
+                if m.phase <= 0 {
+                    m.st = 4
+                    m.t3 = 0.3
+                }
+            }
+        case 7:
+            // in the air on a leap (or a flyer's dive): it comes down on the spot it went for
+            m.t3 -= dt
+            let landed: Bool = r.mdef.flying ? abs(m.b.x - m.atkX) < 0.8 && abs(m.b.cy - m.atkY) < 1.2 : (m.b.onGround && m.t3 < 1.85)
+            if landed || m.t3 <= 0 || (r.mdef.flying && (m.b.hitWall || m.b.onGround)) {
+                var info = DamageInfo(amount: a.damage, type: .stomp, source: .mob(m, faction(of: m)))
+                info.knock = a.knock
+                info.key = m.atkKey
+                info.cooldown = 1.0
+                info.originX = m.b.x
+                let rr: Double = max(1.4, m.b.w * 0.5 + 0.9)
+                damageArea(m.b.x, m.b.y - min(0.8, m.b.h * 0.5), radius: rr, info, falloff: false, lineOfSight: false)
+                spawnParticles(m.b.x, m.b.y - 0.1, 0xA08860, 10, 4.0, 0.45, 14)
+                addShake(abs(pb.x - m.b.x) < 12 ? 0.18 : 0.04)
+                sfx(.land, at: m.b.x, 0.8)
+                m.st = 4
+                m.t3 = 0.35
+            }
+        default:
+            m.st = 0
+        }
+    }
+
+    /// The moment an attack lands (or sets off)
+    func releaseCustomAttack(_ m: Mob, _ r: ModMobRT, _ ar: ModAttackRT) {
+        let a: ModAttack = ar.def
+        // shots and leaps aim at where the target is now; blows land where the warning showed
+        if a.kind == .ranged || a.kind == .jump, let p = customTargetNow(m) {
+            m.atkX = p.0
+            m.atkY = p.1
+        }
+        m.atkT = Mob.atkDur
+        switch a.kind {
+        case .melee:
+            customBlow(m, a)
+            m.st = 4
+            m.t3 = 0.25
+        case .multiHit:
+            m.phase = max(1, a.hits)
+            m.st = 6
+            m.t3 = 0
+        case .charge:
+            let cs: Double = max(8.0, r.mdef.speed * 3.2)
+            m.st = 5
+            m.t3 = clampD((max(4.0, a.range * 3.0) + m.b.w * 0.5) / cs, 0.3, 2.0)
+            sfx(.roar, at: m.b.x, 0.5)
+        case .ranged:
+            fireCustomShots(m, r, ar)
+            m.st = 4
+            m.t3 = 0.25
+        case .area:
+            var info = DamageInfo(amount: a.damage, type: .impact, source: .mob(m, faction(of: m)))
+            info.knock = a.knock
+            info.key = m.atkKey
+            info.cooldown = 1.0
+            damageArea(m.b.x, m.b.cy, radius: a.radius + m.b.w * 0.5, info, falloff: false, lineOfSight: true)
+            spawnParticles(m.b.x, m.b.cy, 0xFFD070, 18, 6.5, 0.45, 0)
+            addShake(abs(pb.x - m.b.x) < 14 ? 0.2 : 0.05)
+            sfx(.explosion, at: m.b.x, 0.5)
+            m.st = 4
+            m.t3 = 0.35
+        case .jump:
+            if r.mdef.flying {
+                // a flyer dives at the target instead
+                let dx: Double = m.atkX - m.b.x
+                let dy: Double = m.atkY - m.b.cy
+                let len: Double = max(0.001, sqrt(dx * dx + dy * dy))
+                let sp: Double = max(9.0, r.mdef.speed * 3.0)
+                m.b.vx = dx / len * sp
+                m.b.vy = dy / len * sp
+                m.t3 = clampD(len / sp + 0.25, 0.3, 1.6)
+            } else {
+                let vy: Double = -max(10.0, r.mdef.jump * 1.1)
+                let flight: Double = max(0.3, 2.0 * abs(vy) / gravityG)
+                m.b.vy = vy
+                m.b.vx = clampD((m.atkX - m.b.x) / flight, -14, 14)
+                m.t3 = 2.0
+            }
+            m.st = 7
+        case .stomp:
+            var info = DamageInfo(amount: a.damage, type: .stomp, source: .mob(m, faction(of: m)))
+            info.knock = a.knock
+            info.key = m.atkKey
+            info.cooldown = 1.0
+            info.originX = m.b.x
+            damageArea(m.b.x, m.b.y - 0.4, radius: a.radius + m.b.w * 0.5, info, falloff: true, lineOfSight: false)
+            // shockwaves run along the ground: both ways, or only forward
+            let len: Double = max(a.radius * 1.5, a.range + 3.0)
+            let sp: Double = 12.0
+            let dirs: [Double] = a.aim == .forward ? [Double(m.dir)] : [-1.0, 1.0]
+            for sgn in dirs where projectiles.count < 400 {
+                var p = Projectile(kind: .shock, x: m.b.x + sgn * (m.b.w * 0.5), y: m.b.y - 0.5, vx: sgn * sp, vy: 0, dmg: a.damage * 0.8, fromPlayer: false, gravity: 0)
+                p.life = len / sp
+                p.w = 0.6
+                p.owner = m.id
+                p.source = .mob(m, faction(of: m))
+                p.uid = newID()
+                projectiles.append(p)
+            }
+            addShake(abs(pb.x - m.b.x) < 16 ? 0.35 : 0.08)
+            spawnParticles(m.b.x, m.b.y - 0.1, 0xA08860, 16, 6.0, 0.55, 12)
+            sfx(.land, at: m.b.x, 1.0)
+            m.st = 4
+            m.t3 = 0.4
+        }
+    }
+
+    /// A melee blow over the box the warning showed
+    func customBlow(_ m: Mob, _ a: ModAttack) {
+        let hw: Double = m.b.w * 0.5
+        let reach: Double = a.range + hw + 0.3
+        let top: Double = m.b.top - 0.3
+        let bottom: Double = m.b.y + 0.1
+        m.atkT = Mob.atkDur
+        switch a.aim {
+        case .around:
+            mobAttackBox(m, m.b.x - reach, top, m.b.x + reach, bottom, dmg: a.damage, knock: a.knock)
+        case .down:
+            mobAttackBox(m, m.b.x - hw - 0.3, m.b.cy, m.b.x + hw + 0.3, m.b.y + reach, dmg: a.damage, knock: a.knock)
+        default:
+            mobAttackBox(m, m.b.x - Double(m.dir) * 0.3, top, m.b.x + Double(m.dir) * reach, bottom, dmg: a.damage, knock: a.knock)
+        }
+        sfx(.swing, at: m.b.x, 0.5)
+    }
+
+    /// Shots of a custom creature's ranged attack: one aimed or straight ahead, a ring, or one dropped
+    /// straight down. Custom shots behave as their maker set them up.
+    func fireCustomShots(_ m: Mob, _ r: ModMobRT, _ ar: ModAttackRT) {
+        let a: ModAttack = ar.def
+        var live: Int = 0
+        for p in projectiles where p.mod >= 0 || p.owner >= 0 { live += 1 }
+        if live >= ModLimits.maxShotsLive { return }
+        let ox: Double = m.b.x + Double(m.dir) * (m.b.w * 0.5 + 0.1)
+        let oy: Double = r.mdef.flying ? m.b.cy : shotY(m)
+        let speed: Double = max(4.0, a.speed)
+        var grav: Double = 0
+        var life: Double = clampD(a.range / speed * 1.5 + 0.2, 0.3, 6.0)
+        var kind: ProjKind = .bullet
+        if ModGameShots.kinds.contains(a.shot), let k = ProjKind(rawValue: a.shot) { kind = k }
+        var w: Double = 0.3
+        var pierce: Int = 0
+        var modIdx: Int = -1
+        if ar.shot >= 0 && ar.shot < ModRuntime.shared.shots.count {
+            let s: ModProjectile = ModRuntime.shared.shots[ar.shot]
+            grav = s.gravity
+            life = s.life
+            kind = .spit
+            w = s.size
+            pierce = s.pierce
+            modIdx = ar.shot
+        } else {
+            switch kind {
+            case .arrow, .quarrel: grav = 15
+            case .rock: grav = 22; w = 0.6
+            case .pebble: grav = 12
+            default: grav = 0
+            }
+        }
+        var angles: [Double] = []
+        switch a.aim {
+        case .forward:
+            angles = [m.dir > 0 ? 0 : Double.pi]
+        case .atTarget:
+            angles = [lobAngle(m.atkX - ox, m.atkY - oy, speed, grav)]
+        case .around:
+            let n: Int = clampI(a.hits, 3, 12)
+            for k in 0..<n { angles.append(Double(k) / Double(n) * 2.0 * Double.pi) }
+        case .down:
+            angles = [Double.pi * 0.5]
+        }
+        for ang in angles {
+            if live >= ModLimits.maxShotsLive { break }
+            var p = Projectile(kind: kind, x: ox, y: oy, vx: cos(ang) * speed, vy: sin(ang) * speed, dmg: a.damage, fromPlayer: false, gravity: grav)
+            p.life = life
+            p.owner = m.id
+            p.source = .mob(m, faction(of: m))
+            p.uid = newID()
+            p.knock = a.knock
+            p.w = w
+            p.pierce = pierce
+            p.mod = modIdx
+            projectiles.append(p)
+            live += 1
+        }
+        spawnParticles(ox, oy, kind == .fireball ? 0xFF7020 : 0xFFE080, 3, 2.0, 0.18, 0)
+        switch kind {
+        case .arrow, .quarrel: sfx(.bow, at: m.b.x, 0.5)
+        case .bullet, .pellet: sfx(.gun, at: m.b.x, 0.5)
+        case .rock, .pebble: sfx(.sling, at: m.b.x, 0.5)
+        default: sfx(.zap, at: m.b.x, 0.45)
+        }
+    }
+
+    /// A custom creature's drops and its loot table, when it dies
+    func dropModLoot(_ m: Mob, _ rng: inout RNG) {
+        guard let r = ModRuntime.shared.mob(m.cslot) else { return }
+        for d in r.drops {
+            if rng.double() >= d.chance { continue }
+            let lo: Int = max(1, d.min)
+            let n: Int = lo + rng.int(max(1, d.max - lo + 1))
+            spawnDrop(Stack(item: d.item, count: n), m.b.x, m.b.y - m.b.h * 0.5, Double.random(in: -2...2), -4.5)
+        }
+        if !r.loot.isEmpty {
+            for s in ModRuntime.shared.roll(r.loot, &rng) {
+                spawnDrop(s, m.b.x, m.b.y - m.b.h * 0.5, Double.random(in: -2.5...2.5), -5.0)
+            }
+        }
+        if r.boss {
+            say(joinText(r.def.name, " is defeated!"), 3.0)
+            sfx(.discovery, 0.8)
+        }
     }
 }
 
@@ -23882,15 +25132,71 @@ final class ModMobRT {
         case .flying: beh = .flyer
         case .water: beh = .swimmer
         }
-        let hostile: Bool = def.category == .hostile || def.category == .boss || (def.category == .flying && def.behavior.attackPlayer)
+        // a creature that goes for the player unprovoked counts as a monster (limits, despawning, pets)
+        let hostile: Bool = def.category == .hostile || def.category == .boss || (def.category != .passive && def.behavior.attackPlayer)
         let fly: Bool = def.behavior.fly || def.category == .flying
         mdef = MobDef(name: def.name, w: clampD(bd.w * def.scale, 0.3, 8), h: clampD(bd.h * def.scale, 0.3, 8), hp: def.hp, speed: def.speed,
                         dmg: def.damage, behavior: beh, flying: fly, aggro: def.detect, jump: def.jump, hostile: hostile)
         boss = def.category == .boss
-        switch def.category {
-        case .boss: faction = .boss
-        case .hostile: faction = .hostile
-        default: faction = hostile ? .hostile : .wild
+        // a guardian that fights monsters but never the player is on the player's side
+        if boss { faction = .boss }
+        else if hostile { faction = .hostile }
+        else if def.behavior.attackMobs { faction = .ally }
+        else { faction = .wild }
+    }
+
+    /// how far its attacks reach (across, up or down) and whether the longest is a shot (see think)
+    var reach: (Double, Double, Bool) = (1.0, 1.4, false)
+    /// creatures that live in water (they flop about on land)
+    var aquatic: Bool { return def.category == .water }
+    /// it can hurt something: it has attacks, or hurts by touch
+    var canAttack: Bool { return !attacks.isEmpty || def.damage > 0 }
+    /// it stays beside another kind of creature
+    var guards: Bool { return guardSlot >= 0 || guardKind != nil }
+
+    /// Works out what its attacks reach, once they are known
+    func finish() {
+        var across: Double = mdef.w * 0.5 + 0.5
+        var up: Double = 1.4
+        var shot: Bool = false
+        for a in attacks {
+            let d: ModAttack = a.def
+            var r: Double = 0
+            var h: Double = 1.4
+            switch d.kind {
+            case .ranged:
+                if d.range > across || !shot {
+                    across = max(d.range, shot ? across : 0)
+                    up = d.range * 0.7 + 1.0
+                    shot = true
+                }
+                continue
+            case .charge, .jump:
+                r = max(4.0, d.range * 3.0)
+                h = 2.5
+            case .area, .stomp:
+                r = d.radius + mdef.w * 0.5
+                h = max(1.4, d.radius)
+            case .melee, .multiHit:
+                r = d.range + mdef.w * 0.5 + 0.3
+                h = max(1.8, mdef.h * 0.7 + 0.6)
+            }
+            if !shot && r > across {
+                across = r
+                up = h
+            }
+        }
+        reach = (across, up, shot)
+    }
+
+    /// Share of a hit of this kind that gets through its hide
+    func resist(_ t: DamageType) -> Double {
+        let tough: Double = 1.0 - clampD(def.defense, 0, 0.9)
+        switch t {
+        case .fire, .lava: return def.fireproof ? 0 : tough
+        case .fall: return mdef.flying || aquatic ? 0 : tough
+        case .drown: return aquatic || def.behavior.swim ? 0 : 1
+        default: return tough
         }
     }
 }
@@ -23948,10 +25254,14 @@ final class ModRuntime {
     var shots: [ModProjectile] = []
     var shotIndex: [String: Int] = [:]
     var loot: [String: ModLootTable] = [:]
+    /// loot tables that also turn up in the world's chests
+    var chestTables: [String] = []
     var recipes: [Recipe] = []
     var ores: [ModOreRT] = []
     var structures: [ModStructRT] = []
     var spawns: [ModSpawnRT] = []
+    /// the custom creatures' spawning as rules beside the game's own (see updateSpawning)
+    var spawnRules: [SpawnRule] = []
     /// names of missing mods by id (for "Missing block" labels)
     var missingNames: [String: String] = [:]
 
@@ -24210,8 +25520,23 @@ final class ModRuntime {
                 var l: ModLootTable = l0
                 for k in l.entries.indices { l.entries[k].item = resolve(l.entries[k].item) }
                 loot[p.key(l.id)] = l
+                if l.chestChance > 0 { chestTables.append(p.key(l.id)) }
             }
         }
+    }
+
+    /// A chest's contents with the world's mods: the tables set to turn up in chests each get their
+    /// chance, rolled from the chest's position (the same chest always holds the same), up to a full chest
+    func addChestLoot(_ base: [Stack], _ g: WorldGen, _ dim: Dimension, _ x: Int, _ y: Int) -> [Stack] {
+        var out: [Stack] = base
+        for key in chestTables {
+            guard let l = loot[key] else { continue }
+            let salt: UInt64 = UInt64(truncatingIfNeeded: modChecksum(Data(key.utf8)))
+            var rng = RNG(hashU(x, y &+ dim.rawValue &* 7_919, g.seed &+ salt))
+            if rng.double() >= l.chestChance { continue }
+            for st in roll(key, &rng) where out.count < 27 { out.append(st) }
+        }
+        return out
     }
 
     /// Rolls a loot table: each roll picks one entry (or nothing) by weight
@@ -24260,6 +25585,34 @@ final class ModRuntime {
         for r in mobs where !r.def.behavior.guardKey.isEmpty {
             let gk: String = r.def.behavior.guardKey
             if let s = mobSlot[gk] { r.guardSlot = s } else { r.guardKind = MobKind.allCases.first { mobDef($0).name == gk } }
+        }
+        for r in mobs { r.finish() }
+        buildSpawnRules()
+    }
+
+    /// Turns each custom creature's spawning settings into a rule the game's spawner understands
+    func buildSpawnRules() {
+        spawnRules = []
+        for s in spawns {
+            guard let r = mob(s.slot) else { continue }
+            let sp: ModSpawn = s.spawn
+            var place: SpawnPlace = .surface
+            switch sp.place {
+            case .surface, .sky: place = .surface
+            case .cave: place = .cave
+            case .ocean: place = .ocean
+            case .umbral: place = .umbral
+            }
+            let when: SpawnWhen = sp.when == 1 ? .day : (sp.when == 2 ? .night : .any)
+            var biomes: [Biome] = []
+            for b in sp.biomes {
+                if let bb = Biome(rawValue: b) { biomes.append(bb) }
+            }
+            var rule = SpawnRule(kind: .custom, weight: max(0, sp.weight), place: place, when: when, biomes: biomes, group: max(1, sp.group), minY: sp.minY, maxY: sp.maxY)
+            rule.slot = s.slot
+            rule.maxNearby = max(1, sp.maxNearby)
+            rule.sky = sp.place == .sky && r.mdef.flying
+            if rule.weight > 0 { spawnRules.append(rule) }
         }
     }
 
@@ -24940,7 +26293,8 @@ extension Game {
             if player && effects.value(.fireproof) <= 0 { playerBurn = max(playerBurn, s.burn * 0.5) }
         }
         if s.explode > 0 {
-            explode(x, y, radius: s.explode, power: p.dmg, source: p.source, breakBlocks: s.breakBlocks)
+            // (only the player's own shots may break blocks; a creature's never wrecks the world)
+            explode(x, y, radius: s.explode, power: p.dmg, source: p.source, breakBlocks: s.breakBlocks && p.source.kind == .player)
         } else {
             spawnParticles(x, y, s.color & 0xFFFFFF, 5, 3.0, 0.3, 6)
         }
@@ -25200,6 +26554,7 @@ final class Art: @unchecked Sendable {
     }
 
     func mobSet(_ m: Mob) -> SpriteSet {
+        if m.kind == .custom { return customMobSet(m.cslot) }
         var variant: Int = 0
         switch m.kind {
         case .zombie: variant = m.variant
@@ -25216,6 +26571,15 @@ final class Art: @unchecked Sendable {
 
     func buildMobSet(_ k: MobKind, _ v: Int) -> SpriteSet {
         return creatureSpriteSet(k, v)
+    }
+
+    /// A custom creature's sprites (made once per world; refreshModArt clears them)
+    func customMobSet(_ slot: Int) -> SpriteSet {
+        if let s = modMobSets[slot] { return s }
+        guard let r = ModRuntime.shared.mob(slot) else { return creaturePreview(.zombie) }
+        let s: SpriteSet = modMobSpriteSet(r.def)
+        modMobSets[slot] = s
+        return s
     }
 
     /// A game creature's sprites (the Mod Creator's body picker)
@@ -30775,6 +32139,7 @@ enum WorldRenderer {
         drawOverlays(&ctx, W, H, g, v)
         drawWeatherOverlay(&ctx, W, H, g, v)
         drawFloats(&ctx, g, v)
+        if g.capturing { drawCapture(&ctx, g, v) }
         if g.showChunks || g.showHitboxes || g.showAI { drawDebug(&ctx, H, g, v) }
         if g.settings.showFPS {
             let fpsN: Int = Int(g.renderFPS.rounded())
@@ -31031,6 +32396,7 @@ enum WorldRenderer {
     }
 
     static func mobFrame(_ m: Mob, _ s: SpriteSet, _ clock: Double) -> Int {
+        if m.kind == .custom { return customMobFrame(m, s) }
         let moving: Bool = abs(m.b.vx) > 0.3
         if isHumanoid(m.kind) {
             if m.st == 3 {
@@ -31092,6 +32458,27 @@ enum WorldRenderer {
         return 0
     }
 
+    /// A custom creature's frame: a humanoid body moves like the game's humanoids; other bodies use their
+    /// own animation, and custom art shows standing, two walking frames and an attack frame
+    static func customMobFrame(_ m: Mob, _ s: SpriteSet) -> Int {
+        let moving: Bool = abs(m.b.vx) > 0.3
+        guard let r = ModRuntime.shared.mob(m.cslot) else { return 0 }
+        if !r.def.customArt && isHumanoid(r.base) {
+            if m.st == 3 {
+                let ranged: Bool = m.atk >= 0 && m.atk < r.attacks.count && r.attacks[m.atk].def.kind == .ranged
+                return ranged ? 6 : 3
+            }
+            if m.st == 4 || m.st == 6 || m.atkT > 0 { return 4 }
+            return moving ? walkFrame(m) : 0
+        }
+        let a: CreatureAnim = s.anim
+        if a.attack >= 0 && (m.atkT > 0 || m.st == 3 || m.st == 5 || m.st == 6) { return a.attack }
+        if a.hop { return m.b.onGround ? 0 : 1 }
+        if !a.cycle.isEmpty { return a.cycle[Int(m.anim * 1.5) % a.cycle.count] }
+        if moving && s.right.count > 1 { return walkFrame(m) }
+        return 0
+    }
+
     /// Telegraphed attacks: the struck area pulses faster as the moment nears, and fills up from the
     /// ground to show how long is left
     static func drawDangerZones(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
@@ -31105,6 +32492,19 @@ enum WorldRenderer {
             fillRect(&ctx, v.rect(z.x0, z.y1 - h, z.x1 - z.x0, h), Color(hex: z.color, alpha: 0.2))
             ctx.stroke(Path(roundedRect: r, cornerRadius: 2), with: .color(Color(hex: z.color, alpha: 0.5 + 0.3 * pulse)), lineWidth: 2)
         }
+    }
+
+    /// The area being captured as a structure: a box from the first corner to the second (or to the
+    /// finger), with its size
+    static func drawCapture(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
+        guard let r = g.captureRect() else { return }
+        let w: Double = Double(r.2 - r.0 + 1)
+        let h: Double = Double(r.3 - r.1 + 1)
+        let box: CGRect = v.rect(Double(r.0), Double(r.1), w, h)
+        let pulse: Double = 0.55 + 0.25 * sin(g.clock * 6.0)
+        fillRect(&ctx, box, Color(hex: 0x60E0FF, alpha: 0.12))
+        strokeRect(&ctx, box, Color(hex: 0x60E0FF, alpha: pulse), 3)
+        drawLabel(&ctx, joinText(String(Int(w)), " x ", String(Int(h))), v.sx(Double(r.0) + w * 0.5), v.sy(Double(r.1)) - 12.0, 13, Color(hex: 0x60E0FF))
     }
 
     static func drawMobs(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
@@ -32993,7 +34393,7 @@ struct InventoryPanel: View {
             Text("CRAFTING").font(.pixel(15))
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 4) {
-                    ForEach(RecipeCat.allCases, id: \.self) { c in
+                    ForEach(RecipeCat.allCases.filter { $0 != .mods || ModRuntime.shared.recipes.contains { r in r.cat == .mods } }, id: \.self) { c in
                         catButton(c)
                     }
                 }
@@ -33376,6 +34776,10 @@ struct PauseView: View {
                 }
                 PixelButton(title: "SAVE GAME", color: Color(hex: 0x3E6FAA)) {
                     savedNote = game.saveNow() ? "Saved!" : "Could not save."
+                }
+                PixelButton(title: "CAPTURE STRUCTURE", color: Color(hex: 0x2E8A8A)) {
+                    game.paused = false
+                    game.startCapture()
                 }
                 toggles
                 CameraSettingsSection(settings: settingsBinding, onChange: { game.tilePx = game.settings.tilePx })
@@ -36784,6 +38188,14 @@ struct MobEditorView: View {
             if a.kind == .multiHit {
                 IntSlider(label: "Blows", value: at(i, \.hits, 3), range: 1...(sb ? 12 : 6))
             }
+            if a.kind == .charge || a.kind == .jump {
+                Text(verbatim: joinText(a.kind == .charge ? "Rushes up to " : "Leaps up to ", String(format: "%.0f", max(4.0, a.range * 3.0)), " blocks"))
+                    .font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+            }
+            if a.kind == .melee || a.kind == .multiHit || a.kind == .stomp {
+                Text(a.kind == .stomp ? "Shockwaves (Forward: one way; otherwise both ways)" : "Where the blow lands").font(.pixel(12, .bold)).foregroundColor(ModUI.dim)
+                ChoiceRow(options: ModAttackAim.allCases.map { $0.name }, selected: aimB, columns: 4)
+            }
             if a.kind == .ranged {
                 Text("Aim").font(.pixel(12, .bold)).foregroundColor(ModUI.dim)
                 ChoiceRow(options: ModAttackAim.allCases.map { $0.name }, selected: aimB, columns: 4)
@@ -37030,6 +38442,11 @@ struct LootEditorView: View {
 
     func b<T>(_ kp: WritableKeyPath<ModLootTable, T>, _ d: T) -> Binding<T> { return s.bind(\ModPack.loot, id, kp, d) }
     var table: ModLootTable { return s.mod.loot.first { $0.id == id } ?? ModLootTable() }
+    /// the chest chance shown as a percentage
+    var pctB: Binding<Double> {
+        let base: Binding<Double> = b(\.chestChance, 0)
+        return Binding<Double>(get: { base.wrappedValue * 100.0 }, set: { base.wrappedValue = clampD($0 / 100.0, 0, 1) })
+    }
 
     var body: some View {
         let cat: ModCatalog = s.catalog
@@ -37039,6 +38456,7 @@ struct LootEditorView: View {
                     ModTextField(label: "Name", text: b(\.name, ""), placeholder: "Treasure")
                     IntSlider(label: "Rolls", value: b(\.rolls, 2), range: 1...6)
                     StatSlider(label: "Weight of 'nothing'", value: b(\.nothing, 0), range: 0...200, step: 1, format: "%.0f")
+                    StatSlider(label: "Also in the world's chests", value: pctB, range: 0...100, step: 1, format: "%.0f%% of chests")
                 }
                 ModSection(title: "ENTRIES") {
                     ForEach(0..<table.entries.count, id: \.self) { i in entryRow(i, cat) }
@@ -37120,7 +38538,7 @@ struct OreEditorView: View {
             }
             ModSection(title: "DEPTH", help: "Drag the two sliders: the green band shows where veins form. The sea is at row 120.") {
                 HStack(alignment: .top, spacing: 14) {
-                    OreDepthBar(minY: ore.minY, maxY: ore.maxY, bottom: ore.dim == 0 ? WorldGen.H : umbralH)
+                    OreDepthBar(minY: ore.minY, maxY: ore.maxY, bottom: ore.dim == 0 ? WorldGen.H : umbralH, dim: ore.dim)
                         .frame(width: 120, height: 300)
                     VStack(spacing: 6) {
                         IntSlider(label: "Highest row", value: b(\.minY, 150), range: 2...((ore.dim == 0 ? WorldGen.H : umbralH) - 2))
@@ -37141,7 +38559,12 @@ struct OreEditorView: View {
 
     var depthWords: String {
         let mid: Int = (ore.minY + ore.maxY) / 2
-        if ore.dim == 1 { return "In the Umbral Realm's ash and rock." }
+        if ore.dim == 1 {
+            // the realm is rock above row 40 and below row 200, an open cavern between
+            if ore.maxY < 40 || ore.minY > 200 { return "In the Umbral Realm's ash rock." }
+            if ore.minY >= 40 && ore.maxY <= 200 { return "Mostly open cavern here: few veins will find rock." }
+            return "Partly in the open cavern (rows 40 to 200), where there is little rock."
+        }
         if mid < 130 { return "Near the surface." }
         if mid < 220 { return "In the upper caves (like coal and copper)." }
         if mid < 360 { return "Deep underground (like iron and silver)." }
@@ -37164,13 +38587,17 @@ struct OreDepthBar: View {
     let minY: Int
     let maxY: Int
     let bottom: Int
+    var dim: Int = 0
     var body: some View {
         Canvas { ctx, size in
             let w: Double = Double(size.width)
             let h: Double = Double(size.height)
             let fb: Double = Double(max(1, bottom))
-            let layers: [(Int, UInt32, String)] = [(0, 0x7AB0E8, "sky"), (110, 0x6A8A40, "surface"), (130, 0x8A6A40, "earth"),
-                                                   (200, 0x7A7A7A, "caves"), (330, 0x5A5A68, "deep"), (450, 0x3A3448, "abyss")]
+            let over: [(Int, UInt32, String)] = [(0, 0x7AB0E8, "sky"), (110, 0x6A8A40, "surface"), (130, 0x8A6A40, "earth"),
+                                                 (200, 0x7A7A7A, "caves"), (330, 0x5A5A68, "deep"), (450, 0x3A3448, "abyss")]
+            // the Umbral Realm: a rock ceiling, the open cavern, then ash rock over lava
+            let umbral: [(Int, UInt32, String)] = [(0, 0x5A4446, "ceiling"), (40, 0x1A1018, "cavern"), (200, 0x6A4A40, "ash rock"), (240, 0x8A3A20, "lava")]
+            let layers: [(Int, UInt32, String)] = dim == 1 ? umbral : over
             for (i, l) in layers.enumerated() where l.0 < bottom {
                 let y0: Double = Double(l.0) / fb * h
                 let y1: Double = i + 1 < layers.count ? min(h, Double(layers[i + 1].0) / fb * h) : h
@@ -37182,6 +38609,87 @@ struct OreDepthBar: View {
             ctx.stroke(Path(CGRect(x: w * 0.15, y: a, width: w * 0.7, height: max(3, b - a))), with: .color(Color.white), lineWidth: 2)
         }
         .overlay(Rectangle().stroke(Color.white.opacity(0.5), lineWidth: 2))
+    }
+}
+
+/// The strip shown while picking a structure's corners
+struct CaptureBar: View {
+    @ObservedObject var game: Game
+    @ObservedObject var hud: HUDSignal
+    var body: some View {
+        let step: String = game.capA == nil ? "Tap the first corner of what you built" : "Now tap the opposite corner"
+        return VStack {
+            HStack(spacing: 10) {
+                Text("CAPTURE").font(.pixel(14)).foregroundColor(Color(hex: 0x60E0FF))
+                Text(verbatim: step).font(.pixel(12, .semibold)).foregroundColor(Color.white)
+                SmallButton(title: "CANCEL", color: ModUI.red) { game.cancelCapture() }
+            }
+            .padding(10)
+            .background(Color.black.opacity(0.7))
+            .cornerRadius(6)
+            .padding(.top, 58)
+            Spacer()
+        }
+    }
+}
+
+/// Saving a captured structure: its name, the mod it goes into, where it appears
+struct CapturePanel: View {
+    @ObservedObject var game: Game
+    @State var name: String = "My Structure"
+    @State var target: Int = 0
+    @State var newModName: String = "My Structures"
+    @State var clearAir: Bool = true
+    @State var placement: Int = 0
+    @State var entries: [ModEntry] = []
+    @State var note: String = ""
+    @State var started: Bool = false
+
+    var body: some View {
+        let cap: (ModStructure, Int) = game.captureStructure(clearAir: clearAir)
+        let cat: ModCatalog = ModCatalog.installed()
+        let names: [String] = ["New mod"] + entries.map { $0.pack?.name ?? $0.id }
+        return ScrollView {
+            VStack(spacing: 10) {
+                Text("SAVE STRUCTURE").font(.pixel(22)).foregroundColor(Color.white)
+                StructurePreview(st: cap.0, catalog: cat).frame(height: 200)
+                Text(verbatim: joinText(String(cap.0.w), " x ", String(cap.0.h), " blocks", cap.1 > 0 ? joinText(" · ", String(cap.1), " left out (machines, bedrock, the rift gate)") : ""))
+                    .font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+                ModTextField(label: "Name", text: $name, placeholder: "Ruined Hut")
+                Text("Save into").font(.pixel(12, .bold)).foregroundColor(ModUI.dim).frame(maxWidth: .infinity, alignment: .leading)
+                ChoiceRow(options: names, selected: $target, columns: 3)
+                if target == 0 { ModTextField(label: "New mod's name", text: $newModName, placeholder: "My Structures") }
+                Text("Where it appears").font(.pixel(12, .bold)).foregroundColor(ModUI.dim).frame(maxWidth: .infinity, alignment: .leading)
+                ChoiceRow(options: ModPlacement.allCases.map { $0.name }, selected: $placement, columns: 3)
+                ModToggle(label: "Empty space clears the ground", help: "Off: only its blocks are placed and the ground around them stays", isOn: $clearAir)
+                if !note.isEmpty { Text(verbatim: note).font(.pixel(12, .semibold)).foregroundColor(Color(hex: 0xFFB060)) }
+                HStack(spacing: 10) {
+                    PixelButton(title: "SAVE", color: ModUI.accent) {
+                        let id: String = target > 0 && target - 1 < entries.count ? entries[target - 1].id : ""
+                        let msg: String = game.saveCapture(name: name, modID: id, newModName: newModName, placement: ModPlacement(rawValue: placement) ?? .surface, clearAir: clearAir)
+                        if game.capturing { note = msg } else { game.say(msg, 5.0) }
+                    }
+                    PixelButton(title: "PICK AGAIN", color: ModUI.blue) {
+                        game.capA = nil
+                        game.capB = nil
+                        game.showCapture = false
+                        game.bumpHUD()
+                    }
+                    PixelButton(title: "CANCEL", color: ModUI.red) { game.cancelCapture() }
+                }
+            }
+            .padding(16)
+            .frame(maxWidth: 620)
+            .background(ModUI.panel)
+            .cornerRadius(10)
+            .padding(20)
+        }
+        .onAppear {
+            if started { return }
+            started = true
+            entries = ModStore.entries().filter { $0.pack != nil }
+            placement = cap.0.placement.rawValue
+        }
     }
 }
 
@@ -37365,8 +38873,13 @@ struct GameView: View {
     var body: some View {
         ZStack {
             worldLayer
-            if !game.showInventory && !game.showMap && !game.showJournal && !game.showWeather && !game.showPower && !game.dead {
+            if !game.showInventory && !game.showMap && !game.showJournal && !game.showWeather && !game.showPower && !game.showCapture && !game.dead {
                 HUDView(game: game, hud: game.hud)
+            }
+            if game.capturing && !game.showCapture && !game.paused { CaptureBar(game: game, hud: game.hud) }
+            if game.showCapture {
+                Color.black.opacity(0.45).ignoresSafeArea()
+                CapturePanel(game: game)
             }
             if game.showWeather {
                 Color.black.opacity(0.4).ignoresSafeArea()

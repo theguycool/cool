@@ -463,6 +463,620 @@ do {
     check(!ModRuntime.shared.active && Tile.mod00.name == "Unused Mod Block" && RecipeBook.all.count == RecipeBook.base.count, "leaving the world switches every mod off again")
 }
 
+// ---------------------------------------------------------------- stage 3: creatures
+func attack(_ k: ModAttackKind, _ dmg: Double, range: Double = 1.6, cd: Double = 1.0, windup: Double = 0.3) -> ModAttack {
+    var a = ModAttack(); a.kind = k; a.damage = dmg; a.range = range; a.cooldown = cd; a.windup = windup
+    return a
+}
+func beast(_ id: String, _ cat: ModMobCategory, _ attacks: [ModAttack], base: MobKind = .zombie) -> ModMob {
+    var m = ModMob(); m.id = id; m.name = id.capitalized; m.category = cat; m.base = base.rawValue
+    m.hp = 60; m.damage = 0; m.speed = 2.5; m.attacks = attacks; m.spawn.enabled = false
+    m.behavior = ModBehavior()
+    if cat == .hostile || cat == .boss { m.behavior.chase = true; m.behavior.attackPlayer = true }
+    return m
+}
+func beastMod() -> ModPack {
+    var p = ModPack(); p.id = "beasts"; p.name = "Beasts"; p.author = "Tester"
+    var brute = beast("brute", .hostile, [attack(.melee, 15, range: 1.4, windup: 0.4)])
+    brute.scale = 1.5; brute.defense = 0.5; brute.knockResist = 1.0
+    brute.drops = [ModDrop(.mat(.coal), 2, 2, 1.0)]
+    var spit = beast("spitter", .hostile, [attack(.ranged, 8, range: 14, cd: 1.2)])
+    spit.attacks[0].aim = .atTarget; spit.attacks[0].shot = ProjKind.bullet.rawValue; spit.attacks[0].speed = 24
+    spit.behavior.runAway = true
+    var glob = ModProjectile(); glob.id = "glob"; glob.name = "Glob"; glob.explode = 2.0; glob.breakBlocks = true
+    p.projectiles = [glob]
+    var bomber = beast("bomber", .hostile, [attack(.ranged, 10, range: 14, cd: 1.2)])
+    bomber.attacks[0].projectile = "glob"
+    let charger = beast("charger", .hostile, [attack(.charge, 12, range: 3, cd: 2.0, windup: 0.3)])
+    var stomper = beast("stomper", .hostile, [attack(.stomp, 10, range: 4, cd: 2.0, windup: 0.3)])
+    stomper.attacks[0].radius = 2
+    let leaper = beast("leaper", .hostile, [attack(.jump, 12, range: 3, cd: 2.0, windup: 0.2)])
+    var whirl = beast("whirler", .hostile, [attack(.area, 9, cd: 1.5, windup: 0.3)])
+    whirl.attacks[0].radius = 2.5
+    var flurry = beast("flurry", .hostile, [attack(.multiHit, 4, range: 1.5, cd: 2.0, windup: 0.1)])
+    flurry.attacks[0].hits = 3
+    var bunny = beast("bunny", .passive, [], base: .chicken)
+    bunny.hp = 10; bunny.behavior.runAway = true; bunny.behavior.retaliate = false
+    var grump = beast("grump", .neutral, [attack(.melee, 10, range: 1.5, windup: 0.2)])
+    grump.behavior.retaliate = true; grump.behavior.chase = true
+    var guardian = beast("guardian", .neutral, [attack(.melee, 20, range: 1.6, cd: 0.6, windup: 0.1)])
+    guardian.behavior.attackMobs = true; guardian.behavior.retaliate = false; guardian.speed = 4
+    var sentry = beast("sentry", .neutral, [attack(.melee, 10, range: 1.5, windup: 0.2)])
+    sentry.behavior.defendArea = true; sentry.behavior.defendRadius = 6; sentry.behavior.wander = false; sentry.behavior.retaliate = false
+    var shepherd = beast("shepherd", .neutral, [])
+    shepherd.behavior.guardKey = "beasts:bunny"; shepherd.behavior.retaliate = false; shepherd.speed = 3.5
+    var moth = beast("moth", .flying, [attack(.melee, 6, range: 1.2, windup: 0.1)], base: .bat)
+    moth.behavior.fly = true; moth.behavior.chase = true; moth.behavior.attackPlayer = true; moth.speed = 4
+    var eel = beast("eel", .water, [], base: .fish)
+    eel.behavior.swim = true; eel.behavior.wander = true
+    var king = beast("king", .boss, [attack(.melee, 18, range: 2.0, cd: 1.6), attack(.stomp, 14, range: 4, cd: 4, windup: 0.8)])
+    king.hp = 900; king.scale = 2.2; king.loot = "hoard"; king.glow = 7
+    var hoard = ModLootTable(); hoard.id = "hoard"; hoard.name = "Hoard"; hoard.rolls = 1
+    hoard.entries = [ModLootEntry(.mat(.goldBar), 3, 3, 0)]
+    p.loot = [hoard]
+    var walker = beast("walker", .neutral, [])
+    walker.behavior.patrol = true; walker.behavior.patrolRange = 4; walker.behavior.wander = false; walker.behavior.retaliate = false
+    var hot = beast("salamander", .hostile, [attack(.melee, 5)])
+    hot.fireproof = true
+    var night = beast("nightling", .hostile, [attack(.melee, 5)])
+    night.spawn.enabled = true; night.spawn.when = 2; night.spawn.place = .surface; night.spawn.weight = 10; night.spawn.maxNearby = 8
+    var art = beast("doodle", .neutral, [])
+    art.customArt = true
+    art.frames = [painted(10, 12, 0x30C0F0), painted(10, 12, 0x30A0E0), painted(10, 12, 0x3080D0), painted(10, 12, 0xF04040)]
+    var pal = beast("pal", .neutral, [])
+    pal.behavior.followPlayer = true; pal.behavior.retaliate = false; pal.speed = 3
+    var statue = beast("statue", .hostile, [attack(.melee, 5, range: 1.4, windup: 0.2)])
+    statue.behavior.standStill = true; statue.behavior.chase = false
+    var ghoul = beast("ghoul", .hostile, [attack(.melee, 5)])
+    ghoul.behavior.burnsInSun = true
+    var homebody = beast("homebody", .neutral, [])
+    homebody.behavior.stayInBiome = true; homebody.behavior.retaliate = false
+    p.mobs = [brute, spit, bomber, charger, stomper, leaper, whirl, flurry, bunny, grump, guardian, sentry, shepherd, moth, eel, king, walker, hot, night, art,
+              pal, statue, ghoul, homebody]
+    return p
+}
+/// a fresh round in the same arena: nobody about, the player healed and in the middle
+func reset(_ g: Game, _ cx: Double) {
+    g.mobs.removeAll(); g.projectiles.removeAll(); g.dangerZones.removeAll(); g.drops.removeAll()
+    g.pb.x = cx; g.pb.y = 100; g.pb.vx = 0; g.pb.vy = 0
+    g.hp = 400; g.invuln = 0; g.dead = false
+}
+func spawn(_ g: Game, _ id: String, _ dx: Double, _ y: Double = 100) -> Mob {
+    let m = g.addCustomMob(ModRuntime.shared.mobSlot["beasts:" + id]!, g.pb.x + dx, y)!
+    m.homeX = m.b.x; m.homeY = m.b.y
+    g.mobGrid.rebuild(g.mobs)
+    return m
+}
+/// runs frames until `done` (or the limit); returns the frames taken
+@discardableResult
+func run(_ g: Game, _ limit: Int, _ done: () -> Bool) -> Int {
+    var n = 0
+    while n < limit && !done() { frame(g); n += 1 }
+    return n
+}
+
+print("== custom creatures")
+do {
+    let p = beastMod()
+    let g = arena([p])
+    let rt = ModRuntime.shared
+    let cx = g.pb.x
+    check(rt.mobs.count == 24 && rt.spawnRules.count == 1, "every creature of the mod is ready, and the one that spawns has its rule")
+
+    // a brute: size, health, side, a telegraphed blow
+    reset(g, cx)
+    let brute = spawn(g, "brute", 6)
+    check(brute.kind == .custom && brute.def.name == "Brute" && abs(brute.b.h - mobDef(.zombie).h * 1.5) < 0.01 && abs(brute.maxHP - 60) < 0.01,
+          "a custom creature appears with its name, its size and its health")
+    check(g.faction(of: brute) == .hostile && brute.def.hostile, "a hostile creature is on the monsters' side")
+    var warned = false
+    var hp0 = g.hp
+    var n = run(g, 600) { if !g.dangerZones.isEmpty { warned = true }; return g.hp < hp0 }
+    check(g.hp < hp0 && warned, "it notices the player, walks up, shows where its blow will land, and the blow hurts (" + String(n) + " frames, " + String(format: "%.0f", hp0 - g.hp) + " damage)")
+    let bhp = brute.hp
+    var hitInfo = DamageInfo(amount: 20, type: .melee, source: .player); hitInfo.knock = 9; hitInfo.dirX = 1
+    g.applyMobDamage(brute, hitInfo)
+    check(abs((bhp - brute.hp) - 20 * g.dmgOutMult * 0.5) < 0.01, "its toughness shrugs off half of a sword blow (" + String(format: "%.1f", bhp - brute.hp) + ")")
+    check(abs(brute.b.vx) < 0.01, "full knockback resistance: the blow does not push it")
+    g.applyMobDamage(brute, DamageInfo(amount: 9999, type: .melee, source: .player))
+    check(brute.hp <= 0 && g.drops.contains { $0.stack.item == .mat(.coal) && $0.stack.count == 2 }, "killed, it drops what its maker set")
+
+    // a fireproof one
+    reset(g, cx)
+    let sal = spawn(g, "salamander", 10)
+    let shp = sal.hp
+    var lava = DamageInfo(amount: 30, type: .lava, source: .environment); lava.originX = sal.b.x
+    check(!g.applyMobDamage(sal, lava) && sal.hp == shp && g.heatImmune(sal), "a fireproof creature takes nothing from lava or fire")
+
+    // ranged: aims and hits; keeps its distance
+    reset(g, cx)
+    let spitter = spawn(g, "spitter", 9)
+    hp0 = g.hp
+    var fired = false
+    n = run(g, 600) { if g.projectiles.contains(where: { $0.owner == spitter.id }) { fired = true }; return g.hp < hp0 }
+    check(fired && g.hp < hp0, "a shooter fires at the player and its shot hurts (" + String(n) + " frames)")
+    reset(g, cx)
+    let kiter = spawn(g, "spitter", 3)
+    frames(g, 150)
+    check(abs(kiter.b.x - g.pb.x) > 4.5, "a shooter that runs away keeps its distance (" + String(format: "%.1f", abs(kiter.b.x - g.pb.x)) + " blocks away)")
+
+    // a creature's exploding custom shot never breaks blocks
+    reset(g, cx)
+    let bomber = spawn(g, "bomber", 9)
+    let wx = Int(cx) + 4
+    g.world.set(wx, 99, .stone)
+    var shotP = Projectile(kind: .spit, x: Double(wx) + 0.5, y: 99.5, vx: 0, vy: 0, dmg: 10, fromPlayer: false, gravity: 0)
+    shotP.source = .mob(bomber, .hostile); shotP.mod = rt.shotIndex["beasts:glob"]!; shotP.owner = bomber.id
+    g.modShotLanded(shotP, Double(wx) + 0.5, 99.5, mob: nil, player: false)
+    check(g.world.tile(wx, 99) == .stone, "a creature's blast does not break blocks, even if its shot is set to")
+    g.world.set(wx, 99, .air)
+
+    // charge, stomp, leap, area, flurry
+    reset(g, cx)
+    let charger = spawn(g, "charger", 6)
+    hp0 = g.hp
+    var charged = false
+    n = run(g, 600) { if charger.st == 5 { charged = true }; return g.hp < hp0 }
+    check(charged && g.hp < hp0, "a charger rushes at the player and the rush hurts (" + String(n) + " frames)")
+    reset(g, cx)
+    let stomper = spawn(g, "stomper", 5)
+    hp0 = g.hp
+    var waves = false
+    n = run(g, 600) { if g.projectiles.contains(where: { $0.kind == .shock && $0.owner == stomper.id }) { waves = true }; return g.hp < hp0 && waves }
+    check(waves && g.hp < hp0, "a stomp sends shockwaves along the ground and hurts (" + String(n) + " frames)")
+    reset(g, cx)
+    let leaper = spawn(g, "leaper", 6)
+    hp0 = g.hp
+    var flew = false
+    n = run(g, 600) { if leaper.st == 7 && !leaper.b.onGround { flew = true }; return g.hp < hp0 }
+    check(flew && g.hp < hp0 && abs(leaper.b.x - g.pb.x) < 3.0, "a jump attack leaps at the player and lands on them (" + String(n) + " frames)")
+    reset(g, cx)
+    _ = spawn(g, "whirler", 2)
+    hp0 = g.hp
+    n = run(g, 600) { g.hp < hp0 }
+    check(g.hp < hp0, "an area burst hurts everyone around it (" + String(n) + " frames)")
+    reset(g, cx)
+    let fl = spawn(g, "flurry", 1.2)
+    let pig = g.addMob(.pig, g.pb.x + 0.6, 100)
+    pig.hp = 200; pig.maxHP = 200
+    var blows = 0
+    var last = pig.hp
+    run(g, 600) {
+        pig.b.x = g.pb.x + 0.6; pig.b.vx = 0
+        if pig.hp < last { blows += 1; last = pig.hp }
+        return blows >= 3 || fl.hp <= 0
+    }
+    check(blows >= 3, "a multi-hit attack lands blow after blow (" + String(blows) + " on a pig in the way)")
+
+    // passive and neutral
+    reset(g, cx)
+    let bunny = spawn(g, "bunny", 3)
+    hp0 = g.hp
+    frames(g, 90)
+    check(abs(bunny.b.x - g.pb.x) > 5.0 && g.hp == hp0, "a timid animal runs from the player and never hurts anyone")
+    reset(g, cx)
+    let grump = spawn(g, "grump", 4)
+    hp0 = g.hp
+    frames(g, 180)
+    let calm = g.hp == hp0 && grump.ai == .idle
+    var poke = DamageInfo(amount: 2, type: .melee, source: .player); poke.originX = g.pb.x
+    g.applyMobDamage(grump, poke)
+    n = run(g, 600) { g.hp < hp0 }
+    check(calm && g.hp < hp0, "a neutral creature leaves the player alone until it is hit, then fights back (" + String(n) + " frames)")
+
+    // a guardian: fights monsters, never the player
+    reset(g, cx)
+    let guardian = spawn(g, "guardian", 22)
+    let zombie = g.addMob(.zombie, g.pb.x + 27, 100)
+    zombie.hp = 400; zombie.maxHP = 400
+    let zhp = zombie.hp
+    hp0 = g.hp
+    n = run(g, 900) { zombie.hp < zhp }
+    check(g.faction(of: guardian) == .ally && zombie.hp < zhp && g.hp == hp0, "a guardian hunts a monster near it (" + String(n) + " frames) and leaves the player alone")
+    check(!g.applyMobDamage(guardian, DamageInfo(amount: 10, type: .melee, source: .player)), "the player's blows can't hurt a guardian by mistake")
+
+    // defending an area
+    reset(g, cx)
+    let sentry = spawn(g, "sentry", 10)
+    hp0 = g.hp
+    frames(g, 120)
+    let stayed = g.hp == hp0 && abs(sentry.b.x - sentry.homeX) < 2.5
+    g.pb.x = sentry.b.x - 3
+    n = run(g, 600) { g.hp < hp0 }
+    check(stayed && g.hp < hp0, "a creature that defends an area ignores the player outside it and attacks inside it (" + String(n) + " frames)")
+    g.pb.x = sentry.homeX - 25
+    frames(g, 400)
+    check(abs(sentry.b.x - sentry.homeX) < 4.0, "when the player leaves, it goes back to its post (" + String(format: "%.1f", abs(sentry.b.x - sentry.homeX)) + " blocks off)")
+
+    // a guard stays beside the creature it guards
+    reset(g, cx)
+    let lamb = spawn(g, "bunny", -20)
+    let shepherd = spawn(g, "shepherd", -12)
+    frames(g, 240)
+    let near1 = abs(shepherd.b.x - lamb.b.x) < 5.0
+    lamb.b.x -= 12
+    lamb.homeX = lamb.b.x
+    frames(g, 300)
+    check(near1 && abs(shepherd.b.x - lamb.b.x) < 5.0 && shepherd.ward === lamb, "a guard finds the creature it guards and follows it")
+
+    // patrol
+    reset(g, cx)
+    let walker = spawn(g, "walker", -20)
+    var lo = walker.b.x
+    var hi = walker.b.x
+    run(g, 900) { lo = min(lo, walker.b.x); hi = max(hi, walker.b.x); return false }
+    check(hi - walker.homeX > 3.0 && walker.homeX - lo > 3.0 && hi - walker.homeX < 6.0 && walker.homeX - lo < 6.0,
+          "a patrolling creature walks its beat back and forth (" + String(format: "%.1f to %.1f", lo - walker.homeX, hi - walker.homeX) + ")")
+
+    // flying and swimming
+    reset(g, cx)
+    let moth = spawn(g, "moth", 9, 94)
+    var lowest: Double = 0
+    hp0 = g.hp
+    n = run(g, 600) { lowest = max(lowest, moth.b.y); return g.hp < hp0 }
+    check(moth.def.flying && lowest < 99.95 && g.hp < hp0, "a flying creature flies at the player without landing, and hurts (" + String(n) + " frames)")
+    reset(g, cx)
+    let px = Int(cx)
+    for x in (px + 10)...(px + 22) { for y in 95...99 { g.world.set(x, y, .water) } }
+    for y in 94...99 { g.world.set(px + 9, y, .stone); g.world.set(px + 23, y, .stone) }
+    let eel = spawn(g, "eel", 16, 98.5)
+    eel.b.inWater = true
+    let ex0 = eel.b.x
+    var dryFrames = 0
+    var farthest = 0.0
+    run(g, 600) {
+        if g.world.tile(Int(floor(eel.b.x)), Int(floor(eel.b.y - eel.b.h * 0.5))) != .water { dryFrames += 1 }
+        farthest = max(farthest, abs(eel.b.x - ex0))
+        return false
+    }
+    check(dryFrames == 0 && farthest > 0.5 && eel.hp > 0, "a water creature swims about and stays in the water (" + String(dryFrames) + " frames dry, went " + String(format: "%.1f", farthest) + " blocks)")
+    for x in (px + 9)...(px + 23) { for y in 95...99 { g.world.set(x, y, .air) } }
+
+    // following, standing still, the sun, the biome
+    reset(g, cx)
+    let pal = spawn(g, "pal", 14)
+    frames(g, 240)
+    let close1 = abs(pal.b.x - g.pb.x) < 4.5
+    g.pb.x -= 12
+    frames(g, 300)
+    check(close1 && abs(pal.b.x - g.pb.x) < 4.5 && g.hp == 400, "a creature that follows the player keeps close to them, without attacking")
+    reset(g, cx)
+    let statue = spawn(g, "statue", 5)
+    frames(g, 240)
+    let still = abs(statue.b.x - statue.homeX) < 0.3
+    g.pb.x = statue.b.x - 1.0
+    hp0 = g.hp
+    n = run(g, 300) { g.hp < hp0 }
+    check(still && g.hp < hp0 && abs(statue.b.x - statue.homeX) < 0.6, "a creature that stands still stays put, and strikes when the player comes within reach (" + String(n) + " frames)")
+    reset(g, cx)
+    g.settings.weatherOn = false
+    let ghoul = spawn(g, "ghoul", -25)
+    frames(g, 3)
+    check(!g.inSunlight(ghoul) || ghoul.burn > 0, "a creature that burns in sunlight catches fire in the open by day" + (g.inSunlight(ghoul) ? "" : " (not in sunlight here)"))
+    g.settings.weatherOn = true
+    reset(g, cx)
+    let homebody = spawn(g, "homebody", -20)
+    homebody.homeBiome = 99
+    homebody.homeX = homebody.b.x - 12
+    let hx0 = homebody.b.x
+    frames(g, 240)
+    check(homebody.b.x < hx0 - 4.0, "a creature that keeps to its biome heads back when it finds itself outside it")
+
+    // a boss
+    reset(g, cx)
+    let king = spawn(g, "king", 14)
+    g.refreshBossBar()
+    check(king.isBoss && g.activeBoss === king && g.bossBarName == "King", "a custom boss gets the boss health bar")
+    check(g.faction(of: king) == .boss, "a boss is on its own side")
+    g.applyMobDamage(king, DamageInfo(amount: 99999, type: .melee, source: .player))
+    check(king.hp <= 0 && g.drops.contains { $0.stack.item == .mat(.goldBar) && $0.stack.count == 3 } && (g.message ?? "").contains("King"),
+          "beaten, it rolls its loot table and the game says so")
+
+    // art
+    reset(g, cx)
+    let doodle = spawn(g, "doodle", 5)
+    let set1 = Art.shared.mobSet(doodle)
+    let set2 = Art.shared.mobSet(spawn(g, "brute", 8))
+    check(set1.right.count == 4 && set1.anim.attack == 3 && set2.right.count == Art.shared.creaturePreview(.zombie).right.count,
+          "custom art gives four frames (with an attack frame); a recoloured body keeps its base's frames")
+
+    // limits
+    reset(g, cx)
+    var made = 0
+    for k in 0..<40 { if g.addCustomMob(rt.mobSlot["beasts:bunny"]!, g.pb.x - 30 + Double(k), 100) != nil { made += 1 } }
+    check(made == ModLimits.maxActiveMobs, "no more than " + String(ModLimits.maxActiveMobs) + " custom creatures can be about at once")
+
+    // spawning at night beside the game's own creatures
+    reset(g, cx)
+    g.monstersEnabled = true
+    g.pauseSpawning = false
+    g.timeOfDay = 0.75
+    var got: Mob? = nil
+    var tries = 0
+    while got == nil && tries < 400 {
+        g.spawnTimer = 0; g.monsterSpawnCD = 0
+        g.updateSpawning(0.01)
+        got = g.mobs.first { $0.kind == .custom }
+        if g.mobs.count > 6 { g.mobs.removeAll() }
+        tries += 1
+    }
+    check(got?.def.name == "Nightling" && got?.hunter == true, "at night the mod's creature spawns among the game's monsters and comes hunting (" + String(tries) + " tries)")
+    g.timeOfDay = 0.25
+    g.monstersEnabled = false
+    g.pauseSpawning = true
+    ModRuntime.deactivate()
+}
+
+// ---------------------------------------------------------------- stage 4: recipes, loot, ores
+func smithMod() -> ModPack {
+    var p = ModPack(); p.id = "smith"; p.name = "Smithing"; p.author = "Tester"
+    var gem = ModItem(); gem.id = "gem"; gem.name = "Gem"; gem.kind = .material; gem.icon = painted(16, 16, 0x40E0A0)
+    var ring = ModItem(); ring.id = "ring"; ring.name = "Gem Ring"; ring.kind = .material; ring.icon = painted(16, 16, 0xE0E040)
+    var forge = ModBlock(); forge.id = "forge"; forge.name = "Gem Forge"; forge.art = painted(8, 8, 0x804020); forge.function = .station
+    var ore = ModBlock(); ore.id = "gem_ore"; ore.name = "Gem Ore"; ore.art = painted(8, 8, 0x30A070); ore.hardness = 2; ore.tier = 2
+    var ash = ModBlock(); ash.id = "ash_ore"; ash.name = "Ash Ore"; ash.art = painted(8, 8, 0x703030)
+    p.items = [gem, ring]; p.blocks = [forge, ore, ash]
+    var r1 = ModRecipe(); r1.id = "r_ring"; r1.out = .custom("smith:ring"); r1.count = 1
+    r1.cost = [ModCost(.custom("smith:gem"), 2), ModCost(.mat(.goldBar), 1)]; r1.station = -1; r1.stationBlock = "forge"
+    var r2 = ModRecipe(); r2.id = "r_forge"; r2.out = .custom("smith:forge"); r2.cost = [ModCost(.block(.stone), 10)]; r2.station = 0
+    r2.cat = RecipeCat.basic.rawValue
+    // loops: a plank back into a log would turn one log into four with the game's own recipe
+    var r3 = ModRecipe(); r3.id = "r_unplank"; r3.out = .block(.log); r3.cost = [ModCost(.block(.planks), 1)]
+    // four planks back into a log gains nothing: allowed
+    var r4 = ModRecipe(); r4.id = "r_fair"; r4.out = .block(.log); r4.cost = [ModCost(.block(.planks), 4)]
+    // two of the mod's own: 1 gem -> 2 rings, 1 ring -> 1 gem doubles gems
+    var r5 = ModRecipe(); r5.id = "r_split"; r5.out = .custom("smith:ring"); r5.count = 2; r5.cost = [ModCost(.custom("smith:gem"), 1)]
+    var r6 = ModRecipe(); r6.id = "r_join"; r6.out = .custom("smith:gem"); r6.cost = [ModCost(.custom("smith:ring"), 1)]
+    p.recipes = [r1, r2, r3, r4, r5, r6]
+    var t = ModLootTable(); t.id = "gems"; t.name = "Gems"; t.rolls = 1; t.nothing = 2
+    t.entries = [ModLootEntry(.custom("smith:gem"), 1, 3, 0), ModLootEntry(.mat(.goldBar), 1, 1, 1), ModLootEntry(.mat(.diamond), 1, 1, 2), ModLootEntry(.custom("smith:ring"), 1, 1, 3)]
+    t.chestChance = 1.0
+    p.loot = [t]
+    var o = ModOre(); o.id = "o_gem"; o.name = "Gem veins"; o.block = "gem_ore"; o.minY = 200; o.maxY = 320; o.veins = 3; o.size = 8; o.host = 0
+    var u = ModOre(); u.id = "o_ash"; u.name = "Ash veins"; u.block = "ash_ore"; u.dim = 1; u.minY = 205; u.maxY = 300; u.veins = 4; u.size = 10; u.host = 0
+    p.ores = [o, u]
+    return p
+}
+
+print("== recipes, loot and ores")
+do {
+    var checked: ModPack = smithMod()
+    let rep: ModReport = ModValidator.check(&checked, known: [:])
+    check(rep.disabled.contains("r_unplank") && !rep.disabled.contains("r_fair"),
+          "a recipe that loops with the game's own into more than it started with is switched off; a fair one is kept")
+    check(rep.disabled.contains("r_split") != rep.disabled.contains("r_join"), "of two recipes that double each other's items, one is switched off")
+    check(rep.issues.contains { $0.text.contains("from nothing") }, "the report says why")
+
+    let g = arena([smithMod()])
+    let rt = ModRuntime.shared
+    let ring: Recipe? = RecipeBook.all.first { $0.out == .custom("smith:ring") && $0.outCount == 1 }
+    let forgeT: Tile = rt.tile("smith:forge")!
+    let forgeR: Recipe? = RecipeBook.all.first { $0.out == .block(forgeT) }
+    check(ring != nil && forgeR != nil && ring?.cat == .mods && forgeR?.cat == .basic && RecipeBook.all.count == RecipeBook.base.count + rt.recipes.count,
+          "the mod's recipes join the crafting book under the tabs chosen for them")
+    check(!RecipeBook.all.contains { $0.out == .block(.log) && $0.cost.first?.n == 1 && $0.cost.first?.item == .block(.planks) }, "the looping recipe is not in the book")
+    hold(g, .block(.stone), 12)
+    g.craft(forgeR!)
+    check(g.inv.total(.block(forgeT)) == 1 && g.inv.total(.block(.stone)) == 2, "a recipe by hand uses its ingredients and gives the custom block")
+    g.inv.slots[1] = Stack(item: .custom("smith:gem"), count: 5)
+    g.inv.slots[2] = Stack(item: .mat(.goldBar), count: 2)
+    let away: Bool = !g.canCraft(ring!)
+    let fx = Int(g.pb.x) + 2
+    g.world.set(fx, 99, rt.tile("smith:forge")!)
+    let near: Bool = g.canCraft(ring!)
+    g.craft(ring!)
+    check(away && near && g.inv.total(.custom("smith:ring")) == 1 && g.inv.total(.custom("smith:gem")) == 3 && g.inv.total(.mat(.goldBar)) == 1,
+          "a recipe that needs the mod's own station works only beside it")
+    check(!g.crafterRecipes().contains { $0.out == .custom("smith:ring") }, "an auto crafter can't make a recipe that needs a mod station")
+    g.world.set(fx, 99, .air)
+
+    // loot: the odds the editor shows are the odds you get
+    guard let table = rt.loot["smith:gems"] else { check(false, "the loot table is ready"); exit(1) }
+    var rng = RNG(12345)
+    var counts: [Int] = [0, 0, 0, 0]
+    var nothing = 0
+    let rolls = 40000
+    for _ in 0..<rolls {
+        let got: [Stack] = rt.roll("smith:gems", &rng)
+        if got.isEmpty { nothing += 1; continue }
+        if let i = table.entries.firstIndex(where: { $0.item == got[0].item }) { counts[i] += 1 }
+    }
+    var worst: Double = 0
+    for i in 0..<4 { worst = max(worst, abs(Double(counts[i]) / Double(rolls) - table.chance(i))) }
+    let pNothing: Double = 2.0 / table.totalWeight
+    check(worst < 0.01 && abs(Double(nothing) / Double(rolls) - pNothing) < 0.01,
+          "common, uncommon, rare and very rare come up as often as the table says (worst gap " + String(format: "%.4f", worst) + ")")
+    check(table.chance(0) > table.chance(1) && table.chance(1) > table.chance(2) && table.chance(2) > table.chance(3), "rarer entries are rarer")
+    // chests: the table is added to a chest, the same every time
+    let c1: [Stack] = g.world.chestItems(Int(g.pb.x) - 7, 90)
+    let ids: Set<String> = Set(table.entries.map { $0.item.name })
+    let has1: Bool = c1.contains { ids.contains($0.item.name) }
+    let g2 = arena([smithMod()])
+    let c2: [Stack] = g2.world.chestItems(Int(g.pb.x) - 7, 90)
+    check(has1 && c1.map { $0.item.name + String($0.count) } == c2.map { $0.item.name + String($0.count) } && c1.count <= 27,
+          "a loot table set to turn up in chests is in a chest, the same contents every time")
+
+    // ores: in the chosen depths, only in rock, the same every time, both realms
+    let gemT: Tile = rt.tile("smith:gem_ore")!
+    let ashT: Tile = rt.tile("smith:ash_ore")!
+    var total = 0
+    var outside = 0
+    var badHost = 0
+    var same = true
+    let base0 = Int(g.pb.x) / chunkW + 40
+    for k in 0..<24 {
+        let c: Chunk = generateChunk(g.gen, .overworld, base0 + k)
+        let again: Chunk = generateChunk(g.gen, .overworld, base0 + k)
+        if c.tiles != again.tiles { same = false }
+        for lx in 0..<chunkW {
+            for y in 0..<c.H where c.get(lx, y) == gemT {
+                total += 1
+                if y < 200 || y > 320 { outside += 1 }
+            }
+        }
+    }
+    // the same chunks without the mod: every ore tile was rock before
+    ModRuntime.deactivate()
+    let gPlain = Game(mode: .survival, infinite: true, seed: 4242, settings: Settings())
+    ModRuntime.activate([smithMod()], world: g.modInfo)
+    for k in 0..<24 {
+        let plain: Chunk = generateChunk(gPlain.gen, .overworld, base0 + k)
+        let modded: Chunk = generateChunk(g.gen, .overworld, base0 + k)
+        for i in 0..<plain.tiles.count where plain.tiles[i] != modded.tiles[i] {
+            let was: Tile = Tile.make(plain.tiles[i])
+            if Tile.make(modded.tiles[i]) != gemT || !modOreHost(was, 0) { badHost += 1 }
+        }
+    }
+    check(total > 24 * 8 && outside == 0, "custom ore veins appear in the chosen depths (" + String(total) + " blocks in 24 chunks)")
+    check(badHost == 0, "veins only take the place of rock; nothing else in the chunk changes")
+    check(same, "a chunk comes out the same every time it is made")
+    var ash = 0
+    for k in 0..<12 {
+        let c: Chunk = generateChunk(g.gen, .umbral, base0 + k)
+        for lx in 0..<chunkW { for y in 0..<c.H where c.get(lx, y) == ashT { ash += 1 } }
+    }
+    check(ash > 0, "an ore set for the Umbral Realm appears there (" + String(ash) + " blocks)")
+    ModRuntime.deactivate()
+    let plainAgain: Chunk = generateChunk(gPlain.gen, .overworld, base0)
+    var stray = 0
+    for i in 0..<plainAgain.tiles.count where Tile.make(plainAgain.tiles[i]).isMod { stray += 1 }
+    check(stray == 0, "with no mods, generation is the game's own")
+}
+
+// ---------------------------------------------------------------- stage 5: structures
+func hutMod(_ placement: ModPlacement = .surface) -> ModPack {
+    var p = smithMod()
+    let B: Int = Int(Tile.brick.rawValue)
+    let C: Int = Int(Tile.chest.rawValue)
+    var st = ModStructure(); st.id = "hut"; st.name = "Gem Hut"; st.w = 5; st.h = 4
+    st.cells = [-1, B, B, B, -1,
+                B, 0, 1000, 0, B,
+                B, 0, C, 0, B,
+                B, B, B, B, B]
+    st.palette = ["smith:forge"]
+    st.placement = placement; st.chance = 1.0; st.spacing = 64; st.loot = "gems"
+    st.minY = 260; st.maxY = 300
+    p.structures = [st]
+    p.loot[0].chestChance = 0
+    return p
+}
+
+print("== structures")
+do {
+    // capture what was built
+    let g = arena([sampleMod()])
+    let rt = ModRuntime.shared
+    let px = Int(g.pb.x) + 6
+    let lamp: Tile = rt.tile("gemmod:lamp")!
+    for x in px...(px + 4) { g.world.set(x, 99, .planks); g.world.set(x, 95, .planks) }
+    for y in 96...98 { g.world.set(px, y, .brick); g.world.set(px + 4, y, .brick) }
+    g.world.set(px + 2, 98, .chest)
+    g.world.set(px + 1, 96, lamp)
+    g.world.set(px + 3, 96, .battery)
+    g.world.set(px + 2, 96, .bedrock)
+    g.startCapture()
+    g.captureTap(Double(px) + 0.5, 95.5)
+    check(g.capturing && !g.showCapture, "capture mode starts, and the first tap sets a corner")
+    g.pointerDown(Double(px + 4) + 0.5, 99.5)
+    g.pointerUp()
+    check(g.showCapture && g.world.tile(px + 4, 99) == .planks, "the second tap opens the save panel (and breaks nothing)")
+    let cap = g.captureStructure(clearAir: true)
+    let st = cap.0
+    check(st.w == 5 && st.h == 5 && st.cells.count == 25, "the captured structure has the selection's size (" + String(st.w) + " x " + String(st.h) + ")")
+    check(st.cell(2, 3) == Int(Tile.chest.rawValue) && st.cell(0, 1) == Int(Tile.brick.rawValue) && st.cell(1, 1) == 1000 && st.palette == ["gemmod:lamp"],
+          "it keeps the game's blocks by number and custom blocks by their key")
+    check(cap.1 == 2 && st.cell(3, 1) == -1 && st.cell(2, 1) == -1, "a machine and bedrock are left out")
+    check(st.cell(1, 2) == 0 && g.captureStructure(clearAir: false).0.cell(1, 2) == -1, "empty space clears the ground, or leaves it, as chosen")
+    let msg = g.saveCapture(name: "Lamp Hut", modID: "", newModName: "My Huts", placement: .surface, clearAir: true)
+    let saved: ModEntry? = ModStore.entries().first { $0.pack?.name == "My Huts" }
+    check(saved?.pack?.structures.first?.name == "Lamp Hut" && saved?.enabled == true && !g.capturing && msg.contains("My Huts"),
+          "saved into a new mod, which is switched on for new worlds")
+    // into the same mod again: a second structure with its own id
+    g.startCapture()
+    g.captureTap(Double(px) + 0.5, 97.5)
+    g.captureTap(Double(px + 4) + 0.5, 99.5)
+    _ = g.saveCapture(name: "Floor", modID: saved!.id, newModName: "", placement: .underground, clearAir: false)
+    let again: ModPack = ModStore.pack(saved!.id)!
+    check(again.structures.count == 2 && again.structures[0].id != again.structures[1].id && again.structures[1].placement == .underground,
+          "a second capture joins the same mod")
+    var checkedP: ModPack = again
+    let rep2: ModReport = ModValidator.check(&checkedP, known: ModCatalog.build([sampleMod(), again]).keys)
+    check(!rep2.disabled.contains(again.structures[0].id) && checkedP.structures[0].cell(1, 1) == 1000, "the saved structure passes the checks, custom block and all")
+    var forged = again
+    forged.structures[0].cells[0] = Int(Tile.bedrock.rawValue)
+    forged.structures[0].cells[1] = Int(Tile.mod05.rawValue)
+    forged.structures[0].cells[2] = Int(Tile.battery.rawValue)
+    _ = ModValidator.check(&forged, known: [:])
+    check(forged.structures[0].cells[0] == -1 && forged.structures[0].cells[1] == -1 && forged.structures[0].cells[2] == -1,
+          "a hand-edited structure can't sneak in bedrock, machines or raw custom block numbers")
+    ModStore.delete(saved!.id)
+
+    // generation: placed whole, the same every time, clear of the world's landmarks
+    let h = arena([hutMod()])
+    let hrt = ModRuntime.shared
+    let s: ModStructRT = hrt.structures[0]
+    let forge: Tile = hrt.tile("smith:forge")!
+    var chunkCache: [Int: Chunk] = [:]
+    func tileAt(_ x: Int, _ y: Int) -> Tile {
+        let cx = floorDiv(x, chunkW)
+        if chunkCache[cx] == nil { chunkCache[cx] = generateChunk(h.gen, .overworld, cx) }
+        return chunkCache[cx]!.get(x - cx * chunkW, y)
+    }
+    var sites = 0
+    var whole = 0
+    var blockedHit = 0
+    var chestSpot: (Int, Int)? = nil
+    let firstCell = floorDiv(Int(h.pb.x) + 200, 64)
+    for cell in firstCell..<(firstCell + 60) {
+        guard let site = modStructSite(h.gen, s, .overworld, cell) else { continue }
+        sites += 1
+        if modSiteBlocked(h.gen, .overworld, site.0, site.0 + 5, .surface) { blockedHit += 1 }
+        var ok = true
+        for cy in 0..<4 { for cx in 0..<5 {
+            let v = s.cells[cy * 5 + cx]
+            if v < 0 { continue }
+            if tileAt(site.0 + cx, site.1 + cy) != Tile.make(UInt8(v)) { ok = false }
+        } }
+        if ok { whole += 1 }
+        if chestSpot == nil { chestSpot = (site.0 + 2, site.1 + 2) }
+    }
+    check(sites >= 5 && whole == sites, "custom structures generate whole, across chunk edges (" + String(whole) + " of " + String(sites) + " sites)")
+    check(blockedHit == 0, "no site lands on the spawn point, the rift gate or the world's own landmarks")
+    check(s.cells[7] == Int(forge.rawValue), "a custom block in a structure becomes that world's tile for it")
+    let again1: Chunk = generateChunk(h.gen, .overworld, floorDiv(chestSpot!.0, chunkW))
+    check(again1.tiles == chunkCache[floorDiv(chestSpot!.0, chunkW)]!.tiles, "a chunk with a structure comes out the same every time")
+    let loot: [Stack] = h.world.chestItems(chestSpot!.0, chestSpot!.1)
+    let gemNames: Set<String> = Set(hrt.loot["smith:gems"]!.entries.map { $0.item.name })
+    check(!loot.isEmpty && loot.allSatisfy { gemNames.contains($0.item.name) }, "a chest in a structure holds the structure's loot table")
+    // under the ground and up in the sky
+    let u = arena([hutMod(.underground)])
+    let us: ModStructRT = ModRuntime.shared.structures[0]
+    var deep = 0
+    var deepOK = 0
+    for cell in firstCell..<(firstCell + 20) {
+        guard let site = modStructSite(u.gen, us, .overworld, cell) else { continue }
+        deep += 1
+        if site.1 >= 260 && site.1 <= 296 && site.1 > u.gen.col(site.0 + 2).h { deepOK += 1 }
+    }
+    check(deep > 0 && deep == deepOK, "an underground structure sits inside its chosen depths (" + String(deepOK) + ")")
+    let k = arena([hutMod(.sky)])
+    let ks: ModStructRT = ModRuntime.shared.structures[0]
+    var high = 0
+    var highOK = 0
+    for cell in firstCell..<(firstCell + 20) {
+        guard let site = modStructSite(k.gen, ks, .overworld, cell) else { continue }
+        high += 1
+        if site.1 + 4 < k.gen.col(site.0 + 2).h - 10 { highOK += 1 }
+    }
+    check(high > 0 && high == highOK, "a sky structure floats well above the ground")
+    // a world made with the structure mod loads safely without it
+    let sv = h.makeSave()
+    ModRuntime.activate([], world: sv.mods)
+    let back = Game.load(sv, settings: Settings())
+    check(back.modInfo?.mods.first?.id == "smith", "a world with mod structures loads without the mod and still remembers it")
+    ModRuntime.deactivate()
+}
+
 print("== done: " + String(passes) + " passed, " + String(fails) + " failed")
 try? FileManager.default.removeItem(at: scratch)
 exit(fails == 0 ? 0 : 1)

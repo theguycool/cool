@@ -11391,6 +11391,8 @@ final class Game: ObservableObject, @unchecked Sendable {
     /// structure capture: picking two corners on the world, then the save panel (see startCapture)
     @Published var capturing: Bool = false
     @Published var showCapture: Bool = false
+    /// the Mod Test tools (test worlds only)
+    @Published var showModTest: Bool = false
     var capA: (Int, Int)? = nil
     var capB: (Int, Int)? = nil
     /// effects from potions, food and armour (see PlayerEffects)
@@ -14154,7 +14156,7 @@ extension Game {
 
     /// Once a frame: releases the controls when something covers them
     func updateInputGate() {
-        let blocked: Bool = paused || showInventory || showMap || showJournal || showWeather || showPower || showCapture || dead
+        let blocked: Bool = paused || showInventory || showMap || showJournal || showWeather || showPower || showCapture || showModTest || dead
         if blocked && !inputBlocked { releaseAllInput() }
         inputBlocked = blocked
     }
@@ -22285,6 +22287,9 @@ enum ModLimits {
     static let maxFrames: Int = 4
     /// custom creatures alive at once (spawning stops at this many; test spawning too)
     static let maxActiveMobs: Int = 24
+    /// ores and structures one world generates, across all its mods (keeps new chunks quick to make)
+    static let maxWorldOres: Int = 32
+    static let maxWorldStructures: Int = 32
     /// shots fired by custom creatures and weapons that may be in the air at once
     static let maxShotsLive: Int = 80
     static let maxEffects: Int = 4
@@ -25371,7 +25376,7 @@ final class ModRuntime {
             slotDef[i] = b
             slotAlt[i] = alt
             slotTool[i] = ToolType(rawValue: b.tool) ?? .pickaxe
-            if let t = Tile(rawValue: UInt8(base + i)) { if !alt { tileForKey[k] = t } else { tileForKey[k] = t } }
+            if let t = Tile(rawValue: UInt8(base + i)) { tileForKey[k] = t }
         }
         if overflow > 0 {
             var rep = ModReport()
@@ -25637,18 +25642,38 @@ final class ModRuntime {
     }
 
     func buildOres() {
+        var skipped: Int = 0
+        defer { capNote(skipped, "ores", ModLimits.maxWorldOres) }
         for p in packs {
             for o in p.ores where !disabled.contains(p.key(o.id)) {
                 guard let t = tileForKey[p.key(o.block)] else { continue }
+                if ores.count >= ModLimits.maxWorldOres {
+                    skipped += 1
+                    continue
+                }
                 let salt: UInt64 = UInt64(truncatingIfNeeded: modChecksum(Data((p.id + o.id).utf8)))
                 ores.append(ModOreRT(tile: t, dim: o.dim, minY: o.minY, maxY: o.maxY, veins: o.veins, size: o.size, host: o.host, salt: salt))
             }
         }
     }
 
+    /// A note when the world's mods together have more ores or structures than one world makes
+    func capNote(_ skipped: Int, _ what: String, _ cap: Int) {
+        if skipped <= 0 { return }
+        var rep = ModReport()
+        rep.add(1, "Mods", "World", joinText(String(skipped), " ", what, " were left out: a world makes at most ", String(cap), " (from all its mods together)."))
+        reports.append(rep)
+    }
+
     func buildStructures() {
+        var skipped: Int = 0
+        defer { capNote(skipped, "structures", ModLimits.maxWorldStructures) }
         for p in packs {
             for s in p.structures where !disabled.contains(p.key(s.id)) {
+                if structures.count >= ModLimits.maxWorldStructures {
+                    skipped += 1
+                    continue
+                }
                 var cells: [Int] = []
                 cells.reserveCapacity(s.cells.count)
                 for v in s.cells {
@@ -26297,6 +26322,106 @@ extension Game {
             explode(x, y, radius: s.explode, power: p.dmg, source: p.source, breakBlocks: s.breakBlocks && p.source.kind == .player)
         } else {
             spawnParticles(x, y, s.color & 0xFFFFFF, 5, 3.0, 0.3, 6)
+        }
+    }
+}
+
+extension Game {
+    // MARK: Mod Test tools
+
+    /// Spawns a custom creature a few blocks in front of the player. It stays put (persistent) until
+    /// cleared. Returns what to tell the player.
+    func testSpawn(_ slot: Int) -> String {
+        guard let r = ModRuntime.shared.mob(slot) else { return "That creature is not in this world." }
+        let x: Double = pb.x + Double(facing) * max(3.0, r.mdef.w + 2.0)
+        var y: Double = pb.y
+        if r.mdef.flying {
+            y = pb.y - 3.0
+        } else if !r.aquatic {
+            y = Double(world.groundBelow(Int(floor(x)), Int(floor(pb.y)) - 8))
+        }
+        guard let m = addCustomMob(slot, x, y) else {
+            return joinText("No more than ", String(ModLimits.maxActiveMobs), " custom creatures at once: clear some first.")
+        }
+        m.homeX = x
+        m.homeY = y
+        m.persistent = true
+        m.dir = pb.x >= x ? 1 : -1
+        var note: String = joinText("Spawned ", r.def.name, ".")
+        if r.aquatic && !m.b.inWater { note = joinText(note, " It lives in water: put it in a pool.") }
+        return note
+    }
+
+    /// One of the game's own creatures to try the mod's creatures and weapons on
+    func testSpawnGame(_ k: MobKind) -> String {
+        let x: Double = pb.x + Double(facing) * 4.0
+        let y: Double = Double(world.groundBelow(Int(floor(x)), Int(floor(pb.y)) - 8))
+        let m: Mob = addMob(k, x, y)
+        m.homeX = x
+        m.homeY = y
+        m.persistent = true
+        return joinText("Spawned a ", mobDef(k).name.lowercased(), ".")
+    }
+
+    /// Removes every creature (pets stay), every shot and every warning
+    func clearCreatures() {
+        mobs.removeAll { !$0.tame }
+        projectiles.removeAll()
+        dangerZones.removeAll()
+        activeBoss = nil
+        bumpHUD()
+    }
+
+    /// Gives what a recipe needs and, if it needs a station, puts that station beside the player, so it
+    /// can be tried in the crafting panel straight away
+    func testIngredients(_ r: Recipe) -> String {
+        for c in r.cost { giveItem(c.item, c.n) }
+        var station: Tile? = r.modStation
+        if station == nil {
+            switch r.station {
+            case .hand: station = nil
+            case .bench: station = .workbench
+            case .furnace, .campfire: station = .furnace
+            case .anvil: station = .anvil
+            case .tinker: station = .tinkerBench
+            case .forge: station = .riftForge
+            }
+        }
+        var placed: String = ""
+        if let st = station {
+            let px: Int = Int(floor(pb.x))
+            let py: Int = Int(floor(pb.y)) - 1
+            var done: Bool = stationNear(st)
+            for dx in [-2, 2, -3, 3] where !done {
+                let x: Int = px + dx
+                if world.tile(x, py) == .air && world.solid(x, py + 1) {
+                    world.set(x, py, st)
+                    done = true
+                    placed = joinText(" and a ", st.name, " beside you")
+                }
+            }
+        }
+        bumpHUD()
+        return joinText("Here is what ", r.out.name, " needs", placed, ".")
+    }
+
+    /// A station tile within reach of the player already
+    func stationNear(_ t: Tile) -> Bool {
+        let px: Int = Int(floor(pb.x))
+        let py: Int = Int(floor(pb.y - 1))
+        for dy in -4...3 {
+            for dx in -5...5 where world.tile(px + dx, py + dy) == t { return true }
+        }
+        return false
+    }
+
+    /// Survival rules in the test world: hunger, damage and using things up (off: creative)
+    var testSurvival: Bool {
+        get { return mode == .survival }
+        set {
+            mode = newValue ? .survival : .creative
+            if newValue && hp <= 0 { hp = maxHP }
+            bumpHUD()
         }
     }
 }
@@ -33914,6 +34039,9 @@ struct HUDView: View {
                         SmallButton(title: "MAP", color: Color(hex: 0x9A7A3A)) { game.showMap = true }
                     }
                     SmallButton(title: "LOG", color: Color(hex: 0x7A5A2A)) { game.showJournal = true }
+                    if !game.testMod.isEmpty {
+                        SmallButton(title: "TEST", color: Color(hex: 0x2E8A8A)) { game.showModTest = true }
+                    }
                     SmallButton(title: "DBG") { game.showDebug.toggle() }
                     SmallButton(title: "II") { game.paused = true }
                 }
@@ -33941,6 +34069,7 @@ struct HUDView: View {
                 }
             }
             if game.mode == .hardcore { OutlinedText(text: "HARDCORE", size: 11, color: Color(hex: 0xFF6060)) }
+            if !game.testMod.isEmpty { OutlinedText(text: "MOD TEST · NOT SAVED", size: 11, color: Color(hex: 0x60E0FF)) }
         }
     }
 
@@ -34774,8 +34903,16 @@ struct PauseView: View {
                     SettingsStore.save(game.settings)
                     game.paused = false
                 }
-                PixelButton(title: "SAVE GAME", color: Color(hex: 0x3E6FAA)) {
-                    savedNote = game.saveNow() ? "Saved!" : "Could not save."
+                if game.testMod.isEmpty {
+                    PixelButton(title: "SAVE GAME", color: Color(hex: 0x3E6FAA)) {
+                        savedNote = game.saveNow() ? "Saved!" : "Could not save."
+                    }
+                } else {
+                    Text("A mod test world: nothing is saved.").font(.pixel(12, .bold)).foregroundColor(Color(hex: 0x60E0FF))
+                    PixelButton(title: "TEST TOOLS", color: Color(hex: 0x2E8A8A)) {
+                        game.paused = false
+                        game.showModTest = true
+                    }
                 }
                 PixelButton(title: "CAPTURE STRUCTURE", color: Color(hex: 0x2E8A8A)) {
                     game.paused = false
@@ -34785,7 +34922,7 @@ struct PauseView: View {
                 CameraSettingsSection(settings: settingsBinding, onChange: { game.tilePx = game.settings.tilePx })
                 WeatherSettingsSection(settings: settingsBinding, onChange: { game.bumpHUD() })
                 NightSettingsSection(settings: settingsBinding)
-                PixelButton(title: "SAVE & QUIT", color: Color(hex: 0xA03030)) { quit() }
+                PixelButton(title: game.testMod.isEmpty ? "SAVE & QUIT" : "EXIT TEST", color: Color(hex: 0xA03030)) { quit() }
                 if !savedNote.isEmpty { Text(savedNote).font(.pixel(12)).foregroundColor(Color.white) }
             }
             .frame(maxWidth: 340)
@@ -35352,6 +35489,8 @@ enum MenuScreen {
 
 struct MenuView: View {
     @Binding var settings: Settings
+    /// open on the Mod Creator (coming back from a test world)
+    var openMods: Bool = false
     var start: (Game) -> Void
     @State var screen: MenuScreen = .main
     @State var seedText: String = ""
@@ -35380,6 +35519,7 @@ struct MenuView: View {
                 ModMissingView(check: mc, load: { loadAnyway(mc) }, cancel: { missingMods = nil })
             }
         }
+        .onAppear { if openMods { screen = .mods } }
     }
 
     var menuBody: some View {
@@ -35619,6 +35759,9 @@ struct MenuView: View {
             }
             ModRuntime.activate(mc.packs, world: s.mods)
             let g: Game = Game.load(s, settings: settings)
+            if !mc.changed.isEmpty {
+                g.say(joinText("Updated since this world was last played: ", mc.changed.joined(separator: ", "), ". New content appears in places not visited yet."), 6.0)
+            }
             start(g)
         } else {
             refreshSaves()
@@ -38693,6 +38836,179 @@ struct CapturePanel: View {
     }
 }
 
+/// The Mod Test tools, opened from the TEST button: the creatures, items and recipes of the world's mods,
+/// the time of day, god mode, survival rules, clearing creatures, starting again and leaving
+struct ModTestPanel: View {
+    @ObservedObject var game: Game
+    @ObservedObject var hud: HUDSignal
+    var reset: () -> Void
+    var exit: () -> Void
+    @State var tab: Int = 0
+    @State var note: String = ""
+
+    var body: some View {
+        let rt: ModRuntime = ModRuntime.shared
+        let title: String = rt.packs.first { $0.id == game.testMod }?.name ?? "Mod"
+        return VStack(spacing: 10) {
+            HStack {
+                Text("MOD TEST").font(.pixel(20)).foregroundColor(Color(hex: 0x60E0FF))
+                Text(verbatim: title).font(.pixel(14)).foregroundColor(Color.white).lineLimit(1)
+                Spacer()
+                SmallButton(title: "CLOSE", color: ModUI.accent) { game.showModTest = false }
+            }
+            Text("A test world: nothing here is saved.").font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            ChoiceRow(options: ["CREATURES", "ITEMS", "RECIPES", "WORLD", "PROBLEMS"], selected: $tab, columns: 5)
+            ScrollView {
+                VStack(spacing: 10) {
+                    if tab == 0 { creatures }
+                    if tab == 1 { items }
+                    if tab == 2 { recipes }
+                    if tab == 3 { worldTools }
+                    if tab == 4 { problems }
+                }
+            }
+            .frame(maxHeight: 420)
+            if !note.isEmpty {
+                Text(verbatim: note).font(.pixel(12, .semibold)).foregroundColor(Color(hex: 0xFFE070))
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: 720)
+        .background(ModUI.panel)
+        .cornerRadius(10)
+        .padding(16)
+    }
+
+    var creatures: some View {
+        let rt: ModRuntime = ModRuntime.shared
+        let cols: [GridItem] = [GridItem(.adaptive(minimum: 120), spacing: 8)]
+        return VStack(alignment: .leading, spacing: 8) {
+            if rt.mobs.isEmpty {
+                Text("This mod has no creatures yet.").font(.pixel(12)).foregroundColor(ModUI.dim)
+            }
+            LazyVGrid(columns: cols, spacing: 8) {
+                ForEach(0..<rt.mobs.count, id: \.self) { i in
+                    Button(action: { note = game.testSpawn(i) }) {
+                        VStack(spacing: 4) {
+                            creatureImage(i)
+                            Text(verbatim: rt.mobs[i].def.name).font(.pixel(11)).foregroundColor(Color.white).lineLimit(1)
+                            Text(verbatim: rt.mobs[i].def.category.name).font(.pixel(9)).foregroundColor(ModUI.dim).lineLimit(1)
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 96)
+                        .background(ModUI.card)
+                        .cornerRadius(6)
+                    }
+                }
+            }
+            Text("Targets from the game").font(.pixel(12, .bold)).foregroundColor(ModUI.dim)
+            HStack(spacing: 8) {
+                ForEach([MobKind.zombie, .skeleton, .pig, .cow], id: \.self) { k in
+                    SmallButton(title: mobDef(k).name.uppercased(), color: ModUI.blue) { note = game.testSpawnGame(k) }
+                }
+            }
+            PixelButton(title: "CLEAR ALL CREATURES", color: ModUI.red) {
+                game.clearCreatures()
+                note = "Every creature is gone."
+            }
+        }
+    }
+
+    /// A creature's standing frame, 56 points high at its own width
+    func creatureImage(_ slot: Int) -> some View {
+        let set: SpriteSet = Art.shared.customMobSet(slot)
+        let ratio: Double = Double(set.w) / Double(max(1, set.h))
+        return set.frame(0, left: false, hurt: false).resizable().interpolation(.none)
+            .frame(width: CGFloat(clampD(56.0 * ratio, 16, 112)), height: 56)
+    }
+
+    var items: some View {
+        let list: [Item] = ModRuntime.shared.paletteItems()
+        let cols: [GridItem] = [GridItem(.adaptive(minimum: 64), spacing: 8)]
+        return VStack(alignment: .leading, spacing: 8) {
+            Text("Tap to put a stack in your bag.").font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+            if list.isEmpty { Text("This mod has no items or blocks yet.").font(.pixel(12)).foregroundColor(ModUI.dim) }
+            LazyVGrid(columns: cols, spacing: 8) {
+                ForEach(0..<list.count, id: \.self) { i in
+                    Button(action: {
+                        game.creativeGive(list[i])
+                        note = joinText("Took ", list[i].name, ".")
+                    }) {
+                        VStack(spacing: 2) {
+                            SlotView(stack: Stack(item: list[i], count: 1), size: 44)
+                            Text(verbatim: list[i].name).font(.pixel(9)).foregroundColor(Color.white).lineLimit(1)
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 70)
+                    }
+                }
+            }
+        }
+    }
+
+    var recipes: some View {
+        let list: [Recipe] = ModRuntime.shared.recipes
+        return VStack(alignment: .leading, spacing: 8) {
+            Text("Take the ingredients (and the station), then craft it here or in the crafting panel. With survival rules on, the station is needed as it would be in play.")
+                .font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+            if list.isEmpty { Text("This mod has no recipes yet.").font(.pixel(12)).foregroundColor(ModUI.dim) }
+            ForEach(list) { r in
+                HStack(spacing: 8) {
+                    RecipeRow(game: game, recipe: r)
+                    VStack(spacing: 4) {
+                        SmallButton(title: "INGREDIENTS", color: ModUI.blue) { note = game.testIngredients(r) }
+                        SmallButton(title: "CRAFT", color: game.canCraft(r) ? ModUI.accent : Color(hex: 0x555555)) {
+                            let before: Int = game.inv.total(r.out)
+                            game.craft(r)
+                            note = game.inv.total(r.out) > before ? joinText("Made ", r.out.name, ".") : "Not yet: something is missing."
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    var worldTools: some View {
+        let god: Binding<Bool> = Binding<Bool>(get: { game.godMode }, set: { game.godMode = $0; game.bumpHUD() })
+        let surv: Binding<Bool> = Binding<Bool>(get: { game.testSurvival }, set: { game.testSurvival = $0 })
+        let spawns: Binding<Bool> = Binding<Bool>(get: { !game.pauseSpawning }, set: { game.pauseSpawning = !$0; game.bumpHUD() })
+        return VStack(alignment: .leading, spacing: 10) {
+            Text("Time of day").font(.pixel(12, .bold)).foregroundColor(ModUI.dim)
+            HStack(spacing: 8) {
+                SmallButton(title: "MORNING", color: ModUI.blue) { setTime(0.02, "Morning.") }
+                SmallButton(title: "NOON", color: ModUI.blue) { setTime(0.25, "Noon.") }
+                SmallButton(title: "DUSK", color: ModUI.blue) { setTime(0.53, "Dusk.") }
+                SmallButton(title: "MIDNIGHT", color: ModUI.blue) { setTime(0.75, "Midnight.") }
+            }
+            ModToggle(label: "God mode", help: "Nothing can hurt you", isOn: god)
+            ModToggle(label: "Survival rules", help: "Hunger, damage, stations and using things up, as in a real game", isOn: surv)
+            ModToggle(label: "Creatures spawn by themselves", help: "Off: only what you spawn here appears", isOn: spawns)
+            HStack(spacing: 8) {
+                PixelButton(title: "CLEAR CREATURES", color: ModUI.red) {
+                    game.clearCreatures()
+                    note = "Every creature is gone."
+                }
+                PixelButton(title: "RESET WORLD", color: Color(hex: 0x8A5A2E)) { reset() }
+            }
+            PixelButton(title: "EXIT TEST", color: Color(hex: 0x6A3A8A)) { exit() }
+        }
+    }
+
+    func setTime(_ t: Double, _ what: String) {
+        game.timeOfDay = t
+        game.light.valid = false
+        game.bumpHUD()
+        note = what
+    }
+
+    var problems: some View {
+        let reps: [ModReport] = ModRuntime.shared.reports
+        return VStack(spacing: 8) {
+            if reps.isEmpty { Text("No mods are active.").font(.pixel(12)).foregroundColor(ModUI.dim) }
+            ForEach(0..<reps.count, id: \.self) { i in ModIssueList(report: reps[i]) }
+        }
+    }
+}
+
 struct StructureEditorView: View {
     @ObservedObject var s: ModSession
     let id: String
@@ -38866,6 +39182,8 @@ struct WorldLayer: View {
 struct GameView: View {
     @ObservedObject var game: Game
     var quit: () -> Void
+    /// swaps in a fresh world (the Mod Test's reset)
+    var restart: ((Game) -> Void)? = nil
     @State var dragging: Bool = false
     @State var clock: LoopClock = LoopClock()
     let timer = Timer.publish(every: 1.0 / 60.0, on: .main, in: .common).autoconnect()
@@ -38873,8 +39191,12 @@ struct GameView: View {
     var body: some View {
         ZStack {
             worldLayer
-            if !game.showInventory && !game.showMap && !game.showJournal && !game.showWeather && !game.showPower && !game.showCapture && !game.dead {
+            if !game.showInventory && !game.showMap && !game.showJournal && !game.showWeather && !game.showPower && !game.showCapture && !game.showModTest && !game.dead {
                 HUDView(game: game, hud: game.hud)
+            }
+            if game.showModTest {
+                Color.black.opacity(0.45).ignoresSafeArea()
+                ModTestPanel(game: game, hud: game.hud, reset: { resetTest() }, exit: quit)
             }
             if game.capturing && !game.showCapture && !game.paused { CaptureBar(game: game, hud: game.hud) }
             if game.showCapture {
@@ -38929,6 +39251,15 @@ struct GameView: View {
         .onReceive(timer) { _ in step() }
         .onAppear { Sound.shared.start() }
         .modifier(KeyInput(game: game))
+    }
+
+    /// A fresh test world for the mod being tested (read again from the store)
+    func resetTest() {
+        guard let p = ModStore.pack(game.testMod), let r = restart else { return }
+        let ng: Game = ModTest.makeWorld(p, settings: game.settings)
+        ng.tilePx = game.tilePx
+        ng.say("The test world starts again.", 2.5)
+        r(ng)
     }
 
     var worldLayer: some View {
@@ -39014,14 +39345,16 @@ struct PhaseWatcher: ViewModifier {
 struct RootView: View {
     @State var game: Game? = nil
     @State var settings: Settings = SettingsStore.load()
+    /// back to the Mod Creator after a test world
+    @State var reopenMods: Bool = false
     @Environment(\.scenePhase) var scenePhase
 
     var body: some View {
         ZStack {
             if let g = game {
-                GameView(game: g, quit: { leave() })
+                GameView(game: g, quit: { leave() }, restart: { ng in game = ng })
             } else {
-                MenuView(settings: $settings) { g in
+                MenuView(settings: $settings, openMods: reopenMods) { g in
                     game = g
                 }
             }
@@ -39047,6 +39380,7 @@ struct RootView: View {
             settings.tilePx = g.tilePx
             SettingsStore.save(settings)
             if g.mode == .hardcore && g.hardcoreOver { SaveStore.delete(g.slot) }
+            reopenMods = !g.testMod.isEmpty
         }
         actState.stickReleased()
         game = nil

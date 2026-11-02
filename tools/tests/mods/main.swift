@@ -1077,6 +1077,266 @@ do {
     ModRuntime.deactivate()
 }
 
+// ---------------------------------------------------------------- stage 6: the Mod Test world
+print("== mod test world")
+do {
+    var tm = beastMod()
+    tm.items = smithMod().items
+    tm.blocks = smithMod().blocks
+    tm.recipes = [smithMod().recipes[0]].map { r -> ModRecipe in var x = r; x.stationBlock = "forge"; return x }
+    tm.recipes[0].out = .custom("beasts:ring")
+    tm.recipes[0].cost = [ModCost(.custom("beasts:gem"), 2), ModCost(.mat(.goldBar), 1)]
+    var hut = hutMod().structures[0]
+    hut.palette = ["beasts:forge"]
+    hut.loot = ""
+    tm.structures = [hut]
+    check(ModStore.save(tm), "the mod to test is saved")
+    let g = ModTest.makeWorld(ModStore.pack(tm.id)!, settings: Settings())
+    let rt = ModRuntime.shared
+    check(g.mode == .creative && g.testMod == tm.id && g.slot < 0 && rt.packs.contains { $0.id == tm.id }, "a test world is a creative world with the mod switched on")
+    check(!g.saveNow(), "a test world is never saved")
+    g.viewW = 1100; g.viewH = 800
+    g.pauseSpawning = true
+    g.monstersEnabled = false
+    g.mobs.removeAll()
+    frames(g, 5)
+    let note = g.testSpawn(rt.mobSlot["beasts:brute"]!)
+    let brute: Mob? = g.mobs.first { $0.kind == .custom }
+    check(brute != nil && brute!.persistent && note.contains("Brute") && abs(brute!.b.x - g.pb.x) < 6, "the test tools spawn a custom creature in front of the player")
+    _ = g.testSpawnGame(.zombie)
+    check(g.mobs.contains { $0.kind == .zombie }, "and one of the game's creatures as a target")
+    var lastNote = ""
+    for _ in 0..<40 { lastNote = g.testSpawn(rt.mobSlot["beasts:bunny"]!) }
+    check(lastNote.contains("No more than") && g.customMobCount() == ModLimits.maxActiveMobs, "test spawning stops at the limit, and says so")
+    g.clearCreatures()
+    check(g.mobs.isEmpty && g.projectiles.isEmpty, "clear removes every creature")
+    // crafting with the station, under survival rules
+    g.testSurvival = true
+    check(g.mode == .survival, "survival rules can be switched on")
+    let rec: Recipe = rt.recipes[0]
+    for i in 0..<g.inv.slots.count { g.inv.slots[i] = nil }
+    let msg = g.testIngredients(rec)
+    let forge: Tile = rt.tile("beasts:forge")!
+    check(g.inv.total(.custom("beasts:gem")) == 2 && g.inv.total(.mat(.goldBar)) == 1 && g.stationNear(forge) && msg.contains("Gem Forge"),
+          "the ingredients come with the mod's station placed beside the player")
+    check(g.canCraft(rec), "so the recipe can be crafted at once")
+    g.craft(rec)
+    check(g.inv.total(.custom("beasts:ring")) == 1, "and crafting it gives the custom item")
+    // damage counts under survival rules, not in creative or god mode
+    g.hp = g.maxHP
+    g.invuln = 0
+    g.damagePlayer(5, from: g.pb.x + 1)
+    let tookSurvival: Bool = g.hp < g.maxHP
+    g.hp = g.maxHP; g.invuln = 0
+    g.godMode = true
+    g.damagePlayer(5, from: g.pb.x + 1)
+    let godSafe: Bool = g.hp == g.maxHP
+    g.godMode = false
+    g.testSurvival = false
+    g.invuln = 0
+    g.damagePlayer(5, from: g.pb.x + 1)
+    check(tookSurvival && godSafe && g.hp == g.maxHP && g.mode == .creative, "damage counts under survival rules, never in god mode or creative")
+    g.timeOfDay = 0.75
+    check(g.isNight, "the time of day can be set (midnight)")
+    // its structures are in the test world
+    var huts = 0
+    let s0: ModStructRT = rt.structures[0]
+    let c0 = floorDiv(Int(g.pb.x) - 2000, 64)
+    for cell in c0..<(c0 + 64) { if modStructSite(g.gen, s0, .overworld, cell) != nil { huts += 1 } }
+    check(huts > 0, "the mod's structures appear in the test world (" + String(huts) + " sites nearby)")
+    // starting again: the same world, fresh
+    let x0 = Int(g.pb.x) + 30
+    g.world.set(x0, Int(g.pb.y) - 3, .glass)
+    let g2 = ModTest.makeWorld(ModStore.pack(tm.id)!, settings: Settings())
+    g2.world.loadAround(centerX: x0, radius: 2)
+    check(g2.world.tile(x0, Int(g.pb.y) - 3) != .glass && g2.gen.seed == g.gen.seed && g2.mobs.filter { $0.kind == .custom }.isEmpty,
+          "reset makes the same test world again, with nothing left over")
+    ModStore.delete(tm.id)
+    ModRuntime.deactivate()
+}
+
+// ---------------------------------------------------------------- stage 7: safety, limits, dependencies
+print("== safety and limits")
+do {
+    // damaged files: numbers swapped for nonsense, wrong types and missing keys never crash the game
+    let enc = JSONEncoder()
+    let src: Data = try! enc.encode(sampleMod())
+    let base: Any = try! JSONSerialization.jsonObject(with: src)
+    var rng = RNG(9090)
+    let junk: [Any] = [-1e300, 1e300, -99999, 0, "x", true, NSNull(), [1, 2, 3], ["a": 1], 3.5]
+    func mutate(_ v: Any, _ depth: Int) -> Any {
+        if var d = v as? [String: Any] {
+            for k in Array(d.keys) {
+                let r = rng.double()
+                if r < 0.06 { d.removeValue(forKey: k) }
+                else if r < 0.16 { d[k] = junk[rng.int(junk.count)] }
+                else { d[k] = mutate(d[k]!, depth + 1) }
+            }
+            return d
+        }
+        if let a = v as? [Any] { return a.map { mutate($0, depth + 1) } }
+        if v is NSNumber && rng.double() < 0.2 { return junk[rng.int(junk.count)] }
+        return v
+    }
+    var decoded = 0
+    var survived = 0
+    var bounded = true
+    for _ in 0..<150 {
+        let m = mutate(base, 0)
+        guard let d = try? JSONSerialization.data(withJSONObject: m) else { continue }
+        guard var p = try? JSONDecoder().decode(ModPack.self, from: d) else { continue }
+        decoded += 1
+        if p.id.isEmpty { p.id = "fuzz" }
+        let rep = ModValidator.check(&p, known: [:])
+        if rep.fatal { survived += 1; continue }
+        for mb in p.mobs where mb.hp > 20000 || mb.scale > 4 || !mb.hp.isFinite { bounded = false }
+        for it in p.items where it.damage > 500 || !it.damage.isFinite { bounded = false }
+        ModRuntime.activate([p], world: nil)
+        let g = Game(mode: .creative, infinite: true, seed: 5, settings: Settings())
+        g.world.loadAround(centerX: Int(g.pb.x), radius: 1)
+        for k in 0..<ModRuntime.shared.mobs.count { _ = g.addCustomMob(k, g.pb.x + 3, g.pb.y) }
+        for _ in 0..<5 { g.tick(1.0 / 60.0) }
+        survived += 1
+    }
+    ModRuntime.deactivate()
+    check(decoded > 100 && survived == decoded && bounded, "150 damaged copies of a mod: " + String(decoded) + " read, every one checked, held to its limits and played without a crash")
+
+    // a world makes at most so many ores and structures, from all its mods together
+    var packs3: [ModPack] = []
+    for n in 0..<3 {
+        var m = hutMod()
+        m.id = "big" + String(n)
+        m.ores = (0..<16).map { k -> ModOre in var o = ModOre(); o.id = "o" + String(k); o.block = "gem_ore"; return o }
+        m.structures = (0..<16).map { k -> ModStructure in var st = hutMod().structures[0]; st.id = "s" + String(k); st.palette = [m.id + ":forge"]; st.loot = ""; return st }
+        packs3.append(m)
+    }
+    ModRuntime.activate(packs3, world: nil)
+    let rt = ModRuntime.shared
+    check(rt.ores.count == ModLimits.maxWorldOres && rt.structures.count == ModLimits.maxWorldStructures && rt.issues.contains { $0.text.contains("at most") },
+          "a world makes at most " + String(ModLimits.maxWorldOres) + " ores and " + String(ModLimits.maxWorldStructures) + " structures, and says what was left out")
+    // custom blocks beyond the world's 64 slots are left out with an error, nothing else breaks
+    var doors = ModPack(); doors.id = "doors"; doors.name = "Doors"
+    doors.blocks = (0..<33).map { k -> ModBlock in var b = ModBlock(); b.id = "d" + String(k); b.function = .door; b.art = painted(8, 8, 0x804000); return b }
+    ModRuntime.activate([doors], world: nil)
+    check(ModRuntime.shared.issues.contains { $0.text.contains("did not fit") } && ModRuntime.shared.tile("doors:d31") != nil,
+          "custom blocks beyond a world's 64 places are left out with an error; the rest work")
+    ModRuntime.deactivate()
+
+    // a world knows when one of its mods has a new version
+    var v1 = smithMod(); v1.version = "1.0"
+    check(ModStore.save(v1), "a mod saved at version 1.0")
+    ModRuntime.activate([v1], world: nil)
+    let gw = Game(mode: .survival, infinite: true, seed: 77, settings: Settings())
+    gw.modInfo = ModRuntime.shared.worldInfo()
+    let sv = gw.makeSave()
+    var v2 = v1; v2.version = "1.1"
+    _ = ModStore.save(v2)
+    let lc = ModLoadCheck.check(sv)
+    check(lc.missing.isEmpty && lc.changed == ["Smithing"] && lc.packs.first?.version == "1.1", "loading a world notices a mod updated since (and still loads it)")
+    ModStore.delete(v1.id)
+    let lc2 = ModLoadCheck.check(sv)
+    check(lc2.missing.first?.id == "smith" && lc2.missing.first?.name == "Smithing", "and one that is gone, by name, so the player can be told")
+    ModRuntime.deactivate()
+
+    // making chunks stays quick with mods on
+    ModRuntime.deactivate()
+    let gp = Game(mode: .survival, infinite: true, seed: 4242, settings: Settings())
+    let c0 = Int(gp.pb.x) / chunkW + 60
+    var t0 = Date()
+    for k in 0..<40 { _ = generateChunk(gp.gen, .overworld, c0 + k) }
+    let plain = Date().timeIntervalSince(t0)
+    var heavy = hutMod()
+    heavy.structures = (0..<16).map { k -> ModStructure in var st = hutMod().structures[0]; st.id = "s" + String(k); st.spacing = 64 + k * 8; return st }
+    heavy.ores = (0..<16).map { k -> ModOre in var o = ModOre(); o.id = "o" + String(k); o.block = "gem_ore"; o.veins = 4; o.size = 12; return o }
+    ModRuntime.activate([heavy], world: nil)
+    t0 = Date()
+    for k in 0..<40 { _ = generateChunk(gp.gen, .overworld, c0 + k) }
+    let modded = Date().timeIntervalSince(t0)
+    ModRuntime.deactivate()
+    check(modded < plain * 3.0 + 0.2, "40 chunks take " + String(format: "%.0f ms", modded * 1000) + " with 16 ores and 16 structures on, " + String(format: "%.0f ms", plain * 1000) + " without")
+}
+
+// ---------------------------------------------------------------- end to end: made, saved, played, saved again, loaded, tested
+print("== end to end")
+do {
+    // made in the editor: a session over a new mod, content added and changed through its bindings, saved
+    var fresh = ModPack(); fresh.id = newModID(); fresh.name = "Frost Pack"; fresh.author = "Tester"; fresh.version = "1.0"
+    let s = ModSession(fresh)
+    var brick = ModBlock(); brick.id = s.mod.freshID("block"); brick.name = "Frost Brick"; brick.art = painted(8, 8, 0xA0E0FF); brick.hardness = 2
+    s.mod.blocks.append(brick); s.touch()
+    var blade = ModItem.template(.melee); blade.id = s.mod.freshID("item"); blade.name = "Frost Blade"
+    s.mod.items.append(blade); s.touch()
+    s.bind(\ModPack.items, blade.id, \ModItem.damage, 0).wrappedValue = 15
+    var wolf = ModMob(); wolf.id = s.mod.freshID("mob"); wolf.name = "Frost Wolf"; wolf.category = .hostile; wolf.base = MobKind.wolf.rawValue
+    wolf.hp = 40; wolf.behavior.chase = true; wolf.behavior.attackPlayer = true; wolf.spawn.enabled = false
+    wolf.drops = [ModDrop(.custom(s.mod.key(brick.id)), 3, 3, 1.0)]
+    s.mod.mobs.append(wolf); s.touch()
+    var rec = ModRecipe(); rec.id = s.mod.freshID("recipe"); rec.out = .custom(s.mod.key(blade.id)); rec.cost = [ModCost(.custom(s.mod.key(brick.id)), 4)]; rec.station = 0
+    s.mod.recipes.append(rec); s.touch()
+    check(s.dirty && s.save() && !s.dirty && s.report.errors == 0 && ModStore.pack(fresh.id)?.items.first?.damage == 15,
+          "a mod made through the editor's own model saves cleanly, edits included")
+    ModStore.setEnabled(fresh.id, true)
+
+    // a new world takes the switched-on mods, the way the menu makes one
+    ModRuntime.activate(ModStore.enabledPacks(), world: nil)
+    let g = Game(mode: .survival, infinite: true, seed: 31337, settings: Settings())
+    g.modInfo = ModRuntime.shared.active ? ModRuntime.shared.worldInfo() : nil
+    g.viewW = 1100; g.viewH = 800; g.pauseSpawning = true; g.monstersEnabled = false; g.mobs.removeAll()
+    let x0 = Int(g.pb.x) - 20
+    g.world.loadAround(centerX: Int(g.pb.x), radius: 3)
+    for x in x0...(x0 + 40) { for y in 60..<100 { g.world.set(x, y, .air) }; for y in 100..<104 { g.world.set(x, y, .stone) } }
+    g.pb.x = Double(x0 + 20) + 0.5; g.pb.y = 100; g.hp = g.maxHP
+    g.light.valid = false
+    let rt = ModRuntime.shared
+    let brickKey = fresh.id + ":" + brick.id
+    guard let brickT = rt.tile(brickKey) else { check(false, "the mod's block has a tile in the new world"); exit(1) }
+    check(g.modInfo?.mods.contains { $0.id == fresh.id } == true, "the new world remembers the mod")
+    // used: the block placed, the blade crafted from bricks, the wolf fought with it
+    hold(g, .block(brickT), 10)
+    aimAt(g, g.pb.x + 2.5, 99.5)
+    g.useCD = 0
+    g.placeCD = 0
+    g.usePlaceBlock(brickT, 1.0 / 60.0)
+    let placedAt = Int(floor(g.pb.x + 2.5))
+    check(g.world.tile(placedAt, 99) == brickT, "the custom block is placed in the world")
+    let bladeRec: Recipe = RecipeBook.all.first { $0.out == .custom(fresh.id + ":" + blade.id) }!
+    g.craft(bladeRec)
+    check(g.inv.total(.custom(fresh.id + ":" + blade.id)) == 1 && g.inv.total(.block(brickT)) == 5, "the blade is crafted from the bricks")
+    let w = g.addCustomMob(rt.mobSlot[fresh.id + ":" + wolf.id]!, g.pb.x - 1.5, 100)!
+    g.mobGrid.rebuild(g.mobs)
+    // the crafted blade itself goes in hand
+    if let bi = g.inv.slots.firstIndex(where: { $0?.item == .custom(fresh.id + ":" + blade.id) }) { g.setSel(bi) }
+    check(g.heldItem == .custom(fresh.id + ":" + blade.id), "the crafted blade can be taken in hand")
+    var swings = 0
+    while w.hp > 0 && swings < 20 {
+        w.b.x = g.pb.x - 1.5; w.b.vx = 0
+        g.mobGrid.rebuild(g.mobs)
+        aimAt(g, w.b.x, w.b.cy)
+        g.facing = -1
+        g.useCD = 0
+        g.swingEmpty(.custom(fresh.id + ":" + blade.id))
+        swings += 1
+    }
+    check(w.hp <= 0 && swings == 3 && g.drops.contains { $0.stack.item == .block(brickT) && $0.stack.count == 3 },
+          "the custom blade kills the custom wolf in three blows, and it drops its bricks")
+    // saved and loaded: the mod comes back with the world, and so does everything made with it
+    let data = try! JSONEncoder().encode(g.makeSave())
+    let back = try! JSONDecoder().decode(SaveData.self, from: data)
+    ModRuntime.deactivate()
+    let lc = ModLoadCheck.check(back)
+    check(lc.missing.isEmpty && lc.packs.contains { $0.id == fresh.id }, "loading the world finds its mod")
+    ModRuntime.activate(lc.packs, world: back.mods)
+    let g2 = Game.load(back, settings: Settings())
+    check(g2.world.tile(placedAt, 99).name == "Frost Brick" && g2.inv.total(.custom(fresh.id + ":" + blade.id)) == 1,
+          "after loading, the placed block and the crafted blade are still there (" + g2.world.tile(placedAt, 99).name + ", " + String(g2.inv.total(.custom(fresh.id + ":" + blade.id))) + " blade, loaded: " + String(g2.world.isLoaded(placedAt)) + ")")
+    // and tested: the Mod Test world for it opens with all of it
+    let t = ModTest.makeWorld(ModStore.pack(fresh.id)!, settings: Settings())
+    check(!t.testMod.isEmpty && ModRuntime.shared.mobSlot[fresh.id + ":" + wolf.id] != nil && t.creativeItems().contains(.custom(fresh.id + ":" + blade.id)),
+          "its test world has its creature, and its items in the creative palette")
+    ModRuntime.deactivate()
+    ModStore.delete(fresh.id)
+}
+
 print("== done: " + String(passes) + " passed, " + String(fails) + " failed")
 try? FileManager.default.removeItem(at: scratch)
 exit(fails == 0 ? 0 : 1)

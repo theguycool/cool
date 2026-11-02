@@ -1,7 +1,7 @@
 # PixelRealm
 
 A 2D sandbox survival game for iPad, written in SwiftUI and run in Swift Playgrounds. The whole game
-is one file, `PixelRealm.swift` (about 31,000 lines), and it must stay one file: the user pastes it
+is one file, `PixelRealm.swift` (about 39,000 lines), and it must stay one file: the user pastes it
 into Swift Playgrounds and asks for every change "all in one file".
 
 ## Checking a change
@@ -10,7 +10,7 @@ In cloud sessions a SessionStart hook (`.claude/hooks/session-start.sh` → `too
 Swift 6.0.3 under `/opt/pixelrealm` and builds stand-ins for SwiftUI and AVFoundation so the game
 compiles and runs headless on Linux. If `/opt/pixelrealm` is missing, run `tools/setup.sh` (about a minute).
 
-- `tools/typecheck.sh`: about 25 s. Run it after every batch of edits.
+- `tools/typecheck.sh`: about 33 s. Run it after every batch of edits.
 - The swift-lsp plugin (if loaded) checks the file as it is edited: `compile_flags.txt` points
   sourcekit-lsp at the stand-ins, and setup.sh installs it. A full check of the file takes about
   30 s, so wait for its diagnostics; `tools/typecheck.sh` remains the check of record.
@@ -24,7 +24,9 @@ compiles and runs headless on Linux. If `/opt/pixelrealm` is missing, run `tools
 Suites: `tests`, `round2`, `p2` (general gameplay), `portal`, `boat`, `veh` (vehicles), `combat`,
 `mines`, `weather`, `nightai` (night spawning and monster AI), `stick` (the combat stick), `power` (Sparkworks), `snd` (sound
 effects ≤ 1.2 s, thunder ≤ 3.2 s), `oldsave` (saves from an older version still load; uses
-`tools/fixtures`), and `det` and `det2` (world generation fingerprints for generator versions 1 to 4).
+`tools/fixtures`), `mods` (the Mod Creator: file format, store, checks, custom content in play,
+structures, test worlds, an end-to-end run; it uses a scratch mod folder, never the real one), and
+`det` and `det2` (world generation fingerprints for generator versions 1 to 4).
 
 What the stand-ins can't tell you:
 - They only declare the SwiftUI and AVFoundation API the game uses. If you use a new API, add it to
@@ -38,7 +40,7 @@ What the stand-ins can't tell you:
 ## Rules for the code
 
 - **Type-checker speed.** Write explicit types on locals (`let x: Double = ...`), join strings with
-  `joinText(...)` instead of long `+` chains, and split big expressions. Keep typecheck near 25 s.
+  `joinText(...)` instead of long `+` chains, and split big expressions. Keep typecheck near 33 s.
 - **Saves.** Saved enums (`Tile: UInt8`, `MobKind`, `Mat`, `Gadget`, `RecipeCat`, `SoundID` and the
   like) only get new cases appended at the end. Never reorder or remove cases. New `SaveData`
   fields are optional; new `Settings` fields are decoded with `decodeIfPresent` and a default.
@@ -51,6 +53,10 @@ What the stand-ins can't tell you:
   `creativeItems` for on/off variants.
 - **A new panel** needs its `@Published` show flag added to `updateInputGate` and to the condition
   that hides the HUD in `GameView`.
+- **Mod data.** New fields of mod content (`ModBlock`, `ModItem`, `ModMob` and the rest) get a default
+  and are decoded with `c.val(.key, default)`, and get a clamp in `ModValidator.check`. Mod enums only
+  get cases appended. Tests never touch the real mod folder or saves: set `ModStore.overrideDir` and
+  use `makeSave()` with a JSON round trip.
 - **Comments** are plain-language doc comments explaining what something does in the game. Match the
   surrounding style.
 - Commit and push to the branch the session names. Never put model names in commits.
@@ -65,8 +71,10 @@ chunks, `set`), `p11_light`, `p12_phys`, `p13a_mobdefs` (MobKind, MobDef, spawn 
 (pointer, `interact`), `p14d_tools` (item use, mining, placing), `p15a_mobai` (`updateMobs`,
 `think`, the per-kind AIs), `p15b_spawn` (`updateSpawning`), `p16*` (combat, damage, bosses), `p17`
 (vehicles, ships), `p18` (portal, map), `p19_save` (`SaveData`, `makeSave`, `Game.load`), `p20`–`p26`
-(helpers, walls, doors, HUD logic), `p27_power` (Sparkworks), `u01_art`, `u02_render`
-(`WorldRenderer.draw` sets the draw order), `u03_hud`, `u04_panels`, `u05_menu`, `u06_root`.
+(helpers, walls, doors, HUD logic), `p27_power` (Sparkworks), `p28_mods` (Mod Creator: data,
+store, checks, runtime, custom creature AI, structures and capture, test tools), `u01_art`, `u02_render`
+(`WorldRenderer.draw` sets the draw order), `u03_hud`, `u04_panels`, `u05_menu`, `u07_mods` (Mod
+Creator screens and editors, the capture and Mod Test panels), `u06_root`.
 
 ## Systems in brief
 
@@ -99,6 +107,22 @@ chunks, `set`), `p11_light`, `p12_phys`, `p13a_mobdefs` (MobKind, MobDef, spawn 
   - Networks are rebuilt only when `world.powerRev` changes. Updates run at three rates:
     `powerTick` 4 Hz, `pulseTick` 20 Hz (a queue, with a delay per logic part and burnout for
     loops), and `machineTick` 10 Hz.
+
+- **Mods (the Mod Creator).**
+  - A mod is a JSON `ModPack` in `ModStore` (one file each, plus an order and on/off index). It is read
+    leniently, then `ModValidator.check` clamps every number (`ModLimits`, `ModRange`; a sandbox mode
+    allows more) and switches off broken content with a `ModReport`. Content keys are `"modID:contentID"`.
+    No code runs from a mod: it is data only.
+  - `ModRuntime.activate(packs, world:)` runs before a world is made or loaded and builds the content;
+    `RootView.leave` deactivates it. Blocks take the reserved tiles `mod00`…`mod63`, numbered per world
+    in `ModWorldInfo` (saved as `SaveData.mods`, which is also how a world remembers its mods); items are
+    `Item.custom(key)`; creatures are `MobKind.custom` with `Mob.cslot` (`updateCustomMob`), and their
+    attacks use the shared damage functions. Loading a world whose mods are missing asks first and keeps
+    placeholders, so nothing is lost.
+  - Custom ores and structures generate in `applyModGen` only when a world's mods add some, so
+    generation without mods is untouched (`det`, `det2`). Structure capture: pause → Capture Structure
+    (`startCapture`, `saveCapture`). Test worlds: `ModTest.makeWorld` (creative, `testMod` set, never
+    saved), tools in `ModTestPanel` (TEST button on the HUD).
 
 ## Working with the user
 

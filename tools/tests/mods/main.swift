@@ -414,10 +414,12 @@ do {
     g.quickEquip(2)
     check(g.inv.armor[0]?.item == .custom("gemmod:ruby_helm") && abs(g.inv.defense - def0 - 4) < 0.01, "custom armour goes into its own slot and adds its defense")
     check(g.armorPieces().0 == .mythril, "it is drawn as the armour tier it looks like")
+    // (effects run down in updateEffects, every world; worn mod armour renews its effect in updateModPlay)
+    g.updateEffects(1.0 / 60.0)
     g.updateModPlay(1.0 / 60.0)
     check(g.effects.value(.speed) == 25, "its effect lasts while it is worn")
     g.inv.armor[0] = nil
-    for _ in 0..<30 { g.updateModPlay(1.0 / 60.0) }
+    for _ in 0..<30 { g.updateEffects(1.0 / 60.0); g.updateModPlay(1.0 / 60.0) }
     check(g.effects.value(.speed) == 0, "and ends when it comes off")
     check(Item.custom("gemmod:ruby_sword").isWeapon && Item.custom("gemmod:ruby_sword").isMeleeWeapon && Item.custom("gemmod:wand").isRanged && Item.custom("gemmod:ruby").maxStack == 99,
           "custom items answer the inventory's questions (weapon, ranged, stack size) like the game's own")

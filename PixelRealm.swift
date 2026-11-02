@@ -373,6 +373,8 @@ enum Tile: UInt8, CaseIterable, Codable {
     /// reserved for blocks from mods (appended): what each one is depends on the mods the world uses
     /// (see ModRuntime); each world remembers which block has which number
     case mod00, mod01, mod02, mod03, mod04, mod05, mod06, mod07, mod08, mod09, mod10, mod11, mod12, mod13, mod14, mod15, mod16, mod17, mod18, mod19, mod20, mod21, mod22, mod23, mod24, mod25, mod26, mod27, mod28, mod29, mod30, mod31, mod32, mod33, mod34, mod35, mod36, mod37, mod38, mod39, mod40, mod41, mod42, mod43, mod44, mod45, mod46, mod47, mod48, mod49, mod50, mod51, mod52, mod53, mod54, mod55, mod56, mod57, mod58, mod59, mod60, mod61, mod62, mod63
+    /// alchemy, infusion and the exosuit (appended after the mod tiles, so every saved number stays)
+    case alchemyStill, infuser, exoStation
 
     // the tables are built once; the reserved mod tiles are rewritten when a world's mods are switched
     // on (see `patch`), the game's own tiles never change
@@ -398,7 +400,7 @@ enum Tile: UInt8, CaseIterable, Codable {
     static let modBase: UInt8 = Tile.mod00.rawValue
 
     /// a tile reserved for a mod block
-    var isMod: Bool { return rawValue >= Tile.modBase }
+    var isMod: Bool { return rawValue >= Tile.modBase && Int(rawValue) < Int(Tile.modBase) + ModLimits.blockSlots }
 
     /// Rewrites one reserved mod tile in every table
     static func patch(_ t: Tile, _ d: TileDef, tool: ToolType) {
@@ -716,6 +718,12 @@ enum Tile: UInt8, CaseIterable, Codable {
             return TileDef(name: "Sump Pump", hard: 1.4, tier: 1, style: .custom, colors: [0x3B7BE0])
         case .signalLight:
             return TileDef(name: "Pulse Indicator", hard: 0.4, solid: false, opaque: false, style: .custom, colors: [0x30E0D0])
+        case .alchemyStill:
+            return TileDef(name: "Alchemy Still", hard: 1.0, solid: false, opaque: false, light: 4, style: .custom, colors: [0xD2793A])
+        case .infuser:
+            return TileDef(name: "Infusion Crucible", hard: 2.0, tier: 1, solid: false, opaque: false, light: 6, style: .custom, colors: [0x6A5A8A])
+        case .exoStation:
+            return TileDef(name: "Assembly Station", hard: 2.0, tier: 1, solid: false, opaque: false, style: .custom, colors: [0x5A6270])
         default:
             // the tiles reserved for mods, until a world's mods give them a meaning (see ModRuntime)
             return TileDef(name: "Unused Mod Block", hard: 9999, style: .custom, colors: [0xFF00FF, 0x200020, 0xFF00FF, 0x200020, 0xFF00FF], noDrop: true)
@@ -818,6 +826,18 @@ func customTileRows(_ t: Tile) -> ([String], [Character: UInt32])? {
     case .riftForge:
         return (["..pppp..", ".pPppPp.", "oovvvvoo", "ovVvvVvo", "ovvVVvvo", "oovvvvoo", "oooooooo", "oooooooo"],
                 ["o": 0x241838, "p": 0x8A4CD8, "P": 0xD8A8FF, "v": 0x4A2A7A, "V": 0xB070FF])
+    case .alchemyStill:
+        // a copper pot on a stand, its coil running to a flask
+        return (["..c.....", ".ccc..g.", "cCCCc.g.", "cCCCcgg.", "cCCCc.f.", ".ccc.fFf", "bbbbbfff", "b...b..."],
+                ["c": 0xB8612A, "C": 0xF0A060, "g": 0xCFEFFF, "f": 0xB8E0F0, "F": 0x7AD040, "b": 0x5A4A3A])
+    case .infuser:
+        // a stone crucible brimming with something that glows
+        return (["..p..p..", ".PvvvvP.", "svVVVVvs", "sSvvvvSs", ".sSSSSs.", "..ssss..", ".ssssss.", "ssssssss"],
+                ["p": 0xC07CFF, "P": 0x8A6AB8, "v": 0x9A5ADC, "V": 0xE0B8FF, "s": 0x5A5E68, "S": 0x7A7E88])
+    case .exoStation:
+        // a gantry with a suit hanging in its clamps
+        return (["kkkkkkkk", "k.mmmm.k", "k.mccm.k", "kmmmmmmk", "k.mmmm.k", "k.m..m.k", "ssssssss", "sysyysys"],
+                ["k": 0x4A5260, "m": 0x9AA4B0, "c": 0x60E0FF, "s": 0x3A3E48, "y": 0xE8C020])
     case .crystalOre:
         // slate with a cluster of pale cyan shards breaking through it
         return (["sSsdsSss", "sdsscCss", "ssscWCds", "sSccWCcs", "dscWCcss", "ssCcsdSs", "sSsssscs", "dsSdsssS"],
@@ -1189,9 +1209,26 @@ enum Mat: Int, Codable, CaseIterable {
     case crystalShard, relicFragment, umbralHeart
     /// appended: tin (alloyed with copper into bronze), saltpeter for powder and fire, silver, amethyst
     case tinOre, bronzeBar, saltpeter, silverOre, silverBar, amethyst
+    /// appended: alchemy (vials and water, herbs, creature parts, storm essence) and rare relics of golems,
+    /// the Crystal Sentinel and mutated creatures
+    case vial, waterVial, sunleaf, glowcap, slimeGel, venomSac, frostCrystal, emberAsh, wraithDust, stormEssence, golemCore, sentinelLens, mutantGland
 
     var name: String {
         switch self {
+        case .vial: return "Empty Vial"
+        case .waterVial: return "Water Vial"
+        case .sunleaf: return "Sunleaf"
+        case .glowcap: return "Glowcap"
+        case .slimeGel: return "Slime Gel"
+        case .venomSac: return "Venom Sac"
+        case .frostCrystal: return "Frost Crystal"
+        case .emberAsh: return "Ember Ash"
+        case .wraithDust: return "Wraith Dust"
+        case .stormEssence: return "Storm Essence"
+        case .golemCore: return "Golem Core"
+        case .sentinelLens: return "Sentinel Lens"
+        case .mutantGland: return "Mutant Gland"
+
         case .tinOre: return "Tin Ore"
         case .bronzeBar: return "Bronze Bar"
         case .saltpeter: return "Saltpeter"
@@ -1241,6 +1278,19 @@ enum Mat: Int, Codable, CaseIterable {
         case .amethyst: return "Amethyst blocks, headlamps, the storm rod"
         case .copperBar, .ironBar, .goldBar, .mythrilBar, .emberBar, .voidBar: return "Tools, weapons and armour"
         case .crystalShard, .relicFragment, .umbralHeart: return "Rare crafting material"
+        case .vial: return "Tap water with it to fill it"
+        case .waterVial: return "The base of every potion and compound"
+        case .sunleaf: return "Herb: from tall grass and flowers"
+        case .glowcap: return "Cave mushroom: from mushrooms and bats"
+        case .slimeGel: return "From slimes"
+        case .venomSac: return "From scorpions and crawlers"
+        case .frostCrystal: return "From ice, snow and polar bears"
+        case .emberAsh: return "From Umbral creatures"
+        case .wraithDust: return "From wraiths"
+        case .stormEssence: return "Left where lightning strikes (a rod catches more)"
+        case .golemCore: return "From golems: cores, Quarry, Thrift"
+        case .sentinelLens: return "From the Crystal Sentinel: the rarest work"
+        case .mutantGland: return "From mutated creatures: cheaper mutagen"
         default: return "Crafting material"
         }
     }
@@ -1649,6 +1699,13 @@ enum Item: Hashable, Codable {
     case relic(Relic)
     /// appended: an item from a player's mod ("mod:id"); see ModRuntime
     case custom(String)
+    /// appended: potions, infusion compounds, and the exosuit's parts, plates, cores and modules
+    case potion(Potion)
+    case compound(Infusion)
+    case exoPart(ExoPart, ExoMat)
+    case exoPlate(ExoMat)
+    case exoCore(ExoCore)
+    case exoModule(ExoModule)
 
     /// Order used by inventory sorting: gear first, then building blocks, materials and the rest
     var sortGroup: Int {
@@ -1666,6 +1723,9 @@ enum Item: Hashable, Codable {
         case .wall: return 9
         case .mat: return 10
         case .custom(let k): return ModRuntime.shared.item(k)?.sortGroup ?? 10
+        case .potion: return 5
+        case .compound: return 6
+        case .exoPart, .exoPlate, .exoCore, .exoModule: return 4
         }
     }
 
@@ -1713,6 +1773,17 @@ enum Item: Hashable, Codable {
         case .wall: return ["Background wall"]
         case .mat(let m): return [m.use]
         case .custom(let k): return ModRuntime.shared.item(k)?.infoLines ?? ["From a mod that is not installed", "Kept safe until the mod is back"]
+        case .potion(let p): return [p.useLine, p.blurb, p.rarity.name]
+        case .compound(let i):
+            let goes: [String] = i.classes.map { $0.name }
+            return ["Infusion compound: work it in at an Infusion Crucible", i.blurb, joinText("Goes on ", goes.joined(separator: " or "), " · ", i.rarity.name)]
+        case .exoPart(let p, let m):
+            return [joinText("Suit part (", m.special.lowercased(), ")"), String(format: "Defence %.1f · weight %.1f", p.baseDefense * m.protect, p.baseWeight * m.weight), p == .chestFrame ? joinText(String(m.sockets), " module sockets") : "Fit it at an Assembly Station"]
+        case .exoPlate(let m): return ["Armour plate: fits any plate place on a suit", String(format: "Guards x%.1f · weight %.1f", m.protect, 2.0 * m.weight), m.special]
+        case .exoCore(let c): return ["Suit power core", String(format: "Holds %.0f · gives %.0f a second", c.capacity, c.output), String(format: "Refills %.1f a second by itself", c.recharge)]
+        case .exoModule(let m):
+            let needs: [String] = m.needs.map { $0.name.lowercased() }
+            return [m.blurb, needs.isEmpty ? "Needs only the chest frame" : joinText("Needs the ", needs.joined(separator: " and ")), String(format: "Weight %.0f · %@", m.weight, m.rarity.name)]
         }
     }
 
@@ -1766,12 +1837,20 @@ enum Item: Hashable, Codable {
         case .gadget(let g): return g.name
         case .wall(let k): return wallName(k)
         case .custom(let k): return ModRuntime.shared.item(k)?.def.name ?? "Missing item"
+        case .potion(let p): return p.name
+        case .compound(let i): return joinText(i.name, " Compound")
+        case .exoPart(let p, let m): return joinText(m.name, " ", p.name)
+        case .exoPlate(let m): return joinText(m.name, " Armour Plate")
+        case .exoCore(let c): return c.name
+        case .exoModule(let m): return m.name
         }
     }
 
     var maxStack: Int {
         switch self {
         case .custom(let k): return ModRuntime.shared.item(k)?.def.stack ?? 99
+        case .potion(let p): return p.maxStack
+        case .compound: return 10
         case .block, .mat, .food, .ammo, .wall: return 99
         case .part: return 20
         case .gadget(let g): return g == .bomb ? 30 : (g == .fireFlask ? 20 : (g == .waterFlask ? 10 : ((g == .powerCable || g == .pulseWire || g == .pulseWireB) ? 250 : 1)))
@@ -1784,6 +1863,7 @@ enum Item: Hashable, Codable {
         case .custom(let k): return ModRuntime.shared.item(k)?.def.kind.isWeapon ?? false
         case .sword, .spear, .hammer, .knife, .club, .relic, .bow, .gun, .sling: return true
         case .gadget(let g): return g == .bomb || g == .fireFlask
+        case .potion(let p): return p.thrown
         default: return false
         }
     }
@@ -1802,6 +1882,7 @@ enum Item: Hashable, Codable {
         case .custom(let k): return ModRuntime.shared.item(k)?.def.kind.isRanged ?? false
         case .bow, .gun, .sling: return true
         case .gadget(let g): return g == .bomb || g == .fireFlask
+        case .potion(let p): return p.thrown
         default: return false
         }
     }
@@ -1862,6 +1943,8 @@ struct Stack: Codable, Hashable {
     var item: Item
     var count: Int
     var extra: Int = 0
+    /// the infusions worked into it (by number; nil: none)
+    var inf: [Int]? = nil
 }
 
 // MARK: - Item icons
@@ -2017,6 +2100,32 @@ func iconMat(_ m: Mat) -> PixelBuf {
     case .amethyst:
         b.line(3, 8, 4, 2, 0xB07AE8); b.line(4, 8, 5, 3, 0x7A3CBC); b.line(5, 8, 7, 3, 0x9A5ADC); b.line(6, 8, 8, 5, 0x7A3CBC)
         b.rect(2, 8, 7, 1, 0x5A2A8A); b.set(4, 3, 0xEEDCFF); b.set(6, 4, 0xEEDCFF)
+    case .vial:
+        b.rect(4, 1, 2, 1, 0x8A5A2A); b.rect(4, 2, 2, 2, 0xCFEFFF); b.ellipse(5, 6.5, 2.8, 2.6, 0xCFEFFF); b.set(4, 5, 0xFFFFFF)
+    case .waterVial:
+        b.rect(4, 1, 2, 1, 0x8A5A2A); b.rect(4, 2, 2, 2, 0xCFEFFF); b.ellipse(5, 6.5, 2.8, 2.6, 0xCFEFFF); b.ellipse(5, 7.2, 2.1, 1.8, 0x3B7BE0); b.set(4, 5, 0xFFFFFF)
+    case .sunleaf:
+        b.ellipse(5.5, 4.5, 3.0, 2.0, 0x9AD040); b.line(2, 8, 5, 5, 0x5A8A2A); b.line(4, 4, 7, 5, 0xC8E870); b.set(7, 3, 0xF0F070)
+    case .glowcap:
+        b.ellipse(5, 4, 3.6, 2.2, 0x40C8D8); b.rect(4, 5, 2, 4, 0xD8D0C0); b.set(3, 3, 0xB8FFFF); b.set(6, 3, 0xB8FFFF)
+    case .slimeGel:
+        b.ellipse(5, 6, 3.6, 2.8, 0x6AC85A); b.ellipse(4, 5, 1.2, 0.9, 0xB8F0A8); b.set(6, 7, 0x3A8A3A)
+    case .venomSac:
+        b.ellipse(5, 5.5, 3.2, 3.2, 0x7A5AA0); b.ellipse(5, 6, 2.0, 1.8, 0x9AE050); b.set(4, 4, 0xD8C8F0)
+    case .frostCrystal:
+        b.line(5, 1, 5, 8, 0xA8E8FF); b.line(3, 3, 7, 7, 0xD8F8FF); b.line(7, 3, 3, 7, 0xD8F8FF); b.line(2, 5, 8, 5, 0x7AC8F0); b.set(5, 5, 0xFFFFFF)
+    case .emberAsh:
+        b.ellipse(5, 6.5, 3.6, 2.2, 0x4A4448); b.set(3, 6, 0xFF7A2A); b.set(6, 5, 0xFFB040); b.set(5, 7, 0xE8502A)
+    case .wraithDust:
+        b.set(3, 3, 0xD8C8F0); b.set(6, 2, 0xB8A8E0); b.set(4, 6, 0xE8E0FF); b.set(7, 5, 0xC8B8F0); b.set(2, 7, 0xB8A8E0); b.set(6, 8, 0xD8C8F0); b.set(5, 4, 0xFFFFFF)
+    case .stormEssence:
+        b.ellipse(5, 5, 3.2, 3.2, 0x5A5A3A); b.line(5, 1, 3, 5, 0xFFF07A); b.line(3, 5, 6, 5, 0xFFF07A); b.line(6, 5, 4, 9, 0xFFF07A); b.set(5, 5, 0xFFFFFF)
+    case .golemCore:
+        b.ellipse(5, 5, 3.6, 3.6, 0x7A7E88); b.line(3, 3, 6, 6, 0x60E0FF); b.line(6, 6, 7, 4, 0x60E0FF); b.set(4, 3, 0xA8ACB8)
+    case .sentinelLens:
+        b.rect(3, 2, 4, 1, 0xF0B8E8); b.rect(2, 3, 6, 3, 0xC88AE8); b.rect(3, 6, 4, 2, 0x8AF0E8); b.set(4, 3, 0xFFFFFF); b.set(5, 6, 0xD8FFFA)
+    case .mutantGland:
+        b.ellipse(5, 5.5, 3.4, 3.0, 0xC8789A); b.ellipse(4, 5, 1.4, 1.2, 0x9AF04A); b.set(6, 7, 0x7A3A5A); b.set(3, 4, 0xF0B8D0)
     }
     b.outline(0x1A1410)
     return b
@@ -2364,6 +2473,9 @@ func itemBuf(_ it: Item) -> PixelBuf {
     case .food(let f): return iconFood(f)
     case .wall(let k): return wallIcon(k)
     case .custom(let k): return ModRuntime.shared.item(k)?.icon ?? missingItemBuf()
+    case .potion(let p): return iconPotion(p)
+    case .compound(let i): return iconCompound(i)
+    case .exoPart, .exoPlate, .exoCore, .exoModule: return iconExo(it)
     default: return iconMisc(it)
     }
 }
@@ -2385,8 +2497,13 @@ enum Station: Int, Codable {
     case hand, bench, furnace, campfire
     /// appended, so the raw values above never change: metalwork, machinery, Umbral smithing
     case anvil, tinker, forge
+    /// appended: brewing, infusion compounds and suit parts
+    case still, infuser, assembly
     var name: String {
         switch self {
+        case .still: return "Alchemy Still"
+        case .infuser: return "Infusion Crucible"
+        case .assembly: return "Assembly Station"
         case .hand: return "By hand"
         case .bench: return "Workbench"
         case .furnace: return "Furnace"
@@ -2405,6 +2522,9 @@ enum Station: Int, Codable {
         case .anvil: return .anvil
         case .tinker: return .tinkerBench
         case .forge: return .riftForge
+        case .still: return .alchemyStill
+        case .infuser: return .infuser
+        case .assembly: return .exoStation
         }
     }
 }
@@ -2427,8 +2547,13 @@ enum RecipeCat: Int, CaseIterable {
     case power
     /// appended: recipes from mods
     case mods
+    /// appended: potions, infusion compounds, suit parts
+    case alchemy, infusion, exosuit
     var name: String {
         switch self {
+        case .alchemy: return "Alchemy"
+        case .infusion: return "Infusion"
+        case .exosuit: return "Exosuit"
         case .mods: return "Mods"
         case .power: return "Power"
         case .weather: return "Weather"
@@ -2679,6 +2804,7 @@ enum RecipeBook {
         add(.block(.autoDrill), 1, [(fe, 6), (.mat(.diamond), 1), (cu, 3)], .anvil, .power)
         add(.block(.autoCrafter), 1, [(.block(.workbench), 1), (fe, 4), (.mat(.goldBar), 2), (.mat(.crystalShard), 1)], .tinker, .power)
         add(.block(.emberDynamo), 1, [(.mat(.emberBar), 4), (.block(.obsidian), 6), (.mat(.crystalShard), 2), (.block(.accumulator), 1)], .forge, .power)
+        addFeatureRecipes(add)
         return list
     }
 }
@@ -2727,14 +2853,15 @@ struct Inventory: Codable {
         return n
     }
 
-    /// Adds items, returns the leftover count that did not fit
-    mutating func add(_ item: Item, _ count: Int, extra: Int = 0) -> Int {
+    /// Adds items, returns the leftover count that did not fit. Infused items keep their infusions and
+    /// never merge with plain ones.
+    mutating func add(_ item: Item, _ count: Int, extra: Int = 0, inf: [Int]? = nil) -> Int {
         var left: Int = count
         let ms: Int = item.maxStack
         if ms > 1 {
             for i in 0..<slots.count {
                 if left <= 0 { break }
-                if var st = slots[i], st.item == item, st.count < ms {
+                if var st = slots[i], st.item == item, st.inf == inf, st.count < ms {
                     let put: Int = min(ms - st.count, left)
                     st.count += put
                     slots[i] = st
@@ -2746,7 +2873,7 @@ struct Inventory: Codable {
             if left <= 0 { break }
             if slots[i] == nil {
                 let put: Int = min(ms, left)
-                slots[i] = Stack(item: item, count: put, extra: extra)
+                slots[i] = Stack(item: item, count: put, extra: extra, inf: inf)
                 left -= put
             }
         }
@@ -2807,7 +2934,7 @@ struct Inventory: Codable {
         for i in Inventory.hotbarCount..<slots.count {
             guard let s = slots[i] else { continue }
             slots[i] = nil
-            if s.item.maxStack > 1, let j = list.firstIndex(where: { $0.item == s.item && $0.extra == s.extra && $0.count < $0.item.maxStack }) {
+            if s.item.maxStack > 1, let j = list.firstIndex(where: { $0.item == s.item && $0.extra == s.extra && $0.inf == s.inf && $0.count < $0.item.maxStack }) {
                 let room: Int = list[j].item.maxStack - list[j].count
                 let put: Int = min(room, s.count)
                 list[j].count += put
@@ -3037,6 +3164,8 @@ struct HumanStyle {
     var patch: Bool = false
     var coat: Bool = false
     var tail: Bool = false
+    /// an exosuit worn over the body (nil: none)
+    var suit: SuitLook? = nil
 }
 
 let humanW: Int = 22
@@ -3109,6 +3238,7 @@ func humanoidFrame(_ s: HumanStyle, legs: Int, pose: Int) -> PixelBuf {
     if pose >= 2 || s.zombieArms {
         for y in 7...9 { cv.clear(13, y); cv.clear(14, y) }
     }
+    if let l = s.suit { paintSuit(&cv, l, legs: legs, pose: pose) }
     if s.zombieArms {
         // arms reach forward; raised a pixel in the attack pose
         let lift: Int = pose == 2 ? 1 : 0
@@ -9050,6 +9180,7 @@ final class World {
         case .workbench, .furnace, .chest, .campfire, .wheat1, .wheat2, .wheat3, .carrot1, .carrot2, .carrot3, .doorClosed, .doorOpen, .oreCart: return true
         case .weatherStation, .dopplerStation, .stormSiren, .lightningRod, .windTurbine, .rainBarrel, .rainCistern, .weatherVane, .heater: return true
         case .crankGen, .solarPanel, .fuelGen, .emberDynamo, .battery, .accumulator, .pressurePlate, .lever: return true
+        case .alchemyStill, .infuser, .exoStation: return true
         default: return false
         }
     }
@@ -9108,7 +9239,8 @@ final class World {
             var rng = RNG(hashU(x, y, gen.seed &+ 4441))
             it = rt.roll(key, &rng)
         } else {
-            it = generateChestLoot(gen, dim, x, y)
+            // the game's own chests also turn up ingredients (a mod structure's chest holds only its table)
+            it = alchemyChestExtras(generateChestLoot(gen, dim, x, y), gen, dim, x, y)
         }
         if rt.active { it = rt.addChestLoot(it, gen, dim, x, y) }
         chests[k] = it
@@ -9122,7 +9254,8 @@ final class World {
     func removeChest(_ x: Int, _ y: Int) -> [Stack] {
         let k: ChestKey = chestKey(x, y)
         var out: [Stack] = []
-        if let it = chests[k] { out = it } else { out = generateChestLoot(gen, dim, x, y) }
+        // storage under a key outside the world (a vehicle's cargo crate, the suit's pack) is never rolled
+        if let it = chests[k] { out = it } else if y >= 0 { out = chestItems(x, y) }
         chests[k] = nil
         return out
     }
@@ -10102,6 +10235,10 @@ struct Projectile {
     var knock: Double = 0
     /// a shot from a mod (index into ModRuntime.shots; -1 for the game's own shots)
     var mod: Int = -1
+    /// a thrown potion (its number; -1: a fire flask or any other shot)
+    var potion: Int = -1
+    /// infusions of the weapon that fired it: 1 fire, 2 frost, 4 volatile, 8 voidrend
+    var inf: Int = 0
     var angle: Double { return atan2(vy, vx) }
 }
 
@@ -10472,6 +10609,22 @@ final class Mob {
     var atkY: Double = 0
     var vsPlayer: Bool = true
     var dryT: Double = 0
+    /// potion effects: slowed (by how much), poisoned (damage a second, and whether the player gets the
+    /// credit), weakened, regenerating; and their timers
+    var slowT: Double = 0
+    var slowAmt: Double = 0
+    var poisonT: Double = 0
+    var poisonDps: Double = 0
+    var poisonTick: Double = 0
+    var poisonByPlayer: Bool = false
+    var weakT: Double = 0
+    var regenT: Double = 0
+    var regenRate: Double = 0
+    var regenAcc: Double = 0
+    /// mutation: doses taken, the size its body has grown to and how much harder it hits
+    var mut: Int = 0
+    var mutSize: Double = 1
+    var mutDmg: Double = 1
     static let turnDur: Double = 0.14
     static let atkDur: Double = 0.28
 
@@ -10553,6 +10706,8 @@ struct MobSave: Codable {
     var variant: Int
     var downed: Bool
     var lair: Int
+    /// mutation doses (nil in saves from before mutation, and for creatures that never mutated)
+    var mut: Int? = nil
 }
 
 // ===== p13b_vehicles =====
@@ -11119,6 +11274,13 @@ struct IntPair: Hashable {
 }
 
 final class Game: ObservableObject, @unchecked Sendable {
+    /// a number no other game in this run has (what the render cache knows a world by)
+    let serial: Int = Game.nextSerial()
+    static var serialCount: Int = 0
+    static func nextSerial() -> Int {
+        serialCount += 1
+        return serialCount
+    }
     // UI refresh signals
     let hud: HUDSignal = HUDSignal()
     let ticker: FrameTicker = FrameTicker()
@@ -11397,6 +11559,28 @@ final class Game: ObservableObject, @unchecked Sendable {
     var capB: (Int, Int)? = nil
     /// effects from potions, food and armour (see PlayerEffects)
     var effects: PlayerEffects = PlayerEffects()
+    /// seconds before mending potions heal fully again
+    var mendCD: Double = 0
+    /// smoke clouds and the rings of bursting potions
+    var smokes: [SmokeCloud] = []
+    var rings: [BurstRing] = []
+    /// the exosuit, a counter bumped whenever it changes, and the numbers worked out from it
+    var suit: ExoSuit = ExoSuit()
+    var suitRev: Int = 0
+    var suitStatsRev: Int = -1
+    var suitStatsCache: ExoStats = ExoStats()
+    /// energy a second the suit's running modules are drawing this frame, and what is running
+    var suitLoad: Double = 0
+    var suitLastLoad: Double = 0
+    var suitHover: Bool = false
+    var suitSprinting: Bool = false
+    var suitLit: Bool = false
+    var suitEmptyWarned: Bool = false
+    /// armour infusions summed over what is worn, and the key of what was worn then
+    var armorInfCache: ArmorInf = ArmorInf()
+    var armorInfKey: Int = 0
+    @Published var showInfuse: Bool = false
+    @Published var showExo: Bool = false
     /// a healing shrine rests between uses
     var healerCD: Double = 0
     /// debug multipliers: damage the player deals / takes
@@ -11582,6 +11766,7 @@ extension Game {
         updateInputEdges()
         updatePlayer(dt)
         updateUse(dt)
+        updateEffects(dt)
         updateModPlay(dt)
         // a landed blow holds the creatures still for a frame or two (the player keeps moving), which
         // is what makes a hit feel like it connected
@@ -11669,7 +11854,7 @@ extension Game {
             rideRex(r, ix, jumpPressed, dt)
             return
         }
-        var runMax: Double = 7.4 * speedMult * (wearing(.swiftBoots) ? 1.18 : 1.0) * wxSlow * (1.0 + effects.value(.speed) / 100.0)
+        var runMax: Double = 7.4 * speedMult * (wearing(.swiftBoots) ? 1.18 : 1.0) * wxSlow * (1.0 + effects.value(.speed) / 100.0) * (1.0 + armorInf.speed) * suitSpeedMul
         // heavy weapons commit you to the blow: slower on your feet while it lasts
         if swingT > 0 || strikeT > 0, let it = heldItem, it.isMeleeWeapon { runMax *= it.melee.moveScale }
         if ix != 0 {
@@ -11733,7 +11918,8 @@ extension Game {
         // pushes even a player standing still; snow and wet ground make the footing slippery. All of
         // these are zero in calm weather, so movement is then exactly as it always was.
         let windT: Double = swimming ? 0 : (pb.onGround ? wxWalk : wxAirDrift)
-        let target: Double = ix * runMax * (swimming ? 0.55 : 1.0) + (ix != 0 ? windT : 0)
+        let swimMul: Double = (effects.value(.breathing) > 0 && !inLava) ? 0.85 : 0.55
+        let target: Double = ix * runMax * (swimming ? swimMul : 1.0) + (ix != 0 ? windT : 0)
         let grip: Double = pb.onGround ? 1.0 - 0.6 * wxSlip : 1.0
         let accel: Double = (pb.onGround ? 72.0 : 40.0) * grip
         if ix != 0 {
@@ -11753,7 +11939,7 @@ extension Game {
         if jumpPressed { jumpBuf = 0.13 } else { jumpBuf -= dt }
         if jumpBuf > 0 && coyote > 0 && !swimming {
             // a jump boost raises the jump's height by its percentage
-            pb.vy = -15.9 * sqrt(1.0 + effects.value(.jump) / 100.0)
+            pb.vy = -15.9 * sqrt(1.0 + effects.value(.jump) / 100.0) * suitJumpMul()
             coyote = 0
             jumpBuf = 0
             pb.onGround = false
@@ -11874,7 +12060,8 @@ extension Game {
         if mode == .creative { return }
         // air
         let headY: Int = Int(floor(pb.y - pb.h * 0.92))
-        if world.tile(Int(floor(pb.x)), headY) == .water {
+        // a Deepbreath Draught or a sealed suit keeps the air coming
+        if world.tile(Int(floor(pb.x)), headY) == .water && effects.value(.breathing) <= 0 && !suitHas(.seal) {
             air -= dt * (wearing(.divingMask) ? 1.0 / 3.0 : 1.0)
             if air <= 0 {
                 air = 0
@@ -11919,7 +12106,7 @@ extension Game {
         if dead || godMode || mode == .creative { return }
         if invuln > 0 && !ignoreArmor { return }
         var d: Double = dmg
-        if !ignoreArmor { d *= (1.0 - min(0.75, inv.defense * 0.045)) }
+        if !ignoreArmor { d *= (1.0 - min(0.75, totalDefense * 0.045)) }
         d = max(1.0, d.rounded())
         hp -= d
         sfx(.hurt, 0.8)
@@ -12053,6 +12240,7 @@ extension Game {
         var hl: Int = heldLightLevel()
         hl = max(hl, wearing(.headlamp) ? 11 : 5)
         hl = max(hl, Int(effects.value(.glow)))
+        if suitLit { hl = max(hl, 12) }
         dyn.append((pcx, pcy, hl))
         for m in mobs {
             var lv: Int = 0
@@ -12100,7 +12288,8 @@ extension Game {
                 }
             }
         }
-        var key: Int = dyn.count
+        let nightVision: Bool = effects.value(.nightVision) > 0
+        var key: Int = dyn.count &+ (nightVision ? 7919 : 0)
         for d in dyn { key = key &* 31 &+ d.0 &* 7 &+ d.1 &* 13 &+ d.2 }
         // window
         let vw: Int = Int(ceil(viewTilesW)) + 2
@@ -12123,7 +12312,9 @@ extension Game {
         }
         let layoutChanged: Bool = light.layoutUsed != world.layoutVersion
         let needsStatic: Bool = !light.valid || !covered || light.skyUsed != skyLevel || light.dimUsed != world.dim.rawValue || edited || layoutChanged
-        let amb: Double = fullBright ? 1.0 : (world.dim == .umbral ? 0.2 : 0.07)
+        var amb: Double = fullBright ? 1.0 : (world.dim == .umbral ? 0.2 : 0.07)
+        // an Owlsight Draught lifts the dark
+        if nightVision { amb = max(amb, 0.5) }
         if !needsStatic {
             // only moving lights changed: cheap partial relight
             if light.dynUsed == key { return }
@@ -12336,7 +12527,7 @@ extension Game {
             if b.function != .none && b.function != .bounce && b.function != .trap { return true }
         }
         switch t {
-        case .chest, .workbench, .furnace, .campfire, .portalOff, .doorClosed, .doorOpen, .anvil, .tinkerBench, .riftForge: return true
+        case .chest, .workbench, .furnace, .campfire, .portalOff, .doorClosed, .doorOpen, .anvil, .tinkerBench, .riftForge, .alchemyStill, .infuser, .exoStation: return true
         case .weatherStation, .dopplerStation, .stormSiren, .lightningRod, .windTurbine, .rainBarrel, .rainCistern, .weatherVane, .heater, .shutterClosed, .shutterOpen: return true
         default: break
         }
@@ -12362,6 +12553,10 @@ extension Game {
         let t: Tile = world.tile(tx, ty)
         if case .gadget(.probe)? = heldItem {
             probeAt(wx, wy)
+            return
+        }
+        if t == .exoStation {
+            openExo()
             return
         }
         if t.isPower && t != .windTurbine {
@@ -12405,6 +12600,15 @@ extension Game {
             craftStation = t == .anvil ? .anvil : (t == .tinkerBench ? .tinker : .forge)
             showInventory = true
             bumpHUD()
+            return
+        case .alchemyStill:
+            craftStation = .still
+            showInventory = true
+            sfx(.splash, 0.3)
+            bumpHUD()
+            return
+        case .infuser:
+            openInfuser()
             return
         case .portalOff:
             tryOpenPortal(tx, ty)
@@ -12612,7 +12816,7 @@ extension Game {
             if !items.contains(where: { $0.item == s.item }) { continue }
             // top up existing chest stacks first, then use free chest slots
             if s.item.maxStack > 1 {
-                for k in 0..<items.count where items[k].item == s.item && items[k].extra == s.extra && items[k].count < s.item.maxStack && s.count > 0 {
+                for k in 0..<items.count where items[k].item == s.item && items[k].extra == s.extra && items[k].inf == s.inf && items[k].count < s.item.maxStack && s.count > 0 {
                     let put: Int = min(s.item.maxStack - items[k].count, s.count)
                     items[k].count += put
                     s.count -= put
@@ -12641,8 +12845,8 @@ extension Game {
 
     func returnCarried() {
         if let c = carry {
-            let left: Int = inv.add(c.item, c.count, extra: c.extra)
-            if left > 0 { spawnDrop(Stack(item: c.item, count: left, extra: c.extra), pb.x, pb.y - 1.0, 2.0, -3.0) }
+            let left: Int = inv.add(c.item, c.count, extra: c.extra, inf: c.inf)
+            if left > 0 { spawnDrop(Stack(item: c.item, count: left, extra: c.extra, inf: c.inf), pb.x, pb.y - 1.0, 2.0, -3.0) }
             carry = nil
             bumpHUD()
         }
@@ -12651,11 +12855,11 @@ extension Game {
     /// Whether an item may go into armour slot `i`: armour into its own slot, gear into either gear slot
     func fitsArmorSlot(_ it: Item, _ i: Int) -> Bool {
         switch it {
-        case .armor(let slot, _): return slot.rawValue == i
+        case .armor(let slot, _): return slot.rawValue == i && !(suit.worn && i < 3)
         case .gear: return i >= Inventory.firstGearSlot && i < inv.armor.count
         case .custom(let k):
             guard let r = ModRuntime.shared.item(k), r.def.kind == .armor else { return false }
-            return r.def.slot == i
+            return r.def.slot == i && !(suit.worn && i < 3)
         default: return false
         }
     }
@@ -12735,7 +12939,7 @@ extension Game {
         var items: [Stack] = world.chestItems(cx, cy)
         if idx >= items.count { return }
         let s: Stack = items[idx]
-        let left: Int = inv.add(s.item, s.count, extra: s.extra)
+        let left: Int = inv.add(s.item, s.count, extra: s.extra, inf: s.inf)
         if left == 0 { items.remove(at: idx) } else { items[idx].count = left }
         world.setChestItems(cx, cy, items)
         bumpHUD()
@@ -12770,6 +12974,9 @@ extension Game {
                 case .anvil: if t == .anvil { return true }
                 case .tinker: if t == .tinkerBench { return true }
                 case .forge: if t == .riftForge { return true }
+                case .still: if t == .alchemyStill { return true }
+                case .infuser: if t == .infuser { return true }
+                case .assembly: if t == .exoStation { return true }
                 case .hand: return true
                 }
             }
@@ -12850,6 +13057,7 @@ func allGameItems() -> [Item] {
     for p in PartType.allCases { out.append(.part(p)) }
     for f in Food.allCases { out.append(.food(f)) }
     for m in Mat.allCases { out.append(.mat(m)) }
+    out.append(contentsOf: featureItems())
     return out
 }
 
@@ -12974,12 +13182,18 @@ extension Game {
         case .food(let f): useFood(f, pressed)
         case .mat(let m):
             if m == .seeds { usePlant(.wheat1, it, pressed) }
+            if m == .vial { useVial(pressed) }
         case .part(let p): usePart(p, pressed)
         case .gadget(let g): useGadget(g, pressed)
         case .wall(let k): usePlaceWall(k)
         case .armor, .gear:
             if pressed { quickEquip(sel); say("Equipped.", 1.0) }
         case .custom(let k): useModItem(k, dt, pressed)
+        case .potion(let p): usePotion(p, pressed)
+        case .compound:
+            if pressed { say("Work it into equipment at an Infusion Crucible.", 1.8) }
+        case .exoPart, .exoPlate, .exoCore, .exoModule:
+            if pressed { say("Fit it to your suit at an Assembly Station.", 1.8) }
         default: break
         }
     }
@@ -13001,8 +13215,8 @@ extension Game {
         let tx: Int = Int(floor(aimX))
         let ty: Int = Int(floor(aimY))
         // pointing at a creature means fighting it, not digging the block behind it
-        if let m = mobUnderAim(it.melee) {
-            if pressed || (useCD <= 0 && !meleeCandidates(it.melee).isEmpty) { startMelee(it, target: m) }
+        if let m = mobUnderAim(infusedMelee(it)) {
+            if pressed || (useCD <= 0 && !meleeCandidates(infusedMelee(it)).isEmpty) { startMelee(it, target: m) }
             return
         }
         if k == .hoe {
@@ -13027,7 +13241,7 @@ extension Game {
     /// down it keeps swinging, but only while a foe is actually in reach, so holding on empty ground or
     /// on a foe that is still too far away never wastes swings.
     func useMeleeWeapon(_ it: Item, _ pressed: Bool) {
-        let p: MeleeProfile = it.melee
+        let p: MeleeProfile = infusedMelee(it)
         let target: Mob? = mobUnderAim(p)
         if let t = target {
             // the touch landed on (or close to) a foe: the blow goes at it
@@ -13103,9 +13317,12 @@ extension Game {
             return
         }
         let cls: ToolType = toolClass(t)
+        // a suit's drill arm bores anything up to its metal's tier, whatever is in hand
+        let drill: Int = suitDrillTier()
         if def.tier > 0 && !isCreative {
             // a tier asks for a strong enough tool of the block's own kind (a pickaxe for the game's ores)
-            let pt: Int = (kind == cls) ? (tier?.rawValue ?? 0) : 0
+            var pt: Int = (kind == cls) ? (tier?.rawValue ?? 0) : 0
+            if drill > pt { pt = drill }
             if pt < def.tier {
                 mining = false
                 if useCD <= 0 {
@@ -13126,9 +13343,13 @@ extension Game {
         mining = true
         var speed: Double = 1.0
         if let k = kind, let tr = tier { speed = (toolSpeed ?? tr.mineSpeed) * (k == cls ? 1.0 : 0.35) }
+        if drill > 0 {
+            let ds: Double = (Tier(rawValue: drill)?.mineSpeed ?? 4.0) * 1.25
+            if ds > speed && suitRun(.drill, 4.0, dt) { speed = ds }
+        }
         if isCreative { speed = 1000 }
         mineNeed = max(0.05, def.hard * 1.5)
-        mineP += dt * speed
+        mineP += dt * speed * mineBoost(kind)
         if useCD <= 0 {
             swingT = 0.22
             swingDir = aimFacing()
@@ -13143,7 +13364,12 @@ extension Game {
             mining = false
             digSound(t, broke: true)
             let fell: Bool = isLogTile(t) && kind == .axe
-            if fell { fellTree(tx, ty) } else { breakTile(tx, ty, true) }
+            if fell {
+                fellTree(tx, ty)
+            } else {
+                breakTile(tx, ty, true)
+                if let k = kind, let tr = tier, k == cls { quarryAround(tx, ty, t, k, tr) }
+            }
         }
     }
 
@@ -13204,7 +13430,7 @@ extension Game {
         let col: UInt32 = t.def.colors.first ?? 0x888888
         spawnParticles(Double(x) + 0.5, Double(y) + 0.5, col, 6, 3.5, 0.5, 16)
         if !(byPlayer && isCreative) {
-            for s in tileDropStacks(t, x, y) {
+            for s in minedDrops(t, x, y, byPlayer) {
                 if dropChance < 1.0 && Double.random(in: 0...1) > dropChance { continue }
                 spawnDrop(s, Double(x) + 0.5, Double(y) + 0.4, Double.random(in: -1.5...1.5), -3.0)
             }
@@ -13427,9 +13653,10 @@ extension Game {
         p.w = 0.22
         p.source = .player
         p.uid = newID()
+        infuseShot(&p, heldItem)
         projectiles.append(p)
         sfx(.bow, 0.7)
-        useCD = st.useTime
+        useCD = st.useTime * quickMul()
         swingT = 0.18
         swingDir = facing
         bowRecoil = 0.12
@@ -13456,6 +13683,7 @@ extension Game {
                 ox = pb.x + Double(facing) * 0.7
                 oy = pb.y - 1.2
             case .gadget(let gd) where gd == .bomb || gd == .fireFlask: speed = throwSpeed; grav = throwGravity
+            case .potion(let pt) where pt.thrown: speed = throwSpeed; grav = throwGravity
             default: return []
             }
             let a: Double = lobAngle(aimX - ox, aimY - oy, speed, grav)
@@ -13548,7 +13776,7 @@ extension Game {
         if g.needsPress && !pressed { return }
         if !isCreative || g != .stormRod { st.extra -= 1 }
         inv.slots[sel] = st
-        useCD = g.cooldown
+        useCD = g.cooldown * quickMul()
         if g == .stormRod {
             fireStormRod()
             bumpHUD()
@@ -13575,6 +13803,7 @@ extension Game {
             p.knock = g.knock
             if kind == .pellet { p.w = 0.16 }
             if kind == .quarrel { p.w = 0.22 }
+            infuseShot(&p, heldItem)
             projectiles.append(p)
         }
         let heavyShot: Bool = g == .rifle || g == .arbalest || g == .blunderbuss
@@ -13894,7 +14123,7 @@ extension Game {
     @discardableResult
     func startMelee(_ it: Item?, target: Mob? = nil) -> Bool {
         if useCD > 0 || strikeT > 0 { return false }
-        let p: MeleeProfile = it?.melee ?? Item.bareHands
+        let p: MeleeProfile = infusedMelee(it)
         useCD = p.cooldown
         swingDur = p.swingTime
         swingT = p.swingTime
@@ -13916,7 +14145,9 @@ extension Game {
     /// The blow itself: everything inside the swing's shape is hit, with the weapon's knockback,
     /// crits, combo, backstab, daze and fire; then the trail, sound and hit feedback
     func resolveMelee(_ it: Item?) {
-        let p: MeleeProfile = it?.melee ?? Item.bareHands
+        let p: MeleeProfile = infusedMelee(it)
+        let infs: [Int] = heldInfusions(it)
+        if suitHas(.servo) { _ = suitSpend(.servo, 1.0) }
         let ox: Double = shoulderX
         let oy: Double = shoulderY
         let ang: Double = attackAngle()
@@ -13954,6 +14185,8 @@ extension Game {
                 if crit { crits += 1 }
                 if p.burn > 0 && !heatImmune(m) { m.burn = max(m.burn, p.burn) }
                 if p.daze > 0 { dazeMob(m, p.daze) }
+                meleeInfusionHit(m, infs, d)
+                suitMeleeHit(m)
                 spawnSparks(m.b.x - info.dirX * m.b.w * 0.3, m.b.cy, info.dirX, p.trail, crit ? 7 : 4)
                 lockTarget = m
                 lockT = 2.0
@@ -14035,7 +14268,7 @@ extension Game {
     func autoTarget(_ it: Item?) -> Mob? {
         let ranged: Bool = it?.isRanged ?? false
         let weapon: Bool = it?.isWeapon ?? false
-        let p: MeleeProfile = it?.melee ?? Item.bareHands
+        let p: MeleeProfile = infusedMelee(it)
         let range: Double = ranged ? 22.0 : p.reach + 3.0
         let ox: Double = shoulderX
         let oy: Double = shoulderY
@@ -14067,6 +14300,7 @@ extension Game {
         case .gun(let g): return (g.speed, g.gravity)
         case .sling: return (23.0, 16.0)
         case .gadget(let g): return (g == .bomb || g == .fireFlask) ? (throwSpeed, throwGravity) : (0, 0)
+        case .potion(let p): return p.thrown ? (throwSpeed, throwGravity) : (0, 0)
         default: return (0, 0)
         }
     }
@@ -14156,7 +14390,7 @@ extension Game {
 
     /// Once a frame: releases the controls when something covers them
     func updateInputGate() {
-        let blocked: Bool = paused || showInventory || showMap || showJournal || showWeather || showPower || showCapture || showModTest || dead
+        let blocked: Bool = paused || showInventory || showMap || showJournal || showWeather || showPower || showCapture || showModTest || showInfuse || showExo || dead
         if blocked && !inputBlocked { releaseAllInput() }
         inputBlocked = blocked
     }
@@ -14185,8 +14419,9 @@ extension Game {
         p.knock = 7.5
         p.source = .player
         p.uid = newID()
+        infuseShot(&p, heldItem)
         projectiles.append(p)
-        useCD = 0.55
+        useCD = 0.55 * quickMul()
         swingDur = 0.2
         swingT = 0.2
         swingDir = facing
@@ -14454,7 +14689,17 @@ extension Game {
                 m.leapT = 1.6
             }
         }
+        // slowed creatures cover less ground (their AI still asks for its usual speed)
+        let sm: Double = m.speedMul
+        if sm < 0.999 {
+            m.b.vx *= sm
+            if d.flying { m.b.vy *= sm }
+        }
         world.moveBody(&m.b, dt, stepUp: d.flying ? 0 : stepUp, dropThrough: false, decks: decksCache)
+        if sm < 0.999 {
+            m.b.vx /= sm
+            if d.flying { m.b.vy /= sm }
+        }
         if m.b.deck >= 0 && m.b.deck < decksCache.count { m.b.x += decksCache[m.b.deck].vx * dt }
         if m.boat >= 0 { clampToDeck(m) }
         if m.b.onGround { m.anim += abs(m.b.vx) * dt * 0.8 } else { m.anim += dt * 0.5 }
@@ -14532,6 +14777,10 @@ extension Game {
     /// A creature's swing: hits the player and any creature from another side inside the reach box
     func mobStrike(_ m: Mob, reach: Double, height: Double, dmg: Double, knock: Double) {
         m.atkT = Mob.atkDur
+        // a mutated creature's swing reaches as far as it has grown
+        let k: Double = max(1.0, m.mutSize)
+        let reach: Double = reach * k
+        let height: Double = height * k
         let x0: Double = m.dir > 0 ? m.b.x - 0.3 : m.b.x - reach - 0.3
         let x1: Double = m.dir > 0 ? m.b.x + reach + 0.3 : m.b.x + 0.3
         var info = DamageInfo(amount: dmg, type: .melee, source: .mob(m, faction(of: m)))
@@ -14757,7 +15006,14 @@ extension Game {
     // MARK: hostile minds
 
     /// How far a monster's attack reaches (across, up or down) and whether it is shot from afar
+    /// How far a creature's attack reaches: a mutated creature's blows reach as far as its size
     func attackReach(_ m: Mob) -> (Double, Double, Bool) {
+        let r: (Double, Double, Bool) = attackReachBase(m)
+        if m.mutSize <= 1.001 || r.2 { return r }
+        return (r.0 * m.mutSize, r.1 * m.mutSize, r.2)
+    }
+
+    func attackReachBase(_ m: Mob) -> (Double, Double, Bool) {
         switch m.kind {
         case .zombie: return (1.5, 1.7, false)
         case .skeleton, .pirate, .pirateCaptain: return (2.0, 1.6, false)
@@ -14795,6 +15051,8 @@ extension Game {
             m.losT = 0.18 + Double(m.id % 7) * 0.02
             let ey: Double = m.kind == .golem ? m.b.top - 0.5 : shotY(m)
             m.sees = m.kind == .wraith || world.lineClear(m.b.x, ey, pb.x, pb.y - pb.h * 0.6) || world.lineClear(m.b.x, ey, pb.x, pb.top + 0.2)
+            // smoke hides the player from eyes on either side of it
+            if m.sees && !smokes.isEmpty && (inSmoke(pb.x, pb.cy) || inSmoke(m.b.x, m.b.cy)) { m.sees = false }
         }
         // sight reaches across most of the screen (further for the night's hunters, and for one already
         // fighting); footsteps and scent carry through walls over a shorter distance
@@ -15559,6 +15817,9 @@ extension Game {
             spawnDrop(s, m.b.x, m.b.y - m.b.h * 0.5, Double.random(in: -2...2), -4.5)
         }
         if m.kind == .custom { dropModLoot(m, &rng) }
+        for s in alchemyDrops(m, &rng, credit) {
+            spawnDrop(s, m.b.x, m.b.y - m.b.h * 0.5, Double.random(in: -2...2), -4.5)
+        }
         var col: UInt32 = 0xB02828
         if m.kind == .skeleton { col = 0xE8E8E0 }
         if m.kind == .slime { col = 0x60C060 }
@@ -15610,7 +15871,7 @@ extension Game {
         if p.life <= 0 {
             if p.mod >= 0 { modShotLanded(p, p.x, p.y, mob: nil, player: false) }
             if p.kind == .bomb { explode(p.x, p.y, radius: 3.4, power: p.dmg, source: p.source, breakBlocks: true) }
-            if p.kind == .flask { burstFlask(p.x, p.y, p.source) }
+            if p.kind == .flask { burstFlaskOrPotion(p, p.x, p.y, nil) }
             return false
         }
         if p.stuck > 0 {
@@ -15638,7 +15899,7 @@ extension Game {
                 let hx: Double = p.x + (nx - p.x) * target.t
                 let hy: Double = p.y + (ny - p.y) * target.t
                 if p.kind == .flask {
-                    burstFlask(hx, hy, p.source)
+                    burstFlaskOrPotion(p, hx, hy, target.mob)
                     return false
                 }
                 let dirx: Double = p.vx >= 0 ? 1.0 : -1.0
@@ -15661,6 +15922,7 @@ extension Game {
                             if let sh = s, sh.burn > 0 { m.burn = max(m.burn, sh.burn) }
                         }
                         if p.kind == .fireball { m.burn = max(m.burn, 2.5) }
+                        if p.inf != 0 { shotInfusionHit(p, m, hx, hy) }
                         spawnParticles(hx, hy, p.kind == .fireball ? 0xFF8030 : 0xE8E0D0, 3, 2.5, 0.25, 8)
                         if p.source.kind == .player {
                             // a clear "it landed" for the player's own shots
@@ -15693,9 +15955,10 @@ extension Game {
                 modShotLanded(p, hx, hy, mob: nil, player: false)
                 return false
             }
+            if p.inf & 4 != 0 { volatileBurst(hx, hy) }
             switch p.kind {
             case .flask:
-                burstFlask(hx, hy, p.source)
+                burstFlaskOrPotion(p, hx, hy, nil)
                 return false
             case .pebble:
                 spawnParticles(hx, hy, 0x9A9A9A, 4, 2.5, 0.3, 14)
@@ -15891,7 +16154,7 @@ extension Game {
             d.vy = b.vy
             d.onGround = b.onGround
             if !dead && d.pickDelay <= 0 && dist < 0.9 {
-                let left: Int = inv.add(d.stack.item, d.stack.count, extra: d.stack.extra)
+                let left: Int = inv.add(d.stack.item, d.stack.count, extra: d.stack.extra, inf: d.stack.inf)
                 if left < d.stack.count {
                     if d.stack.item == .mat(.relicFragment) { journal.relics += d.stack.count - left }
                     sfx(.pickup, 0.5)
@@ -15954,11 +16217,13 @@ enum DamageType: Int {
     case melee, projectile, explosion, fire, lava, impact, stomp, contact, fall, drown, starve, hazard, crush
     /// lightning from the storm rod
     case shock
+    /// potions (appended): poison over time, and the searing splash's burn
+    case poison, magic
 
     /// Armor does not help against these
     var bypassesArmor: Bool {
         switch self {
-        case .fire, .lava, .fall, .drown, .starve: return true
+        case .fire, .lava, .fall, .drown, .starve, .poison: return true
         default: return false
         }
     }
@@ -15985,10 +16250,12 @@ struct DamageSource {
     var kind: SourceKind
     var id: Int
     var faction: Faction
+    /// how hard a creature's blows land (mutation doubles it, weakness softens it): fixed when the blow starts
+    var mult: Double = 1
 
     static let player: DamageSource = DamageSource(kind: .player, id: 0, faction: .player)
     static let environment: DamageSource = DamageSource(kind: .environment, id: -1, faction: .environment)
-    static func mob(_ m: Mob, _ f: Faction) -> DamageSource { return DamageSource(kind: .mob, id: m.id, faction: f) }
+    static func mob(_ m: Mob, _ f: Faction) -> DamageSource { return DamageSource(kind: .mob, id: m.id, faction: f, mult: m.dmgMul) }
 }
 
 struct DamageInfo {
@@ -16059,6 +16326,8 @@ func damageResist(_ k: MobKind, _ t: DamageType) -> Double {
     // lightning: stone and crystal carry it poorly
     case (.golem, .shock): return 0.6
     case (.sentinel, .shock): return 0.5
+    // poison does not take hold in the dead, in stone or crystal, or in slimes
+    case (.zombie, .poison), (.skeleton, .poison), (.wraith, .poison), (.golem, .poison), (.sentinel, .poison), (.warden, .poison), (.slime, .poison), (.emberSlime, .poison): return 0
     case (.warden, .shock): return 0.75
     default: return 1
     }
@@ -16178,7 +16447,7 @@ extension Game {
             m.hitStamps[info.key] = clock
             if m.hitStamps.count > 24 { m.hitStamps = m.hitStamps.filter { clock - $0.value < 4.0 } }
         }
-        var amount: Double = info.amount * damageResist(m.kind, info.type)
+        var amount: Double = info.amount * damageResist(m.kind, info.type) * (info.source.kind == .mob ? info.source.mult : 1.0)
         if m.kind == .custom, let r = ModRuntime.shared.mob(m.cslot) { amount *= r.resist(info.type) }
         if info.heavy && m.kind == .golem { amount *= 1.9 }
         if info.source.kind == .player {
@@ -16211,7 +16480,11 @@ extension Game {
         var ward: Double = wearing(.wardenSigil) ? 0.85 : 1.0
         ward *= 1.0 - clampD(effects.value(.resistance), 0, 90) / 100.0
         if info.source.kind == .mob && wearing(.silverCharm), let src = mobs.first(where: { $0.id == info.source.id }), isUndead(src.kind) { ward *= 0.75 }
-        damagePlayer(info.amount * dmgInMult * ward, from: info.originX, knock: info.knock, ignoreArmor: info.type.bypassesArmor)
+        // armour infusions and the suit take their share first
+        let amount: Double = guardedAmount(info)
+        if amount <= 0.001 { return false }
+        damagePlayer(amount * dmgInMult * ward, from: info.originX, knock: info.knock * knockTaken, ignoreArmor: info.type.bypassesArmor)
+        if hp < before { thornsBack(info, amount) }
         return hp < before
     }
 
@@ -16304,6 +16577,7 @@ extension Game {
     /// as everything else. Hazards are timed (not per frame) and resistances apply.
     func mobHazards(_ m: Mob, _ dt: Double) {
         if m.removed || m.downed { return }
+        if m.hasStatus { mobStatus(m, dt) }
         if m.hazardT > 0 { m.hazardT -= dt }
         let b: Body = m.b
         let def: MobDef = m.def
@@ -18042,6 +18316,8 @@ extension Game {
         flashes.removeAll()
         dangerZones.removeAll()
         ships.removeAll()
+        smokes.removeAll()
+        rings.removeAll()
         shipTimer = 30
         activeBoss = nil
         decksCache = []
@@ -18341,10 +18617,16 @@ struct SaveData: Codable {
     var power: [PowerDevSave]? = nil
     /// the mods the world was made with and its custom blocks' tile numbers (nil: no mods)
     var mods: ModWorldInfo? = nil
+    /// potion effects on the player (nil: none, or a save from before potions)
+    var effects: EffectsSave? = nil
+    /// mutated creatures still about (nil: none)
+    var mutants: [MutantSave]? = nil
+    /// the exosuit (nil: never built)
+    var suit: ExoSuit? = nil
 }
 
 func mobToSave(_ m: Mob) -> MobSave {
-    return MobSave(kind: m.kind.rawValue, x: m.b.x, y: m.b.y, hp: m.hp, maxHP: m.maxHP, tame: m.tame, variant: m.variant, downed: m.downed, lair: m.lair)
+    return MobSave(kind: m.kind.rawValue, x: m.b.x, y: m.b.y, hp: m.hp, maxHP: m.maxHP, tame: m.tame, variant: m.variant, downed: m.downed, lair: m.lair, mut: m.mut > 0 ? m.mut : nil)
 }
 
 enum SaveStore {
@@ -18461,7 +18743,7 @@ extension Game {
         // the world's mods: those it was made with (a missing one stays listed, so it is never forgotten)
         var mi: ModWorldInfo? = modInfo
         if ModRuntime.shared.active { mi = ModRuntime.shared.worldInfo() }
-        return SaveData(meta: meta, settings: settings, px: px, py: py, hp: max(1, hp), maxHP: maxHP, hunger: hunger, timeOfDay: timeOfDay, kills: kills, spawnX: spawnX, spawnY: spawnY, inv: inv, sel: sel, defeated: Array(defeated), gotMap: gotMap, portalOpened: portalOpened, chests: chestList, chunks: cs, vehicles: vs, pets: pets, rex: rs, nextID: nextID, journal: journal, weather: weather, bodyCold: bodyCold, power: powerSave(), mods: mi)
+        return SaveData(meta: meta, settings: settings, px: px, py: py, hp: max(1, hp), maxHP: maxHP, hunger: hunger, timeOfDay: timeOfDay, kills: kills, spawnX: spawnX, spawnY: spawnY, inv: inv, sel: sel, defeated: Array(defeated), gotMap: gotMap, portalOpened: portalOpened, chests: chestList, chunks: cs, vehicles: vs, pets: pets, rex: rs, nextID: nextID, journal: journal, weather: weather, bodyCold: bodyCold, power: powerSave(), mods: mi, effects: effectsSave(), mutants: mutantSaves(), suit: suit.isEmpty ? nil : suit)
     }
 
     @discardableResult
@@ -18499,6 +18781,8 @@ extension Game {
         if let w = s.weather { g.weather = w }
         g.bodyCold = clampD(s.bodyCold ?? 0, 0, 1)
         g.modInfo = s.mods
+        if let e = s.effects { g.restoreEffects(e) }
+        if let su = s.suit { g.restoreSuit(su) }
         g.gotMap = s.gotMap
         g.portalOpened = s.portalOpened
         g.nextID = max(g.nextID, s.nextID)
@@ -18568,6 +18852,11 @@ extension Game {
             m.hp = p.hp
             m.maxHP = p.maxHP
             m.variant = p.variant
+            if let mu = p.mut, mu > 0 {
+                g.reapplyMutation(m, clampI(mu, 1, MutationLimits.maxStacks))
+                m.maxHP = clampD(p.maxHP, 1, MutationLimits.maxHP)
+                m.hp = clampD(p.hp, 1, m.maxHP)
+            }
         }
         if let r = s.rex {
             let m: Mob = g.addMob(.rex, r.x, r.y)
@@ -18582,6 +18871,7 @@ extension Game {
                 g.teleportRexNearPlayer(m)
             }
         }
+        if let ms = s.mutants { g.restoreMutants(ms) }
         g.invuln = 2.0
         return g
     }
@@ -18682,6 +18972,7 @@ extension Game {
         if let i = it {
             switch i {
             case .block, .part, .mat, .food, .wall: wantsMob = false
+            case .potion(let pt): wantsMob = pt.thrown && pt != .mendingSplash && pt != .regrowthSplash
             default: wantsMob = true
             }
         }
@@ -18692,6 +18983,12 @@ extension Game {
             aimed = true
             lockTarget = m
             lockT = max(lockT, 0.5)
+        }
+        if case .potion(let pt)? = it, pt == .mendingSplash || pt == .regrowthSplash {
+            // a helpful splash thrown with no direction bursts at the player's own feet
+            tx = pb.x + Double(facing) * 0.6
+            ty = pb.y - 0.3
+            aimed = true
         }
         if !aimed {
             let fx: Int = Int(floor(pb.x + Double(facing) * (pb.w * 0.5 + 0.55)))
@@ -18744,12 +19041,15 @@ extension Game {
         guard let item = it else { return stickDigPoint(dx, dy, reach) }
         switch item {
         case .sword, .spear, .hammer, .knife, .club, .relic:
-            let d: Double = max(1.0, item.melee.reach)
+            let d: Double = max(1.0, infusedMelee(item).reach)
             return (ox + dx * d, oy + dy * d)
         case .bow, .gun:
             return (ox + dx * 14.0, oy + dy * 14.0)
         case .sling:
             let d: Double = 4.0 + 9.0 * power
+            return (ox + dx * d, oy + dy * d)
+        case .potion(let pt) where pt.thrown:
+            let d: Double = 3.0 + 9.0 * power
             return (ox + dx * d, oy + dy * d)
         case .gadget(let g):
             if g == .bomb || g == .fireFlask {
@@ -19133,7 +19433,8 @@ extension Game {
         let h: Int = a.0?.rawValue ?? 0
         let c: Int = a.1?.rawValue ?? 0
         let l: Int = a.2?.rawValue ?? 0
-        return h * 100 + c * 10 + l + settings.hair * 1000 + settings.scarf * 10000
+        let suitPart: Int = suitLook()?.hashValue ?? 0
+        return (h * 100 + c * 10 + l + settings.hair * 1000 + settings.scarf * 10000) &+ suitPart
     }
 
     /// Which humanoid frame to show for the player: 0 idle, 1/2 walk, 3 windup, 4 attack, 6 shoot
@@ -19777,7 +20078,14 @@ extension Game {
         h.combine(Int(maxHP))
         h.combine(Int(hunger * 2.0))
         h.combine(Int(air * 2.0))
-        h.combine(Int(inv.defense))
+        h.combine(Int(totalDefense))
+        // effects tick down a second at a time; the suit's energy in steps
+        for e in activeEffects() {
+            h.combine(e.0.rawValue)
+            h.combine(Int(e.1))
+        }
+        h.combine(suit.worn)
+        h.combine(Int(suit.energy / 3.0))
         h.combine(sel)
         for i in 0..<Inventory.hotbarCount {
             if let s = inv.slots[i] {
@@ -20234,7 +20542,7 @@ func powerRole(_ t: Tile) -> PowerRole {
     case .lever, .pushButton, .pressurePlate: return .source
     case .pulseTimer, .repeater, .inverter, .logicGate: return .logic
     case .motionSensor, .daySensor, .weatherSensor, .itemSensor, .proximitySensor: return .sensor
-    case .gateClosed, .gateOpen, .lampOff, .lampOn, .arcTrap, .autoDrill, .conveyor, .collector, .autoCrafter, .sumpPump: return .machine
+    case .gateClosed, .gateOpen, .lampOff, .lampOn, .arcTrap, .autoDrill, .conveyor, .collector, .autoCrafter, .sumpPump, .exoStation: return .machine
     case .signalLight: return .indicator
     default: return .none
     }
@@ -20440,6 +20748,7 @@ enum PowerSpec {
         case .collector: return 1
         case .autoCrafter: return 5
         case .sumpPump: return 4
+        case .exoStation: return 10
         case .motionSensor, .daySensor, .weatherSensor, .itemSensor, .proximitySensor: return 0.5
         default: return 0
         }
@@ -21200,6 +21509,7 @@ extension Game {
             switch d.tile {
             case .arcTrap: runArcTrap(d, dt)
             case .autoDrill: runDrill(d, dt)
+            case .exoStation: runSuitDock(d, dt)
             case .collector: runCollector(d, dt)
             case .autoCrafter: runCrafter(d, dt)
             case .sumpPump: runPump(d, dt)
@@ -21648,6 +21958,8 @@ extension Game {
     /// breaker resets, fuel goes in; anything else opens its panel
     func usePowerDevice(_ x: Int, _ y: Int, _ t: Tile) {
         guard let d = world.powerDev(x, y) else { return }
+        // wearing the suit, a tap on a battery fills the suit from it
+        if (t == .battery || t == .accumulator) && suit.worn && chargeSuitFrom(d) { return }
         switch t {
         case .lever:
             d.on.toggle()
@@ -21892,6 +22204,7 @@ extension Game {
         case .gateClosed, .gateOpen: return "Opens while its pulse wire is on; with none, tap it. Needs power to move."
         case .arcTrap: return "Zaps whatever stands on it, once a second."
         case .autoDrill: return "Bores out the block it faces (what an iron pickaxe could). Drops land as if mined."
+        case .exoStation: return "Builds suits; charges a suit worn close by from this line (10 a second, only while it charges)."
         case .conveyor: return "Carries items (and anyone) along the way the arrow points."
         case .collector: return "Draws loose items within two blocks into a chest beside it."
         case .autoCrafter: return "Makes its recipe from the chest behind it into the chest in front, every 2 s."
@@ -22568,8 +22881,17 @@ enum ModItemKind: Int, Codable, CaseIterable {
 /// Effects an item can give, taken from a fixed list (no custom code)
 enum ModEffectKind: Int, Codable, CaseIterable {
     case heal, feed, speed, strength, resistance, regen, glow, jump, fireproof, cure
+    /// appended (potions): mining speed, water breathing, night vision, luck, slow falling, warmth
+    case mining, breathing, nightVision, luck, featherfall, warmth
     var name: String {
         switch self {
+        case .mining: return "Mining speed"
+        case .breathing: return "Water breathing"
+        case .nightVision: return "Night vision"
+        case .luck: return "Luck"
+        case .featherfall: return "Slow falling"
+        case .warmth: return "Warmth (cold)"
+
         case .heal: return "Restore health"
         case .feed: return "Restore hunger"
         case .speed: return "Speed boost"
@@ -22599,6 +22921,9 @@ enum ModEffectKind: Int, Codable, CaseIterable {
         case .regen: return "Health per second"
         case .glow: return "Light level"
         case .fireproof, .cure: return "Strength"
+        case .mining: return "Extra %"
+        case .luck: return "Chance %"
+        case .breathing, .nightVision, .featherfall, .warmth: return "Strength"
         }
     }
     var amountRange: ModRange {
@@ -22610,6 +22935,9 @@ enum ModEffectKind: Int, Codable, CaseIterable {
         case .regen: return ModRange(lo: 0, hi: 4, sandboxHi: 40)
         case .glow: return ModRange(lo: 1, hi: 15, sandboxHi: 15)
         case .fireproof, .cure: return ModRange(lo: 0, hi: 1, sandboxHi: 1)
+        case .mining: return ModRange(lo: 0, hi: 80, sandboxHi: 300)
+        case .luck: return ModRange(lo: 0, hi: 30, sandboxHi: 60)
+        case .breathing, .nightVision, .featherfall, .warmth: return ModRange(lo: 0, hi: 1, sandboxHi: 1)
         }
     }
 }
@@ -23879,7 +24207,7 @@ enum ModValidator {
             b.tier = clampI(b.tier, 0, 9)
             b.light = clampI(b.light, 0, 15)
             b.dropCount = clampI(b.dropCount, 1, 16)
-            b.station = clampI(b.station, -1, 6)
+            b.station = clampI(b.station, -1, 9)
             b.power = clampD(b.power.isFinite ? b.power : 0, 0, sb ? 400 : 40)
             if b.text.count > 200 { b.text = String(b.text.prefix(200)) }
             if let d = b.drop, !exists(d) {
@@ -24065,7 +24393,7 @@ enum ModValidator {
             rc.count = clampI(rc.count, 1, 99)
             if rc.cost.count > ModLimits.maxCost { rc.cost = Array(rc.cost.prefix(ModLimits.maxCost)) }
             for k in rc.cost.indices { rc.cost[k].n = clampI(rc.cost[k].n, 1, 999) }
-            rc.station = clampI(rc.station, -1, 6)
+            rc.station = clampI(rc.station, -1, 9)
             rc.cat = clampI(rc.cat, 0, RecipeCat.allCases.count - 1)
             var bad: String = ""
             if !exists(rc.out) { bad = "It makes something that does not exist." }
@@ -24588,7 +24916,10 @@ extension Game {
             return
         }
         if r.def.behavior.swim && m.b.inWater && !r.mdef.flying {
+            let sm: Double = m.speedMul
+            if sm < 0.999 { m.b.vx *= sm }
             world.moveBody(&m.b, dt, stepUp: 1.0, dropThrough: false, decks: decksCache)
+            if sm < 0.999 { m.b.vx /= sm }
             m.anim += dt * 4.0
             return
         }
@@ -25973,10 +26304,9 @@ struct ModGunSpec {
 }
 
 extension Game {
-    /// Once a frame: effects run down, worn armour keeps its effect up, regeneration heals, fire
-    /// protection puts fires out, jump pads throw the player up
+    /// Once a frame in a world with mods: worn mod armour keeps its effect up and jump pads throw the
+    /// player up (effects themselves run down in updateEffects, in every world)
     func updateModPlay(_ dt: Double) {
-        effects.tick(dt)
         if healerCD > 0 { healerCD -= dt }
         let rt: ModRuntime = ModRuntime.shared
         if !rt.active { return }
@@ -25985,17 +26315,6 @@ extension Game {
                 effects.add(e.kind, e.amount, 0.3)
             }
         }
-        let regen: Double = effects.value(.regen)
-        if regen > 0 && !dead && hp < maxHP {
-            effects.regenAcc += regen * dt
-            if effects.regenAcc >= 1 {
-                let n: Double = floor(effects.regenAcc)
-                effects.regenAcc -= n
-                hp = min(maxHP, hp + n)
-                bumpHUD()
-            }
-        }
-        if effects.value(.fireproof) > 0 { playerBurn = 0 }
         // a jump pad under the feet
         if pb.onGround && !dead && inVehicle == nil {
             let under: Tile = world.tile(Int(floor(pb.x)), Int(floor(pb.y + 0.05)))
@@ -26046,8 +26365,8 @@ extension Game {
         let it: Item = .custom(r.key)
         let tx: Int = Int(floor(aimX))
         let ty: Int = Int(floor(aimY))
-        if let m = mobUnderAim(it.melee) {
-            if pressed || (useCD <= 0 && !meleeCandidates(it.melee).isEmpty) { startMelee(it, target: m) }
+        if let m = mobUnderAim(infusedMelee(it)) {
+            if pressed || (useCD <= 0 && !meleeCandidates(infusedMelee(it)).isEmpty) { startMelee(it, target: m) }
             return
         }
         let tt: ToolType = ToolType(rawValue: r.def.toolType) ?? .pickaxe
@@ -26194,9 +26513,10 @@ extension Game {
             p.w = w
             p.mod = r.shot
             if r.shot < 0 && kind == .fireball { p.life = 2.5 }
+            infuseShot(&p, heldItem)
             projectiles.append(p)
         }
-        useCD = d.cooldown
+        useCD = d.cooldown * quickMul()
         swingT = 0.14
         swingDir = facing
         switch d.kind {
@@ -26385,6 +26705,9 @@ extension Game {
             case .anvil: station = .anvil
             case .tinker: station = .tinkerBench
             case .forge: station = .riftForge
+            case .still: station = .alchemyStill
+            case .infuser: station = .infuser
+            case .assembly: station = .exoStation
             }
         }
         var placed: String = ""
@@ -26424,6 +26747,2875 @@ extension Game {
             bumpHUD()
         }
     }
+}
+
+// ===== p29_alchemy =====
+
+// MARK: - Alchemy: rarity, potions, ingredients
+
+/// How rare something is. It colours a name and says how hard the ingredients are to come by: basic
+/// things come from the overworld, rarer ones from deep places, storms, the Umbral realm and its bosses.
+enum Rarity: Int, Codable, CaseIterable {
+    case basic, uncommon, rare, veryRare, legendary
+    var name: String {
+        switch self {
+        case .basic: return "Basic"
+        case .uncommon: return "Uncommon"
+        case .rare: return "Rare"
+        case .veryRare: return "Very rare"
+        case .legendary: return "Boss relic"
+        }
+    }
+    var color: UInt32 {
+        switch self {
+        case .basic: return 0xD8D8D8
+        case .uncommon: return 0x6EE07A
+        case .rare: return 0x5AB4FF
+        case .veryRare: return 0xC07CFF
+        case .legendary: return 0xFFB040
+        }
+    }
+}
+
+/// Every potion. Drinkable ones work on the player at once or for a while; the rest are thrown and burst
+/// over an area. Saved by number: new kinds only ever go on the end.
+enum Potion: Int, Codable, CaseIterable {
+    case mending, greaterMending, regrowth, brawn, quickstep, prospector, ironhide, emberward, deepbreath, owlsight, seeker, featherfall, hearthfire, springstep
+    case searing, blight, mire, enfeeble, mendingSplash, regrowthSplash, smoke, frost, mutagen
+
+    var name: String {
+        switch self {
+        case .mending: return "Mending Draught"
+        case .greaterMending: return "Greater Mending Draught"
+        case .regrowth: return "Regrowth Tonic"
+        case .brawn: return "Brawn Brew"
+        case .quickstep: return "Quickstep Elixir"
+        case .prospector: return "Prospector's Draught"
+        case .ironhide: return "Ironhide Tonic"
+        case .emberward: return "Emberward Draught"
+        case .deepbreath: return "Deepbreath Draught"
+        case .owlsight: return "Owlsight Draught"
+        case .seeker: return "Seeker's Tonic"
+        case .featherfall: return "Featherfall Tonic"
+        case .hearthfire: return "Hearthfire Tonic"
+        case .springstep: return "Springstep Draught"
+        case .searing: return "Searing Splash"
+        case .blight: return "Blight Splash"
+        case .mire: return "Mire Splash"
+        case .enfeeble: return "Enfeebling Splash"
+        case .mendingSplash: return "Mending Splash"
+        case .regrowthSplash: return "Regrowth Splash"
+        case .smoke: return "Smoke Flask"
+        case .frost: return "Frost Splash"
+        case .mutagen: return "Mutagen"
+        }
+    }
+
+    /// thrown to burst (the others are drunk)
+    var thrown: Bool { return rawValue >= Potion.searing.rawValue }
+
+    /// the colour of what is inside (also the colour of its burst and of its effect's icon)
+    var color: UInt32 {
+        switch self {
+        case .mending, .mendingSplash: return 0xE8445A
+        case .greaterMending: return 0xFF2E6A
+        case .regrowth, .regrowthSplash: return 0xF07AB8
+        case .brawn: return 0xC8402A
+        case .quickstep: return 0x7AD8F8
+        case .prospector: return 0xE8B83A
+        case .ironhide: return 0x9AA4B8
+        case .emberward: return 0xFF8A2A
+        case .deepbreath: return 0x2E7AE8
+        case .owlsight: return 0x3A4AC8
+        case .seeker: return 0x5AE070
+        case .featherfall: return 0xE8ECF8
+        case .hearthfire: return 0xE86A3A
+        case .springstep: return 0x8AE85A
+        case .searing: return 0xFF5A1E
+        case .blight: return 0x6AB82E
+        case .mire: return 0x7A5A3A
+        case .enfeeble: return 0x8A7AA8
+        case .smoke: return 0x8A8A90
+        case .frost: return 0xA8E8FF
+        case .mutagen: return 0x9AF04A
+        }
+    }
+
+    var rarity: Rarity {
+        switch self {
+        case .mending, .springstep, .featherfall, .quickstep, .smoke, .mire: return .basic
+        case .regrowth, .brawn, .prospector, .ironhide, .deepbreath, .owlsight, .hearthfire, .searing, .blight, .mendingSplash, .frost: return .uncommon
+        case .emberward, .enfeeble, .regrowthSplash, .greaterMending: return .rare
+        case .seeker: return .rare
+        case .mutagen: return .veryRare
+        }
+    }
+
+    /// the effect a drink gives, with its strength and seconds (nil: healing, which acts at once)
+    var effect: ModEffect? {
+        switch self {
+        case .regrowth: return ModEffect(.regen, 1.0, 20)
+        case .brawn: return ModEffect(.strength, 35, 60)
+        case .quickstep: return ModEffect(.speed, 30, 90)
+        case .prospector: return ModEffect(.mining, 60, 120)
+        case .ironhide: return ModEffect(.resistance, 30, 90)
+        case .emberward: return ModEffect(.fireproof, 1, 120)
+        case .deepbreath: return ModEffect(.breathing, 1, 180)
+        case .owlsight: return ModEffect(.nightVision, 1, 180)
+        case .seeker: return ModEffect(.luck, 25, 150)
+        case .featherfall: return ModEffect(.featherfall, 1, 120)
+        case .hearthfire: return ModEffect(.warmth, 1, 240)
+        case .springstep: return ModEffect(.jump, 40, 90)
+        default: return nil
+        }
+    }
+
+    /// health a mending potion gives back at once
+    var healAmount: Double {
+        switch self {
+        case .mending: return 8
+        case .greaterMending: return 14
+        case .mendingSplash: return 6
+        default: return 0
+        }
+    }
+
+    /// how far a thrown potion's burst reaches (blocks)
+    var radius: Double {
+        switch self {
+        case .searing: return 2.6
+        case .blight: return 2.8
+        case .mendingSplash, .regrowthSplash: return 3.2
+        case .smoke: return 3.6
+        case .mutagen: return 1.6
+        default: return 3.0
+        }
+    }
+
+    var maxStack: Int { return self == .mutagen ? 4 : (thrown ? 16 : 10) }
+
+    /// what it does, in a line
+    var blurb: String {
+        switch self {
+        case .mending: return "Heals 8 at once (then 10 s before mending works fully again)"
+        case .greaterMending: return "Heals 14 at once (then 14 s before mending works fully again)"
+        case .regrowth: return "Heals 1 a second for 20 s"
+        case .brawn: return "Hit 35% harder for 60 s"
+        case .quickstep: return "Run 30% faster for 90 s"
+        case .prospector: return "Mine 60% faster for 2 min"
+        case .ironhide: return "Take 30% less damage for 90 s"
+        case .emberward: return "Fire and lava can't hurt you for 2 min"
+        case .deepbreath: return "Breathe under water and swim faster for 3 min"
+        case .owlsight: return "See in the dark for 3 min"
+        case .seeker: return "A 25% chance of one extra ore, gem or creature drop, for 150 s"
+        case .featherfall: return "Fall slowly and take no fall damage for 2 min"
+        case .hearthfire: return "The cold can't get at you for 4 min"
+        case .springstep: return "Jump 40% higher for 90 s"
+        case .searing: return "Burns creatures it bursts over: 8 damage"
+        case .blight: return "Poisons creatures: 1.5 a second for 8 s (not the undead or stone)"
+        case .mire: return "Bogs creatures down: half speed for 8 s"
+        case .enfeeble: return "Creatures hit 40% softer for 15 s"
+        case .mendingSplash: return "Heals you and your animals within reach: 6"
+        case .regrowthSplash: return "You and your animals heal 1 a second for 12 s"
+        case .smoke: return "A cloud for 8 s: monsters can't see into or out of it"
+        case .frost: return "Slows creatures hard, puts out fires, freezes still water"
+        case .mutagen: return "The creature it hits doubles in size, health and strength"
+        }
+    }
+
+    /// what it is like to use, for its tooltip
+    var useLine: String {
+        if self == .mutagen { return "Rare. Throw it at a creature: aim with the attack stick" }
+        return thrown ? "Throw it: aim with the attack stick and let go" : "Tap to drink it"
+    }
+}
+
+/// Seconds after drinking a mending potion before another heals fully (a second one inside that time
+/// heals a third as much)
+let mendingRest: [Double] = [10, 14]
+
+// MARK: status effects on creatures
+
+extension Mob {
+    /// how hard its blows land: doubled by each mutation, softened while it is weakened
+    var dmgMul: Double { return mutDmg * (weakT > 0 ? 0.6 : 1.0) }
+    /// how fast it moves: bogged down by mire, frost and frost-infused weapons
+    var speedMul: Double { return slowT > 0 ? max(0.2, 1.0 - slowAmt) : 1.0 }
+    /// any potion effect showing on it (for drawing)
+    var hasStatus: Bool { return slowT > 0 || poisonT > 0 || weakT > 0 || regenT > 0 }
+}
+
+/// Creatures that poison does not touch: the restless dead, stone and crystal, and slimes
+func poisonImmune(_ m: Mob) -> Bool {
+    switch m.kind {
+    case .zombie, .skeleton, .wraith, .golem, .sentinel, .warden, .slime, .emberSlime: return true
+    default: return false
+    }
+}
+
+// MARK: smoke
+
+/// A smoke flask's cloud: monsters can't see into it or out of it while it lasts
+struct SmokeCloud {
+    var x: Double
+    var y: Double
+    var r: Double
+    var t: Double
+    var maxT: Double
+}
+
+/// Thrown-potion bursts drawn as a ring for a moment
+struct BurstRing {
+    var x: Double
+    var y: Double
+    var r: Double
+    var t: Double
+    var color: UInt32
+}
+
+// MARK: mutation limits
+
+/// Safe limits for creature mutation. Each dose doubles size, health and strength, but the numbers stop
+/// at these caps, so stacking can never break the physics, the drawing or the arithmetic.
+enum MutationLimits {
+    /// doses a creature can take (more still burst, but change nothing)
+    static let maxStacks: Int = 8
+    /// the most a body may grow to, in blocks
+    static let maxW: Double = 7.0
+    static let maxH: Double = 7.0
+    /// size multiplier cap (whatever the doses)
+    static let maxSize: Double = 8.0
+    /// health: at most this many times the normal amount, and never above `maxHP`
+    static let maxHPMul: Double = 64.0
+    static let maxHP: Double = 3000.0
+    /// strength: at most this many times the normal blow, and no blow above `maxBlow`
+    static let maxDmgMul: Double = 6.0
+    static let maxBlow: Double = 26.0
+    /// bosses take one dose only, and it is milder
+    static let bossHP: Double = 1.5
+    static let bossDmg: Double = 1.25
+    static let bossSize: Double = 1.15
+    /// mutated creatures kept (and saved) at once; the oldest wild ones give way
+    static let maxMutants: Int = 16
+}
+
+// MARK: saving
+
+/// The player's potion effects in a save: each kind by number with its strength and time left
+struct EffectsSave: Codable {
+    var kinds: [Int]
+    var amount: [Double]
+    var time: [Double]
+    /// seconds before mending potions heal fully again
+    var mendCD: Double? = nil
+}
+
+/// A mutated creature in a save (wild ones as well as pets): where it is and how mutated
+struct MutantSave: Codable {
+    var kind: Int
+    var x: Double
+    var y: Double
+    var hp: Double
+    var maxHP: Double
+    var mut: Int
+    var variant: Int
+    var tame: Bool
+    var dim: Int
+}
+
+extension Game {
+    // MARK: effects every frame
+
+    /// Every frame: effects run down; regeneration heals; fire protection puts out flames. Runs in every
+    /// world (mod armour's worn effects and jump pads are in updateModPlay).
+    func updateEffects(_ dt: Double) {
+        effects.tick(dt)
+        if mendCD > 0 { mendCD = max(0, mendCD - dt) }
+        let regen: Double = effects.value(.regen) + armorInf.regen
+        if regen > 0 && !dead && hp < maxHP {
+            effects.regenAcc += regen * dt
+            if effects.regenAcc >= 1 {
+                let n: Double = floor(effects.regenAcc)
+                effects.regenAcc -= n
+                hp = min(maxHP, hp + n)
+                bumpHUD()
+            }
+        }
+        if effects.value(.fireproof) > 0 { playerBurn = 0 }
+        // a falling body drifts down gently and lands softly
+        if effects.value(.featherfall) > 0 && !pb.onGround && !pb.inWater && inVehicle == nil && mounted == nil {
+            if pb.vy > 5.5 { pb.vy = 5.5 }
+            fallPeak = 0
+        }
+        if !smokes.isEmpty {
+            for i in smokes.indices { smokes[i].t -= dt }
+            smokes.removeAll { $0.t <= 0 }
+        }
+        if !rings.isEmpty {
+            for i in rings.indices { rings[i].t -= dt }
+            rings.removeAll { $0.t <= 0 }
+        }
+        updateSuit(dt)
+    }
+
+    /// Potion effects on a creature, once a frame: slows and weakness wear off, poison hurts once a
+    /// second, regeneration heals
+    func mobStatus(_ m: Mob, _ dt: Double) {
+        if m.slowT > 0 { m.slowT -= dt }
+        if m.weakT > 0 { m.weakT -= dt }
+        if m.poisonT > 0 {
+            m.poisonT -= dt
+            m.poisonTick += dt
+            if m.poisonTick >= 1.0 {
+                m.poisonTick = 0
+                var info = DamageInfo(amount: m.poisonDps, type: .poison, source: m.poisonByPlayer ? .player : .environment)
+                info.originX = m.b.x
+                applyMobDamage(m, info)
+                spawnParticles(m.b.x, m.b.top + 0.2, 0x7AD040, 3, 1.2, 0.5, -3)
+            }
+        }
+        if m.regenT > 0 {
+            m.regenT -= dt
+            m.regenAcc += m.regenRate * dt
+            if m.regenAcc >= 1 {
+                let n: Double = floor(m.regenAcc)
+                m.regenAcc -= n
+                m.hp = min(m.maxHP, m.hp + n)
+            }
+        }
+    }
+
+    // MARK: drinking
+
+    /// A potion in hand: drink it, or throw it
+    func usePotion(_ p: Potion, _ pressed: Bool) {
+        if p.thrown {
+            if pressed { throwPotion(p) }
+            return
+        }
+        if !pressed || useCD > 0 { return }
+        drinkPotion(p)
+    }
+
+    /// Drinks a potion from the selected slot: its effect, a sip sound, bubbles in its colour and a word
+    /// over the player's head
+    func drinkPotion(_ p: Potion) {
+        guard let s = inv.slots[sel], s.item == .potion(p) else { return }
+        if p.healAmount > 0 {
+            if hp >= maxHP && !isCreative {
+                say("You are not hurt.", 1.2)
+                useCD = 0.4
+                return
+            }
+            let rested: Bool = mendCD <= 0
+            let amount: Double = rested ? p.healAmount : (p.healAmount / 3.0).rounded()
+            heal(amount)
+            mendCD = max(mendCD, p == .greaterMending ? mendingRest[1] : mendingRest[0])
+            floatText(joinText("+", String(Int(amount))), pb.x, pb.y - pb.h - 0.4, 0x60F070)
+            if !rested { say("Too soon after the last: it only mends a little.", 1.6) }
+        } else if let e = p.effect {
+            effects.add(e.kind, e.amount, e.seconds)
+            floatText(e.kind.short, pb.x, pb.y - pb.h - 0.4, p.color)
+            if e.kind == .nightVision { light.valid = false }
+        }
+        if !isCreative { inv.removeAt(sel, 1) }
+        useCD = 0.7
+        eatT = 0.6
+        sfx(.drink, 0.7)
+        spawnParticles(pb.x + Double(facing) * 0.3, pb.y - 1.5, p.color, 8, 2.0, 0.6, -3)
+        if !journal.crafted.contains(p.name) { journal.crafted.append(p.name) }
+        bumpHUD()
+    }
+
+    // MARK: throwing
+
+    /// Throws a potion from the selected slot in a lob toward the aim: it flies as a flask and bursts
+    /// where it lands or on the first creature it meets
+    func throwPotion(_ p: Potion) {
+        if useCD > 0 { return }
+        guard let s = inv.slots[sel], s.item == .potion(p) else { return }
+        if !isCreative { inv.removeAt(sel, 1) }
+        facing = aimFacing()
+        let ox: Double = pb.x + Double(facing) * 0.4
+        let oy: Double = pb.y - 1.3
+        let a: Double = lobAngle(aimX - ox, aimY - oy, throwSpeed, throwGravity)
+        var pr = Projectile(kind: .flask, x: ox, y: oy, vx: cos(a) * throwSpeed, vy: sin(a) * throwSpeed, dmg: 0, fromPlayer: true, gravity: throwGravity)
+        pr.life = 2.5
+        pr.w = 0.3
+        pr.source = .player
+        pr.uid = newID()
+        pr.potion = p.rawValue
+        // the creature under the aim (a mutagen goes to it even if it is hit only at the edge)
+        pr.owner = -1
+        projectiles.append(pr)
+        useCD = 0.5
+        swingT = 0.18
+        swingDir = facing
+        sfx(.swingLight, 0.5)
+        bumpHUD()
+    }
+
+    /// A thrown potion breaks: what it does to everything within its reach (through open air only), a
+    /// ring and a puff in its colour, and the sound of glass
+    func burstPotion(_ p: Potion, _ x: Double, _ y: Double, direct: Mob?) {
+        let r: Double = p.radius
+        sfx(.potionBreak, at: x, 0.9)
+        spawnParticles(x, y, p.color, 14, 4.5, 0.55, 6)
+        spawnParticles(x, y, 0xD8F0FF, 5, 3.5, 0.3, 16)
+        if rings.count >= 6 { rings.removeFirst() }
+        rings.append(BurstRing(x: x, y: y, r: r, t: 0.35, color: p.color))
+        addLightFlash(x, y - 0.3, peak: 9, dur: 0.35, radius: r, color: p.color)
+        switch p {
+        case .smoke:
+            if smokes.count >= 4 { smokes.removeFirst() }
+            smokes.append(SmokeCloud(x: x, y: y - 0.8, r: r, t: 8.0, maxT: 8.0))
+            return
+        case .mutagen:
+            var target: Mob? = direct
+            if target == nil {
+                var bd: Double = r
+                for m in mobsNear(x - r - 3, x + r + 3) where m.hp > 0 && !m.removed && !m.downed {
+                    let d: Double = boxDistance(x, y, m.b.left, m.b.top, m.b.right, m.b.y)
+                    if d <= bd { bd = d; target = m }
+                }
+            }
+            if let m = target { _ = mutate(m) } else { floatText("Nothing to change", x, y - 0.6, 0xC8C8C8) }
+            return
+        default: break
+        }
+        let helpful: Bool = p == .mendingSplash || p == .regrowthSplash
+        if helpful && !dead {
+            let d: Double = boxDistance(x, y, pb.left, pb.top, pb.right, pb.y)
+            if d <= r && world.lineClear(x, y, pb.x, pb.cy) { splashPlayer(p) }
+        }
+        if p == .frost { frostBurst(x, y, r) }
+        for m in mobsNear(x - r - 4, x + r + 4) {
+            if m.hp <= 0 || m.removed { continue }
+            let d: Double = boxDistance(x, y, m.b.left, m.b.top, m.b.right, m.b.y)
+            if d > r { continue }
+            if !world.lineClear(x, y, m.b.x, m.b.cy) && direct !== m { continue }
+            if helpful {
+                if m.tame { splashMob(p, m) }
+            } else if !m.tame {
+                splashMob(p, m)
+            }
+        }
+    }
+
+    /// A helpful splash on the player
+    func splashPlayer(_ p: Potion) {
+        if p == .mendingSplash {
+            let rested: Bool = mendCD <= 0
+            let amount: Double = rested ? p.healAmount : (p.healAmount / 3.0).rounded()
+            if hp < maxHP {
+                heal(amount)
+                floatText(joinText("+", String(Int(amount))), pb.x, pb.y - pb.h - 0.4, 0x60F070)
+            }
+            mendCD = max(mendCD, mendingRest[0])
+        } else if p == .regrowthSplash {
+            effects.add(.regen, 1.0, 12)
+            floatText(ModEffectKind.regen.short, pb.x, pb.y - pb.h - 0.4, p.color)
+        }
+        bumpHUD()
+    }
+
+    /// A splash on a creature. Bosses feel the harmful ones less.
+    func splashMob(_ p: Potion, _ m: Mob) {
+        let boss: Bool = m.isBoss
+        switch p {
+        case .mendingSplash:
+            m.hp = min(m.maxHP, m.hp + p.healAmount)
+            floatText(joinText("+", String(Int(p.healAmount))), m.b.x, m.b.top - 0.3, 0x60F070)
+        case .regrowthSplash:
+            m.regenT = 12
+            m.regenRate = 1.0
+        case .searing:
+            var info = DamageInfo(amount: 8, type: .magic, source: .player)
+            info.originX = m.b.x
+            info.knock = 3
+            info.key = newID()
+            applyMobDamage(m, info)
+        case .blight:
+            if poisonImmune(m) {
+                floatText("Immune", m.b.x, m.b.top - 0.3, 0xB8B8B8)
+            } else {
+                m.poisonT = max(m.poisonT, boss ? 4.0 : 8.0)
+                m.poisonDps = boss ? 0.75 : 1.5
+                m.poisonByPlayer = true
+                m.lastHitByPlayer = clock
+                angerBy(m)
+            }
+        case .mire:
+            m.slowT = max(m.slowT, boss ? 4.0 : 8.0)
+            m.slowAmt = max(m.slowT > 0 ? m.slowAmt : 0, boss ? 0.25 : 0.5)
+            angerBy(m)
+        case .enfeeble:
+            m.weakT = max(m.weakT, boss ? 8.0 : 15.0)
+            angerBy(m)
+        case .frost:
+            m.slowT = max(m.slowT, boss ? 2.0 : 4.0)
+            m.slowAmt = max(m.slowAmt, boss ? 0.35 : 0.7)
+            m.burn = 0
+            angerBy(m)
+        default: break
+        }
+    }
+
+    /// A harmful splash counts as an attack: animals that defend themselves turn on the player
+    func angerBy(_ m: Mob) {
+        m.lastHitByPlayer = clock
+        if m.def.behavior == .defensive {
+            m.angry = true
+            m.t3 = 10.0
+        }
+    }
+
+    /// Frost: fires in reach go out (on the player too), and still water near the burst freezes over
+    func frostBurst(_ x: Double, _ y: Double, _ r: Double) {
+        if !dead && boxDistance(x, y, pb.left, pb.top, pb.right, pb.y) <= r { playerBurn = 0 }
+        fireZones.removeAll { abs($0.x - x) < r + $0.r && abs($0.y - y) < r + 1.5 }
+        let x0: Int = Int(floor(x - r))
+        let x1: Int = Int(floor(x + r))
+        let y0: Int = Int(floor(y - r))
+        let y1: Int = Int(floor(y + r))
+        var frozen: Int = 0
+        for ty in y0...y1 {
+            for tx in x0...x1 where frozen < 16 {
+                let dx: Double = Double(tx) + 0.5 - x
+                let dy: Double = Double(ty) + 0.5 - y
+                if dx * dx + dy * dy > r * r { continue }
+                // only the surface of water (open air above it) freezes, so nothing is sealed in
+                if world.tile(tx, ty) == .water && world.tile(tx, ty - 1) == .air {
+                    world.set(tx, ty, .ice)
+                    frozen += 1
+                }
+            }
+        }
+    }
+
+    /// True when a point is inside a smoke cloud
+    func inSmoke(_ x: Double, _ y: Double) -> Bool {
+        for s in smokes {
+            let dx: Double = x - s.x
+            let dy: Double = y - s.y
+            if dx * dx + dy * dy < s.r * s.r { return true }
+        }
+        return false
+    }
+
+    // MARK: vials and ingredients
+
+    /// An empty vial held over water fills it (one each tap)
+    func useVial(_ pressed: Bool) {
+        if !pressed || useCD > 0 { return }
+        let tx: Int = Int(floor(aimX))
+        let ty: Int = Int(floor(aimY))
+        if world.tile(tx, ty) == .water && inReach(Double(tx) + 0.5, Double(ty) + 0.5) {
+            _ = inv.remove(.mat(.vial), 1)
+            giveItem(.mat(.waterVial), 1)
+            sfx(.splash, 0.5)
+            spawnParticles(Double(tx) + 0.5, Double(ty) + 0.2, 0x8DBBFF, 5, 2.0, 0.4, 10)
+            useCD = 0.25
+            bumpHUD()
+        } else {
+            say("Tap water with it to fill it.", 1.4)
+            useCD = 0.4
+        }
+    }
+
+    /// Ingredients a creature leaves when the player killed it, the extra drops of a Seeker's Tonic, and
+    /// the glands of a mutated creature
+    func alchemyDrops(_ m: Mob, _ rng: inout RNG, _ credit: Bool) -> [Stack] {
+        var out: [Stack] = []
+        if !credit || m.tame { return out }
+        func chance(_ it: Mat, _ p: Double, _ n: Int = 1) {
+            if rng.double() < p { out.append(Stack(item: .mat(it), count: n)) }
+        }
+        switch m.kind {
+        case .slime: chance(.slimeGel, 0.6, 1 + rng.int(2))
+        case .emberSlime: chance(.slimeGel, 0.4); chance(.emberAsh, 0.45)
+        case .scorpion: chance(.venomSac, 0.5)
+        case .crawler: chance(.venomSac, 0.35)
+        case .polarBear: chance(.frostCrystal, 0.4)
+        case .imp, .cinderBat: chance(.emberAsh, 0.4)
+        case .wraith: chance(.wraithDust, 0.6)
+        case .bat: chance(.glowcap, 0.25)
+        case .golem: chance(.golemCore, 0.35)
+        case .sentinel: out.append(Stack(item: .mat(.sentinelLens), count: 1 + rng.int(2)))
+        case .warden: out.append(Stack(item: .mat(.emberAsh), count: 4))
+        default: break
+        }
+        if m.mut > 0 {
+            out.append(Stack(item: .mat(.mutantGland), count: min(4, 1 + m.mut / 2)))
+        }
+        // luck: one more of what it normally drops, now and then (never anything it would not drop)
+        let luck: Double = effects.value(.luck) / 100.0
+        if luck > 0 && rng.double() < luck {
+            var r2 = RNG(UInt64(truncatingIfNeeded: m.id) &* 0x9E3779B97F4A7C15 &+ 77)
+            if let extra = mobDrops(m.kind, &r2, m.sheared).first(where: { !$0.item.isRareLoot }) {
+                out.append(Stack(item: extra.item, count: 1))
+                floatText("Lucky!", m.b.x, m.b.top - 0.6, 0x5AE070)
+            }
+        }
+        return out
+    }
+
+    // MARK: mutation
+
+    /// One dose of mutagen on a creature: it grows to twice the size (as far as there is room), with
+    /// twice the health and twice the strength, its colours shift a little, and it keeps its own mind.
+    /// Every number stops at the limits in MutationLimits. Returns whether anything changed.
+    @discardableResult
+    func mutate(_ m: Mob) -> Bool {
+        if m.hp <= 0 || m.removed { return false }
+        let base: MobDef = m.def
+        if m.isBoss && m.mut >= 1 {
+            floatText("It resists further change", m.b.x, m.b.top - 0.6, 0xC8C8C8)
+            return false
+        }
+        if m.mut >= MutationLimits.maxStacks {
+            floatText("It can change no further", m.b.x, m.b.top - 0.6, 0xC8C8C8)
+            return false
+        }
+        let boss: Bool = m.isBoss
+        m.mut += 1
+        // health: the same share of health as before, of a doubled (capped) total
+        let frac: Double = m.maxHP > 0 ? clampD(m.hp / m.maxHP, 0.05, 1.0) : 1.0
+        let hpMul: Double = boss ? MutationLimits.bossHP : 2.0
+        let cap: Double = min(MutationLimits.maxHP, base.hp * mobHealthMult * MutationLimits.maxHPMul)
+        m.maxHP = min(cap, max(m.maxHP, m.maxHP * hpMul))
+        m.hp = max(1, m.maxHP * frac)
+        // strength: doubled, with no single blow above the cap
+        let dmgMul: Double = boss ? MutationLimits.bossDmg : 2.0
+        let blowCap: Double = base.dmg > 0 ? MutationLimits.maxBlow / base.dmg : MutationLimits.maxDmgMul
+        m.mutDmg = min(min(MutationLimits.maxDmgMul, blowCap), max(1.0, m.mutDmg * dmgMul))
+        // size: doubled, within the caps and only as far as there is room around it
+        let want: Double = min(mutCap(base), m.mutSize * (boss ? MutationLimits.bossSize : 2.0))
+        let grown: Double = growRoom(m, base, want)
+        let changedSize: Bool = grown > m.mutSize + 0.001
+        setMutSize(m, base, grown)
+        m.persistent = true
+        m.flash = 0.25
+        spawnParticles(m.b.x, m.b.cy, 0x9AF04A, 16, 4.0, 0.7, -2)
+        spawnParticles(m.b.x, m.b.cy, 0xC07CFF, 8, 3.0, 0.6, -2)
+        sfx(.roar, at: m.b.x, 0.5)
+        addShake(0.2)
+        var note: String = joinText(base.name, " mutates! (", String(m.mut), ")")
+        if !changedSize && !boss { note = joinText(base.name, " grows stronger, but has no room to grow") }
+        floatText(note, m.b.x, m.b.top - 0.8, 0x9AF04A)
+        keepMutantsInCheck()
+        bumpHUD()
+        return true
+    }
+
+    /// The largest size up to `want` that fits where the creature stands (it may rise a little to fit)
+    func growRoom(_ m: Mob, _ base: MobDef, _ want: Double) -> Double {
+        var s: Double = want
+        var tries: Int = 0
+        while s > m.mutSize + 0.001 && tries < 6 {
+            tries += 1
+            let w: Double = base.w * s
+            let h: Double = base.h * s
+            let hw: Double = w * 0.5
+            var lift: Double = 0
+            while lift <= 2.0 {
+                let fy: Double = m.b.y - lift
+                if !world.boxSolid(m.b.x - hw + 0.02, fy - h + 0.02, m.b.x + hw - 0.02, fy - 0.02) {
+                    if lift > 0 { m.b.y = fy }
+                    return s
+                }
+                lift += 1.0
+            }
+            s = m.mutSize + (s - m.mutSize) * 0.6
+            if s - m.mutSize < 0.1 { break }
+        }
+        return m.mutSize
+    }
+
+    /// The biggest a creature may grow: the size cap, and no wider or taller than the body limits
+    func mutCap(_ base: MobDef) -> Double {
+        let a: Double = MutationLimits.maxW / max(0.1, base.w)
+        let b: Double = MutationLimits.maxH / max(0.1, base.h)
+        return max(1.0, min(MutationLimits.maxSize, min(a, b)))
+    }
+
+    /// Sets the body size from the size multiplier, so the hit box and the picture always agree
+    func setMutSize(_ m: Mob, _ base: MobDef, _ s: Double) {
+        m.mutSize = clampD(s, 1.0, mutCap(base))
+        m.b.w = base.w * m.mutSize
+        m.b.h = base.h * m.mutSize
+    }
+
+    /// The drawn size of a creature against its normal size (1 for creatures that never mutated); the
+    /// same number as its body, so what is seen is what can be hit
+    func drawScale(_ m: Mob) -> Double {
+        return m.mut > 0 ? max(1.0, m.mutSize) : 1.0
+    }
+
+    /// Too many mutated creatures: the oldest wild ones (not pets, not bosses) lose their hold on the
+    /// world and wander off like any other creature
+    func keepMutantsInCheck() {
+        let list: [Mob] = mobs.filter { $0.mut > 0 && $0.hp > 0 && !$0.removed }
+        if list.count <= MutationLimits.maxMutants { return }
+        var extra: Int = list.count - MutationLimits.maxMutants
+        for m in list where extra > 0 && !m.tame && !m.isBoss {
+            m.persistent = false
+            extra -= 1
+        }
+    }
+
+    /// The mutated creatures for a save
+    func mutantSaves() -> [MutantSave]? {
+        var out: [MutantSave] = []
+        for m in mobs where m.mut > 0 && m.hp > 0 && !m.removed && m.persistent && m.kind != .rex && m.kind != .custom && !m.isBoss {
+            if m.tame { continue }
+            out.append(MutantSave(kind: m.kind.rawValue, x: m.b.x, y: m.b.y, hp: m.hp, maxHP: m.maxHP, mut: m.mut, variant: m.variant, tame: false, dim: world.dim.rawValue))
+            if out.count >= MutationLimits.maxMutants { break }
+        }
+        return out.isEmpty ? nil : out
+    }
+
+    /// Brings saved mutated creatures back (those of the realm the player is in)
+    func restoreMutants(_ list: [MutantSave]) {
+        for s in list.prefix(MutationLimits.maxMutants) where s.dim == world.dim.rawValue {
+            guard let k = MobKind(rawValue: s.kind), k != .custom, k != .rex else { continue }
+            let m: Mob = addMob(k, s.x, s.y)
+            m.variant = s.variant
+            reapplyMutation(m, clampI(s.mut, 1, MutationLimits.maxStacks))
+            m.maxHP = clampD(s.maxHP, 1, MutationLimits.maxHP)
+            m.hp = clampD(s.hp, 1, m.maxHP)
+            m.persistent = true
+        }
+    }
+
+    /// Puts a creature back to `n` doses (loading): the size, health and strength it had
+    func reapplyMutation(_ m: Mob, _ n: Int) {
+        let base: MobDef = m.def
+        m.mut = 0
+        m.mutDmg = 1
+        m.mutSize = 1
+        let boss: Bool = m.isBoss
+        let doses: Int = boss ? min(1, n) : n
+        var size: Double = 1
+        var dmg: Double = 1
+        var hpv: Double = m.maxHP
+        let cap: Double = min(MutationLimits.maxHP, base.hp * mobHealthMult * MutationLimits.maxHPMul)
+        let blowCap: Double = base.dmg > 0 ? MutationLimits.maxBlow / base.dmg : MutationLimits.maxDmgMul
+        for _ in 0..<doses {
+            size = min(mutCap(base), size * (boss ? MutationLimits.bossSize : 2.0))
+            dmg = min(min(MutationLimits.maxDmgMul, blowCap), dmg * (boss ? MutationLimits.bossDmg : 2.0))
+            hpv = min(cap, hpv * (boss ? MutationLimits.bossHP : 2.0))
+        }
+        m.mut = doses
+        m.mutDmg = max(1, dmg)
+        m.maxHP = max(m.maxHP, hpv)
+        m.hp = m.maxHP
+        setMutSize(m, base, growRoom(m, base, size))
+    }
+}
+
+extension Item {
+    /// one of a kind or found only in the best chests (a Seeker's Tonic never doubles these)
+    var isRareLoot: Bool {
+        switch self {
+        case .relic, .gear: return true
+        case .mat(let m): return m == .umbralHeart || m == .relicFragment || m == .sentinelLens || m == .diamond
+        default: return MineLoot.isExceptional(self)
+        }
+    }
+}
+
+extension ModEffectKind {
+    /// a word or two shown over the player when the effect starts
+    var short: String {
+        switch self {
+        case .heal: return "Healed"
+        case .feed: return "Fed"
+        case .speed: return "Swift"
+        case .strength: return "Strong"
+        case .resistance: return "Ironhide"
+        case .regen: return "Regrowth"
+        case .glow: return "Glowing"
+        case .jump: return "Springy"
+        case .fireproof: return "Fireproof"
+        case .cure: return "Cured"
+        case .mining: return "Prospecting"
+        case .breathing: return "Water breathing"
+        case .nightVision: return "Night vision"
+        case .luck: return "Lucky"
+        case .featherfall: return "Featherlight"
+        case .warmth: return "Warm"
+        }
+    }
+
+    /// the colour of its icon in the HUD
+    var color: UInt32 {
+        switch self {
+        case .heal: return 0xE8445A
+        case .feed: return 0xC0703A
+        case .speed: return 0x7AD8F8
+        case .strength: return 0xC8402A
+        case .resistance: return 0x9AA4B8
+        case .regen: return 0xF07AB8
+        case .glow: return 0xFFE070
+        case .jump: return 0x8AE85A
+        case .fireproof: return 0xFF8A2A
+        case .cure: return 0xE8E8E8
+        case .mining: return 0xE8B83A
+        case .breathing: return 0x2E7AE8
+        case .nightVision: return 0x5A6AE8
+        case .luck: return 0x5AE070
+        case .featherfall: return 0xE8ECF8
+        case .warmth: return 0xE86A3A
+        }
+    }
+}
+
+extension World {
+    /// A few ingredients, now and then a potion or a compound, added to a chest's loot. Fixed by the
+    /// world and the chest's place (like the rest of its loot); deeper and Umbral chests hold rarer finds.
+    func alchemyChestExtras(_ base: [Stack], _ g: WorldGen, _ dim: Dimension, _ x: Int, _ y: Int) -> [Stack] {
+        var out: [Stack] = base
+        if out.count >= 27 { return out }
+        var rng = RNG(hashU(x &+ 913, y, g.seed &+ 0xA1C4E))
+        let deep: Bool = dim == .umbral || y > 140
+        if rng.double() < 0.4 {
+            var pool: [Mat] = [.sunleaf, .vial, .slimeGel, .waterVial]
+            if deep { pool += [.glowcap, .frostCrystal, .venomSac] }
+            if dim == .umbral { pool = [.emberAsh, .glowcap, .wraithDust, .venomSac] }
+            let m: Mat = pool[rng.int(pool.count)]
+            out.append(Stack(item: .mat(m), count: 1 + rng.int(3)))
+        }
+        if rng.double() < (deep ? 0.12 : 0.07) && out.count < 27 {
+            let pool: [Potion] = deep ? [.regrowth, .ironhide, .owlsight, .prospector, .emberward, .blight] : [.mending, .quickstep, .springstep, .featherfall, .mire, .smoke]
+            out.append(Stack(item: .potion(pool[rng.int(pool.count)]), count: 1 + rng.int(2)))
+        }
+        if rng.double() < (deep ? 0.05 : 0.02) && out.count < 27 {
+            let pool: [Infusion] = deep ? [.keen, .venom, .bountiful, .fireward, .bulwark, .fleet] : [.honed, .heft, .haste, .reinforced]
+            out.append(Stack(item: .compound(pool[rng.int(pool.count)]), count: 1))
+        }
+        return out
+    }
+}
+
+extension Game {
+    // MARK: guards on the player
+
+    /// A hit after the armour infusions and the suit have done their part (before armour and wards)
+    func guardedAmount(_ info: DamageInfo) -> Double {
+        var a: Double = info.amount
+        if info.source.kind == .mob { a *= info.source.mult }
+        let ai: ArmorInf = armorInf
+        if info.type == .fire || info.type == .lava { a *= 1.0 - ai.fireCut }
+        if info.type == .shock { a *= 1.0 - ai.stormCut }
+        if a > 6 && ai.heavyCut > 0 { a *= 1.0 - ai.heavyCut }
+        return suitGuard(a, info.type)
+    }
+
+    /// How far the player is thrown by a blow: Bulwark armour and a heavy suit hold them steadier
+    var knockTaken: Double {
+        var k: Double = armorInf.knockMul
+        if suit.worn { k *= suitStats.knockMul }
+        return k
+    }
+
+    /// Barbed armour: a creature that strikes the player takes some of the blow back
+    func thornsBack(_ info: DamageInfo, _ amount: Double) {
+        let t: Double = armorInf.thorns
+        if t <= 0 || info.source.kind != .mob { return }
+        if info.type != .melee && info.type != .contact { return }
+        guard let m = mobs.first(where: { $0.id == info.source.id }), m.hp > 0 else { return }
+        var back = DamageInfo(amount: max(0.5, amount * t), type: .magic, source: .player)
+        back.originX = pb.x
+        applyMobDamage(m, back)
+    }
+
+    /// How much of the cold still gets in: a Hearthfire Tonic keeps it all out; Frostward armour and the
+    /// suit keep some out
+    func coldGuard() -> Double {
+        if effects.value(.warmth) > 0 { return 0 }
+        return (1.0 - armorInf.coldCut) * suitColdMul
+    }
+
+    /// The held weapon's Quickened infusion: attacks come sooner
+    func quickMul() -> Double {
+        if let s = inv.slots[sel], s.has(.quickened) { return 0.85 }
+        return 1.0
+    }
+
+    /// A flask lands: a potion bursts, a fire flask catches
+    func burstFlaskOrPotion(_ p: Projectile, _ x: Double, _ y: Double, _ m: Mob?) {
+        if p.potion >= 0, let pt = Potion(rawValue: p.potion) {
+            burstPotion(pt, x, y, direct: m)
+        } else {
+            burstFlask(x, y, p.source)
+        }
+    }
+
+    /// A lightning strike near the player sometimes leaves a spark of storm essence behind (a lightning
+    /// rod catches it more often)
+    func stormEssenceAt(_ x: Double, _ y: Double, rod: Bool) {
+        if abs(x - pb.x) > 60 || world.dim != .overworld { return }
+        let p: Double = rod ? 0.5 : 0.2
+        if Double.random(in: 0...1) < p {
+            spawnDrop(Stack(item: .mat(.stormEssence), count: 1), x, y - 0.6, 0, -2)
+            spawnParticles(x, y - 0.4, 0xFFF07A, 6, 2.0, 0.6, -2)
+        }
+    }
+
+    /// The tapped station's screens
+    func openExo() {
+        showExo = true
+        bumpHUD()
+    }
+
+    func openInfuser() {
+        showInfuse = true
+        bumpHUD()
+    }
+
+    // MARK: saving
+
+    func effectsSave() -> EffectsSave? {
+        var k: [Int] = []
+        var a: [Double] = []
+        var t: [Double] = []
+        for kind in ModEffectKind.allCases where effects.time[kind.rawValue] > 0 {
+            k.append(kind.rawValue)
+            a.append(effects.amount[kind.rawValue])
+            t.append(effects.time[kind.rawValue])
+        }
+        if k.isEmpty && mendCD <= 0 { return nil }
+        return EffectsSave(kinds: k, amount: a, time: t, mendCD: mendCD > 0 ? mendCD : nil)
+    }
+
+    func restoreEffects(_ s: EffectsSave) {
+        for (i, raw) in s.kinds.enumerated() where i < s.amount.count && i < s.time.count {
+            guard let kind = ModEffectKind(rawValue: raw), kind.timed else { continue }
+            let amount: Double = clampD(s.amount[i], kind.amountRange.lo, kind.amountRange.sandboxHi)
+            effects.add(kind, amount, clampD(s.time[i], 0, 3600))
+        }
+        mendCD = clampD(s.mendCD ?? 0, 0, 60)
+    }
+
+    /// A saved suit, checked: a part in a place it doesn't fit goes back into the bag
+    func restoreSuit(_ s: ExoSuit) {
+        var clean: ExoSuit = ExoSuit()
+        var loose: [Stack] = []
+        for (k, st) in s.parts {
+            if let slot = ExoSlot(rawValue: k), slot.fits(st.item) { clean[slot] = st } else { loose.append(st) }
+        }
+        let stats: ExoStats = ExoStats.of(clean)
+        clean.energy = clampD(s.energy, 0, stats.capacity)
+        clean.worn = s.worn && stats.complete
+        clean.off = s.off
+        suit = clean
+        for st in loose { addStack(st) }
+        suitChanged()
+    }
+}
+
+// MARK: - Recipes for alchemy, infusion compounds and the suit
+
+extension RecipeBook {
+    static func addFeatureRecipes(_ add: (Item, Int, [(Item, Int)], Station, RecipeCat) -> Void) {
+        let wv: Item = .mat(.waterVial)
+        func m(_ x: Mat) -> Item { return .mat(x) }
+        func pot(_ p: Potion) -> Item { return .potion(p) }
+        // the stations
+        add(.block(.alchemyStill), 1, [(m(.copperBar), 4), (.block(.glass), 3), (.block(.stone), 4)], .bench, .alchemy)
+        add(.block(.infuser), 1, [(.block(.obsidian), 4), (m(.goldBar), 2), (m(.crystalShard), 2), (m(.ironBar), 4)], .anvil, .infusion)
+        add(.block(.exoStation), 1, [(m(.ironBar), 10), (m(.copperBar), 6), (.block(.glass), 2), (m(.goldBar), 1)], .anvil, .exosuit)
+        // vials and water
+        add(m(.vial), 3, [(.block(.glass), 1)], .furnace, .alchemy)
+        add(m(.vial), 3, [(.block(.glass), 1)], .still, .alchemy)
+        add(wv, 3, [(.gadget(.waterFlask), 1), (m(.vial), 3)], .still, .alchemy)
+        // drinkable potions
+        add(pot(.mending), 1, [(wv, 1), (m(.sunleaf), 2), (.food(.apple), 1)], .still, .alchemy)
+        add(pot(.greaterMending), 1, [(pot(.mending), 1), (m(.glowcap), 1), (m(.crystalShard), 1)], .still, .alchemy)
+        add(pot(.regrowth), 1, [(wv, 1), (m(.sunleaf), 1), (m(.slimeGel), 1), (.food(.carrot), 1)], .still, .alchemy)
+        add(pot(.brawn), 1, [(wv, 1), (m(.claw), 1), (m(.bone), 1)], .still, .alchemy)
+        add(pot(.quickstep), 1, [(wv, 1), (m(.feather), 2), (m(.sunleaf), 1)], .still, .alchemy)
+        add(pot(.prospector), 1, [(wv, 1), (m(.amethyst), 1), (m(.glowcap), 1)], .still, .alchemy)
+        add(pot(.ironhide), 1, [(wv, 1), (m(.ironBar), 1), (m(.tusk), 1)], .still, .alchemy)
+        add(pot(.emberward), 1, [(wv, 1), (m(.frostCrystal), 1), (m(.slimeGel), 1), (.block(.obsidian), 1)], .still, .alchemy)
+        add(pot(.deepbreath), 1, [(wv, 1), (.food(.rawFish), 1), (m(.sunleaf), 1)], .still, .alchemy)
+        add(pot(.owlsight), 1, [(wv, 1), (m(.glowcap), 1), (.food(.carrot), 1)], .still, .alchemy)
+        add(pot(.seeker), 1, [(wv, 1), (m(.goldBar), 1), (m(.crystalShard), 1), (m(.glowcap), 1)], .still, .alchemy)
+        add(pot(.featherfall), 1, [(wv, 1), (m(.feather), 3)], .still, .alchemy)
+        add(pot(.hearthfire), 1, [(wv, 1), (m(.coal), 1), (m(.fur), 1)], .still, .alchemy)
+        add(pot(.springstep), 1, [(wv, 1), (m(.slimeGel), 1), (m(.feather), 1)], .still, .alchemy)
+        // splashes (gunpowder bursts the flask)
+        add(pot(.searing), 2, [(wv, 1), (m(.gunpowder), 1), (m(.saltpeter), 1)], .still, .alchemy)
+        add(pot(.blight), 2, [(wv, 1), (m(.gunpowder), 1), (m(.venomSac), 1)], .still, .alchemy)
+        add(pot(.mire), 2, [(wv, 1), (m(.gunpowder), 1), (m(.slimeGel), 2)], .still, .alchemy)
+        add(pot(.enfeeble), 2, [(wv, 1), (m(.gunpowder), 1), (m(.wraithDust), 1)], .still, .alchemy)
+        add(pot(.mendingSplash), 1, [(pot(.mending), 1), (m(.gunpowder), 1), (m(.sunleaf), 1)], .still, .alchemy)
+        add(pot(.regrowthSplash), 1, [(pot(.regrowth), 1), (m(.gunpowder), 1)], .still, .alchemy)
+        add(pot(.smoke), 2, [(wv, 1), (m(.gunpowder), 1), (m(.coal), 2)], .still, .alchemy)
+        add(pot(.frost), 2, [(wv, 1), (m(.gunpowder), 1), (m(.frostCrystal), 1)], .still, .alchemy)
+        add(pot(.mutagen), 1, [(wv, 1), (m(.crystalShard), 2), (m(.venomSac), 1), (m(.glowcap), 1), (m(.slimeGel), 1)], .still, .alchemy)
+        add(pot(.mutagen), 1, [(wv, 1), (m(.mutantGland), 1), (m(.slimeGel), 1)], .still, .alchemy)
+        // infusion compounds
+        func comp(_ i: Infusion, _ cost: [(Item, Int)]) { add(.compound(i), 1, cost + [(wv, 1)], .infuser, .infusion) }
+        comp(.honed, [(m(.ironBar), 1), (m(.saltpeter), 1)])
+        comp(.quickened, [(m(.feather), 2), (m(.sunleaf), 2), (m(.silverBar), 1)])
+        comp(.keen, [(m(.amethyst), 2), (m(.crystalShard), 1)])
+        comp(.heft, [(m(.ironBar), 2), (m(.bone), 2)])
+        comp(.longReach, [(m(.bronzeBar), 2), (m(.string), 3), (m(.feather), 1)])
+        comp(.emberbrand, [(m(.emberAsh), 2), (m(.saltpeter), 1), (m(.goldBar), 1)])
+        comp(.frostbite, [(m(.frostCrystal), 3), (m(.silverBar), 1)])
+        comp(.stormcall, [(m(.stormEssence), 2), (m(.crystalShard), 2), (m(.silverBar), 2)])
+        comp(.venom, [(m(.venomSac), 2), (m(.slimeGel), 1)])
+        comp(.volatile, [(m(.gunpowder), 3), (m(.emberAsh), 1), (m(.saltpeter), 2)])
+        comp(.voidrend, [(m(.umbralHeart), 1), (m(.voidBar), 2), (m(.sentinelLens), 1)])
+        comp(.haste, [(m(.copperBar), 2), (m(.sunleaf), 2)])
+        comp(.bountiful, [(m(.goldBar), 2), (m(.glowcap), 2), (m(.amethyst), 1)])
+        comp(.precision, [(m(.silverBar), 1), (m(.crystalShard), 1), (m(.slimeGel), 1)])
+        comp(.quarry, [(m(.golemCore), 1), (m(.diamond), 2), (m(.stormEssence), 1)])
+        comp(.thrift, [(m(.golemCore), 1), (m(.copperBar), 4), (m(.crystalShard), 1)])
+        comp(.reinforced, [(m(.ironBar), 2), (m(.leather), 2)])
+        comp(.bulwark, [(m(.tusk), 2), (m(.ironBar), 2), (m(.fur), 1)])
+        comp(.fireward, [(m(.frostCrystal), 1), (m(.slimeGel), 2), (.block(.obsidian), 1)])
+        comp(.frostward, [(m(.fur), 2), (m(.coal), 2), (m(.wool), 2)])
+        comp(.stormward, [(m(.stormEssence), 1), (m(.copperBar), 3), (m(.slimeGel), 1)])
+        comp(.fleet, [(m(.feather), 3), (m(.sunleaf), 2), (m(.leather), 1)])
+        comp(.renewal, [(m(.glowcap), 2), (m(.slimeGel), 2), (m(.crystalShard), 1), (m(.goldBar), 1)])
+        comp(.barbed, [(m(.claw), 3), (m(.ironBar), 1)])
+        // suit parts in every metal (the Umbral metals and boss relics for the best)
+        for mt in ExoMat.allCases {
+            let b: Item = mt.bar
+            let n: Int = mt == .diamond ? 1 : 2
+            var helm: [(Item, Int)] = [(b, 2 * n), (.block(.glass), 1)]
+            var chest: [(Item, Int)] = [(b, 4 * n), (m(.copperBar), 2)]
+            if mt == .diamond { helm.append((m(.ironBar), 2)); chest.append((m(.ironBar), 4)) }
+            if mt == .ember { chest.append((.block(.obsidian), 4)) }
+            if mt == .voidium { chest.append((m(.umbralHeart), 1)) }
+            add(.exoPart(.helmet, mt), 1, helm, .assembly, .exosuit)
+            add(.exoPart(.chestFrame, mt), 1, chest, .assembly, .exosuit)
+            add(.exoPart(.arm, mt), 1, [(b, n + 1), (m(.copperBar), 1)] + (mt == .diamond ? [(m(.ironBar), 2)] : []), .assembly, .exosuit)
+            add(.exoPart(.legs, mt), 1, [(b, 2 * n + 1), (m(.copperBar), 1)] + (mt == .diamond ? [(m(.ironBar), 3)] : []), .assembly, .exosuit)
+            add(.exoPart(.boots, mt), 1, [(b, n + 1), (m(.leather), 1)] + (mt == .diamond ? [(m(.ironBar), 2)] : []), .assembly, .exosuit)
+            add(.exoPlate(mt), 1, [(b, n)] + (mt == .diamond ? [(m(.ironBar), 1)] : []), .assembly, .exosuit)
+        }
+        // power cores
+        add(.exoCore(.sparkCell), 1, [(m(.copperBar), 4), (m(.coal), 4), (m(.ironBar), 1)], .assembly, .exosuit)
+        add(.exoCore(.dynamo), 1, [(m(.ironBar), 4), (m(.copperBar), 4), (m(.goldBar), 2), (.block(.battery), 1)], .assembly, .exosuit)
+        add(.exoCore(.crystal), 1, [(m(.crystalShard), 4), (m(.goldBar), 3), (.block(.accumulator), 1)], .assembly, .exosuit)
+        add(.exoCore(.ember), 1, [(m(.emberBar), 4), (m(.emberAsh), 4), (m(.golemCore), 1)], .assembly, .exosuit)
+        add(.exoCore(.heart), 1, [(m(.umbralHeart), 1), (m(.voidBar), 4), (m(.sentinelLens), 2)], .assembly, .exosuit)
+        // modules
+        add(.exoModule(.servo), 1, [(m(.ironBar), 4), (m(.copperBar), 3), (m(.string), 4)], .assembly, .exosuit)
+        add(.exoModule(.drill), 1, [(m(.ironBar), 4), (.part(.drill), 1)], .assembly, .exosuit)
+        add(.exoModule(.sprint), 1, [(m(.bronzeBar), 4), (m(.copperBar), 2), (m(.feather), 4)], .assembly, .exosuit)
+        add(.exoModule(.leap), 1, [(m(.ironBar), 3), (m(.slimeGel), 4), (m(.copperBar), 2)], .assembly, .exosuit)
+        add(.exoModule(.hover), 1, [(m(.mythrilBar), 4), (m(.stormEssence), 3), (m(.golemCore), 1)], .assembly, .exosuit)
+        add(.exoModule(.lamp), 1, [(m(.copperBar), 2), (.block(.glass), 1), (.block(.torch), 2)], .assembly, .exosuit)
+        add(.exoModule(.seal), 1, [(.block(.glass), 4), (m(.slimeGel), 4), (m(.frostCrystal), 2), (m(.emberAsh), 2)], .assembly, .exosuit)
+        add(.exoModule(.cargo), 1, [(m(.leather), 6), (m(.ironBar), 2), (.block(.chest), 1)], .assembly, .exosuit)
+        add(.exoModule(.gauntlet), 1, [(m(.copperBar), 4), (m(.silverBar), 2), (m(.stormEssence), 1)], .assembly, .exosuit)
+        add(.exoModule(.barrier), 1, [(m(.crystalShard), 3), (m(.goldBar), 2), (m(.sentinelLens), 1)], .assembly, .exosuit)
+    }
+}
+
+/// The alchemy, infusion and suit items, in palette order
+func featureItems() -> [Item] {
+    var out: [Item] = []
+    for p in Potion.allCases { out.append(.potion(p)) }
+    for i in Infusion.allCases { out.append(.compound(i)) }
+    for mt in ExoMat.allCases {
+        for p in ExoPart.allCases { out.append(.exoPart(p, mt)) }
+        out.append(.exoPlate(mt))
+    }
+    for c in ExoCore.allCases { out.append(.exoCore(c)) }
+    for m in ExoModule.allCases { out.append(.exoModule(m)) }
+    return out
+}
+
+extension Art {
+    /// A mutated creature's sprites: its own, with the colours turned a little further round the wheel
+    /// for each dose (up to four steps). Built once per creature kind and step.
+    func mutantSet(_ m: Mob) -> SpriteSet {
+        if m.kind == .custom { return customMobSet(m.cslot) }
+        var variant: Int = 0
+        switch m.kind {
+        case .zombie: variant = m.variant
+        case .sheep: variant = m.sheared ? 1 : 0
+        case .wolf: variant = m.tame ? 1 : 0
+        default: variant = 0
+        }
+        let step: Int = clampI(m.mut, 1, 4)
+        let key: Int = 1_000_000 + m.kind.rawValue * 256 + variant * 8 + step
+        if let s = mobSets[key] { return s }
+        let art: ([PixelBuf], CreatureAnim) = creatureArt(m.kind, variant)
+        var frames: [PixelBuf] = []
+        let hue: Double = 12.0 * Double(step)
+        for f in art.0 { frames.append(recolorBuf(f, hue: hue, sat: 1.06, bright: 1.0, tint: 0x9AF04A, amt: 0.035 * Double(step))) }
+        let s: SpriteSet = makeSpriteSet(frames, hitH: mobDef(m.kind).h, fixedScale: creatureScale, anim: art.1)
+        mobSets[key] = s
+        return s
+    }
+}
+
+extension WorldRenderer {
+    /// Smoke clouds (soft grey puffs that thin out as they end) and the rings of bursting potions
+    static func drawPotionFX(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
+        for s in g.smokes {
+            let a: Double = 0.55 * clampD(s.t / 1.5, 0, 1)
+            for k in 0..<7 {
+                let ang: Double = Double(k) * 0.898 + g.clock * 0.15
+                let rr: Double = s.r * (0.35 + 0.12 * Double(k % 3))
+                let px: Double = s.x + cos(ang) * rr
+                let py: Double = s.y + sin(ang) * rr * 0.6
+                let sz: Double = s.r * (0.75 + 0.1 * Double(k % 2))
+                fillOval(&ctx, v.rect(px - sz * 0.5, py - sz * 0.4, sz, sz * 0.8), Color(hex: 0x8A8A90, alpha: a))
+            }
+        }
+        for r in g.rings {
+            let p: Double = 1.0 - r.t / 0.35
+            let rad: Double = r.r * (0.3 + 0.7 * p)
+            let path: Path = Path(ellipseIn: v.rect(r.x - rad, r.y - rad * 0.6, rad * 2.0, rad * 1.2))
+            ctx.stroke(path, with: .color(Color(hex: r.color, alpha: 0.7 * (1.0 - p))), lineWidth: 3)
+        }
+    }
+}
+
+// ===== p30_infusion =====
+
+// MARK: - Infusion: lasting properties worked into equipment
+
+/// The kinds of equipment an infusion can go on
+enum InfuseClass: Int {
+    case melee, ranged, tool, armor, suit
+    var name: String {
+        switch self {
+        case .melee: return "melee weapons"
+        case .ranged: return "bows, slings and guns"
+        case .tool: return "tools"
+        case .armor: return "armour and suit plating"
+        case .suit: return "suit cores and modules"
+        }
+    }
+}
+
+/// Infusions: a compound worked into a piece of equipment at an Infusion Crucible gives it one lasting
+/// property. Each piece has a few slots (more for better metals), each infusion goes on it once, and
+/// most bonuses are a share of what the item already does, so a good item stays better than a poor one.
+/// Saved by number on the item: new kinds only go on the end.
+enum Infusion: Int, Codable, CaseIterable {
+    case honed, quickened, keen, heft, longReach, emberbrand, frostbite, stormcall, venom, volatile, voidrend
+    case haste, bountiful, precision, quarry, thrift
+    case reinforced, bulwark, fireward, frostward, stormward, fleet, renewal, barbed
+
+    var name: String {
+        switch self {
+        case .honed: return "Honed"
+        case .quickened: return "Quickened"
+        case .keen: return "Keen"
+        case .heft: return "Heft"
+        case .longReach: return "Long Reach"
+        case .emberbrand: return "Emberbrand"
+        case .frostbite: return "Frostbite"
+        case .stormcall: return "Stormcall"
+        case .venom: return "Venom"
+        case .volatile: return "Volatile"
+        case .voidrend: return "Voidrend"
+        case .haste: return "Haste"
+        case .bountiful: return "Bountiful"
+        case .precision: return "Precision"
+        case .quarry: return "Quarry"
+        case .thrift: return "Thrift"
+        case .reinforced: return "Reinforced"
+        case .bulwark: return "Bulwark"
+        case .fireward: return "Fireward"
+        case .frostward: return "Frostward"
+        case .stormward: return "Stormward"
+        case .fleet: return "Fleet"
+        case .renewal: return "Renewal"
+        case .barbed: return "Barbed"
+        }
+    }
+
+    var rarity: Rarity {
+        switch self {
+        case .honed, .heft, .haste, .reinforced: return .basic
+        case .quickened, .keen, .longReach, .venom, .bountiful, .precision, .bulwark, .fireward, .frostward, .fleet, .barbed: return .uncommon
+        case .emberbrand, .frostbite, .volatile, .thrift, .stormward, .renewal: return .rare
+        case .stormcall, .quarry: return .veryRare
+        case .voidrend: return .legendary
+        }
+    }
+
+    /// what it can go on
+    var classes: [InfuseClass] {
+        switch self {
+        case .honed, .longReach, .emberbrand, .frostbite, .voidrend: return [.melee, .ranged]
+        case .quickened: return [.melee, .ranged]
+        case .keen, .heft, .stormcall, .venom: return [.melee]
+        case .volatile: return [.ranged]
+        case .haste, .bountiful, .precision, .quarry: return [.tool]
+        case .thrift: return [.suit]
+        case .reinforced, .bulwark, .fireward, .frostward, .stormward, .fleet, .renewal, .barbed: return [.armor]
+        }
+    }
+
+    /// what it does, in a line
+    var blurb: String {
+        switch self {
+        case .honed: return "+20% damage"
+        case .quickened: return "Attacks and shots come 15% sooner"
+        case .keen: return "+12% chance of a critical blow"
+        case .heft: return "Blows knock foes 60% further"
+        case .longReach: return "Melee reaches 0.6 further; shots fly 25% further"
+        case .emberbrand: return "Sets what it hits alight for 3 s"
+        case .frostbite: return "What it hits moves 40% slower for 3 s"
+        case .stormcall: return "One blow in five sends a spark leaping to 2 more foes"
+        case .venom: return "Poisons what it hits: 1 a second for 4 s"
+        case .volatile: return "Shots burst on impact (3 damage around, no blocks broken)"
+        case .voidrend: return "+15% damage, and 35% more against bosses and Umbral creatures"
+        case .haste: return "Mines 25% faster"
+        case .bountiful: return "A 20% chance of one extra ore, gem or crystal"
+        case .precision: return "Glass, ice, crystal, leaves and grass come away whole"
+        case .quarry: return "Also breaks the blocks above and below (diamond tools and better)"
+        case .thrift: return "Powered suit parts use 25% less energy"
+        case .reinforced: return "+1 defence"
+        case .bulwark: return "Less knockback; heavy blows hurt 15% less"
+        case .fireward: return "Fire and lava hurt 20% less (each piece)"
+        case .frostward: return "The cold gets in 25% slower (each piece)"
+        case .stormward: return "Lightning and hail hurt 30% less (each piece)"
+        case .fleet: return "Run 4% faster (each piece)"
+        case .renewal: return "Slowly heals you (each piece adds a little)"
+        case .barbed: return "Foes that strike you take 15% of the blow back (each piece)"
+        }
+    }
+
+    /// colour of its compound and of its mark on an item
+    var color: UInt32 {
+        switch self {
+        case .honed: return 0xE0E4EC
+        case .quickened: return 0x7AD8F8
+        case .keen: return 0xC07CFF
+        case .heft: return 0xA88A5A
+        case .longReach: return 0x8AC8E8
+        case .emberbrand: return 0xFF7A2A
+        case .frostbite: return 0xA8E8FF
+        case .stormcall: return 0xFFF07A
+        case .venom: return 0x7AD040
+        case .volatile: return 0xFF5A3A
+        case .voidrend: return 0xB04CFF
+        case .haste: return 0xE8B83A
+        case .bountiful: return 0x5AE070
+        case .precision: return 0xE8F4FF
+        case .quarry: return 0xC8A070
+        case .thrift: return 0x60E0C8
+        case .reinforced: return 0xB8C0CC
+        case .bulwark: return 0x8A9AB8
+        case .fireward: return 0xFF9A4A
+        case .frostward: return 0x9AD8FF
+        case .stormward: return 0xE8E87A
+        case .fleet: return 0x9AF0D0
+        case .renewal: return 0xF07AB8
+        case .barbed: return 0xC86A5A
+        }
+    }
+}
+
+/// How many infusions a piece of equipment holds: more for better metals and rarer finds (0: none)
+func infusionSlots(_ it: Item) -> Int {
+    func byTier(_ t: Tier) -> Int {
+        switch t {
+        case .wood, .stone, .copper: return 1
+        case .iron, .gold, .diamond: return 2
+        case .mythril, .ember, .voidium: return 3
+        }
+    }
+    switch it {
+    case .sword(let t), .spear(let t), .hammer(let t), .knife(let t): return byTier(t)
+    case .tool(_, let t): return byTier(t)
+    case .armor(_, let t): return byTier(t)
+    case .club, .sling: return 1
+    case .bow: return 2
+    case .relic: return 3
+    case .gun(let g):
+        switch g {
+        case .pistol, .crossbow, .blunderbuss: return 1
+        case .rifle, .arbalest, .repeater, .stormRod: return 2
+        }
+    case .exoPart(_, let m): return m.slots
+    case .exoPlate(let m): return max(1, m.slots - 1)
+    case .exoCore, .exoModule: return 1
+    case .custom(let k):
+        guard let r = ModRuntime.shared.item(k) else { return 0 }
+        return (r.def.kind.isWeapon || r.def.kind == .tool || r.def.kind == .armor) ? 1 : 0
+    default: return 0
+    }
+}
+
+/// The kinds of equipment an item counts as, for infusing
+func infuseClasses(_ it: Item) -> [InfuseClass] {
+    switch it {
+    case .sword, .spear, .hammer, .knife, .club, .relic: return [.melee]
+    case .bow, .sling: return [.ranged]
+    case .gun: return [.ranged]
+    case .tool: return [.tool]
+    case .armor, .exoPart, .exoPlate: return [.armor]
+    case .exoCore, .exoModule: return [.suit]
+    case .custom(let k):
+        guard let r = ModRuntime.shared.item(k) else { return [] }
+        switch r.def.kind {
+        case .melee: return [.melee]
+        case .bow, .gun, .thrown, .magic: return [.ranged]
+        case .tool: return [.tool]
+        case .armor: return [.armor]
+        default: return []
+        }
+    default: return []
+    }
+}
+
+extension Stack {
+    /// the infusions worked into this item
+    var infusions: [Infusion] {
+        guard let l = inf else { return [] }
+        var out: [Infusion] = []
+        for r in l { if let i = Infusion(rawValue: r) { out.append(i) } }
+        return out
+    }
+
+    func has(_ i: Infusion) -> Bool { return inf?.contains(i.rawValue) ?? false }
+
+    /// Why an infusion cannot go on this item (nil: it can)
+    func infuseProblem(_ i: Infusion) -> String? {
+        let slots: Int = infusionSlots(item)
+        if slots <= 0 { return "This can't be infused." }
+        let cls: [InfuseClass] = infuseClasses(item)
+        if !i.classes.contains(where: { cls.contains($0) }) {
+            let names: [String] = i.classes.map { $0.name }
+            return joinText(i.name, " only goes on ", names.joined(separator: " or "), ".")
+        }
+        if has(i) { return joinText("It already has ", i.name, ".") }
+        if (inf?.count ?? 0) >= slots { return joinText("All ", String(slots), " of its slots are taken.") }
+        if i == .quarry {
+            var ok: Bool = false
+            if case .tool(let k, let t) = item, (k == .pickaxe || k == .shovel), t.rawValue >= Tier.diamond.rawValue { ok = true }
+            if !ok { return "Quarry needs a diamond (or better) pickaxe or shovel." }
+        }
+        if i == .volatile, case .gun(let g) = item, g == .stormRod { return "The storm rod's lightning can't carry it." }
+        if i == .longReach, case .gun(let g) = item, g == .stormRod { return "The storm rod's lightning can't carry it." }
+        return nil
+    }
+}
+
+/// Armour infusions summed over everything worn (worked out again only when what is worn changes)
+struct ArmorInf {
+    var defense: Double = 0
+    var knockMul: Double = 1
+    var heavyCut: Double = 0
+    var fireCut: Double = 0
+    var coldCut: Double = 0
+    var stormCut: Double = 0
+    var speed: Double = 0
+    var regen: Double = 0
+    var thorns: Double = 0
+
+    mutating func add(_ s: Stack) {
+        for i in s.infusions {
+            switch i {
+            case .reinforced: defense += 1.0
+            case .bulwark:
+                knockMul *= 0.75
+                heavyCut = min(0.4, heavyCut + 0.15)
+            case .fireward: fireCut = min(0.6, fireCut + 0.2)
+            case .frostward: coldCut = min(0.75, coldCut + 0.25)
+            case .stormward: stormCut = min(0.75, stormCut + 0.3)
+            case .fleet: speed = min(0.2, speed + 0.04)
+            case .renewal: regen = min(0.35, regen + 0.1)
+            case .barbed: thorns = min(0.45, thorns + 0.15)
+            default: break
+            }
+        }
+    }
+}
+
+extension Game {
+    // MARK: infusing
+
+    /// Works a compound into the item in a bag slot. Everything is checked again here (the panel may be
+    /// out of date): the item must still be there, the infusion must fit, and a compound must be in the
+    /// bag. The item itself never leaves its slot, so nothing can be lost on the way. Returns what to say.
+    @discardableResult
+    func infuse(slot i: Int, _ inf: Infusion) -> String {
+        guard i >= 0 && i < inv.slots.count, var s = inv.slots[i] else { return "That item is gone." }
+        if let why = s.infuseProblem(inf) { return why }
+        if !isCreative && inv.total(.compound(inf)) < 1 { return joinText("You need a ", inf.name, " compound.") }
+        if !isCreative { _ = inv.remove(.compound(inf), 1) }
+        var list: [Int] = s.inf ?? []
+        list.append(inf.rawValue)
+        s.inf = list
+        inv.slots[i] = s
+        sfx(.infuse, 0.8)
+        spawnParticles(pb.x, pb.y - 1.2, inf.color, 12, 3.0, 0.7, -4)
+        if !journal.crafted.contains(joinText("Infusion: ", inf.name)) { journal.crafted.append(joinText("Infusion: ", inf.name)) }
+        bumpHUD()
+        return joinText(s.item.name, " is now ", inf.name, ".")
+    }
+
+    /// Takes an infusion back out of an item (the compound is spent; the item is unharmed)
+    @discardableResult
+    func removeInfusion(slot i: Int, _ inf: Infusion) -> String {
+        guard i >= 0 && i < inv.slots.count, var s = inv.slots[i], s.has(inf) else { return "Nothing to remove." }
+        var list: [Int] = s.inf ?? []
+        list.removeAll { $0 == inf.rawValue }
+        s.inf = list.isEmpty ? nil : list
+        inv.slots[i] = s
+        sfx(.tap, 0.6)
+        bumpHUD()
+        return joinText(inf.name, " was drawn out of ", s.item.name, ".")
+    }
+
+    /// The infusions of the item in hand, if it is the given item (nil: none)
+    func heldInfusions(_ it: Item?) -> [Int] {
+        guard let i = it, let s = inv.slots[sel], s.item == i, let l = s.inf else { return [] }
+        return l
+    }
+
+    /// The melee profile of an item as the player swings it: its own, changed by its infusions
+    func infusedMelee(_ it: Item?) -> MeleeProfile {
+        var p: MeleeProfile = it?.melee ?? Item.bareHands
+        let l: [Int] = heldInfusions(it)
+        if !l.isEmpty { p = Game.infuseProfile(p, l) }
+        if suitWorn { p = suitMelee(p) }
+        return p
+    }
+
+    static func infuseProfile(_ p0: MeleeProfile, _ l: [Int]) -> MeleeProfile {
+        var p: MeleeProfile = p0
+        for r in l {
+            guard let i = Infusion(rawValue: r) else { continue }
+            switch i {
+            case .honed: p.damage *= 1.2
+            case .quickened: p.cooldown *= 0.85
+            case .keen: p.critChance += 0.12
+            case .heft: p.knock *= 1.6
+            case .longReach: p.reach += 0.6
+            case .voidrend: p.damage *= 1.15
+            case .emberbrand: p.burn = max(p.burn, 3.0)
+            default: break
+            }
+        }
+        return p
+    }
+
+    /// After a melee blow lands: frost, poison, voidrend's extra bite and stormcall's spark
+    func meleeInfusionHit(_ m: Mob, _ l: [Int], _ dmg: Double) {
+        if l.isEmpty || m.hp <= 0 { return }
+        for r in l {
+            guard let i = Infusion(rawValue: r) else { continue }
+            switch i {
+            case .frostbite:
+                m.slowT = max(m.slowT, m.isBoss ? 1.5 : 3.0)
+                m.slowAmt = max(m.slowAmt, m.isBoss ? 0.2 : 0.4)
+            case .venom:
+                if !poisonImmune(m) {
+                    m.poisonT = max(m.poisonT, m.isBoss ? 2.0 : 4.0)
+                    m.poisonDps = max(m.poisonDps, 1.0)
+                    m.poisonByPlayer = true
+                }
+            case .voidrend:
+                if m.isBoss || faction(of: m) == .umbral {
+                    var info = DamageInfo(amount: dmg * 0.2, type: .magic, source: .player)
+                    info.originX = pb.x
+                    applyMobDamage(m, info)
+                }
+            case .stormcall:
+                if Double.random(in: 0...1) < 0.2 { stormSpark(m) }
+            default: break
+            }
+        }
+    }
+
+    /// A spark leaps from a struck foe to up to two more close by
+    func stormSpark(_ from: Mob) {
+        var hit: [Mob] = []
+        var prev: Mob = from
+        for _ in 0..<2 {
+            var best: Mob? = nil
+            var bd: Double = 6.0
+            for m in mobsNear(prev.b.x - 7, prev.b.x + 7) where m !== from && !hit.contains(where: { $0 === m }) {
+                if m.hp <= 0 || m.removed || m.tame { continue }
+                let d: Double = abs(m.b.x - prev.b.x) + abs(m.b.cy - prev.b.cy)
+                if d < bd { bd = d; best = m }
+            }
+            guard let n = best else { break }
+            arcs.append(ArcFX(pts: [(prev.b.x, prev.b.cy), ((prev.b.x + n.b.x) * 0.5, min(prev.b.cy, n.b.cy) - 0.6), (n.b.x, n.b.cy)], life: 0.2))
+            var info = DamageInfo(amount: 5, type: .shock, source: .player)
+            info.originX = prev.b.x
+            info.key = newID()
+            applyMobDamage(n, info)
+            hit.append(n)
+            prev = n
+        }
+        if !hit.isEmpty { sfx(.zap, at: from.b.x, 0.5) }
+    }
+
+    /// Infusions on the weapon that fires a shot: damage, range, and what it does when it lands
+    func infuseShot(_ p: inout Projectile, _ it: Item?) {
+        let l: [Int] = heldInfusions(it)
+        if l.isEmpty { return }
+        var bits: Int = 0
+        for r in l {
+            guard let i = Infusion(rawValue: r) else { continue }
+            switch i {
+            case .honed: p.dmg *= 1.2
+            case .voidrend: p.dmg *= 1.15; bits |= 8
+            case .longReach: p.life *= 1.25
+            case .emberbrand: bits |= 1
+            case .frostbite: bits |= 2
+            case .volatile: bits |= 4
+            default: break
+            }
+        }
+        p.inf = bits
+    }
+
+    /// A shot with infusions lands on a creature
+    func shotInfusionHit(_ p: Projectile, _ m: Mob?, _ x: Double, _ y: Double) {
+        if let mm = m, mm.hp > 0 {
+            if p.inf & 1 != 0 && !heatImmune(mm) { mm.burn = max(mm.burn, 3.0) }
+            if p.inf & 2 != 0 {
+                mm.slowT = max(mm.slowT, mm.isBoss ? 1.5 : 3.0)
+                mm.slowAmt = max(mm.slowAmt, mm.isBoss ? 0.2 : 0.4)
+            }
+            if p.inf & 8 != 0 && (mm.isBoss || faction(of: mm) == .umbral) {
+                var info = DamageInfo(amount: p.dmg * 0.2, type: .magic, source: .player)
+                info.originX = x
+                applyMobDamage(mm, info)
+            }
+        }
+        if p.inf & 4 != 0 { volatileBurst(x, y) }
+    }
+
+    /// A volatile shot's little blast: hurts what is close, breaks nothing
+    func volatileBurst(_ x: Double, _ y: Double) {
+        var info = DamageInfo(amount: 3, type: .explosion, source: .player)
+        info.knock = 4
+        info.key = newID()
+        info.cooldown = 0.5
+        for m in mobsNear(x - 2.5, x + 2.5) where m.hp > 0 && !m.removed && !m.tame {
+            let d: Double = boxDistance(x, y, m.b.left, m.b.top, m.b.right, m.b.y)
+            if d <= 1.3 {
+                var i2: DamageInfo = info
+                i2.originX = x
+                i2.originY = y
+                applyMobDamage(m, i2)
+            }
+        }
+        spawnParticles(x, y, 0xFF8A3A, 8, 4.0, 0.3, 4)
+        sfx(.flask, at: x, 0.35)
+    }
+
+    // MARK: mining with infusions
+
+    /// How much faster than usual the player mines right now: potions, the tool's Haste, the suit's drill
+    func mineBoost(_ kind: ToolType?) -> Double {
+        var b: Double = 1.0 + effects.value(.mining) / 100.0
+        if kind != nil, let s = inv.slots[sel], s.has(.haste) { b *= 1.25 }
+        return b
+    }
+
+    /// What breaking a block gives: its usual drops, ingredients from plants and ice, whole blocks with
+    /// Precision, and now and then one extra ore or gem (Bountiful, a Seeker's Tonic)
+    func minedDrops(_ t: Tile, _ x: Int, _ y: Int, _ byPlayer: Bool) -> [Stack] {
+        let held: Stack? = byPlayer ? inv.slots[sel] : nil
+        var tool: Bool = false
+        if let h = held, case .tool = h.item { tool = true }
+        if tool, let h = held, h.has(.precision), precisionKeeps(t) {
+            return [Stack(item: .block(t == .grass ? .grass : t), count: 1)]
+        }
+        var out: [Stack] = tileDropStacks(t, x, y)
+        if !byPlayer { return out }
+        let r: Double = Double.random(in: 0...1)
+        switch t {
+        case .tallGrass: if r < 0.1 { out.append(Stack(item: .mat(.sunleaf), count: 1)) }
+        case .flowerR, .flowerY: if r < 0.35 { out.append(Stack(item: .mat(.sunleaf), count: 1)) }
+        case .mushroom: if r < 0.3 { out.append(Stack(item: .mat(.glowcap), count: 1)) }
+        case .ice: if r < 0.15 { out.append(Stack(item: .mat(.frostCrystal), count: 1)) }
+        case .snow: if r < 0.03 { out.append(Stack(item: .mat(.frostCrystal), count: 1)) }
+        default: break
+        }
+        if isOreTile(t), let first = out.first {
+            var p: Double = effects.value(.luck) / 100.0
+            if tool, let h = held, h.has(.bountiful) { p += 0.2 }
+            if p > 0 && Double.random(in: 0...1) < min(0.5, p) {
+                out.append(Stack(item: first.item, count: 1))
+                floatText("+1", Double(x) + 0.5, Double(y) - 0.2, 0x5AE070)
+            }
+        }
+        return out
+    }
+
+    /// Blocks that Precision lifts whole
+    func precisionKeeps(_ t: Tile) -> Bool {
+        switch t {
+        case .glass, .ice, .glowCrystal, .grass, .leaves, .jungleLeaves, .birchLeaves, .pineLeaves, .snow: return true
+        default: return false
+        }
+    }
+
+    /// After a block breaks under a Quarry tool: the blocks right above and below go too, if they are
+    /// no harder and the tool could mine them anyway
+    func quarryAround(_ x: Int, _ y: Int, _ t0: Tile, _ kind: ToolType, _ tier: Tier) {
+        guard let s = inv.slots[sel], s.has(.quarry) else { return }
+        for dy in [-1, 1] {
+            let t: Tile = world.tile(x, y + dy)
+            if t == .air || t.liquid || t == .bedrock || t == .chest || t.isPower || t.hardness >= 99 { continue }
+            if t.hardness > t0.hardness + 0.01 { continue }
+            if toolClass(t) != kind || t.def.tier > tier.rawValue { continue }
+            if t == .portalFrame || t == .portalOff || t == .portalOn { continue }
+            breakTile(x, y + dy, true)
+        }
+    }
+
+    // MARK: armour infusions
+
+    /// Armour infusions over everything worn (rebuilt only when what is worn changes)
+    var armorInf: ArmorInf {
+        var h: Hasher = Hasher()
+        for i in 0..<min(3, inv.armor.count) { h.combine(inv.armor[i]) }
+        h.combine(suitRev)
+        h.combine(suit.worn)
+        let k: Int = h.finalize()
+        if k == armorInfKey { return armorInfCache }
+        var a: ArmorInf = ArmorInf()
+        for i in 0..<min(3, inv.armor.count) { if let s = inv.armor[i] { a.add(s) } }
+        if suit.worn {
+            for s in suit.parts.values { a.add(s) }
+        }
+        armorInfCache = a
+        armorInfKey = k
+        return a
+    }
+
+    /// Everything that guards the player: armour, its Reinforced infusions and a worn suit
+    var totalDefense: Double {
+        var d: Double = inv.defense + armorInf.defense
+        if suitWorn { d += suitStats.defense }
+        return d
+    }
+}
+
+/// The ores, gems and crystals a Bountiful tool or a Seeker's Tonic can turn up more of
+func isOreTile(_ t: Tile) -> Bool {
+    switch t {
+    case .coal, .copper, .iron, .gold, .diamond, .mythril, .emberOre, .voidOre, .crystalOre, .tin, .saltpeter, .silver, .amethyst, .glowCrystal: return true
+    default: return false
+    }
+}
+
+// ===== p31_exosuit =====
+
+// MARK: - The modular exosuit: parts, materials, cores and modules
+
+/// The metals a suit part is made from. Iron is easy to come by and even; heavier metals guard better
+/// but slow the wearer; gold carries energy well; rare metals are light or strong; the Umbral metals
+/// shrug off fire, cold and lightning and give room for the most modules. Saved by number.
+enum ExoMat: Int, Codable, CaseIterable {
+    case iron, bronze, gold, diamond, mythril, ember, voidium
+
+    var name: String {
+        switch self {
+        case .iron: return "Iron"
+        case .bronze: return "Bronze"
+        case .gold: return "Gilded"
+        case .diamond: return "Diamond"
+        case .mythril: return "Mythril"
+        case .ember: return "Ember"
+        case .voidium: return "Voidium"
+        }
+    }
+    /// how much a part of this metal guards (iron 1)
+    var protect: Double {
+        switch self {
+        case .iron: return 1.0
+        case .bronze: return 0.85
+        case .gold: return 0.7
+        case .diamond: return 1.6
+        case .mythril: return 1.5
+        case .ember: return 1.8
+        case .voidium: return 2.2
+        }
+    }
+    /// how heavy a part of this metal is (iron 1)
+    var weight: Double {
+        switch self {
+        case .iron: return 1.0
+        case .bronze: return 0.85
+        case .gold: return 1.2
+        case .diamond: return 1.35
+        case .mythril: return 0.7
+        case .ember: return 1.5
+        case .voidium: return 1.2
+        }
+    }
+    /// how well it carries energy: powered parts use less in a suit of good conductors (iron 1)
+    var conduct: Double {
+        switch self {
+        case .iron: return 1.0
+        case .bronze: return 1.1
+        case .gold: return 1.5
+        case .diamond: return 0.9
+        case .mythril: return 1.2
+        case .ember: return 1.0
+        case .voidium: return 1.3
+        }
+    }
+    /// module sockets a chest frame of this metal has
+    var sockets: Int {
+        switch self {
+        case .iron, .bronze, .gold: return 2
+        case .diamond, .mythril, .ember: return 3
+        case .voidium: return 4
+        }
+    }
+    /// infusion slots on a part of this metal
+    var slots: Int {
+        switch self {
+        case .iron, .bronze: return 1
+        case .gold, .diamond: return 2
+        case .mythril, .ember, .voidium: return 3
+        }
+    }
+    /// the mining tier a drill arm of this metal bores at (pickaxe tiers)
+    var drillTier: Int {
+        switch self {
+        case .bronze: return 3
+        case .iron: return 4
+        case .gold: return 5
+        case .diamond: return 6
+        case .mythril: return 7
+        case .ember: return 8
+        case .voidium: return 9
+        }
+    }
+    var color: UInt32 {
+        switch self {
+        case .iron: return 0xC8CCD4
+        case .bronze: return 0xC89040
+        case .gold: return 0xF0C840
+        case .diamond: return 0x5ADCE4
+        case .mythril: return 0x8A7CFF
+        case .ember: return 0xE8642A
+        case .voidium: return 0x9A4CE8
+        }
+    }
+    var rarity: Rarity {
+        switch self {
+        case .iron, .bronze: return .basic
+        case .gold: return .uncommon
+        case .diamond: return .rare
+        case .mythril, .ember: return .veryRare
+        case .voidium: return .legendary
+        }
+    }
+    /// the metal a part is made of, for its recipe
+    var bar: Item {
+        switch self {
+        case .iron: return .mat(.ironBar)
+        case .bronze: return .mat(.bronzeBar)
+        case .gold: return .mat(.goldBar)
+        case .diamond: return .mat(.diamond)
+        case .mythril: return .mat(.mythrilBar)
+        case .ember: return .mat(.emberBar)
+        case .voidium: return .mat(.voidBar)
+        }
+    }
+    /// what it adds besides guarding
+    var special: String {
+        switch self {
+        case .iron: return "Even and easy to make"
+        case .bronze: return "Light and cheap, guards a little less"
+        case .gold: return "Carries energy well: powered parts use less"
+        case .diamond: return "Guards very well, but heavy"
+        case .mythril: return "Strong and very light"
+        case .ember: return "Turns fire and lava (each part)"
+        case .voidium: return "Turns cold and lightning; room for 4 modules"
+        }
+    }
+}
+
+/// The frame parts of a suit
+enum ExoPart: Int, Codable, CaseIterable {
+    case helmet, chestFrame, arm, legs, boots
+    var name: String {
+        switch self {
+        case .helmet: return "Suit Helmet"
+        case .chestFrame: return "Chest Frame"
+        case .arm: return "Suit Arm"
+        case .legs: return "Suit Legs"
+        case .boots: return "Suit Boots"
+        }
+    }
+    var baseDefense: Double {
+        switch self {
+        case .helmet: return 0.9
+        case .chestFrame: return 1.6
+        case .arm: return 0.5
+        case .legs: return 1.1
+        case .boots: return 0.6
+        }
+    }
+    var baseWeight: Double {
+        switch self {
+        case .helmet: return 3
+        case .chestFrame: return 8
+        case .arm: return 3
+        case .legs: return 6
+        case .boots: return 3
+        }
+    }
+}
+
+/// Power cores: how much energy they hold, how much they can give at once, and how fast they refill
+enum ExoCore: Int, Codable, CaseIterable {
+    case sparkCell, dynamo, crystal, ember, heart
+    var name: String {
+        switch self {
+        case .sparkCell: return "Spark Cell"
+        case .dynamo: return "Dynamo Core"
+        case .crystal: return "Crystal Core"
+        case .ember: return "Ember Core"
+        case .heart: return "Heart Core"
+        }
+    }
+    var capacity: Double {
+        switch self {
+        case .sparkCell: return 120
+        case .dynamo: return 240
+        case .crystal: return 400
+        case .ember: return 600
+        case .heart: return 1000
+        }
+    }
+    /// the most energy a second it can give
+    var output: Double {
+        switch self {
+        case .sparkCell: return 6
+        case .dynamo: return 10
+        case .crystal: return 14
+        case .ember: return 20
+        case .heart: return 30
+        }
+    }
+    /// energy a second it makes by itself
+    var recharge: Double {
+        switch self {
+        case .sparkCell: return 0.5
+        case .dynamo: return 1.0
+        case .crystal: return 1.6
+        case .ember: return 2.4
+        case .heart: return 4.0
+        }
+    }
+    var color: UInt32 {
+        switch self {
+        case .sparkCell: return 0xFFC830
+        case .dynamo: return 0x60E0FF
+        case .crystal: return 0x8AF0E8
+        case .ember: return 0xFF7A2A
+        case .heart: return 0xD860FF
+        }
+    }
+    var rarity: Rarity {
+        switch self {
+        case .sparkCell: return .basic
+        case .dynamo: return .uncommon
+        case .crystal: return .rare
+        case .ember: return .veryRare
+        case .heart: return .legendary
+        }
+    }
+}
+
+/// Suit modules: each does one thing, costs energy to run, and needs certain parts to hold it
+enum ExoModule: Int, Codable, CaseIterable {
+    case servo, drill, sprint, leap, hover, lamp, seal, cargo, gauntlet, barrier
+    var name: String {
+        switch self {
+        case .servo: return "Servo Muscles"
+        case .drill: return "Drill Arm"
+        case .sprint: return "Sprint Actuators"
+        case .leap: return "Leap Pistons"
+        case .hover: return "Hover Jets"
+        case .lamp: return "Helmet Lamp"
+        case .seal: return "Environment Seal"
+        case .cargo: return "Cargo Pack"
+        case .gauntlet: return "Shock Gauntlet"
+        case .barrier: return "Barrier Projector"
+        }
+    }
+    var blurb: String {
+        switch self {
+        case .servo: return "Carries 25 more weight and hits 25% harder (a little energy each swing)"
+        case .drill: return "Mine with any hand, faster, at the right arm's metal tier (energy while mining)"
+        case .sprint: return "Run 20% faster (energy while running)"
+        case .leap: return "Jump 35% higher (energy each jump)"
+        case .hover: return "Hold jump in the air to hover and glide (a lot of energy)"
+        case .lamp: return "Lights the way in the dark (a trickle of energy)"
+        case .seal: return "Fire, lava, cold, water and lightning hurt far less (energy while it works)"
+        case .cargo: return "A chest on your back: 27 stacks that go where you go (PACK button)"
+        case .gauntlet: return "Melee blows add a 4-damage shock (energy each hit)"
+        case .barrier: return "Turns 40% of each hit into energy drain instead of harm"
+        }
+    }
+    /// the parts it needs to be mounted (besides the chest frame)
+    var needs: [ExoSlot] {
+        switch self {
+        case .drill: return [.armR]
+        case .gauntlet: return [.armL]
+        case .servo: return [.armL, .armR]
+        case .sprint: return [.legs]
+        case .leap: return [.legs, .boots]
+        case .hover: return [.legs, .boots]
+        case .lamp, .seal: return [.helmet]
+        case .cargo, .barrier: return []
+        }
+    }
+    var weight: Double {
+        switch self {
+        case .drill: return 4
+        case .hover, .cargo: return 3
+        default: return 2
+        }
+    }
+    var rarity: Rarity {
+        switch self {
+        case .lamp, .cargo: return .basic
+        case .servo, .drill, .sprint, .leap: return .uncommon
+        case .seal, .gauntlet: return .rare
+        case .hover, .barrier: return .veryRare
+        }
+    }
+    var color: UInt32 {
+        switch self {
+        case .servo: return 0xA8B0C0
+        case .drill: return 0xD8D8E0
+        case .sprint: return 0x7AD8F8
+        case .leap: return 0x8AE85A
+        case .hover: return 0xFF9A3A
+        case .lamp: return 0xFFF0A0
+        case .seal: return 0x60C8E8
+        case .cargo: return 0x9A6A3A
+        case .gauntlet: return 0xFFF07A
+        case .barrier: return 0xC07CFF
+        }
+    }
+}
+
+/// The places on a suit. Frame parts first, then the core, the armour plates, and module sockets.
+enum ExoSlot: Int, Codable, CaseIterable {
+    case helmet, chest, armL, armR, legs, boots, core, plateHead, plateShoulders, plateChest, plateArms, plateLegs, mod1, mod2, mod3, mod4
+
+    var name: String {
+        switch self {
+        case .helmet: return "Helmet"
+        case .chest: return "Chest frame"
+        case .armL: return "Left arm"
+        case .armR: return "Right arm"
+        case .legs: return "Legs"
+        case .boots: return "Boots"
+        case .core: return "Power core"
+        case .plateHead: return "Helmet plate"
+        case .plateShoulders: return "Shoulder plates"
+        case .plateChest: return "Chest plate"
+        case .plateArms: return "Arm plates"
+        case .plateLegs: return "Leg plates"
+        case .mod1: return "Module 1"
+        case .mod2: return "Module 2"
+        case .mod3: return "Module 3"
+        case .mod4: return "Module 4"
+        }
+    }
+    var isPlate: Bool { return rawValue >= ExoSlot.plateHead.rawValue && rawValue <= ExoSlot.plateLegs.rawValue }
+    var isModule: Bool { return rawValue >= ExoSlot.mod1.rawValue }
+    /// the frame part a plate is fixed to
+    var plateBase: ExoSlot? {
+        switch self {
+        case .plateHead: return .helmet
+        case .plateShoulders, .plateChest: return .chest
+        case .plateArms: return .armL
+        case .plateLegs: return .legs
+        default: return nil
+        }
+    }
+    /// how much a plate here guards (before its metal)
+    var plateDefense: Double {
+        switch self {
+        case .plateHead: return 0.5
+        case .plateShoulders: return 0.6
+        case .plateChest: return 0.9
+        case .plateArms: return 0.5
+        case .plateLegs: return 0.6
+        default: return 0
+        }
+    }
+    /// what kind of part fits here
+    func fits(_ it: Item) -> Bool {
+        switch it {
+        case .exoPart(let p, _):
+            switch p {
+            case .helmet: return self == .helmet
+            case .chestFrame: return self == .chest
+            case .arm: return self == .armL || self == .armR
+            case .legs: return self == .legs
+            case .boots: return self == .boots
+            }
+        case .exoPlate: return isPlate
+        case .exoCore: return self == .core
+        case .exoModule: return isModule
+        default: return false
+        }
+    }
+}
+
+/// A suit: what is fitted in each place (each part keeps its own infusions), whether it is being worn
+/// and the energy in its core. The parts live in the suit, not in the bag.
+struct ExoSuit: Codable, Equatable {
+    var parts: [Int: Stack] = [:]
+    var worn: Bool = false
+    var energy: Double = 0
+    /// the module switches the player has turned off (by module number)
+    var off: [Int]? = nil
+
+    init() {}
+
+    subscript(_ s: ExoSlot) -> Stack? {
+        get { return parts[s.rawValue] }
+        set { parts[s.rawValue] = newValue }
+    }
+
+    var isEmpty: Bool { return parts.isEmpty }
+
+    func material(_ s: ExoSlot) -> ExoMat? {
+        if let st = parts[s.rawValue] {
+            if case .exoPart(_, let m) = st.item { return m }
+            if case .exoPlate(let m) = st.item { return m }
+        }
+        return nil
+    }
+
+    var core: ExoCore? {
+        if let st = parts[ExoSlot.core.rawValue], case .exoCore(let c) = st.item { return c }
+        return nil
+    }
+
+    /// the module sockets the chest frame has
+    var sockets: Int { return material(.chest)?.sockets ?? 0 }
+
+    /// every module fitted in a socket that is open and whose parts are there, in socket order
+    var modules: [ExoModule] {
+        var out: [ExoModule] = []
+        let n: Int = sockets
+        for (k, s) in [ExoSlot.mod1, .mod2, .mod3, .mod4].enumerated() where k < n {
+            if let st = parts[s.rawValue], case .exoModule(let m) = st.item {
+                if m.needs.allSatisfy({ parts[$0.rawValue] != nil }) && !out.contains(m) { out.append(m) }
+            }
+        }
+        return out
+    }
+}
+
+/// What a suit adds up to: worked out once each time it changes, never every frame
+struct ExoStats {
+    var defense: Double = 0
+    var weight: Double = 0
+    var strength: Double = 20
+    var speedMul: Double = 1
+    var jumpMul: Double = 1
+    var capacity: Double = 0
+    var output: Double = 0
+    var recharge: Double = 0
+    var drainMul: Double = 1
+    var fireCut: Double = 0
+    var coldCut: Double = 0
+    var stormCut: Double = 0
+    var knockMul: Double = 1
+    var drillTier: Int = 0
+    var modules: [ExoModule] = []
+    /// can be worn: a chest frame and a core
+    var complete: Bool = false
+    /// what is wrong or missing, in plain words
+    var notes: [String] = []
+    var thrift: Set<Int> = []
+
+    func has(_ m: ExoModule) -> Bool { return modules.contains(m) }
+
+    static func of(_ s: ExoSuit) -> ExoStats {
+        var r: ExoStats = ExoStats()
+        var conductSum: Double = 0
+        var conductN: Double = 0
+        for slot in ExoSlot.allCases {
+            guard let st = s[slot] else { continue }
+            switch st.item {
+            case .exoPart(let p, let m):
+                r.defense += p.baseDefense * m.protect
+                r.weight += p.baseWeight * m.weight
+                conductSum += m.conduct
+                conductN += 1
+                if m == .ember { r.fireCut = min(0.6, r.fireCut + 0.12) }
+                if m == .voidium {
+                    r.coldCut = min(0.6, r.coldCut + 0.1)
+                    r.stormCut = min(0.6, r.stormCut + 0.1)
+                }
+            case .exoPlate(let m):
+                if let b = slot.plateBase, s[b] == nil {
+                    r.notes.append(joinText(slot.name, " has nothing to hold it (fit the ", b.name.lowercased(), ")."))
+                    continue
+                }
+                r.defense += slot.plateDefense * m.protect
+                r.weight += 2.0 * m.weight
+                if m == .ember { r.fireCut = min(0.6, r.fireCut + 0.06) }
+            case .exoCore(let c):
+                r.capacity = c.capacity
+                r.output = c.output
+                r.recharge = c.recharge
+                r.weight += 3
+                if st.has(.thrift) { r.drainMul *= 0.75 }
+            case .exoModule(let m):
+                r.weight += m.weight
+                if st.has(.thrift) { r.thrift.insert(m.rawValue) }
+            default: break
+            }
+        }
+        if conductN > 0 { r.drainMul /= max(0.6, conductSum / conductN) }
+        r.modules = s.modules
+        // modules fitted but not working, and why
+        let open: Int = s.sockets
+        for (k, slot) in [ExoSlot.mod1, .mod2, .mod3, .mod4].enumerated() {
+            guard let st = s[slot], case .exoModule(let m) = st.item else { continue }
+            if k >= open {
+                r.notes.append(joinText(m.name, ": the chest frame has only ", String(open), " sockets."))
+            } else if let miss = m.needs.first(where: { s[$0] == nil }) {
+                r.notes.append(joinText(m.name, " needs the ", miss.name.lowercased(), "."))
+            }
+        }
+        if r.has(.servo) { r.strength += 25 }
+        let over: Double = max(0, r.weight - r.strength)
+        r.speedMul = 1.0 - min(0.35, over * 0.006)
+        r.jumpMul = 1.0 - min(0.3, over * 0.004)
+        r.knockMul = max(0.35, 1.0 - r.weight * 0.012)
+        if let m = s.material(.armR) { r.drillTier = m.drillTier }
+        r.complete = s[.chest] != nil && s[.core] != nil
+        if s[.chest] == nil { r.notes.insert("Fit a chest frame: every suit is built on one.", at: 0) }
+        if s[.core] == nil { r.notes.insert("Fit a power core: without one nothing can run.", at: 0) }
+        return r
+    }
+}
+
+extension Game {
+    // MARK: suit state
+
+    /// a suit is on and has its frame and core
+    var suitWorn: Bool { return suit.worn }
+
+    /// the suit's numbers, worked out again only when it changes
+    var suitStats: ExoStats {
+        if suitStatsRev == suitRev { return suitStatsCache }
+        suitStatsCache = ExoStats.of(suit)
+        suitStatsRev = suitRev
+        return suitStatsCache
+    }
+
+    /// Call after any change to the suit: its numbers, its armour infusions and its look are redone
+    func suitChanged() {
+        suitRev &+= 1
+        bumpHUD()
+    }
+
+    /// A module that is fitted, working, switched on and has energy behind it
+    func suitHas(_ m: ExoModule) -> Bool {
+        if !suit.worn || suit.energy <= 0.01 { return false }
+        if suit.off?.contains(m.rawValue) ?? false { return false }
+        return suitStats.has(m)
+    }
+
+    /// Spends energy on a module; false (nothing spent) when there is not enough
+    @discardableResult
+    func suitSpend(_ m: ExoModule, _ amount: Double) -> Bool {
+        if isCreative { return true }
+        let st: ExoStats = suitStats
+        var a: Double = amount * st.drainMul
+        if st.thrift.contains(m.rawValue) { a *= 0.75 }
+        if suit.energy < a { return false }
+        suit.energy -= a
+        return true
+    }
+
+    /// Spends energy over time for a module that runs continuously, within what the core can give
+    /// each second; false when the core can't keep it going
+    func suitRun(_ m: ExoModule, _ perSec: Double, _ dt: Double) -> Bool {
+        if !suitHas(m) { return false }
+        let st: ExoStats = suitStats
+        var rate: Double = perSec * st.drainMul
+        if st.thrift.contains(m.rawValue) { rate *= 0.75 }
+        if suitLoad + rate > st.output + 1e-6 { return false }
+        suitLoad += rate
+        if isCreative { return true }
+        let a: Double = rate * dt
+        if suit.energy < a { return false }
+        suit.energy -= a
+        return true
+    }
+
+    /// Once a frame while the suit is worn: the core refills a little, and the modules that run by
+    /// themselves (lamp, seal, jets, sprint) take their share of its output
+    func updateSuit(_ dt: Double) {
+        // the load counts everything run since the last frame's end (the drill runs earlier in the
+        // frame, while mining), so all modules share the core's output together
+        defer {
+            suitLastLoad = suitLoad
+            suitLoad = 0
+        }
+        suitHover = false
+        if !suit.worn { return }
+        let st: ExoStats = suitStats
+        if !st.complete {
+            suit.worn = false
+            suitChanged()
+            say("The suit can't run without its chest frame and core.", 2.0)
+            return
+        }
+        suit.energy = min(st.capacity, suit.energy + st.recharge * dt)
+        if dead || inVehicle != nil || mounted != nil { return }
+        // the seal works only while something it guards against is around
+        if suitStats.has(.seal) && sealNeeded() { _ = suitRun(.seal, 2.0, dt) }
+        // jets: hold jump in the air to hover
+        if suitStats.has(.hover) && jumpHeld && !pb.onGround && !pb.inWater && pb.vy > -2.0 && !flying {
+            if suitRun(.hover, 6.0, dt) {
+                suitHover = true
+                pb.vy = min(pb.vy, 0.6)
+                fallPeak = 0
+                if frameNo % 3 == 0 { spawnParticles(pb.x, pb.y + 0.05, 0xFF9A3A, 1, 1.5, 0.25, 6) }
+            }
+        }
+        if suitStats.has(.sprint) && abs(pb.vx) > 4.0 && pb.onGround { suitSprinting = suitRun(.sprint, 1.2, dt) } else { suitSprinting = false }
+        // the lamp lights itself in the dark: at night, under ground, in the Umbral realm
+        if suitStats.has(.lamp) && suitNeedsLight() { suitLit = suitRun(.lamp, 0.25, dt) } else { suitLit = false }
+        if suitStats.has(.servo) { _ = suitRun(.servo, 0.1, dt) }
+        if suit.energy <= 0.01 && !suitEmptyWarned {
+            suitEmptyWarned = true
+            say("Suit energy is spent: its modules are dead weight until it charges.", 2.5)
+        } else if suit.energy > 5 {
+            suitEmptyWarned = false
+        }
+    }
+
+    /// Dark enough for the helmet lamp
+    func suitNeedsLight() -> Bool {
+        if world.dim != .overworld { return true }
+        if dayFactor < 0.5 { return true }
+        return !world.isSkyExposed(Int(floor(pb.x)), Int(floor(pb.y - 1.0)))
+    }
+
+    /// Fire, lava, deep water, a blizzard or a thunderstorm around the player
+    func sealNeeded() -> Bool {
+        if playerBurn > 0 || pb.inLava || lavaT > 0 { return true }
+        let headY: Int = Int(floor(pb.y - pb.h * 0.92))
+        if world.tile(Int(floor(pb.x)), headY) == .water { return true }
+        if world.dim == .overworld && settings.weatherOn {
+            if wxHere.chill > 0.5 || wxHere.thunder > 0.4 || wxHere.hail > 0.3 { return true }
+        }
+        return false
+    }
+
+    /// The suit's speed: its weight against its strength, and the sprint actuators
+    var suitSpeedMul: Double {
+        if !suit.worn { return 1.0 }
+        var m: Double = suitStats.speedMul
+        if suitSprinting { m *= 1.2 }
+        return m
+    }
+
+    /// The suit's jump: weight, and the leap pistons (each boosted jump costs energy)
+    func suitJumpMul() -> Double {
+        if !suit.worn { return 1.0 }
+        var m: Double = suitStats.jumpMul
+        if suitHas(.leap) && suitSpend(.leap, 3.0) { m *= 1.35 }
+        return m
+    }
+
+    /// A melee blow through the suit: servos hit harder (energy each swing)
+    func suitMelee(_ p0: MeleeProfile) -> MeleeProfile {
+        var p: MeleeProfile = p0
+        if suitHas(.servo) { p.damage *= 1.25 }
+        return p
+    }
+
+    /// After a melee blow lands with the suit on: the gauntlet's shock
+    func suitMeleeHit(_ m: Mob) {
+        if m.hp <= 0 || !suitHas(.gauntlet) { return }
+        if !suitSpend(.gauntlet, 1.5) { return }
+        var info = DamageInfo(amount: 4, type: .shock, source: .player)
+        info.originX = pb.x
+        info.key = newID()
+        applyMobDamage(m, info)
+        spawnParticles(m.b.x, m.b.cy, 0xFFF07A, 5, 3.0, 0.2, 0)
+    }
+
+    /// The share of a hit the suit takes: the seal against fire, water and lightning, the metals'
+    /// own resistances, and the barrier turning some of what is left into energy drain
+    func suitGuard(_ amount: Double, _ type: DamageType) -> Double {
+        if !suit.worn { return amount }
+        let st: ExoStats = suitStats
+        var a: Double = amount
+        if type == .fire || type == .lava {
+            a *= 1.0 - st.fireCut
+            if suitHas(.seal) { a *= 0.4 }
+        }
+        if type == .shock {
+            a *= 1.0 - st.stormCut
+            if suitHas(.seal) { a *= 0.5 }
+        }
+        if type == .drown && suitHas(.seal) { a = 0 }
+        if a > 0 && suitHas(.barrier) && type != .starve && type != .drown {
+            let take: Double = a * 0.4
+            if suitSpend(.barrier, take * 3.0) {
+                a -= take
+                spawnParticles(pb.x, pb.cy, 0xC07CFF, 4, 2.5, 0.25, 0)
+            }
+        }
+        return a
+    }
+
+    /// How much slower the cold gets in through the suit
+    var suitColdMul: Double {
+        if !suit.worn { return 1.0 }
+        var m: Double = 1.0 - suitStats.coldCut
+        if suitHas(.seal) { m *= 0.1 }
+        return m
+    }
+
+    /// The drill arm, if it can bore right now: its tier (0: no drill)
+    func suitDrillTier() -> Int {
+        if !suitHas(.drill) { return 0 }
+        return suitStats.drillTier
+    }
+
+    // MARK: putting the suit on and off
+
+    /// Puts the suit on: it needs its chest frame and core, and the armour slots for head, body and legs
+    /// must be free (armour worn there goes into the bag first). Returns what to say.
+    @discardableResult
+    func wearSuit() -> String {
+        let st: ExoStats = suitStats
+        if !st.complete { return st.notes.first ?? "The suit is not complete." }
+        if suit.worn { return "You are already wearing it." }
+        for i in 0..<3 {
+            if let a = inv.armor[i] {
+                if inv.canFit(a.item, 1) {
+                    addStack(a)
+                    inv.armor[i] = nil
+                } else {
+                    return "Your bag is too full to take off your armour."
+                }
+            }
+        }
+        suit.worn = true
+        if suit.energy <= 0 && isCreative { suit.energy = st.capacity }
+        sfx(.suitUp, 0.8)
+        spawnParticles(pb.x, pb.y - 1.0, st.modules.isEmpty ? 0xC8CCD4 : 0x60E0FF, 12, 3.0, 0.5, -2)
+        suitChanged()
+        return "Suit on."
+    }
+
+    @discardableResult
+    func takeOffSuit() -> String {
+        if !suit.worn { return "You are not wearing it." }
+        suit.worn = false
+        sfx(.suitUp, 0.5)
+        suitChanged()
+        return "Suit off."
+    }
+
+    /// Puts a whole stack (with its infusions) into the bag, or at the player's feet if it is full:
+    /// nothing is ever lost
+    func addStack(_ s: Stack) {
+        for i in 0..<inv.slots.count where inv.slots[i] == nil {
+            inv.slots[i] = s
+            bumpHUD()
+            return
+        }
+        spawnDrop(s, pb.x, pb.y - 1, 0, -2)
+        say("Your bag is full: it went on the ground.", 1.6)
+    }
+
+    /// Fits every part of a planned suit at once. A planned part comes from the suit itself if it is
+    /// already on it (moved or kept), otherwise out of the bag (the very item chosen, infusions and all);
+    /// the parts left over go back into the bag. If anything planned can't be found, nothing at all
+    /// changes. Returns what to say.
+    @discardableResult
+    func applySuit(_ plan: ExoSuit) -> String {
+        for slot in ExoSlot.allCases {
+            if let n = plan[slot], !slot.fits(n.item) { return joinText(n.item.name, " doesn't fit the ", slot.name.lowercased(), ".") }
+        }
+        var pool: [Stack] = Array(suit.parts.values)
+        var bag: [Stack?] = inv.slots
+        for slot in ExoSlot.allCases {
+            guard let n = plan[slot] else { continue }
+            if let j = pool.firstIndex(of: n) {
+                pool.remove(at: j)
+            } else if let i = bag.firstIndex(where: { $0 == n }) {
+                bag[i] = nil
+            } else {
+                return joinText(n.item.name, " is no longer in your bag: nothing was changed.")
+            }
+        }
+        inv.slots = bag
+        let wasWorn: Bool = suit.worn
+        var next: ExoSuit = plan
+        next.worn = false
+        next.energy = suit.energy
+        next.off = suit.off
+        suit = next
+        // the parts taken off go back (after the new ones have left the bag, so there is room)
+        for b in pool { addStack(b) }
+        let st: ExoStats = ExoStats.of(suit)
+        suit.energy = min(suit.energy, st.capacity)
+        if wasWorn && st.complete { suit.worn = true }
+        // a cargo pack taken off empties into the bag (nothing is left stranded in it)
+        if !st.has(.cargo) { emptyPack() }
+        suitChanged()
+        sfx(.craft, 0.7)
+        if wasWorn && !st.complete { return "Built. The suit came off: it needs a chest frame and a core to run." }
+        return wasWorn ? "Built and still on." : "Built."
+    }
+
+    /// Opens the cargo pack (stored like a chest, under a key no block can have)
+    func openPack() {
+        if !(suit.worn && suitStats.has(.cargo)) { return }
+        let k: IntPair = packSpot
+        // the pack is kept with the realm the player is in: bring it along from the other one
+        for d in 0..<2 where d != world.dim.rawValue {
+            let other: ChestKey = ChestKey(d: d, x: k.x, y: k.y)
+            if let items = world.chests[other] {
+                let here: ChestKey = world.chestKey(k.x, k.y)
+                world.chests[here] = (world.chests[here] ?? []) + items
+                world.chests[other] = nil
+            }
+        }
+        if world.chests[world.chestKey(k.x, k.y)] == nil { world.setChestItems(k.x, k.y, []) }
+        openChest = k
+        showInventory = true
+        sfx(.chestOpen, 0.6)
+        bumpHUD()
+    }
+
+    /// Everything in the cargo pack goes into the bag (or at the player's feet)
+    func emptyPack() {
+        let k: IntPair = packSpot
+        for d in 0..<2 {
+            let key: ChestKey = ChestKey(d: d, x: k.x, y: k.y)
+            if let items = world.chests[key] {
+                world.chests[key] = nil
+                for st in items { addStack(st) }
+            }
+        }
+        if let p = openChest, isPackSpot(p) { openChest = nil }
+    }
+
+    /// The pack's storage key (outside any block a world can have)
+    var packSpot: IntPair { return IntPair(x: -1_900_000_000, y: -88) }
+
+    /// The pack's storage lives in the overworld's chest list wherever the player is: it travels along
+    func isPackSpot(_ p: IntPair) -> Bool { return p.y == -88 && p.x == -1_900_000_000 }
+
+    // MARK: charging
+
+    /// The assembly station charges a worn suit nearby from the power line it is wired to (it takes
+    /// sparks from the network only while it has a suit to charge)
+    func runSuitDock(_ d: PowerDev, _ dt: Double) {
+        let near: Bool = suit.worn && abs(Double(d.x) + 0.5 - pb.x) < 4.5 && abs(Double(d.y) + 0.5 - pb.cy) < 4.0
+        let st: ExoStats = suitStats
+        let wants: Bool = near && suit.energy < st.capacity - 0.01
+        if d.enabled != wants { d.enabled = wants }
+        if wants && d.powered {
+            suit.energy = min(st.capacity, suit.energy + PowerSpec.draw(.exoStation) * dt)
+            if frameNo % 20 == 0 { spawnParticles(pb.x, pb.y - 1.0, 0x60E0FF, 1, 1.5, 0.3, -2) }
+        }
+    }
+
+    /// Tapping a battery or accumulator while wearing the suit fills it from the stored charge
+    func chargeSuitFrom(_ d: PowerDev) -> Bool {
+        if !suit.worn { return false }
+        let st: ExoStats = suitStats
+        let room: Double = st.capacity - suit.energy
+        if room <= 0.5 {
+            say("The suit is full.", 1.2)
+            return true
+        }
+        let take: Double = min(room, d.charge)
+        if take < 0.5 {
+            say("That battery is empty.", 1.2)
+            return true
+        }
+        d.charge -= take
+        suit.energy += take
+        sfx(.zap, 0.5)
+        say(joinText("The suit takes ", String(Int(take.rounded())), " from the battery (", String(Int(suit.energy)), " of ", String(Int(st.capacity)), ")."), 2.0)
+        return true
+    }
+
+    /// The look the player's sprite takes from the suit (nil: not worn)
+    func suitLook() -> SuitLook? {
+        if !suit.worn { return nil }
+        var l: SuitLook = SuitLook()
+        func col(_ s: ExoSlot) -> UInt32 { return suit.material(s)?.color ?? 0 }
+        l.helmet = col(.helmet)
+        l.chest = col(.chest)
+        l.armL = col(.armL)
+        l.armR = col(.armR)
+        l.legs = col(.legs)
+        l.boots = col(.boots)
+        l.plateHead = col(.plateHead)
+        l.plateShoulders = col(.plateShoulders)
+        l.plateChest = col(.plateChest)
+        l.plateArms = col(.plateArms)
+        l.plateLegs = col(.plateLegs)
+        l.core = suit.core?.color ?? 0
+        let st: ExoStats = suitStats
+        l.drill = st.has(.drill)
+        l.lamp = st.has(.lamp)
+        l.pack = st.has(.cargo)
+        l.jets = st.has(.hover)
+        return l
+    }
+}
+
+/// How a worn suit looks on the player: a colour for each part (0: not fitted) and its modules
+struct SuitLook: Hashable {
+    var helmet: UInt32 = 0
+    var chest: UInt32 = 0
+    var armL: UInt32 = 0
+    var armR: UInt32 = 0
+    var legs: UInt32 = 0
+    var boots: UInt32 = 0
+    var plateHead: UInt32 = 0
+    var plateShoulders: UInt32 = 0
+    var plateChest: UInt32 = 0
+    var plateArms: UInt32 = 0
+    var plateLegs: UInt32 = 0
+    var core: UInt32 = 0
+    var drill: Bool = false
+    var lamp: Bool = false
+    var pack: Bool = false
+    var jets: Bool = false
+}
+
+/// The suit drawn over a humanoid frame (22 x 17, the figure 10 wide from column 6): frame colours on
+/// the body, a visor across the face, plates where they are fitted, the core's glow, and the modules
+/// that show (a drill on the front arm, a lamp on the helmet, a pack on the back, jets on the boots)
+func paintSuit(_ cv: inout PixelBuf, _ l: SuitLook, legs: Int, pose: Int) {
+    let ox: Int = humanOX
+    func px(_ x: Int, _ y: Int, _ c: UInt32) { cv.ink(ox + x, y, inkS(c)) }
+    func lit(_ x: Int, _ y: Int, _ c: UInt32) { cv.ink(ox + x, y, inkF(c)) }
+    let dark: UInt32 = 0x2A2E36
+    if l.helmet != 0 {
+        // a closed helm: the face is behind a visor
+        for x in 3...6 { px(x, 1, l.helmet) }
+        for x in 2...7 { px(x, 2, l.helmet) }
+        px(2, 3, l.helmet)
+        px(3, 3, l.helmet)
+        for x in 4...7 { lit(x, 3, 0x60E0FF) }
+        for x in 2...7 { px(x, 4, shadeRGB(l.helmet, 0.85)) }
+        for x in 3...6 { px(x, 5, shadeRGB(l.helmet, 0.7)) }
+        if l.plateHead != 0 { for x in 3...6 { px(x, 1, shadeRGB(l.plateHead, 1.15)) } }
+        if l.lamp { lit(7, 2, 0xFFF4C0) }
+    }
+    if l.chest != 0 {
+        for y in 7...9 { for x in 3...6 { px(x, y, l.chest) } }
+        for x in 2...7 { px(x, 10, dark) }
+        if l.plateChest != 0 {
+            for x in 3...6 { px(x, 7, shadeRGB(l.plateChest, 1.15)) }
+            for x in 3...6 { px(x, 8, l.plateChest) }
+        }
+        if l.core != 0 {
+            lit(4, 8, l.core)
+            lit(5, 8, shadeRGB(l.core, 1.3))
+        }
+    }
+    // arms: the back arm (left column pair) and the front arm (right pair, unless a pose draws its own)
+    let frontFree: Bool = pose < 2
+    for y in 7...9 {
+        if l.armL != 0 { px(1, y, l.armL); px(2, y, shadeRGB(l.armL, 0.85)) }
+        if l.armR != 0 && frontFree { px(7, y, l.armR); px(8, y, shadeRGB(l.armR, 0.85)) }
+    }
+    if l.plateShoulders != 0 && l.chest != 0 {
+        px(1, 7, shadeRGB(l.plateShoulders, 1.2))
+        px(2, 7, l.plateShoulders)
+        if frontFree { px(7, 7, l.plateShoulders); px(8, 7, shadeRGB(l.plateShoulders, 1.2)) }
+        px(1, 6, l.plateShoulders)
+        if frontFree { px(8, 6, l.plateShoulders) }
+    }
+    if l.plateArms != 0 {
+        if l.armL != 0 { px(1, 9, l.plateArms); px(2, 9, l.plateArms) }
+        if l.armR != 0 && frontFree { px(7, 9, l.plateArms); px(8, 9, l.plateArms) }
+    }
+    if l.drill && l.armR != 0 && frontFree {
+        lit(9, 9, 0xD8D8E0)
+        lit(10, 9, 0xB0B0B8)
+        lit(11, 9, 0x8A8A94)
+    }
+    // legs and boots follow the stride of the frame
+    let legCols: [Int] = legs == 1 ? [1, 2, 7, 8] : (legs == 2 ? [3, 4, 5, 6] : [2, 3, 6, 7])
+    if l.legs != 0 {
+        for y in 11...14 { for x in legCols { px(x, y, y == 11 ? shadeRGB(l.legs, 0.9) : l.legs) } }
+        if l.plateLegs != 0 { for x in legCols { px(x, 13, shadeRGB(l.plateLegs, 1.15)) } }
+    }
+    if l.boots != 0 {
+        for x in legCols { px(x, 15, l.boots) }
+        if l.jets { lit(legCols[0], 15, 0xFF9A3A) }
+    }
+    if l.pack {
+        for y in 7...10 {
+            cv.ink(ox - 1, y, inkS(0x6A4A2A))
+            cv.ink(ox, y, inkS(0x8A6A3A))
+        }
+    }
+}
+
+// MARK: - Alchemy, infusion and suit art
+
+/// A potion's icon: a round flask for a drink, a squat strapped flask for a splash, the mutagen glowing
+func iconPotion(_ p: Potion) -> PixelBuf {
+    var b = PixelBuf(w: 12, h: 12)
+    let liq: UInt32 = p.color
+    let glass: UInt32 = 0xCFEFFF
+    if p.thrown {
+        b.rect(5, 0, 2, 1, 0x5A4A3A)
+        b.rect(4, 1, 4, 2, glass)
+        b.rect(2, 3, 8, 8, glass)
+        b.rect(3, 5, 6, 5, liq)
+        b.rect(3, 9, 6, 1, shadeRGB(liq, 0.75))
+        b.rect(2, 4, 8, 1, 0x7A5A3A)
+        b.set(4, 6, shadeRGB(liq, 1.45))
+        b.set(8, 4, 0xFFFFFF)
+        if p == .mutagen {
+            b.set(5, 7, 0xC07CFF)
+            b.set(7, 6, 0xC07CFF)
+            b.set(6, 8, 0xE0B8FF)
+        }
+    } else {
+        b.rect(5, 0, 2, 1, 0x8A5A2A)
+        b.rect(5, 1, 2, 2, glass)
+        b.ellipse(6, 7.5, 4.0, 3.8, glass)
+        b.ellipse(6, 8.2, 3.2, 2.9, liq)
+        b.ellipse(4.8, 7.0, 1.0, 0.8, shadeRGB(liq, 1.45))
+        b.set(8, 5, 0xFFFFFF)
+        if p == .greaterMending { b.set(6, 3, 0xFFD040) }
+    }
+    b.outline(0x1A1410)
+    return b
+}
+
+/// An infusion compound's icon: a stoppered phial with a swirl in the infusion's colour, ringed in
+/// its rarity's colour
+func iconCompound(_ i: Infusion) -> PixelBuf {
+    var b = PixelBuf(w: 12, h: 12)
+    let c: UInt32 = i.color
+    let ring: UInt32 = i.rarity.color
+    b.rect(5, 0, 2, 2, 0x6A6E78)
+    b.rect(4, 2, 4, 1, ring)
+    b.rect(3, 3, 6, 7, 0x2A2A34)
+    b.rect(4, 4, 4, 5, c)
+    b.set(4, 4, shadeRGB(c, 1.4))
+    b.set(6, 6, shadeRGB(c, 0.6))
+    b.set(5, 7, shadeRGB(c, 1.3))
+    b.rect(3, 10, 6, 1, ring)
+    b.outline(0x1A1410)
+    return b
+}
+
+/// The icon of a suit part, plate, core or module
+func iconExo(_ it: Item) -> PixelBuf {
+    var b = PixelBuf(w: 12, h: 12)
+    switch it {
+    case .exoPart(let p, let m):
+        let c: UInt32 = m.color
+        let hi: UInt32 = shadeRGB(c, 1.25)
+        let lo: UInt32 = shadeRGB(c, 0.7)
+        switch p {
+        case .helmet:
+            b.rect(3, 2, 6, 7, c); b.rect(4, 1, 4, 1, c); b.rect(3, 5, 6, 2, 0x60E0FF); b.rect(3, 2, 6, 1, hi); b.rect(3, 8, 6, 1, lo)
+        case .chestFrame:
+            b.rect(2, 2, 8, 7, c); b.rect(3, 9, 6, 2, lo); b.rect(0, 2, 2, 3, c); b.rect(10, 2, 2, 3, c)
+            b.rect(5, 4, 2, 2, 0xFFC830); b.rect(2, 2, 8, 1, hi)
+        case .arm:
+            b.rect(4, 1, 4, 4, c); b.rect(5, 5, 3, 4, lo); b.rect(5, 9, 3, 2, 0x3A3E48); b.rect(4, 1, 4, 1, hi)
+        case .legs:
+            b.rect(2, 1, 8, 2, lo); b.rect(2, 3, 3, 8, c); b.rect(7, 3, 3, 8, c); b.rect(2, 6, 3, 1, hi); b.rect(7, 6, 3, 1, hi)
+        case .boots:
+            b.rect(1, 5, 4, 4, c); b.rect(7, 5, 4, 4, c); b.rect(0, 9, 5, 2, lo); b.rect(7, 9, 5, 2, lo); b.rect(1, 5, 4, 1, hi); b.rect(7, 5, 4, 1, hi)
+        }
+    case .exoPlate(let m):
+        let c: UInt32 = m.color
+        b.rect(1, 2, 10, 8, shadeRGB(c, 0.75)); b.rect(2, 3, 8, 6, c); b.rect(2, 3, 8, 1, shadeRGB(c, 1.3))
+        b.set(2, 3, 0x3A3E48); b.set(9, 3, 0x3A3E48); b.set(2, 8, 0x3A3E48); b.set(9, 8, 0x3A3E48)
+    case .exoCore(let k):
+        let c: UInt32 = k.color
+        b.ellipse(6, 6, 4.6, 4.6, 0x3A3E48); b.ellipse(6, 6, 3.4, 3.4, shadeRGB(c, 0.7)); b.ellipse(6, 6, 2.2, 2.2, c)
+        b.set(5, 5, 0xFFFFFF); b.rect(5, 0, 2, 2, 0x6A6E78); b.rect(5, 10, 2, 2, 0x6A6E78)
+    case .exoModule(let m):
+        let c: UInt32 = m.color
+        b.rect(1, 2, 10, 8, 0x3A3E48); b.rect(2, 3, 8, 6, 0x5A6270)
+        switch m {
+        case .drill: b.rect(3, 5, 3, 2, c); b.rect(6, 5, 2, 2, shadeRGB(c, 0.8)); b.set(8, 5, c); b.set(9, 6, c)
+        case .lamp: b.ellipse(6, 6, 2.2, 2.2, c); b.set(6, 6, 0xFFFFFF)
+        case .hover: b.rect(3, 4, 2, 4, 0x9AA4B0); b.rect(7, 4, 2, 4, 0x9AA4B0); b.rect(3, 8, 2, 1, c); b.rect(7, 8, 2, 1, c)
+        case .cargo: b.rect(3, 4, 6, 4, c); b.rect(3, 4, 6, 1, shadeRGB(c, 1.3)); b.set(6, 6, 0xE8C060)
+        case .barrier: b.ellipse(6, 6, 3.0, 3.0, c); b.ellipse(6, 6, 1.8, 1.8, 0x5A6270)
+        case .gauntlet: b.line(3, 8, 6, 4, c); b.line(6, 4, 5, 6, c); b.line(5, 6, 8, 3, c)
+        default: b.rect(3, 4, 6, 4, c); b.rect(4, 5, 4, 2, shadeRGB(c, 1.3))
+        }
+        b.rect(1, 2, 10, 1, shadeRGB(0x5A6270, 1.3))
+    default: break
+    }
+    b.outline(0x1A1410)
+    return b
+}
+
+/// The suit seen from the front (view 0) or the back (view 1), 40 x 56. Fitted parts in their metal's
+/// colour; missing ones as a faint outline, so the empty places can be seen.
+func suitViewBuf(_ s: ExoSuit, _ view: Int) -> PixelBuf {
+    var b = PixelBuf(w: 40, h: 56)
+    let ghost: UInt32 = 0x46505E
+    let dark: UInt32 = 0x2A2E36
+    func part(_ slot: ExoSlot) -> UInt32? { return s.material(slot)?.color }
+    func box(_ x: Int, _ y: Int, _ w: Int, _ h: Int, _ c: UInt32?) {
+        if let col = c {
+            b.rect(x, y, w, h, col)
+            b.rect(x, y, w, 1, shadeRGB(col, 1.25))
+            b.rect(x, y + h - 1, w, 1, shadeRGB(col, 0.7))
+        } else {
+            // outline only
+            b.rect(x, y, w, 1, ghost)
+            b.rect(x, y + h - 1, w, 1, ghost)
+            b.rect(x, y, 1, h, ghost)
+            b.rect(x + w - 1, y, 1, h, ghost)
+        }
+    }
+    let back: Bool = view == 1
+    // left and right as the viewer sees them: from the back, the suit's left arm is on the left
+    let leftArm: ExoSlot = back ? .armL : .armR
+    let rightArm: ExoSlot = back ? .armR : .armL
+    // helmet
+    box(14, 2, 12, 10, part(.helmet))
+    if part(.helmet) != nil {
+        if !back { b.rect(15, 6, 10, 3, 0x60E0FF); b.rect(15, 6, 10, 1, 0xB8F4FF) } else { b.rect(16, 5, 8, 1, shadeRGB(part(.helmet) ?? 0, 0.75)) }
+        if let p = part(.plateHead) { b.rect(15, 2, 10, 2, shadeRGB(p, 1.15)) }
+        if s.modules.contains(.lamp) && !back { b.rect(25, 5, 2, 2, 0xFFF4C0) }
+    }
+    b.rect(18, 12, 4, 2, dark)
+    // chest frame
+    box(11, 14, 18, 13, part(.chest))
+    box(13, 27, 14, 3, part(.chest))
+    if let c = part(.chest) {
+        if let p = part(.plateChest), !back { b.rect(13, 16, 14, 7, shadeRGB(p, 0.9)); b.rect(14, 17, 12, 5, p); b.rect(14, 17, 12, 1, shadeRGB(p, 1.3)) }
+        if let core = s.core, !back {
+            b.ellipse(20, 20, 2.6, 2.6, shadeRGB(core.color, 0.7))
+            b.ellipse(20, 20, 1.6, 1.6, core.color)
+            b.set(19, 19, 0xFFFFFF)
+        }
+        if back {
+            b.rect(15, 16, 10, 9, shadeRGB(c, 0.8))
+            for k in 0..<3 { b.rect(16, 17 + k * 3, 8, 1, dark) }
+            if s.modules.contains(.cargo) { b.rect(13, 15, 14, 12, 0x6A4A2A); b.rect(13, 15, 14, 2, 0x8A6A3A); b.rect(19, 19, 2, 2, 0xE8C060) }
+            if s.modules.contains(.hover) { b.rect(12, 18, 3, 8, 0x9AA4B0); b.rect(25, 18, 3, 8, 0x9AA4B0); b.rect(12, 26, 3, 2, 0xFF9A3A); b.rect(25, 26, 3, 2, 0xFF9A3A) }
+        } else if s.modules.contains(.cargo) {
+            b.rect(14, 14, 1, 12, 0x6A4A2A)
+            b.rect(25, 14, 1, 12, 0x6A4A2A)
+        }
+    }
+    if let p = part(.plateShoulders), part(.chest) != nil {
+        b.rect(7, 13, 7, 4, shadeRGB(p, 0.85)); b.rect(7, 13, 7, 1, shadeRGB(p, 1.3))
+        b.rect(26, 13, 7, 4, shadeRGB(p, 0.85)); b.rect(26, 13, 7, 1, shadeRGB(p, 1.3))
+    }
+    // arms
+    box(6, 16, 5, 18, part(leftArm))
+    box(29, 16, 5, 18, part(rightArm))
+    if let p = part(.plateArms) {
+        if part(leftArm) != nil { b.rect(6, 19, 5, 4, shadeRGB(p, 1.1)) }
+        if part(rightArm) != nil { b.rect(29, 19, 5, 4, shadeRGB(p, 1.1)) }
+    }
+    if part(leftArm) != nil { b.rect(6, 34, 5, 3, dark) }
+    if part(rightArm) != nil { b.rect(29, 34, 5, 3, dark) }
+    // the drill on the right arm, the gauntlet on the left
+    let drillSide: Int = back ? 6 : 29
+    let gauntSide: Int = back ? 29 : 6
+    if s.modules.contains(.drill) { b.rect(drillSide + 1, 37, 3, 3, 0xD8D8E0); b.rect(drillSide + 2, 40, 1, 2, 0xA8A8B0) }
+    if s.modules.contains(.gauntlet) { b.rect(gauntSide, 33, 5, 3, 0xFFF07A) }
+    // legs and boots
+    b.rect(13, 30, 14, 2, dark)
+    box(13, 32, 6, 16, part(.legs))
+    box(21, 32, 6, 16, part(.legs))
+    if let p = part(.plateLegs), part(.legs) != nil { b.rect(13, 38, 6, 3, shadeRGB(p, 1.15)); b.rect(21, 38, 6, 3, shadeRGB(p, 1.15)) }
+    box(12, 48, 7, 6, part(.boots))
+    box(21, 48, 7, 6, part(.boots))
+    if s.modules.contains(.hover) && part(.boots) != nil { b.rect(14, 54, 2, 2, 0xFF9A3A); b.rect(24, 54, 2, 2, 0xFF9A3A) }
+    if s.modules.contains(.sprint) && part(.legs) != nil { b.rect(13, 44, 6, 1, 0x7AD8F8); b.rect(21, 44, 6, 1, 0x7AD8F8) }
+    b.outline(0x101418)
+    return b
+}
+
+/// Built suit pictures (redrawn only when the suit or the view changes)
+final class SuitArt: @unchecked Sendable {
+    static let shared: SuitArt = SuitArt()
+    var cache: [Int: Image] = [:]
+
+    func image(_ s: ExoSuit, _ view: Int) -> Image {
+        var h: Hasher = Hasher()
+        for k in s.parts.keys.sorted() {
+            h.combine(k)
+            h.combine(s.parts[k]?.item)
+        }
+        h.combine(view)
+        let key: Int = h.finalize()
+        if let i = cache[key] { return i }
+        var img: Image
+        if view == 2 {
+            // side on, as it is worn in the world
+            var st: HumanStyle = playerStyle(hairIdx: 0, scarfIdx: 0, head: nil, chest: nil, legs: nil)
+            st.suit = suitLookOf(s)
+            img = pixImage(humanoidFrame(st, legs: 0, pose: 0))
+        } else {
+            img = pixImage(suitViewBuf(s, view))
+        }
+        if cache.count > 64 { cache.removeAll() }
+        cache[key] = img
+        return img
+    }
+}
+
+/// How a suit would look worn (for the side view, worn or not)
+func suitLookOf(_ s: ExoSuit) -> SuitLook {
+    var l: SuitLook = SuitLook()
+    func col(_ x: ExoSlot) -> UInt32 { return s.material(x)?.color ?? 0 }
+    l.helmet = col(.helmet)
+    l.chest = col(.chest)
+    l.armL = col(.armL)
+    l.armR = col(.armR)
+    l.legs = col(.legs)
+    l.boots = col(.boots)
+    l.plateHead = col(.plateHead)
+    l.plateShoulders = col(.plateShoulders)
+    l.plateChest = col(.plateChest)
+    l.plateArms = col(.plateArms)
+    l.plateLegs = col(.plateLegs)
+    l.core = s.core?.color ?? 0
+    let mods: [ExoModule] = s.modules
+    l.drill = mods.contains(.drill)
+    l.lamp = mods.contains(.lamp)
+    l.pack = mods.contains(.cargo)
+    l.jets = mods.contains(.hover)
+    return l
 }
 
 // ===== u01_art =====
@@ -26666,7 +29858,8 @@ final class Art: @unchecked Sendable {
         let key: Int = g.armorKey
         if let s = playerSets[key] { return s }
         let a = g.armorPieces()
-        let st: HumanStyle = playerStyle(hairIdx: g.settings.hair, scarfIdx: g.settings.scarf, head: a.0, chest: a.1, legs: a.2)
+        var st: HumanStyle = playerStyle(hairIdx: g.settings.hair, scarfIdx: g.settings.scarf, head: a.0, chest: a.1, legs: a.2)
+        st.suit = g.suitLook()
         let s: SpriteSet = makeSpriteSet(humanoidFrames(st), hitH: 1.8, fixedScale: 0.125)
         playerSets[key] = s
         return s
@@ -26736,6 +29929,8 @@ enum SoundID: Int, CaseIterable {
     /// weather (appended): a close thunderclap, far-off rolling thunder, the crackle before a strike,
     /// an alert chime, a hailstone's tick
     case thunderNear, thunderFar, strikeWarn, weatherAlert, hailTick
+    /// alchemy and the suit (appended): a sip, a flask breaking, an infusion taking hold, a suit closing
+    case drink, potionBreak, infuse, suitUp
 }
 
 enum LoopID: Int, CaseIterable {
@@ -27089,6 +30284,31 @@ enum SoundBank {
             s.noise(0.03, 0.0005, 0.008, 0.6, lp: 9000, hp: 2500)
             s.tone(2600 * p, 2400 * p, 0.02, 0.0005, 0.006, 0.3)
             peak = 0.3
+        case .drink:
+            // three soft gulps
+            s = Synth(0.5, seed: seed)
+            for k in 0..<3 { s.tone(320 * p, 220 * p, 0.09, 0.01, 0.04, 0.35, wave: 0, at: Double(k) * 0.14) }
+            s.noise(0.4, 0.02, 0.15, 0.12, lp: 900, hp: 200)
+            peak = 0.4
+        case .potionBreak:
+            // glass, then a hiss
+            s = Synth(0.55, seed: seed)
+            s.noise(0.05, 0.0008, 0.015, 0.7, lp: 9500, hp: 3500)
+            for k in 0..<4 { s.tone((2900 + Double(k) * 520) * p, 2500 * p, 0.07, 0.001, 0.025, 0.14, at: 0.008 * Double(k)) }
+            s.noise(0.45, 0.04, 0.16, 0.45, lp: 2600, hp: 500, at: 0.05)
+            peak = 0.55
+        case .infuse:
+            // a rising shimmer
+            s = Synth(0.8, seed: seed)
+            for (k, f) in [440.0, 554.0, 659.0, 880.0].enumerated() { s.tone(f * p, f * 1.01 * p, 0.45, 0.04, 0.2, 0.22, wave: 1, at: Double(k) * 0.08, vibrato: 6) }
+            peak = 0.45
+        case .suitUp:
+            // servos and a latch
+            s = Synth(0.45, seed: seed)
+            s.tone(180 * p, 420 * p, 0.25, 0.01, 0.1, 0.3, wave: 3)
+            s.noise(0.06, 0.001, 0.02, 0.6, lp: 4000, hp: 800, at: 0.28)
+            s.tone(1200 * p, 1100 * p, 0.05, 0.001, 0.02, 0.25, at: 0.3)
+            peak = 0.45
         }
         s.finish(peak)
         return s.out
@@ -28693,6 +31913,7 @@ extension Game {
     func lightningStrike(_ x: Double, _ y: Double, rod: Bool) {
         let soft: Bool = settings.reduceFlashes
         makeBolt(x, y)
+        stormEssenceAt(x, y, rod: rod)
         skyFlash = max(skyFlash, soft ? 0.12 : 0.55)
         addLightFlash(x, y - 0.5, peak: soft ? 11 : 15, dur: soft ? 0.7 : 0.35, radius: 1.4, color: 0xC8DCFF)
         // thunder: at once up close, later the further off it was (light is quick, sound is slow)
@@ -28845,9 +32066,9 @@ extension Game {
         if weather.bigHail && h > 0.3 {
             if settings.weatherHurtsPlayer && !dead && rainReaches(pb.x, pb.y, pb.h) {
                 // a helmet turns most of the stones
-                let helmet: Bool = inv.armor[0] != nil
+                let helmet: Bool = inv.armor[0] != nil || (suit.worn && suit[.helmet] != nil)
                 if !helmet || Double.random(in: 0...1) < 0.35 {
-                    var info = DamageInfo(amount: 1.0 * I, type: .impact, source: .environment)
+                    var info = DamageInfo(amount: 1.0 * I * (1.0 - armorInf.stormCut) * (suitHas(.seal) ? 0.5 : 1.0), type: .impact, source: .environment)
                     info.originX = pb.x
                     info.key = newID()
                     _ = hurtPlayer(info)
@@ -28955,6 +32176,7 @@ extension Game {
                 if wearing(.winterCoat) { loss *= 0.35 }
                 if wearing(.snowBoots) { loss *= 0.8 }
                 if pb.inWater { loss += 0.6 * cold }
+                loss *= coldGuard()
             }
         }
         let gain: Double = warmthNear * 0.12 + (loss <= 0.001 ? 0.05 : 0)
@@ -31866,7 +35088,7 @@ struct SectionEntry {
 
 final class RenderCache: @unchecked Sendable {
     static let shared: RenderCache = RenderCache()
-    var owner: ObjectIdentifier? = nil
+    var owner: Int = -1
     var sections: [Int: SectionEntry] = [:]
     var frame: Int = 0
     var lightRev: Int = -1
@@ -31880,7 +35102,7 @@ final class RenderCache: @unchecked Sendable {
     var lastDraw: Double = 0
 
     func reset(for g: Game) {
-        let id: ObjectIdentifier = ObjectIdentifier(g)
+        let id: Int = g.serial
         if owner != id {
             owner = id
             sections.removeAll()
@@ -32253,6 +35475,7 @@ enum WorldRenderer {
         drawProjectiles(&ctx, g, v)
         drawCombatFX(&ctx, g, v)
         drawParticles(&ctx, g, v)
+        if !g.smokes.isEmpty || !g.rings.isEmpty { drawPotionFX(&ctx, g, v) }
         drawWeatherDevices(&ctx, g, v)
         drawTornado(&ctx, g, v)
         drawPrecip(&ctx, g, v)
@@ -32638,8 +35861,13 @@ enum WorldRenderer {
         for m in g.mobs {
             let dying: Bool = m.hp <= 0 && !m.downed
             if dying && (m.deathT < 0 || m.removed) { continue }
-            if !v.visible(m.b.x, m.b.y, 8) { continue }
-            let s: SpriteSet = art.mobSet(m)
+            if !v.visible(m.b.x, m.b.y, 8 + m.b.w) { continue }
+            var s: SpriteSet = art.mobSet(m)
+            if m.mut > 0 {
+                // a mutated creature: its colours turned, drawn as large as its body has grown
+                s = art.mutantSet(m)
+                s.scale *= g.drawScale(m)
+            }
             var left: Bool = m.dir < 0
             // turning round: the sprite narrows to a sliver and widens again facing the other way
             var scaleX: Double = 1.0
@@ -32691,6 +35919,7 @@ enum WorldRenderer {
                 let r: CGRect = v.rect(m.b.left, m.b.top + m.b.h * 0.3, m.b.w, m.b.h * 0.7)
                 fillRect(&ctx, r, Color(hex: 0xFF7020, alpha: fl))
             }
+            if m.hasStatus { drawMobStatus(&ctx, g, v, m) }
             if m.tame {
                 drawLabel(&ctx, "♥", v.sx(m.b.x), v.sy(m.b.top) - 10.0, 12, Color(hex: 0xFF5A7A))
             }
@@ -33242,11 +36471,16 @@ enum WorldRenderer {
                 fillRect(&ctx, mkRect(x - h, y - h, sz * 0.5, sz * 0.45), Color(hex: 0xB0B0B0))
             case .flask:
                 let r: Double = tp * 0.26
+                let pot: Potion? = p.potion >= 0 ? Potion(rawValue: p.potion) : nil
                 fillOval(&ctx, mkRect(x - r, y - r, r * 2.0, r * 2.0), Color(hex: 0xB8E0F0))
-                fillOval(&ctx, mkRect(x - r * 0.75, y - r * 0.55, r * 1.5, r * 1.3), Color(hex: 0xFF7A1E))
+                fillOval(&ctx, mkRect(x - r * 0.75, y - r * 0.55, r * 1.5, r * 1.3), Color(hex: pot?.color ?? 0xFF7A1E))
                 fillRect(&ctx, mkRect(x - r * 0.3, y - r * 1.6, r * 0.6, r * 0.7), Color(hex: 0xB8E0F0))
-                let flick: Bool = Int(p.life * 12.0) % 2 == 0
-                fillRect(&ctx, mkRect(x - 2.0, y - r * 2.2, 4, 4), flick ? Color(hex: 0xFFD040) : Color(hex: 0xFF8030))
+                if pot == nil {
+                    let flick: Bool = Int(p.life * 12.0) % 2 == 0
+                    fillRect(&ctx, mkRect(x - 2.0, y - r * 2.2, 4, 4), flick ? Color(hex: 0xFFD040) : Color(hex: 0xFF8030))
+                } else {
+                    fillRect(&ctx, mkRect(x - r * 0.3, y - r * 2.0, r * 0.6, r * 0.4), Color(hex: 0x8A5A2A))
+                }
             case .arrow:
                 // the arrow points along its flight (or the angle it hit at, once stuck)
                 let ang: Double = p.stuck > 0 ? p.stuckAngle : atan2(p.vy, p.vx)
@@ -33723,6 +36957,7 @@ struct SlotView: View {
                         .shadow(color: Color.black, radius: 0, x: 1, y: 1)
                         .padding(2)
                 }
+                if let l = s.inf, !l.isEmpty { infusionMarks(l) }
             }
         }
         .frame(width: size, height: size)
@@ -34061,13 +37296,15 @@ struct HUDView: View {
                 if game.air < 9.99 {
                     IconRow(value: game.air, perIcon: 1.0, count: 10, full: art.bubble, empty: art.heartEmpty, size: 14)
                 }
-                if game.inv.defense > 0 {
+                if game.totalDefense > 0 {
                     HStack(spacing: 4) {
                         art.shieldIcon.resizable().frame(width: 16, height: 16)
-                        OutlinedText(text: String(Int(game.inv.defense.rounded())), size: 12)
+                        OutlinedText(text: String(Int(game.totalDefense.rounded())), size: 12)
                     }
                 }
+                if game.suit.worn { SuitBar(game: game) }
             }
+            if !game.activeEffects().isEmpty { EffectStrip(game: game) }
             if game.mode == .hardcore { OutlinedText(text: "HARDCORE", size: 11, color: Color(hex: 0xFF6060)) }
             if !game.testMod.isEmpty { OutlinedText(text: "MOD TEST · NOT SAVED", size: 11, color: Color(hex: 0x60E0FF)) }
         }
@@ -34275,6 +37512,14 @@ struct InventoryPanel: View {
         .coordinateSpace(name: "inv")
         .frame(maxWidth: 1000)
         .padding(10)
+        .onAppear {
+            switch game.craftStation {
+            case .still: cat = .alchemy
+            case .infuser: cat = .infusion
+            case .assembly: cat = .exosuit
+            default: break
+            }
+        }
     }
 
     /// A slot that can be tapped (pick up / place), long-pressed, hovered for info, and dragged
@@ -34334,6 +37579,9 @@ struct InventoryPanel: View {
             if let st = s {
                 Text(verbatim: st.count > 1 ? joinText(st.item.name, "  x", String(st.count)) : st.item.name).font(.pixel(12))
                 Text(verbatim: st.item.infoLines.joined(separator: " · ")).font(.pixel(10, .semibold)).foregroundColor(Color.white.opacity(0.75))
+                if !st.infusions.isEmpty {
+                    Text(verbatim: joinText("Infused: ", st.infusions.map { $0.name }.joined(separator: ", "))).font(.pixel(10, .semibold)).foregroundColor(Color(hex: 0xC07CFF))
+                }
             } else {
                 Text("Tap or hover an item to see what it does.").font(.pixel(10, .semibold)).foregroundColor(Color.white.opacity(0.55))
             }
@@ -34345,6 +37593,7 @@ struct InventoryPanel: View {
 
     var titleText: String {
         if let p = game.openChest, game.isCargoSpot(p) { return "INVENTORY  ·  CARGO" }
+        if let p = game.openChest, game.isPackSpot(p) { return "INVENTORY  ·  SUIT PACK" }
         if game.openChest != nil { return "INVENTORY  ·  CHEST" }
         return "INVENTORY"
     }
@@ -37615,7 +40864,7 @@ struct BlockEditorView: View {
         switch block.function {
         case .station:
             Text("Works as").font(.pixel(12, .bold)).foregroundColor(ModUI.dim)
-            ChoiceRow(options: ["Its own station", "Workbench", "Furnace", "Campfire", "Anvil", "Tinker's Bench", "Rift Forge"], selected: stationBind, columns: 4)
+            ChoiceRow(options: ["Its own station", "Workbench", "Furnace", "Campfire", "Anvil", "Tinker's Bench", "Rift Forge", "Alchemy Still", "Infusion Crucible", "Assembly Station"], selected: stationBind, columns: 4)
         case .healer:
             StatSlider(label: "Health restored", value: b(\.power, 6), range: 1...40, step: 1, format: "%.0f")
         case .bounce:
@@ -39081,6 +42330,901 @@ struct StructurePreview: View {
     }
 }
 
+// ===== u08_alchemy =====
+
+// MARK: - HUD: effects and suit energy
+
+/// The potion effects on the player: a small flask in the effect's colour and the seconds left
+struct EffectStrip: View {
+    let game: Game
+    var body: some View {
+        let list: [(ModEffectKind, Double)] = game.activeEffects()
+        return HStack(spacing: 4) {
+            ForEach(0..<list.count, id: \.self) { i in
+                EffectChip(kind: list[i].0, secs: list[i].1)
+            }
+        }
+    }
+}
+
+struct EffectChip: View {
+    let kind: ModEffectKind
+    let secs: Double
+    var body: some View {
+        let t: Int = Int(secs.rounded(.up))
+        let label: String = t >= 60 ? joinText(String(t / 60), "m") : joinText(String(t), "s")
+        return HStack(spacing: 2) {
+            Rectangle().fill(Color(hex: kind.color)).frame(width: 9, height: 9)
+                .overlay(Rectangle().stroke(Color.black, lineWidth: 1))
+            OutlinedText(text: label, size: 10, color: secs < 6 ? Color(hex: 0xFFB060) : Color.white)
+        }
+        .padding(.horizontal, 3)
+        .padding(.vertical, 2)
+        .background(Color.black.opacity(0.35))
+    }
+}
+
+/// The worn suit's energy, and the PACK button when it carries a cargo pack
+struct SuitBar: View {
+    let game: Game
+    var body: some View {
+        let st: ExoStats = game.suitStats
+        let cap: Double = max(1, st.capacity)
+        let f: Double = clampD(game.suit.energy / cap, 0, 1)
+        let col: Color = f > 0.25 ? Color(hex: 0x60E0FF) : Color(hex: 0xFF8A40)
+        return HStack(spacing: 6) {
+            OutlinedText(text: "SUIT", size: 10, color: Color(hex: 0x9AD8F0))
+            ZStack(alignment: .leading) {
+                Rectangle().fill(Color.black.opacity(0.6)).frame(width: 110, height: 9)
+                Rectangle().fill(col).frame(width: CGFloat(110.0 * f), height: 9)
+            }
+            .overlay(Rectangle().stroke(Color.white.opacity(0.4), lineWidth: 1))
+            OutlinedText(text: joinText(String(Int(game.suit.energy)), "/", String(Int(cap))), size: 10)
+            if st.has(.cargo) {
+                SmallButton(title: "PACK", color: Color(hex: 0x7A5A2A)) { game.openPack() }
+            }
+        }
+    }
+}
+
+// MARK: - Infusion Crucible
+
+/// The Infusion Crucible: pick a piece of equipment, pick a compound, see what will change, confirm.
+/// The item never leaves its slot while this is open, so a slip of the finger can't lose it.
+struct InfusionPanel: View {
+    @ObservedObject var game: Game
+    @ObservedObject var hud: HUDSignal
+    @State var pick: Int = -1
+    @State var choice: Int = -1
+    @State var removing: Int = -1
+    @State var note: String = ""
+
+    var body: some View {
+        VStack(spacing: 10) {
+            HStack {
+                Text("INFUSION CRUCIBLE").font(.pixel(20)).foregroundColor(Color(hex: 0xC07CFF))
+                Spacer()
+                SmallButton(title: "MAKE COMPOUNDS", color: Color(hex: 0x5A4A8A)) { game.openCrafting(.infuser) }
+                SmallButton(title: "CLOSE", color: Color(hex: 0xA03030)) { close() }
+            }
+            Text("1 Choose equipment  ·  2 Choose an infusion  ·  3 Check what changes, then confirm")
+                .font(.pixel(11, .semibold)).foregroundColor(Color.white.opacity(0.7))
+                .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(alignment: .top, spacing: 12) {
+                equipmentColumn.frame(width: 250)
+                infusionColumn.frame(width: 330)
+                previewColumn.frame(width: 300)
+            }
+            if !note.isEmpty {
+                Text(verbatim: note).font(.pixel(12, .semibold)).foregroundColor(Color(hex: 0xFFE070))
+            }
+        }
+        .foregroundColor(Color.white)
+        .padding(14)
+        .background(PixelBox(color: Color(hex: 0x2C2834)).opacity(0.97))
+        .frame(maxWidth: 940)
+        .padding(10)
+    }
+
+    func close() {
+        game.showInfuse = false
+        game.bumpHUD()
+    }
+
+    /// bag slots holding something that takes infusions
+    var candidates: [Int] {
+        var out: [Int] = []
+        for i in 0..<game.inv.slots.count {
+            if let s = game.inv.slots[i], infusionSlots(s.item) > 0, s.item.maxStack == 1 { out.append(i) }
+        }
+        return out
+    }
+
+    var equipmentColumn: some View {
+        let list: [Int] = candidates
+        let cols: [GridItem] = [GridItem(.adaptive(minimum: 46), spacing: 4)]
+        return VStack(alignment: .leading, spacing: 6) {
+            Text("EQUIPMENT").font(.pixel(13)).foregroundColor(Color(hex: 0xB8A8D8))
+            if list.isEmpty {
+                Text("Nothing in your bag can take an infusion yet: weapons, tools, armour and suit parts can (take worn armour off first).")
+                    .font(.pixel(11, .semibold)).foregroundColor(Color.white.opacity(0.6))
+            }
+            ScrollView {
+                LazyVGrid(columns: cols, spacing: 4) {
+                    ForEach(list, id: \.self) { i in
+                        Button(action: {
+                            pick = i
+                            removing = -1
+                            note = ""
+                        }) {
+                            SlotView(stack: game.inv.slots[i], selected: pick == i, size: 44)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            .frame(maxHeight: 300)
+            if let s = picked { pickedInfo(s) }
+        }
+    }
+
+    var picked: Stack? {
+        if pick < 0 || pick >= game.inv.slots.count { return nil }
+        guard let s = game.inv.slots[pick], infusionSlots(s.item) > 0 else { return nil }
+        return s
+    }
+
+    func pickedInfo(_ s: Stack) -> some View {
+        let slots: Int = infusionSlots(s.item)
+        let have: [Infusion] = s.infusions
+        return VStack(alignment: .leading, spacing: 4) {
+            Text(verbatim: s.item.name).font(.pixel(13))
+            Text(verbatim: joinText(String(have.count), " of ", String(slots), " slots used")).font(.pixel(10, .semibold)).foregroundColor(Color.white.opacity(0.7))
+            ForEach(0..<have.count, id: \.self) { k in
+                HStack(spacing: 6) {
+                    Rectangle().fill(Color(hex: have[k].color)).frame(width: 10, height: 10)
+                    Text(verbatim: have[k].name).font(.pixel(11)).foregroundColor(Color(hex: have[k].rarity.color))
+                    Spacer(minLength: 0)
+                    SmallButton(title: removing == have[k].rawValue ? "SURE?" : "REMOVE", color: Color(hex: removing == have[k].rawValue ? 0xC04030 : 0x5A4A4A)) {
+                        if removing == have[k].rawValue {
+                            note = game.removeInfusion(slot: pick, have[k])
+                            removing = -1
+                        } else {
+                            removing = have[k].rawValue
+                            note = "Removing it spends the compound; the item is unharmed. Tap SURE? to go ahead."
+                        }
+                    }
+                }
+            }
+        }
+        .padding(6)
+        .background(Color.black.opacity(0.25))
+    }
+
+    var infusionColumn: some View {
+        let all: [Infusion] = Infusion.allCases
+        return VStack(alignment: .leading, spacing: 6) {
+            Text("INFUSIONS").font(.pixel(13)).foregroundColor(Color(hex: 0xB8A8D8))
+            ScrollView {
+                VStack(spacing: 4) {
+                    ForEach(all, id: \.self) { inf in infusionRow(inf) }
+                }
+            }
+            .frame(maxHeight: 420)
+        }
+    }
+
+    func infusionRow(_ inf: Infusion) -> some View {
+        let owned: Int = game.inv.total(.compound(inf))
+        let problem: String? = picked?.infuseProblem(inf)
+        let usable: Bool = (owned > 0 || game.isCreative) && problem == nil && picked != nil
+        let chosen: Bool = choice == inf.rawValue
+        return Button(action: {
+            choice = inf.rawValue
+            note = ""
+        }) {
+            HStack(spacing: 6) {
+                SlotView(stack: Stack(item: .compound(inf), count: max(1, owned)), selected: chosen, size: 34, dim: owned == 0)
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: 4) {
+                        Text(verbatim: inf.name).font(.pixel(12)).foregroundColor(Color(hex: inf.rarity.color))
+                        Text(verbatim: inf.rarity.name).font(.pixel(9, .semibold)).foregroundColor(Color.white.opacity(0.5))
+                    }
+                    Text(verbatim: inf.blurb).font(.pixel(10, .semibold)).foregroundColor(Color.white.opacity(usable ? 0.85 : 0.5)).lineLimit(2)
+                }
+                Spacer(minLength: 0)
+                Text(verbatim: owned > 0 ? joinText("x", String(owned)) : "none").font(.pixel(10)).foregroundColor(Color.white.opacity(0.6))
+            }
+            .padding(4)
+            .background(chosen ? Color(hex: 0x4A3A6A) : Color.black.opacity(0.2))
+        }
+        .buttonStyle(.plain)
+    }
+
+    var previewColumn: some View {
+        let inf: Infusion? = Infusion(rawValue: choice)
+        return VStack(alignment: .leading, spacing: 6) {
+            Text("WHAT CHANGES").font(.pixel(13)).foregroundColor(Color(hex: 0xB8A8D8))
+            if let s = picked, let i = inf {
+                previewBody(s, i)
+            } else {
+                Text("Pick a piece of equipment and an infusion to see how it changes.")
+                    .font(.pixel(11, .semibold)).foregroundColor(Color.white.opacity(0.6))
+            }
+        }
+    }
+
+    func previewBody(_ s: Stack, _ i: Infusion) -> some View {
+        let problem: String? = s.infuseProblem(i)
+        let owned: Int = game.inv.total(.compound(i))
+        var after: Stack = s
+        after.inf = (s.inf ?? []) + [i.rawValue]
+        let rows: [(String, String, String)] = game.infusionCompare(s, after)
+        let ok: Bool = problem == nil && (owned > 0 || game.isCreative)
+        return VStack(alignment: .leading, spacing: 5) {
+            Text(verbatim: joinText(s.item.name, " + ", i.name)).font(.pixel(12))
+            Text(verbatim: i.blurb).font(.pixel(10, .semibold)).foregroundColor(Color.white.opacity(0.8))
+            ForEach(0..<rows.count, id: \.self) { k in
+                HStack {
+                    Text(verbatim: rows[k].0).font(.pixel(11, .semibold)).foregroundColor(Color.white.opacity(0.75))
+                    Spacer(minLength: 4)
+                    Text(verbatim: rows[k].1).font(.pixel(11)).foregroundColor(Color.white.opacity(0.6))
+                    Text("→").font(.pixel(11)).foregroundColor(Color.white.opacity(0.6))
+                    Text(verbatim: rows[k].2).font(.pixel(11)).foregroundColor(rows[k].1 == rows[k].2 ? Color.white : Color(hex: 0x7AF08A))
+                }
+            }
+            if let p = problem {
+                Text(verbatim: p).font(.pixel(11, .semibold)).foregroundColor(Color(hex: 0xFF9A7A))
+            } else if owned == 0 && !game.isCreative {
+                Text(verbatim: joinText("You have no ", i.name, " compound: make one with MAKE COMPOUNDS.")).font(.pixel(11, .semibold)).foregroundColor(Color(hex: 0xFF9A7A))
+            }
+            PixelButton(title: ok ? "CONFIRM INFUSION" : "CAN'T INFUSE", color: ok ? Color(hex: 0x6A4AA8) : Color(hex: 0x444444)) {
+                if !ok { return }
+                note = game.infuse(slot: pick, i)
+                choice = -1
+            }
+        }
+        .padding(6)
+        .background(Color.black.opacity(0.25))
+    }
+}
+
+extension Game {
+    /// Before-and-after numbers for an infusion preview: what a weapon, tool or armour piece does
+    func infusionCompare(_ a: Stack, _ b: Stack) -> [(String, String, String)] {
+        var rows: [(String, String, String)] = []
+        let cls: [InfuseClass] = infuseClasses(a.item)
+        func f1(_ v: Double) -> String { return String(format: "%.1f", v) }
+        func pct(_ v: Double) -> String { return joinText(String(Int((v * 100).rounded())), "%") }
+        if cls.contains(.melee) {
+            let p0: MeleeProfile = Game.infuseProfile(a.item.melee, a.inf ?? [])
+            let p1: MeleeProfile = Game.infuseProfile(a.item.melee, b.inf ?? [])
+            rows.append(("Damage", f1(p0.damage), f1(p1.damage)))
+            rows.append(("Swing every", joinText(String(format: "%.2f", p0.cooldown), " s"), joinText(String(format: "%.2f", p1.cooldown), " s")))
+            rows.append(("Reach", f1(p0.reach), f1(p1.reach)))
+            rows.append(("Critical chance", pct(p0.critChance), pct(p1.critChance)))
+            rows.append(("Knockback", f1(p0.knock), f1(p1.knock)))
+        }
+        if cls.contains(.ranged) {
+            var d0: Double = 1
+            var d1: Double = 1
+            if a.has(.honed) { d0 *= 1.2 }
+            if a.has(.voidrend) { d0 *= 1.15 }
+            if b.has(.honed) { d1 *= 1.2 }
+            if b.has(.voidrend) { d1 *= 1.15 }
+            rows.append(("Shot damage", pct(d0), pct(d1)))
+            rows.append(("Range", a.has(.longReach) ? "125%" : "100%", b.has(.longReach) ? "125%" : "100%"))
+        }
+        if cls.contains(.tool) {
+            rows.append(("Mining speed", a.has(.haste) ? "125%" : "100%", b.has(.haste) ? "125%" : "100%"))
+            rows.append(("Extra ore chance", a.has(.bountiful) ? "20%" : "0%", b.has(.bountiful) ? "20%" : "0%"))
+        }
+        if cls.contains(.armor) || cls.contains(.suit) {
+            var x: ArmorInf = ArmorInf()
+            x.add(a)
+            var y: ArmorInf = ArmorInf()
+            y.add(b)
+            rows.append(("Extra defence", f1(x.defense), f1(y.defense)))
+            if x.fireCut != y.fireCut { rows.append(("Fire and lava", joinText("-", pct(x.fireCut)), joinText("-", pct(y.fireCut)))) }
+            if x.coldCut != y.coldCut { rows.append(("Cold", joinText("-", pct(x.coldCut)), joinText("-", pct(y.coldCut)))) }
+            if x.stormCut != y.stormCut { rows.append(("Lightning and hail", joinText("-", pct(x.stormCut)), joinText("-", pct(y.stormCut)))) }
+            if x.speed != y.speed { rows.append(("Run speed", joinText("+", pct(x.speed)), joinText("+", pct(y.speed)))) }
+            if x.thorns != y.thorns { rows.append(("Blow returned", pct(x.thorns), pct(y.thorns))) }
+            if x.knockMul != y.knockMul { rows.append(("Knockback taken", pct(x.knockMul), pct(y.knockMul))) }
+            if x.regen != y.regen { rows.append(("Healing a minute", f1(x.regen * 60), f1(y.regen * 60))) }
+        }
+        rows.append(("Slots used", String(a.inf?.count ?? 0), String(b.inf?.count ?? 0)))
+        return rows
+    }
+
+    /// Opens the crafting screen at a station (the crucible's compounds, the assembly station's parts)
+    func openCrafting(_ s: Station) {
+        showInfuse = false
+        showExo = false
+        craftStation = s
+        showInventory = true
+        bumpHUD()
+    }
+
+    /// The effects on the player, for the HUD: kind and seconds left
+    func activeEffects() -> [(ModEffectKind, Double)] {
+        var out: [(ModEffectKind, Double)] = []
+        for k in ModEffectKind.allCases where k.timed && effects.time[k.rawValue] > 0 {
+            out.append((k, effects.time[k.rawValue]))
+        }
+        if mendCD > 0 { out.append((.heal, mendCD)) }
+        return out
+    }
+}
+
+// MARK: - Assembly Station: the visual suit builder
+
+/// Where each place on the suit and the parts tray sit on screen, so a drag can find its target
+final class ExoFrames: @unchecked Sendable {
+    var slots: [Int: CGRect] = [:]
+    var tray: CGRect = .zero
+
+    func slot(at p: CGPoint) -> ExoSlot? {
+        for (k, r) in slots where r.contains(p) { return ExoSlot(rawValue: k) }
+        return nil
+    }
+}
+
+/// A part that can be fitted: one from the bag, or one taken off the suit in this plan (it goes back
+/// to the bag when the plan is applied, unless it is fitted again)
+struct TrayPart: Identifiable {
+    var id: Int
+    var stack: Stack
+    var fromSuit: Bool
+}
+
+/// The Assembly Station: the suit drawn large with its places marked on it. Drag parts from the tray
+/// onto the suit (or tap a part, then a place), drag them off again, swap metals, add plates and
+/// modules, and watch the numbers change before anything is fitted. APPLY fits it all at once.
+struct ExoAssemblyPanel: View {
+    @ObservedObject var game: Game
+    @ObservedObject var hud: HUDSignal
+    @State var plan: ExoSuit = ExoSuit()
+    @State var started: Bool = false
+    @State var view: Int = 0
+    @State var sel: Int = -1
+    @State var trayPick: Int = -1
+    @State var dragging: TrayPart? = nil
+    @State var dragSlot: Int = -1
+    @State var dragPoint: CGPoint = .zero
+    @State var hover: Int = -1
+    @State var note: String = ""
+    @State var frames: ExoFrames = ExoFrames()
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            VStack(spacing: 8) {
+                header
+                HStack(alignment: .top, spacing: 10) {
+                    builder
+                    VStack(spacing: 8) {
+                        statsBox
+                        detailBox
+                    }
+                    .frame(width: 270)
+                    trayColumn.frame(width: 250)
+                }
+                if !note.isEmpty {
+                    Text(verbatim: note).font(.pixel(12, .semibold)).foregroundColor(Color(hex: 0xFFE070))
+                }
+            }
+            .foregroundColor(Color.white)
+            .padding(12)
+            .background(PixelBox(color: Color(hex: 0x262A32)).opacity(0.97))
+            if let d = dragging {
+                SlotView(stack: d.stack, size: 46)
+                    .opacity(0.9)
+                    .position(x: dragPoint.x, y: dragPoint.y)
+                    .allowsHitTesting(false)
+            } else if dragSlot >= 0, let s = plan[ExoSlot(rawValue: dragSlot) ?? .helmet] {
+                SlotView(stack: s, size: 46)
+                    .opacity(0.9)
+                    .position(x: dragPoint.x, y: dragPoint.y)
+                    .allowsHitTesting(false)
+            }
+        }
+        .coordinateSpace(name: "exo")
+        .frame(maxWidth: 1000)
+        .padding(8)
+        .onAppear {
+            if started { return }
+            started = true
+            plan = game.suit
+        }
+    }
+
+    var changed: Bool { return plan.parts != game.suit.parts }
+
+    var header: some View {
+        HStack(spacing: 8) {
+            Text("ASSEMBLY STATION").font(.pixel(20)).foregroundColor(Color(hex: 0x60E0FF))
+            Spacer()
+            ForEach(0..<3, id: \.self) { v in
+                SmallButton(title: ["FRONT", "BACK", "SIDE"][v], color: view == v ? Color(hex: 0x2E6A8A) : Color(hex: 0x3A3E48)) { view = v }
+            }
+            SmallButton(title: "MAKE PARTS", color: Color(hex: 0x4A5A3A)) { game.openCrafting(.assembly) }
+            SmallButton(title: "CLOSE", color: Color(hex: 0xA03030)) { close() }
+        }
+    }
+
+    func close() {
+        if changed { note = "" }
+        game.showExo = false
+        game.bumpHUD()
+    }
+
+    // MARK: the suit and its places
+
+    var builder: some View {
+        HStack(alignment: .top, spacing: 6) {
+            VStack(spacing: 5) {
+                Text("PLATES").font(.pixel(10)).foregroundColor(Color.white.opacity(0.6))
+                ForEach([ExoSlot.plateHead, .plateShoulders, .plateChest, .plateArms, .plateLegs], id: \.self) { s in socket(s) }
+            }
+            figure
+            VStack(spacing: 5) {
+                Text("CORE").font(.pixel(10)).foregroundColor(Color.white.opacity(0.6))
+                socket(.core)
+                Text("MODULES").font(.pixel(10)).foregroundColor(Color.white.opacity(0.6))
+                ForEach([ExoSlot.mod1, .mod2, .mod3, .mod4], id: \.self) { s in socket(s) }
+            }
+        }
+    }
+
+    /// The suit picture with its frame places laid over it (front and back), or the suit as worn (side)
+    var figure: some View {
+        let img: Image = SuitArt.shared.image(plan, view)
+        let w: CGFloat = 240
+        let h: CGFloat = 336
+        return ZStack(alignment: .topLeading) {
+            Rectangle().fill(Color.black.opacity(0.35)).frame(width: w, height: h)
+            if view == 2 {
+                img.resizable().interpolation(.none).frame(width: w * 22.0 / 22.0, height: w * 17.0 / 22.0)
+                    .offset(x: 0, y: (h - w * 17.0 / 22.0) * 0.5)
+                VStack {
+                    Spacer()
+                    Text("As it looks when worn").font(.pixel(10, .semibold)).foregroundColor(Color.white.opacity(0.6))
+                }
+                .frame(width: w, height: h - 8)
+                ForEach([ExoSlot.helmet, .chest, .armL, .armR, .legs, .boots], id: \.self) { s in hiddenTarget(s) }
+            } else {
+                img.resizable().interpolation(.none).frame(width: w, height: h)
+                ForEach([ExoSlot.helmet, .chest, .armL, .armR, .legs, .boots], id: \.self) { s in partTarget(s, w / 40.0) }
+            }
+        }
+        .frame(width: w, height: h)
+    }
+
+    /// where each frame part sits on the 40 x 56 picture (front; the back swaps the arms)
+    func partRect(_ s: ExoSlot) -> (Double, Double, Double, Double) {
+        let back: Bool = view == 1
+        switch s {
+        case .helmet: return (13, 1, 14, 12)
+        case .chest: return (10, 13, 20, 18)
+        case .armR: return back ? (29, 15, 7, 23) : (4, 15, 7, 23)
+        case .armL: return back ? (4, 15, 7, 23) : (29, 15, 7, 23)
+        case .legs: return (12, 32, 16, 16)
+        case .boots: return (11, 48, 18, 8)
+        default: return (0, 0, 0, 0)
+        }
+    }
+
+    func partTarget(_ s: ExoSlot, _ k: CGFloat) -> some View {
+        let r: (Double, Double, Double, Double) = partRect(s)
+        let x: CGFloat = CGFloat(r.0) * k
+        let y: CGFloat = CGFloat(r.1) * k
+        let w: CGFloat = CGFloat(r.2) * k
+        let h: CGFloat = CGFloat(r.3) * k
+        return target(s, w, h, showIcon: false)
+            .offset(x: x, y: y)
+    }
+
+    /// in the side view the frame places are still there, stacked at the edge, so drops still work
+    func hiddenTarget(_ s: ExoSlot) -> some View {
+        let i: Int = [ExoSlot.helmet, .chest, .armL, .armR, .legs, .boots].firstIndex(of: s) ?? 0
+        return target(s, 74, 44, showIcon: true)
+            .offset(x: i % 2 == 0 ? 4 : 162, y: CGFloat(8 + (i / 2) * 50))
+    }
+
+    /// a module, plate or core place beside the picture
+    func socket(_ s: ExoSlot) -> some View {
+        return target(s, 64, 50, showIcon: true)
+    }
+
+    /// One place on the suit: shows what is fitted (or that it is empty), lights up when what is being
+    /// dragged or picked would fit, and takes drops and taps
+    func target(_ s: ExoSlot, _ w: CGFloat, _ h: CGFloat, showIcon: Bool) -> some View {
+        let box: ExoFrames = frames
+        let fitted: Stack? = plan[s]
+        let cand: Stack? = candidateStack
+        let fits: Bool = cand.map { s.fits($0.item) } ?? false
+        let locked: Bool = s.isModule && (s.rawValue - ExoSlot.mod1.rawValue) >= plan.sockets
+        let isSel: Bool = sel == s.rawValue
+        let isHover: Bool = hover == s.rawValue
+        var edge: Color = Color.white.opacity(0.25)
+        if fits { edge = Color(hex: 0x60E0FF) }
+        if isHover && fits { edge = Color(hex: 0x7AF08A) }
+        if isSel { edge = Color.white }
+        let g: Game = game
+        return ZStack {
+            Rectangle().fill(fits ? Color(hex: 0x1E4A5A).opacity(0.55) : Color.black.opacity(showIcon ? 0.35 : 0.01))
+            if showIcon {
+                VStack(spacing: 1) {
+                    if let f = fitted {
+                        Art.shared.icon(f.item).resizable().interpolation(.none).frame(width: 26, height: 26)
+                    }
+                    Text(verbatim: locked ? "locked" : (fitted == nil ? s.name : shortName(fitted!))).font(.pixel(8, .semibold))
+                        .foregroundColor(Color.white.opacity(fitted == nil ? 0.55 : 0.9)).lineLimit(1).minimumScaleFactor(0.6)
+                }
+            }
+        }
+        .frame(width: w, height: h)
+        .overlay(Rectangle().stroke(edge, lineWidth: isSel || fits ? 2 : 1))
+        .background(GeometryReader { gp -> Color in
+            box.slots[s.rawValue] = gp.frame(in: .named("exo"))
+            return Color.clear
+        })
+        .contentShape(Rectangle())
+        .onTapGesture { tapSlot(s) }
+        .gesture(DragGesture(minimumDistance: 8, coordinateSpace: .named("exo"))
+            .onChanged { v in
+                if dragSlot < 0 && dragging == nil {
+                    if plan[s] == nil { return }
+                    dragSlot = s.rawValue
+                    sel = s.rawValue
+                }
+                dragPoint = v.location
+                hover = box.slot(at: v.location)?.rawValue ?? -1
+            }
+            .onEnded { v in
+                if dragSlot >= 0, let from = ExoSlot(rawValue: dragSlot) {
+                    if let to = box.slot(at: v.location) {
+                        moveSlot(from, to)
+                    } else if box.tray.contains(v.location) {
+                        unfit(from)
+                    }
+                }
+                dragSlot = -1
+                hover = -1
+                _ = g
+            })
+    }
+
+    func shortName(_ s: Stack) -> String {
+        switch s.item {
+        case .exoPart(_, let m), .exoPlate(let m): return m.name
+        case .exoCore(let c): return c.name
+        case .exoModule(let m): return m.name
+        default: return s.item.name
+        }
+    }
+
+    /// what is being dragged or has been picked from the tray
+    var candidateStack: Stack? {
+        if let d = dragging { return d.stack }
+        if dragSlot >= 0 { return plan[ExoSlot(rawValue: dragSlot) ?? .helmet] }
+        if trayPick >= 0, let t = tray.first(where: { $0.id == trayPick }) { return t.stack }
+        return nil
+    }
+
+    // MARK: changing the plan
+
+    func tapSlot(_ s: ExoSlot) {
+        if trayPick >= 0, let t = tray.first(where: { $0.id == trayPick }) {
+            fit(t.stack, s)
+            trayPick = -1
+            return
+        }
+        sel = sel == s.rawValue ? -1 : s.rawValue
+        note = ""
+    }
+
+    func fit(_ st: Stack, _ s: ExoSlot) {
+        if !s.fits(st.item) {
+            note = joinText(st.item.name, " doesn't go in the ", s.name.lowercased(), ".")
+            return
+        }
+        if s.isModule && (s.rawValue - ExoSlot.mod1.rawValue) >= plan.sockets {
+            note = plan.sockets == 0 ? "Fit a chest frame first: module sockets are in it." : joinText("This chest frame has ", String(plan.sockets), " module sockets: a better metal has more.")
+            return
+        }
+        if case .exoModule(let m) = st.item, plan.modules.contains(m) {
+            note = joinText("The suit already has ", m.name, ".")
+            return
+        }
+        plan[s] = st
+        sel = s.rawValue
+        note = joinText("Planned: ", st.item.name, " in the ", s.name.lowercased(), ". APPLY to fit it.")
+    }
+
+    func unfit(_ s: ExoSlot) {
+        guard let st = plan[s] else { return }
+        plan[s] = nil
+        note = joinText(st.item.name, " comes off (back to your bag on APPLY).")
+    }
+
+    func moveSlot(_ a: ExoSlot, _ b: ExoSlot) {
+        if a == b { return }
+        guard let st = plan[a] else { return }
+        if !b.fits(st.item) {
+            note = joinText(st.item.name, " doesn't go in the ", b.name.lowercased(), ".")
+            return
+        }
+        let other: Stack? = plan[b]
+        plan[b] = st
+        plan[a] = (other != nil && a.fits(other!.item)) ? other : nil
+        sel = b.rawValue
+    }
+
+    // MARK: the parts tray
+
+    /// The parts that can go on: suit parts in the bag (less those the plan already uses), and parts the
+    /// plan has taken off the suit
+    var tray: [TrayPart] {
+        var pool: [Stack] = Array(game.suit.parts.values)
+        var fromBag: [Stack] = []
+        for s in ExoSlot.allCases {
+            guard let st = plan[s] else { continue }
+            if let j = pool.firstIndex(of: st) { pool.remove(at: j) } else { fromBag.append(st) }
+        }
+        var out: [TrayPart] = []
+        for (k, st) in pool.enumerated() { out.append(TrayPart(id: 1000 + k, stack: st, fromSuit: true)) }
+        for i in 0..<game.inv.slots.count {
+            guard let st = game.inv.slots[i] else { continue }
+            if !isExoItem(st.item) { continue }
+            if let j = fromBag.firstIndex(of: st) {
+                fromBag.remove(at: j)
+                continue
+            }
+            out.append(TrayPart(id: i, stack: st, fromSuit: false))
+        }
+        return out
+    }
+
+    func isExoItem(_ it: Item) -> Bool {
+        switch it {
+        case .exoPart, .exoPlate, .exoCore, .exoModule: return true
+        default: return false
+        }
+    }
+
+    var trayColumn: some View {
+        let list: [TrayPart] = tray
+        let box: ExoFrames = frames
+        let cols: [GridItem] = [GridItem(.adaptive(minimum: 50), spacing: 4)]
+        return VStack(alignment: .leading, spacing: 6) {
+            Text("PARTS").font(.pixel(13)).foregroundColor(Color(hex: 0x9AD8F0))
+            Text("Drag onto the suit, or tap one and then a place. Drag a fitted part here to take it off.")
+                .font(.pixel(9, .semibold)).foregroundColor(Color.white.opacity(0.6))
+            ScrollView {
+                LazyVGrid(columns: cols, spacing: 4) {
+                    ForEach(list) { t in trayItem(t) }
+                }
+                if list.isEmpty {
+                    Text("No suit parts in your bag. MAKE PARTS shows what can be made here.")
+                        .font(.pixel(10, .semibold)).foregroundColor(Color.white.opacity(0.55))
+                }
+            }
+            .frame(height: 230)
+            .background(Color.black.opacity(dragSlot >= 0 ? 0.45 : 0.2))
+            .overlay(Rectangle().stroke(dragSlot >= 0 ? Color(hex: 0xFFB060) : Color.clear, lineWidth: 2))
+            .background(GeometryReader { gp -> Color in
+                box.tray = gp.frame(in: .named("exo"))
+                return Color.clear
+            })
+            actions
+        }
+    }
+
+    func trayItem(_ t: TrayPart) -> some View {
+        let box: ExoFrames = frames
+        return SlotView(stack: t.stack, selected: trayPick == t.id, size: 46)
+            .overlay(Rectangle().stroke(t.fromSuit ? Color(hex: 0xFFB060) : Color.clear, lineWidth: 2))
+            .opacity(dragging?.id == t.id ? 0.35 : 1.0)
+            .onTapGesture {
+                trayPick = trayPick == t.id ? -1 : t.id
+                sel = -1
+                note = t.fromSuit ? joinText(t.stack.item.name, " (taken off in this plan)") : t.stack.item.name
+            }
+            .gesture(DragGesture(minimumDistance: 6, coordinateSpace: .named("exo"))
+                .onChanged { v in
+                    if dragging == nil { dragging = t }
+                    dragPoint = v.location
+                    hover = box.slot(at: v.location)?.rawValue ?? -1
+                }
+                .onEnded { v in
+                    if let d = dragging, let s = box.slot(at: v.location) { fit(d.stack, s) }
+                    dragging = nil
+                    hover = -1
+                })
+    }
+
+    var actions: some View {
+        let st: ExoStats = ExoStats.of(plan)
+        let wornNow: Bool = game.suit.worn
+        return VStack(spacing: 6) {
+            PixelButton(title: changed ? "APPLY" : "NOTHING TO APPLY", color: changed ? Color(hex: 0x2E8A5A) : Color(hex: 0x444444)) {
+                if !changed { return }
+                note = game.applySuit(plan)
+                plan = game.suit
+                sel = -1
+                trayPick = -1
+            }
+            HStack(spacing: 6) {
+                SmallButton(title: "UNDO PLAN", color: Color(hex: 0x5A4A3A)) {
+                    plan = game.suit
+                    note = "Back to the suit as it is."
+                }
+                SmallButton(title: wornNow ? "TAKE OFF" : "WEAR", color: wornNow ? Color(hex: 0x8A5A2A) : Color(hex: 0x2E6A8A)) {
+                    if changed {
+                        note = "APPLY or undo your plan first."
+                        return
+                    }
+                    note = wornNow ? game.takeOffSuit() : game.wearSuit()
+                }
+            }
+            if !st.complete {
+                Text("To wear it: a chest frame and a power core.").font(.pixel(9, .semibold)).foregroundColor(Color(hex: 0xFFB060))
+            }
+        }
+    }
+
+    // MARK: numbers
+
+    /// the plan with the dragged or picked part dropped where it is hovering (or where it would go)
+    var previewSuit: ExoSuit? {
+        guard let c = candidateStack else { return nil }
+        var target: ExoSlot? = hover >= 0 ? ExoSlot(rawValue: hover) : nil
+        if target == nil {
+            target = ExoSlot.allCases.first { s in s.fits(c.item) && plan[s] == nil && !(s.isModule && (s.rawValue - ExoSlot.mod1.rawValue) >= plan.sockets) }
+        }
+        guard let t = target, t.fits(c.item) else { return nil }
+        var p: ExoSuit = plan
+        p[t] = c
+        return p
+    }
+
+    var statsBox: some View {
+        let now: ExoStats = ExoStats.of(game.suit)
+        let pl: ExoStats = ExoStats.of(plan)
+        let pv: ExoStats? = previewSuit.map { ExoStats.of($0) }
+        let rows: [(String, Double, Double, Double?, Bool)] = [
+            ("Defence", now.defense, pl.defense, pv?.defense, true),
+            ("Weight", now.weight, pl.weight, pv?.weight, false),
+            ("Strength", now.strength, pl.strength, pv?.strength, true),
+            ("Speed %", now.speedMul * 100, pl.speedMul * 100, pv.map { $0.speedMul * 100 }, true),
+            ("Jump %", now.jumpMul * 100, pl.jumpMul * 100, pv.map { $0.jumpMul * 100 }, true),
+            ("Energy", now.capacity, pl.capacity, pv?.capacity, true),
+            ("Output /s", now.output, pl.output, pv?.output, true),
+            ("Recharge /s", now.recharge, pl.recharge, pv?.recharge, true),
+            ("Energy use %", now.drainMul * 100, pl.drainMul * 100, pv.map { $0.drainMul * 100 }, false)
+        ]
+        return VStack(alignment: .leading, spacing: 3) {
+            HStack {
+                Text("SUIT").font(.pixel(13)).foregroundColor(Color(hex: 0x9AD8F0))
+                Spacer()
+                Text(verbatim: changed ? "now → plan" : "now").font(.pixel(9, .semibold)).foregroundColor(Color.white.opacity(0.6))
+            }
+            ForEach(0..<rows.count, id: \.self) { i in statRow(rows[i]) }
+            let mods: [ExoModule] = (pv ?? pl).modules
+            Text(verbatim: mods.isEmpty ? "No working modules" : joinText("Modules: ", mods.map { $0.name }.joined(separator: ", ")))
+                .font(.pixel(9, .semibold)).foregroundColor(Color.white.opacity(0.8)).lineLimit(3)
+            if pl.fireCut > 0 || pl.coldCut > 0 || pl.stormCut > 0 {
+                Text(verbatim: joinText("Resists: fire ", String(Int(pl.fireCut * 100)), "%, cold ", String(Int(pl.coldCut * 100)), "%, lightning ", String(Int(pl.stormCut * 100)), "%"))
+                    .font(.pixel(9, .semibold)).foregroundColor(Color(hex: 0xFFC890))
+            }
+            ForEach(0..<min(3, pl.notes.count), id: \.self) { i in
+                Text(verbatim: pl.notes[i]).font(.pixel(9, .semibold)).foregroundColor(Color(hex: 0xFFB060)).lineLimit(2)
+            }
+        }
+        .padding(6)
+        .background(Color.black.opacity(0.25))
+    }
+
+    func statRow(_ r: (String, Double, Double, Double?, Bool)) -> some View {
+        let shown: Double = r.3 ?? r.2
+        let diff: Double = shown - r.1
+        let better: Bool = r.4 ? diff > 0 : diff < 0
+        let col: Color = abs(diff) < 0.05 ? Color.white : (better ? Color(hex: 0x7AF08A) : Color(hex: 0xFF8A7A))
+        return HStack(spacing: 4) {
+            Text(verbatim: r.0).font(.pixel(10, .semibold)).foregroundColor(Color.white.opacity(0.75))
+            Spacer(minLength: 2)
+            Text(verbatim: String(format: "%.1f", r.1)).font(.pixel(10)).foregroundColor(Color.white.opacity(0.6))
+            if abs(diff) >= 0.05 {
+                Text(verbatim: joinText("→ ", String(format: "%.1f", shown))).font(.pixel(10)).foregroundColor(col)
+            }
+        }
+    }
+
+    /// what the selected place holds, with a button to take it off
+    var detailBox: some View {
+        let s: ExoSlot? = sel >= 0 ? ExoSlot(rawValue: sel) : nil
+        return VStack(alignment: .leading, spacing: 4) {
+            if let slot = s {
+                Text(verbatim: slot.name.uppercased()).font(.pixel(12)).foregroundColor(Color(hex: 0x9AD8F0))
+                if let st = plan[slot] {
+                    Text(verbatim: st.item.name).font(.pixel(11))
+                    ForEach(0..<st.item.infoLines.count, id: \.self) { k in
+                        Text(verbatim: st.item.infoLines[k]).font(.pixel(9, .semibold)).foregroundColor(Color.white.opacity(0.75)).lineLimit(2)
+                    }
+                    if !st.infusions.isEmpty {
+                        Text(verbatim: joinText("Infused: ", st.infusions.map { $0.name }.joined(separator: ", "))).font(.pixel(9, .semibold)).foregroundColor(Color(hex: 0xC07CFF))
+                    }
+                    SmallButton(title: "TAKE OFF", color: Color(hex: 0x8A4A3A)) { unfit(slot) }
+                } else {
+                    Text(verbatim: slotHelp(slot)).font(.pixel(9, .semibold)).foregroundColor(Color.white.opacity(0.7))
+                }
+            } else {
+                Text("Tap a place on the suit to see what is in it.").font(.pixel(9, .semibold)).foregroundColor(Color.white.opacity(0.6))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(6)
+        .background(Color.black.opacity(0.25))
+    }
+
+    func slotHelp(_ s: ExoSlot) -> String {
+        if s.isPlate { return joinText("Takes an armour plate of any metal. Needs the ", (s.plateBase ?? .chest).name.lowercased(), ".") }
+        if s.isModule {
+            let k: Int = s.rawValue - ExoSlot.mod1.rawValue
+            return k < plan.sockets ? "Takes a module. Each needs certain parts (see its notes)." : "Locked: the chest frame's metal decides how many module sockets there are."
+        }
+        if s == .core { return "Takes a power core: it holds the energy every module runs on." }
+        return "Takes a suit part made at this station."
+    }
+}
+
+extension SlotView {
+    /// little squares in the corner, one in each infusion's colour
+    func infusionMarks(_ l: [Int]) -> some View {
+        let sz: CGFloat = max(3, size * 0.11)
+        return VStack {
+            HStack(spacing: 1) {
+                ForEach(0..<min(3, l.count), id: \.self) { k in
+                    Rectangle().fill(Color(hex: Infusion(rawValue: l[k])?.color ?? 0xFFFFFF)).frame(width: sz, height: sz)
+                        .overlay(Rectangle().stroke(Color.black, lineWidth: 1))
+                }
+                Spacer(minLength: 0)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(2)
+        .frame(width: size, height: size)
+    }
+}
+
+extension WorldRenderer {
+    /// What a potion is doing to a creature, kept faint: a blue film while slowed, rising green bubbles
+    /// while poisoned, a grey shade while weakened, pink motes while it regenerates
+    static func drawMobStatus(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D, _ m: Mob) {
+        if m.slowT > 0 {
+            fillRect(&ctx, v.rect(m.b.left, m.b.top + m.b.h * 0.55, m.b.w, m.b.h * 0.45), Color(hex: 0x7AB8F0, alpha: 0.22))
+        }
+        if m.weakT > 0 {
+            fillRect(&ctx, v.rect(m.b.left, m.b.top, m.b.w, m.b.h * 0.5), Color(hex: 0x6A6478, alpha: 0.2))
+        }
+        if m.poisonT > 0 {
+            let sz: Double = max(3.0, v.tp * 0.12)
+            for k in 0..<2 {
+                let ph: Double = (g.clock * 0.9 + Double(k) * 0.5 + Double(m.id % 7) * 0.13).truncatingRemainder(dividingBy: 1.0)
+                let bx: Double = m.b.x + (k == 0 ? -0.25 : 0.25) * m.b.w
+                let by: Double = m.b.top + 0.2 - ph * 0.8
+                fillRect(&ctx, mkRect(v.sx(bx) - sz * 0.5, v.sy(by) - sz * 0.5, sz, sz), Color(hex: 0x8AE04A, alpha: 0.8 * (1.0 - ph)))
+            }
+        }
+        if m.regenT > 0 {
+            let sz: Double = max(3.0, v.tp * 0.1)
+            let ph: Double = (g.clock * 0.7 + Double(m.id % 5) * 0.2).truncatingRemainder(dividingBy: 1.0)
+            fillRect(&ctx, mkRect(v.sx(m.b.x) - sz * 0.5, v.sy(m.b.top - ph * 0.6) - sz * 0.5, sz, sz), Color(hex: 0xF07AB8, alpha: 0.8 * (1.0 - ph)))
+        }
+    }
+}
+
 // ===== u06_root =====
 
 // MARK: - Keyboard (hardware keyboards on iPad)
@@ -39191,8 +43335,25 @@ struct GameView: View {
     var body: some View {
         ZStack {
             worldLayer
-            if !game.showInventory && !game.showMap && !game.showJournal && !game.showWeather && !game.showPower && !game.showCapture && !game.showModTest && !game.dead {
+            if !game.showInventory && !game.showMap && !game.showJournal && !game.showWeather && !game.showPower && !game.showCapture && !game.showModTest && !game.showInfuse && !game.showExo && !game.dead {
                 HUDView(game: game, hud: game.hud)
+            }
+            if game.showInfuse {
+                Color.black.opacity(0.45).ignoresSafeArea()
+                GeometryReader { geo in
+                    InfusionPanel(game: game, hud: game.hud)
+                        .scaleEffect(min(1.0, min(geo.size.width / 960.0, geo.size.height / 640.0)))
+                        .frame(width: geo.size.width, height: geo.size.height)
+                }
+            }
+            if game.showExo {
+                Color.black.opacity(0.45).ignoresSafeArea()
+                // no scroll view (it would fight with dragging): it scales to fit instead
+                GeometryReader { geo in
+                    ExoAssemblyPanel(game: game, hud: game.hud)
+                        .scaleEffect(min(1.0, min(geo.size.width / 1010.0, geo.size.height / 560.0)))
+                        .frame(width: geo.size.width, height: geo.size.height)
+                }
             }
             if game.showModTest {
                 Color.black.opacity(0.45).ignoresSafeArea()

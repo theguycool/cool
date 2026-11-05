@@ -1,7 +1,7 @@
 # PixelRealm
 
 A 2D sandbox survival game for iPad, written in SwiftUI and run in Swift Playgrounds. The whole game
-is one file, `PixelRealm.swift` (about 43,700 lines), and it must stay one file: the user pastes it
+is one file, `PixelRealm.swift` (about 51,900 lines), and it must stay one file: the user pastes it
 into Swift Playgrounds and asks for every change "all in one file".
 
 ## Checking a change
@@ -17,7 +17,7 @@ compiles and runs headless on Linux. If `/opt/pixelrealm` is missing, run `tools
 - `tools/run-tests.sh [suite ...]`: builds and runs suites from `tools/tests`, four at a time (all
   of them take several minutes). Pass only the suites you touched while iterating, and run them all
   before committing. Full output is in `/tmp/pixelrealm-build/<suite>/out.log`.
-- `tools/shots.sh power|weather|sky|cloudsheet|stick|alchemy [folder]`: PNG screenshots from the game's own renderer (`sky`: clouds by day, dusk, night and storm; `cloudsheet`: every cloud template; `stick`: the combat stick's dial; `alchemy`: mutated creatures, the worn suit, the new stations, and a sheet of the new icons and suit pictures).
+- `tools/shots.sh power|weather|sky|cloudsheet|stick|alchemy|modplus [folder]`: PNG screenshots from the game's own renderer (`sky`: clouds by day, dusk, night and storm; `cloudsheet`: every cloud template; `stick`: the combat stick's dial; `alchemy`: mutated creatures, the worn suit, the new stations, and a sheet of the new icons and suit pictures; `modplus`: two custom dimensions and a boss in a phase).
 - `tools/bench.sh`: chunk generation, painting, lighting and tick timings (debug build; compare
   with `GAME_SRC=<old file> tools/bench.sh`).
 
@@ -25,7 +25,9 @@ Suites: `tests`, `round2`, `p2` (general gameplay), `portal`, `boat`, `veh` (veh
 `mines`, `weather`, `nightai` (night spawning and monster AI), `stick` (the combat stick), `power` (Sparkworks), `snd` (sound
 effects ≤ 1.2 s, thunder ≤ 3.2 s), `oldsave` (saves from an older version still load; uses
 `tools/fixtures`), `mods` (the Mod Creator: file format, store, checks, custom content in play,
-structures, test worlds, an end-to-end run; it uses a scratch mod folder, never the real one), `alchemy`
+structures, test worlds, an end-to-end run; it uses a scratch mod folder, never the real one), `modplus` (Mod Creator+:
+changes to game content, folders, versions, dependencies, ore controls, mining times, the sprite tools, custom infusions,
+boss phases and summoning, custom dimensions, the Logic Studio and its safety limits), `alchemy`
 (potions and status effects, throwing, mutation and its limits, infusions, the exosuit: building, wearing,
 modules, power, saving), and
 `det` and `det2` (world generation fingerprints for generator versions 1 to 4).
@@ -34,8 +36,9 @@ What the stand-ins can't tell you:
 - They only declare the SwiftUI and AVFoundation API the game uses. If you use a new API, add it to
   `tools/shim/SwiftUI.swift` with the real signature (setup.sh rebuilds the shim when its source
   changes). Prefer APIs the file already uses: anything that compiles only against the shim breaks
-  on the iPad. The shim's `StrokeStyle` takes no `lineCap`, and its `Path` has no `isEmpty` or
-  `addRoundedRect`.
+  on the iPad. The shim's `StrokeStyle` takes no `lineCap`, its `Path` has no `isEmpty` or
+  `addRoundedRect`, and there is no `LinearGradient`. The Sprite Studio's clipboard (`UIPasteboard`,
+  `UIImage`, `CGContext` drawing) is stood in with a nearest-neighbour copy; the real scaling is untested.
 - Only the world Canvas is rasterised. SwiftUI panels are compile-checked but never drawn.
 - Nothing has been run on a real iPad from here. Say so in reports.
 
@@ -44,8 +47,8 @@ What the stand-ins can't tell you:
 - **Type-checker speed.** Write explicit types on locals (`let x: Double = ...`), join strings with
   `joinText(...)` instead of long `+` chains, and split big expressions. Keep typecheck near 39 s.
 - **Saves.** Saved enums (`Tile: UInt8`, `MobKind`, `Mat`, `Gadget`, `RecipeCat`, `SoundID`, `Potion`,
-  `Infusion`, `ExoMat`, `ExoPart`, `ExoCore`, `ExoModule`, `ExoSlot` and the like) only get new cases
-  appended at the end. Never reorder or remove cases. New `SaveData` fields are optional; new `Settings`
+  `Infusion`, `ExoMat`, `ExoPart`, `ExoCore`, `ExoModule`, `ExoSlot`, `Dimension` (custom0-2 were appended)
+  and the like) only get new cases appended at the end. Never reorder or remove cases. New `SaveData` fields are optional; new `Settings`
   fields are decoded with `decodeIfPresent` and a default.
 - **Infusions live on the stack** (`Stack.inf`). Code that moves an item between bag, chest, carried and
   dropped must keep the whole `Stack`, or pass `inf:` to `Inventory.add`; infused items never merge.
@@ -61,7 +64,9 @@ What the stand-ins can't tell you:
   that hides the HUD in `GameView`.
 - **Mod data.** New fields of mod content (`ModBlock`, `ModItem`, `ModMob` and the rest) get a default
   and are decoded with `c.val(.key, default)`, and get a clamp in `ModValidator.check`. Mod enums only
-  get cases appended. Tests never touch the real mod folder or saves: set `ModStore.overrideDir` and
+  get cases appended (also `ModInfuseTrigger`, `ModPhaseWhen`, `ModSummonHow`, and the Logic Studio's
+  `LEvent`, `LOp`, `LEOp`). References inside a mod are content keys: renamed in `ModStore.rekey` and
+  counted in `ModStore.dependencies` (game tiles are `"tile:<n>"`, never renamed). Tests never touch the real mod folder or saves: set `ModStore.overrideDir` and
   use `makeSave()` with a JSON round trip.
 - **Comments** are plain-language doc comments explaining what something does in the game. Match the
   surrounding style.
@@ -78,12 +83,16 @@ chunks, `set`), `p11_light`, `p12_phys`, `p13a_mobdefs` (MobKind, MobDef, spawn 
 `think`, the per-kind AIs), `p15b_spawn` (`updateSpawning`), `p16*` (combat, damage, bosses), `p17`
 (vehicles, ships), `p18` (portal, map), `p19_save` (`SaveData`, `makeSave`, `Game.load`), `p20`–`p26`
 (helpers, walls, doors, HUD logic), `p27_power` (Sparkworks), `p28_mods` (Mod Creator: data,
-store, checks, runtime, custom creature AI, structures and capture, test tools), `p29_alchemy` (rarity, potions, effects on creatures, smoke,
+store, checks, runtime, custom creature AI, structures and capture, test tools), `p32_modplus` (Mod Creator+: changes
+to game content, ore controls, sprite tools, custom infusions, boss phases and summoning, custom dimensions, the
+Logic Studio), `p29_alchemy` (rarity, potions, effects on creatures, smoke,
 mutation and its limits, chest extras, the recipes of all three new systems), `p30_infusion`,
 `p31_exosuit` (parts, stats, energy, modules, the worn look, the builder's pictures), `u01_art`, `u02_render`
 (`WorldRenderer.draw` sets the draw order), `u03_hud`, `u04_panels`, `u05_menu`, `u07_mods` (Mod
 Creator screens and editors, the capture and Mod Test panels), `u08_alchemy` (the HUD's effect strip and
-suit bar, the Infusion Crucible screen, the Assembly Station builder), `u06_root`.
+suit bar, the Infusion Crucible screen, the Assembly Station builder), `u09_modplus` (the Mod Creator+ screens: game
+content, ore controls, hardness reference, Sprite Studio, infusion, phase, summoning, dimension and script editors,
+the Mod Test LOGIC tab), `u06_root`.
 
 ## Systems in brief
 
@@ -154,6 +163,22 @@ suit bar, the Infusion Crucible screen, the Assembly Station builder), `u06_root
   energy through `suitRun` (within the core's output) and `suitSpend`; the Assembly Station is a
   Sparkworks machine that charges a worn suit nearby (`runSuitDock`). The sprite draws the suit
   (`HumanStyle.suit`, `paintSuit`).
+
+- **Mod Creator+.**
+  - Changes to game content (`ModOverride`) are built into `OverrideRT` at activation; it restores the
+    game's own tables first (`Tile.setGameDef`, `mobDefTable`), so switching a mod off undoes it. `Item.melee`
+    goes through `baseMelee`.
+  - Ores keep the old placement for old settings (`ModOreRT.place`); new controls use their own random seed.
+  - Custom infusions are numbered from 1000 per world (`ModWorldInfo.infusions`) and live in `Stack.inf` beside
+    the game's; their compound is a mod item under the same key.
+  - Phases: `stepPhases`/`enterPhase` in `updateCustomMob`; numbers on the `Mob` (`mphase`, `phaseDmg`...).
+    Summoning: `ModSummonRT` (an item, a shape, conditions); dimension ways in are summonings with `dimSlot`.
+  - Custom dimensions take slots 2-4 (`Dimension.custom0`...); `dimCount` is 5 everywhere a list is kept per
+    dimension. Their land is `fillCustomChunk`; sky `drawCustomSky`; weather `customWeather`; only their own
+    creatures spawn. A world saved in a dimension whose mod is missing starts at the Overworld spawn.
+  - Logic Studio: scripts are data compiled to `LInstr` and run by `runLogic` a little each frame (`LLimits`:
+    300 steps a script per frame, 3000 in all, groups 8 deep, a loop that never waits is stopped after 10 s).
+    Events are fired from the game with `fireLogic`; variables are saved per world (`SaveData.logicVars`).
 
 ## Working with the user
 

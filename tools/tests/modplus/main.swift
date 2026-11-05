@@ -1176,6 +1176,200 @@ do {
           "a copy under a new id keeps its dimension pointing at its own blocks, creatures and key")
 }
 
+// ---------------------------------------------------------------- stage 7
+func node(_ op: LOp, _ f: (inout LNode) -> Void = { _ in }) -> LNode {
+    var n = LNode(op)
+    f(&n)
+    return n
+}
+func ex(_ v: Double) -> LExpr { return LExpr(v) }
+func rep_(_ op: LEOp, _ a: [LExpr] = []) -> LExpr { return LExpr(op: op, args: a) }
+func script(_ id: String, _ e: LEvent, _ blocks: [LNode], _ f: (inout ModScript) -> Void = { _ in }) -> ModScript {
+    var s = ModScript()
+    s.id = id
+    s.name = id
+    s.event = e
+    s.blocks = blocks
+    f(&s)
+    return s
+}
+func logicMod() -> ModPack {
+    var p = ModPack()
+    p.id = "lg"
+    p.name = "Logic"
+    p.variables = ["score", "count", "ok", "night", "spin", "flag"]
+    var pet = ModMob(); pet.id = "pet"; pet.name = "Pet"; pet.category = .passive; pet.hp = 20; pet.spawn.enabled = false; pet.attacks = []
+    var wand = ModItem(); wand.id = "wand"; wand.name = "Wand"; wand.kind = .material
+    var button = ModBlock(); button.id = "button"; button.name = "Button"; button.art = painted(8, 8, 0xD04040)
+    p.mobs = [pet]
+    p.items = [wand]
+    p.blocks = [button]
+    var g1 = script("g1", .group, [node(.changeVar) { $0.s = "score"; $0.args = [rep_(.mul, [LExpr(op: .param, args: []), ex(2)])] }])
+    g1.blocks[0].args[0].args[0].v = 1
+    g1.params = ["amount"]
+    p.scripts = [
+        script("start", .worldStart, [node(.say) { $0.s = "Hello" }, node(.setVar) { $0.s = "score"; $0.args = [ex(5)] }, node(.changeVar) { $0.s = "score"; $0.args = [ex(2)] }]),
+        script("tick", .every, [node(.changeVar) { $0.s = "score"; $0.args = [ex(1)] }]) { $0.ev = 1 },
+        script("boom", .custom, [node(.hurtPlayer) { $0.args = [ex(3)] }, node(.log) { $0.s = "boom went off"; $0.args = [] }]) { $0.evText = "boom" },
+        g1,
+        script("callg", .worldStart, [node(.runGroup) { $0.s = "lg:g1"; $0.args = [ex(10)] }]),
+        script("petIn", .spawned, [node(.say) { $0.s = "pet is here" }, node(.jump) { $0.a = 10 }, node(.wait) { $0.args = [ex(0.5)] }, node(.setVar) { $0.s = "flag"; $0.args = [ex(1)] }]) { $0.target = "lg:pet" },
+        script("petOut", .dies, [node(.giveItem) { $0.item = .mat(.coal); $0.a = 3 }]) { $0.target = "lg:pet" },
+        script("loops", .worldStart, [
+            node(.repeatN) { $0.args = [ex(3)]; $0.body = [node(.changeVar) { $0.s = "count"; $0.args = [ex(1)] }] },
+            node(.ifElse) { $0.args = [rep_(.gt, [LExpr(op: .variable), ex(2)])]; $0.args[0].args[0].s = "count"
+                $0.body = [node(.setVar) { $0.s = "ok"; $0.args = [ex(1)] }]
+                $0.alt = [node(.setVar) { $0.s = "ok"; $0.args = [ex(2)] }] },
+            node(.placeBlock) { $0.s = ModGround.key(.brick); $0.a = 2; $0.b = 0 },
+        ]),
+        script("tap", .blockTapped, [node(.broadcast) { $0.s = "boom" }]) { $0.target = "lg:button" },
+        script("use", .itemUsed, [node(.giveEffect) { $0.a = Double(ModEffectKind.speed.rawValue); $0.b = 30; $0.c = 5 }]) { $0.target = "lg:wand" },
+        script("dark", .nightFalls, [node(.setVar) { $0.s = "night"; $0.args = [ex(1)] }]),
+    ]
+    _ = ModValidator.check(&p, known: [:])
+    return p
+}
+
+print("== logic studio")
+do {
+    let pack: ModPack = logicMod()
+    check(pack.scripts.count == 11 && pack.scripts.allSatisfy { $0.enabled } && pack.variables.count == 6, "a mod of eleven scripts and six variables passes its checks")
+    let g = arena([pack])
+    let lrt: LogicRT = ModRuntime.shared.logic
+    check(lrt.programs.count == 11 && lrt.groups["lg:g1"] != nil && lrt.listeners(.worldStart).count == 3, "the scripts are compiled for the world, the group set apart")
+    func v(_ name: String) -> Double { return g.logicVars["lg:" + name] ?? -999 }
+    let bx: Int = Int(floor(g.pb.x)) + 2
+    let by: Int = Int(floor(g.pb.y - g.pb.h * 0.5))
+    g.world.set(bx, by, .air)
+    frames(g, 6)
+    check(g.message == "Hello", "when the world starts, a script shows its message")
+    check(near(v("score"), 27), "variables are set and changed, and a group runs with its input (5 + 2 + 10 x 2 = \(v("score")))")
+    check(near(v("count"), 3) && near(v("ok"), 1), "a repeat runs three times, and if/else takes the right branch")
+    check(g.world.tile(bx, by) == .brick, "a script places a block beside the player")
+    frames(g, 70)
+    check(near(v("score"), 28), "a script every second runs once a second (\(v("score")))")
+    // a block tapped sends a message; the message hurts the player
+    let button: Tile = ModRuntime.shared.tileForKey["lg:button"]!
+    let tx: Int = Int(g.pb.x) - 2
+    g.world.set(tx, 99, button)
+    g.hp = 100
+    aimAt(g, Double(tx) + 0.5, 99.5)
+    g.inv.slots[g.sel] = nil
+    g.usePressedFlag = true
+    g.useHeld = true
+    g.invuln = 0
+    frames(g, 3)
+    g.useHeld = false
+    check(g.world.tile(tx, 99) == button && g.hp < 100 && g.logic.log.contains { $0.contains("boom went off") }, "tapping the block sends a message, and the script for it runs (the block is kept)")
+    // creatures
+    let slot: Int = ModRuntime.shared.mobSlot["lg:pet"]!
+    let pet: Mob = g.addCustomMob(slot, g.pb.x + 4, 100)!
+    pet.persistent = true
+    frames(g, 2)
+    check(g.message == "pet is here" && pet.b.vy < 0, "when a creature appears its script runs: a message, and it jumps")
+    check(near(v("flag"), -999), "a wait holds the script")
+    frames(g, 40)
+    check(near(v("flag"), 1), "and it carries on after the wait")
+    let coal0: Int = g.inv.total(.mat(.coal))
+    g.killMob(pet, true)
+    frames(g, 2)
+    check(g.inv.total(.mat(.coal)) == coal0 + 3, "when it is beaten, its script still runs (3 coal given)")
+    // an item
+    g.inv.slots[0] = Stack(item: .custom("lg:wand"), count: 1)
+    g.setSel(0)
+    aimAt(g, g.pb.x + 1, g.pb.y - 1)
+    g.usePressedFlag = true
+    g.useHeld = true
+    g.effects.clear()
+    frames(g, 2)
+    g.useHeld = false
+    check(near(g.effects.value(.speed), 30), "using the item gives its effect")
+    // night falls
+    g.timeOfDay = 0.75
+    frames(g, 2)
+    check(near(v("night"), 1), "when night falls, its script runs")
+    // the step debugger
+    g.fireLogic(.custom, text: "boom")
+    g.logicPauseToggle()
+    let hp1: Double = g.hp
+    g.invuln = 0
+    frames(g, 10)
+    // (health may tick up meanwhile; the script must not have hurt the player)
+    check(g.logic.paused && g.hp >= hp1 - 0.01 && g.logic.threads.count == 1 && g.logic.threads[0].frames[0].pc == 0, "paused, a script waits at its first block")
+    let hp2: Double = g.hp
+    g.logicStepOnce()
+    g.invuln = 0
+    check(g.hp < hp2 && g.logic.threads.count == 1 && g.logic.threads[0].frames[0].pc == 1, "STEP runs it one block at a time")
+    g.logicPauseToggle()
+    frames(g, 2)
+    check(g.logic.threads.isEmpty, "and RUN lets it finish")
+    // saved with the world
+    let back: SaveData = try! JSONDecoder().decode(SaveData.self, from: try! JSONEncoder().encode(g.makeSave()))
+    check(near(back.logicVars?["lg:score"] ?? 0, v("score")), "the variables are saved with the world")
+    ModRuntime.activate([pack], world: back.mods)
+    let g2 = Game.load(back, settings: Settings())
+    check(near(g2.logicVars["lg:count"] ?? 0, 3), "and come back with it")
+    ModRuntime.deactivate()
+}
+
+print("== logic studio safety")
+do {
+    var p = ModPack()
+    p.id = "bad"
+    p.name = "Bad"
+    p.variables = ["spin"]
+    let spinner = script("spin", .worldStart, [node(.forever) { $0.body = [node(.changeVar) { $0.s = "spin"; $0.args = [ex(1)] }] }])
+    let selfCall = script("deep", .group, [node(.runGroup) { $0.s = "bad:deep" }])
+    let caller = script("call", .worldStart, [node(.runGroup) { $0.s = "bad:deep" }])
+    let hurt = script("hurt", .custom, [node(.hurtPlayer) { $0.args = [ex(9999)] }]) { $0.evText = "x" }
+    p.scripts = [spinner, selfCall, caller, hurt]
+    _ = ModValidator.check(&p, known: [:])
+    let g = arena([p])
+    g.maxHP = 400
+    g.hp = 400
+    frames(g, 3)
+    let t: LThread? = g.logic.threads.first { $0.prog.key == "bad:spin" }
+    check(t != nil && t!.steps <= 3 * LLimits.stepsPerThread + 10, "a loop that never waits gets only a slice of each frame (\(t?.steps ?? -1) steps in 3 frames)")
+    check(g.logic.log.contains { $0.contains("too deeply") }, "a group that runs itself is stopped at eight deep")
+    let start: Double = perfNow()
+    frames(g, 660)
+    let ms: Double = (perfNow() - start) / 660.0 * 1000.0
+    check(!g.logic.threads.contains { $0.prog.key == "bad:spin" } && g.logic.log.contains { $0.contains("without waiting") }, "after 10 seconds without waiting it is stopped, with a reason")
+    check(ms < 40, "the game kept running meanwhile (\(String(format: "%.1f", ms)) ms a frame, debug build)")
+    g.invuln = 0
+    g.fireLogic(.custom, text: "x")
+    frames(g, 2)
+    check(g.hp >= 400 - 50.5, "a script can't hurt the player more than 50 at once (\(400 - g.hp))")
+    ModRuntime.deactivate()
+    // checks
+    var bad: ModPack = logicMod()
+    bad.scripts[0].blocks.append(node(.setVar) { $0.s = "ghost"; $0.args = [ex(1)] })
+    bad.scripts[0].blocks.append(node(.runGroup) { $0.s = "lg:nope" })
+    bad.scripts[0].blocks.append(node(.jump) { $0.a = 999 })
+    bad.scripts[0].blocks.append(node(.say) { $0.a = 99 })
+    bad.scripts[0].blocks.append(node(.whileDo) { $0.args = [ex(1)]; $0.body = [node(.log)] })
+    bad.scripts[5].target = "lg:ghost"
+    bad.scripts.append(contentsOf: (0..<45).map { i in script("x" + String(i), .worldStart, []) })
+    _ = ModValidator.check(&bad, known: [:])
+    let b0: [LNode] = bad.scripts[0].blocks
+    check(bad.scripts.count == LLimits.maxScripts, "only \(LLimits.maxScripts) scripts fit in a mod")
+    check(b0[3].s.isEmpty && b0[4].s.isEmpty && near(b0[5].a, 24) && near(b0[6].a, 10), "variables and groups that don't exist are cleared and numbers kept in range")
+    check(!bad.scripts[5].enabled, "a script for a creature that doesn't exist is switched off")
+    let rp: ModReport = { var q = logicMod(); q.scripts[0].blocks.append(node(.jump)); q.scripts[0].blocks.append(node(.forever) { $0.body = [node(.log)] }); return ModValidator.check(&q, known: [:]) }()
+    check(rp.issues.contains { $0.text.contains("needs a creature") } && rp.issues.contains { $0.text.contains("no \u{201C}wait\u{201D}") },
+          "the checks say in plain words when a block needs a creature, or a loop never waits")
+    let rt: ModScript = try! JSONDecoder().decode(ModScript.self, from: try! JSONEncoder().encode(logicMod().scripts[7]))
+    check(rt == logicMod().scripts[7], "a script with blocks inside blocks survives a JSON round trip")
+    let old: ModPack = try! JSONDecoder().decode(ModPack.self, from: "{\"id\":\"o\",\"name\":\"O\"}".data(using: .utf8)!)
+    check(old.scripts.isEmpty && old.variables.isEmpty, "a mod from before has no scripts")
+    let moved: ModPack = ModStore.rekey(logicMod(), from: "lg", to: "lg2")
+    check(moved.scripts[4].blocks[0].s == "lg2:g1" && moved.scripts[5].target == "lg2:pet" && moved.scripts[8].target == "lg2:button", "a copy under a new id keeps its scripts pointing at its own content")
+    var some = ModPack()
+    some.id = "user"
+    some.scripts = [script("s", .worldStart, [node(.summon) { $0.s = "lg:pet" }])]
+    check(ModStore.dependencies(some) == ["lg"], "a script that calls another mod's creature makes that mod a dependency")
+}
+
 print(fails == 0 ? "ALL \(passes) MOD CREATOR+ CHECKS PASSED" : "\(fails) FAILED, \(passes) passed")
 try? FileManager.default.removeItem(at: scratch)
 exit(fails == 0 ? 0 : 1)

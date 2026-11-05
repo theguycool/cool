@@ -11639,6 +11639,9 @@ final class Game: ObservableObject, @unchecked Sendable {
     var vehicleStash: [[Vehicle]] = [[Vehicle]](repeating: [], count: dimCount)
     /// where the player came from into a custom dimension (to go back there)
     var dimReturn: DimReturn? = nil
+    /// the Logic Studio's running scripts, and the variables of the world's mods ("mod:name")
+    var logic: LogicVM = LogicVM()
+    var logicVars: [String: Double] = [:]
     var mapCache: TreasureMap? = nil
     var hintT: Double = 0
     var autosaveT: Double = 0
@@ -11802,6 +11805,7 @@ extension Game {
         updateUse(dt)
         updateEffects(dt)
         updateModPlay(dt)
+        updateLogic(dt)
         // a landed blow holds the creatures still for a frame or two (the player keeps moving), which
         // is what makes a hit feel like it connected
         let frozen: Bool = hitStopT > 0
@@ -13210,6 +13214,7 @@ extension Game {
         }
         // a custom dimension's gate, then a mod's summoning item (tried before the item's own use)
         if pressed && world.dim.isCustom && tryReturnGate() { return }
+        if pressed && !logicRT.isEmpty && tryLogicTap() { return }
         if pressed && !ModRuntime.shared.summons.isEmpty && trySummonWith(it) { return }
         switch it {
         case .block(let t): usePlaceBlock(t, dt)
@@ -13240,6 +13245,7 @@ extension Game {
 
     func useBareHand(_ dt: Double, _ pressed: Bool) {
         if pressed && world.dim.isCustom && tryReturnGate() { return }
+        if pressed && !logicRT.isEmpty && tryLogicTap() { return }
         if let m = mobUnderAim(Item.bareHands) {
             if pressed || (useCD <= 0 && !meleeCandidates(Item.bareHands).isEmpty) { startMelee(nil, target: m) }
             return
@@ -13465,6 +13471,7 @@ extension Game {
             if isDoor(world.tile(x, y + 1)) { world.set(x, y + 1, .air) }
         }
         if world.set(x, y, .air) == .air && t != .air { return }
+        if byPlayer && t.isMod && !logicRT.isEmpty, let k = modBlockKey(t) { fireLogic(.blockBroken, x: x, y: y, block: true, key: k) }
         if isLogTile(t) && decayZones.count < 24 { decayZones.append(DecayZone(x: x, y: y, t: 30)) }
         let col: UInt32 = t.def.colors.first ?? 0x888888
         spawnParticles(Double(x) + 0.5, Double(y) + 0.5, col, 6, 3.5, 0.5, 16)
@@ -13582,6 +13589,7 @@ extension Game {
         sfx(.place, 0.6)
         // the last block of a summoning shape
         if !ModRuntime.shared.summons.isEmpty { summonByBuilding(tx, ty) }
+        if placed.isMod && !logicRT.isEmpty, let k = modBlockKey(placed) { fireLogic(.blockPlaced, x: tx, y: ty, block: true, key: k) }
         placeCD = 0.11
         swingT = 0.14
         swingDir = aimFacing()
@@ -15845,6 +15853,7 @@ extension Game {
         default: break
         }
         if m.boat >= 0 { alertShip(m.boat) }
+        if m.kind == .custom && !logicRT.isEmpty, let r = ModRuntime.shared.mob(m.cslot) { fireLogic(.hurt, mob: m, key: r.key) }
         if m.hp <= 0 { killMob(m, byPlayer) }
     }
 
@@ -15864,6 +15873,7 @@ extension Game {
             spawnDrop(s, m.b.x, m.b.y - m.b.h * 0.5, Double.random(in: -2...2), -4.5)
         }
         if m.kind == .custom { dropModLoot(m, &rng) }
+        if m.kind == .custom && !logicRT.isEmpty, let r = ModRuntime.shared.mob(m.cslot) { fireLogic(.dies, mob: m, key: r.key) }
         for s in alchemyDrops(m, &rng, credit) {
             spawnDrop(s, m.b.x, m.b.y - m.b.h * 0.5, Double.random(in: -2...2), -4.5)
         }
@@ -16540,6 +16550,7 @@ extension Game {
         damagePlayer(amount * dmgInMult * ward, from: info.originX, knock: info.knock * knockTaken, ignoreArmor: info.type.bypassesArmor)
         if hp < before { thornsBack(info, amount) }
         if hp < before { customHurtTriggers() }
+        if hp < before && !logicRT.isEmpty { fireLogic(.playerHurt) }
         return hp < before
     }
 
@@ -18686,6 +18697,8 @@ struct SaveData: Codable {
     var bosses: [ModBossSave]? = nil
     /// where the player came into a custom dimension from (nil: not in one)
     var dimReturn: DimReturn? = nil
+    /// the Logic Studio variables of the world's mods (nil: none)
+    var logicVars: [String: Double]? = nil
 }
 
 func mobToSave(_ m: Mob) -> MobSave {
@@ -18806,7 +18819,7 @@ extension Game {
         // the world's mods: those it was made with (a missing one stays listed, so it is never forgotten)
         var mi: ModWorldInfo? = modInfo
         if ModRuntime.shared.active { mi = ModRuntime.shared.worldInfo() }
-        return SaveData(meta: meta, settings: settings, px: px, py: py, hp: max(1, hp), maxHP: maxHP, hunger: hunger, timeOfDay: timeOfDay, kills: kills, spawnX: spawnX, spawnY: spawnY, inv: inv, sel: sel, defeated: Array(defeated), gotMap: gotMap, portalOpened: portalOpened, chests: chestList, chunks: cs, vehicles: vs, pets: pets, rex: rs, nextID: nextID, journal: journal, weather: weather, bodyCold: bodyCold, power: powerSave(), mods: mi, effects: effectsSave(), mutants: mutantSaves(), suit: suit.isEmpty ? nil : suit, bosses: bossSaves(), dimReturn: dimReturn)
+        return SaveData(meta: meta, settings: settings, px: px, py: py, hp: max(1, hp), maxHP: maxHP, hunger: hunger, timeOfDay: timeOfDay, kills: kills, spawnX: spawnX, spawnY: spawnY, inv: inv, sel: sel, defeated: Array(defeated), gotMap: gotMap, portalOpened: portalOpened, chests: chestList, chunks: cs, vehicles: vs, pets: pets, rex: rs, nextID: nextID, journal: journal, weather: weather, bodyCold: bodyCold, power: powerSave(), mods: mi, effects: effectsSave(), mutants: mutantSaves(), suit: suit.isEmpty ? nil : suit, bosses: bossSaves(), dimReturn: dimReturn, logicVars: logicVars.isEmpty ? nil : logicVars)
     }
 
     @discardableResult
@@ -18948,6 +18961,7 @@ extension Game {
         }
         if let ms = s.mutants { g.restoreMutants(ms) }
         if let bs = s.bosses { g.restoreBosses(bs) }
+        g.logicVars = (s.logicVars ?? [:]).filter { $0.value.isFinite }
         g.invuln = 2.0
         return g
     }
@@ -23776,13 +23790,16 @@ struct ModPack: Codable, Identifiable, Equatable {
     var infusions: [ModInfusion] = []
     /// dimensions of this mod
     var dims: [ModDimension] = []
+    /// Logic Studio scripts and the variables they keep (optional)
+    var scripts: [ModScript] = []
+    var variables: [String] = []
     /// entries left out because they could not be read (not saved)
     var skipped: Int = 0
 
     enum CodingKeys: String, CodingKey {
         case format, id, name, desc, author, version, created, edited, sandbox
         case blocks, items, mobs, projectiles, recipes, loot, ores, structures
-        case folder, requires, off, overrides, infusions, dims
+        case folder, requires, off, overrides, infusions, dims, scripts, variables
     }
 
     init() {}
@@ -23813,6 +23830,8 @@ struct ModPack: Codable, Identifiable, Equatable {
         overrides = c.list(.overrides, &skip)
         infusions = c.list(.infusions, &skip)
         dims = c.list(.dims, &skip)
+        scripts = c.list(.scripts, &skip)
+        variables = c.val(.variables, [])
         skipped = skip
     }
 
@@ -23820,7 +23839,7 @@ struct ModPack: Codable, Identifiable, Equatable {
     func key(_ contentID: String) -> String { return id + ":" + contentID }
 
     var contentCount: Int {
-        return blocks.count + items.count + mobs.count + projectiles.count + recipes.count + loot.count + ores.count + structures.count + overrides.count + infusions.count + dims.count
+        return blocks.count + items.count + mobs.count + projectiles.count + recipes.count + loot.count + ores.count + structures.count + overrides.count + infusions.count + dims.count + scripts.count
     }
 
     /// "3 creatures, 2 weapons, 5 blocks..." for the mod list
@@ -23842,6 +23861,7 @@ struct ModPack: Codable, Identifiable, Equatable {
         add(overrides.count, "change to the game", "changes to the game")
         add(infusions.count, "infusion", "infusions")
         add(dims.count, "dimension", "dimensions")
+        add(scripts.count, "script", "scripts")
         return parts.isEmpty ? "Empty" : parts.joined(separator: ", ")
     }
 
@@ -23859,6 +23879,7 @@ struct ModPack: Codable, Identifiable, Equatable {
         for o in overrides { used.insert(o.id) }
         for f in infusions { used.insert(f.id) }
         for d in dims { used.insert(d.id) }
+        for sc in scripts { used.insert(sc.id) }
         var n: Int = 1
         while used.contains(prefix + String(n)) { n += 1 }
         return prefix + String(n)
@@ -24194,6 +24215,7 @@ enum ModStore {
             d.entry.dimKeys = d.entry.dimKeys.map { fixRef($0) }
             p.dims[i] = d
         }
+        for i in p.scripts.indices { p.scripts[i] = LKeys.rekey(p.scripts[i], fixRef, fix) }
         return p
     }
 }
@@ -24752,6 +24774,7 @@ extension Game {
         m.lastAtk = -1
         if world.dim == .overworld { m.homeBiome = gen.col(Int(floor(x))).biome.rawValue }
         mobs.append(m)
+        if !r.key.isEmpty && !logicRT.isEmpty { fireLogic(.spawned, mob: m, key: r.key) }
         return m
     }
 
@@ -25801,6 +25824,8 @@ final class ModRuntime {
     var infusionNumber: [String: Int] = [:]
     /// every way to summon a custom creature, ready for play
     var summons: [ModSummonRT] = []
+    /// the Logic Studio scripts of the world's mods, compiled
+    var logic: LogicRT = LogicRT()
     /// the world's three custom dimension slots, and the key each holds (kept for missing mods)
     var dimSlots: [ModDimRT?] = [nil, nil, nil]
     var dimSlotKey: [String?] = [nil, nil, nil]
@@ -25854,6 +25879,7 @@ final class ModRuntime {
         rt.buildMobs()
         rt.buildSummons()
         rt.buildDims(world)
+        rt.logic = LogicRT.build(rt.packs, rt.disabled)
         rt.buildRecipes()
         rt.buildOres()
         rt.buildStructures()
@@ -26568,6 +26594,7 @@ extension Game {
             return
         }
         let d: ModItem = r.def
+        if pressed && !logicRT.isEmpty { fireLogic(.itemUsed, key: k) }
         switch d.kind {
         case .tool: useModTool(r, dt, pressed)
         case .melee: useMeleeWeapon(.custom(k), pressed)
@@ -30399,6 +30426,7 @@ extension ModStore {
             addItem(d.entry.item)
             for k in d.entry.pattern.cells where k.contains(":") && !k.hasPrefix("tile:") { add(k) }
         }
+        for sc in p.scripts { LKeys.uses(sc, add, addItem) }
         return out
     }
 
@@ -30450,13 +30478,14 @@ extension ModValidator {
             keep.append(o)
         }
         p.overrides = keep
-        let ids: Set<String> = Set(p.blocks.map { $0.id } + p.items.map { $0.id } + p.mobs.map { $0.id } + p.recipes.map { $0.id } + p.ores.map { $0.id } + p.structures.map { $0.id } + p.overrides.map { $0.id } + p.projectiles.map { $0.id } + p.loot.map { $0.id } + p.infusions.map { $0.id } + p.dims.map { $0.id })
+        let ids: Set<String> = Set(p.blocks.map { $0.id } + p.items.map { $0.id } + p.mobs.map { $0.id } + p.recipes.map { $0.id } + p.ores.map { $0.id } + p.structures.map { $0.id } + p.overrides.map { $0.id } + p.projectiles.map { $0.id } + p.loot.map { $0.id } + p.infusions.map { $0.id } + p.dims.map { $0.id } + p.scripts.map { $0.id })
         p.off = p.off.filter { ids.contains($0) }
         _ = known
         checkOrePlus(&p, mn, &r)
         checkInfusions(&p, mn, sb, known, &r)
         checkBosses(&p, mn, sb, known, &r)
         checkDims(&p, mn, sb, known, &r)
+        checkScripts(&p, mn, sb, known, &r)
         let dimIDs: Set<String> = Set(p.dims.map { $0.id })
         for i in p.ores.indices where !p.ores[i].dimKey.isEmpty && !dimIDs.contains(p.ores[i].dimKey) { p.ores[i].dimKey = "" }
         for i in p.structures.indices where !p.structures[i].dimKey.isEmpty && !dimIDs.contains(p.structures[i].dimKey) { p.structures[i].dimKey = "" }
@@ -31786,6 +31815,7 @@ extension Game {
         }
         spawnParticles(m.b.x, m.b.cy, p.tint, 20, 6.0, 0.8, 0)
         if p.helpers > 0 && !p.helper.isEmpty { callHelpers(m, p) }
+        if !logicRT.isEmpty { fireLogic(.phase, mob: m, key: r.key, number: Double(k + 1)) }
         bumpHUD()
     }
 
@@ -32745,8 +32775,9 @@ extension Game {
         if r.def.returnGate { placeReturnGate(r) }
         say(r.def.arriveMessage.isEmpty ? joinText("You step into ", r.def.name, ".") : r.def.arriveMessage, 4.0)
         addShake(0.4)
-        sfx(.zap, 0.8)
+        sfx(.portal, 0.8)
         spawnParticles(pb.x, pb.y - 1.0, 0xC8A0FF, 24, 5.0, 0.8, -2)
+        if !logicRT.isEmpty { fireLogic(.enterDim, text: r.key) }
     }
 
     /// Back to where the player entered from (the Overworld's spawn if that is unknown)
@@ -32758,7 +32789,7 @@ extension Game {
         travelTo(d, arriveX: back.x, arriveY: back.y, silent: true)
         say(d == .overworld ? "You return to the Overworld." : "You return to the Umbral Realm.", 3.0)
         addShake(0.3)
-        sfx(.zap, 0.7)
+        sfx(.portal, 0.7)
     }
 
     /// The way back: a gate on the ground beside where the player arrived
@@ -33113,6 +33144,1257 @@ extension ModValidator {
             }
             p.dims[i] = d
         }
+    }
+}
+
+// MARK: - Mod Creator+: Logic Studio (optional visual scripting)
+//
+// Scripts are data: stacks of blocks chosen from the lists below, nothing else. The game turns each into
+// a short list of steps and runs it with its own interpreter, a little at a time each frame: a script
+// can't run forever without waiting, call itself too deeply, reach outside the game, or crash it. Every
+// number a block uses is kept in range, and anything it names (a block, an item, a creature) is looked up
+// safely; what is missing is skipped and reported in the Mod Test tools' LOGIC tab.
+
+/// What starts a script
+enum LEvent: Int, Codable, CaseIterable {
+    case worldStart, every, nightFalls, dayBreaks, custom, playerHurt, enterDim
+    case spawned, hurt, dies, creatureEvery, phase
+    case itemUsed, blockPlaced, blockBroken, blockTapped
+    /// not an event: a group of blocks other scripts run ("run group")
+    case group
+
+    var name: String {
+        switch self {
+        case .worldStart: return "When the world starts"
+        case .every: return "Every few seconds"
+        case .nightFalls: return "When night falls"
+        case .dayBreaks: return "When day breaks"
+        case .custom: return "When I receive a message"
+        case .playerHurt: return "When the player is hurt"
+        case .enterDim: return "When the player enters a dimension"
+        case .spawned: return "When my creature appears"
+        case .hurt: return "When my creature is hurt"
+        case .dies: return "When my creature is beaten"
+        case .creatureEvery: return "Every few seconds, for each of my creatures"
+        case .phase: return "When my creature enters a phase"
+        case .itemUsed: return "When my item is used"
+        case .blockPlaced: return "When my block is placed"
+        case .blockBroken: return "When my block is broken"
+        case .blockTapped: return "When my block is tapped"
+        case .group: return "A group of blocks (run by other scripts)"
+        }
+    }
+    /// what the script is about: 0 the world, 1 a creature, 2 an item, 3 a block
+    var subject: Int {
+        switch self {
+        case .spawned, .hurt, .dies, .creatureEvery, .phase: return 1
+        case .itemUsed: return 2
+        case .blockPlaced, .blockBroken, .blockTapped: return 3
+        default: return 0
+        }
+    }
+}
+
+/// A block's command
+enum LOp: Int, Codable, CaseIterable {
+    case ifThen, ifElse, repeatN, whileDo, forever, wait, stop, broadcast, runGroup, log
+    case setVar, changeVar
+    case say, floatText, particles, sound, shake, flash
+    case jump, dash, stepToPlayer, teleportNear, facePlayer
+    case hurtPlayer, healPlayer, hurtSelf, healSelf, hurtNearby, explode, fireShot, summon
+    case giveEffect, placeBlock, breakBlock, setTime, giveItem, takeItem, enterPhase
+}
+
+/// A reporter (a value a block reads)
+enum LEOp: Int, Codable, CaseIterable {
+    case num, variable, param, random, add, sub, mul, div, mod, lt, gt, eq, and, or, not
+    case playerHP, playerMaxHP, selfHP, selfHPPct, distance, timeOfDay, isNight, itemCount
+    case playerX, playerY, selfX, selfY, nearby, inDim, inBiome, raining
+}
+
+/// A value: a number, a variable, or a reporter with its inputs
+struct LExpr: Codable, Equatable {
+    var op: LEOp = .num
+    var v: Double = 0
+    var s: String = ""
+    var item: Item? = nil
+    var args: [LExpr] = []
+
+    init() {}
+    init(_ v: Double) { self.v = v }
+    init(op: LEOp, args: [LExpr] = []) {
+        self.op = op
+        self.args = args
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        op = c.val(.op, .num)
+        v = c.val(.v, 0)
+        s = c.val(.s, "")
+        item = c.val(.item, nil)
+        args = c.val(.args, [])
+    }
+}
+
+/// One block of a script; `body` and `alt` hold the blocks inside an if, a loop or an else
+struct LNode: Codable, Equatable {
+    var op: LOp = .say
+    var a: Double = 0
+    var b: Double = 0
+    var c: Double = 0
+    var s: String = ""
+    var item: Item? = nil
+    var args: [LExpr] = []
+    var body: [LNode] = []
+    var alt: [LNode] = []
+
+    init() {}
+    init(_ op: LOp) {
+        self.op = op
+        let sp: LSpec = LSpec.of(op)
+        for f in sp.fields {
+            switch f.kind {
+            case .number:
+                if f.slot == 0 { a = f.def } else if f.slot == 1 { b = f.def } else { c = f.def }
+            case .choice:
+                if f.slot == 0 { a = f.def } else if f.slot == 1 { b = f.def } else { c = f.def }
+            case .expr:
+                while args.count <= f.slot { args.append(LExpr(0)) }
+                args[f.slot] = LExpr(f.def)
+            case .text: s = f.label == "" ? "" : s
+            default: break
+            }
+        }
+        if op == .say || op == .floatText { s = "Hello!" }
+        if op == .log { s = "Here" }
+    }
+
+    init(from decoder: Decoder) throws {
+        let c0 = try decoder.container(keyedBy: CodingKeys.self)
+        op = c0.val(.op, .say)
+        a = c0.val(.a, 0)
+        b = c0.val(.b, 0)
+        c = c0.val(.c, 0)
+        s = c0.val(.s, "")
+        item = c0.val(.item, nil)
+        args = c0.val(.args, [])
+        body = c0.val(.body, [])
+        alt = c0.val(.alt, [])
+    }
+}
+
+/// A script: what starts it, what it is about, and its blocks
+struct ModScript: Codable, Identifiable, Equatable {
+    var id: String = ""
+    var name: String = "Script"
+    var enabled: Bool = true
+    var event: LEvent = .worldStart
+    /// the event's number: seconds (every), a phase
+    var ev: Double = 5
+    /// the event's text: a message name, a dimension key
+    var evText: String = ""
+    /// the creature, item or block it belongs to (this mod's, "mod:id")
+    var target: String = ""
+    var blocks: [LNode] = []
+    /// a group's inputs (up to three names)
+    var params: [String] = []
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = c.val(.id, "")
+        name = c.val(.name, "Script")
+        enabled = c.val(.enabled, true)
+        event = c.val(.event, .worldStart)
+        ev = c.val(.ev, 5)
+        evText = c.val(.evText, "")
+        target = c.val(.target, "")
+        blocks = c.val(.blocks, [])
+        params = c.val(.params, [])
+    }
+}
+
+// MARK: the block catalogue (shared by the editor, the checks and the interpreter)
+
+enum LCat: Int, CaseIterable {
+    case control, looks, movement, combat, world, items, variables
+    var name: String {
+        switch self {
+        case .control: return "CONTROL"
+        case .looks: return "LOOKS & SOUND"
+        case .movement: return "MOVEMENT"
+        case .combat: return "COMBAT"
+        case .world: return "WORLD"
+        case .items: return "ITEMS & EFFECTS"
+        case .variables: return "VARIABLES"
+        }
+    }
+    var color: UInt32 {
+        switch self {
+        case .control: return 0xD8A030
+        case .looks: return 0x9A6AE0
+        case .movement: return 0x4A8AE0
+        case .combat: return 0xD85A4A
+        case .world: return 0x4AAA5A
+        case .items: return 0x3AB0B0
+        case .variables: return 0xE07A30
+        }
+    }
+}
+
+enum LFieldKind {
+    case number, text, key, item, expr, choice
+}
+
+/// One input of a block: what it holds and where (slot: a b c for numbers, the argument for values)
+struct LField {
+    let kind: LFieldKind
+    let slot: Int
+    let label: String
+    var lo: Double = 0
+    var hi: Double = 100
+    var def: Double = 0
+    /// for keys: 0 creature, 1 block, 2 shot, 3 message, 4 variable, 5 group, 6 dimension
+    /// for choices: 0 sound, 1 effect, 2 game shot
+    var list: Int = 0
+}
+
+struct LSpec {
+    let op: LOp
+    let cat: LCat
+    let title: String
+    let fields: [LField]
+    /// 0 no blocks inside, 1 blocks inside, 2 blocks inside and an else
+    var inside: Int = 0
+    /// it needs a creature to act on
+    var creature: Bool = false
+
+    static let all: [LSpec] = [
+        LSpec(op: .ifThen, cat: .control, title: "if", fields: [LField(kind: .expr, slot: 0, label: "this is true", def: 1)], inside: 1),
+        LSpec(op: .ifElse, cat: .control, title: "if, else", fields: [LField(kind: .expr, slot: 0, label: "this is true", def: 1)], inside: 2),
+        LSpec(op: .repeatN, cat: .control, title: "repeat", fields: [LField(kind: .expr, slot: 0, label: "times", def: 3)], inside: 1),
+        LSpec(op: .whileDo, cat: .control, title: "repeat while", fields: [LField(kind: .expr, slot: 0, label: "this is true", def: 1)], inside: 1),
+        LSpec(op: .forever, cat: .control, title: "forever", fields: [], inside: 1),
+        LSpec(op: .wait, cat: .control, title: "wait", fields: [LField(kind: .expr, slot: 0, label: "seconds", def: 1)]),
+        LSpec(op: .stop, cat: .control, title: "stop this script", fields: []),
+        LSpec(op: .broadcast, cat: .control, title: "send a message", fields: [LField(kind: .key, slot: 0, label: "message", list: 3)]),
+        LSpec(op: .runGroup, cat: .control, title: "run a group", fields: [LField(kind: .key, slot: 0, label: "group", list: 5), LField(kind: .expr, slot: 0, label: "input 1"),
+                                                                            LField(kind: .expr, slot: 1, label: "input 2"), LField(kind: .expr, slot: 2, label: "input 3")]),
+        LSpec(op: .log, cat: .control, title: "note in the test log", fields: [LField(kind: .text, slot: 0, label: "text"), LField(kind: .expr, slot: 0, label: "value")]),
+        LSpec(op: .setVar, cat: .variables, title: "set variable", fields: [LField(kind: .key, slot: 0, label: "variable", list: 4), LField(kind: .expr, slot: 0, label: "to")]),
+        LSpec(op: .changeVar, cat: .variables, title: "change variable", fields: [LField(kind: .key, slot: 0, label: "variable", list: 4), LField(kind: .expr, slot: 0, label: "by", def: 1)]),
+        LSpec(op: .say, cat: .looks, title: "show a message", fields: [LField(kind: .text, slot: 0, label: "text"), LField(kind: .number, slot: 0, label: "seconds", lo: 0.5, hi: 10, def: 3)]),
+        LSpec(op: .floatText, cat: .looks, title: "float text over it", fields: [LField(kind: .text, slot: 0, label: "text"), LField(kind: .number, slot: 0, label: "colour", lo: 0, hi: 7, def: 0)]),
+        LSpec(op: .particles, cat: .looks, title: "sparkle", fields: [LField(kind: .number, slot: 0, label: "colour", lo: 0, hi: 7, def: 2), LField(kind: .number, slot: 1, label: "how many", lo: 1, hi: 40, def: 12)]),
+        LSpec(op: .sound, cat: .looks, title: "play a sound", fields: [LField(kind: .choice, slot: 0, label: "sound", def: 0, list: 0)]),
+        LSpec(op: .shake, cat: .looks, title: "shake the screen", fields: [LField(kind: .number, slot: 0, label: "strength", lo: 0.05, hi: 1, def: 0.3)]),
+        LSpec(op: .flash, cat: .looks, title: "flash my creature", fields: [LField(kind: .number, slot: 0, label: "seconds", lo: 0.05, hi: 2, def: 0.3)], creature: true),
+        LSpec(op: .jump, cat: .movement, title: "jump", fields: [LField(kind: .number, slot: 0, label: "strength", lo: 2, hi: 24, def: 12)], creature: true),
+        LSpec(op: .dash, cat: .movement, title: "dash forward", fields: [LField(kind: .number, slot: 0, label: "speed", lo: 1, hi: 30, def: 12)], creature: true),
+        LSpec(op: .stepToPlayer, cat: .movement, title: "lunge toward the player", fields: [LField(kind: .number, slot: 0, label: "speed", lo: 1, hi: 20, def: 6)], creature: true),
+        LSpec(op: .teleportNear, cat: .movement, title: "appear beside the player", fields: [LField(kind: .number, slot: 0, label: "how far", lo: 2, hi: 12, def: 4)], creature: true),
+        LSpec(op: .facePlayer, cat: .movement, title: "face the player", fields: [], creature: true),
+        LSpec(op: .hurtPlayer, cat: .combat, title: "hurt the player", fields: [LField(kind: .expr, slot: 0, label: "damage", def: 4)]),
+        LSpec(op: .healPlayer, cat: .combat, title: "heal the player", fields: [LField(kind: .expr, slot: 0, label: "health", def: 4)]),
+        LSpec(op: .hurtSelf, cat: .combat, title: "hurt my creature", fields: [LField(kind: .expr, slot: 0, label: "damage", def: 4)], creature: true),
+        LSpec(op: .healSelf, cat: .combat, title: "heal my creature", fields: [LField(kind: .expr, slot: 0, label: "health", def: 4)], creature: true),
+        LSpec(op: .hurtNearby, cat: .combat, title: "hurt creatures nearby", fields: [LField(kind: .number, slot: 0, label: "how far", lo: 1, hi: 8, def: 3), LField(kind: .expr, slot: 0, label: "damage", def: 4)]),
+        LSpec(op: .explode, cat: .combat, title: "blast (breaks no blocks)", fields: [LField(kind: .number, slot: 0, label: "size", lo: 1, hi: 4, def: 2), LField(kind: .number, slot: 1, label: "power", lo: 1, hi: 20, def: 6)]),
+        LSpec(op: .fireShot, cat: .combat, title: "fire a shot at the player", fields: [LField(kind: .key, slot: 0, label: "mod shot (or none)", list: 2), LField(kind: .choice, slot: 1, label: "game shot", def: 2, list: 2),
+                                                                                         LField(kind: .number, slot: 0, label: "speed", lo: 4, hi: 30, def: 14), LField(kind: .number, slot: 2, label: "damage", lo: 0, hi: 30, def: 5)]),
+        LSpec(op: .summon, cat: .combat, title: "call creatures", fields: [LField(kind: .key, slot: 0, label: "creature", list: 0), LField(kind: .number, slot: 0, label: "how many", lo: 1, hi: 4, def: 1)]),
+        LSpec(op: .giveEffect, cat: .items, title: "give the player an effect", fields: [LField(kind: .choice, slot: 0, label: "effect", def: 2, list: 1), LField(kind: .number, slot: 1, label: "strength", lo: 0, hi: 100, def: 20),
+                                                                                         LField(kind: .number, slot: 2, label: "seconds", lo: 1, hi: 120, def: 10)]),
+        LSpec(op: .placeBlock, cat: .world, title: "place a block", fields: [LField(kind: .key, slot: 0, label: "block", list: 1), LField(kind: .number, slot: 0, label: "across", lo: -8, hi: 8, def: 0),
+                                                                            LField(kind: .number, slot: 1, label: "up", lo: -8, hi: 8, def: 1)]),
+        LSpec(op: .breakBlock, cat: .world, title: "break a block", fields: [LField(kind: .number, slot: 0, label: "across", lo: -8, hi: 8, def: 0), LField(kind: .number, slot: 1, label: "up", lo: -8, hi: 8, def: -1)]),
+        LSpec(op: .setTime, cat: .world, title: "set the time of day", fields: [LField(kind: .number, slot: 0, label: "time (0.25 noon, 0.75 midnight)", lo: 0, hi: 1, def: 0.25)]),
+        LSpec(op: .giveItem, cat: .items, title: "give the player items", fields: [LField(kind: .item, slot: 0, label: "item"), LField(kind: .number, slot: 0, label: "how many", lo: 1, hi: 64, def: 1)]),
+        LSpec(op: .takeItem, cat: .items, title: "take items from the player", fields: [LField(kind: .item, slot: 0, label: "item"), LField(kind: .number, slot: 0, label: "how many", lo: 1, hi: 64, def: 1)]),
+        LSpec(op: .enterPhase, cat: .combat, title: "move my creature to a phase", fields: [LField(kind: .number, slot: 0, label: "phase", lo: 1, hi: 6, def: 1)], creature: true),
+    ]
+
+    static func of(_ op: LOp) -> LSpec {
+        return all.first { $0.op == op } ?? LSpec(op: op, cat: .control, title: "?", fields: [])
+    }
+}
+
+/// The reporters, by name, and how many values each takes
+enum LReporters {
+    static func name(_ op: LEOp) -> String {
+        switch op {
+        case .num: return "number"
+        case .variable: return "variable"
+        case .param: return "group input"
+        case .random: return "random between"
+        case .add: return "+"
+        case .sub: return "\u{2212}"
+        case .mul: return "\u{00D7}"
+        case .div: return "\u{00F7}"
+        case .mod: return "remainder"
+        case .lt: return "<"
+        case .gt: return ">"
+        case .eq: return "="
+        case .and: return "and"
+        case .or: return "or"
+        case .not: return "not"
+        case .playerHP: return "player's health"
+        case .playerMaxHP: return "player's most health"
+        case .selfHP: return "my creature's health"
+        case .selfHPPct: return "my creature's health %"
+        case .distance: return "distance to the player"
+        case .timeOfDay: return "time of day"
+        case .isNight: return "it is night"
+        case .itemCount: return "how many the player has of"
+        case .playerX: return "player across"
+        case .playerY: return "player up/down"
+        case .selfX: return "my across"
+        case .selfY: return "my up/down"
+        case .nearby: return "creatures within"
+        case .inDim: return "the player is in dimension"
+        case .inBiome: return "the player is in biome"
+        case .raining: return "it is raining or snowing"
+        }
+    }
+    static func arity(_ op: LEOp) -> Int {
+        switch op {
+        case .random, .add, .sub, .mul, .div, .mod, .lt, .gt, .eq, .and, .or: return 2
+        case .not: return 1
+        default: return 0
+        }
+    }
+    /// reporters that only make sense for a creature
+    static func needsCreature(_ op: LEOp) -> Bool { return op == .selfHP || op == .selfHPPct }
+    static let colours: [UInt32] = [0xFFFFFF, 0xFF5A4A, 0xFFD24A, 0x5AE070, 0x5AB8FF, 0xC070FF, 0xFF8A3A, 0x8A8A8A]
+    static let sounds: [SoundID] = [.zap, .roar, .portal, .discovery, .warn, .explosion, .chestOpen, .craft, .infuse, .tap, .hit, .crit, .flask, .rareLoot]
+    static let soundNames: [String] = ["Zap", "Roar", "Portal", "Discovery", "Warning", "Explosion", "Chest", "Craft", "Infuse", "Tap", "Hit", "Critical", "Flask", "Rare find"]
+}
+
+// MARK: the interpreter
+
+/// A step of a compiled script
+enum LInstr {
+    case run(LNode)
+    case jumpUnless(LExpr, Int)
+    case jump(Int)
+    case loopStart(Int, LExpr)
+    case loopCheck(Int, Int)
+    case wait(LExpr)
+    case call(String, [LExpr])
+    case stop
+}
+
+/// Limits that keep scripts from slowing or stopping the game
+enum LLimits {
+    static let maxThreads: Int = 32
+    static let perScript: Int = 4
+    static let stepsPerThread: Int = 300
+    static let stepsPerFrame: Int = 3000
+    static let maxDepth: Int = 8
+    static let maxExprDepth: Int = 32
+    static let maxRepeat: Int = 1000
+    /// seconds a script may run without ever waiting before it is stopped
+    static let noWaitLimit: Double = 10
+    static let maxScripts: Int = 40
+    static let maxBlocks: Int = 400
+    static let maxVariables: Int = 16
+}
+
+extension LExpr {
+    static var zero: LExpr { return LExpr(0) }
+}
+
+/// A script ready to run: its steps, its mod, what starts it
+final class LProgram {
+    let key: String
+    let modID: String
+    let name: String
+    let def: ModScript
+    var code: [LInstr] = []
+    /// how many loop counters it needs
+    var slots: Int = 0
+
+    init(key: String, modID: String, def: ModScript) {
+        self.key = key
+        self.modID = modID
+        self.name = def.name
+        self.def = def
+        var out: [LInstr] = []
+        var n: Int = 0
+        LProgram.compile(def.blocks, &out, &n)
+        code = out
+        slots = n
+    }
+
+    static func compile(_ list: [LNode], _ out: inout [LInstr], _ slots: inout Int) {
+        for n in list {
+            let cond: LExpr = n.args.first ?? LExpr.zero
+            switch n.op {
+            case .ifThen:
+                let j: Int = out.count
+                out.append(.jumpUnless(cond, -1))
+                compile(n.body, &out, &slots)
+                out[j] = .jumpUnless(cond, out.count)
+            case .ifElse:
+                let j: Int = out.count
+                out.append(.jumpUnless(cond, -1))
+                compile(n.body, &out, &slots)
+                let k: Int = out.count
+                out.append(.jump(-1))
+                out[j] = .jumpUnless(cond, out.count)
+                compile(n.alt, &out, &slots)
+                out[k] = .jump(out.count)
+            case .repeatN:
+                let sl: Int = slots
+                slots += 1
+                out.append(.loopStart(sl, cond))
+                let top: Int = out.count
+                out.append(.loopCheck(sl, -1))
+                compile(n.body, &out, &slots)
+                out.append(.jump(top))
+                out[top] = .loopCheck(sl, out.count)
+            case .whileDo:
+                let top: Int = out.count
+                out.append(.jumpUnless(cond, -1))
+                compile(n.body, &out, &slots)
+                out.append(.jump(top))
+                out[top] = .jumpUnless(cond, out.count)
+            case .forever:
+                let top: Int = out.count
+                compile(n.body, &out, &slots)
+                out.append(.jump(top))
+            case .wait:
+                out.append(.wait(cond))
+            case .stop:
+                out.append(.stop)
+            case .runGroup:
+                out.append(.call(n.s, n.args))
+            default:
+                out.append(.run(n))
+            }
+        }
+    }
+}
+
+/// Where a running script is in one program (a group run from it gets a frame of its own)
+struct LFrame {
+    let prog: LProgram
+    var pc: Int = 0
+    var counters: [Int]
+    var params: [Double]
+}
+
+/// One running script
+final class LThread {
+    let prog: LProgram
+    let id: Int
+    var frames: [LFrame]
+    var waitT: Double = 0
+    weak var mob: Mob? = nil
+    var hasMob: Bool = false
+    var bx: Int = 0
+    var by: Int = 0
+    var hasBlock: Bool = false
+    var noWaitT: Double = 0
+    var steps: Int = 0
+    var done: Bool = false
+    var error: String = ""
+
+    init(_ p: LProgram, id: Int) {
+        prog = p
+        self.id = id
+        frames = [LFrame(prog: p, pc: 0, counters: [Int](repeating: 0, count: p.slots), params: [0, 0, 0])]
+    }
+
+    /// where it is, for the step debugger ("Script name, step 3")
+    var whereText: String {
+        guard let f = frames.last else { return prog.name }
+        return joinText(f.prog.name, ", step ", String(f.pc + 1), " of ", String(f.prog.code.count))
+    }
+}
+
+/// The scripts of the world's mods, compiled once per world
+final class LogicRT {
+    var programs: [LProgram] = []
+    var groups: [String: LProgram] = [:]
+    /// programs by what starts them
+    var byEvent: [LEvent: [LProgram]] = [:]
+
+    var isEmpty: Bool { return programs.isEmpty }
+
+    static func build(_ packs: [ModPack], _ off: Set<String>) -> LogicRT {
+        let rt = LogicRT()
+        for p in packs {
+            for s in p.scripts where s.enabled && !off.contains(p.key(s.id)) {
+                let prog = LProgram(key: p.key(s.id), modID: p.id, def: s)
+                rt.programs.append(prog)
+                if s.event == .group {
+                    rt.groups[p.key(s.id)] = prog
+                } else {
+                    rt.byEvent[s.event, default: []].append(prog)
+                }
+            }
+        }
+        return rt
+    }
+
+    func listeners(_ e: LEvent) -> [LProgram] { return byEvent[e] ?? [] }
+}
+
+/// The running side of the Logic Studio in one game: running scripts, timers, the world's variables, the
+/// test log, and the step debugger
+final class LogicVM {
+    var threads: [LThread] = []
+    /// what the last scripts did (newest last), for the Mod Test tools
+    var log: [String] = []
+    var nextID: Int = 1
+    var started: Bool = false
+    var lastNight: Bool? = nil
+    var timers: [String: Double] = [:]
+    var mobTimers: [Int: Double] = [:]
+    /// step debugger: scripts wait while paused; `stepOnce` lets one step through
+    var paused: Bool = false
+    var stepOnce: Bool = false
+    var ran: Int = 0
+    var errors: Int = 0
+
+    func note(_ s: String) {
+        log.append(s)
+        if log.count > 60 { log.removeFirst(log.count - 60) }
+    }
+}
+
+extension Game {
+    // MARK: starting scripts
+
+    var logicRT: LogicRT { return ModRuntime.shared.logic }
+
+    /// Starts every script waiting for this event (that belongs to this subject)
+    func fireLogic(_ e: LEvent, mob: Mob? = nil, x: Int = 0, y: Int = 0, block: Bool = false, key: String = "", text: String = "", number: Double = 0) {
+        let rt: LogicRT = logicRT
+        if rt.isEmpty { return }
+        for p in rt.listeners(e) {
+            let d: ModScript = p.def
+            switch e.subject {
+            case 1, 2, 3:
+                if d.target != key { continue }
+            default: break
+            }
+            if e == .custom && d.evText != text { continue }
+            if e == .enterDim && !d.evText.isEmpty && d.evText != text { continue }
+            if e == .phase && Int(d.ev.rounded()) != Int(number.rounded()) { continue }
+            startThread(p, mob: mob, x: x, y: y, block: block)
+        }
+    }
+
+    @discardableResult
+    func startThread(_ p: LProgram, mob: Mob?, x: Int, y: Int, block: Bool) -> LThread? {
+        let vm: LogicVM = logic
+        if vm.threads.count >= LLimits.maxThreads {
+            vm.note(joinText(p.name, ": not started, too many scripts are running at once."))
+            return nil
+        }
+        var same: Int = 0
+        for t in vm.threads where t.prog === p && !t.done { same += 1 }
+        if same >= LLimits.perScript { return nil }
+        let t = LThread(p, id: vm.nextID)
+        vm.nextID += 1
+        t.mob = mob
+        t.hasMob = mob != nil
+        t.bx = x
+        t.by = y
+        t.hasBlock = block
+        vm.threads.append(t)
+        vm.ran += 1
+        return t
+    }
+
+    /// The clock of the Logic Studio: timed and time-of-day events, then a little of every running script
+    func updateLogic(_ dt: Double) {
+        let rt: LogicRT = logicRT
+        let vm: LogicVM = logic
+        if rt.isEmpty {
+            if !vm.threads.isEmpty { vm.threads.removeAll() }
+            return
+        }
+        // the step debugger stops the scripts' clock too: nothing new starts by time while paused
+        if vm.paused {
+            runLogic(dt)
+            return
+        }
+        if !vm.started {
+            vm.started = true
+            fireLogic(.worldStart)
+        }
+        let night: Bool = isNight
+        if let was = vm.lastNight, was != night { fireLogic(night ? .nightFalls : .dayBreaks) }
+        vm.lastNight = night
+        for p in rt.listeners(.every) {
+            let gap: Double = clampD(p.def.ev, 0.25, 600)
+            let next: Double = vm.timers[p.key] ?? (clock + gap)
+            if clock >= next {
+                vm.timers[p.key] = clock + gap
+                startThread(p, mob: nil, x: 0, y: 0, block: false)
+            } else if vm.timers[p.key] == nil {
+                vm.timers[p.key] = next
+            }
+        }
+        let each: [LProgram] = rt.listeners(.creatureEvery)
+        if !each.isEmpty {
+            for m in mobs where m.kind == .custom && m.hp > 0 && !m.removed {
+                guard let r = ModRuntime.shared.mob(m.cslot) else { continue }
+                for (i, p) in each.enumerated() where p.def.target == r.key {
+                    let k: Int = m.id &* 64 &+ i
+                    let gap: Double = clampD(p.def.ev, 0.25, 600)
+                    let next: Double = vm.mobTimers[k] ?? (clock + gap)
+                    if clock >= next {
+                        vm.mobTimers[k] = clock + gap
+                        startThread(p, mob: m, x: 0, y: 0, block: false)
+                    } else if vm.mobTimers[k] == nil {
+                        vm.mobTimers[k] = next
+                    }
+                }
+            }
+            if vm.mobTimers.count > 400 { vm.mobTimers.removeAll() }
+        }
+        runLogic(dt)
+    }
+
+    /// Runs a little of each script (all of them wait while the step debugger is paused)
+    func runLogic(_ dt: Double) {
+        let vm: LogicVM = logic
+        if vm.threads.isEmpty { return }
+        if vm.paused {
+            if !vm.stepOnce { return }
+            vm.stepOnce = false
+            if let t = vm.threads.first(where: { !$0.done }) {
+                if t.waitT > 0 { t.waitT = 0 }
+                logicStep(t)
+            }
+            vm.threads.removeAll { $0.done }
+            return
+        }
+        var budget: Int = LLimits.stepsPerFrame
+        for t in vm.threads where !t.done {
+            if t.hasMob {
+                // a creature's script ends with the creature (its "beaten" script still runs)
+                if t.mob == nil || t.mob!.removed || (t.mob!.hp <= 0 && t.prog.def.event != .dies) {
+                    t.done = true
+                    continue
+                }
+            }
+            if t.waitT > 0 {
+                t.waitT -= dt
+                t.noWaitT = 0
+                continue
+            }
+            var n: Int = 0
+            while n < LLimits.stepsPerThread && budget > 0 && !t.done && t.waitT <= 0 {
+                logicStep(t)
+                n += 1
+                budget -= 1
+            }
+            if n >= LLimits.stepsPerThread {
+                t.noWaitT += dt
+                if t.noWaitT > LLimits.noWaitLimit {
+                    logicFail(t, "It ran for 10 seconds without waiting, so it was stopped. Put a \u{201C}wait\u{201D} inside loops that go on.")
+                }
+            }
+            if budget <= 0 { break }
+        }
+        vm.threads.removeAll { $0.done }
+    }
+
+    func logicFail(_ t: LThread, _ why: String) {
+        t.error = why
+        t.done = true
+        logic.errors += 1
+        logic.note(joinText("\u{26A0} ", t.prog.name, ": ", why))
+    }
+
+    /// One step of a running script
+    func logicStep(_ t: LThread) {
+        guard !t.frames.isEmpty else {
+            t.done = true
+            return
+        }
+        let fi: Int = t.frames.count - 1
+        let code: [LInstr] = t.frames[fi].prog.code
+        let pc: Int = t.frames[fi].pc
+        if pc >= code.count || pc < 0 {
+            t.frames.removeLast()
+            if t.frames.isEmpty { t.done = true }
+            return
+        }
+        t.frames[fi].pc = pc + 1
+        t.steps += 1
+        switch code[pc] {
+        case .run(let n):
+            logicExec(t, n)
+        case .jumpUnless(let e, let to):
+            if logicEval(t, e, 0) == 0 { t.frames[fi].pc = to }
+        case .jump(let to):
+            t.frames[fi].pc = to
+        case .loopStart(let sl, let e):
+            if sl < t.frames[fi].counters.count { t.frames[fi].counters[sl] = clampI(Int(logicEval(t, e, 0).rounded()), 0, LLimits.maxRepeat) }
+        case .loopCheck(let sl, let to):
+            if sl >= t.frames[fi].counters.count || t.frames[fi].counters[sl] <= 0 {
+                t.frames[fi].pc = to
+            } else {
+                t.frames[fi].counters[sl] -= 1
+            }
+        case .wait(let e):
+            t.waitT = clampD(logicEval(t, e, 0), 0.05, 60)
+            t.noWaitT = 0
+        case .call(let name, let args):
+            guard let g = logicRT.groups[name] else {
+                logic.note(joinText(t.prog.name, ": the group it runs is missing; skipped."))
+                return
+            }
+            if t.frames.count >= LLimits.maxDepth {
+                logicFail(t, "Groups ran each other too deeply (more than 8 inside one another).")
+                return
+            }
+            var ps: [Double] = [0, 0, 0]
+            for k in 0..<min(3, args.count) { ps[k] = logicEval(t, args[k], 0) }
+            t.frames.append(LFrame(prog: g, pc: 0, counters: [Int](repeating: 0, count: g.slots), params: ps))
+        case .stop:
+            t.done = true
+        }
+    }
+
+    // MARK: values
+
+    /// Where a script's subject is: its creature, its block, or the player
+    func logicPos(_ t: LThread) -> (Double, Double) {
+        if t.hasMob, let m = t.mob { return (m.b.x, m.b.cy) }
+        if t.hasBlock { return (Double(t.bx) + 0.5, Double(t.by) + 0.5) }
+        return (pb.x, pb.y - pb.h * 0.5)
+    }
+
+    func logicVarKey(_ t: LThread, _ name: String) -> String { return joinText(t.prog.modID, ":", name) }
+
+    func logicEval(_ t: LThread, _ e: LExpr, _ depth: Int) -> Double {
+        if depth > LLimits.maxExprDepth { return 0 }
+        func arg(_ i: Int) -> Double { return i < e.args.count ? logicEval(t, e.args[i], depth + 1) : 0 }
+        var v: Double = 0
+        switch e.op {
+        case .num: v = e.v
+        case .variable: v = logicVars[logicVarKey(t, e.s)] ?? 0
+        case .param:
+            let k: Int = Int(e.v.rounded()) - 1
+            if let f = t.frames.last, k >= 0 && k < f.params.count { v = f.params[k] }
+        case .random:
+            let a: Double = arg(0)
+            let b: Double = arg(1)
+            v = a == b ? a : Double.random(in: min(a, b)...max(a, b))
+        case .add: v = arg(0) + arg(1)
+        case .sub: v = arg(0) - arg(1)
+        case .mul: v = arg(0) * arg(1)
+        case .div:
+            let d: Double = arg(1)
+            v = d == 0 ? 0 : arg(0) / d
+        case .mod:
+            let d: Double = arg(1)
+            v = d == 0 ? 0 : fmod(arg(0), d)
+        case .lt: v = arg(0) < arg(1) ? 1 : 0
+        case .gt: v = arg(0) > arg(1) ? 1 : 0
+        case .eq: v = abs(arg(0) - arg(1)) < 0.0001 ? 1 : 0
+        case .and: v = arg(0) != 0 && arg(1) != 0 ? 1 : 0
+        case .or: v = arg(0) != 0 || arg(1) != 0 ? 1 : 0
+        case .not: v = arg(0) == 0 ? 1 : 0
+        case .playerHP: v = hp
+        case .playerMaxHP: v = maxHP
+        case .selfHP: v = t.mob?.hp ?? 0
+        case .selfHPPct:
+            if let m = t.mob, m.maxHP > 0 { v = m.hp / m.maxHP * 100.0 }
+        case .distance:
+            let p: (Double, Double) = logicPos(t)
+            let dx: Double = p.0 - pb.x
+            let dy: Double = p.1 - (pb.y - pb.h * 0.5)
+            v = sqrt(dx * dx + dy * dy)
+        case .timeOfDay: v = timeOfDay
+        case .isNight: v = isNight ? 1 : 0
+        case .itemCount: v = e.item.map { Double(inv.total($0)) } ?? 0
+        case .playerX: v = pb.x
+        case .playerY: v = pb.y
+        case .selfX: v = logicPos(t).0
+        case .selfY: v = logicPos(t).1
+        case .nearby:
+            let p: (Double, Double) = logicPos(t)
+            let r: Double = clampD(e.v, 1, 30)
+            var n: Int = 0
+            for m in mobsNear(p.0 - r, p.0 + r) where m.hp > 0 && !m.removed && m !== t.mob {
+                if abs(m.b.cy - p.1) <= r { n += 1 }
+            }
+            v = Double(n)
+        case .inDim:
+            if e.s == "overworld" { v = world.dim == .overworld ? 1 : 0 }
+            else if e.s == "umbral" { v = world.dim == .umbral ? 1 : 0 }
+            else { v = customDim?.key == e.s ? 1 : 0 }
+        case .inBiome: v = biomeAt(pb.x).rawValue == Int(e.v.rounded()) ? 1 : 0
+        case .raining: v = wxHere.precip > 0.2 ? 1 : 0
+        }
+        return v.isFinite ? v : 0
+    }
+
+    // MARK: commands
+
+    func logicExec(_ t: LThread, _ n: LNode) {
+        let sp: LSpec = LSpec.of(n.op)
+        if sp.creature && t.mob == nil {
+            logic.note(joinText(t.prog.name, ": \u{201C}", sp.title, "\u{201D} needs a creature; skipped."))
+            return
+        }
+        func arg(_ i: Int) -> Double { return i < n.args.count ? logicEval(t, n.args[i], 0) : 0 }
+        let pos: (Double, Double) = logicPos(t)
+        let sb: Bool = ModRuntime.shared.packs.first { $0.id == t.prog.modID }?.sandbox ?? false
+        let maxDmg: Double = sb ? 200 : 50
+        switch n.op {
+        case .broadcast:
+            if !n.s.isEmpty { fireLogic(.custom, text: n.s) }
+        case .log:
+            let val: String = n.args.isEmpty ? "" : joinText(" = ", String(format: "%.2f", arg(0)))
+            logic.note(joinText(t.prog.name, ": ", String(n.s.prefix(60)), val))
+        case .setVar:
+            if !n.s.isEmpty { logicVars[logicVarKey(t, n.s)] = clampD(arg(0), -1e9, 1e9) }
+        case .changeVar:
+            if !n.s.isEmpty {
+                let k: String = logicVarKey(t, n.s)
+                logicVars[k] = clampD((logicVars[k] ?? 0) + arg(0), -1e9, 1e9)
+            }
+        case .say:
+            say(String(n.s.prefix(80)), clampD(n.a, 0.5, 10))
+        case .floatText:
+            let col: UInt32 = LReporters.colours[clampI(Int(n.a), 0, LReporters.colours.count - 1)]
+            floatText(String(n.s.prefix(24)), pos.0, pos.1 - 1.0, col)
+        case .particles:
+            let col: UInt32 = LReporters.colours[clampI(Int(n.a), 0, LReporters.colours.count - 1)]
+            spawnParticles(pos.0, pos.1, col, clampI(Int(n.b), 1, 40), 4.0, 0.6, 2)
+        case .sound:
+            let i: Int = clampI(Int(n.a), 0, LReporters.sounds.count - 1)
+            sfx(LReporters.sounds[i], at: pos.0, 0.8)
+        case .shake:
+            addShake(clampD(n.a, 0, 1))
+        case .flash:
+            if let m = t.mob { m.flash = clampD(n.a, 0.05, 2) }
+        case .jump:
+            // on the ground, flying, or standing still (one that has just appeared has not landed yet)
+            if let m = t.mob, m.b.onGround || m.def.flying || abs(m.b.vy) < 0.5 { m.b.vy = -clampD(n.a, 2, 24) }
+        case .dash:
+            if let m = t.mob { m.b.vx = Double(m.dir) * clampD(n.a, 1, 30) }
+        case .stepToPlayer:
+            if let m = t.mob {
+                m.dir = pb.x >= m.b.x ? 1 : -1
+                m.b.vx = Double(m.dir) * clampD(n.a, 1, 20)
+            }
+        case .teleportNear:
+            if let m = t.mob {
+                let d: Double = clampD(n.a, 2, 12)
+                let side: Double = m.b.x >= pb.x ? 1.0 : -1.0
+                for k in 0..<2 {
+                    let x: Double = pb.x + (k == 0 ? side : -side) * d
+                    if let y = roomNear(x, pb.y, m.b.w, m.b.h) {
+                        spawnParticles(m.b.x, m.b.cy, 0xC070FF, 10, 3.0, 0.5, 0)
+                        m.b.x = x
+                        m.b.y = y
+                        m.b.vx = 0
+                        m.b.vy = 0
+                        m.dir = pb.x >= x ? 1 : -1
+                        spawnParticles(x, y - m.b.h * 0.5, 0xC070FF, 10, 3.0, 0.5, 0)
+                        break
+                    }
+                }
+            }
+        case .facePlayer:
+            if let m = t.mob { m.dir = pb.x >= m.b.x ? 1 : -1 }
+        case .hurtPlayer:
+            let d: Double = clampD(arg(0), 0, maxDmg)
+            if d > 0 {
+                var info = DamageInfo(amount: d, type: .magic, source: t.mob.map { DamageSource.mob($0, faction(of: $0)) } ?? .environment)
+                info.originX = pos.0
+                info.originY = pos.1
+                info.key = newID()
+                _ = hurtPlayer(info)
+            }
+        case .healPlayer:
+            let h: Double = clampD(arg(0), 0, maxDmg)
+            if h > 0 && !dead { heal(h) }
+        case .hurtSelf:
+            if let m = t.mob {
+                let d: Double = clampD(arg(0), 0, maxDmg * 4)
+                if d > 0 { hurtMob(m, d, 0, 0, false) }
+            }
+        case .healSelf:
+            if let m = t.mob, m.hp > 0 { m.hp = min(m.maxHP, m.hp + clampD(arg(0), 0, maxDmg * 4)) }
+        case .hurtNearby:
+            let r: Double = clampD(n.a, 1, 8)
+            let d: Double = clampD(arg(0), 0, maxDmg)
+            if d > 0 {
+                var info = DamageInfo(amount: d, type: .magic, source: .player)
+                info.key = newID()
+                info.originX = pos.0
+                info.originY = pos.1
+                for m in mobsNear(pos.0 - r, pos.0 + r) where m.hp > 0 && !m.removed && !m.tame && m !== t.mob {
+                    if abs(m.b.cy - pos.1) <= r + m.b.h * 0.5 { applyMobDamage(m, info) }
+                }
+            }
+        case .explode:
+            let src: DamageSource = t.mob.map { DamageSource.mob($0, faction(of: $0)) } ?? .environment
+            explode(pos.0, pos.1, radius: clampD(n.a, 1, 4), power: clampD(n.b, 1, 20), source: src, breakBlocks: false)
+        case .fireShot:
+            logicShot(t, n, pos)
+        case .summon:
+            let rt: ModRuntime = ModRuntime.shared
+            let count: Int = clampI(Int(n.a), 1, 4)
+            for k in 0..<count {
+                let x: Double = pos.0 + (k % 2 == 0 ? 1.0 : -1.0) * (1.5 + Double(k / 2) * 1.2)
+                if let slot = rt.mobSlot[n.s], let r = rt.mob(slot) {
+                    if let y = roomNear(x, pos.1 + 1.0, r.mdef.w, r.mdef.h) { addCustomMob(slot, x, y) }
+                } else if let kind = MobKind.allCases.first(where: { $0 != .custom && $0 != .villager && mobDef($0).name == n.s }) {
+                    if let y = roomNear(x, pos.1 + 1.0, mobDef(kind).w, mobDef(kind).h) { _ = addMob(kind, x, y) }
+                } else {
+                    logic.note(joinText(t.prog.name, ": the creature to call is missing; skipped."))
+                    break
+                }
+            }
+        case .giveEffect:
+            guard let kind = ModEffectKind(rawValue: clampI(Int(n.a), 0, ModEffectKind.allCases.count - 1)) else { return }
+            let amt: Double = kind.amountRange.clamp(n.b, sb)
+            applyEffects([ModEffect(kind, amt, ModRange.seconds.clamp(n.c, sb))])
+        case .placeBlock:
+            guard let tile = ModGround.resolve(n.s, ModRuntime.shared), tile != .air else {
+                logic.note(joinText(t.prog.name, ": the block to place is missing; skipped."))
+                return
+            }
+            let x: Int = Int(floor(pos.0)) + clampI(Int(n.a), -8, 8)
+            let y: Int = Int(floor(pos.1)) - clampI(Int(n.b), -8, 8)
+            let cur: Tile = world.tile(x, y)
+            if !(cur == .air || cur.liquid || cur.isPlant) { return }
+            if tile.solid && pb.right > Double(x) + 0.02 && pb.left < Double(x + 1) - 0.02 && pb.y > Double(y) + 0.02 && pb.top < Double(y + 1) - 0.02 { return }
+            world.set(x, y, tile)
+        case .breakBlock:
+            let x: Int = Int(floor(pos.0)) + clampI(Int(n.a), -8, 8)
+            let y: Int = Int(floor(pos.1)) - clampI(Int(n.b), -8, 8)
+            let cur: Tile = world.tile(x, y)
+            if cur == .air || cur.liquid || cur == .bedrock || cur.hardness >= 99 || cur == .chest || cur.isPower { return }
+            if cur == .portalFrame || cur == .portalOff || cur == .portalOn { return }
+            breakTile(x, y, false)
+        case .setTime:
+            timeOfDay = clampD(n.a, 0, 0.999)
+            light.valid = false
+        case .giveItem:
+            if let it = n.item { giveItem(it, clampI(Int(n.a), 1, 64)) }
+        case .takeItem:
+            if let it = n.item {
+                let k: Int = min(inv.total(it), clampI(Int(n.a), 1, 64))
+                if k > 0 { _ = inv.remove(it, k) }
+                bumpHUD()
+            }
+        case .enterPhase:
+            if let m = t.mob, let r = ModRuntime.shared.mob(m.cslot) {
+                let k: Int = clampI(Int(n.a), 1, max(1, r.def.phases.count)) - 1
+                if k < r.def.phases.count && k + 1 > m.mphase { enterPhase(m, r, k, quiet: false) }
+            }
+        case .ifThen, .ifElse, .repeatN, .whileDo, .forever, .wait, .stop, .runGroup:
+            break
+        }
+    }
+
+    /// A scripted shot at the player: a mod's own shot, or one of the game's
+    func logicShot(_ t: LThread, _ n: LNode, _ pos: (Double, Double)) {
+        var live: Int = 0
+        for p in projectiles where p.mod >= 0 || p.owner >= 0 { live += 1 }
+        if live >= ModLimits.maxShotsLive { return }
+        let speed: Double = clampD(n.a, 4, 30)
+        var dx: Double = pb.x - pos.0
+        var dy: Double = (pb.y - pb.h * 0.5) - pos.1
+        let len: Double = max(0.001, sqrt(dx * dx + dy * dy))
+        dx /= len
+        dy /= len
+        var kind: ProjKind = .fireball
+        let gk: Int = clampI(Int(n.b), 0, ModGameShots.kinds.count - 1)
+        if let k = ProjKind(rawValue: ModGameShots.kinds[gk]) { kind = k }
+        var p = Projectile(kind: kind, x: pos.0 + dx * 0.8, y: pos.1 + dy * 0.8, vx: dx * speed, vy: dy * speed, dmg: clampD(n.c, 0, 30), fromPlayer: false, gravity: 0)
+        p.life = 4.0
+        p.uid = newID()
+        if let m = t.mob {
+            p.owner = m.id
+            p.source = .mob(m, faction(of: m))
+        } else {
+            p.source = .environment
+        }
+        if !n.s.isEmpty, let si = ModRuntime.shared.shotIndex[n.s], si < ModRuntime.shared.shots.count {
+            let s: ModProjectile = ModRuntime.shared.shots[si]
+            p.kind = .spit
+            p.mod = si
+            p.gravity = s.gravity
+            p.life = s.life
+            p.w = s.size
+            p.pierce = s.pierce
+        }
+        projectiles.append(p)
+    }
+
+    // MARK: the Mod Test debugger
+
+    func logicPauseToggle() {
+        logic.paused.toggle()
+        logic.note(logic.paused ? "Paused: scripts wait for STEP." : "Running again.")
+    }
+
+    func logicStepOnce() {
+        logic.stepOnce = true
+        runLogic(0)
+    }
+}
+
+extension ModValidator {
+    /// Logic Studio scripts: their number, their blocks' numbers and names, and blocks that can't work
+    /// where they are (a creature's command in a world script) reported in plain words
+    static func checkScripts(_ p: inout ModPack, _ mn: String, _ sb: Bool, _ known: [String: String], _ r: inout ModReport) {
+        if p.scripts.count > LLimits.maxScripts {
+            r.add(1, mn, "Logic Studio", joinText("Only ", String(LLimits.maxScripts), " scripts fit in one mod; the rest were left out."))
+            p.scripts = Array(p.scripts.prefix(LLimits.maxScripts))
+        }
+        p.variables = Array(Set(p.variables.map { String($0.prefix(20)).trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty })).sorted()
+        if p.variables.count > LLimits.maxVariables { p.variables = Array(p.variables.prefix(LLimits.maxVariables)) }
+        var used: Set<String> = Set(p.blocks.map { $0.id } + p.items.map { $0.id } + p.mobs.map { $0.id } + p.infusions.map { $0.id } + p.dims.map { $0.id })
+        let groups: Set<String> = Set(p.scripts.filter { $0.event == .group }.map { p.key($0.id) })
+        let vars: Set<String> = Set(p.variables)
+        let ownMobs: Set<String> = Set(p.mobs.map { p.key($0.id) })
+        let ownItems: Set<String> = Set(p.items.map { p.key($0.id) } + p.infusions.map { p.key($0.id) })
+        let ownBlocks: Set<String> = Set(p.blocks.map { p.key($0.id) })
+        let ownShots: Set<String> = Set(p.projectiles.map { p.key($0.id) })
+        let gameNames: Set<String> = Set(MobKind.allCases.filter { $0 != .custom && $0 != .villager }.map { mobDef($0).name })
+        for i in p.scripts.indices {
+            var s: ModScript = p.scripts[i]
+            if s.id.isEmpty || used.contains(s.id) { s.id = joinText("sc", String(i + 1), "x", String(used.count)) }
+            used.insert(s.id)
+            if s.name.trimmingCharacters(in: .whitespaces).isEmpty { s.name = "Script" }
+            s.name = String(s.name.prefix(32))
+            let place: String = joinText("Script \u{201C}", s.name, "\u{201D}")
+            s.ev = clampD(s.ev.isFinite ? s.ev : 5, s.event == .phase ? 1 : 0.25, s.event == .phase ? 6 : 600)
+            s.evText = String(s.evText.prefix(32))
+            s.params = Array(s.params.prefix(3).map { String($0.prefix(16)) })
+            // what it belongs to must be this mod's own
+            switch s.event.subject {
+            case 1:
+                if !ownMobs.contains(s.target) {
+                    r.add(1, mn, place, "It belongs to a creature that does not exist; it is switched off.")
+                    s.enabled = false
+                }
+            case 2:
+                if !ownItems.contains(s.target) {
+                    r.add(1, mn, place, "It belongs to an item that does not exist; it is switched off.")
+                    s.enabled = false
+                }
+            case 3:
+                if !ownBlocks.contains(s.target) {
+                    r.add(1, mn, place, "It belongs to a block that does not exist; it is switched off.")
+                    s.enabled = false
+                }
+            default:
+                s.target = ""
+            }
+            var count: Int = 0
+            var notes: Set<String> = []
+            let creature: Bool = s.event.subject == 1 || s.event == .group
+            func fixExpr(_ e: inout LExpr, _ depth: Int) {
+                if depth > 6 {
+                    e = LExpr(0)
+                    notes.insert("Values were put inside one another too deeply; the deepest became 0.")
+                    return
+                }
+                if !e.v.isFinite { e.v = 0 }
+                e.s = String(e.s.prefix(40))
+                let ar: Int = LReporters.arity(e.op)
+                if e.args.count > ar { e.args = Array(e.args.prefix(ar)) }
+                while e.args.count < ar { e.args.append(LExpr(0)) }
+                switch e.op {
+                case .variable:
+                    if !vars.contains(e.s) {
+                        notes.insert("A variable it reads does not exist; it reads 0.")
+                        e = LExpr(0)
+                    }
+                case .param: e.v = clampD(e.v.rounded(), 1, 3)
+                case .itemCount:
+                    if let it = e.item, case .custom(let k) = it, !ownItems.contains(k) && known[k] != "item" { e.item = nil }
+                case .nearby: e.v = clampD(e.v, 1, 30)
+                default: break
+                }
+                if LReporters.needsCreature(e.op) && !creature { notes.insert("It reads a creature's health, but it isn't a creature's script; that reads 0.") }
+                for k in e.args.indices { fixExpr(&e.args[k], depth + 1) }
+            }
+            func fixList(_ list: inout [LNode], _ depth: Int) {
+                var keep: [LNode] = []
+                for var n in list {
+                    count += 1
+                    if count > LLimits.maxBlocks {
+                        notes.insert(joinText("Only ", String(LLimits.maxBlocks), " blocks fit in one script; the rest were left out."))
+                        break
+                    }
+                    if depth > 12 {
+                        notes.insert("Blocks were put inside one another too deeply; the deepest were left out.")
+                        continue
+                    }
+                    let sp: LSpec = LSpec.of(n.op)
+                    for f in sp.fields where f.kind == .number || f.kind == .choice {
+                        let hi: Double = f.kind == .choice ? Double(choiceCount(f.list) - 1) : f.hi
+                        if f.slot == 0 { n.a = clampD(n.a.isFinite ? n.a : f.def, f.lo, hi) }
+                        if f.slot == 1 { n.b = clampD(n.b.isFinite ? n.b : f.def, f.lo, hi) }
+                        if f.slot == 2 { n.c = clampD(n.c.isFinite ? n.c : f.def, f.lo, hi) }
+                    }
+                    n.s = String(n.s.prefix(80))
+                    for k in n.args.indices { fixExpr(&n.args[k], 0) }
+                    if sp.creature && !creature { notes.insert(joinText("\u{201C}", sp.title, "\u{201D} needs a creature; in this script it does nothing.")) }
+                    switch n.op {
+                    case .setVar, .changeVar:
+                        if !vars.contains(n.s) {
+                            notes.insert("It sets a variable that does not exist; that block does nothing.")
+                            n.s = ""
+                        }
+                    case .runGroup:
+                        if !groups.contains(n.s) {
+                            notes.insert("It runs a group that does not exist; that block does nothing.")
+                            n.s = ""
+                        }
+                    case .summon:
+                        if !gameNames.contains(n.s) && !ownMobs.contains(n.s) && known[n.s] != "mob" {
+                            notes.insert("It calls a creature that does not exist; that block does nothing.")
+                            n.s = ""
+                        }
+                    case .placeBlock:
+                        var ok: Bool = ownBlocks.contains(n.s) || known[n.s] == "block"
+                        if n.s.hasPrefix("tile:"), let v = Int(n.s.dropFirst(5)), v > 0 && v <= 255, let t = Tile(rawValue: UInt8(v)), !t.isMod, t != .bedrock, t != .portalOn, t != .portalOff, t != .portalFrame { ok = true }
+                        if !ok {
+                            notes.insert("It places a block that does not exist; that block does nothing.")
+                            n.s = ""
+                        }
+                    case .fireShot:
+                        if !n.s.isEmpty && !ownShots.contains(n.s) && known[n.s] != "shot" { n.s = "" }
+                    case .giveItem, .takeItem:
+                        if let it = n.item, case .custom(let k) = it, !ownItems.contains(k) && known[k] != "item" {
+                            notes.insert("It gives or takes an item that does not exist; that block does nothing.")
+                            n.item = nil
+                        }
+                    case .broadcast:
+                        n.s = String(n.s.prefix(32))
+                    default: break
+                    }
+                    if sp.inside == 0 {
+                        n.body = []
+                        n.alt = []
+                    } else {
+                        fixList(&n.body, depth + 1)
+                        if sp.inside == 2 { fixList(&n.alt, depth + 1) } else { n.alt = [] }
+                    }
+                    if n.op == .forever || n.op == .whileDo {
+                        if !LValidate.waits(n.body) { notes.insert("A loop that goes on has no \u{201C}wait\u{201D} inside: the game stops it after 10 seconds.") }
+                    }
+                    keep.append(n)
+                }
+                list = keep
+            }
+            fixList(&s.blocks, 0)
+            for n in notes.sorted() { r.add(1, mn, place, n) }
+            p.scripts[i] = s
+        }
+    }
+
+    static func choiceCount(_ list: Int) -> Int {
+        switch list {
+        case 0: return LReporters.sounds.count
+        case 1: return ModEffectKind.allCases.count
+        default: return ModGameShots.kinds.count
+        }
+    }
+}
+
+enum LValidate {
+    /// whether a list of blocks waits somewhere (so a loop around it gives the game room)
+    static func waits(_ l: [LNode]) -> Bool {
+        for n in l {
+            if n.op == .wait || n.op == .runGroup { return true }
+            if waits(n.body) || waits(n.alt) { return true }
+        }
+        return false
+    }
+}
+
+/// The content keys inside scripts: renamed with their mod, and counted as dependencies
+enum LKeys {
+    static func rekey(_ s0: ModScript, _ fixKey: (String) -> String, _ fixItem: (Item) -> Item) -> ModScript {
+        var s: ModScript = s0
+        s.target = fixKey(s.target)
+        if s.event == .enterDim { s.evText = fixKey(s.evText) }
+        func fixE(_ e: inout LExpr) {
+            if let it = e.item { e.item = fixItem(it) }
+            if e.op == .inDim && e.s != "overworld" && e.s != "umbral" { e.s = fixKey(e.s) }
+            for k in e.args.indices { fixE(&e.args[k]) }
+        }
+        func fixL(_ l: inout [LNode]) {
+            for i in l.indices {
+                switch l[i].op {
+                case .summon, .placeBlock, .fireShot, .runGroup: l[i].s = fixKey(l[i].s)
+                default: break
+                }
+                if let it = l[i].item { l[i].item = fixItem(it) }
+                for k in l[i].args.indices { fixE(&l[i].args[k]) }
+                fixL(&l[i].body)
+                fixL(&l[i].alt)
+            }
+        }
+        fixL(&s.blocks)
+        return s
+    }
+
+    static func uses(_ s: ModScript, _ add: (String) -> Void, _ addItem: (Item?) -> Void) {
+        func useE(_ e: LExpr) {
+            addItem(e.item)
+            if e.op == .inDim && e.s.contains(":") { add(e.s) }
+            for a in e.args { useE(a) }
+        }
+        func useL(_ l: [LNode]) {
+            for n in l {
+                switch n.op {
+                case .summon, .placeBlock, .fireShot, .runGroup:
+                    if n.s.contains(":") && !n.s.hasPrefix("tile:") { add(n.s) }
+                default: break
+                }
+                addItem(n.item)
+                for a in n.args { useE(a) }
+                useL(n.body)
+                useL(n.alt)
+            }
+        }
+        useL(s.blocks)
+    }
+}
+
+/// A mod block's key from its tile in this world ("mod:id"; the open or lit half of a pair counts as it)
+func modBlockKey(_ t: Tile) -> String? {
+    if !t.isMod { return nil }
+    let i: Int = Int(t.rawValue) - Int(Tile.modBase)
+    let keys: [String?] = ModRuntime.shared.slotKey
+    if i < 0 || i >= keys.count { return nil }
+    guard let k = keys[i] else { return nil }
+    if k.hasSuffix("#alt") { return String(k.dropLast(4)) }
+    return k
+}
+
+extension Game {
+    /// A tap on one of the mods' blocks that a script listens for (the tap goes to the script)
+    func tryLogicTap() -> Bool {
+        let tx: Int = Int(floor(aimX))
+        let ty: Int = Int(floor(aimY))
+        let t: Tile = world.tile(tx, ty)
+        guard t.isMod, let k = modBlockKey(t), inReach(Double(tx) + 0.5, Double(ty) + 0.5) else { return false }
+        if !logicRT.listeners(.blockTapped).contains(where: { $0.def.target == k }) { return false }
+        fireLogic(.blockTapped, x: tx, y: ty, block: true, key: k)
+        return true
     }
 }
 
@@ -43379,9 +44661,11 @@ struct ModPackagesScreen: View {
 // MARK: - Mod Creator: editing a mod
 
 enum ModTab: Int, CaseIterable {
-    case info, blocks, items, mobs, shots, recipes, loot, ores, structures, infusions, dims, game, reference, check
+    case info, blocks, items, mobs, shots, recipes, loot, ores, structures, infusions, dims, logic, game, reference, check
     var name: String {
         switch self {
+        case .logic: return "LOGIC STUDIO"
+
         case .dims: return "DIMENSIONS"
 
         case .infusions: return "INFUSIONS"
@@ -43417,6 +44701,7 @@ enum ModEditTarget: Equatable {
     case override(String)
     case infusion(String)
     case dimension(String)
+    case script(String)
 }
 
 struct ModEditorView: View {
@@ -43512,6 +44797,7 @@ struct ModEditorView: View {
         case .override(let id): OverrideEditorView(s: session, id: id)
         case .infusion(let id): InfusionEditorView(s: session, id: id, openRecipe: { rid in target = .recipe(rid) })
         case .dimension(let id): DimensionEditorView(s: session, id: id)
+        case .script(let id): ScriptEditorView(s: session, id: id)
         }
     }
 
@@ -43531,6 +44817,7 @@ struct ModEditorView: View {
         case .reference: HardnessReferenceView(s: session)
         case .infusions: InfusionListView(s: session, open: { id in target = .infusion(id) })
         case .dims: DimensionListView(s: session, open: { id in target = .dimension(id) })
+        case .logic: LogicStudioView(s: session, open: { id in target = .script(id) })
         case .check: ModIssueList(report: session.report)
         }
     }
@@ -45492,7 +46779,7 @@ struct ModTestPanel: View {
             }
             Text("A test world: nothing here is saved.").font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            ChoiceRow(options: ["CREATURES", "ITEMS", "RECIPES", "WORLD", "PROBLEMS"], selected: $tab, columns: 5)
+            ChoiceRow(options: ["CREATURES", "ITEMS", "RECIPES", "WORLD", "PROBLEMS", "LOGIC"], selected: $tab, columns: 6)
             ScrollView {
                 VStack(spacing: 10) {
                     if tab == 0 { creatures }
@@ -45500,6 +46787,7 @@ struct ModTestPanel: View {
                     if tab == 2 { recipes }
                     if tab == 3 { worldTools }
                     if tab == 4 { problems }
+                    if tab == 5 { LogicDebugView(game: game, hud: hud) }
                 }
             }
             .frame(maxHeight: 420)
@@ -49481,6 +50769,762 @@ struct SkySwatch: View {
             Rectangle().fill(Color(hex: top))
             Rectangle().fill(Color(hex: mixRGB(top, bottom, 0.5)))
             Rectangle().fill(Color(hex: bottom))
+        }
+    }
+}
+
+// MARK: - Mod Creator+: Logic Studio (screens)
+
+/// Finding, changing and moving blocks inside a script. A path is a block's place: its index at the top
+/// level, then for each block it sits in, which part (0 inside, 1 else) and its index there.
+enum LPath {
+    static func get(_ list: [LNode], _ path: [Int]) -> LNode? {
+        guard let i = path.first, i >= 0, i < list.count else { return nil }
+        if path.count == 1 { return list[i] }
+        let rest: [Int] = Array(path.dropFirst(2))
+        return path[1] == 0 ? get(list[i].body, rest) : get(list[i].alt, rest)
+    }
+
+    static func update(_ list: inout [LNode], _ path: [Int], _ f: (inout LNode) -> Void) {
+        guard let i = path.first, i >= 0, i < list.count else { return }
+        if path.count == 1 {
+            f(&list[i])
+            return
+        }
+        if path.count < 3 { return }
+        let rest: [Int] = Array(path.dropFirst(2))
+        if path[1] == 0 { update(&list[i].body, rest, f) } else { update(&list[i].alt, rest, f) }
+    }
+
+    /// the list a block sits in, changed by f
+    static func updateList(_ list: inout [LNode], _ parent: [Int], _ f: (inout [LNode]) -> Void) {
+        if parent.isEmpty {
+            f(&list)
+            return
+        }
+        let container: [Int] = Array(parent.dropLast())
+        let br: Int = parent.last ?? 0
+        update(&list, container) { n in
+            if br == 0 { f(&n.body) } else { f(&n.alt) }
+        }
+    }
+
+    static func remove(_ list: inout [LNode], _ path: [Int]) {
+        guard let i = path.last else { return }
+        updateList(&list, Array(path.dropLast())) { l in if i >= 0 && i < l.count { l.remove(at: i) } }
+    }
+
+    static func move(_ list: inout [LNode], _ path: [Int], _ d: Int) {
+        guard let i = path.last else { return }
+        updateList(&list, Array(path.dropLast())) { l in
+            let j: Int = i + d
+            if i >= 0 && i < l.count && j >= 0 && j < l.count { l.swapAt(i, j) }
+        }
+    }
+
+    /// `into` is a block's path and a part (0 inside, 1 else); nil adds to the end of the script
+    static func insert(_ list: inout [LNode], _ into: [Int]?, _ node: LNode) {
+        guard let p = into, p.count >= 2 else {
+            list.append(node)
+            return
+        }
+        updateList(&list, p) { l in l.append(node) }
+    }
+
+    static func exprUpdate(_ e: inout LExpr, _ path: [Int], _ f: (inout LExpr) -> Void) {
+        if path.isEmpty {
+            f(&e)
+            return
+        }
+        let i: Int = path[0]
+        if i < 0 || i >= e.args.count { return }
+        exprUpdate(&e.args[i], Array(path.dropFirst()), f)
+    }
+}
+
+/// The LOGIC STUDIO tab: the mod's variables and scripts (optional: everything else works without it)
+struct LogicStudioView: View {
+    @ObservedObject var s: ModSession
+    var open: (String) -> Void
+    @State var newVar: String = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Optional. Every part of the Mod Creator works without scripts. Scripts are stacks of blocks run by the game's own safe interpreter: they can only use the blocks shown here, loops that go on must wait, and nothing outside the game can be reached.")
+                .font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+            ModSection(title: "VARIABLES", help: "Numbers your scripts keep, one set per world (saved with it).") {
+                ForEach(s.mod.variables, id: \.self) { v in
+                    HStack {
+                        Text(verbatim: v).font(.pixel(13, .bold)).foregroundColor(Color.white)
+                        Spacer(minLength: 0)
+                        SmallButton(title: "DELETE", color: ModUI.red) {
+                            s.mod.variables.removeAll { $0 == v }
+                            s.touch()
+                        }
+                    }
+                }
+                if s.mod.variables.count < LLimits.maxVariables {
+                    HStack(spacing: 8) {
+                        ModTextField(label: "New variable", text: $newVar, placeholder: "score")
+                        SmallButton(title: "+ ADD", color: ModUI.accent) {
+                            let n: String = String(newVar.trimmingCharacters(in: .whitespaces).prefix(20))
+                            if !n.isEmpty && !s.mod.variables.contains(n) {
+                                s.mod.variables.append(n)
+                                s.touch()
+                            }
+                            newVar = ""
+                        }
+                    }
+                }
+            }
+            HStack(spacing: 8) {
+                if s.mod.scripts.count < LLimits.maxScripts {
+                    PixelButton(title: "+ NEW SCRIPT", color: ModUI.accent) { add(.worldStart) }
+                    PixelButton(title: "+ NEW GROUP", color: Color(hex: 0x8A6A2A)) { add(.group) }
+                }
+            }
+            ForEach(s.mod.scripts) { sc in
+                Button(action: { open(sc.id) }) {
+                    HStack(spacing: 10) {
+                        Rectangle().fill(Color(hex: sc.event == .group ? 0xC08A3A : 0xE8C040)).frame(width: 10, height: 44)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(verbatim: sc.name).font(.pixel(14)).foregroundColor(sc.enabled ? Color.white : ModUI.dim)
+                            Text(verbatim: joinText(sc.event.name, " \u{00B7} ", String(LogicStudioView.count(sc.blocks)), " blocks", sc.enabled ? "" : " \u{00B7} off"))
+                                .font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(PixelBox(color: ModUI.card))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    static func count(_ l: [LNode]) -> Int {
+        var n: Int = 0
+        for b in l { n += 1 + count(b.body) + count(b.alt) }
+        return n
+    }
+
+    func add(_ e: LEvent) {
+        var sc = ModScript()
+        sc.id = s.mod.freshID("sc")
+        sc.event = e
+        sc.name = e == .group ? joinText("Group ", String(s.mod.scripts.count + 1)) : joinText("Script ", String(s.mod.scripts.count + 1))
+        if e == .worldStart {
+            var hi = LNode(.say)
+            hi.s = "My mod is on!"
+            sc.blocks = [hi]
+        }
+        s.mod.scripts.append(sc)
+        s.touch()
+        open(sc.id)
+    }
+}
+
+/// Editing one script, Scratch-style: what starts it (the hat), then its blocks. Tap a block in the
+/// palette to add it at the end, or inside the block chosen with IN.
+struct ScriptEditorView: View {
+    @ObservedObject var s: ModSession
+    let id: String
+    @State var cat: Int = 0
+    /// where new blocks go: a block's path and part, or nil for the end of the script
+    @State var into: [Int]? = nil
+    @State var exprPick: ([Int], Int, [Int])? = nil
+    @State var itemPick: [Int]? = nil
+    @State var exprItemPick: ([Int], Int, [Int])? = nil
+    @State var blockPick: [Int]? = nil
+
+    var script: ModScript { return s.mod.scripts.first { $0.id == id } ?? ModScript() }
+    func b<T>(_ kp: WritableKeyPath<ModScript, T>, _ d: T) -> Binding<T> { return s.bind(\ModPack.scripts, id, kp, d) }
+
+    var body: some View {
+        ZStack {
+            VStack(alignment: .leading, spacing: 10) {
+                hat
+                palette
+                Text(verbatim: into == nil ? "New blocks go at the end of the script." : joinText("New blocks go inside \u{201C}", intoTitle, "\u{201D}."))
+                    .font(.pixel(11, .bold)).foregroundColor(ModUI.gold)
+                if into != nil { SmallButton(title: "ADD AT THE END INSTEAD", color: ModUI.blue) { into = nil } }
+                blockList(script.blocks, [])
+                if script.blocks.isEmpty {
+                    Text("No blocks yet: tap one in the palette above.").font(.pixel(12)).foregroundColor(ModUI.dim)
+                }
+                issues
+            }
+            if let ep = exprPick {
+                ReporterPicker(s: s, pick: { e in
+                    setExpr(ep.0, ep.1, ep.2) { $0 = e }
+                    exprPick = nil
+                }, cancel: { exprPick = nil })
+            }
+            if let ip = itemPick {
+                ItemPickerView(catalog: s.catalog, title: "CHOOSE AN ITEM", pick: { it in
+                    edit(ip) { $0.item = it }
+                    itemPick = nil
+                }, cancel: { itemPick = nil })
+            }
+            if let ep = exprItemPick {
+                ItemPickerView(catalog: s.catalog, title: "CHOOSE AN ITEM", pick: { it in
+                    setExpr(ep.0, ep.1, ep.2) { $0.item = it }
+                    exprItemPick = nil
+                }, cancel: { exprItemPick = nil })
+            }
+            if let bp = blockPick {
+                ItemPickerView(catalog: s.catalog, title: "CHOOSE A BLOCK", blocksOnly: true, pick: { it in
+                    let k: String = SummonRuleEditor.key(it)
+                    edit(bp) { $0.s = k }
+                    blockPick = nil
+                }, cancel: { blockPick = nil })
+            }
+        }
+    }
+
+    var intoTitle: String {
+        guard let p = into, p.count >= 2, let n = LPath.get(script.blocks, Array(p.dropLast())) else { return "the script" }
+        return LSpec.of(n.op).title + (p.last == 1 ? " (else)" : "")
+    }
+
+    // MARK: the hat block
+
+    var hat: some View {
+        let sc: ModScript = script
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                ModTextField(label: "Name", text: b(\.name, ""), placeholder: "Boss rage")
+                ModToggle(label: "On", isOn: b(\.enabled, true))
+            }
+            if sc.event == .group {
+                Text("A GROUP: other scripts run it with \u{201C}run a group\u{201D}, giving it up to three inputs (read them with \u{201C}group input\u{201D}).")
+                    .font(.pixel(11, .semibold)).foregroundColor(Color.black)
+                ForEach(0..<3, id: \.self) { k in
+                    ModTextField(label: joinText("Input ", String(k + 1)), text: paramBind(k), placeholder: k == 0 ? "damage" : "")
+                }
+            } else {
+                Text("WHEN").font(.pixel(12, .bold)).foregroundColor(Color.black)
+                ChoiceRow(options: LEvent.allCases.filter { $0 != .group }.map { $0.name }, selected: eventBind, columns: 2)
+                eventDetail(sc)
+            }
+        }
+        .padding(10)
+        .background(Color(hex: sc.event == .group ? 0xC08A3A : 0xE8C040))
+        .cornerRadius(10)
+    }
+
+    var eventBind: Binding<Int> {
+        let base: Binding<LEvent> = b(\.event, .worldStart)
+        let list: [LEvent] = LEvent.allCases.filter { $0 != .group }
+        return Binding<Int>(get: { list.firstIndex(of: base.wrappedValue) ?? 0 }, set: { base.wrappedValue = list[clampI($0, 0, list.count - 1)] })
+    }
+
+    func paramBind(_ k: Int) -> Binding<String> {
+        let base: Binding<[String]> = b(\.params, [])
+        return Binding<String>(get: { k < base.wrappedValue.count ? base.wrappedValue[k] : "" }, set: { v in
+            var l: [String] = base.wrappedValue
+            while l.count <= k { l.append("") }
+            l[k] = String(v.prefix(16))
+            base.wrappedValue = l
+        })
+    }
+
+    @ViewBuilder
+    func eventDetail(_ sc: ModScript) -> some View {
+        switch sc.event {
+        case .every, .creatureEvery:
+            StatSlider(label: "Seconds between", value: b(\.ev, 5), range: 0.25...120, step: 0.25, format: "%.2f", unit: " s")
+        case .phase:
+            StatSlider(label: "Phase", value: b(\.ev, 1), range: 1...6, step: 1, format: "%.0f")
+        case .custom:
+            ModTextField(label: "Message name", text: b(\.evText, ""), placeholder: "open the gate")
+        case .enterDim:
+            ChoiceRow(options: ["Any dimension"] + s.mod.dims.map { $0.name }, selected: dimEventBind, columns: 3)
+        default: EmptyView()
+        }
+        switch sc.event.subject {
+        case 1: targetRow("Which creature", s.mod.mobs.map { ($0.name, s.mod.key($0.id)) })
+        case 2: targetRow("Which item", s.mod.items.map { ($0.name, s.mod.key($0.id)) })
+        case 3: targetRow("Which block", s.mod.blocks.map { ($0.name, s.mod.key($0.id)) })
+        default: EmptyView()
+        }
+    }
+
+    var dimEventBind: Binding<Int> {
+        let base: Binding<String> = b(\.evText, "")
+        let keys: [String] = [""] + s.mod.dims.map { s.mod.key($0.id) }
+        return Binding<Int>(get: { keys.firstIndex(of: base.wrappedValue) ?? 0 }, set: { base.wrappedValue = keys[clampI($0, 0, keys.count - 1)] })
+    }
+
+    func targetRow(_ label: String, _ opts: [(String, String)]) -> some View {
+        let base: Binding<String> = b(\.target, "")
+        let keys: [String] = opts.map { $0.1 }
+        let sel: Binding<Int> = Binding<Int>(get: { keys.firstIndex(of: base.wrappedValue) ?? -1 }, set: { v in if !keys.isEmpty { base.wrappedValue = keys[clampI(v, 0, keys.count - 1)] } })
+        return VStack(alignment: .leading, spacing: 4) {
+            Text(verbatim: label).font(.pixel(11, .bold)).foregroundColor(Color.black)
+            if opts.isEmpty {
+                Text("Make one in this mod first.").font(.pixel(11, .semibold)).foregroundColor(Color(hex: 0x7A1A1A))
+            } else {
+                ChoiceRow(options: opts.map { $0.0 }, selected: sel, columns: 3)
+            }
+        }
+    }
+
+    // MARK: the palette
+
+    var palette: some View {
+        let cats: [LCat] = LCat.allCases
+        let c: LCat = cats[clampI(cat, 0, cats.count - 1)]
+        let specs: [LSpec] = LSpec.all.filter { $0.cat == c }
+        let cols: [GridItem] = [GridItem(.adaptive(minimum: 150), spacing: 6)]
+        return VStack(alignment: .leading, spacing: 6) {
+            ChoiceRow(options: cats.map { $0.name }, selected: $cat, columns: 4)
+            LazyVGrid(columns: cols, spacing: 6) {
+                ForEach(0..<specs.count, id: \.self) { k in
+                    Button(action: { addBlock(specs[k].op) }) {
+                        Text(verbatim: specs[k].title).font(.pixel(11, .bold)).foregroundColor(Color.white)
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: .infinity, minHeight: 44)
+                            .background(Color(hex: c.color))
+                            .cornerRadius(8)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .padding(8)
+        .background(PixelBox(color: ModUI.card))
+    }
+
+    func addBlock(_ op: LOp) {
+        var list: [LNode] = script.blocks
+        if LogicStudioView.count(list) >= LLimits.maxBlocks { return }
+        LPath.insert(&list, into, LNode(op))
+        b(\.blocks, []).wrappedValue = list
+    }
+
+    // MARK: the script
+
+    func blockList(_ list: [LNode], _ base: [Int]) -> AnyView {
+        return AnyView(VStack(alignment: .leading, spacing: 4) {
+            ForEach(0..<list.count, id: \.self) { i in
+                self.blockRow(list[i], base + [i])
+            }
+        })
+    }
+
+    func blockRow(_ n: LNode, _ path: [Int]) -> AnyView {
+        let sp: LSpec = LSpec.of(n.op)
+        let col: Color = Color(hex: sp.cat.color)
+        return AnyView(VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text(verbatim: sp.title).font(.pixel(13, .bold)).foregroundColor(Color.white)
+                Spacer(minLength: 0)
+                if sp.inside >= 1 {
+                    SmallButton(title: isInto(path, 0) ? "IN \u{2713}" : "IN", color: Color.black.opacity(0.35)) { into = path + [0] }
+                }
+                if sp.inside == 2 {
+                    SmallButton(title: isInto(path, 1) ? "ELSE \u{2713}" : "ELSE", color: Color.black.opacity(0.35)) { into = path + [1] }
+                }
+                SmallButton(title: "\u{2191}", color: Color.black.opacity(0.35)) { mutate { LPath.move(&$0, path, -1) } }
+                SmallButton(title: "\u{2193}", color: Color.black.opacity(0.35)) { mutate { LPath.move(&$0, path, 1) } }
+                SmallButton(title: "\u{2715}", color: ModUI.red) {
+                    if let p = into, p.starts(with: path) { into = nil }
+                    mutate { LPath.remove(&$0, path) }
+                }
+            }
+            self.fields(n, path, sp)
+            if sp.inside >= 1 {
+                HStack(alignment: .top, spacing: 6) {
+                    Rectangle().fill(col).frame(width: 8)
+                    VStack(alignment: .leading, spacing: 4) {
+                        self.blockList(n.body, path + [0])
+                        if n.body.isEmpty { Text("(empty: choose IN, then add blocks)").font(.pixel(10, .semibold)).foregroundColor(Color.white.opacity(0.8)) }
+                    }
+                }
+            }
+            if sp.inside == 2 {
+                Text("else").font(.pixel(12, .bold)).foregroundColor(Color.white)
+                HStack(alignment: .top, spacing: 6) {
+                    Rectangle().fill(col).frame(width: 8)
+                    VStack(alignment: .leading, spacing: 4) {
+                        self.blockList(n.alt, path + [1])
+                        if n.alt.isEmpty { Text("(empty: choose ELSE, then add blocks)").font(.pixel(10, .semibold)).foregroundColor(Color.white.opacity(0.8)) }
+                    }
+                }
+            }
+        }
+        .padding(8)
+        .background(col.opacity(0.92))
+        .cornerRadius(8))
+    }
+
+    func isInto(_ path: [Int], _ part: Int) -> Bool { return into == path + [part] }
+
+    func mutate(_ f: (inout [LNode]) -> Void) {
+        var list: [LNode] = script.blocks
+        f(&list)
+        b(\.blocks, []).wrappedValue = list
+    }
+
+    func edit(_ path: [Int], _ f: (inout LNode) -> Void) {
+        mutate { LPath.update(&$0, path, f) }
+    }
+
+    func setExpr(_ path: [Int], _ arg: Int, _ sub: [Int], _ f: (inout LExpr) -> Void) {
+        edit(path) { n in
+            while n.args.count <= arg { n.args.append(LExpr(0)) }
+            LPath.exprUpdate(&n.args[arg], sub, f)
+        }
+    }
+
+    // MARK: a block's inputs
+
+    func fields(_ n: LNode, _ path: [Int], _ sp: LSpec) -> AnyView {
+        return AnyView(VStack(alignment: .leading, spacing: 4) {
+            ForEach(0..<sp.fields.count, id: \.self) { k in
+                self.field(n, path, sp.fields[k])
+            }
+        })
+    }
+
+    func field(_ n: LNode, _ path: [Int], _ f: LField) -> AnyView {
+        switch f.kind {
+        case .number:
+            return AnyView(LNumBox(label: f.label, value: numBind(path, f.slot), lo: f.lo, hi: f.hi))
+        case .text:
+            return AnyView(ModTextField(label: f.label, text: strBind(path), placeholder: ""))
+        case .choice:
+            let names: [String] = ScriptEditorView.choiceNames(f.list)
+            let sel: Binding<Int> = Binding<Int>(get: { Int(self.num(path, f.slot)) }, set: { v in self.edit(path) { n in
+                if f.slot == 0 { n.a = Double(v) } else if f.slot == 1 { n.b = Double(v) } else { n.c = Double(v) }
+            } })
+            return AnyView(VStack(alignment: .leading, spacing: 2) {
+                Text(verbatim: f.label).font(.pixel(10, .bold)).foregroundColor(Color.white.opacity(0.85))
+                ChoiceRow(options: names, selected: sel, columns: 4)
+            })
+        case .item:
+            return AnyView(HStack(spacing: 8) {
+                Text(verbatim: joinText(f.label, ": ", n.item.map { ModPreview.name($0, s.catalog) } ?? "none")).font(.pixel(11, .bold)).foregroundColor(Color.white)
+                SmallButton(title: "CHOOSE", color: Color.black.opacity(0.35)) { itemPick = path }
+            })
+        case .key:
+            return keyField(n, path, f)
+        case .expr:
+            let e: LExpr = f.slot < n.args.count ? n.args[f.slot] : LExpr(0)
+            return AnyView(HStack(spacing: 6) {
+                Text(verbatim: f.label).font(.pixel(10, .bold)).foregroundColor(Color.white.opacity(0.85))
+                self.exprView(e, path, f.slot, [])
+            })
+        }
+    }
+
+    func num(_ path: [Int], _ slot: Int) -> Double {
+        guard let n = LPath.get(script.blocks, path) else { return 0 }
+        return slot == 0 ? n.a : (slot == 1 ? n.b : n.c)
+    }
+
+    func numBind(_ path: [Int], _ slot: Int) -> Binding<Double> {
+        return Binding<Double>(get: { self.num(path, slot) }, set: { v in self.edit(path) { n in
+            if slot == 0 { n.a = v } else if slot == 1 { n.b = v } else { n.c = v }
+        } })
+    }
+
+    func strBind(_ path: [Int]) -> Binding<String> {
+        return Binding<String>(get: { LPath.get(self.script.blocks, path)?.s ?? "" }, set: { v in self.edit(path) { $0.s = String(v.prefix(80)) } })
+    }
+
+    static func choiceNames(_ list: Int) -> [String] {
+        switch list {
+        case 0: return LReporters.soundNames
+        case 1: return ModEffectKind.allCases.map { $0.name }
+        default: return ModGameShots.names
+        }
+    }
+
+    func keyField(_ n: LNode, _ path: [Int], _ f: LField) -> AnyView {
+        var names: [String] = []
+        var keys: [String] = []
+        switch f.list {
+        case 0:
+            for m in s.mod.mobs { names.append(m.name); keys.append(s.mod.key(m.id)) }
+            for k in BossPhasesPage.gameHelpers + [MobKind.pig, .cow, .wolf] { names.append(mobDef(k).name); keys.append(mobDef(k).name) }
+        case 1:
+            return AnyView(HStack(spacing: 8) {
+                Text(verbatim: joinText(f.label, ": ", n.s.isEmpty ? "none" : ModGround.name(n.s, s.mod))).font(.pixel(11, .bold)).foregroundColor(Color.white)
+                SmallButton(title: "CHOOSE", color: Color.black.opacity(0.35)) { blockPick = path }
+            })
+        case 2:
+            names.append("Game shot")
+            keys.append("")
+            for p in s.mod.projectiles { names.append(p.name); keys.append(s.mod.key(p.id)) }
+        case 3:
+            return AnyView(ModTextField(label: f.label, text: strBind(path), placeholder: "open the gate"))
+        case 4:
+            for v in s.mod.variables { names.append(v); keys.append(v) }
+        case 5:
+            for g in s.mod.scripts where g.event == .group && g.id != id { names.append(g.name); keys.append(s.mod.key(g.id)) }
+        default:
+            for d in s.mod.dims { names.append(d.name); keys.append(s.mod.key(d.id)) }
+        }
+        if names.isEmpty {
+            let what: String = f.list == 4 ? "Add a variable in the Logic Studio list first." : (f.list == 5 ? "Make a group first (+ NEW GROUP)." : "Make one in this mod first.")
+            return AnyView(Text(verbatim: joinText(f.label, ": ", what)).font(.pixel(10, .semibold)).foregroundColor(Color.white))
+        }
+        let sel: Binding<Int> = Binding<Int>(get: { keys.firstIndex(of: LPath.get(self.script.blocks, path)?.s ?? "") ?? -1 }, set: { v in
+            self.edit(path) { $0.s = keys[clampI(v, 0, keys.count - 1)] }
+        })
+        return AnyView(VStack(alignment: .leading, spacing: 2) {
+            Text(verbatim: f.label).font(.pixel(10, .bold)).foregroundColor(Color.white.opacity(0.85))
+            ChoiceRow(options: names, selected: sel, columns: 4)
+        })
+    }
+
+    // MARK: values
+
+    /// A value as a chip: a number to type, or a reporter (tap its name to swap it for another) with
+    /// its own inputs inside
+    func exprView(_ e: LExpr, _ path: [Int], _ arg: Int, _ sub: [Int]) -> AnyView {
+        let tapName: () -> Void = { self.exprPick = (path, arg, sub) }
+        if e.op == .num {
+            let vb: Binding<Double> = Binding<Double>(get: { e.v }, set: { v in self.setExpr(path, arg, sub) { $0.v = v } })
+            return AnyView(HStack(spacing: 4) {
+                LNumBox(label: "", value: vb, lo: -100000, hi: 100000, compact: true)
+                SmallButton(title: "\u{25BE}", color: Color.black.opacity(0.35), action: tapName)
+            }
+            .padding(4)
+            .background(Color.white.opacity(0.25))
+            .cornerRadius(10))
+        }
+        return AnyView(HStack(spacing: 4) {
+            Button(action: tapName) {
+                Text(verbatim: LReporters.name(e.op)).font(.pixel(11, .bold)).foregroundColor(Color.black)
+                    .padding(.horizontal, 8)
+                    .frame(minHeight: 34)
+                    .background(Color(hex: 0x9AE070))
+                    .cornerRadius(10)
+            }
+            .buttonStyle(.plain)
+            self.exprDetail(e, path, arg, sub)
+            ForEach(0..<e.args.count, id: \.self) { k in
+                self.exprView(e.args[k], path, arg, sub + [k])
+            }
+        }
+        .padding(4)
+        .background(Color.black.opacity(0.2))
+        .cornerRadius(10))
+    }
+
+    /// The setting a reporter needs (which variable, input, item, distance, dimension or biome)
+    func exprDetail(_ e: LExpr, _ path: [Int], _ arg: Int, _ sub: [Int]) -> AnyView {
+        switch e.op {
+        case .variable:
+            let vars: [String] = s.mod.variables
+            if vars.isEmpty { return AnyView(Text("(no variables)").font(.pixel(10)).foregroundColor(Color.white)) }
+            let sel: Binding<Int> = Binding<Int>(get: { vars.firstIndex(of: e.s) ?? -1 }, set: { v in self.setExpr(path, arg, sub) { $0.s = vars[clampI(v, 0, vars.count - 1)] } })
+            return AnyView(ChoiceRow(options: vars, selected: sel, columns: min(4, vars.count)).frame(maxWidth: 360))
+        case .param:
+            let vb: Binding<Double> = Binding<Double>(get: { e.v }, set: { v in self.setExpr(path, arg, sub) { $0.v = v } })
+            return AnyView(LNumBox(label: "", value: vb, lo: 1, hi: 3, compact: true))
+        case .nearby:
+            let vb: Binding<Double> = Binding<Double>(get: { e.v }, set: { v in self.setExpr(path, arg, sub) { $0.v = v } })
+            return AnyView(HStack(spacing: 2) {
+                LNumBox(label: "", value: vb, lo: 1, hi: 30, compact: true)
+                Text("blocks").font(.pixel(10)).foregroundColor(Color.white)
+            })
+        case .itemCount:
+            return AnyView(SmallButton(title: e.item.map { ModPreview.name($0, s.catalog) } ?? "CHOOSE ITEM", color: Color.black.opacity(0.35)) { self.exprItemPick = (path, arg, sub) })
+        case .inDim:
+            let keys: [String] = ["overworld", "umbral"] + s.mod.dims.map { s.mod.key($0.id) }
+            let names: [String] = ["Overworld", "Umbral Realm"] + s.mod.dims.map { $0.name }
+            let sel: Binding<Int> = Binding<Int>(get: { keys.firstIndex(of: e.s) ?? -1 }, set: { v in self.setExpr(path, arg, sub) { $0.s = keys[clampI(v, 0, keys.count - 1)] } })
+            return AnyView(ChoiceRow(options: names, selected: sel, columns: 3).frame(maxWidth: 360))
+        case .inBiome:
+            let all: [Biome] = ModBiomePicker.all
+            let sel: Binding<Int> = Binding<Int>(get: { all.firstIndex { $0.rawValue == Int(e.v) } ?? -1 }, set: { v in self.setExpr(path, arg, sub) { $0.v = Double(all[clampI(v, 0, all.count - 1)].rawValue) } })
+            return AnyView(ChoiceRow(options: all.map { $0.name }, selected: sel, columns: 5).frame(maxWidth: 420))
+        default:
+            return AnyView(EmptyView())
+        }
+    }
+
+    /// What the checks found in this script
+    var issues: some View {
+        let place: String = joinText("Script \u{201C}", script.name, "\u{201D}")
+        let mine: [ModIssue] = s.report.issues.filter { $0.place == place }
+        return VStack(alignment: .leading, spacing: 4) {
+            if !mine.isEmpty {
+                Text("CHECKS").font(.pixel(12, .bold)).foregroundColor(ModUI.gold)
+                ForEach(mine) { i in
+                    Text(verbatim: joinText("\u{2022} ", i.text)).font(.pixel(11, .semibold)).foregroundColor(Color(hex: 0xFFB070))
+                }
+            }
+        }
+    }
+}
+
+/// A number with big minus and plus buttons (and typing)
+struct LNumBox: View {
+    let label: String
+    @Binding var value: Double
+    let lo: Double
+    let hi: Double
+    var compact: Bool = false
+
+    var step: Double { return hi - lo <= 2.01 ? 0.05 : (hi - lo <= 20.01 ? 0.5 : 1) }
+
+    var text: Binding<String> {
+        return Binding<String>(get: {
+            let v: Double = value
+            return v == v.rounded() ? String(Int(v)) : String(format: "%.2f", v)
+        }, set: { t in
+            if let v = Double(t.trimmingCharacters(in: .whitespaces)) { value = clampD(v, lo, hi) }
+        })
+    }
+
+    var body: some View {
+        HStack(spacing: 4) {
+            if !label.isEmpty { Text(verbatim: label).font(.pixel(10, .bold)).foregroundColor(Color.white.opacity(0.85)) }
+            SmallButton(title: "\u{2212}", color: Color.black.opacity(0.35)) { value = clampD(value - step, lo, hi) }
+            TextField("0", text: text)
+                .font(.pixel(13, .bold))
+                .foregroundColor(Color.white)
+                .frame(width: compact ? 64 : 80)
+                .padding(4)
+                .background(Color.black.opacity(0.35))
+            SmallButton(title: "+", color: Color.black.opacity(0.35)) { value = clampD(value + step, lo, hi) }
+        }
+    }
+}
+
+/// Choosing a reporter for a value
+struct ReporterPicker: View {
+    @ObservedObject var s: ModSession
+    var pick: (LExpr) -> Void
+    var cancel: () -> Void
+
+    static let groups: [(String, [LEOp])] = [
+        ("NUMBERS", [.num, .random, .variable, .param]),
+        ("MATHS", [.add, .sub, .mul, .div, .mod]),
+        ("TESTS", [.lt, .gt, .eq, .and, .or, .not]),
+        ("THE PLAYER", [.playerHP, .playerMaxHP, .playerX, .playerY, .itemCount, .distance]),
+        ("MY CREATURE OR BLOCK", [.selfHP, .selfHPPct, .selfX, .selfY, .nearby]),
+        ("THE WORLD", [.timeOfDay, .isNight, .raining, .inDim, .inBiome]),
+    ]
+
+    var body: some View {
+        let cols: [GridItem] = [GridItem(.adaptive(minimum: 150), spacing: 6)]
+        return ZStack {
+            Color.black.opacity(0.7).ignoresSafeArea()
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("CHOOSE A VALUE").font(.pixel(18)).foregroundColor(ModUI.gold)
+                    Spacer()
+                    SmallButton(title: "CANCEL", color: ModUI.red) { cancel() }
+                }
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(0..<ReporterPicker.groups.count, id: \.self) { g in
+                            Text(verbatim: ReporterPicker.groups[g].0).font(.pixel(12, .bold)).foregroundColor(ModUI.dim)
+                            LazyVGrid(columns: cols, spacing: 6) {
+                                ForEach(0..<ReporterPicker.groups[g].1.count, id: \.self) { k in
+                                    Button(action: { pick(ReporterPicker.make(ReporterPicker.groups[g].1[k])) }) {
+                                        Text(verbatim: LReporters.name(ReporterPicker.groups[g].1[k])).font(.pixel(11, .bold)).foregroundColor(Color.black)
+                                            .frame(maxWidth: .infinity, minHeight: 44)
+                                            .background(Color(hex: 0x9AE070))
+                                            .cornerRadius(10)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(14)
+            .frame(maxWidth: 820, maxHeight: 640)
+            .background(PixelBox(color: ModUI.panel))
+            .padding(10)
+        }
+    }
+
+    static func make(_ op: LEOp) -> LExpr {
+        var e = LExpr(op: op)
+        for _ in 0..<LReporters.arity(op) { e.args.append(LExpr(0)) }
+        if op == .param { e.v = 1 }
+        if op == .nearby { e.v = 6 }
+        if op == .random {
+            e.args = [LExpr(1), LExpr(10)]
+        }
+        if op == .inDim { e.s = "overworld" }
+        if op == .inBiome { e.v = Double(Biome.plains.rawValue) }
+        return e
+    }
+}
+
+/// The Mod Test tools' LOGIC tab: what is running, the variables, the log, messages to send, and the
+/// step debugger (pause every script, then run them one step at a time)
+struct LogicDebugView: View {
+    @ObservedObject var game: Game
+    @ObservedObject var hud: HUDSignal
+    @State var rev: Int = 0
+
+    var body: some View {
+        let vm: LogicVM = game.logic
+        let rt: LogicRT = ModRuntime.shared.logic
+        let msgs: [String] = Array(Set(rt.listeners(.custom).map { $0.def.evText })).sorted()
+        let vars: [(String, Double)] = game.logicVars.sorted { $0.key < $1.key }.map { ($0.key, $0.value) }
+        return VStack(alignment: .leading, spacing: 8) {
+            if rt.isEmpty {
+                Text("This world's mods have no scripts.").font(.pixel(12)).foregroundColor(ModUI.dim)
+            }
+            HStack(spacing: 8) {
+                SmallButton(title: vm.paused ? "RUN" : "PAUSE", color: vm.paused ? ModUI.accent : Color(hex: 0x8A6A2A)) {
+                    game.logicPauseToggle()
+                    rev += 1
+                }
+                if vm.paused {
+                    SmallButton(title: "STEP", color: ModUI.blue) {
+                        game.logicStepOnce()
+                        rev += 1
+                    }
+                }
+                SmallButton(title: "WORLD START AGAIN", color: ModUI.blue) {
+                    vm.started = false
+                    rev += 1
+                }
+                SmallButton(title: "REFRESH", color: Color(hex: 0x555555)) { rev += 1 }
+            }
+            Text(verbatim: joinText("Started ", String(vm.ran), " times \u{00B7} problems ", String(vm.errors), rev < 0 ? "" : ""))
+                .font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+            Text(verbatim: joinText("RUNNING (", String(vm.threads.count), ")")).font(.pixel(12, .bold)).foregroundColor(ModUI.gold)
+            ForEach(0..<vm.threads.count, id: \.self) { i in
+                let t: LThread = vm.threads[i]
+                Text(verbatim: joinText(t.whereText, t.waitT > 0 ? String(format: " \u{00B7} waiting %.1f s", t.waitT) : "", t.hasMob ? " \u{00B7} creature" : ""))
+                    .font(.pixel(11, .semibold)).foregroundColor(Color.white)
+            }
+            if !vars.isEmpty {
+                Text("VARIABLES").font(.pixel(12, .bold)).foregroundColor(ModUI.gold)
+                ForEach(0..<vars.count, id: \.self) { i in
+                    Text(verbatim: joinText(vars[i].0, " = ", String(format: "%.2f", vars[i].1))).font(.pixel(11, .semibold)).foregroundColor(Color.white)
+                }
+            }
+            if !msgs.isEmpty {
+                Text("SEND A MESSAGE").font(.pixel(12, .bold)).foregroundColor(ModUI.gold)
+                HStack(spacing: 6) {
+                    ForEach(msgs, id: \.self) { m in
+                        SmallButton(title: m.isEmpty ? "(unnamed)" : m, color: Color(hex: 0x8A6A2A)) {
+                            game.fireLogic(.custom, text: m)
+                            rev += 1
+                        }
+                    }
+                }
+            }
+            Text("LOG (newest first)").font(.pixel(12, .bold)).foregroundColor(ModUI.gold)
+            ForEach(0..<min(30, vm.log.count), id: \.self) { i in
+                Text(verbatim: vm.log[vm.log.count - 1 - i]).font(.pixel(10, .semibold)).foregroundColor(Color.white.opacity(0.85))
+            }
         }
     }
 }

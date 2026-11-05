@@ -729,6 +729,234 @@ do {
     check(oldMod.infusions.isEmpty, "a mod from before has no infusions and loads as it was")
 }
 
+// ---------------------------------------------------------------- stage 5
+func bossMod() -> ModPack {
+    var p = ModPack()
+    p.id = "bossy"
+    p.name = "Bosses"
+    var totem = ModItem(); totem.id = "totem"; totem.name = "Storm Totem"; totem.kind = .material
+    var altar = ModBlock(); altar.id = "altar"; altar.name = "Altar"; altar.art = painted(8, 8, 0xA040C0)
+    p.items = [totem]
+    p.blocks = [altar]
+    var imp = ModMob(); imp.id = "imp"; imp.name = "Imp"; imp.category = .hostile; imp.hp = 10; imp.spawn.enabled = false
+    var b = ModMob()
+    b.id = "king"; b.name = "Frost King"; b.category = .boss; b.hp = 400; b.damage = 10; b.speed = 2; b.scale = 1.2
+    b.behavior.chase = true; b.behavior.attackPlayer = true; b.behavior.wander = false
+    b.spawn.enabled = false
+    var hit = ModAttack(); hit.kind = .melee; hit.damage = 10; hit.cooldown = 1.0
+    var slam = ModAttack(); slam.kind = .stomp; slam.damage = 8; slam.cooldown = 3.0; slam.radius = 3
+    b.attacks = [hit, slam]
+    var p1 = ModPhase()
+    p1.name = "Angry"; p1.when = .health; p1.value = 0.6; p1.speedMul = 1.5; p1.damageMul = 2; p1.cooldownMul = 0.5; p1.attacks = [1]
+    p1.defense = 0.5; p1.heal = 0.1; p1.shield = 2; p1.helper = "bossy:imp"; p1.helpers = 2; p1.message = "The king is angry!"; p1.tint = 0xFF2020; p1.tintAmt = 0.5
+    var p2 = ModPhase(); p2.name = "Alone"; p2.when = .helpersGone; p2.speedMul = 1.8; p2.damageMul = 2
+    var p3 = ModPhase(); p3.name = "Last Stand"; p3.when = .time; p3.value = 20; p3.damageMul = 3
+    b.phases = [p1, p2, p3]
+    var s1 = ModSummon(); s1.how = .useItem; s1.item = .custom("bossy:totem"); s1.time = 2; s1.message = "The Frost King answers!"
+    var s2 = ModSummon(); s2.how = .buildPattern; s2.pattern = ModPattern(w: 3, h: 2)
+    s2.pattern.set(0, 0, "air"); s2.pattern.set(1, 0, "bossy:altar"); s2.pattern.set(2, 0, "air")
+    for x in 0..<3 { s2.pattern.set(x, 1, ModGround.key(.stone)) }
+    b.summons = [s1, s2]
+    p.mobs = [imp, b]
+    _ = ModValidator.check(&p, known: [:])
+    return p
+}
+
+print("== boss phases")
+do {
+    let pack: ModPack = bossMod()
+    check(pack.mobs[1].phases.count == 3 && pack.mobs[1].summons.count == 2 && pack.mobs[1].summons.allSatisfy { $0.enabled } && pack.mobs[1].phases[0].helper == "bossy:imp",
+          "a boss with three phases and two ways to summon passes its checks unchanged")
+    let g = arena([pack])
+    let slot: Int = ModRuntime.shared.mobSlot["bossy:king"]!
+    let r: ModMobRT = ModRuntime.shared.mob(slot)!
+    let king: Mob = g.addCustomMob(slot, g.pb.x + 6, 100)!
+    king.persistent = true
+    g.mobGrid.rebuild(g.mobs)
+    check(king.mphase == 0 && near(king.dmgMul, 1) && near(king.phaseSpeed, 1), "a fresh boss is in no phase yet")
+    g.stepPhases(king, r, 1.0 / 60.0)
+    check(king.mphase == 0, "at full health nothing happens")
+    king.hp = king.maxHP * 0.55
+    g.stepPhases(king, r, 1.0 / 60.0)
+    check(king.mphase == 1 && near(king.phaseSpeed, 1.5) && near(king.dmgMul, 2) && near(king.phaseCD, 0.5), "below 60% health it enters its first phase: faster and stronger")
+    check(near(king.hp, king.maxHP * 0.65, 0.5), "it heals a tenth of its health as the phase begins")
+    check(g.helpersAlive(king) == 2 && king.helpersCalled == 2, "and calls its two helpers to its side (\(g.helpersAlive(king)))")
+    check(g.message == "The king is angry!", "and says its message")
+    var info = DamageInfo(amount: 20, type: .melee, source: .player)
+    info.originX = g.pb.x
+    let hp0: Double = king.hp
+    check(!g.applyMobDamage(king, info) && near(king.hp, hp0), "while it changes, blows glance off")
+    king.phaseShield = 0
+    _ = g.applyMobDamage(king, info)
+    check(near(hp0 - king.hp, 10, 0.6), "afterwards it shrugs off half of every blow (20 -> \(hp0 - king.hp))")
+    check(!g.phaseAllows(king, r, 0) && g.phaseAllows(king, r, 1), "in this phase it only uses the attacks chosen for it")
+    king.modCD = [0, 0]
+    king.b.onGround = true
+    var picks: Set<Int> = []
+    for _ in 0..<20 { if let k = g.pickCustomAttack(king, r, king.b.x + 1.0, king.b.cy, nil) { picks.insert(k) } }
+    check(picks == [1], "so it picks only the stomp, though the swipe is in reach too (\(picks))")
+    g.startCustomAttack(king, r, 1, king.b.x + 1, king.b.cy, nil)
+    check(near(king.modCD[1], 1.5), "its attacks rest half as long (3 s -> \(king.modCD[1]) s)")
+    king.st = 0
+    g.refreshBossBar()
+    check(g.bossBarName == "Frost King \u{00B7} Angry", "the boss bar names the phase (\(g.bossBarName))")
+    _ = Art.shared.customMobSet(slot, 1)
+    check(Art.shared.modMobSets[1_000_000 + slot * 16 + 1] != nil, "it is drawn in the phase's colour")
+    // helpers beaten: the next phase
+    for h in g.mobs where h.helperOf == king.id { g.killMob(h, true) }
+    g.stepPhases(king, r, 1.0 / 60.0)
+    check(king.mphase == 2 && near(king.phaseSpeed, 1.8), "once its helpers are beaten it enters the next phase")
+    // the fight's clock
+    king.lastHitByPlayer = g.clock
+    king.fightT = 0
+    g.stepPhases(king, r, 1.0)
+    check(near(king.fightT, 1), "the fight's clock runs while it fights")
+    king.fightT = 21
+    g.stepPhases(king, r, 1.0 / 60.0)
+    check(king.mphase == 3 && near(king.dmgMul, 3), "after 20 seconds of fighting it makes its last stand (damage x3)")
+    // a live fight: it comes for the player and hits hard
+    king.phaseShield = 0
+    g.hp = 400
+    var n: Int = 0
+    while g.hp >= 400 && n < 900 { frame(g); n += 1 }
+    check(g.hp < 400, "in a live fight it reaches the player and hits (\(400 - g.hp) in \(n) frames)")
+    // saved mid-fight, a summoned boss comes back in its phase
+    king.summoned = true
+    let back: SaveData = try! JSONDecoder().decode(SaveData.self, from: try! JSONEncoder().encode(g.makeSave()))
+    check(back.bosses?.count == 1 && back.bosses?.first?.phase == 3, "a save keeps a summoned boss and its phase")
+    ModRuntime.activate([pack], world: back.mods)
+    let g2 = Game.load(back, settings: Settings())
+    let k2: Mob? = g2.mobs.first { $0.kind == .custom && $0.hp > 0 && ModRuntime.shared.mob($0.cslot)?.key == "bossy:king" }
+    check(k2 != nil && k2!.mphase == 3 && near(k2!.dmgMul, 3) && near(k2!.hp, back.bosses!.first!.hp) && k2!.summoned, "and it comes back where it was, in that phase")
+    var old: SaveData = back
+    old.bosses = nil
+    let g3 = Game.load(old, settings: Settings())
+    check(!g3.mobs.contains { $0.kind == .custom }, "a save without one loads as before")
+    ModRuntime.deactivate()
+}
+
+print("== summoning")
+do {
+    let pack: ModPack = bossMod()
+    let g = arena([pack])
+    let slot: Int = ModRuntime.shared.mobSlot["bossy:king"]!
+    func kings() -> [Mob] { return g.mobs.filter { $0.kind == .custom && $0.cslot == slot && $0.hp > 0 && !$0.removed } }
+    func tap(_ x: Double, _ y: Double) {
+        aimAt(g, x, y)
+        g.usePressedFlag = true
+        g.useHeld = true
+        g.placeCD = 0
+        g.useCD = 0
+        g.updateUse(1.0 / 60.0)
+        g.useHeld = false
+    }
+    check(ModRuntime.shared.summons.count == 2, "both ways to summon are ready in play")
+    hold(g, .custom("bossy:totem"), 2)
+    g.timeOfDay = 0.25
+    tap(g.pb.x + 2, 99.5)
+    check(kings().isEmpty && g.inv.total(.custom("bossy:totem")) == 2 && (g.message ?? "").contains("only answers at night"), "by day the totem does nothing, and says why (\(g.message ?? ""))")
+    g.timeOfDay = 0.75
+    tap(g.pb.x + 2, 99.5)
+    check(kings().count == 1 && g.inv.total(.custom("bossy:totem")) == 1 && g.message == "The Frost King answers!", "at night it calls the Frost King, and the totem is used up")
+    let k: Mob = kings()[0]
+    check(k.persistent && k.summoned && k.isBoss, "the summoned boss stays (it never wanders off)")
+    g.refreshBossBar()
+    check(g.activeBoss === k, "and its health bar shows")
+    tap(g.pb.x + 2, 99.5)
+    check(kings().count == 1 && g.inv.total(.custom("bossy:totem")) == 1 && (g.message ?? "").contains("already here"), "while it is about, a second can't be called")
+    // the player far away: it leaves
+    k.b.x = g.pb.x + 300
+    check(g.summonedLeaves(k, 5.0) && k.removed, "when the player goes far away, it leaves")
+    // building the shape
+    let bx: Int = Int(g.pb.x) + 2
+    let altar: Tile = ModRuntime.shared.tileForKey["bossy:altar"]!
+    for x in bx..<(bx + 3) { g.world.set(x, 99, .stone) }
+    hold(g, .block(altar), 1)
+    g.timeOfDay = 0.25
+    tap(Double(bx + 1) + 0.5, 98.5)
+    check(kings().count == 1 && g.world.tile(bx + 1, 98) == .air && g.world.tile(bx, 99) == .air, "placing the last block of the shape calls it, and the shape is used up")
+    kings()[0].removed = true
+    for x in bx..<(bx + 3) { g.world.set(x, 99, .dirt) }
+    hold(g, .block(altar), 1)
+    tap(Double(bx + 1) + 0.5, 98.5)
+    check(kings().isEmpty && g.world.tile(bx + 1, 98) == altar, "a shape of the wrong blocks calls nothing")
+    // the conditions, one at a time
+    let base: ModSummon = pack.mobs[1].summons[0]
+    func problem(_ f: (inout ModSummon) -> Void) -> String? {
+        var d: ModSummon = base
+        d.time = 0
+        f(&d)
+        return g.summonProblem(ModSummonRT(slot: slot, key: "bossy:king", def: d, cells: []), nil)
+    }
+    let here: Biome = g.biomeAt(g.pb.x)
+    let other: Biome = here == .desert ? .forest : .desert
+    check(problem { $0.biomes = [here.rawValue] } == nil && problem { $0.biomes = [other.rawValue] }?.contains(other.name) == true, "a biome condition holds only in that biome")
+    check(problem { $0.dims = [0] } == nil && problem { $0.dims = [1] } != nil, "a dimension condition holds only there")
+    check(problem { $0.place = 1 } == nil && problem { $0.place = 2 }?.contains("underground") == true, "open sky or underground")
+    g.settings.weatherOn = false
+    check(problem { $0.weather = 3 } == nil, "with the weather switched off, weather conditions are skipped")
+    g.settings.weatherOn = true
+    if g.weatherAt(g.pb.x, g.pb.y).thunder < 0.2 {
+        check(problem { $0.weather = 3 }?.contains("thunderstorm") == true, "otherwise a thunderstorm summoning waits for a storm")
+    }
+    check(problem { $0.time = 1; $0.biomes = [here.rawValue] } == nil && problem { $0.time = 1; $0.biomes = [other.rawValue] } != nil, "conditions combine: all of them must hold")
+    // an item used on the shape
+    var onShape: ModSummon = pack.mobs[1].summons[1]
+    onShape.how = .itemOnPattern
+    onShape.item = .custom("bossy:totem")
+    onShape.clearPattern = false
+    var cells: [(Int, Int, Tile?)] = [(0, 0, nil), (1, 0, altar), (2, 0, nil)]
+    for x in 0..<3 { cells.append((x, 1, .stone)) }
+    let rule = ModSummonRT(slot: slot, key: "bossy:king", def: onShape, cells: cells)
+    for x in bx..<(bx + 3) { g.world.set(x, 99, .stone) }
+    g.world.set(bx + 1, 98, altar)
+    check(rule.shapeAt(g.world, bx + 1, 98)! == (bx, 98) && rule.shapeAt(g.world, bx + 2, 99)! == (bx, 98), "a finished shape is found from any of its blocks")
+    g.world.set(bx + 2, 98, .dirt)
+    check(rule.shapeAt(g.world, bx + 1, 98) == nil, "a cell that must be empty has to be")
+    g.world.set(bx + 2, 98, .air)
+    ModRuntime.shared.summons = [rule]
+    hold(g, .custom("bossy:totem"), 1)
+    tap(Double(bx) + 0.5, 99.5)
+    check(kings().count == 1 && g.world.tile(bx + 1, 98) == altar && g.inv.total(.custom("bossy:totem")) == 0, "tapping the shape with the item calls it (this shape is kept)")
+    ModRuntime.deactivate()
+    // checks
+    var bad: ModPack = bossMod()
+    bad.mobs[1].phases[0].helper = "ghost:thing"
+    bad.mobs[1].phases[0].value = 7
+    bad.mobs[1].phases[0].damageMul = 99
+    bad.mobs[1].phases[0].attacks = [0, 5, -1]
+    bad.mobs[1].phases.append(contentsOf: [ModPhase](repeating: ModPhase(), count: 6))
+    bad.mobs[1].summons[0].item = .custom("ghost:item")
+    bad.mobs[1].summons[1].pattern.set(0, 1, "tile:999")
+    bad.mobs[1].summons[1].pattern.set(2, 1, "ghost:block")
+    bad.mobs[1].summons[1].time = 9
+    bad.mobs[1].summons.append(contentsOf: [ModSummon](repeating: ModSummon(), count: 3))
+    _ = ModValidator.check(&bad, known: [:])
+    let ph: ModPhase = bad.mobs[1].phases[0]
+    check(bad.mobs[1].phases.count == ModLimits.maxPhases && ph.helper.isEmpty && ph.helpers == 0 && near(ph.value, 0.95) && near(ph.damageMul, 3) && ph.attacks == [0],
+          "phases are kept in range, and a helper that doesn't exist is cleared")
+    let sm: [ModSummon] = bad.mobs[1].summons
+    check(sm.count == ModLimits.maxSummons && !sm[0].enabled && sm[0].item == nil, "a summoning item that doesn't exist switches that summoning off")
+    check(sm[1].enabled && sm[1].pattern.cell(0, 1).isEmpty && sm[1].pattern.cell(2, 1).isEmpty && sm[1].pattern.cell(1, 1) == ModGround.key(.stone) && sm[1].time == 2,
+          "blocks that don't exist leave their cells free; numbers are kept in range")
+    let rt2: ModMob = try! JSONDecoder().decode(ModMob.self, from: try! JSONEncoder().encode(pack.mobs[1]))
+    check(rt2 == pack.mobs[1], "phases and summonings survive a JSON round trip")
+    let oldMob: ModMob = try! JSONDecoder().decode(ModMob.self, from: "{\"id\":\"m\",\"name\":\"Old\"}".data(using: .utf8)!)
+    check(oldMob.phases.isEmpty && oldMob.summons.isEmpty, "a creature from before has neither")
+    // a copy of the mod under a new id keeps its own references
+    let moved: ModPack = ModStore.rekey(pack, from: "bossy", to: "boss2")
+    let mk: ModMob = moved.mobs[1]
+    check(mk.phases[0].helper == "boss2:imp" && mk.summons[0].item == .custom("boss2:totem") && mk.summons[1].pattern.cell(1, 0) == "boss2:altar" && mk.summons[1].pattern.cell(0, 1) == ModGround.key(.stone),
+          "a mod copied under a new id keeps its helpers, items and shapes pointing at its own content")
+    var dep = ModPack()
+    dep.id = "user"
+    var dm = ModMob(); dm.id = "d"; dm.name = "D"
+    var ds = ModSummon(); ds.item = .custom("bossy:totem")
+    dm.summons = [ds]
+    dep.mobs = [dm]
+    check(ModStore.dependencies(dep) == ["bossy"], "a summoning item from another mod makes that mod a dependency")
+}
+
 print(fails == 0 ? "ALL \(passes) MOD CREATOR+ CHECKS PASSED" : "\(fails) FAILED, \(passes) passed")
 try? FileManager.default.removeItem(at: scratch)
 exit(fails == 0 ? 0 : 1)

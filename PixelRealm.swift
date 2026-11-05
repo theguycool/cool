@@ -10616,6 +10616,20 @@ final class Mob {
     var mut: Int = 0
     var mutSize: Double = 1
     var mutDmg: Double = 1
+    /// custom creatures' fights (Mod Creator phases): the phase it is in (0: none yet) and its numbers
+    /// there, how long it can't be hurt, how long it has been fighting, how many helpers it has called,
+    /// the creature it helps (its id), whether a summoning called it, and how long the player has been gone
+    var mphase: Int = 0
+    var phaseSpeed: Double = 1
+    var phaseDmg: Double = 1
+    var phaseCD: Double = 1
+    var phaseDef: Double = 0
+    var phaseShield: Double = 0
+    var fightT: Double = 0
+    var helpersCalled: Int = 0
+    var helperOf: Int = -1
+    var summoned: Bool = false
+    var leaveT: Double = 0
     static let turnDur: Double = 0.14
     static let atkDur: Double = 0.28
 
@@ -13166,6 +13180,8 @@ extension Game {
             useBareHand(dt, pressed)
             return
         }
+        // a mod's summoning item (tried before the item's own use)
+        if pressed && !ModRuntime.shared.summons.isEmpty && trySummonWith(it) { return }
         switch it {
         case .block(let t): usePlaceBlock(t, dt)
         case .tool(let k, let tr): useToolItem(k, tr, dt, pressed)
@@ -13534,6 +13550,8 @@ extension Game {
         if powerDirectional(placed), let d = world.powerDev(tx, ty) { d.dir = facing >= 0 ? 0 : 2 }
         if !isCreative { inv.removeAt(sel, 1) }
         sfx(.place, 0.6)
+        // the last block of a summoning shape
+        if !ModRuntime.shared.summons.isEmpty { summonByBuilding(tx, ty) }
         placeCD = 0.11
         swingT = 0.14
         swingDir = aimFacing()
@@ -16446,7 +16464,14 @@ extension Game {
             if m.hitStamps.count > 24 { m.hitStamps = m.hitStamps.filter { clock - $0.value < 4.0 } }
         }
         var amount: Double = info.amount * damageResist(m.kind, info.type) * (info.source.kind == .mob ? info.source.mult : 1.0)
-        if m.kind == .custom, let r = ModRuntime.shared.mob(m.cslot) { amount *= r.resist(info.type) }
+        if m.kind == .custom, let r = ModRuntime.shared.mob(m.cslot) {
+            amount *= r.resist(info.type) * (1.0 - m.phaseDef)
+            // changing phase: blows glance off
+            if m.phaseShield > 0 {
+                if info.source.kind == .player { spawnParticles(m.b.x, m.b.cy, 0xE0E8FF, 3, 2.5, 0.25, 6) }
+                return false
+            }
+        }
         if info.heavy && m.kind == .golem { amount *= 1.9 }
         if info.source.kind == .player {
             amount *= dmgOutMult * (1.0 + effects.value(.strength) / 100.0)
@@ -16838,7 +16863,7 @@ extension Game {
         }
         activeBoss = best
         if let b = best {
-            bossBarName = b.def.name
+            bossBarName = bossTitle(b)
             bossBarFrac = clampD(b.hp / b.maxHP, 0, 1)
         }
         // companion housekeeping
@@ -18622,6 +18647,8 @@ struct SaveData: Codable {
     var mutants: [MutantSave]? = nil
     /// the exosuit (nil: never built)
     var suit: ExoSuit? = nil
+    /// summoned mod creatures still about (nil: none)
+    var bosses: [ModBossSave]? = nil
 }
 
 func mobToSave(_ m: Mob) -> MobSave {
@@ -18742,7 +18769,7 @@ extension Game {
         // the world's mods: those it was made with (a missing one stays listed, so it is never forgotten)
         var mi: ModWorldInfo? = modInfo
         if ModRuntime.shared.active { mi = ModRuntime.shared.worldInfo() }
-        return SaveData(meta: meta, settings: settings, px: px, py: py, hp: max(1, hp), maxHP: maxHP, hunger: hunger, timeOfDay: timeOfDay, kills: kills, spawnX: spawnX, spawnY: spawnY, inv: inv, sel: sel, defeated: Array(defeated), gotMap: gotMap, portalOpened: portalOpened, chests: chestList, chunks: cs, vehicles: vs, pets: pets, rex: rs, nextID: nextID, journal: journal, weather: weather, bodyCold: bodyCold, power: powerSave(), mods: mi, effects: effectsSave(), mutants: mutantSaves(), suit: suit.isEmpty ? nil : suit)
+        return SaveData(meta: meta, settings: settings, px: px, py: py, hp: max(1, hp), maxHP: maxHP, hunger: hunger, timeOfDay: timeOfDay, kills: kills, spawnX: spawnX, spawnY: spawnY, inv: inv, sel: sel, defeated: Array(defeated), gotMap: gotMap, portalOpened: portalOpened, chests: chestList, chunks: cs, vehicles: vs, pets: pets, rex: rs, nextID: nextID, journal: journal, weather: weather, bodyCold: bodyCold, power: powerSave(), mods: mi, effects: effectsSave(), mutants: mutantSaves(), suit: suit.isEmpty ? nil : suit, bosses: bossSaves())
     }
 
     @discardableResult
@@ -18871,6 +18898,7 @@ extension Game {
             }
         }
         if let ms = s.mutants { g.restoreMutants(ms) }
+        if let bs = s.bosses { g.restoreBosses(bs) }
         g.invuln = 2.0
         return g
     }
@@ -22609,6 +22637,9 @@ enum ModLimits {
     static let maxDrops: Int = 8
     static let maxLootEntries: Int = 16
     static let maxCost: Int = 6
+    /// phases and ways to summon one creature may have
+    static let maxPhases: Int = 6
+    static let maxSummons: Int = 3
 }
 
 /// The range a number may take: normal play and sandbox mode
@@ -23377,6 +23408,10 @@ struct ModMob: Codable, Identifiable, Equatable {
     /// a loot table of this mod, rolled as well as `drops`
     var loot: String = ""
     var glow: Int = 0
+    /// the stages of its fight, in order (see ModPhase)
+    var phases: [ModPhase] = []
+    /// ways a player can call it into the world (see ModSummon)
+    var summons: [ModSummon] = []
 
     init() {}
 
@@ -23410,6 +23445,8 @@ struct ModMob: Codable, Identifiable, Equatable {
         drops = c.list(.drops, &skip)
         loot = c.val(.loot, "")
         glow = c.val(.glow, 0)
+        phases = c.list(.phases, &skip)
+        summons = c.list(.summons, &skip)
     }
 }
 
@@ -24059,6 +24096,18 @@ enum ModStore {
         }
         for i in p.structures.indices { p.structures[i].palette = p.structures[i].palette.map { fixKey($0) } }
         for i in p.infusions.indices { p.infusions[i].items = p.infusions[i].items.map { fix($0) } }
+        func fixRef(_ k: String) -> String { return k.isEmpty || k == "air" || k.hasPrefix("tile:") ? k : fixKey(k) }
+        for i in p.mobs.indices {
+            for k in p.mobs[i].phases.indices { p.mobs[i].phases[k].helper = fixRef(p.mobs[i].phases[k].helper) }
+            for k in p.mobs[i].summons.indices {
+                if let it = p.mobs[i].summons[k].item { p.mobs[i].summons[k].item = fix(it) }
+                p.mobs[i].summons[k].pattern.cells = p.mobs[i].summons[k].pattern.cells.map { fixRef($0) }
+            }
+        }
+        for i in p.ores.indices {
+            p.ores[i].hosts = p.ores[i].hosts.map { fixRef($0) }
+            p.ores[i].near = fixRef(p.ores[i].near)
+        }
         return p
     }
 }
@@ -24639,6 +24688,8 @@ extension Game {
             m.removed = true
             return
         }
+        if m.summoned && summonedLeaves(m, dt) { return }
+        if !r.def.phases.isEmpty || m.phaseShield > 0 { stepPhases(m, r, dt) }
         let bh: ModBehavior = r.def.behavior
         if m.modCD.count != r.attacks.count { m.modCD = [Double](repeating: 0, count: r.attacks.count) }
         var i: Int = 0
@@ -24779,7 +24830,7 @@ extension Game {
             gy = m.homeY - 1.0
             spd = 0.8
         }
-        moveCustom(m, r, mode, gx, gy, spd, dt)
+        moveCustom(m, r, mode, gx, gy, spd * m.phaseSpeed, dt)
         // touching it hurts while it is after the player (its contact damage)
         if onPlayer && m.ai == .chase && r.def.damage > 0 { contactHurt(m, r.def.damage) }
         if hasTarget && m.cd <= 0 && m.daze <= 0, let k = pickCustomAttack(m, r, tgtX, tgtY, foe) {
@@ -24990,7 +25041,7 @@ extension Game {
         var i: Int = 0
         while i < r.attacks.count && i < m.modCD.count {
             let a: ModAttack = r.attacks[i].def
-            if m.modCD[i] > 0 {
+            if m.modCD[i] > 0 || !phaseAllows(m, r, i) {
                 i += 1
                 continue
             }
@@ -25029,7 +25080,7 @@ extension Game {
         let a: ModAttack = r.attacks[i].def
         m.atk = i
         m.lastAtk = i
-        m.modCD[i] = max(0.2, a.cooldown)
+        m.modCD[i] = max(0.2, a.cooldown * m.phaseCD)
         m.st = 3
         m.t3 = max(0, a.windup)
         m.atkX = tx
@@ -25657,6 +25708,8 @@ final class ModRuntime {
     /// custom infusions by their number on items, and the numbers by key
     var infusionDefs: [Int: ModInfusionRT] = [:]
     var infusionNumber: [String: Int] = [:]
+    /// every way to summon a custom creature, ready for play
+    var summons: [ModSummonRT] = []
 
     var active: Bool { return !packs.isEmpty || !missing.isEmpty }
     var hasWorldGen: Bool { return !ores.isEmpty || !structures.isEmpty }
@@ -25705,6 +25758,7 @@ final class ModRuntime {
         rt.buildInfusions(world)
         rt.buildLoot()
         rt.buildMobs()
+        rt.buildSummons()
         rt.buildRecipes()
         rt.buildOres()
         rt.buildStructures()
@@ -27015,7 +27069,7 @@ let mendingRest: [Double] = [10, 14]
 
 extension Mob {
     /// how hard its blows land: doubled by each mutation, softened while it is weakened
-    var dmgMul: Double { return mutDmg * (weakT > 0 ? 0.6 : 1.0) }
+    var dmgMul: Double { return mutDmg * (weakT > 0 ? 0.6 : 1.0) * phaseDmg }
     /// how fast it moves: bogged down by mire, frost and frost-infused weapons
     var speedMul: Double { return slowT > 0 ? max(0.2, 1.0 - slowAmt) : 1.0 }
     /// any potion effect showing on it (for drawing)
@@ -27913,7 +27967,7 @@ extension Art {
     /// A mutated creature's sprites: its own, with the colours turned a little further round the wheel
     /// for each dose (up to four steps). Built once per creature kind and step.
     func mutantSet(_ m: Mob) -> SpriteSet {
-        if m.kind == .custom { return customMobSet(m.cslot) }
+        if m.kind == .custom { return customMobSet(m.cslot, m.mphase) }
         var variant: Int = 0
         switch m.kind {
         case .zombie: variant = m.variant
@@ -30223,6 +30277,17 @@ extension ModStore {
         for l in p.loot { for e in l.entries { addItem(e.item) } }
         for s in p.structures { for k in s.palette where k.contains(":") { add(k) } }
         for f in p.infusions { for it in f.items { addItem(it) } }
+        for m in p.mobs {
+            for f in m.phases where f.helper.contains(":") { add(f.helper) }
+            for sm in m.summons {
+                addItem(sm.item)
+                for k in sm.pattern.cells where k.contains(":") && !k.hasPrefix("tile:") { add(k) }
+            }
+        }
+        for o in p.ores {
+            for k in o.hosts where k.contains(":") && !k.hasPrefix("tile:") { add(k) }
+            if o.near.contains(":") && !o.near.hasPrefix("tile:") { add(o.near) }
+        }
         return out
     }
 
@@ -30279,6 +30344,7 @@ extension ModValidator {
         _ = known
         checkOrePlus(&p, mn, &r)
         checkInfusions(&p, mn, sb, known, &r)
+        checkBosses(&p, mn, sb, known, &r)
     }
 }
 
@@ -31247,6 +31313,766 @@ extension ModValidator {
     }
 }
 
+// MARK: - Mod Creator+: boss phases and summoning
+
+/// What moves a creature on to its next phase
+enum ModPhaseWhen: Int, Codable, CaseIterable {
+    case health, time, helpersGone
+    var name: String {
+        switch self {
+        case .health: return "Health falls below"
+        case .time: return "After fighting for"
+        case .helpersGone: return "Its helpers are beaten"
+        }
+    }
+    var help: String {
+        switch self {
+        case .health: return "Begins when its health drops under this share of the most it has."
+        case .time: return "Begins once the fight has gone on this long."
+        case .helpersGone: return "Begins when every helper an earlier phase called is beaten."
+        }
+    }
+}
+
+/// One stage of a fight: when it begins, and how the creature changes for the rest of the fight.
+/// Phases follow one another in order; each lasts until the next begins.
+struct ModPhase: Codable, Equatable {
+    var name: String = "Phase"
+    var when: ModPhaseWhen = .health
+    /// a share of its health (health phases) or seconds (time phases)
+    var value: Double = 0.5
+    var speedMul: Double = 1.2
+    var damageMul: Double = 1.2
+    /// how long its attacks rest between uses, as a share of their own rest
+    var cooldownMul: Double = 0.8
+    /// a share of every hit it shrugs off (on top of its own toughness)
+    var defense: Double = 0
+    /// the attacks it may use in this phase (their numbers; empty: all of them)
+    var attacks: [Int] = []
+    var tint: UInt32 = 0xFF4030
+    var tintAmt: Double = 0.25
+    /// share of its health healed as the phase begins
+    var heal: Double = 0
+    /// seconds it can't be hurt while it changes
+    var shield: Double = 1.0
+    /// helpers it calls: a creature ("mod:id" or a game creature's name) and how many
+    var helper: String = ""
+    var helpers: Int = 0
+    var message: String = ""
+    var roar: Bool = true
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = c.val(.name, "Phase")
+        when = c.val(.when, .health)
+        value = c.val(.value, 0.5)
+        speedMul = c.val(.speedMul, 1.2)
+        damageMul = c.val(.damageMul, 1.2)
+        cooldownMul = c.val(.cooldownMul, 0.8)
+        defense = c.val(.defense, 0)
+        attacks = c.val(.attacks, [])
+        tint = c.val(.tint, 0xFF4030)
+        tintAmt = c.val(.tintAmt, 0.25)
+        heal = c.val(.heal, 0)
+        shield = c.val(.shield, 1.0)
+        helper = c.val(.helper, "")
+        helpers = c.val(.helpers, 0)
+        message = c.val(.message, "")
+        roar = c.val(.roar, true)
+    }
+
+    /// when it begins, in words
+    var whenText: String {
+        switch when {
+        case .health: return joinText("below ", String(Int((value * 100).rounded())), "% health")
+        case .time: return joinText("after ", String(Int(value.rounded())), " s of fighting")
+        case .helpersGone: return "when its helpers are beaten"
+        }
+    }
+}
+
+/// How a summoning is started
+enum ModSummonHow: Int, Codable, CaseIterable {
+    case useItem, itemOnPattern, buildPattern
+    var name: String {
+        switch self {
+        case .useItem: return "Use an item"
+        case .itemOnPattern: return "Use an item on a shape"
+        case .buildPattern: return "Finish building a shape"
+        }
+    }
+    var help: String {
+        switch self {
+        case .useItem: return "Tap with the item in hand, where the conditions are right."
+        case .itemOnPattern: return "Build the shape, then tap one of its blocks with the item in hand."
+        case .buildPattern: return "Placing the last block of the shape calls the creature."
+        }
+    }
+}
+
+/// A shape of blocks for a summoning, top row first. A cell is "" (anything), "air" (must be empty),
+/// or a block ("tile:<number>" for the game's own, "mod:id" for a mod's).
+struct ModPattern: Codable, Equatable {
+    static let maxSide: Int = 7
+    var w: Int = 3
+    var h: Int = 3
+    var cells: [String] = [String](repeating: "", count: 9)
+
+    init() {}
+    init(w: Int, h: Int) {
+        self.w = clampI(w, 1, ModPattern.maxSide)
+        self.h = clampI(h, 1, ModPattern.maxSide)
+        cells = [String](repeating: "", count: self.w * self.h)
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        w = c.val(.w, 3)
+        h = c.val(.h, 3)
+        cells = c.val(.cells, [])
+    }
+
+    func cell(_ x: Int, _ y: Int) -> String {
+        if x < 0 || y < 0 || x >= w || y >= h { return "" }
+        let i: Int = y * w + x
+        return i < cells.count ? cells[i] : ""
+    }
+
+    mutating func set(_ x: Int, _ y: Int, _ k: String) {
+        if x < 0 || y < 0 || x >= w || y >= h { return }
+        while cells.count < w * h { cells.append("") }
+        cells[y * w + x] = k
+    }
+
+    /// The same shape in a new size (what fits is kept, from the top left)
+    func resized(_ nw: Int, _ nh: Int) -> ModPattern {
+        var o = ModPattern(w: nw, h: nh)
+        for y in 0..<o.h { for x in 0..<o.w { o.set(x, y, cell(x, y)) } }
+        return o
+    }
+
+    /// cells that need a block
+    var blockCells: Int { return cells.filter { !$0.isEmpty && $0 != "air" }.count }
+}
+
+/// A way to call a creature into the world: what the player does, the item and shape it takes, and
+/// where and when it works. Every condition set must hold at once.
+struct ModSummon: Codable, Equatable {
+    var enabled: Bool = true
+    var how: ModSummonHow = .useItem
+    var item: Item? = nil
+    var consume: Bool = true
+    var pattern: ModPattern = ModPattern()
+    /// the shape's blocks are used up when the creature comes
+    var clearPattern: Bool = true
+    /// Biome numbers (empty: any)
+    var biomes: [Int] = []
+    /// Dimension numbers (empty: any)
+    var dims: [Int] = []
+    /// 0 any time, 1 by day, 2 at night
+    var time: Int = 0
+    /// 0 any, 1 clear, 2 rain or snow, 3 thunderstorm, 4 snowfall
+    var weather: Int = 0
+    /// 0 anywhere, 1 under the open sky, 2 underground
+    var place: Int = 0
+    /// 0 right there (on the shape, or beside the player), 1 a little way off
+    var appear: Int = 0
+    var message: String = ""
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = c.val(.enabled, true)
+        how = c.val(.how, .useItem)
+        item = c.val(.item, nil)
+        consume = c.val(.consume, true)
+        pattern = c.val(.pattern, ModPattern())
+        clearPattern = c.val(.clearPattern, true)
+        biomes = c.val(.biomes, [])
+        dims = c.val(.dims, [])
+        time = c.val(.time, 0)
+        weather = c.val(.weather, 0)
+        place = c.val(.place, 0)
+        appear = c.val(.appear, 0)
+        message = c.val(.message, "")
+    }
+
+    var usesItem: Bool { return how != .buildPattern }
+    var usesPattern: Bool { return how != .useItem }
+}
+
+/// Words for the summoning settings (the editor and the messages in play use the same ones)
+enum ModSummonText {
+    static let times: [String] = ["Any time", "By day", "At night"]
+    static let weathers: [String] = ["Any weather", "Clear skies", "Rain or snow", "Thunderstorm", "Snowfall"]
+    static let places: [String] = ["Anywhere", "Open sky", "Underground"]
+    static let appears: [String] = ["Right there", "A little way off"]
+    static let timeWords: [String] = ["", "by day", "at night"]
+    static let weatherWords: [String] = ["", "under clear skies", "in rain or snow", "in a thunderstorm", "while snow falls"]
+    static let placeWords: [String] = ["", "under the open sky", "underground"]
+
+    static func dimName(_ n: Int) -> String {
+        switch n {
+        case 0: return "the Overworld"
+        case 1: return "the Umbral Realm"
+        default: return "another dimension"
+        }
+    }
+
+    static func biomeName(_ n: Int) -> String { return Biome(rawValue: n)?.name ?? "?" }
+
+    /// "Hold Ember Totem and tap, at night, in Desert" (what the player needs to do)
+    static func describe(_ s: ModSummon, _ itemName: String) -> String {
+        var parts: [String] = []
+        switch s.how {
+        case .useItem: parts.append(joinText("Tap with ", itemName, " in hand"))
+        case .itemOnPattern: parts.append(joinText("Build the shape, then tap it with ", itemName))
+        case .buildPattern: parts.append("Finish building the shape")
+        }
+        if s.time > 0 && s.time < timeWords.count { parts.append(timeWords[s.time]) }
+        if s.weather > 0 && s.weather < weatherWords.count { parts.append(weatherWords[s.weather]) }
+        if s.place > 0 && s.place < placeWords.count { parts.append(placeWords[s.place]) }
+        if !s.biomes.isEmpty { parts.append(joinText("in ", s.biomes.map { biomeName($0) }.joined(separator: " or "))) }
+        if !s.dims.isEmpty { parts.append(joinText("in ", s.dims.map { dimName($0) }.joined(separator: " or "))) }
+        return parts.joined(separator: ", ")
+    }
+}
+
+/// A summoning ready for play: its creature, its item, and its shape as this world's blocks
+final class ModSummonRT {
+    let slot: Int
+    let key: String
+    let def: ModSummon
+    /// the shape's cells that matter: across and down from its top left, and the block (nil: empty)
+    let cells: [(Int, Int, Tile?)]
+
+    init(slot: Int, key: String, def: ModSummon, cells: [(Int, Int, Tile?)]) {
+        self.slot = slot
+        self.key = key
+        self.def = def
+        self.cells = cells
+    }
+
+    /// The top left of a finished shape that takes in the block at (x, y) (nil: there is none)
+    func shapeAt(_ w: World, _ x: Int, _ y: Int) -> (Int, Int)? {
+        let here: Tile = w.tile(x, y)
+        if here == .air { return nil }
+        for c in cells {
+            guard let t = c.2, t == here else { continue }
+            let ox: Int = x - c.0
+            let oy: Int = y - c.1
+            var ok: Bool = true
+            for d in cells {
+                let tt: Tile = w.tile(ox + d.0, oy + d.1)
+                if let need = d.2 {
+                    if tt != need { ok = false; break }
+                } else if tt != .air {
+                    ok = false
+                    break
+                }
+            }
+            if ok { return (ox, oy) }
+        }
+        return nil
+    }
+}
+
+extension ModRuntime {
+    /// Every summoning of every custom creature, with its shape turned into this world's blocks (one
+    /// whose item or blocks are missing is left out)
+    func buildSummons() {
+        summons = []
+        for (i, r) in mobs.enumerated() {
+            for s in r.def.summons where s.enabled {
+                var cells: [(Int, Int, Tile?)] = []
+                var bad: Bool = false
+                if s.usesPattern {
+                    for y in 0..<s.pattern.h {
+                        for x in 0..<s.pattern.w {
+                            let k: String = s.pattern.cell(x, y)
+                            if k.isEmpty { continue }
+                            if k == "air" {
+                                cells.append((x, y, nil))
+                                continue
+                            }
+                            guard let t = ModGround.resolve(k, self), t != .air else {
+                                bad = true
+                                continue
+                            }
+                            cells.append((x, y, t))
+                        }
+                    }
+                    if bad || !cells.contains(where: { $0.2 != nil }) { continue }
+                }
+                if s.usesItem && s.item == nil { continue }
+                summons.append(ModSummonRT(slot: i, key: r.key, def: s, cells: cells))
+            }
+        }
+    }
+}
+
+/// A summoned creature still about when the world was saved (it comes back where it was)
+struct ModBossSave: Codable {
+    var key: String
+    var x: Double
+    var y: Double
+    var hp: Double
+    var phase: Int
+    var fightT: Double
+}
+
+extension Game {
+    // MARK: phases
+
+    /// A custom creature's fight: the time it has been fighting, and the next phase when its moment
+    /// comes (one at a time, in order)
+    func stepPhases(_ m: Mob, _ r: ModMobRT, _ dt: Double) {
+        if m.phaseShield > 0 { m.phaseShield -= dt }
+        let ph: [ModPhase] = r.def.phases
+        if ph.isEmpty { return }
+        if m.ai == .chase || m.ai == .alert || m.st >= 3 || clock - m.lastHitByPlayer < 8.0 { m.fightT += dt }
+        if m.mphase >= ph.count { return }
+        let p: ModPhase = ph[m.mphase]
+        var go: Bool = false
+        switch p.when {
+        case .health: go = m.hp < m.maxHP * p.value
+        case .time: go = m.fightT >= p.value
+        case .helpersGone: go = m.helpersCalled > 0 && helpersAlive(m) == 0
+        }
+        if go { enterPhase(m, r, m.mphase, quiet: false) }
+    }
+
+    /// Starts phase k: its numbers from now on, and (unless quiet, as when a saved fight comes back) its
+    /// healing, shield, message, roar and helpers
+    func enterPhase(_ m: Mob, _ r: ModMobRT, _ k: Int, quiet: Bool) {
+        guard k >= 0 && k < r.def.phases.count else { return }
+        let p: ModPhase = r.def.phases[k]
+        m.mphase = k + 1
+        m.phaseSpeed = p.speedMul
+        m.phaseDmg = p.damageMul
+        m.phaseCD = p.cooldownMul
+        m.phaseDef = p.defense
+        if quiet { return }
+        if p.heal > 0 { m.hp = min(m.maxHP, m.hp + m.maxHP * p.heal) }
+        m.phaseShield = p.shield
+        if !p.message.isEmpty { say(p.message, 3.0) }
+        if p.roar {
+            sfx(.roar, at: m.b.x, 0.9)
+            addShake(0.3)
+        }
+        spawnParticles(m.b.x, m.b.cy, p.tint, 20, 6.0, 0.8, 0)
+        if p.helpers > 0 && !p.helper.isEmpty { callHelpers(m, p) }
+        bumpHUD()
+    }
+
+    /// Helpers called by a creature that are still standing
+    func helpersAlive(_ m: Mob) -> Int {
+        var n: Int = 0
+        for o in mobs where o.helperOf == m.id && o.hp > 0 && !o.removed { n += 1 }
+        return n
+    }
+
+    /// The helpers a phase calls: they appear on either side of the creature, where there is room
+    func callHelpers(_ m: Mob, _ p: ModPhase) {
+        let rt: ModRuntime = ModRuntime.shared
+        let slot: Int? = rt.mobSlot[p.helper]
+        var kind: MobKind? = nil
+        if slot == nil { kind = MobKind.allCases.first { $0 != .custom && $0 != .villager && mobDef($0).name == p.helper } }
+        var hw: Double = 0.6
+        var hh: Double = 1.8
+        if let s = slot, let hr = rt.mob(s) {
+            hw = hr.mdef.w
+            hh = hr.mdef.h
+        } else if let k = kind {
+            hw = mobDef(k).w
+            hh = mobDef(k).h
+        } else {
+            return
+        }
+        var n: Int = 0
+        var i: Int = 0
+        while i < p.helpers * 3 && n < p.helpers {
+            let side: Double = i % 2 == 0 ? 1.0 : -1.0
+            let x: Double = m.b.x + side * (m.b.w * 0.5 + 1.5 + Double(i / 2) * (hw + 0.8))
+            i += 1
+            guard let y = roomNear(x, m.b.y, hw, hh) else { continue }
+            var made: Mob? = nil
+            if let s = slot { made = addCustomMob(s, x, y) } else if let k = kind { made = addMob(k, x, y) }
+            guard let h = made else { break }
+            h.helperOf = m.id
+            h.lastHitByPlayer = clock
+            spawnParticles(x, y - hh * 0.5, p.tint, 8, 3.0, 0.5, 0)
+            n += 1
+        }
+        m.helpersCalled += n
+    }
+
+    /// Feet height near (x, y) where a body this big fits without touching blocks (nil: no room)
+    func roomNear(_ x: Double, _ y: Double, _ w: Double, _ h: Double) -> Double? {
+        let tries: [Double] = [0, -1, -2, 1, -3, -4, 2, -5, -6, -8, -10]
+        for d in tries {
+            let fy: Double = floor(y + d) + 0.999
+            if !world.boxSolid(x - w * 0.5, fy - h, x + w * 0.5, fy - 0.02) { return fy }
+        }
+        return nil
+    }
+
+    /// Whether the creature's present phase lets it use attack i
+    func phaseAllows(_ m: Mob, _ r: ModMobRT, _ i: Int) -> Bool {
+        if m.mphase <= 0 || m.mphase > r.def.phases.count { return true }
+        let l: [Int] = r.def.phases[m.mphase - 1].attacks
+        return l.isEmpty || l.contains(i)
+    }
+
+    /// The name on the boss bar: the creature's, and the phase it is in
+    func bossTitle(_ b: Mob) -> String {
+        if b.kind == .custom && b.mphase > 0, let r = ModRuntime.shared.mob(b.cslot), b.mphase <= r.def.phases.count {
+            let pn: String = r.def.phases[b.mphase - 1].name.trimmingCharacters(in: .whitespaces)
+            if !pn.isEmpty { return joinText(b.def.name, " \u{00B7} ", pn) }
+        }
+        return b.def.name
+    }
+
+    /// A summoned creature leaves once the player is gone (dead, or far away) for a few seconds
+    func summonedLeaves(_ m: Mob, _ dt: Double) -> Bool {
+        if dead || abs(pb.x - m.b.x) > 150 || abs(pb.y - m.b.y) > 100 { m.leaveT += dt } else { m.leaveT = 0 }
+        if m.leaveT < 4.0 { return false }
+        m.removed = true
+        say(joinText(m.def.name, " has gone."), 2.5)
+        spawnParticles(m.b.x, m.b.cy, 0xB0A0FF, 16, 4.0, 0.6, -2)
+        return true
+    }
+
+    // MARK: summoning
+
+    /// The biome at x in the world the player is in
+    func biomeAt(_ x: Double) -> Biome {
+        if world.dim == .overworld { return gen.col(Int(floor(x))).biome }
+        return .umbral
+    }
+
+    /// Tries the summonings this item starts (a tap with it in hand). True when a creature came, or
+    /// when the item does nothing else (then the reason it didn't work is shown)
+    func trySummonWith(_ it: Item) -> Bool {
+        var why: String? = nil
+        for s in ModRuntime.shared.summons where s.def.usesItem && s.def.item == it {
+            var at: (Int, Int)? = nil
+            if s.def.how == .itemOnPattern {
+                let tx: Int = Int(floor(aimX))
+                let ty: Int = Int(floor(aimY))
+                if !inReach(Double(tx) + 0.5, Double(ty) + 0.5) {
+                    why = "Tap the shape you built, within reach."
+                    continue
+                }
+                guard let o = s.shapeAt(world, tx, ty) else {
+                    why = "Tap a block of the finished shape."
+                    continue
+                }
+                at = o
+            }
+            if let w = summonProblem(s, at) {
+                why = w
+                continue
+            }
+            if let w = summonCreature(s, at) {
+                why = w
+                continue
+            }
+            if s.def.consume && !isCreative { inv.removeAt(sel, 1) }
+            bumpHUD()
+            return true
+        }
+        guard let w = why else { return false }
+        say(w, 2.2)
+        return summonOnly(it)
+    }
+
+    /// Items that do nothing but summon (a failed summoning doesn't fall through to another use)
+    func summonOnly(_ it: Item) -> Bool {
+        switch it {
+        case .mat(let m): return m != .seeds && m != .vial
+        case .custom(let k):
+            guard let r = ModRuntime.shared.item(k) else { return true }
+            return r.def.kind == .material || r.def.kind == .ammo
+        default: return false
+        }
+    }
+
+    /// After the player places a block: a shape it finishes calls its creature
+    func summonByBuilding(_ x: Int, _ y: Int) {
+        for s in ModRuntime.shared.summons where s.def.how == .buildPattern {
+            guard let o = s.shapeAt(world, x, y) else { continue }
+            if let w = summonProblem(s, o) {
+                say(w, 2.5)
+                continue
+            }
+            if let w = summonCreature(s, o) {
+                say(w, 2.2)
+                continue
+            }
+            return
+        }
+    }
+
+    /// Why the summoning can't happen here and now (nil: it can)
+    func summonProblem(_ s: ModSummonRT, _ at: (Int, Int)?) -> String? {
+        guard let r = ModRuntime.shared.mob(s.slot) else { return "That creature's mod is not on." }
+        let d: ModSummon = s.def
+        let name: String = r.def.name
+        for m in mobs where m.kind == .custom && m.cslot == s.slot && m.hp > 0 && !m.removed && (m.summoned || r.boss) {
+            return joinText(name, " is already here.")
+        }
+        var x: Double = pb.x
+        var y: Double = pb.y - 0.5
+        if let o = at {
+            x = Double(o.0) + Double(d.pattern.w) * 0.5
+            y = Double(o.1) - 0.5
+        }
+        if !d.dims.isEmpty && !d.dims.contains(world.dim.rawValue) {
+            return joinText(name, " only answers in ", d.dims.map { ModSummonText.dimName($0) }.joined(separator: " or "), ".")
+        }
+        if !d.biomes.isEmpty && !d.biomes.contains(biomeAt(x).rawValue) {
+            return joinText(name, " only answers in ", d.biomes.map { ModSummonText.biomeName($0) }.joined(separator: " or "), ".")
+        }
+        if d.time == 1 && isNight { return joinText(name, " only answers by day.") }
+        if d.time == 2 && !isNight { return joinText(name, " only answers at night.") }
+        if d.weather > 0 && d.weather < ModSummonText.weatherWords.count && settings.weatherOn {
+            let w: LocalWeather = weatherAt(x, y)
+            var ok: Bool = true
+            switch d.weather {
+            case 1: ok = w.precip < 0.15 && w.thunder < 0.1
+            case 2: ok = w.precip >= 0.2
+            case 3: ok = w.thunder >= 0.2
+            default: ok = w.snow && w.precip >= 0.2
+            }
+            if !ok { return joinText(name, " only answers ", ModSummonText.weatherWords[d.weather], ".") }
+        }
+        let open: Bool = world.isSkyExposed(Int(floor(x)), Int(floor(y)) - 1)
+        if d.place == 1 && !open { return joinText(name, " only answers under the open sky.") }
+        if d.place == 2 && open { return joinText(name, " only answers underground.") }
+        return nil
+    }
+
+    /// Calls the creature: it appears on the shape (which is used up if the summoning says so), beside
+    /// the player, or a little way off. Returns why it couldn't (nil: it came).
+    func summonCreature(_ s: ModSummonRT, _ at: (Int, Int)?) -> String? {
+        guard let r = ModRuntime.shared.mob(s.slot) else { return "That creature's mod is not on." }
+        let w: Double = r.mdef.w
+        let h: Double = r.mdef.h
+        var x: Double = pb.x + Double(facing) * (w * 0.5 + 1.6)
+        var y: Double = pb.y
+        if let o = at {
+            x = Double(o.0) + Double(s.def.pattern.w) * 0.5
+            y = Double(o.1) - 0.001
+        }
+        if s.def.appear == 1 {
+            let side: Double = Double.random(in: 0...1) < 0.5 ? -1.0 : 1.0
+            x = pb.x + side * 14.0
+            let open: Bool = world.isSkyExposed(Int(floor(pb.x)), Int(floor(pb.y)) - 2)
+            y = open ? Double(world.surfaceY(Int(floor(x)))) - 0.001 : pb.y
+        }
+        // the shape goes first (so the creature can stand where it was); put back if nothing comes
+        var used: [(Int, Int, Tile)] = []
+        if let o = at, s.def.clearPattern {
+            for c in s.cells where c.2 != nil {
+                let tx: Int = o.0 + c.0
+                let ty: Int = o.1 + c.1
+                used.append((tx, ty, world.tile(tx, ty)))
+                world.set(tx, ty, .air)
+            }
+        }
+        func undo() { for u in used { world.set(u.0, u.1, u.2) } }
+        guard let fy = roomNear(x, y, w, h) else {
+            undo()
+            return joinText("There's no room for ", r.def.name, " here.")
+        }
+        guard let m = addCustomMob(s.slot, x, fy) else {
+            undo()
+            return "Too many creatures are about right now."
+        }
+        m.persistent = true
+        m.summoned = true
+        m.homeX = x
+        m.homeY = fy
+        m.dir = pb.x >= x ? 1 : -1
+        m.lastHitByPlayer = clock
+        m.phaseShield = 1.0
+        say(s.def.message.isEmpty ? joinText(r.def.name, " has been summoned!") : s.def.message, 3.5)
+        sfx(.roar, at: x, 1.0)
+        addShake(0.4)
+        let glow: UInt32 = r.def.tintAmt > 0.05 ? r.def.tint : 0xC070FF
+        spawnParticles(x, fy - h * 0.5, glow, 30, 7.0, 0.9, 0)
+        for u in used { spawnParticles(Double(u.0) + 0.5, Double(u.1) + 0.5, glow, 3, 2.0, 0.5, 0) }
+        refreshBossBar()
+        return nil
+    }
+
+    // MARK: saving a fight
+
+    func bossSaves() -> [ModBossSave]? {
+        var out: [ModBossSave] = []
+        for m in mobs where m.kind == .custom && m.summoned && m.hp > 0 && !m.removed {
+            guard let r = ModRuntime.shared.mob(m.cslot) else { continue }
+            out.append(ModBossSave(key: r.key, x: m.b.x, y: m.b.y, hp: m.hp, phase: m.mphase, fightT: m.fightT))
+        }
+        return out.isEmpty ? nil : out
+    }
+
+    /// Summoned creatures of a loaded world come back, in the phase they were in (if their mod is on,
+    /// and they were near the player)
+    func restoreBosses(_ l: [ModBossSave]) {
+        for b in l {
+            guard let slot = ModRuntime.shared.mobSlot[b.key], let r = ModRuntime.shared.mob(slot) else { continue }
+            if abs(b.x - pb.x) > 60 || abs(b.y - pb.y) > 60 { continue }
+            guard let m = addCustomMob(slot, b.x, b.y) else { continue }
+            m.persistent = true
+            m.summoned = true
+            m.homeX = b.x
+            m.homeY = b.y
+            m.hp = clampD(b.hp.isFinite ? b.hp : m.maxHP, 1, m.maxHP)
+            for k in 0..<clampI(b.phase, 0, r.def.phases.count) { enterPhase(m, r, k, quiet: true) }
+            m.fightT = clampD(b.fightT.isFinite ? b.fightT : 0, 0, 3600)
+        }
+    }
+}
+
+extension Art {
+    /// A custom creature's sprites in a phase (tinted with the phase's colour; made once per phase)
+    func customMobSet(_ slot: Int, _ phase: Int) -> SpriteSet {
+        if phase <= 0 { return customMobSet(slot) }
+        let key: Int = 1_000_000 + slot * 16 + min(phase, 15)
+        if let s = modMobSets[key] { return s }
+        guard let r = ModRuntime.shared.mob(slot), phase <= r.def.phases.count else { return customMobSet(slot) }
+        let p: ModPhase = r.def.phases[phase - 1]
+        let s: SpriteSet = p.tintAmt > 0.01 ? modMobSpriteSet(r.def, tint: p.tint, amt: p.tintAmt) : customMobSet(slot)
+        modMobSets[key] = s
+        return s
+    }
+}
+
+/// A custom creature's sprites with a colour laid over them (its phases)
+func modMobSpriteSet(_ m: ModMob, tint: UInt32, amt: Double) -> SpriteSet {
+    let fr: ([PixelBuf], CreatureAnim) = modMobFrames(m)
+    var frames: [PixelBuf] = []
+    for f in fr.0 { frames.append(recolorBuf(f, hue: 0, sat: 1, bright: 1, tint: tint, amt: clampD(amt, 0, 1))) }
+    let base: MobKind = MobKind(rawValue: m.base) ?? .zombie
+    let h: Double = clampD(mobDef(base == .custom ? .zombie : base).h * m.scale, 0.3, 8)
+    if m.customArt && !m.frames.isEmpty && !m.frames[0].isBlank, let f0 = fr.0.first {
+        let bb: (Int, Int, Int, Int) = opaqueBounds(f0)
+        let oh: Double = Double(bb.3 - bb.1 + 1)
+        return makeSpriteSet(frames, hitH: h, fixedScale: h * 1.05 / max(1.0, oh), anim: fr.1)
+    }
+    return makeSpriteSet(frames, hitH: h, fixedScale: creatureScale * m.scale, anim: fr.1)
+}
+
+extension ModValidator {
+    /// Phases and summonings of custom creatures: numbers in range, helpers, items and blocks real
+    static func checkBosses(_ p: inout ModPack, _ mn: String, _ sb: Bool, _ known: [String: String], _ r: inout ModReport) {
+        let ownMobs: Set<String> = Set(p.mobs.map { p.key($0.id) })
+        let ownItems: Set<String> = Set(p.items.map { p.key($0.id) } + p.infusions.map { p.key($0.id) })
+        let ownBlocks: Set<String> = Set(p.blocks.map { p.key($0.id) })
+        let gameNames: Set<String> = Set(MobKind.allCases.filter { $0 != .custom && $0 != .villager }.map { mobDef($0).name })
+        func c(_ v: Double, _ lo: Double, _ hi: Double, _ d: Double) -> Double { return clampD(v.isFinite ? v : d, lo, hi) }
+        for i in p.mobs.indices {
+            var m: ModMob = p.mobs[i]
+            let place: String = joinText("Creature \u{201C}", m.name, "\u{201D}")
+            if m.phases.count > ModLimits.maxPhases {
+                r.add(1, mn, place, joinText("Only ", String(ModLimits.maxPhases), " phases fit; the rest were left out."))
+                m.phases = Array(m.phases.prefix(ModLimits.maxPhases))
+            }
+            var calls: Bool = false
+            var lastHealth: Double = 2
+            for k in m.phases.indices {
+                var f: ModPhase = m.phases[k]
+                f.name = String(f.name.prefix(24))
+                f.message = String(f.message.prefix(80))
+                switch f.when {
+                case .health:
+                    f.value = c(f.value, 0.05, 0.95, 0.5)
+                    if f.value > lastHealth + 0.001 { r.add(1, mn, place, joinText("Phase ", String(k + 1), " begins at more health than the one before it, so it follows straight after.")) }
+                    lastHealth = f.value
+                case .time: f.value = c(f.value, 3, 600, 30)
+                case .helpersGone:
+                    if !calls { r.add(1, mn, place, joinText("Phase ", String(k + 1), " waits for helpers, but no phase before it calls any.")) }
+                }
+                f.speedMul = c(f.speedMul, 0.5, sb ? 3 : 2, 1)
+                f.damageMul = c(f.damageMul, 0.5, sb ? 6 : 3, 1)
+                f.cooldownMul = c(f.cooldownMul, 0.3, 2, 1)
+                f.defense = c(f.defense, 0, sb ? 0.9 : 0.6, 0)
+                f.tintAmt = c(f.tintAmt, 0, 1, 0)
+                f.heal = c(f.heal, 0, 0.5, 0)
+                f.shield = c(f.shield, 0, 5, 0)
+                f.attacks = Array(Set(f.attacks.filter { $0 >= 0 && $0 < m.attacks.count })).sorted()
+                f.helpers = clampI(f.helpers, 0, sb ? 10 : 6)
+                if !f.helper.isEmpty && !gameNames.contains(f.helper) && !ownMobs.contains(f.helper) && known[f.helper] != "mob" {
+                    r.add(1, mn, place, joinText("The helper phase ", String(k + 1), " calls does not exist."))
+                    f.helper = ""
+                }
+                if f.helper == p.key(m.id) {
+                    r.add(1, mn, place, "A creature can't call more of itself as helpers.")
+                    f.helper = ""
+                }
+                if f.helper.isEmpty { f.helpers = 0 }
+                if f.helpers > 0 { calls = true }
+                m.phases[k] = f
+            }
+            if m.summons.count > ModLimits.maxSummons {
+                r.add(1, mn, place, joinText("Only ", String(ModLimits.maxSummons), " ways to summon fit; the rest were left out."))
+                m.summons = Array(m.summons.prefix(ModLimits.maxSummons))
+            }
+            for k in m.summons.indices {
+                var s: ModSummon = m.summons[k]
+                s.message = String(s.message.prefix(80))
+                s.time = clampI(s.time, 0, 2)
+                s.weather = clampI(s.weather, 0, 4)
+                s.place = clampI(s.place, 0, 2)
+                s.appear = clampI(s.appear, 0, 1)
+                s.biomes = Array(Set(s.biomes.filter { Biome(rawValue: $0) != nil })).sorted()
+                s.dims = Array(Set(s.dims.filter { $0 >= 0 && $0 <= 1 })).sorted()
+                // the shape: a legal size, every cell empty, "air" or a block that exists
+                var pt: ModPattern = s.pattern
+                pt.w = clampI(pt.w, 1, ModPattern.maxSide)
+                pt.h = clampI(pt.h, 1, ModPattern.maxSide)
+                var cells: [String] = Array(pt.cells.prefix(pt.w * pt.h))
+                while cells.count < pt.w * pt.h { cells.append("") }
+                var broken: Bool = false
+                for j in cells.indices {
+                    let key: String = cells[j]
+                    if key.isEmpty || key == "air" { continue }
+                    if key.hasPrefix("tile:") {
+                        if let n = Int(key.dropFirst(5)), let t = Tile(rawValue: UInt8(clampI(n, 0, 255))), t != .air, !t.isMod, n >= 0 && n <= 255 { continue }
+                    } else if ownBlocks.contains(key) || known[key] == "block" {
+                        continue
+                    }
+                    cells[j] = ""
+                    broken = true
+                }
+                pt.cells = cells
+                s.pattern = pt
+                if broken { r.add(1, mn, place, "A block in a summoning shape does not exist; that cell now takes anything.") }
+                if s.usesPattern && pt.blockCells == 0 && s.enabled {
+                    r.add(1, mn, place, "A summoning by shape needs at least one block in its shape; it is switched off.")
+                    s.enabled = false
+                }
+                if s.usesItem {
+                    if let it = s.item, case .custom(let key) = it, !ownItems.contains(key) && known[key] != "item" {
+                        s.item = nil
+                    }
+                    if s.item == nil && s.enabled {
+                        r.add(1, mn, place, "A summoning by item needs an item that exists; it is switched off.")
+                        s.enabled = false
+                    }
+                }
+                m.summons[k] = s
+            }
+            p.mobs[i] = m
+        }
+    }
+}
+
 // ===== u01_art =====
 
 // MARK: - Art store (converts the procedural PixelBufs into SwiftUI images)
@@ -31501,7 +32327,7 @@ final class Art: @unchecked Sendable {
     }
 
     func mobSet(_ m: Mob) -> SpriteSet {
-        if m.kind == .custom { return customMobSet(m.cslot) }
+        if m.kind == .custom { return customMobSet(m.cslot, m.mphase) }
         var variant: Int = 0
         switch m.kind {
         case .zombie: variant = m.variant
@@ -42725,13 +43551,13 @@ struct MobEditorView: View {
     var mob: ModMob { return s.mod.mobs.first { $0.id == id } ?? ModMob() }
     var sb: Bool { return s.mod.sandbox }
 
-    static let pages: [String] = ["BASICS", "LOOK", "STATS", "BEHAVIOUR", "ATTACKS", "SPAWNING", "DROPS"]
+    static let pages: [String] = ["BASICS", "LOOK", "STATS", "BEHAVIOUR", "ATTACKS", "SPAWNING", "DROPS", "PHASES", "SUMMON"]
 
     var body: some View {
         ZStack {
             VStack(spacing: 10) {
                 previewHeader
-                ChoiceRow(options: MobEditorView.pages, selected: $page, columns: 7)
+                ChoiceRow(options: MobEditorView.pages, selected: $page, columns: 5)
                 pageView
             }
             if picking >= 0 {
@@ -42780,6 +43606,8 @@ struct MobEditorView: View {
         case 4: attacksPage
         case 5: spawnPage
         case 6: dropsPage
+        case 7: BossPhasesPage(s: s, id: id)
+        case 8: SummonPage(s: s, id: id)
         default: basicsPage
         }
     }
@@ -42824,6 +43652,12 @@ struct MobEditorView: View {
             var hit = ModAttack(); hit.kind = .melee; hit.damage = 18; hit.range = 2.4; hit.cooldown = 1.6
             m.attacks = [hit, slam]
             m.spawn.enabled = false
+            if m.phases.isEmpty {
+                var rage = ModPhase()
+                rage.name = "Enraged"
+                rage.message = joinText(m.name, " flies into a rage!")
+                m.phases = [rage]
+            }
         case .flying:
             bh.wander = true; bh.fly = true; bh.chase = true; bh.attackPlayer = true
             m.base = MobKind.bat.rawValue; m.hp = 12; m.damage = 4; m.speed = 4
@@ -46577,6 +47411,525 @@ extension InfusionPanel {
         }
         .padding(6)
         .background(Color.black.opacity(0.25))
+    }
+}
+
+// MARK: - Mod Creator+: boss phases and summoning (screens)
+
+/// The PHASES page of a creature: the stages of its fight, shown along its health bar
+struct BossPhasesPage: View {
+    @ObservedObject var s: ModSession
+    let id: String
+    @State var open: Int = 0
+
+    static let gameHelpers: [MobKind] = [.zombie, .skeleton, .slime, .bat, .scorpion, .wraith, .imp, .emberSlime, .cinderBat, .crawler, .archer, .pirate]
+
+    var mob: ModMob { return s.mod.mobs.first { $0.id == id } ?? ModMob() }
+    var phases: Binding<[ModPhase]> { return s.bind(\ModPack.mobs, id, \ModMob.phases, []) }
+    var sb: Bool { return s.mod.sandbox }
+
+    func pb<T>(_ i: Int, _ kp: WritableKeyPath<ModPhase, T>, _ d: T) -> Binding<T> {
+        let base: Binding<[ModPhase]> = phases
+        return Binding<T>(get: { i < base.wrappedValue.count ? base.wrappedValue[i][keyPath: kp] : d }, set: { v in
+            var list: [ModPhase] = base.wrappedValue
+            if i < list.count {
+                list[i][keyPath: kp] = v
+                base.wrappedValue = list
+            }
+        })
+    }
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Text("A fight in stages. Each phase begins when its moment comes and changes the creature for the rest of the fight; phases follow one another in order. They work for any creature, and bosses show the phase on their health bar.")
+                .font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+            timeline
+            ForEach(0..<mob.phases.count, id: \.self) { i in phaseCard(i) }
+            if mob.phases.count < ModLimits.maxPhases {
+                PixelButton(title: "+ ADD PHASE", color: ModUI.accent) { add() }
+            }
+        }
+    }
+
+    /// The fight along the health bar: where each health phase begins, then the others in order
+    var timeline: some View {
+        let segs: [(Double, UInt32, String)] = segments
+        let others: [String] = laterPhases
+        return VStack(alignment: .leading, spacing: 4) {
+            Text("THE FIGHT, FULL HEALTH TO NONE").font(.pixel(12, .bold)).foregroundColor(ModUI.gold)
+            HStack(spacing: 2) {
+                ForEach(0..<segs.count, id: \.self) { k in
+                    VStack(spacing: 2) {
+                        Rectangle().fill(Color(hex: segs[k].1)).frame(width: CGFloat(max(10.0, segs[k].0 * 420.0)), height: 16)
+                        Text(verbatim: segs[k].2).font(.pixel(9, .semibold)).foregroundColor(Color.white).lineLimit(1)
+                            .frame(width: CGFloat(max(10.0, segs[k].0 * 420.0)))
+                    }
+                }
+            }
+            ForEach(0..<others.count, id: \.self) { k in
+                Text(verbatim: others[k]).font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
+            }
+        }
+        .padding(8)
+        .background(PixelBox(color: ModUI.card))
+    }
+
+    /// Stretches of the health bar: (share, colour, the phase's name)
+    var segments: [(Double, UInt32, String)] {
+        var out: [(Double, UInt32, String)] = []
+        var from: Double = 1.0
+        var col: UInt32 = 0x5AA85A
+        var name: String = "Start"
+        for p in mob.phases where p.when == .health && p.value < from {
+            out.append((from - p.value, col, name))
+            from = p.value
+            col = p.tintAmt > 0.05 ? p.tint : 0xA05050
+            name = p.name
+        }
+        out.append((from, col, name))
+        return out
+    }
+
+    var laterPhases: [String] {
+        var out: [String] = []
+        for (i, p) in mob.phases.enumerated() where p.when != .health {
+            out.append(joinText("Phase ", String(i + 1), " \u{201C}", p.name, "\u{201D} begins ", p.whenText, "."))
+        }
+        return out
+    }
+
+    func phaseCard(_ i: Int) -> some View {
+        let p: ModPhase = i < mob.phases.count ? mob.phases[i] : ModPhase()
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Rectangle().fill(Color(hex: p.tint)).frame(width: 14, height: 14)
+                Text(verbatim: joinText(String(i + 1), ". ", p.name, " \u{2014} ", p.whenText)).font(.pixel(13, .bold)).foregroundColor(Color.white)
+                Spacer(minLength: 0)
+                SmallButton(title: open == i ? "CLOSE" : "EDIT", color: ModUI.blue) { open = open == i ? -1 : i }
+                if i > 0 { SmallButton(title: "UP") { move(i, -1) } }
+                if i < mob.phases.count - 1 { SmallButton(title: "DOWN") { move(i, 1) } }
+                SmallButton(title: "DELETE", color: ModUI.red) { remove(i) }
+            }
+            Text(verbatim: summary(p)).font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
+            if open == i { editor(i, p) }
+        }
+        .padding(10)
+        .background(PixelBox(color: ModUI.card))
+    }
+
+    func summary(_ p: ModPhase) -> String {
+        var parts: [String] = []
+        parts.append(String(format: "speed x%.2f", p.speedMul))
+        parts.append(String(format: "damage x%.2f", p.damageMul))
+        if abs(p.cooldownMul - 1) > 0.01 { parts.append(String(format: "attacks rest x%.2f", p.cooldownMul)) }
+        if p.defense > 0.01 { parts.append(joinText("shrugs off ", String(Int((p.defense * 100).rounded())), "%")) }
+        if p.heal > 0.01 { parts.append(joinText("heals ", String(Int((p.heal * 100).rounded())), "%")) }
+        if p.helpers > 0 && !p.helper.isEmpty { parts.append(joinText("calls ", String(p.helpers), " helpers")) }
+        if !p.attacks.isEmpty { parts.append(joinText("uses ", String(p.attacks.count), " of its attacks")) }
+        return parts.joined(separator: " \u{00B7} ")
+    }
+
+    @ViewBuilder
+    func editor(_ i: Int, _ p: ModPhase) -> some View {
+        ModTextField(label: "Name", text: pb(i, \.name, ""), placeholder: "Enraged")
+        ModSection(title: "WHEN IT BEGINS", help: p.when.help) {
+            ChoiceRow(options: ModPhaseWhen.allCases.map { $0.name }, selected: whenBind(i), columns: 3)
+            if p.when == .health {
+                StatSlider(label: "Health", value: percent(pb(i, \.value, 0.5)), range: 5...95, step: 1, format: "%.0f", unit: "%")
+            } else if p.when == .time {
+                StatSlider(label: "Seconds of fighting", value: pb(i, \.value, 30), range: 3...600, step: 1, format: "%.0f", unit: " s")
+            }
+        }
+        ModSection(title: "HOW IT CHANGES", help: "Multipliers of its own numbers, for the rest of the fight.") {
+            StatSlider(label: "Speed", value: pb(i, \.speedMul, 1), range: 0.5...(sb ? 3 : 2), step: 0.05, format: "x%.2f")
+            StatSlider(label: "Damage", value: pb(i, \.damageMul, 1), range: 0.5...(sb ? 6 : 3), step: 0.05, format: "x%.2f")
+            StatSlider(label: "Rest between attacks", value: pb(i, \.cooldownMul, 1), range: 0.3...2, step: 0.05, format: "x%.2f")
+            StatSlider(label: "Hits shrugged off", value: percent(pb(i, \.defense, 0)), range: 0...(sb ? 90 : 60), step: 1, format: "%.0f", unit: "%")
+            StatSlider(label: "Heals as it begins", value: percent(pb(i, \.heal, 0)), range: 0...50, step: 1, format: "%.0f", unit: "%")
+            StatSlider(label: "Can't be hurt while changing", value: pb(i, \.shield, 1), range: 0...5, step: 0.25, format: "%.2f", unit: " s")
+        }
+        if !mob.attacks.isEmpty {
+            ModSection(title: "ATTACKS IN THIS PHASE", help: "All on: it uses every attack it has.") {
+                ForEach(0..<mob.attacks.count, id: \.self) { j in
+                    ModToggle(label: joinText("Attack ", String(j + 1), ": ", mob.attacks[j].kind.name), isOn: attackBind(i, j))
+                }
+            }
+        }
+        ModSection(title: "LOOK") {
+            HStack(spacing: 12) {
+                tinted(p).resizable().interpolation(.none).frame(width: 72, height: 72).background(Color(hex: 0x5A7A9A).opacity(0.6))
+                VStack(alignment: .leading, spacing: 6) {
+                    StatSlider(label: "Colour strength", value: pb(i, \.tintAmt, 0.25), range: 0...1, step: 0.05, format: "%.2f")
+                    ModToggle(label: "Roars as it begins", isOn: pb(i, \.roar, true))
+                }
+            }
+            ModColorRow(label: "Colour", color: pb(i, \.tint, 0xFF4030))
+        }
+        ModSection(title: "HELPERS", help: "Creatures it calls to its side as this phase begins.") {
+            ChoiceRow(options: helperChoices.0, selected: helperBind(i), columns: 4)
+            if !p.helper.isEmpty {
+                IntSlider(label: "How many", value: pb(i, \.helpers, 0), range: 0...(sb ? 10 : 6))
+            }
+        }
+        ModTextField(label: "Message", text: pb(i, \.message, ""), placeholder: "The ground splits open!")
+    }
+
+    func percent(_ b: Binding<Double>) -> Binding<Double> {
+        return Binding<Double>(get: { b.wrappedValue * 100.0 }, set: { b.wrappedValue = $0 / 100.0 })
+    }
+
+    func whenBind(_ i: Int) -> Binding<Int> {
+        let base: Binding<ModPhaseWhen> = pb(i, \.when, .health)
+        let val: Binding<Double> = pb(i, \.value, 0.5)
+        return Binding<Int>(get: { base.wrappedValue.rawValue }, set: { n in
+            let w: ModPhaseWhen = ModPhaseWhen(rawValue: n) ?? .health
+            if w != base.wrappedValue {
+                base.wrappedValue = w
+                val.wrappedValue = w == .time ? 30 : 0.5
+            }
+        })
+    }
+
+    /// One attack switched on or off for a phase (all on is stored as "every attack")
+    func attackBind(_ i: Int, _ j: Int) -> Binding<Bool> {
+        let base: Binding<[Int]> = pb(i, \.attacks, [])
+        let n: Int = mob.attacks.count
+        return Binding<Bool>(get: { base.wrappedValue.isEmpty || base.wrappedValue.contains(j) }, set: { on in
+            var l: [Int] = base.wrappedValue.isEmpty ? Array(0..<n) : base.wrappedValue
+            if on {
+                if !l.contains(j) { l.append(j) }
+            } else {
+                // at least one attack stays on
+                if l.count <= 1 { return }
+                l.removeAll { $0 == j }
+            }
+            l.sort()
+            base.wrappedValue = l.count >= n ? [] : l
+        })
+    }
+
+    var helperChoices: ([String], [String]) {
+        var names: [String] = ["Nobody"]
+        var keys: [String] = [""]
+        for o in s.mod.mobs where o.id != id {
+            names.append(o.name)
+            keys.append(s.mod.key(o.id))
+        }
+        for k in BossPhasesPage.gameHelpers {
+            names.append(mobDef(k).name)
+            keys.append(mobDef(k).name)
+        }
+        return (names, keys)
+    }
+
+    func helperBind(_ i: Int) -> Binding<Int> {
+        let base: Binding<String> = pb(i, \.helper, "")
+        let count: Binding<Int> = pb(i, \.helpers, 0)
+        let keys: [String] = helperChoices.1
+        return Binding<Int>(get: { keys.firstIndex(of: base.wrappedValue) ?? 0 }, set: { n in
+            base.wrappedValue = keys[clampI(n, 0, keys.count - 1)]
+            if base.wrappedValue.isEmpty { count.wrappedValue = 0 } else if count.wrappedValue == 0 { count.wrappedValue = 2 }
+        })
+    }
+
+    /// The creature as it looks in this phase
+    func tinted(_ p: ModPhase) -> Image {
+        let fr: ([PixelBuf], CreatureAnim) = modMobFrames(mob)
+        guard let f = fr.0.first else { return pixImage(PixelBuf(w: 1, h: 1)) }
+        return pixImage(recolorBuf(f, hue: 0, sat: 1, bright: 1, tint: p.tint, amt: p.tintAmt))
+    }
+
+    func add() {
+        var list: [ModPhase] = mob.phases
+        var p = ModPhase()
+        let lowest: Double = list.filter { $0.when == .health }.map { $0.value }.min() ?? 1.0
+        p.value = max(0.1, (lowest - 0.25).rounded(toPlaces: 2))
+        p.name = list.isEmpty ? "Enraged" : joinText("Phase ", String(list.count + 1))
+        list.append(p)
+        phases.wrappedValue = list
+        open = list.count - 1
+    }
+
+    func move(_ i: Int, _ d: Int) {
+        var list: [ModPhase] = mob.phases
+        let j: Int = i + d
+        if i < 0 || j < 0 || i >= list.count || j >= list.count { return }
+        list.swapAt(i, j)
+        phases.wrappedValue = list
+        open = j
+    }
+
+    func remove(_ i: Int) {
+        var list: [ModPhase] = mob.phases
+        if i < 0 || i >= list.count { return }
+        list.remove(at: i)
+        phases.wrappedValue = list
+        open = -1
+    }
+}
+
+extension Double {
+    func rounded(toPlaces n: Int) -> Double {
+        let f: Double = pow(10.0, Double(n))
+        return (self * f).rounded() / f
+    }
+}
+
+/// The SUMMON page of a creature: the ways a player can call it into the world
+struct SummonPage: View {
+    @ObservedObject var s: ModSession
+    let id: String
+    @State var open: Int = 0
+    @State var pickingItem: Int = -1
+    @State var pickingBlock: Bool = false
+    /// what a tap on the shape paints: "" anything, "air" empty, or a block key
+    @State var brush: String = "air"
+    @State var recent: [String] = []
+
+    var mob: ModMob { return s.mod.mobs.first { $0.id == id } ?? ModMob() }
+    var summons: Binding<[ModSummon]> { return s.bind(\ModPack.mobs, id, \ModMob.summons, []) }
+
+    func sb<T>(_ i: Int, _ kp: WritableKeyPath<ModSummon, T>, _ d: T) -> Binding<T> {
+        let base: Binding<[ModSummon]> = summons
+        return Binding<T>(get: { i < base.wrappedValue.count ? base.wrappedValue[i][keyPath: kp] : d }, set: { v in
+            var list: [ModSummon] = base.wrappedValue
+            if i < list.count {
+                list[i][keyPath: kp] = v
+                base.wrappedValue = list
+            }
+        })
+    }
+
+    var body: some View {
+        ZStack {
+            VStack(spacing: 10) {
+                Text("Ways for a player to call this creature into the world in normal play: with an item, a shape of blocks, or both, where and when you say. Every condition you set must hold at once.")
+                    .font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+                ForEach(0..<mob.summons.count, id: \.self) { i in card(i) }
+                if mob.summons.count < ModLimits.maxSummons {
+                    PixelButton(title: "+ ADD A WAY TO SUMMON", color: ModUI.accent) { add() }
+                }
+            }
+            if pickingItem >= 0 {
+                ItemPickerView(catalog: s.catalog, title: "THE SUMMONING ITEM", pick: { it in
+                    sb(pickingItem, \.item, nil).wrappedValue = it
+                    pickingItem = -1
+                }, cancel: { pickingItem = -1 })
+            }
+            if pickingBlock {
+                ItemPickerView(catalog: s.catalog, title: "A BLOCK FOR THE SHAPE", blocksOnly: true, pick: { it in
+                    let k: String = SummonPage.key(it)
+                    if !k.isEmpty {
+                        brush = k
+                        recent.removeAll { $0 == k }
+                        recent.insert(k, at: 0)
+                        if recent.count > 8 { recent = Array(recent.prefix(8)) }
+                    }
+                    pickingBlock = false
+                }, cancel: { pickingBlock = false })
+            }
+        }
+    }
+
+    static func key(_ it: Item) -> String {
+        switch it {
+        case .block(let t): return t.isMod || t == .air ? "" : ModGround.key(t)
+        case .custom(let k): return k
+        default: return ""
+        }
+    }
+
+    func itemName(_ it: Item?) -> String {
+        guard let i = it else { return "an item (none chosen)" }
+        return ModPreview.name(i, s.catalog)
+    }
+
+    func card(_ i: Int) -> some View {
+        let sm: ModSummon = i < mob.summons.count ? mob.summons[i] : ModSummon()
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Text(verbatim: joinText(String(i + 1), ". ", sm.how.name)).font(.pixel(13, .bold)).foregroundColor(sm.enabled ? Color.white : ModUI.dim)
+                Spacer(minLength: 0)
+                SmallButton(title: open == i ? "CLOSE" : "EDIT", color: ModUI.blue) { open = open == i ? -1 : i }
+                SmallButton(title: "DELETE", color: ModUI.red) { remove(i) }
+            }
+            Text(verbatim: joinText(ModSummonText.describe(sm, itemName(sm.item)), sm.enabled ? "." : " (switched off).")).font(.pixel(10, .semibold)).foregroundColor(ModUI.gold)
+            if open == i { editor(i, sm) }
+        }
+        .padding(10)
+        .background(PixelBox(color: ModUI.card))
+    }
+
+    @ViewBuilder
+    func editor(_ i: Int, _ sm: ModSummon) -> some View {
+        ModToggle(label: "Works in play", isOn: sb(i, \.enabled, true))
+        ModSection(title: "WHAT THE PLAYER DOES", help: sm.how.help) {
+            ChoiceRow(options: ModSummonHow.allCases.map { $0.name }, selected: howBind(i), columns: 3)
+        }
+        if sm.usesItem {
+            ModSection(title: "THE ITEM") {
+                HStack(spacing: 10) {
+                    if let it = sm.item {
+                        ModPreview.icon(it, s.catalog).resizable().interpolation(.none).frame(width: 36, height: 36)
+                    }
+                    Text(verbatim: itemName(sm.item)).font(.pixel(13, .bold)).foregroundColor(Color.white)
+                    Spacer(minLength: 0)
+                    SmallButton(title: "CHOOSE", color: ModUI.blue) { pickingItem = i }
+                }
+                ModToggle(label: "Used up when the creature comes", isOn: sb(i, \.consume, true))
+            }
+        }
+        if sm.usesPattern {
+            ModSection(title: "THE SHAPE", help: "Tap a cell to paint it. ANY: the cell can hold anything. EMPTY: it must be clear. The shape can be built anywhere, facing the way it is drawn.") {
+                palette
+                PatternGrid(pattern: sb(i, \.pattern, ModPattern()), brush: brush, catalog: s.catalog)
+                HStack(spacing: 10) {
+                    IntSlider(label: "Width", value: sizeBind(i, true), range: 1...ModPattern.maxSide)
+                    IntSlider(label: "Height", value: sizeBind(i, false), range: 1...ModPattern.maxSide)
+                }
+                ModToggle(label: "The shape's blocks are used up", isOn: sb(i, \.clearPattern, true))
+            }
+        }
+        ModSection(title: "WHEN AND WHERE", help: "Weather conditions are skipped for players who switch the weather off.") {
+            ChoiceRow(options: ModSummonText.times, selected: sb(i, \.time, 0), columns: 3)
+            ChoiceRow(options: ModSummonText.weathers, selected: sb(i, \.weather, 0), columns: 5)
+            ChoiceRow(options: ModSummonText.places, selected: sb(i, \.place, 0), columns: 3)
+            ModBiomePicker(biomes: sb(i, \.biomes, []))
+            Text("Dimensions (none chosen: any)").font(.pixel(11, .bold)).foregroundColor(ModUI.dim)
+            chips([(0, "Overworld"), (1, "Umbral Realm")], sb(i, \.dims, []))
+        }
+        ModSection(title: "ITS ENTRANCE") {
+            ChoiceRow(options: ModSummonText.appears, selected: sb(i, \.appear, 0), columns: 2)
+            ModTextField(label: "Message", text: sb(i, \.message, ""), placeholder: "The Frost King answers your call!")
+        }
+    }
+
+    var palette: some View {
+        let cols: [GridItem] = [GridItem(.adaptive(minimum: 70), spacing: 6)]
+        return LazyVGrid(columns: cols, spacing: 6) {
+            brushButton("", "ANY")
+            brushButton("air", "EMPTY")
+            ForEach(recent, id: \.self) { k in brushButton(k, ModGround.name(k, s.mod)) }
+            Button(action: { pickingBlock = true }) {
+                Text("+ BLOCK").font(.pixel(11, .bold)).foregroundColor(Color.white)
+                    .frame(maxWidth: .infinity, minHeight: 52)
+                    .background(ModUI.blue)
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    func brushButton(_ k: String, _ label: String) -> some View {
+        Button(action: { brush = k }) {
+            VStack(spacing: 2) {
+                PatternGrid.cellImage(k, s.catalog).resizable().interpolation(.none).frame(width: 28, height: 28)
+                Text(verbatim: label).font(.pixel(8, .semibold)).foregroundColor(Color.white).lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, minHeight: 52)
+            .background(brush == k ? ModUI.accent : Color.black.opacity(0.4))
+        }
+        .buttonStyle(.plain)
+    }
+
+    func chips(_ opts: [(Int, String)], _ b: Binding<[Int]>) -> some View {
+        let cols: [GridItem] = [GridItem(.adaptive(minimum: 104), spacing: 6)]
+        return LazyVGrid(columns: cols, spacing: 6) {
+            ForEach(0..<opts.count, id: \.self) { k in
+                Button(action: {
+                    var l: [Int] = b.wrappedValue
+                    if let j = l.firstIndex(of: opts[k].0) { l.remove(at: j) } else { l.append(opts[k].0) }
+                    b.wrappedValue = l.sorted()
+                }) {
+                    Text(verbatim: opts[k].1).font(.pixel(11, .bold)).foregroundColor(Color.white)
+                        .frame(maxWidth: .infinity, minHeight: 40)
+                        .background(b.wrappedValue.contains(opts[k].0) ? ModUI.accent : Color.black.opacity(0.4))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    func howBind(_ i: Int) -> Binding<Int> {
+        let base: Binding<ModSummonHow> = sb(i, \.how, .useItem)
+        return Binding<Int>(get: { base.wrappedValue.rawValue }, set: { base.wrappedValue = ModSummonHow(rawValue: $0) ?? .useItem })
+    }
+
+    func sizeBind(_ i: Int, _ across: Bool) -> Binding<Int> {
+        let base: Binding<ModPattern> = sb(i, \.pattern, ModPattern())
+        return Binding<Int>(get: { across ? base.wrappedValue.w : base.wrappedValue.h }, set: { n in
+            let p: ModPattern = base.wrappedValue
+            base.wrappedValue = across ? p.resized(n, p.h) : p.resized(p.w, n)
+        })
+    }
+
+    func add() {
+        var list: [ModSummon] = mob.summons
+        var sm = ModSummon()
+        sm.time = 2
+        sm.message = joinText(mob.name, " answers the call!")
+        list.append(sm)
+        summons.wrappedValue = list
+        open = list.count - 1
+    }
+
+    func remove(_ i: Int) {
+        var list: [ModSummon] = mob.summons
+        if i < 0 || i >= list.count { return }
+        list.remove(at: i)
+        summons.wrappedValue = list
+        open = -1
+    }
+}
+
+/// A summoning shape as a grid of big cells to paint
+struct PatternGrid: View {
+    @Binding var pattern: ModPattern
+    let brush: String
+    let catalog: ModCatalog
+
+    var body: some View {
+        VStack(spacing: 2) {
+            ForEach(0..<pattern.h, id: \.self) { y in
+                HStack(spacing: 2) {
+                    ForEach(0..<pattern.w, id: \.self) { x in
+                        Button(action: {
+                            var p: ModPattern = pattern
+                            p.set(x, y, p.cell(x, y) == brush ? "" : brush)
+                            pattern = p
+                        }) {
+                            PatternGrid.cellImage(pattern.cell(x, y), catalog).resizable().interpolation(.none)
+                                .frame(width: 46, height: 46)
+                                .background(Color.black.opacity(0.35))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+        .padding(6)
+        .background(Color(hex: 0x6A8AAA).opacity(0.5))
+    }
+
+    /// The picture of a cell: a block, a cross for "empty", or a faint dot for "anything"
+    static func cellImage(_ k: String, _ cat: ModCatalog) -> Image {
+        if k.isEmpty {
+            var b = PixelBuf(w: 8, h: 8)
+            b.set(3, 3, 0xFF707070)
+            b.set(4, 4, 0xFF707070)
+            b.set(3, 4, 0xFF707070)
+            b.set(4, 3, 0xFF707070)
+            return pixImage(b)
+        }
+        if k == "air" {
+            var b = PixelBuf(w: 8, h: 8)
+            for i in 1..<7 {
+                b.set(i, i, 0xFFE04040)
+                b.set(7 - i, i, 0xFFE04040)
+            }
+            return pixImage(b)
+        }
+        if k.hasPrefix("tile:"), let n = Int(k.dropFirst(5)), let t = Tile(rawValue: UInt8(clampI(n, 0, 255))) { return pixImage(tileBuf(t)) }
+        return ModPreview.icon(.custom(k), cat)
     }
 }
 

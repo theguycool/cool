@@ -957,6 +957,225 @@ do {
     check(ModStore.dependencies(dep) == ["bossy"], "a summoning item from another mod makes that mod a dependency")
 }
 
+// ---------------------------------------------------------------- stage 6
+func dimMod() -> ModPack {
+    var p = ModPack()
+    p.id = "dimz"
+    p.name = "Dims"
+    var key = ModItem(); key.id = "key"; key.name = "Frost Key"; key.kind = .material
+    var gateB = ModBlock(); gateB.id = "gate"; gateB.name = "Frost Gate"; gateB.art = painted(8, 8, 0x80C0FF)
+    var ice = ModBlock(); ice.id = "ice"; ice.name = "Blue Ice"; ice.art = painted(8, 8, 0x60A0E0)
+    var fore = ModBlock(); fore.id = "fore"; fore.name = "Frost Ore"; fore.art = painted(8, 8, 0xE0F0FF)
+    p.items = [key]
+    p.blocks = [gateB, ice, fore]
+    var yeti = ModMob(); yeti.id = "yeti"; yeti.name = "Yeti"; yeti.category = .passive; yeti.hp = 30; yeti.spawn.enabled = false; yeti.attacks = []
+    p.mobs = [yeti]
+    var d = ModDimension()
+    d.id = "frost"; d.name = "Frostlands"
+    d.skyTop = 0x203050; d.skyBottom = 0xA0C8F0; d.light = 0.7; d.cycle = false; d.fixedTime = 0.75
+    d.weather = 4; d.chill = 0.6; d.ambient = 2
+    d.surface = 140; d.hills = 10; d.caves = 0.5; d.islands = 0.5; d.sea = 0
+    d.stone = "dimz:ice"
+    var z1 = ModDimZone(); z1.name = "Snowfield"; z1.biome = Biome.tundra.rawValue; z1.ground = ModGround.key(.snow); z1.trees = 2; z1.leaves = ModGround.key(.pineLeaves)
+    var z2 = ModDimZone(); z2.name = "Glacier"; z2.biome = Biome.mountain.rawValue; z2.ground = "dimz:ice"; z2.filler = "dimz:ice"; z2.trees = 0; z2.plant = ""
+    d.zones = [z1, z2]
+    d.zoneWidth = 64
+    var sp = ModDimSpawn(); sp.creature = "dimz:yeti"; sp.place = 0; sp.weight = 10
+    var sp2 = ModDimSpawn(); sp2.creature = mobDef(.wolf).name; sp2.when = 2; sp2.weight = 4
+    d.spawns = [sp, sp2]
+    d.entry.how = .itemOnPattern
+    d.entry.item = .custom("dimz:key")
+    d.entry.consume = false
+    d.entry.clearPattern = false
+    d.entry.pattern = ModPattern(w: 3, h: 4)
+    for y in 0..<4 { for x in 0..<3 { d.entry.pattern.set(x, y, (x == 1 && (y == 1 || y == 2)) ? "air" : "dimz:gate") } }
+    d.returnGate = true
+    d.gateBlock = "dimz:gate"
+    p.dims = [d]
+    var ore = ModOre(); ore.id = "o1"; ore.name = "Frost veins"; ore.block = "fore"; ore.dimKey = "frost"; ore.minY = 150; ore.maxY = 300; ore.veins = 6; ore.size = 6; ore.hosts = ["dimz:ice"]
+    p.ores = [ore]
+    _ = ModValidator.check(&p, known: [:])
+    return p
+}
+
+print("== custom dimensions")
+do {
+    let pack: ModPack = dimMod()
+    check(pack.dims.count == 1 && pack.dims[0].entry.enabled && pack.dims[0].stone == "dimz:ice" && pack.dims[0].zones.count == 2 && pack.dims[0].spawns.count == 2 && pack.ores[0].dimKey == "frost",
+          "a dimension with two regions, two creatures, a gateway and its own ore passes its checks unchanged")
+    let g = arena([pack])
+    let rt: ModRuntime = ModRuntime.shared
+    check(rt.dimSlots[0]?.key == "dimz:frost" && rt.worldInfo().dims["dimz:frost"] == 0, "it takes the world's first dimension slot, remembered with the world's mods")
+    let ice: Tile = rt.tileForKey["dimz:ice"]!
+    let fore: Tile = rt.tileForKey["dimz:fore"]!
+    let gate: Tile = rt.tileForKey["dimz:gate"]!
+    // generation
+    let c0: Chunk = generateChunk(g.gen, .custom0, 0)
+    let c0b: Chunk = generateChunk(g.gen, .custom0, 0)
+    check(c0.H == customDimH && c0.tiles == c0b.tiles, "its land is the same every time it is made")
+    var iceN: Int = 0
+    var oreN: Int = 0
+    var snowTop: Int = 0
+    var iceTop: Int = 0
+    var leaves: Int = 0
+    var isles: Int = 0
+    var caves: Int = 0
+    for cx in -6...6 {
+        let ch: Chunk = generateChunk(g.gen, .custom0, cx)
+        for lx in 0..<chunkW {
+            let surf: Int = ch.surf[lx]
+            let top: Tile = ch.get(lx, surf)
+            if top == .snow { snowTop += 1 }
+            if top == ice { iceTop += 1 }
+            for y in 0..<customDimH {
+                let t: Tile = ch.get(lx, y)
+                if t == ice { iceN += 1 }
+                if t == fore { oreN += 1 }
+                if t == .pineLeaves { leaves += 1 }
+                if y < surf - 26 && (t == ice || t == .snow) { isles += 1 }
+                if y > surf + 6 && y < customDimH - 40 && t == .air { caves += 1 }
+            }
+        }
+    }
+    check(iceN > 5000 && snowTop > 40 && iceTop > 40, "its rock is the mod's ice, and its two regions have their own ground (snow \(snowTop), ice \(iceTop) columns)")
+    check(leaves > 20, "the snowfield grows trees of pine leaves (\(leaves) leaf blocks)")
+    check(isles > 50, "floating islands hang in its sky (\(isles) blocks)")
+    check(caves > 200, "caves run under its ground (\(caves) open blocks)")
+    check(oreN > 0, "the mod's ore forms there (\(oreN) blocks)")
+    var leak: Bool = false
+    for cx in -3...3 {
+        let ch: Chunk = generateChunk(g.gen, .overworld, cx)
+        if ch.tiles.contains(fore.rawValue) { leak = true }
+    }
+    check(!leak, "and not in the Overworld")
+    // getting in: build the gateway, tap it with the key
+    let bx: Int = Int(g.pb.x) + 2
+    for y in 0..<4 { for x in 0..<3 { g.world.set(bx + x, 96 + y, (x == 1 && (y == 1 || y == 2)) ? .air : gate) } }
+    hold(g, .custom("dimz:key"), 1)
+    func tap(_ x: Double, _ y: Double) {
+        aimAt(g, x, y)
+        g.usePressedFlag = true
+        g.useHeld = true
+        g.placeCD = 0
+        g.useCD = 0
+        g.updateUse(1.0 / 60.0)
+        g.useHeld = false
+    }
+    let fromX: Double = g.pb.x
+    tap(Double(bx) + 0.5, 99.5)
+    check(g.world.dim == .custom0 && g.customDim?.def.name == "Frostlands", "tapping the gateway with the key takes the player into the dimension")
+    check(g.dimReturn?.dim == 0 && near(g.dimReturn!.x, fromX), "remembering where they came from")
+    check(g.inv.total(.custom("dimz:key")) == 1 && (g.message ?? "").contains("Frostlands"), "the key is kept (as chosen) and arrival is announced")
+    var gateAt: (Int, Int)? = nil
+    for dx in -6...6 { for dy in -6...4 where g.world.tile(Int(g.pb.x) + dx, Int(g.pb.y) + dy) == gate { gateAt = (Int(g.pb.x) + dx, Int(g.pb.y) + dy) } }
+    check(gateAt != nil, "a gate back stands beside where they arrived")
+    // what it is like there
+    check(g.isNight && near(g.dayFactor, 0) && g.skyLevel <= 4, "it is always night there, as set (sky light \(g.skyLevel))")
+    check(g.weatherAt(g.pb.x, g.pb.y - 2).precip == 0, "with the weather switched off, nothing falls there either")
+    g.settings.weatherOn = true
+    let w: LocalWeather = g.weatherAt(g.pb.x, g.pb.y - 2)
+    check(w.snow && w.precip > 0.5 && w.chill >= 0.55, "snow falls, and it is cold")
+    g.settings.weatherOn = false
+    let b1: Biome = g.biomeAt(Double(0))
+    let b2: Biome = g.biomeAt(Double(64))
+    check(Set([b1, b2]) == Set([Biome.tundra, Biome.mountain]), "its regions count as the biomes chosen (\(b1.name), \(b2.name))")
+    check(g.world.isSkyExposed(Int(g.pb.x), Int(g.pb.y) - 2) && dimHasSky(.custom0), "it has open sky")
+    check(g.customDim!.spawnRules.count == 2, "its creatures become spawning rules")
+    // only its own creatures come
+    g.monstersEnabled = true
+    g.mobs.removeAll()
+    var others: [String] = []
+    for _ in 0..<500 {
+        g.spawnTimer = 0
+        g.updateSpawning(0.1)
+    }
+    let yetiSlot: Int = rt.mobSlot["dimz:yeti"]!
+    var yetis: Int = 0
+    var wolves: Int = 0
+    for m in g.mobs where m.hp > 0 {
+        if m.kind == .custom && m.cslot == yetiSlot { yetis += 1 } else if m.kind == .wolf { wolves += 1 } else { others.append(m.def.name) }
+    }
+    check(yetis + wolves > 0 && others.isEmpty, "only its own creatures appear there (\(yetis) yetis, \(wolves) wolves, others: \(others))")
+    g.mobs.removeAll()
+    g.mobGrid.rebuild(g.mobs)
+    // saved in the dimension
+    g.world.set(Int(g.pb.x) - 3, Int(g.pb.y) - 1, .brick)
+    let bxIn: Int = Int(g.pb.x) - 3
+    let byIn: Int = Int(g.pb.y) - 1
+    let back: SaveData = try! JSONDecoder().decode(SaveData.self, from: try! JSONEncoder().encode(g.makeSave()))
+    check(back.meta.dim == 2 && back.chunks.contains { $0.dim == 2 } && back.dimReturn?.dim == 0 && back.mods?.dims["dimz:frost"] == 0, "a save made there keeps the dimension's land, where the player is, and the way back")
+    ModRuntime.activate([pack], world: back.mods)
+    let g2 = Game.load(back, settings: Settings())
+    check(g2.world.dim == .custom0 && g2.world.tile(bxIn, byIn) == .brick && g2.dimReturn?.dim == 0, "loading it puts the player back in the dimension, with what they built")
+    check(ModRuntime.shared.dimSlots[0]?.key == "dimz:frost", "in the same slot")
+    ModRuntime.activate([], world: back.mods)
+    let g3 = Game.load(back, settings: Settings())
+    check(g3.world.dim == .overworld && near(g3.pb.x, back.spawnX, 3) && (g3.message ?? "").contains("missing"), "with its mod missing, the player wakes at the Overworld's spawn and is told why")
+    let resave: SaveData = g3.makeSave()
+    check(resave.chunks.contains { $0.dim == 2 } && resave.mods?.dims["dimz:frost"] == 0, "and the dimension is kept in the save for when the mod is back")
+    ModRuntime.activate([pack], world: back.mods)
+    // the way back
+    let g4 = Game.load(back, settings: Settings())
+    var gate4: (Int, Int)? = nil
+    for dx in -40...40 { for dy in -12...12 where g4.world.tile(Int(g4.pb.x) + dx, Int(g4.pb.y) + dy) == gate { gate4 = (Int(g4.pb.x) + dx, Int(g4.pb.y) + dy) } }
+    if let gt = gate4 {
+        g4.pb.x = Double(gt.0) - 1.5
+        g4.pb.y = Double(gt.1) + 1
+        aimAt(g4, Double(gt.0) + 0.5, Double(gt.1) + 0.5)
+        g4.usePressedFlag = true
+        g4.useHeld = true
+        g4.inv.slots[g4.sel] = nil
+        g4.updateUse(1.0 / 60.0)
+    }
+    check(gate4 != nil && g4.world.dim == .overworld && near(g4.pb.x, fromX, 4) && g4.dimReturn == nil, "tapping the gate takes the player back to where they came in")
+    // the key used inside the dimension also takes them back
+    let g5 = Game.load(back, settings: Settings())
+    g5.inv.slots[0] = Stack(item: .custom("dimz:key"), count: 1)
+    g5.setSel(0)
+    aimAt(g5, g5.pb.x + 1, g5.pb.y - 1)
+    g5.usePressedFlag = true
+    g5.useHeld = true
+    g5.updateUse(1.0 / 60.0)
+    check(g5.world.dim == .overworld, "so does using the key again inside it")
+    // summonings can be limited to the dimension
+    var only: ModSummon = ModSummon()
+    only.dimKeys = ["dimz:frost"]
+    check(g5.conditionsProblem(only, "It", nil) != nil, "a summoning set for the dimension doesn't work in the Overworld")
+    let g6 = Game.load(back, settings: Settings())
+    check(g6.conditionsProblem(only, "It", nil) == nil, "but does inside it")
+    ModRuntime.deactivate()
+    // the editor's preview runs the same generator
+    let pv: PixelBuf = ModDimPreview.render(pack.dims[0], pack)
+    check(pv.w == ModDimPreview.chunks * chunkW && pv.px.contains { $0 & 0xFFFFFF == 0x60A0E0 } && pv.px.contains { $0 & 0xFFFFFF == 0x203050 || $0 & 0xFFFFFF == 0xA0C8F0 },
+          "the editor's preview shows the land in the mod's own block colours under its sky")
+    // checks
+    var bad: ModPack = dimMod()
+    var bd: ModDimension = bad.dims[0]
+    bd.surface = 999; bd.hills = -5; bd.light = 7; bd.zoneWidth = 1; bd.stone = "ghost:rock"
+    bd.zones[0].ground = "tile:999"; bd.zones[0].plant = "ghost:plant"
+    bd.spawns.append({ var x = ModDimSpawn(); x.creature = "ghost:thing"; return x }())
+    bd.entry.how = .buildPattern
+    bd.entry.pattern = ModPattern(w: 2, h: 2)
+    bd.returnGate = false
+    bad.dims = [bd, bd, bd, bd]
+    bad.ores[0].dimKey = "nowhere"
+    _ = ModValidator.check(&bad, known: [:])
+    let cd: ModDimension = bad.dims[0]
+    check(bad.dims.count == 3 && Set(bad.dims.map { $0.id }).count == 3, "only three dimensions fit in a mod, each with its own id")
+    check(cd.surface == 260 && near(cd.hills, 0) && near(cd.light, 1) && cd.zoneWidth == 40 && cd.stone == ModGround.key(.stone), "numbers are kept in range and a rock that doesn't exist falls back to stone")
+    check(cd.zones[0].ground == ModGround.key(.grass) && cd.zones[0].plant.isEmpty && cd.spawns.count == 2, "broken blocks and creatures are cleared")
+    check(!cd.entry.enabled && cd.returnGate, "a way in with nothing to build is switched off, and without a key to use again the gate back is kept")
+    check(bad.ores[0].dimKey.isEmpty, "an ore set for a dimension that doesn't exist goes back to the Overworld")
+    let rtd: ModDimension = try! JSONDecoder().decode(ModDimension.self, from: try! JSONEncoder().encode(pack.dims[0]))
+    check(rtd == pack.dims[0], "a dimension survives a JSON round trip")
+    let oldPack: ModPack = try! JSONDecoder().decode(ModPack.self, from: "{\"id\":\"old\",\"name\":\"Old\"}".data(using: .utf8)!)
+    check(oldPack.dims.isEmpty, "a mod from before has none")
+    let moved: ModPack = ModStore.rekey(pack, from: "dimz", to: "dim2")
+    let md: ModDimension = moved.dims[0]
+    check(md.stone == "dim2:ice" && md.zones[1].ground == "dim2:ice" && md.spawns[0].creature == "dim2:yeti" && md.spawns[1].creature == mobDef(.wolf).name && md.entry.item == .custom("dim2:key") && md.entry.pattern.cell(0, 0) == "dim2:gate" && md.gateBlock == "dim2:gate",
+          "a copy under a new id keeps its dimension pointing at its own blocks, creatures and key")
+}
+
 print(fails == 0 ? "ALL \(passes) MOD CREATOR+ CHECKS PASSED" : "\(fails) FAILED, \(passes) passed")
 try? FileManager.default.removeItem(at: scratch)
 exit(fails == 0 ? 0 : 1)

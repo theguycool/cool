@@ -5267,6 +5267,8 @@ enum Biome: Int, Codable {
 
 enum Dimension: Int, Codable {
     case overworld, umbral
+    /// appended: the three custom dimension slots a world's mods can fill (see ModDimension)
+    case custom0, custom1, custom2
 }
 
 enum LairKind: Int { case bear, rex }
@@ -8628,7 +8630,7 @@ func buildUmbralPortal(_ g: WorldGen, _ ch: Chunk) {
 /// out the same; the work is done once, when the chunk is first made, never per frame.
 func applyModGen(_ g: WorldGen, _ ch: Chunk, _ dim: Dimension) {
     let rt: ModRuntime = ModRuntime.shared
-    let d: Int = dim == .overworld ? 0 : 1
+    let d: Int = dim.rawValue
     let H: Int = ch.H
     _ = H
     // each ore places itself (see ModOreRT.place: the original settings give the original veins)
@@ -8709,9 +8711,23 @@ func modStructSite(_ g: WorldGen, _ s: ModStructRT, _ dim: Dimension, _ cell: In
     if modSiteBlocked(g, dim, sx - 4, sx + d.w + 4, d.placement) { return nil }
     let mid: Int = sx + d.w / 2
     let pick: Double = hash2(cell, 1931, key)
-    let H: Int = dim == .overworld ? WorldGen.H : umbralH
+    let H: Int = dimHeight(dim)
     var top: Int = 0
-    if dim == .overworld {
+    if dim.isCustom {
+        guard let cd = ModRuntime.shared.dimRT(dim) else { return nil }
+        let surf: Int = cd.surfaceAt(mid, g.seed)
+        if !d.biomes.isEmpty && !d.biomes.contains(cd.biomeAt(Double(mid)).rawValue) { return nil }
+        switch d.placement {
+        case .surface:
+            if cd.def.sea > 0 && surf >= cd.def.sea - 1 { return nil }
+            top = surf - d.h + 1
+        case .underground:
+            let lo: Int = max(d.minY, surf + 6)
+            let hi: Int = max(lo, d.maxY - d.h)
+            top = lo + Int(pick * Double(hi - lo + 1))
+        case .sky: top = surf - d.h - 18 - Int(pick * 14.0)
+        }
+    } else if dim == .overworld {
         let c: Col = g.col(mid)
         if !d.biomes.isEmpty && !d.biomes.contains(c.biome.rawValue) { return nil }
         switch d.placement {
@@ -8746,7 +8762,7 @@ func applyModStructures(_ g: WorldGen, _ ch: Chunk, _ dim: Dimension) {
     let rt: ModRuntime = ModRuntime.shared
     if rt.structures.isEmpty { return }
     if dim == .overworld && !g.hasLandmarks { return }
-    let d: Int = dim == .overworld ? 0 : 1
+    let d: Int = dim.rawValue
     let x0: Int = ch.x0
     let x1: Int = x0 + chunkW - 1
     for s in rt.structures where s.def.dim == d {
@@ -8798,7 +8814,7 @@ func buildModStructure(_ ch: Chunk, _ s: ModStructRT, _ sx: Int, _ top: Int, fou
 extension ModRuntime {
     /// The loot table for a chest that one of the mods' structures put there, if any
     func structureChestLoot(_ g: WorldGen, _ dim: Dimension, _ x: Int, _ y: Int) -> String? {
-        let d: Int = dim == .overworld ? 0 : 1
+        let d: Int = dim.rawValue
         if dim == .overworld && !g.hasLandmarks { return nil }
         for s in structures where s.def.dim == d && !s.loot.isEmpty {
             let sp: Int = max(64, s.def.spacing)
@@ -8871,6 +8887,7 @@ extension Game {
         st.w = r.2 - r.0 + 1
         st.h = r.3 - r.1 + 1
         st.dim = world.dim == .umbral ? 1 : 0
+        if let cd = customDim { st.dimKey = splitModKey(cd.key).1 }
         var skipped: Int = 0
         var cells: [Int] = []
         cells.reserveCapacity(st.w * st.h)
@@ -8955,10 +8972,12 @@ func modStructureTileOK(_ t: Tile) -> Bool {
 }
 
 func generateChunk(_ g: WorldGen, _ dim: Dimension, _ cx: Int) -> Chunk {
+    if dim.isCustom { return generateCustomChunk(g, dim, cx) }
     return dim == .overworld ? generateOverworldChunk(g, cx) : generateUmbralChunk(g, cx)
 }
 
 func dimHeight(_ dim: Dimension) -> Int {
+    if dim.isCustom { return customDimH }
     return dim == .overworld ? WorldGen.H : umbralH
 }
 
@@ -8982,7 +9001,7 @@ final class World {
     var dim: Dimension = .overworld
     var H: Int = WorldGen.H
     var chunks: [Int: Chunk] = [:]
-    var parked: [[Int: Chunk]] = [[:], [:]]
+    var parked: [[Int: Chunk]] = [[Int: Chunk]](repeating: [:], count: dimCount)
     /// bounding box of tile edits since the light map last looked (lets lighting skip far-away edits)
     var editAny: Bool = false
     var editX0: Int = 0
@@ -9116,7 +9135,7 @@ final class World {
     var dirtyChunkCount: Int {
         var n: Int = 0
         for (_, c) in chunks { if c.dirty { n += 1 } }
-        for d in 0..<2 { n += parked[d].count }
+        for d in 0..<parked.count { n += parked[d].count }
         return n
     }
 
@@ -9189,7 +9208,7 @@ final class World {
     }
 
     func isSkyExposed(_ x: Int, _ y: Int) -> Bool {
-        if dim != .overworld { return false }
+        if dim != .overworld && !dimHasSky(dim) { return false }
         return y < skyTop(x)
     }
 
@@ -9610,7 +9629,7 @@ final class LightMap {
         var l0: Int = 0
         while l0 < 16 { lens[l0] = 0; l0 += 1 }
         let H: Int = world.H
-        let hasSky: Bool = world.dim == .overworld
+        let hasSky: Bool = dimHasSky(world.dim)
         let sl: Int = clampI(skyLevel, 0, 15)
         let q: UnsafeMutablePointer<Int> = queue
         let ss: UnsafeMutablePointer<Int> = skySeed
@@ -11617,7 +11636,9 @@ final class Game: ObservableObject, @unchecked Sendable {
     var fadeT: Double = 0
     var mounted: Mob? = nil
     var inVehicle: Vehicle? = nil
-    var vehicleStash: [[Vehicle]] = [[], []]
+    var vehicleStash: [[Vehicle]] = [[Vehicle]](repeating: [], count: dimCount)
+    /// where the player came from into a custom dimension (to go back there)
+    var dimReturn: DimReturn? = nil
     var mapCache: TreasureMap? = nil
     var hintT: Double = 0
     var autosaveT: Double = 0
@@ -11685,7 +11706,10 @@ final class Game: ObservableObject, @unchecked Sendable {
     /// 1 = full day, 0 = deep night
     var dayFactor: Double {
         let t: Double = timeOfDay
-        if world.dim != .overworld { return 0 }
+        if world.dim != .overworld {
+            if let d = customDim, !d.def.ceiling { return customDayFactor(d) }
+            return 0
+        }
         if t < 0.50 { return 1.0 }
         if t < 0.58 { return 1.0 - smooth((t - 0.50) / 0.08) }
         if t < 0.92 { return 0.0 }
@@ -11693,7 +11717,10 @@ final class Game: ObservableObject, @unchecked Sendable {
     }
 
     var skyLevel: Int {
-        if world.dim != .overworld { return 0 }
+        if world.dim != .overworld {
+            guard let d = customDim, !d.def.ceiling else { return 0 }
+            return Int((clampD(d.def.light, 0, 1) * (6.0 + 9.0 * dayFactor)).rounded())
+        }
         return Int((6.0 + 9.0 * dayFactor).rounded())
     }
 
@@ -12152,6 +12179,7 @@ extension Game {
     func respawn() {
         if mode == .hardcore && hardcoreOver { return }
         if world.dim != .overworld { travelTo(.overworld, arriveX: spawnX, arriveY: spawnY, silent: true) }
+        dimReturn = nil
         dead = false
         hp = maxHP
         hunger = max(hunger, 14)
@@ -12319,7 +12347,7 @@ extension Game {
         }
         let layoutChanged: Bool = light.layoutUsed != world.layoutVersion
         let needsStatic: Bool = !light.valid || !covered || light.skyUsed != skyLevel || light.dimUsed != world.dim.rawValue || edited || layoutChanged
-        var amb: Double = fullBright ? 1.0 : (world.dim == .umbral ? 0.2 : 0.07)
+        var amb: Double = fullBright ? 1.0 : (world.dim == .umbral ? 0.2 : (world.dim.isCustom ? 0.12 : 0.07))
         // an Owlsight Draught lifts the dark
         if nightVision { amb = max(amb, 0.5) }
         if !needsStatic {
@@ -13180,7 +13208,8 @@ extension Game {
             useBareHand(dt, pressed)
             return
         }
-        // a mod's summoning item (tried before the item's own use)
+        // a custom dimension's gate, then a mod's summoning item (tried before the item's own use)
+        if pressed && world.dim.isCustom && tryReturnGate() { return }
         if pressed && !ModRuntime.shared.summons.isEmpty && trySummonWith(it) { return }
         switch it {
         case .block(let t): usePlaceBlock(t, dt)
@@ -13210,6 +13239,7 @@ extension Game {
     // MARK: bare hands & tools
 
     func useBareHand(_ dt: Double, _ pressed: Bool) {
+        if pressed && world.dim.isCustom && tryReturnGate() { return }
         if let m = mobUnderAim(Item.bareHands) {
             if pressed || (useCD <= 0 && !meleeCandidates(Item.bareHands).isEmpty) { startMelee(nil, target: m) }
             return
@@ -15584,7 +15614,7 @@ extension Game {
         if world.dim == .umbral {
             place = .umbral
         } else {
-            let sh: Int = gen.col(px).h
+            let sh: Int = world.dim.isCustom ? customSurface(px) : gen.col(px).h
             let open: Bool = world.isSkyExposed(px, Int(pb.y) - 1)
             let depth: Int = Int(pb.y) - sh
             if depth > 18 && !open { place = .cave }
@@ -15630,7 +15660,7 @@ extension Game {
             if light.valid && light.covers(ix, y, ix, y) && light.brightness(ix, y) > 6 && !fullBright { spawnNote("too bright"); return }
             sy = Double(y + 1)
         }
-        let biome: Biome = world.dim == .overworld ? gen.col(ix).biome : .umbral
+        let biome: Biome = biomeAt(Double(ix))
         // under a dark storm by day, now and then the night's creatures come out too
         let stormDark: Bool = world.dim == .overworld && settings.weatherOn && wxHere.cloud > 0.9 && wxHere.precip > 0.6 && Double.random(in: 0...1) < 0.35
         let night: Bool = isNight || stormDark
@@ -15650,7 +15680,8 @@ extension Game {
         var total: Double = 0
         // the custom creatures of the world's mods spawn by the same rules, beside the game's own
         let rt: ModRuntime = ModRuntime.shared
-        let rules: [SpawnRule] = rt.spawnRules.isEmpty ? spawnRules : spawnRules + rt.spawnRules
+        // a custom dimension has only its own creatures
+        let rules: [SpawnRule] = world.dim.isCustom ? (customDim?.spawnRules ?? []) : (rt.spawnRules.isEmpty ? spawnRules : spawnRules + rt.spawnRules)
         var customN: Int = -1
         for r in rules {
             if r.place != eff { continue }
@@ -16820,6 +16851,10 @@ extension Game {
         if checkGuardians { guardianT = 0.25 }
         if world.dim == .umbral {
             if checkGuardians { updateWardenSpawn() }
+            refreshBossBar()
+            return
+        }
+        if world.dim.isCustom {
             refreshBossBar()
             return
         }
@@ -18649,6 +18684,8 @@ struct SaveData: Codable {
     var suit: ExoSuit? = nil
     /// summoned mod creatures still about (nil: none)
     var bosses: [ModBossSave]? = nil
+    /// where the player came into a custom dimension from (nil: not in one)
+    var dimReturn: DimReturn? = nil
 }
 
 func mobToSave(_ m: Mob) -> MobSave {
@@ -18737,7 +18774,7 @@ extension Game {
             }
             cs.append(ChunkSave(dim: cur, cx: k, data: Data(World.rle(tiles)), walls: c.walls.isEmpty ? nil : Data(World.rle(c.walls)), wires: c.wireCount == 0 ? nil : Data(World.rle(c.wires))))
         }
-        for d in 0..<2 {
+        for d in 0..<world.parked.count {
             for (k, c) in world.parked[d] {
                 if d == cur && world.chunks[k] != nil { continue }
                 cs.append(ChunkSave(dim: d, cx: k, data: Data(World.rle(c.tiles)), walls: c.walls.isEmpty ? nil : Data(World.rle(c.walls)), wires: c.wireCount == 0 ? nil : Data(World.rle(c.wires))))
@@ -18752,8 +18789,8 @@ extension Game {
                 chestList.append(ChestEntry(key: key, items: loot))
             }
         }
-        var vs: [[VehicleSave]] = [[], []]
-        for d in 0..<2 {
+        var vs: [[VehicleSave]] = [[VehicleSave]](repeating: [], count: dimCount)
+        for d in 0..<dimCount {
             let list: [Vehicle] = d == cur ? vehicles : vehicleStash[d]
             vs[d] = list.map { $0.save() }
         }
@@ -18769,7 +18806,7 @@ extension Game {
         // the world's mods: those it was made with (a missing one stays listed, so it is never forgotten)
         var mi: ModWorldInfo? = modInfo
         if ModRuntime.shared.active { mi = ModRuntime.shared.worldInfo() }
-        return SaveData(meta: meta, settings: settings, px: px, py: py, hp: max(1, hp), maxHP: maxHP, hunger: hunger, timeOfDay: timeOfDay, kills: kills, spawnX: spawnX, spawnY: spawnY, inv: inv, sel: sel, defeated: Array(defeated), gotMap: gotMap, portalOpened: portalOpened, chests: chestList, chunks: cs, vehicles: vs, pets: pets, rex: rs, nextID: nextID, journal: journal, weather: weather, bodyCold: bodyCold, power: powerSave(), mods: mi, effects: effectsSave(), mutants: mutantSaves(), suit: suit.isEmpty ? nil : suit, bosses: bossSaves())
+        return SaveData(meta: meta, settings: settings, px: px, py: py, hp: max(1, hp), maxHP: maxHP, hunger: hunger, timeOfDay: timeOfDay, kills: kills, spawnX: spawnX, spawnY: spawnY, inv: inv, sel: sel, defeated: Array(defeated), gotMap: gotMap, portalOpened: portalOpened, chests: chestList, chunks: cs, vehicles: vs, pets: pets, rex: rs, nextID: nextID, journal: journal, weather: weather, bodyCold: bodyCold, power: powerSave(), mods: mi, effects: effectsSave(), mutants: mutantSaves(), suit: suit.isEmpty ? nil : suit, bosses: bossSaves(), dimReturn: dimReturn)
     }
 
     @discardableResult
@@ -18814,12 +18851,12 @@ extension Game {
         g.nextID = max(g.nextID, s.nextID)
         let w: World = g.world
         w.chunks.removeAll()
-        w.parked = [[:], [:]]
+        w.parked = [[Int: Chunk]](repeating: [:], count: dimCount)
         for c in s.chunks {
-            if c.dim < 0 || c.dim > 1 { continue }
+            if c.dim < 0 || c.dim >= dimCount { continue }
             let H: Int = dimHeight(Dimension(rawValue: c.dim) ?? .overworld)
             let ch = Chunk(cx: c.cx, H: H)
-            ch.hasSky = c.dim == 0
+            ch.hasSky = dimHasSky(Dimension(rawValue: c.dim) ?? .overworld)
             ch.tiles = World.unrle([UInt8](c.data), chunkW * H)
             if ch.tiles.count > chunkW * H { ch.tiles = Array(ch.tiles.prefix(chunkW * H)) }
             if let wd = c.walls { ch.walls = World.unrle([UInt8](wd), chunkW * H) }
@@ -18830,7 +18867,7 @@ extension Game {
             }
             ch.dirty = true
             ch.rebuildSky()
-            fillSurface(ch, g.gen, c.dim == 0 ? .overworld : .umbral)
+            fillSurface(ch, g.gen, Dimension(rawValue: c.dim) ?? .overworld)
             w.parked[c.dim][c.cx] = ch
         }
         for e in s.chests { w.chests[e.key] = e.items }
@@ -18848,24 +18885,36 @@ extension Game {
             w.devs[k] = d
         }
         w.powerRev &+= 1
-        let dim: Dimension = Dimension(rawValue: s.meta.dim) ?? .overworld
+        var dim: Dimension = Dimension(rawValue: s.meta.dim) ?? .overworld
+        var startX: Double = s.px
+        var startY: Double = s.py
+        g.dimReturn = s.dimReturn
+        if dim.isCustom && ModRuntime.shared.dimRT(dim) == nil {
+            // saved in a custom dimension whose mod is missing: back at the Overworld's spawn (the
+            // dimension itself is kept for when its mod returns)
+            dim = .overworld
+            startX = s.spawnX
+            startY = s.spawnY
+            g.dimReturn = nil
+            g.say("That dimension's mod is missing, so you are back in the Overworld.", 5.0)
+        }
         if dim != w.dim {
             w.dim = dim
             w.H = dimHeight(dim)
         }
         w.version += 1
         w.layoutVersion += 1
-        for d in 0..<2 where d < s.vehicles.count {
+        for d in 0..<min(dimCount, s.vehicles.count) {
             let list: [Vehicle] = s.vehicles[d].map { Vehicle.restore($0) }
             if d == dim.rawValue { g.vehicles = list } else { g.vehicleStash[d] = list }
         }
-        w.loadAround(centerX: Int(floor(s.px)), radius: 4)
-        g.pb.x = s.px
-        g.pb.y = s.py
+        w.loadAround(centerX: Int(floor(startX)), radius: 4)
+        g.pb.x = startX
+        g.pb.y = startY
         g.pb.vx = 0
         g.pb.vy = 0
         if w.boxSolid(g.pb.left, g.pb.top, g.pb.right, g.pb.y - 0.05) {
-            let spot: (Double, Double) = g.findSafeSpot(s.px, s.py)
+            let spot: (Double, Double) = g.findSafeSpot(startX, startY)
             g.pb.x = spot.0
             g.pb.y = spot.1
         }
@@ -19407,6 +19456,7 @@ extension Game {
 
     var biomeHere: Biome {
         if world.dim == .umbral { return .umbral }
+        if world.dim.isCustom { return customDim?.biomeAt(pb.x) ?? .plains }
         return gen.col(Int(floor(pb.x))).biome
     }
 
@@ -19486,9 +19536,13 @@ extension Game {
 // 0 none (sky shows through), 1 dirt, 2 stone, 3 deep rock, 4 ash, 5 planks, 6 brick, 7 sandstone
 
 func fillSurface(_ ch: Chunk, _ g: WorldGen, _ dim: Dimension) {
+    let cd: ModDimRT? = dim.isCustom ? ModRuntime.shared.dimRT(dim) : nil
     for lx in 0..<chunkW {
         let x: Int = ch.x0 + lx
-        if dim == .overworld {
+        if dim.isCustom {
+            ch.surf[lx] = cd?.surfaceAt(x, g.seed) ?? ch.H - 3
+            ch.ceilY[lx] = (cd?.def.ceiling ?? false) ? (cd?.ceilingAt(x, g.seed) ?? 0) : 0
+        } else if dim == .overworld {
             ch.surf[lx] = g.col(x).h
         } else {
             ch.surf[lx] = g.uFloor(x)
@@ -23597,6 +23651,8 @@ struct ModOre: Codable, Identifiable, Equatable {
     var near: String = ""
     /// the exact blocks it may replace (empty: the host choice)
     var hosts: [String] = []
+    /// one of this mod's dimensions (its id) instead of `dim` (empty: `dim` decides)
+    var dimKey: String = ""
 
     init() {}
 
@@ -23617,6 +23673,7 @@ struct ModOre: Codable, Identifiable, Equatable {
         shape = c.val(.shape, 0)
         near = c.val(.near, "")
         hosts = c.val(.hosts, [])
+        dimKey = c.val(.dimKey, "")
     }
 
     static let hostNames: [String] = ["Any rock", "Stone", "Slate and deep rock", "Dirt and sand", "Any natural ground"]
@@ -23652,6 +23709,8 @@ struct ModStructure: Codable, Identifiable, Equatable {
     /// blocks between possible sites
     var spacing: Int = 300
     var dim: Int = 0
+    /// one of this mod's dimensions (its id) instead of `dim` (empty: `dim` decides)
+    var dimKey: String = ""
     /// loot table of this mod for chests inside
     var loot: String = ""
 
@@ -23673,6 +23732,7 @@ struct ModStructure: Codable, Identifiable, Equatable {
         spacing = c.val(.spacing, 300)
         dim = c.val(.dim, 0)
         loot = c.val(.loot, "")
+        dimKey = c.val(.dimKey, "")
     }
 
     func cell(_ x: Int, _ y: Int) -> Int {
@@ -23714,13 +23774,15 @@ struct ModPack: Codable, Identifiable, Equatable {
     var overrides: [ModOverride] = []
     /// infusions of this mod (each has a compound: an item under the same key)
     var infusions: [ModInfusion] = []
+    /// dimensions of this mod
+    var dims: [ModDimension] = []
     /// entries left out because they could not be read (not saved)
     var skipped: Int = 0
 
     enum CodingKeys: String, CodingKey {
         case format, id, name, desc, author, version, created, edited, sandbox
         case blocks, items, mobs, projectiles, recipes, loot, ores, structures
-        case folder, requires, off, overrides, infusions
+        case folder, requires, off, overrides, infusions, dims
     }
 
     init() {}
@@ -23750,6 +23812,7 @@ struct ModPack: Codable, Identifiable, Equatable {
         off = c.val(.off, [])
         overrides = c.list(.overrides, &skip)
         infusions = c.list(.infusions, &skip)
+        dims = c.list(.dims, &skip)
         skipped = skip
     }
 
@@ -23757,7 +23820,7 @@ struct ModPack: Codable, Identifiable, Equatable {
     func key(_ contentID: String) -> String { return id + ":" + contentID }
 
     var contentCount: Int {
-        return blocks.count + items.count + mobs.count + projectiles.count + recipes.count + loot.count + ores.count + structures.count + overrides.count + infusions.count
+        return blocks.count + items.count + mobs.count + projectiles.count + recipes.count + loot.count + ores.count + structures.count + overrides.count + infusions.count + dims.count
     }
 
     /// "3 creatures, 2 weapons, 5 blocks..." for the mod list
@@ -23778,6 +23841,7 @@ struct ModPack: Codable, Identifiable, Equatable {
         add(projectiles.count, "shot", "shots")
         add(overrides.count, "change to the game", "changes to the game")
         add(infusions.count, "infusion", "infusions")
+        add(dims.count, "dimension", "dimensions")
         return parts.isEmpty ? "Empty" : parts.joined(separator: ", ")
     }
 
@@ -23794,6 +23858,7 @@ struct ModPack: Codable, Identifiable, Equatable {
         for s in structures { used.insert(s.id) }
         for o in overrides { used.insert(o.id) }
         for f in infusions { used.insert(f.id) }
+        for d in dims { used.insert(d.id) }
         var n: Int = 1
         while used.contains(prefix + String(n)) { n += 1 }
         return prefix + String(n)
@@ -24108,6 +24173,27 @@ enum ModStore {
             p.ores[i].hosts = p.ores[i].hosts.map { fixRef($0) }
             p.ores[i].near = fixRef(p.ores[i].near)
         }
+        for i in p.mobs.indices {
+            for k in p.mobs[i].summons.indices { p.mobs[i].summons[k].dimKeys = p.mobs[i].summons[k].dimKeys.map { fixRef($0) } }
+        }
+        for i in p.dims.indices {
+            var d: ModDimension = p.dims[i]
+            d.stone = fixRef(d.stone)
+            d.hazard = fixRef(d.hazard)
+            d.gateBlock = fixRef(d.gateBlock)
+            for k in d.zones.indices {
+                d.zones[k].ground = fixRef(d.zones[k].ground)
+                d.zones[k].filler = fixRef(d.zones[k].filler)
+                d.zones[k].plant = fixRef(d.zones[k].plant)
+                d.zones[k].log = fixRef(d.zones[k].log)
+                d.zones[k].leaves = fixRef(d.zones[k].leaves)
+            }
+            for k in d.spawns.indices { d.spawns[k].creature = fixRef(d.spawns[k].creature) }
+            if let it = d.entry.item { d.entry.item = fix(it) }
+            d.entry.pattern.cells = d.entry.pattern.cells.map { fixRef($0) }
+            d.entry.dimKeys = d.entry.dimKeys.map { fixRef($0) }
+            p.dims[i] = d
+        }
         return p
     }
 }
@@ -24180,6 +24266,7 @@ struct ModCatalog {
             for s in p.projectiles { c.keys[p.key(s.id)] = "shot"; c.names[p.key(s.id)] = s.name }
             for l in p.loot { c.keys[p.key(l.id)] = "loot"; c.names[p.key(l.id)] = l.name }
             for f in p.infusions { c.keys[p.key(f.id)] = "item"; c.names[p.key(f.id)] = joinText(f.name, " Compound") }
+            for d in p.dims { c.keys[p.key(d.id)] = "dimension"; c.names[p.key(d.id)] = d.name }
         }
         return c
     }
@@ -24275,6 +24362,7 @@ enum ModValidator {
         for l in p.loot { own[p.key(l.id)] = "loot" }
         // an infusion's compound is an item of the mod
         for f in p.infusions { own[p.key(f.id)] = "item" }
+        for d in p.dims { own[p.key(d.id)] = "dimension" }
         func exists(_ it: Item) -> Bool {
             if case .custom(let k) = it {
                 let kind: String = own[k] ?? known[k] ?? ""
@@ -25423,6 +25511,8 @@ struct ModWorldInfo: Codable, Equatable {
     var blocks: [String: Int] = [:]
     /// custom infusion key -> its number on items
     var infusions: [String: Int] = [:]
+    /// custom dimension key -> its slot (0 to 2)
+    var dims: [String: Int] = [:]
 
     init() {}
 
@@ -25432,6 +25522,7 @@ struct ModWorldInfo: Codable, Equatable {
         mods = c.list(.mods, &skip)
         blocks = c.val(.blocks, [:])
         infusions = c.val(.infusions, [:])
+        dims = c.val(.dims, [:])
     }
 }
 
@@ -25710,6 +25801,9 @@ final class ModRuntime {
     var infusionNumber: [String: Int] = [:]
     /// every way to summon a custom creature, ready for play
     var summons: [ModSummonRT] = []
+    /// the world's three custom dimension slots, and the key each holds (kept for missing mods)
+    var dimSlots: [ModDimRT?] = [nil, nil, nil]
+    var dimSlotKey: [String?] = [nil, nil, nil]
 
     var active: Bool { return !packs.isEmpty || !missing.isEmpty }
     var hasWorldGen: Bool { return !ores.isEmpty || !structures.isEmpty }
@@ -25759,6 +25853,7 @@ final class ModRuntime {
         rt.buildLoot()
         rt.buildMobs()
         rt.buildSummons()
+        rt.buildDims(world)
         rt.buildRecipes()
         rt.buildOres()
         rt.buildStructures()
@@ -25789,6 +25884,7 @@ final class ModRuntime {
             if let k = slotKey[i] { w.blocks[k] = Int(Tile.modBase) + i }
         }
         for (k, n) in infusionNumber { w.infusions[k] = n }
+        for i in 0..<dimSlotKey.count { if let k = dimSlotKey[i] { w.dims[k] = i } }
         return w
     }
 
@@ -26111,7 +26207,9 @@ final class ModRuntime {
                 var hostTiles: Set<UInt8> = []
                 for k in o.hosts { if let h = ModGround.resolve(k, self) { hostTiles.insert(h.rawValue) } }
                 let near: Tile? = o.near.isEmpty ? nil : ModGround.resolve(o.near, self)
-                ores.append(ModOreRT(tile: t, dim: o.dim, minY: o.minY, maxY: o.maxY, veins: o.veins, size: o.size, host: o.host, salt: salt,
+                let od: Int = dimNumber(o.dim, o.dimKey.isEmpty ? "" : p.key(o.dimKey))
+                if od < 0 { continue }
+                ores.append(ModOreRT(tile: t, dim: od, minY: o.minY, maxY: o.maxY, veins: o.veins, size: o.size, host: o.host, salt: salt,
                                      place: o.place, biomes: Set(o.biomes), rarity: o.rarity, shape: o.shape, nearTile: near, hostTiles: hostTiles))
             }
         }
@@ -26146,7 +26244,10 @@ final class ModRuntime {
                     }
                 }
                 let salt: UInt64 = UInt64(truncatingIfNeeded: modChecksum(Data((p.id + s.id).utf8)))
-                structures.append(ModStructRT(key: p.key(s.id), def: s, cells: cells, salt: salt, loot: s.loot.isEmpty ? "" : p.key(s.loot)))
+                var sd: ModStructure = s
+                sd.dim = dimNumber(s.dim, s.dimKey.isEmpty ? "" : p.key(s.dimKey))
+                if sd.dim < 0 { continue }
+                structures.append(ModStructRT(key: p.key(s.id), def: sd, cells: cells, salt: salt, loot: s.loot.isEmpty ? "" : p.key(s.loot)))
             }
         }
     }
@@ -29337,7 +29438,7 @@ extension Game {
         if !(suit.worn && suitStats.has(.cargo)) { return }
         let k: IntPair = packSpot
         // the pack is kept with the realm the player is in: bring it along from the other one
-        for d in 0..<2 where d != world.dim.rawValue {
+        for d in 0..<dimCount where d != world.dim.rawValue {
             let other: ChestKey = ChestKey(d: d, x: k.x, y: k.y)
             if let items = world.chests[other] {
                 let here: ChestKey = world.chestKey(k.x, k.y)
@@ -29355,7 +29456,7 @@ extension Game {
     /// Everything in the cargo pack goes into the bag (or at the player's feet)
     func emptyPack() {
         let k: IntPair = packSpot
-        for d in 0..<2 {
+        for d in 0..<dimCount {
             let key: ChestKey = ChestKey(d: d, x: k.x, y: k.y)
             if let items = world.chests[key] {
                 world.chests[key] = nil
@@ -30288,6 +30389,16 @@ extension ModStore {
             for k in o.hosts where k.contains(":") && !k.hasPrefix("tile:") { add(k) }
             if o.near.contains(":") && !o.near.hasPrefix("tile:") { add(o.near) }
         }
+        for m in p.mobs { for sm in m.summons { for k in sm.dimKeys { add(k) } } }
+        for d in p.dims {
+            for k in [d.stone, d.hazard, d.gateBlock] where k.contains(":") && !k.hasPrefix("tile:") { add(k) }
+            for z in d.zones {
+                for k in [z.ground, z.filler, z.plant, z.log, z.leaves] where k.contains(":") && !k.hasPrefix("tile:") { add(k) }
+            }
+            for sp in d.spawns where sp.creature.contains(":") { add(sp.creature) }
+            addItem(d.entry.item)
+            for k in d.entry.pattern.cells where k.contains(":") && !k.hasPrefix("tile:") { add(k) }
+        }
         return out
     }
 
@@ -30339,12 +30450,16 @@ extension ModValidator {
             keep.append(o)
         }
         p.overrides = keep
-        let ids: Set<String> = Set(p.blocks.map { $0.id } + p.items.map { $0.id } + p.mobs.map { $0.id } + p.recipes.map { $0.id } + p.ores.map { $0.id } + p.structures.map { $0.id } + p.overrides.map { $0.id } + p.projectiles.map { $0.id } + p.loot.map { $0.id } + p.infusions.map { $0.id })
+        let ids: Set<String> = Set(p.blocks.map { $0.id } + p.items.map { $0.id } + p.mobs.map { $0.id } + p.recipes.map { $0.id } + p.ores.map { $0.id } + p.structures.map { $0.id } + p.overrides.map { $0.id } + p.projectiles.map { $0.id } + p.loot.map { $0.id } + p.infusions.map { $0.id } + p.dims.map { $0.id })
         p.off = p.off.filter { ids.contains($0) }
         _ = known
         checkOrePlus(&p, mn, &r)
         checkInfusions(&p, mn, sb, known, &r)
         checkBosses(&p, mn, sb, known, &r)
+        checkDims(&p, mn, sb, known, &r)
+        let dimIDs: Set<String> = Set(p.dims.map { $0.id })
+        for i in p.ores.indices where !p.ores[i].dimKey.isEmpty && !dimIDs.contains(p.ores[i].dimKey) { p.ores[i].dimKey = "" }
+        for i in p.structures.indices where !p.structures[i].dimKey.isEmpty && !dimIDs.contains(p.structures[i].dimKey) { p.structures[i].dimKey = "" }
     }
 }
 
@@ -31480,6 +31595,8 @@ struct ModSummon: Codable, Equatable {
     /// 0 right there (on the shape, or beside the player), 1 a little way off
     var appear: Int = 0
     var message: String = ""
+    /// custom dimensions it works in ("mod:id"; with `dims`, any of them)
+    var dimKeys: [String] = []
 
     init() {}
 
@@ -31498,6 +31615,7 @@ struct ModSummon: Codable, Equatable {
         place = c.val(.place, 0)
         appear = c.val(.appear, 0)
         message = c.val(.message, "")
+        dimKeys = c.val(.dimKeys, [])
     }
 
     var usesItem: Bool { return how != .buildPattern }
@@ -31548,12 +31666,15 @@ final class ModSummonRT {
     let def: ModSummon
     /// the shape's cells that matter: across and down from its top left, and the block (nil: empty)
     let cells: [(Int, Int, Tile?)]
+    /// a custom dimension's way in (its slot), instead of a creature (-1)
+    let dimSlot: Int
 
-    init(slot: Int, key: String, def: ModSummon, cells: [(Int, Int, Tile?)]) {
+    init(slot: Int, key: String, def: ModSummon, cells: [(Int, Int, Tile?)], dimSlot: Int = -1) {
         self.slot = slot
         self.key = key
         self.def = def
         self.cells = cells
+        self.dimSlot = dimSlot
     }
 
     /// The top left of a finished shape that takes in the block at (x, y) (nil: there is none)
@@ -31751,6 +31872,7 @@ extension Game {
     /// The biome at x in the world the player is in
     func biomeAt(_ x: Double) -> Biome {
         if world.dim == .overworld { return gen.col(Int(floor(x))).biome }
+        if let d = customDim { return d.biomeAt(x) }
         return .umbral
     }
 
@@ -31759,6 +31881,11 @@ extension Game {
     func trySummonWith(_ it: Item) -> Bool {
         var why: String? = nil
         for s in ModRuntime.shared.summons where s.def.usesItem && s.def.item == it {
+            // inside the dimension, its key item takes the player back
+            if s.dimSlot >= 0 && world.dim == .custom(s.dimSlot) {
+                leaveCustomDim()
+                return true
+            }
             var at: (Int, Int)? = nil
             if s.def.how == .itemOnPattern {
                 let tx: Int = Int(floor(aimX))
@@ -31772,6 +31899,17 @@ extension Game {
                     continue
                 }
                 at = o
+            }
+            if s.dimSlot >= 0 {
+                guard let dr = ModRuntime.shared.dimSlots[s.dimSlot] else { continue }
+                if let w = conditionsProblem(s.def, dr.def.name, at) {
+                    why = w
+                    continue
+                }
+                if s.def.consume && !isCreative { inv.removeAt(sel, 1) }
+                if let o = at, s.def.clearPattern { for c in s.cells where c.2 != nil { world.set(o.0 + c.0, o.1 + c.1, .air) } }
+                enterCustomDim(dr)
+                return true
             }
             if let w = summonProblem(s, at) {
                 why = w
@@ -31805,6 +31943,16 @@ extension Game {
     func summonByBuilding(_ x: Int, _ y: Int) {
         for s in ModRuntime.shared.summons where s.def.how == .buildPattern {
             guard let o = s.shapeAt(world, x, y) else { continue }
+            if s.dimSlot >= 0 {
+                guard let dr = ModRuntime.shared.dimSlots[s.dimSlot], world.dim != dr.dim else { continue }
+                if let w = conditionsProblem(s.def, dr.def.name, o) {
+                    say(w, 2.5)
+                    continue
+                }
+                if s.def.clearPattern { for c in s.cells where c.2 != nil { world.set(o.0 + c.0, o.1 + c.1, .air) } }
+                enterCustomDim(dr)
+                return
+            }
             if let w = summonProblem(s, o) {
                 say(w, 2.5)
                 continue
@@ -31820,19 +31968,32 @@ extension Game {
     /// Why the summoning can't happen here and now (nil: it can)
     func summonProblem(_ s: ModSummonRT, _ at: (Int, Int)?) -> String? {
         guard let r = ModRuntime.shared.mob(s.slot) else { return "That creature's mod is not on." }
-        let d: ModSummon = s.def
         let name: String = r.def.name
         for m in mobs where m.kind == .custom && m.cslot == s.slot && m.hp > 0 && !m.removed && (m.summoned || r.boss) {
             return joinText(name, " is already here.")
         }
+        return conditionsProblem(s.def, name, at)
+    }
+
+    /// Why a summoning's (or a dimension's way in) conditions don't hold here and now (nil: they do)
+    func conditionsProblem(_ d: ModSummon, _ name: String, _ at: (Int, Int)?) -> String? {
         var x: Double = pb.x
         var y: Double = pb.y - 0.5
         if let o = at {
             x = Double(o.0) + Double(d.pattern.w) * 0.5
             y = Double(o.1) - 0.5
         }
-        if !d.dims.isEmpty && !d.dims.contains(world.dim.rawValue) {
-            return joinText(name, " only answers in ", d.dims.map { ModSummonText.dimName($0) }.joined(separator: " or "), ".")
+        if !d.dims.isEmpty || !d.dimKeys.isEmpty {
+            var ok: Bool = d.dims.contains(world.dim.rawValue)
+            if let cd = customDim, d.dimKeys.contains(cd.key) { ok = true }
+            if !ok {
+                var names: [String] = d.dims.map { ModSummonText.dimName($0) }
+                for k in d.dimKeys {
+                    let n: String? = ModRuntime.shared.dimSlots.first { $0?.key == k }??.def.name
+                    names.append(n ?? "another dimension")
+                }
+                return joinText(name, " only answers in ", names.joined(separator: " or "), ".")
+            }
         }
         if !d.biomes.isEmpty && !d.biomes.contains(biomeAt(x).rawValue) {
             return joinText(name, " only answers in ", d.biomes.map { ModSummonText.biomeName($0) }.joined(separator: " or "), ".")
@@ -31972,8 +32133,6 @@ extension ModValidator {
     /// Phases and summonings of custom creatures: numbers in range, helpers, items and blocks real
     static func checkBosses(_ p: inout ModPack, _ mn: String, _ sb: Bool, _ known: [String: String], _ r: inout ModReport) {
         let ownMobs: Set<String> = Set(p.mobs.map { p.key($0.id) })
-        let ownItems: Set<String> = Set(p.items.map { p.key($0.id) } + p.infusions.map { p.key($0.id) })
-        let ownBlocks: Set<String> = Set(p.blocks.map { p.key($0.id) })
         let gameNames: Set<String> = Set(MobKind.allCases.filter { $0 != .custom && $0 != .villager }.map { mobDef($0).name })
         func c(_ v: Double, _ lo: Double, _ hi: Double, _ d: Double) -> Double { return clampD(v.isFinite ? v : d, lo, hi) }
         for i in p.mobs.indices {
@@ -32025,50 +32184,934 @@ extension ModValidator {
             }
             for k in m.summons.indices {
                 var s: ModSummon = m.summons[k]
-                s.message = String(s.message.prefix(80))
-                s.time = clampI(s.time, 0, 2)
-                s.weather = clampI(s.weather, 0, 4)
-                s.place = clampI(s.place, 0, 2)
-                s.appear = clampI(s.appear, 0, 1)
-                s.biomes = Array(Set(s.biomes.filter { Biome(rawValue: $0) != nil })).sorted()
-                s.dims = Array(Set(s.dims.filter { $0 >= 0 && $0 <= 1 })).sorted()
-                // the shape: a legal size, every cell empty, "air" or a block that exists
-                var pt: ModPattern = s.pattern
-                pt.w = clampI(pt.w, 1, ModPattern.maxSide)
-                pt.h = clampI(pt.h, 1, ModPattern.maxSide)
-                var cells: [String] = Array(pt.cells.prefix(pt.w * pt.h))
-                while cells.count < pt.w * pt.h { cells.append("") }
-                var broken: Bool = false
-                for j in cells.indices {
-                    let key: String = cells[j]
-                    if key.isEmpty || key == "air" { continue }
-                    if key.hasPrefix("tile:") {
-                        if let n = Int(key.dropFirst(5)), let t = Tile(rawValue: UInt8(clampI(n, 0, 255))), t != .air, !t.isMod, n >= 0 && n <= 255 { continue }
-                    } else if ownBlocks.contains(key) || known[key] == "block" {
-                        continue
-                    }
-                    cells[j] = ""
-                    broken = true
-                }
-                pt.cells = cells
-                s.pattern = pt
-                if broken { r.add(1, mn, place, "A block in a summoning shape does not exist; that cell now takes anything.") }
-                if s.usesPattern && pt.blockCells == 0 && s.enabled {
-                    r.add(1, mn, place, "A summoning by shape needs at least one block in its shape; it is switched off.")
-                    s.enabled = false
-                }
-                if s.usesItem {
-                    if let it = s.item, case .custom(let key) = it, !ownItems.contains(key) && known[key] != "item" {
-                        s.item = nil
-                    }
-                    if s.item == nil && s.enabled {
-                        r.add(1, mn, place, "A summoning by item needs an item that exists; it is switched off.")
-                        s.enabled = false
-                    }
-                }
+                for n in fixSummon(&s, p, known) { r.add(1, mn, place, n) }
                 m.summons[k] = s
             }
             p.mobs[i] = m
+        }
+    }
+}
+
+// MARK: - Mod Creator+: custom dimensions
+
+/// Height of every custom dimension (blocks)
+let customDimH: Int = 320
+/// Dimensions one world holds: the Overworld, the Umbral Realm and three custom ones
+let dimCount: Int = 5
+
+extension Dimension {
+    var isCustom: Bool { return rawValue >= 2 }
+    /// which of the three custom dimension slots it is (-1: not a custom one)
+    var customSlot: Int { return rawValue >= 2 ? rawValue - 2 : -1 }
+    static func custom(_ slot: Int) -> Dimension { return Dimension(rawValue: 2 + clampI(slot, 0, 2)) ?? .overworld }
+}
+
+/// Whether a dimension has open sky (sunlight, rain, the sky drawn behind it)
+func dimHasSky(_ d: Dimension) -> Bool {
+    if d == .overworld { return true }
+    if d.isCustom, let r = ModRuntime.shared.dimRT(d) { return !r.def.ceiling }
+    return false
+}
+
+/// A stretch of a custom dimension with its own ground, plants and trees: its biomes
+struct ModDimZone: Codable, Equatable {
+    var name: String = "Meadow"
+    /// the game biome it counts as (for ores, structures, summoning and creature rules)
+    var biome: Int = Biome.plains.rawValue
+    var ground: String = ModGround.key(.grass)
+    var filler: String = ModGround.key(.dirt)
+    /// a small plant on the ground (empty: none)
+    var plant: String = ModGround.key(.tallGrass)
+    var plantChance: Double = 0.12
+    /// 0 none, 1 a few, 2 many
+    var trees: Int = 1
+    var log: String = ModGround.key(.log)
+    var leaves: String = ModGround.key(.leaves)
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = c.val(.name, "Zone")
+        biome = c.val(.biome, Biome.plains.rawValue)
+        ground = c.val(.ground, ModGround.key(.grass))
+        filler = c.val(.filler, ModGround.key(.dirt))
+        plant = c.val(.plant, "")
+        plantChance = c.val(.plantChance, 0.12)
+        trees = c.val(.trees, 1)
+        log = c.val(.log, ModGround.key(.log))
+        leaves = c.val(.leaves, ModGround.key(.leaves))
+    }
+}
+
+/// A creature that lives in a custom dimension
+struct ModDimSpawn: Codable, Equatable {
+    /// "mod:id", or a game creature's name
+    var creature: String = ""
+    /// 0 on the surface, 1 in caves, 2 anywhere
+    var place: Int = 0
+    /// 0 any time, 1 by day, 2 at night
+    var when: Int = 0
+    var weight: Double = 5
+    var group: Int = 1
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        creature = c.val(.creature, "")
+        place = c.val(.place, 0)
+        when = c.val(.when, 0)
+        weight = c.val(.weight, 5)
+        group = c.val(.group, 1)
+    }
+}
+
+/// A dimension made in the Mod Creator: how its sky and light look, how its land is made, what lives
+/// there, and how a player gets in and out. Each world gives its dimensions one of three slots.
+struct ModDimension: Codable, Identifiable, Equatable {
+    var id: String = ""
+    var name: String = "New Dimension"
+    var desc: String = ""
+    // sky and light
+    var skyTop: UInt32 = 0x3A2A6A
+    var skyBottom: UInt32 = 0xC07AB0
+    var nightTop: UInt32 = 0x080614
+    var nightBottom: UInt32 = 0x241A3A
+    /// how bright the open air is (0 dark ... 1 full daylight)
+    var light: Double = 0.8
+    /// follows the world's day and night (off: always the same time)
+    var cycle: Bool = true
+    /// the time it always is without a cycle (0.25 noon ... 0.75 midnight)
+    var fixedTime: Double = 0.25
+    var sun: Bool = true
+    var moon: Bool = true
+    var stars: Bool = true
+    var sunColor: UInt32 = 0xFFE8A0
+    /// floating motes: 0 none, 1 embers, 2 snowflakes, 3 fireflies, 4 ash, 5 spores
+    var ambient: Int = 0
+    /// 0 none, 1 drizzle, 2 rain, 3 thunderstorms, 4 snow
+    var weather: Int = 0
+    /// 0 mild ... 1 bitter cold (as the game's cold: it chills the player)
+    var chill: Double = 0
+    var hot: Bool = false
+    // the land
+    /// a roof of rock overhead: a cavern world, like the Umbral Realm (no sky, no sun)
+    var ceiling: Bool = false
+    /// the row the ground lies at (smaller is higher up)
+    var surface: Int = 150
+    var hills: Double = 12
+    var roughness: Double = 1.0
+    /// tall peaks (0 none ... 1 many)
+    var mountains: Double = 0.2
+    var caves: Double = 0.4
+    /// floating islands in the sky (0 none ... 1 many)
+    var islands: Double = 0
+    /// the row its seas fill up to (0: no seas)
+    var sea: Int = 0
+    /// 0 water, 1 lava (seas, and pools deep in the caves)
+    var liquid: Int = 0
+    var pools: Bool = true
+    var stone: String = ModGround.key(.stone)
+    /// its regions, side by side (at least one)
+    var zones: [ModDimZone] = [ModDimZone()]
+    var zoneWidth: Int = 300
+    /// a block scattered on the ground that harms or hinders (empty: none)
+    var hazard: String = ""
+    var hazardChance: Double = 0.02
+    // life
+    var spawns: [ModDimSpawn] = []
+    // getting in and out
+    var entry: ModSummon = ModDimension.defaultEntry
+    /// a gate stands where the player arrives; tapping it takes them back
+    var returnGate: Bool = true
+    /// the gate's block: one of this mod's blocks (empty: a glowing crystal)
+    var gateBlock: String = ""
+    var arriveMessage: String = ""
+
+    static var defaultEntry: ModSummon {
+        var s = ModSummon()
+        s.how = .itemOnPattern
+        s.clearPattern = false
+        return s
+    }
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        var skip: Int = 0
+        id = c.val(.id, "")
+        name = c.val(.name, "Dimension")
+        desc = c.val(.desc, "")
+        skyTop = c.val(.skyTop, 0x3A2A6A)
+        skyBottom = c.val(.skyBottom, 0xC07AB0)
+        nightTop = c.val(.nightTop, 0x080614)
+        nightBottom = c.val(.nightBottom, 0x241A3A)
+        light = c.val(.light, 0.8)
+        cycle = c.val(.cycle, true)
+        fixedTime = c.val(.fixedTime, 0.25)
+        sun = c.val(.sun, true)
+        moon = c.val(.moon, true)
+        stars = c.val(.stars, true)
+        sunColor = c.val(.sunColor, 0xFFE8A0)
+        ambient = c.val(.ambient, 0)
+        weather = c.val(.weather, 0)
+        chill = c.val(.chill, 0)
+        hot = c.val(.hot, false)
+        ceiling = c.val(.ceiling, false)
+        surface = c.val(.surface, 150)
+        hills = c.val(.hills, 12)
+        roughness = c.val(.roughness, 1.0)
+        mountains = c.val(.mountains, 0.2)
+        caves = c.val(.caves, 0.4)
+        islands = c.val(.islands, 0)
+        sea = c.val(.sea, 0)
+        liquid = c.val(.liquid, 0)
+        pools = c.val(.pools, true)
+        stone = c.val(.stone, ModGround.key(.stone))
+        zones = c.list(.zones, &skip)
+        if zones.isEmpty { zones = [ModDimZone()] }
+        zoneWidth = c.val(.zoneWidth, 300)
+        hazard = c.val(.hazard, "")
+        hazardChance = c.val(.hazardChance, 0.02)
+        spawns = c.list(.spawns, &skip)
+        entry = c.val(.entry, ModDimension.defaultEntry)
+        returnGate = c.val(.returnGate, true)
+        gateBlock = c.val(.gateBlock, "")
+        arriveMessage = c.val(.arriveMessage, "")
+    }
+}
+
+/// Words for the dimension settings
+enum ModDimText {
+    static let ambients: [String] = ["None", "Embers", "Snowflakes", "Fireflies", "Ash", "Spores"]
+    static let weathers: [String] = ["None", "Drizzle", "Rain", "Thunderstorms", "Snow"]
+    static let liquids: [String] = ["Water", "Lava"]
+    static let trees: [String] = ["None", "A few", "Many"]
+    static let places: [String] = ["Surface", "Caves", "Anywhere"]
+    static let times: [String] = ["Any time", "By day", "At night"]
+}
+
+/// Where a player came from when they entered a custom dimension (to go back there)
+struct DimReturn: Codable, Equatable {
+    var dim: Int
+    var x: Double
+    var y: Double
+}
+
+/// A custom dimension ready for play: its blocks resolved, its creature rules, its land's shape
+final class ModDimRT {
+    let key: String
+    let slot: Int
+    let def: ModDimension
+    let salt: UInt64
+    let stone: Tile
+    let liquid: Tile
+    let hazard: Tile?
+    let gate: Tile
+    let zones: [ModDimZoneRT]
+    var spawnRules: [SpawnRule] = []
+    var modName: String = ""
+
+    var dim: Dimension { return .custom(slot) }
+
+    init(key: String, slot: Int, def: ModDimension, resolve: (String) -> Tile?) {
+        self.key = key
+        self.slot = slot
+        self.def = def
+        salt = UInt64(truncatingIfNeeded: modChecksum(Data(key.utf8))) &* 0x9E37_79B9 &+ 0x5D1
+        func pick(_ k: String, _ d: Tile) -> Tile {
+            guard let t = resolve(k), t != .air else { return d }
+            return t
+        }
+        stone = pick(def.stone, .stone)
+        liquid = def.liquid == 1 ? .lava : .water
+        hazard = def.hazard.isEmpty ? nil : resolve(def.hazard)
+        gate = def.gateBlock.isEmpty ? .glowCrystal : pick(def.gateBlock, .glowCrystal)
+        var zs: [ModDimZoneRT] = []
+        for z in def.zones.prefix(4) {
+            let plant: Tile? = z.plant.isEmpty ? nil : resolve(z.plant)
+            zs.append(ModDimZoneRT(ground: pick(z.ground, .grass), filler: pick(z.filler, .dirt), plant: plant, plantChance: z.plantChance,
+                                   trees: z.trees, log: pick(z.log, .log), leaves: pick(z.leaves, .leaves), biome: Biome(rawValue: z.biome) ?? .plains))
+        }
+        if zs.isEmpty { zs.append(ModDimZoneRT(ground: .grass, filler: .dirt, plant: nil, plantChance: 0, trees: 0, log: .log, leaves: .leaves, biome: .plains)) }
+        zones = zs
+    }
+
+    /// the region at column x
+    func zoneIndex(_ x: Int) -> Int {
+        if zones.count <= 1 { return 0 }
+        let w: Int = max(40, def.zoneWidth)
+        let off: Int = Int(salt % 997)
+        let k: Int = floorDiv(x + off, w)
+        return ((k % zones.count) + zones.count) % zones.count
+    }
+
+    func biomeAt(_ x: Double) -> Biome { return zones[zoneIndex(Int(floor(x)))].biome }
+
+    /// The row of the ground at column x, for a world's seed
+    func surfaceAt(_ x: Int, _ seed: UInt64) -> Int {
+        let s: UInt64 = seed &+ salt
+        let f: Double = clampD(def.roughness, 0.2, 3.0)
+        let n: Double = fbm1(Double(x) / (60.0 / f), s &+ 501, 4)
+        var h: Double = Double(def.surface) + (n - 0.5) * 2.0 * def.hills
+        if def.mountains > 0.001 {
+            let m: Double = fbm1(Double(x) / 140.0, s &+ 502, 3)
+            let th: Double = 0.78 - def.mountains * 0.26
+            if m > th { h -= pow((m - th) / (1.0 - th), 1.4) * 80.0 }
+        }
+        let lo: Int = def.ceiling ? 72 : 24
+        return clampI(Int(h.rounded()), lo, customDimH - 30)
+    }
+
+    /// The row where the rock roof ends at column x (roofed dimensions)
+    func ceilingAt(_ x: Int, _ seed: UInt64) -> Int {
+        return 10 + Int(fbm1(Double(x) / 50.0, seed &+ salt &+ 511, 3) * 28.0)
+    }
+
+    /// Where a player arrives: the first dry column near the middle of the dimension
+    func arrival(_ seed: UInt64) -> (Double, Double) {
+        var x: Int = 0
+        for k in 0..<400 {
+            let c: Int = k % 2 == 0 ? k / 2 : -(k / 2) - 1
+            let s: Int = surfaceAt(c, seed)
+            if def.sea <= 0 || s < def.sea - 1 {
+                x = c
+                break
+            }
+        }
+        return (Double(x) + 0.5, Double(surfaceAt(x, seed)) - 0.001)
+    }
+}
+
+struct ModDimZoneRT {
+    var ground: Tile
+    var filler: Tile
+    var plant: Tile?
+    var plantChance: Double
+    var trees: Int
+    var log: Tile
+    var leaves: Tile
+    var biome: Biome
+}
+
+/// A chunk of a custom dimension: rolling ground in regions, caves, seas, floating islands, trees,
+/// plants and hazards, then the mods' ores and structures for it. A dimension whose mod is missing
+/// is an empty void (nobody is sent there: see Game.load).
+func generateCustomChunk(_ g: WorldGen, _ dim: Dimension, _ cx: Int) -> Chunk {
+    let H: Int = customDimH
+    let ch = Chunk(cx: cx, H: H)
+    guard let d = ModRuntime.shared.dimRT(dim) else {
+        ch.hasSky = false
+        for lx in 0..<chunkW {
+            for y in (H - 3)..<H { ch.tiles[lx * H + y] = Tile.bedrock.rawValue }
+            ch.surf[lx] = H - 3
+        }
+        ch.rebuildSky()
+        return ch
+    }
+    fillCustomChunk(g.seed, g.infinite, g.width, d, ch)
+    if ModRuntime.shared.hasWorldGen { applyModGen(g, ch, dim) }
+    ch.rebuildSky()
+    return ch
+}
+
+/// The land of a custom dimension in one chunk (shared by the game and the editor's preview)
+func fillCustomChunk(_ seed0: UInt64, _ infinite: Bool, _ width: Int, _ d: ModDimRT, _ ch: Chunk) {
+    let H: Int = ch.H
+    let def: ModDimension = d.def
+    let seed: UInt64 = seed0 &+ d.salt
+    ch.hasSky = !def.ceiling
+    let x0: Int = ch.x0
+    let caveT: Double = 0.035 + clampD(def.caves, 0, 1) * 0.07
+    let cavern: Double = 0.9 - clampD(def.caves, 0, 1) * 0.12
+    // floating islands: rarer and flatter than the noise alone would make them (they shade the ground)
+    let isleT: Double = 0.86 - clampD(def.islands, 0, 1) * 0.08
+    for lx in 0..<chunkW {
+        let x: Int = x0 + lx
+        let base: Int = lx * H
+        if !infinite && (x < 0 || x >= width) {
+            for y in 0..<H { ch.tiles[base + y] = Tile.bedrock.rawValue }
+            continue
+        }
+        let surf: Int = d.surfaceAt(x, seed0)
+        let ceil: Int = def.ceiling ? d.ceilingAt(x, seed0) : 0
+        let z: ModDimZoneRT = d.zones[d.zoneIndex(x)]
+        ch.surf[lx] = surf
+        ch.ceilY[lx] = ceil
+        let fill: Int = 3 + Int(hash2(x, 11, seed) * 3.0)
+        let seaRow: Int = def.sea > 0 ? clampI(def.sea, 10, H - 10) : H
+        for y in 0..<H {
+            var t: Tile = .air
+            if y >= H - 3 || (def.ceiling && y <= 2) {
+                t = .bedrock
+            } else if def.ceiling && y < ceil {
+                t = d.stone
+            } else if y >= surf {
+                let depth: Int = y - surf
+                t = depth == 0 ? (surf >= seaRow ? z.filler : z.ground) : (depth <= fill ? z.filler : d.stone)
+                if depth >= 4 && def.caves > 0.001 {
+                    let a: Double = vnoise(Double(x) * 0.05, Double(y) * 0.08, seed &+ 601)
+                    let b: Double = vnoise(Double(x) * 0.028, Double(y) * 0.05, seed &+ 602)
+                    if abs(a - 0.5) < caveT || b > cavern {
+                        t = def.pools && y >= H - 40 ? d.liquid : .air
+                    }
+                }
+            } else {
+                if y >= seaRow { t = d.liquid }
+                if def.islands > 0.001 && y > (def.ceiling ? ceil + 12 : 30) && y < surf - 26 {
+                    let n: Double = vnoise(Double(x) * 0.05, Double(y) * 0.14, seed &+ 631)
+                    // they gather in a band some way above the ground
+                    let band: Double = abs(Double(y) - Double(surf - 60)) / 60.0
+                    if n > isleT + band * 0.06 { t = d.stone }
+                }
+            }
+            ch.tiles[base + y] = t.rawValue
+        }
+        // the tops of floating islands get the region's ground
+        if def.islands > 0.001 {
+            var y: Int = 4
+            while y < surf - 1 {
+                if ch.tiles[base + y] == d.stone.rawValue && ch.tiles[base + y - 1] == Tile.air.rawValue {
+                    ch.tiles[base + y] = z.ground.rawValue
+                    if ch.tiles[base + y + 1] == d.stone.rawValue { ch.tiles[base + y + 1] = z.filler.rawValue }
+                }
+                y += 1
+            }
+        }
+    }
+    // trees, plants and hazards on dry ground (trees only where the whole tree fits in this chunk)
+    for lx in 0..<chunkW {
+        let x: Int = x0 + lx
+        if !infinite && (x < 0 || x >= width) { continue }
+        let surf: Int = ch.surf[lx]
+        if surf <= 12 || surf >= H - 8 { continue }
+        if def.sea > 0 && surf >= def.sea - 1 { continue }
+        if ch.get(lx, surf - 1) != .air || ch.get(lx, surf) == .air { continue }
+        let z: ModDimZoneRT = d.zones[d.zoneIndex(x)]
+        if z.trees > 0 && lx >= 2 && lx < chunkW - 2 && customTreeAt(x, z.trees, seed) {
+            let h: Int = 4 + Int(hash2(x, 22, seed) * 4.0)
+            if surf - h - 3 > (def.ceiling ? ch.ceilY[lx] + 2 : 2) {
+                for k in 1...h { ch.setLocal(lx, surf - k, z.log) }
+                let top: Int = surf - h
+                for dy in -2...1 {
+                    for dx in -2...2 where abs(dx) + abs(dy) <= 3 && lx + dx >= 0 && lx + dx < chunkW {
+                        let y: Int = top + dy
+                        if ch.get(lx + dx, y) == .air { ch.setLocal(lx + dx, y, z.leaves) }
+                    }
+                }
+                continue
+            }
+        }
+        let r: Double = hash2(x, 5, seed)
+        if let hz = d.hazard, r < clampD(def.hazardChance, 0, 0.5) {
+            ch.setLocal(lx, surf - 1, hz)
+        } else if let p = z.plant, r < clampD(def.hazardChance, 0, 0.5) + clampD(z.plantChance, 0, 0.8) {
+            ch.setLocal(lx, surf - 1, p)
+        }
+    }
+}
+
+/// Trees stand at least five columns apart
+func customTreeAt(_ x: Int, _ trees: Int, _ seed: UInt64) -> Bool {
+    let p: Double = trees >= 2 ? 0.2 : 0.07
+    if hash2(x, 21, seed) >= p { return false }
+    for k in 1...4 where hash2(x - k, 21, seed) < p { return false }
+    return true
+}
+
+extension ModRuntime {
+    func dimRT(_ d: Dimension) -> ModDimRT? {
+        let s: Int = d.customSlot
+        if s < 0 || s >= dimSlots.count { return nil }
+        return dimSlots[s]
+    }
+
+    /// Gives each custom dimension one of the three slots (the world's own first, so its land stays
+    /// where it is), makes its creature rules, and adds its way in to the summonings
+    func buildDims(_ world: ModWorldInfo?) {
+        dimSlots = [ModDimRT?](repeating: nil, count: 3)
+        dimSlotKey = [String?](repeating: nil, count: 3)
+        var taken: Set<Int> = []
+        if let w = world {
+            for (k, s) in w.dims where s >= 0 && s < 3 {
+                dimSlotKey[s] = k
+                taken.insert(s)
+            }
+        }
+        for p in packs {
+            for d in p.dims where !disabled.contains(p.key(d.id)) {
+                let k: String = p.key(d.id)
+                var slot: Int = dimSlotKey.firstIndex { $0 == k } ?? -1
+                if slot < 0 {
+                    guard let free = (0..<3).first(where: { !taken.contains($0) }) else {
+                        var r = ModReport()
+                        r.add(1, p.name, joinText("Dimension \u{201C}", d.name, "\u{201D}"), "A world holds three custom dimensions; this one was left out.")
+                        reports.append(r)
+                        continue
+                    }
+                    slot = free
+                    taken.insert(free)
+                    dimSlotKey[slot] = k
+                }
+                let rt = ModDimRT(key: k, slot: slot, def: d, resolve: { key in ModGround.resolve(key, self) })
+                rt.modName = p.name
+                rt.spawnRules = dimSpawnRules(d)
+                dimSlots[slot] = rt
+                // its way in: a summoning that takes the player there
+                let e: ModSummon = d.entry
+                if e.enabled {
+                    var cells: [(Int, Int, Tile?)] = []
+                    var bad: Bool = false
+                    if e.usesPattern {
+                        for y in 0..<e.pattern.h {
+                            for x in 0..<e.pattern.w {
+                                let c: String = e.pattern.cell(x, y)
+                                if c.isEmpty { continue }
+                                if c == "air" {
+                                    cells.append((x, y, nil))
+                                    continue
+                                }
+                                guard let t = ModGround.resolve(c, self), t != .air else {
+                                    bad = true
+                                    continue
+                                }
+                                cells.append((x, y, t))
+                            }
+                        }
+                        if !cells.contains(where: { $0.2 != nil }) { bad = true }
+                    }
+                    if e.usesItem && e.item == nil { bad = true }
+                    if !bad { summons.append(ModSummonRT(slot: -1, key: k, def: e, cells: cells, dimSlot: slot)) }
+                }
+            }
+        }
+    }
+
+    /// A dimension's creatures as rules the spawner understands
+    func dimSpawnRules(_ d: ModDimension) -> [SpawnRule] {
+        var out: [SpawnRule] = []
+        for s in d.spawns {
+            var kind: MobKind = .custom
+            var slot: Int = -1
+            if let sl = mobSlot[s.creature] {
+                slot = sl
+            } else if let k = MobKind.allCases.first(where: { $0 != .custom && $0 != .villager && mobDef($0).name == s.creature }) {
+                kind = k
+            } else {
+                continue
+            }
+            let when: SpawnWhen = s.when == 1 ? .day : (s.when == 2 ? .night : .any)
+            var places: [SpawnPlace] = []
+            if s.place == 0 || s.place == 2 { places.append(.surface) }
+            if s.place == 1 || s.place == 2 { places.append(.cave) }
+            for pl in places {
+                var r = SpawnRule(kind: kind, weight: max(0.1, s.weight), place: pl, when: when, biomes: [], group: clampI(s.group, 1, 4))
+                r.slot = slot
+                r.maxNearby = slot >= 0 ? 6 : 99
+                if slot >= 0, let m = mob(slot) { r.sky = m.mdef.flying }
+                out.append(r)
+            }
+        }
+        return out
+    }
+
+    /// A content dimension number for a mod's ore or structure: the game's own, or a custom one by key
+    /// (-1: its dimension is not in this world)
+    func dimNumber(_ dim: Int, _ key: String) -> Int {
+        if key.isEmpty { return dim }
+        guard let s = dimSlotKey.firstIndex(where: { $0 == key }), dimSlots[s] != nil else { return -1 }
+        return 2 + s
+    }
+}
+
+extension Game {
+    /// The custom dimension the player is in (nil: the Overworld, the Umbral Realm, or its mod is off)
+    var customDim: ModDimRT? { return world.dim.isCustom ? ModRuntime.shared.dimRT(world.dim) : nil }
+
+    /// The ground row at x in a custom dimension
+    func customSurface(_ x: Int) -> Int {
+        guard let d = customDim else { return world.surfaceY(x) }
+        return d.surfaceAt(x, gen.seed)
+    }
+
+    /// Takes the player into a custom dimension (remembering where they came from)
+    func enterCustomDim(_ r: ModDimRT) {
+        if world.dim == r.dim { return }
+        if !world.dim.isCustom { dimReturn = DimReturn(dim: world.dim.rawValue, x: pb.x, y: pb.y) }
+        let spot: (Double, Double) = r.arrival(gen.seed)
+        travelTo(r.dim, arriveX: spot.0, arriveY: spot.1, silent: true)
+        if r.def.returnGate { placeReturnGate(r) }
+        say(r.def.arriveMessage.isEmpty ? joinText("You step into ", r.def.name, ".") : r.def.arriveMessage, 4.0)
+        addShake(0.4)
+        sfx(.zap, 0.8)
+        spawnParticles(pb.x, pb.y - 1.0, 0xC8A0FF, 24, 5.0, 0.8, -2)
+    }
+
+    /// Back to where the player entered from (the Overworld's spawn if that is unknown)
+    func leaveCustomDim() {
+        let back: DimReturn = dimReturn ?? DimReturn(dim: 0, x: spawnX, y: spawnY)
+        var d: Dimension = Dimension(rawValue: back.dim) ?? .overworld
+        if d.isCustom { d = .overworld }
+        dimReturn = nil
+        travelTo(d, arriveX: back.x, arriveY: back.y, silent: true)
+        say(d == .overworld ? "You return to the Overworld." : "You return to the Umbral Realm.", 3.0)
+        addShake(0.3)
+        sfx(.zap, 0.7)
+    }
+
+    /// The way back: a gate on the ground beside where the player arrived
+    func placeReturnGate(_ r: ModDimRT) {
+        for dx in [2, -2, 3, -3, 4] {
+            let x: Int = Int(floor(pb.x)) + dx
+            var y: Int = Int(floor(pb.y))
+            var k: Int = 0
+            while k < 6 && !world.tile(x, y).solid { y += 1; k += 1 }
+            while k < 12 && world.tile(x, y - 1).solid { y -= 1; k += 1 }
+            if world.tile(x, y).solid && world.tile(x, y - 1) == .air {
+                world.set(x, y - 1, r.gate)
+                return
+            }
+        }
+    }
+
+    /// A tap on the gate of the custom dimension the player is in takes them back
+    func tryReturnGate() -> Bool {
+        guard let d = customDim, d.def.returnGate else { return false }
+        let tx: Int = Int(floor(aimX))
+        let ty: Int = Int(floor(aimY))
+        if world.tile(tx, ty) != d.gate || !inReach(Double(tx) + 0.5, Double(ty) + 0.5) { return false }
+        leaveCustomDim()
+        return true
+    }
+
+    /// The light of a custom dimension's day
+    func customDayFactor(_ d: ModDimRT) -> Double {
+        let t: Double = d.def.cycle ? timeOfDay : clampD(d.def.fixedTime, 0, 1)
+        if t < 0.50 { return 1.0 }
+        if t < 0.58 { return 1.0 - smooth((t - 0.50) / 0.08) }
+        if t < 0.92 { return 0.0 }
+        return smooth((t - 0.92) / 0.08)
+    }
+
+    /// A custom dimension's weather where it can fall (under the open sky): set by its maker
+    func customWeather(_ d: ModDimRT, _ x: Double, _ y: Double) -> LocalWeather {
+        var L = LocalWeather()
+        L.chill = clampD(d.def.chill, 0, 1)
+        L.hot = d.def.hot
+        // nothing falls under a rock roof
+        if d.def.ceiling { return L }
+        switch d.def.weather {
+        case 1:
+            L.precip = 0.3
+            L.cloud = 0.6
+        case 2:
+            L.precip = 0.75
+            L.cloud = 0.9
+        case 3:
+            L.precip = 0.85
+            L.cloud = 1.0
+            L.thunder = 0.6
+            L.wind = 4.0 * sin(clock * 0.3)
+        case 4:
+            L.precip = 0.6
+            L.cloud = 0.85
+            L.snow = true
+            L.chill = max(L.chill, 0.55)
+        default: break
+        }
+        if L.chill >= 0.5 && L.precip > 0 { L.snow = true }
+        L.wet = L.snow ? 0 : L.precip
+        L.fog = L.precip * 0.3
+        return L
+    }
+
+    /// Visiting a dimension from the Mod Test tools (by slot)
+    @discardableResult
+    func testVisitDim(_ slot: Int) -> String {
+        guard let r = ModRuntime.shared.dimSlots.indices.contains(slot) ? ModRuntime.shared.dimSlots[slot] : nil else { return "That dimension is not in this world." }
+        if world.dim == r.dim {
+            leaveCustomDim()
+            return "Back from the dimension."
+        }
+        enterCustomDim(r)
+        return joinText("Visiting ", r.def.name, ".")
+    }
+}
+
+extension WorldRenderer {
+    /// The sky of a custom dimension: its colours by day and night, stars, sun and moon, and motes
+    static func drawCustomSky(_ ctx: inout GraphicsContext, _ W: Double, _ H: Double, _ g: Game, _ v: View2D, _ d: ModDimRT) {
+        let full: CGRect = mkRect(0, 0, W, H)
+        let day: Double = d.def.ceiling ? 0 : g.dayFactor
+        let def: ModDimension = d.def
+        if def.ceiling {
+            vGradient(&ctx, full, [rgbColor(shadeRGB(def.nightTop, 0.6)), rgbColor(def.nightBottom)], 0, H)
+        } else {
+            let top: UInt32 = mixRGB(def.nightTop, def.skyTop, day)
+            let bot: UInt32 = mixRGB(def.nightBottom, def.skyBottom, day)
+            vGradient(&ctx, full, [rgbColor(top), rgbColor(bot)], 0, H)
+            let cover: Double = g.wxHere.cloud
+            if def.stars && day < 0.6 {
+                let a: Double = (0.6 - day) / 0.6 * (1.0 - cover * 0.8)
+                var path: Path = Path()
+                var i: Int = 0
+                while i < 70 {
+                    let x: Double = hash2(i, 1, 9) * W
+                    let y: Double = hash2(i, 2, 9) * H * 0.6
+                    path.addRect(mkRect(x, y, i % 7 == 0 ? 3.0 : 2.0, i % 7 == 0 ? 3.0 : 2.0))
+                    i += 1
+                }
+                ctx.fill(path, with: .color(Color.white.opacity(a * (0.75 + 0.25 * sin(g.clock * 2.0)))))
+            }
+            let t: Double = def.cycle ? g.timeOfDay : clampD(def.fixedTime, 0, 1)
+            let ang: Double = t < 0.5 ? (t / 0.5) : ((t - 0.5) / 0.5)
+            let bx: Double = (0.1 + 0.8 * ang) * W
+            let by: Double = H * (0.55 - 0.42 * sin(ang * Double.pi))
+            let r: Double = max(10.0, v.tp * 1.6)
+            if t < 0.5 && def.sun {
+                ctx.fill(Path(ellipseIn: mkRect(bx - r * 1.6, by - r * 1.6, r * 3.2, r * 3.2)), with: .color(rgbColor(def.sunColor).opacity(0.18)))
+                ctx.fill(Path(ellipseIn: mkRect(bx - r, by - r, r * 2.0, r * 2.0)), with: .color(rgbColor(def.sunColor)))
+            } else if t >= 0.5 && def.moon {
+                ctx.fill(Path(ellipseIn: mkRect(bx - r * 0.8, by - r * 0.8, r * 1.6, r * 1.6)), with: .color(Color(hex: 0xE8ECF8)))
+                ctx.fill(Path(ellipseIn: mkRect(bx - r * 0.3, by - r * 0.9, r * 1.4, r * 1.4)), with: .color(rgbColor(mixRGB(def.nightTop, def.skyTop, day)).opacity(0.85)))
+            }
+        }
+        // drifting motes
+        if def.ambient > 0 {
+            let cols: [UInt32] = [0, 0xFF8A3A, 0xF4F8FF, 0xD8F070, 0x8A8A8A, 0xB0E0A0]
+            let col: UInt32 = cols[clampI(def.ambient, 0, cols.count - 1)]
+            var path: Path = Path()
+            let rise: Double = def.ambient == 2 || def.ambient == 4 ? -1.0 : 1.0
+            var i: Int = 0
+            while i < 48 {
+                let sp: Double = 0.02 + hash2(i, 31, 3) * 0.04
+                let fx: Double = (hash2(i, 32, 3) + g.clock * sp * 0.4 + sin(g.clock * 0.7 + Double(i)) * 0.01).truncatingRemainder(dividingBy: 1.0)
+                var fy: Double = (hash2(i, 33, 3) - rise * g.clock * sp).truncatingRemainder(dividingBy: 1.0)
+                if fy < 0 { fy += 1.0 }
+                let s: Double = def.ambient == 3 ? 3.0 : 2.0
+                path.addRect(mkRect(fx * W, fy * H, s, s))
+                i += 1
+            }
+            let a: Double = def.ambient == 3 ? 0.5 + 0.5 * sin(g.clock * 3.0) : 0.75
+            ctx.fill(path, with: .color(rgbColor(col).opacity(a)))
+        }
+    }
+}
+
+/// A picture of a custom dimension for its editor: six chunks of its land from the sky to the
+/// bottom, made by the same generator the game uses (its mod's blocks drawn in their own colours)
+enum ModDimPreview {
+    static let seed: UInt64 = 7_771_234
+    static let chunks: Int = 6
+
+    static func render(_ d: ModDimension, _ p: ModPack) -> PixelBuf {
+        // the mod's blocks stand in as spare tile numbers, coloured from their art
+        var proxy: [String: Tile] = [:]
+        var colour: [UInt8: UInt32] = [:]
+        for (i, b) in p.blocks.prefix(ModLimits.blockSlots).enumerated() {
+            guard let t = Tile(rawValue: Tile.modBase + UInt8(i)) else { continue }
+            proxy[p.key(b.id)] = t
+            colour[t.rawValue] = averageColor(b.art)
+        }
+        let rt = ModDimRT(key: p.key(d.id), slot: 0, def: d, resolve: { k in
+            if k.hasPrefix("tile:") {
+                guard let n = Int(k.dropFirst(5)) else { return nil }
+                return Tile(rawValue: UInt8(clampI(n, 0, 255)))
+            }
+            return proxy[k]
+        })
+        let H: Int = customDimH
+        let rows: Int = (H + 1) / 2
+        var b = PixelBuf(w: chunks * chunkW, h: rows)
+        for c in 0..<chunks {
+            let ch = Chunk(cx: c - chunks / 2, H: H)
+            fillCustomChunk(seed, true, 0, rt, ch)
+            for lx in 0..<chunkW {
+                for r in 0..<rows {
+                    let y: Int = r * 2
+                    let t: Tile = ch.get(lx, y)
+                    var col: UInt32 = 0
+                    if t == .air {
+                        if d.ceiling && y < ch.ceilY[lx] + 2 { col = shadeRGB(d.nightBottom, 0.8) }
+                        else if y < ch.surf[lx] { col = mixRGB(d.skyTop, d.skyBottom, Double(y) / Double(max(1, ch.surf[lx]))) }
+                        else { col = 0x16161C }
+                    } else if t == .water {
+                        col = 0x2E5FD0
+                    } else if t == .lava {
+                        col = 0xE8601A
+                    } else if let mc = colour[t.rawValue] {
+                        col = mc
+                    } else {
+                        col = shadeRGB(t.def.colors.first ?? 0x808080, 0.85)
+                    }
+                    b.set(c * chunkW + lx, r, col)
+                }
+            }
+        }
+        return b
+    }
+
+    static func averageColor(_ p: ModPixels) -> UInt32 {
+        var r: Int = 0
+        var g: Int = 0
+        var bl: Int = 0
+        var n: Int = 0
+        for y in 0..<p.h {
+            for x in 0..<p.w {
+                let c: UInt32 = p.argb(x, y)
+                if c >> 24 < 128 { continue }
+                r += Int((c >> 16) & 0xFF)
+                g += Int((c >> 8) & 0xFF)
+                bl += Int(c & 0xFF)
+                n += 1
+            }
+        }
+        if n == 0 { return 0x808080 }
+        return (UInt32(r / n) << 16) | (UInt32(g / n) << 8) | UInt32(bl / n)
+    }
+}
+
+extension ModValidator {
+    /// One summoning's settings kept in range (a creature's, or a dimension's way in); returns what was wrong
+    static func fixSummon(_ s: inout ModSummon, _ p: ModPack, _ known: [String: String]) -> [String] {
+        var notes: [String] = []
+        let ownItems: Set<String> = Set(p.items.map { p.key($0.id) } + p.infusions.map { p.key($0.id) })
+        let ownBlocks: Set<String> = Set(p.blocks.map { p.key($0.id) })
+        let ownDims: Set<String> = Set(p.dims.map { p.key($0.id) })
+        s.message = String(s.message.prefix(80))
+        s.time = clampI(s.time, 0, 2)
+        s.weather = clampI(s.weather, 0, 4)
+        s.place = clampI(s.place, 0, 2)
+        s.appear = clampI(s.appear, 0, 1)
+        s.biomes = Array(Set(s.biomes.filter { Biome(rawValue: $0) != nil })).sorted()
+        s.dims = Array(Set(s.dims.filter { $0 >= 0 && $0 <= 1 })).sorted()
+        s.dimKeys = Array(s.dimKeys.filter { ownDims.contains($0) || known[$0] == "dimension" }.prefix(3))
+        var pt: ModPattern = s.pattern
+        pt.w = clampI(pt.w, 1, ModPattern.maxSide)
+        pt.h = clampI(pt.h, 1, ModPattern.maxSide)
+        var cells: [String] = Array(pt.cells.prefix(pt.w * pt.h))
+        while cells.count < pt.w * pt.h { cells.append("") }
+        var broken: Bool = false
+        for j in cells.indices {
+            let key: String = cells[j]
+            if key.isEmpty || key == "air" { continue }
+            if key.hasPrefix("tile:") {
+                if let n = Int(key.dropFirst(5)), n >= 0 && n <= 255, let t = Tile(rawValue: UInt8(n)), t != .air, !t.isMod { continue }
+            } else if ownBlocks.contains(key) || known[key] == "block" {
+                continue
+            }
+            cells[j] = ""
+            broken = true
+        }
+        pt.cells = cells
+        s.pattern = pt
+        if broken { notes.append("A block in a shape does not exist; that cell now takes anything.") }
+        if s.usesPattern && pt.blockCells == 0 && s.enabled {
+            notes.append("A way that uses a shape needs at least one block in it; it is switched off.")
+            s.enabled = false
+        }
+        if s.usesItem {
+            if let it = s.item, case .custom(let key) = it, !ownItems.contains(key) && known[key] != "item" { s.item = nil }
+            if s.item == nil && s.enabled {
+                notes.append("A way that uses an item needs an item that exists; it is switched off.")
+                s.enabled = false
+            }
+        }
+        return notes
+    }
+
+    /// Custom dimensions: numbers in range, blocks and creatures real, a way in and a way back
+    static func checkDims(_ p: inout ModPack, _ mn: String, _ sb: Bool, _ known: [String: String], _ r: inout ModReport) {
+        if p.dims.count > 3 {
+            r.add(1, mn, "Mod", "Only 3 dimensions fit in one mod; the rest were left out.")
+            p.dims = Array(p.dims.prefix(3))
+        }
+        let ownBlocks: Set<String> = Set(p.blocks.map { p.key($0.id) })
+        let ownMobs: Set<String> = Set(p.mobs.map { p.key($0.id) })
+        let gameNames: Set<String> = Set(MobKind.allCases.filter { $0 != .custom && $0 != .villager }.map { mobDef($0).name })
+        var used: Set<String> = Set(p.blocks.map { $0.id } + p.items.map { $0.id } + p.mobs.map { $0.id } + p.infusions.map { $0.id })
+        func c(_ v: Double, _ lo: Double, _ hi: Double, _ d: Double) -> Double { return clampD(v.isFinite ? v : d, lo, hi) }
+        func block(_ k: String, _ d: String, _ allowEmpty: Bool) -> String {
+            if k.isEmpty { return allowEmpty ? "" : d }
+            if k.hasPrefix("tile:") {
+                if let n = Int(k.dropFirst(5)), n > 0 && n <= 255, let t = Tile(rawValue: UInt8(n)), !t.isMod, t != .air { return k }
+                return allowEmpty ? "" : d
+            }
+            if ownBlocks.contains(k) || known[k] == "block" { return k }
+            return allowEmpty ? "" : d
+        }
+        for i in p.dims.indices {
+            var d: ModDimension = p.dims[i]
+            if d.id.isEmpty || used.contains(d.id) { d.id = joinText("dim", String(i + 1), "x", String(used.count)) }
+            used.insert(d.id)
+            let place: String = joinText("Dimension \u{201C}", d.name, "\u{201D}")
+            if d.name.trimmingCharacters(in: .whitespaces).isEmpty { d.name = "Dimension" }
+            d.name = String(d.name.prefix(32))
+            d.desc = String(d.desc.prefix(200))
+            d.arriveMessage = String(d.arriveMessage.prefix(80))
+            d.light = c(d.light, 0, 1, 0.8)
+            d.fixedTime = c(d.fixedTime, 0, 1, 0.25)
+            d.ambient = clampI(d.ambient, 0, ModDimText.ambients.count - 1)
+            d.weather = clampI(d.weather, 0, ModDimText.weathers.count - 1)
+            d.chill = c(d.chill, 0, 1, 0)
+            d.surface = clampI(d.surface, d.ceiling ? 80 : 40, 260)
+            d.hills = c(d.hills, 0, 40, 12)
+            d.roughness = c(d.roughness, 0.2, 3, 1)
+            d.mountains = c(d.mountains, 0, 1, 0)
+            d.caves = c(d.caves, 0, 1, 0.4)
+            d.islands = c(d.islands, 0, 1, 0)
+            d.sea = d.sea <= 0 ? 0 : clampI(d.sea, 60, 280)
+            d.liquid = clampI(d.liquid, 0, 1)
+            d.stone = block(d.stone, ModGround.key(.stone), false)
+            if d.zones.isEmpty { d.zones = [ModDimZone()] }
+            if d.zones.count > 4 {
+                r.add(1, mn, place, "Only 4 regions fit; the rest were left out.")
+                d.zones = Array(d.zones.prefix(4))
+            }
+            for k in d.zones.indices {
+                var z: ModDimZone = d.zones[k]
+                z.name = String(z.name.prefix(24))
+                if Biome(rawValue: z.biome) == nil { z.biome = Biome.plains.rawValue }
+                z.ground = block(z.ground, ModGround.key(.grass), false)
+                z.filler = block(z.filler, ModGround.key(.dirt), false)
+                z.plant = block(z.plant, "", true)
+                z.plantChance = c(z.plantChance, 0, 0.8, 0.1)
+                z.trees = clampI(z.trees, 0, 2)
+                z.log = block(z.log, ModGround.key(.log), false)
+                z.leaves = block(z.leaves, ModGround.key(.leaves), false)
+                d.zones[k] = z
+            }
+            d.zoneWidth = clampI(d.zoneWidth, 40, 2000)
+            d.hazard = block(d.hazard, "", true)
+            d.hazardChance = c(d.hazardChance, 0, 0.3, 0.02)
+            if d.spawns.count > 8 {
+                r.add(1, mn, place, "Only 8 kinds of creature fit; the rest were left out.")
+                d.spawns = Array(d.spawns.prefix(8))
+            }
+            var keep: [ModDimSpawn] = []
+            for var s in d.spawns {
+                if !gameNames.contains(s.creature) && !ownMobs.contains(s.creature) && known[s.creature] != "mob" {
+                    r.add(1, mn, place, "A creature it spawns does not exist; it was left out.")
+                    continue
+                }
+                s.place = clampI(s.place, 0, 2)
+                s.when = clampI(s.when, 0, 2)
+                s.weight = c(s.weight, 0.1, 20, 5)
+                s.group = clampI(s.group, 1, 4)
+                keep.append(s)
+            }
+            d.spawns = keep
+            d.gateBlock = block(d.gateBlock, "", true)
+            if d.gateBlock.hasPrefix("tile:") { d.gateBlock = "" }
+            for n in fixSummon(&d.entry, p, known) { r.add(1, mn, place, n) }
+            if !d.entry.enabled { r.add(1, mn, place, "It has no way in that works yet: players can only reach it from the Mod Test tools.") }
+            if !d.entry.usesItem && !d.returnGate {
+                d.returnGate = true
+                r.add(1, mn, place, "Without an item to use again, the way back is the gate; it was switched on.")
+            }
+            p.dims[i] = d
         }
     }
 }
@@ -33895,6 +34938,7 @@ extension Game {
     /// place has the same weather whichever chunks are loaded.
     func weatherAt(_ x: Double, _ y: Double) -> LocalWeather {
         var L = LocalWeather()
+        if let d = customDim, settings.weatherOn { return customWeather(d, x, y) }
         if world.dim != .overworld || !settings.weatherOn { return L }
         let ix: Int = Int(floor(x))
         let col: Col = gen.col(ix)
@@ -35383,7 +36427,7 @@ extension WorldRenderer {
     /// thing in their way; splashes where rain lands; hail from the pool; blown dust and grass bent
     /// over in the wind
     static func drawPrecip(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
-        if g.world.dim != .overworld || !g.settings.weatherOn { return }
+        if (g.world.dim != .overworld && g.customDim == nil) || !g.settings.weatherOn { return }
         let dens: Double = clampD(g.settings.weatherParticles, 0.2, 1.0)
         let tp: Double = v.tp
         let bands: Int = 8
@@ -37977,6 +39021,10 @@ enum WorldRenderer {
     // MARK: sky & background
 
     static func drawSky(_ ctx: inout GraphicsContext, _ W: Double, _ H: Double, _ g: Game, _ v: View2D) {
+        if let d = g.customDim {
+            drawCustomSky(&ctx, W, H, g, v, d)
+            return
+        }
         let full: CGRect = mkRect(0, 0, W, H)
         if g.world.dim == .umbral {
             let cols: [Color] = [Color(hex: 0x0C0614), Color(hex: 0x241030), Color(hex: 0x5A1A12)]
@@ -40917,7 +41965,7 @@ struct DebugPanel: View {
         out.append("Tick \(tickS) ms")
         let fpsN: Int = Int(game.renderFPS.rounded())
         out.append("FPS \(fpsN)")
-        let dimName: String = game.world.dim == .overworld ? "Overworld" : "Umbral"
+        let dimName: String = game.world.dim == .overworld ? "Overworld" : (game.customDim?.def.name ?? "Umbral")
         let xs: String = String(format: "%.1f", game.pb.x)
         let ys: String = String(format: "%.1f", game.pb.y)
         out.append("XY \(xs), \(ys)  \(dimName)")
@@ -42331,9 +43379,11 @@ struct ModPackagesScreen: View {
 // MARK: - Mod Creator: editing a mod
 
 enum ModTab: Int, CaseIterable {
-    case info, blocks, items, mobs, shots, recipes, loot, ores, structures, infusions, game, reference, check
+    case info, blocks, items, mobs, shots, recipes, loot, ores, structures, infusions, dims, game, reference, check
     var name: String {
         switch self {
+        case .dims: return "DIMENSIONS"
+
         case .infusions: return "INFUSIONS"
 
         case .reference: return "BLOCK REFERENCE"
@@ -42366,6 +43416,7 @@ enum ModEditTarget: Equatable {
     case structure(String)
     case override(String)
     case infusion(String)
+    case dimension(String)
 }
 
 struct ModEditorView: View {
@@ -42460,6 +43511,7 @@ struct ModEditorView: View {
         case .structure(let id): StructureEditorView(s: session, id: id)
         case .override(let id): OverrideEditorView(s: session, id: id)
         case .infusion(let id): InfusionEditorView(s: session, id: id, openRecipe: { rid in target = .recipe(rid) })
+        case .dimension(let id): DimensionEditorView(s: session, id: id)
         }
     }
 
@@ -42478,6 +43530,7 @@ struct ModEditorView: View {
         case .game: GameContentList(s: session, open: { id in target = .override(id) })
         case .reference: HardnessReferenceView(s: session)
         case .infusions: InfusionListView(s: session, open: { id in target = .infusion(id) })
+        case .dims: DimensionListView(s: session, open: { id in target = .dimension(id) })
         case .check: ModIssueList(report: session.report)
         }
     }
@@ -44257,7 +45310,7 @@ struct OreEditorView: View {
                     Text("Made of").font(.pixel(12, .bold)).foregroundColor(ModUI.dim)
                     ChoiceRow(options: blocks.map { $0.name }, selected: bsel, columns: 3)
                 }
-                ChoiceRow(options: ["Overworld", "Umbral Realm"], selected: b(\.dim, 0), columns: 2)
+                ModDimChoice(s: s, dim: b(\.dim, 0), dimKey: b(\.dimKey, ""))
             }
             ModSection(title: "DEPTH", help: "Drag the two sliders: the green band shows where veins form. The sea is at row 120.") {
                 HStack(alignment: .top, spacing: 14) {
@@ -44560,6 +45613,16 @@ struct ModTestPanel: View {
                 SmallButton(title: "DUSK", color: ModUI.blue) { setTime(0.53, "Dusk.") }
                 SmallButton(title: "MIDNIGHT", color: ModUI.blue) { setTime(0.75, "Midnight.") }
             }
+            if ModRuntime.shared.dimSlots.contains(where: { $0 != nil }) {
+                Text("Dimensions").font(.pixel(12, .bold)).foregroundColor(ModUI.dim)
+                ForEach(0..<3, id: \.self) { i in
+                    if let d = ModRuntime.shared.dimSlots[i] {
+                        SmallButton(title: game.world.dim == d.dim ? joinText("LEAVE ", d.def.name.uppercased()) : joinText("VISIT ", d.def.name.uppercased()), color: Color(hex: 0x6A4AAA)) {
+                            note = game.testVisitDim(i)
+                        }
+                    }
+                }
+            }
             ModToggle(label: "God mode", help: "Nothing can hurt you", isOn: god)
             ModToggle(label: "Survival rules", help: "Hunger, damage, stations and using things up, as in a real game", isOn: surv)
             ModToggle(label: "Creatures spawn by themselves", help: "Off: only what you spawn here appears", isOn: spawns)
@@ -44611,7 +45674,7 @@ struct StructureEditorView: View {
             }
             ModSection(title: "WHERE IT APPEARS", help: "It never cuts into bedrock or the rift gate, and keeps away from the world's own landmarks.") {
                 ChoiceRow(options: ModPlacement.allCases.map { $0.name }, selected: placeB, columns: 3)
-                ChoiceRow(options: ["Overworld", "Umbral Realm"], selected: b(\.dim, 0), columns: 2)
+                ModDimChoice(s: s, dim: b(\.dim, 0), dimKey: b(\.dimKey, ""))
                 if st.placement == .underground {
                     IntSlider(label: "Highest row", value: b(\.minY, 150), range: 4...550)
                     IntSlider(label: "Lowest row", value: b(\.maxY, 400), range: 4...550)
@@ -47675,212 +48738,6 @@ extension Double {
     }
 }
 
-/// The SUMMON page of a creature: the ways a player can call it into the world
-struct SummonPage: View {
-    @ObservedObject var s: ModSession
-    let id: String
-    @State var open: Int = 0
-    @State var pickingItem: Int = -1
-    @State var pickingBlock: Bool = false
-    /// what a tap on the shape paints: "" anything, "air" empty, or a block key
-    @State var brush: String = "air"
-    @State var recent: [String] = []
-
-    var mob: ModMob { return s.mod.mobs.first { $0.id == id } ?? ModMob() }
-    var summons: Binding<[ModSummon]> { return s.bind(\ModPack.mobs, id, \ModMob.summons, []) }
-
-    func sb<T>(_ i: Int, _ kp: WritableKeyPath<ModSummon, T>, _ d: T) -> Binding<T> {
-        let base: Binding<[ModSummon]> = summons
-        return Binding<T>(get: { i < base.wrappedValue.count ? base.wrappedValue[i][keyPath: kp] : d }, set: { v in
-            var list: [ModSummon] = base.wrappedValue
-            if i < list.count {
-                list[i][keyPath: kp] = v
-                base.wrappedValue = list
-            }
-        })
-    }
-
-    var body: some View {
-        ZStack {
-            VStack(spacing: 10) {
-                Text("Ways for a player to call this creature into the world in normal play: with an item, a shape of blocks, or both, where and when you say. Every condition you set must hold at once.")
-                    .font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-                ForEach(0..<mob.summons.count, id: \.self) { i in card(i) }
-                if mob.summons.count < ModLimits.maxSummons {
-                    PixelButton(title: "+ ADD A WAY TO SUMMON", color: ModUI.accent) { add() }
-                }
-            }
-            if pickingItem >= 0 {
-                ItemPickerView(catalog: s.catalog, title: "THE SUMMONING ITEM", pick: { it in
-                    sb(pickingItem, \.item, nil).wrappedValue = it
-                    pickingItem = -1
-                }, cancel: { pickingItem = -1 })
-            }
-            if pickingBlock {
-                ItemPickerView(catalog: s.catalog, title: "A BLOCK FOR THE SHAPE", blocksOnly: true, pick: { it in
-                    let k: String = SummonPage.key(it)
-                    if !k.isEmpty {
-                        brush = k
-                        recent.removeAll { $0 == k }
-                        recent.insert(k, at: 0)
-                        if recent.count > 8 { recent = Array(recent.prefix(8)) }
-                    }
-                    pickingBlock = false
-                }, cancel: { pickingBlock = false })
-            }
-        }
-    }
-
-    static func key(_ it: Item) -> String {
-        switch it {
-        case .block(let t): return t.isMod || t == .air ? "" : ModGround.key(t)
-        case .custom(let k): return k
-        default: return ""
-        }
-    }
-
-    func itemName(_ it: Item?) -> String {
-        guard let i = it else { return "an item (none chosen)" }
-        return ModPreview.name(i, s.catalog)
-    }
-
-    func card(_ i: Int) -> some View {
-        let sm: ModSummon = i < mob.summons.count ? mob.summons[i] : ModSummon()
-        return VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                Text(verbatim: joinText(String(i + 1), ". ", sm.how.name)).font(.pixel(13, .bold)).foregroundColor(sm.enabled ? Color.white : ModUI.dim)
-                Spacer(minLength: 0)
-                SmallButton(title: open == i ? "CLOSE" : "EDIT", color: ModUI.blue) { open = open == i ? -1 : i }
-                SmallButton(title: "DELETE", color: ModUI.red) { remove(i) }
-            }
-            Text(verbatim: joinText(ModSummonText.describe(sm, itemName(sm.item)), sm.enabled ? "." : " (switched off).")).font(.pixel(10, .semibold)).foregroundColor(ModUI.gold)
-            if open == i { editor(i, sm) }
-        }
-        .padding(10)
-        .background(PixelBox(color: ModUI.card))
-    }
-
-    @ViewBuilder
-    func editor(_ i: Int, _ sm: ModSummon) -> some View {
-        ModToggle(label: "Works in play", isOn: sb(i, \.enabled, true))
-        ModSection(title: "WHAT THE PLAYER DOES", help: sm.how.help) {
-            ChoiceRow(options: ModSummonHow.allCases.map { $0.name }, selected: howBind(i), columns: 3)
-        }
-        if sm.usesItem {
-            ModSection(title: "THE ITEM") {
-                HStack(spacing: 10) {
-                    if let it = sm.item {
-                        ModPreview.icon(it, s.catalog).resizable().interpolation(.none).frame(width: 36, height: 36)
-                    }
-                    Text(verbatim: itemName(sm.item)).font(.pixel(13, .bold)).foregroundColor(Color.white)
-                    Spacer(minLength: 0)
-                    SmallButton(title: "CHOOSE", color: ModUI.blue) { pickingItem = i }
-                }
-                ModToggle(label: "Used up when the creature comes", isOn: sb(i, \.consume, true))
-            }
-        }
-        if sm.usesPattern {
-            ModSection(title: "THE SHAPE", help: "Tap a cell to paint it. ANY: the cell can hold anything. EMPTY: it must be clear. The shape can be built anywhere, facing the way it is drawn.") {
-                palette
-                PatternGrid(pattern: sb(i, \.pattern, ModPattern()), brush: brush, catalog: s.catalog)
-                HStack(spacing: 10) {
-                    IntSlider(label: "Width", value: sizeBind(i, true), range: 1...ModPattern.maxSide)
-                    IntSlider(label: "Height", value: sizeBind(i, false), range: 1...ModPattern.maxSide)
-                }
-                ModToggle(label: "The shape's blocks are used up", isOn: sb(i, \.clearPattern, true))
-            }
-        }
-        ModSection(title: "WHEN AND WHERE", help: "Weather conditions are skipped for players who switch the weather off.") {
-            ChoiceRow(options: ModSummonText.times, selected: sb(i, \.time, 0), columns: 3)
-            ChoiceRow(options: ModSummonText.weathers, selected: sb(i, \.weather, 0), columns: 5)
-            ChoiceRow(options: ModSummonText.places, selected: sb(i, \.place, 0), columns: 3)
-            ModBiomePicker(biomes: sb(i, \.biomes, []))
-            Text("Dimensions (none chosen: any)").font(.pixel(11, .bold)).foregroundColor(ModUI.dim)
-            chips([(0, "Overworld"), (1, "Umbral Realm")], sb(i, \.dims, []))
-        }
-        ModSection(title: "ITS ENTRANCE") {
-            ChoiceRow(options: ModSummonText.appears, selected: sb(i, \.appear, 0), columns: 2)
-            ModTextField(label: "Message", text: sb(i, \.message, ""), placeholder: "The Frost King answers your call!")
-        }
-    }
-
-    var palette: some View {
-        let cols: [GridItem] = [GridItem(.adaptive(minimum: 70), spacing: 6)]
-        return LazyVGrid(columns: cols, spacing: 6) {
-            brushButton("", "ANY")
-            brushButton("air", "EMPTY")
-            ForEach(recent, id: \.self) { k in brushButton(k, ModGround.name(k, s.mod)) }
-            Button(action: { pickingBlock = true }) {
-                Text("+ BLOCK").font(.pixel(11, .bold)).foregroundColor(Color.white)
-                    .frame(maxWidth: .infinity, minHeight: 52)
-                    .background(ModUI.blue)
-            }
-            .buttonStyle(.plain)
-        }
-    }
-
-    func brushButton(_ k: String, _ label: String) -> some View {
-        Button(action: { brush = k }) {
-            VStack(spacing: 2) {
-                PatternGrid.cellImage(k, s.catalog).resizable().interpolation(.none).frame(width: 28, height: 28)
-                Text(verbatim: label).font(.pixel(8, .semibold)).foregroundColor(Color.white).lineLimit(1)
-            }
-            .frame(maxWidth: .infinity, minHeight: 52)
-            .background(brush == k ? ModUI.accent : Color.black.opacity(0.4))
-        }
-        .buttonStyle(.plain)
-    }
-
-    func chips(_ opts: [(Int, String)], _ b: Binding<[Int]>) -> some View {
-        let cols: [GridItem] = [GridItem(.adaptive(minimum: 104), spacing: 6)]
-        return LazyVGrid(columns: cols, spacing: 6) {
-            ForEach(0..<opts.count, id: \.self) { k in
-                Button(action: {
-                    var l: [Int] = b.wrappedValue
-                    if let j = l.firstIndex(of: opts[k].0) { l.remove(at: j) } else { l.append(opts[k].0) }
-                    b.wrappedValue = l.sorted()
-                }) {
-                    Text(verbatim: opts[k].1).font(.pixel(11, .bold)).foregroundColor(Color.white)
-                        .frame(maxWidth: .infinity, minHeight: 40)
-                        .background(b.wrappedValue.contains(opts[k].0) ? ModUI.accent : Color.black.opacity(0.4))
-                }
-                .buttonStyle(.plain)
-            }
-        }
-    }
-
-    func howBind(_ i: Int) -> Binding<Int> {
-        let base: Binding<ModSummonHow> = sb(i, \.how, .useItem)
-        return Binding<Int>(get: { base.wrappedValue.rawValue }, set: { base.wrappedValue = ModSummonHow(rawValue: $0) ?? .useItem })
-    }
-
-    func sizeBind(_ i: Int, _ across: Bool) -> Binding<Int> {
-        let base: Binding<ModPattern> = sb(i, \.pattern, ModPattern())
-        return Binding<Int>(get: { across ? base.wrappedValue.w : base.wrappedValue.h }, set: { n in
-            let p: ModPattern = base.wrappedValue
-            base.wrappedValue = across ? p.resized(n, p.h) : p.resized(p.w, n)
-        })
-    }
-
-    func add() {
-        var list: [ModSummon] = mob.summons
-        var sm = ModSummon()
-        sm.time = 2
-        sm.message = joinText(mob.name, " answers the call!")
-        list.append(sm)
-        summons.wrappedValue = list
-        open = list.count - 1
-    }
-
-    func remove(_ i: Int) {
-        var list: [ModSummon] = mob.summons
-        if i < 0 || i >= list.count { return }
-        list.remove(at: i)
-        summons.wrappedValue = list
-        open = -1
-    }
-}
-
 /// A summoning shape as a grid of big cells to paint
 struct PatternGrid: View {
     @Binding var pattern: ModPattern
@@ -47930,6 +48787,701 @@ struct PatternGrid: View {
         }
         if k.hasPrefix("tile:"), let n = Int(k.dropFirst(5)), let t = Tile(rawValue: UInt8(clampI(n, 0, 255))) { return pixImage(tileBuf(t)) }
         return ModPreview.icon(.custom(k), cat)
+    }
+}
+
+// MARK: - Mod Creator+: summoning rules and custom dimensions (screens)
+
+/// One way to summon (or a dimension's way in): what the player does, the item, the shape, and when
+/// and where it works. Used by the SUMMON page and the dimension editor.
+struct SummonRuleEditor: View {
+    @ObservedObject var s: ModSession
+    @Binding var rule: ModSummon
+    var forDimension: Bool = false
+    @State var pickingItem: Bool = false
+    @State var pickingBlock: Bool = false
+    /// what a tap on the shape paints: "" anything, "air" empty, or a block key
+    @State var brush: String = "air"
+    @State var recent: [String] = []
+
+    func rb<T>(_ kp: WritableKeyPath<ModSummon, T>) -> Binding<T> {
+        return Binding<T>(get: { rule[keyPath: kp] }, set: { rule[keyPath: kp] = $0 })
+    }
+
+    var body: some View {
+        ZStack {
+            VStack(alignment: .leading, spacing: 8) {
+                ModToggle(label: forDimension ? "Players can get in this way" : "Works in play", isOn: rb(\.enabled))
+                ModSection(title: "WHAT THE PLAYER DOES", help: rule.how.help) {
+                    ChoiceRow(options: ModSummonHow.allCases.map { $0.name }, selected: howBind, columns: 3)
+                }
+                if rule.usesItem {
+                    ModSection(title: forDimension ? "THE KEY ITEM" : "THE ITEM", help: forDimension ? "Using it again inside the dimension brings the player back." : "") {
+                        HStack(spacing: 10) {
+                            if let it = rule.item {
+                                ModPreview.icon(it, s.catalog).resizable().interpolation(.none).frame(width: 36, height: 36)
+                            }
+                            Text(verbatim: itemName).font(.pixel(13, .bold)).foregroundColor(Color.white)
+                            Spacer(minLength: 0)
+                            SmallButton(title: "CHOOSE", color: ModUI.blue) { pickingItem = true }
+                        }
+                        ModToggle(label: forDimension ? "Used up on the way in" : "Used up when the creature comes", isOn: rb(\.consume))
+                    }
+                }
+                if rule.usesPattern {
+                    ModSection(title: forDimension ? "THE GATEWAY SHAPE" : "THE SHAPE", help: "Tap a cell to paint it. ANY: the cell can hold anything. EMPTY: it must be clear. It is built facing the way it is drawn.") {
+                        palette
+                        PatternGrid(pattern: rb(\.pattern), brush: brush, catalog: s.catalog)
+                        HStack(spacing: 10) {
+                            IntSlider(label: "Width", value: sizeBind(true), range: 1...ModPattern.maxSide)
+                            IntSlider(label: "Height", value: sizeBind(false), range: 1...ModPattern.maxSide)
+                        }
+                        ModToggle(label: "The shape's blocks are used up", isOn: rb(\.clearPattern))
+                    }
+                }
+                ModSection(title: "WHEN AND WHERE", help: "Weather conditions are skipped for players who switch the weather off.") {
+                    ChoiceRow(options: ModSummonText.times, selected: rb(\.time), columns: 3)
+                    ChoiceRow(options: ModSummonText.weathers, selected: rb(\.weather), columns: 5)
+                    ChoiceRow(options: ModSummonText.places, selected: rb(\.place), columns: 3)
+                    ModBiomePicker(biomes: rb(\.biomes))
+                    Text("Dimensions (none chosen: any)").font(.pixel(11, .bold)).foregroundColor(ModUI.dim)
+                    chips([(0, "Overworld"), (1, "Umbral Realm")], rb(\.dims))
+                    if !s.mod.dims.isEmpty { keyChips(s.mod.dims.map { (s.mod.key($0.id), $0.name) }, rb(\.dimKeys)) }
+                }
+                if !forDimension {
+                    ModSection(title: "ITS ENTRANCE") {
+                        ChoiceRow(options: ModSummonText.appears, selected: rb(\.appear), columns: 2)
+                        ModTextField(label: "Message", text: rb(\.message), placeholder: "The Frost King answers your call!")
+                    }
+                }
+            }
+            if pickingItem {
+                ItemPickerView(catalog: s.catalog, title: forDimension ? "THE KEY ITEM" : "THE SUMMONING ITEM", pick: { it in
+                    rule.item = it
+                    pickingItem = false
+                }, cancel: { pickingItem = false })
+            }
+            if pickingBlock {
+                ItemPickerView(catalog: s.catalog, title: "A BLOCK FOR THE SHAPE", blocksOnly: true, pick: { it in
+                    let k: String = SummonRuleEditor.key(it)
+                    if !k.isEmpty {
+                        brush = k
+                        recent.removeAll { $0 == k }
+                        recent.insert(k, at: 0)
+                        if recent.count > 8 { recent = Array(recent.prefix(8)) }
+                    }
+                    pickingBlock = false
+                }, cancel: { pickingBlock = false })
+            }
+        }
+    }
+
+    static func key(_ it: Item) -> String {
+        switch it {
+        case .block(let t): return t.isMod || t == .air ? "" : ModGround.key(t)
+        case .custom(let k): return k
+        default: return ""
+        }
+    }
+
+    var itemName: String {
+        guard let i = rule.item else { return "None chosen" }
+        return ModPreview.name(i, s.catalog)
+    }
+
+    var palette: some View {
+        let cols: [GridItem] = [GridItem(.adaptive(minimum: 70), spacing: 6)]
+        return LazyVGrid(columns: cols, spacing: 6) {
+            brushButton("", "ANY")
+            brushButton("air", "EMPTY")
+            ForEach(recent, id: \.self) { k in brushButton(k, ModGround.name(k, s.mod)) }
+            Button(action: { pickingBlock = true }) {
+                Text("+ BLOCK").font(.pixel(11, .bold)).foregroundColor(Color.white)
+                    .frame(maxWidth: .infinity, minHeight: 52)
+                    .background(ModUI.blue)
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    func brushButton(_ k: String, _ label: String) -> some View {
+        Button(action: { brush = k }) {
+            VStack(spacing: 2) {
+                PatternGrid.cellImage(k, s.catalog).resizable().interpolation(.none).frame(width: 28, height: 28)
+                Text(verbatim: label).font(.pixel(8, .semibold)).foregroundColor(Color.white).lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, minHeight: 52)
+            .background(brush == k ? ModUI.accent : Color.black.opacity(0.4))
+        }
+        .buttonStyle(.plain)
+    }
+
+    func chips(_ opts: [(Int, String)], _ b: Binding<[Int]>) -> some View {
+        let cols: [GridItem] = [GridItem(.adaptive(minimum: 104), spacing: 6)]
+        return LazyVGrid(columns: cols, spacing: 6) {
+            ForEach(0..<opts.count, id: \.self) { k in
+                Button(action: {
+                    var l: [Int] = b.wrappedValue
+                    if let j = l.firstIndex(of: opts[k].0) { l.remove(at: j) } else { l.append(opts[k].0) }
+                    b.wrappedValue = l.sorted()
+                }) {
+                    Text(verbatim: opts[k].1).font(.pixel(11, .bold)).foregroundColor(Color.white)
+                        .frame(maxWidth: .infinity, minHeight: 40)
+                        .background(b.wrappedValue.contains(opts[k].0) ? ModUI.accent : Color.black.opacity(0.4))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    func keyChips(_ opts: [(String, String)], _ b: Binding<[String]>) -> some View {
+        let cols: [GridItem] = [GridItem(.adaptive(minimum: 104), spacing: 6)]
+        return LazyVGrid(columns: cols, spacing: 6) {
+            ForEach(0..<opts.count, id: \.self) { k in
+                Button(action: {
+                    var l: [String] = b.wrappedValue
+                    if let j = l.firstIndex(of: opts[k].0) { l.remove(at: j) } else { l.append(opts[k].0) }
+                    b.wrappedValue = l
+                }) {
+                    Text(verbatim: opts[k].1).font(.pixel(11, .bold)).foregroundColor(Color.white)
+                        .frame(maxWidth: .infinity, minHeight: 40)
+                        .background(b.wrappedValue.contains(opts[k].0) ? ModUI.accent : Color.black.opacity(0.4))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    var howBind: Binding<Int> {
+        return Binding<Int>(get: { rule.how.rawValue }, set: { rule.how = ModSummonHow(rawValue: $0) ?? .useItem })
+    }
+
+    func sizeBind(_ across: Bool) -> Binding<Int> {
+        return Binding<Int>(get: { across ? rule.pattern.w : rule.pattern.h }, set: { n in
+            let p: ModPattern = rule.pattern
+            rule.pattern = across ? p.resized(n, p.h) : p.resized(p.w, n)
+        })
+    }
+}
+
+/// The SUMMON page of a creature: the ways a player can call it into the world
+struct SummonPage: View {
+    @ObservedObject var s: ModSession
+    let id: String
+    @State var open: Int = 0
+
+    var mob: ModMob { return s.mod.mobs.first { $0.id == id } ?? ModMob() }
+    var summons: Binding<[ModSummon]> { return s.bind(\ModPack.mobs, id, \ModMob.summons, []) }
+
+    func rule(_ i: Int) -> Binding<ModSummon> {
+        let base: Binding<[ModSummon]> = summons
+        return Binding<ModSummon>(get: { i < base.wrappedValue.count ? base.wrappedValue[i] : ModSummon() }, set: { v in
+            var list: [ModSummon] = base.wrappedValue
+            if i < list.count {
+                list[i] = v
+                base.wrappedValue = list
+            }
+        })
+    }
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Text("Ways for a player to call this creature into the world in normal play: with an item, a shape of blocks, or both, where and when you say. Every condition you set must hold at once.")
+                .font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+            ForEach(0..<mob.summons.count, id: \.self) { i in card(i) }
+            if mob.summons.count < ModLimits.maxSummons {
+                PixelButton(title: "+ ADD A WAY TO SUMMON", color: ModUI.accent) { add() }
+            }
+        }
+    }
+
+    func itemName(_ it: Item?) -> String {
+        guard let i = it else { return "an item (none chosen)" }
+        return ModPreview.name(i, s.catalog)
+    }
+
+    func card(_ i: Int) -> some View {
+        let sm: ModSummon = i < mob.summons.count ? mob.summons[i] : ModSummon()
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Text(verbatim: joinText(String(i + 1), ". ", sm.how.name)).font(.pixel(13, .bold)).foregroundColor(sm.enabled ? Color.white : ModUI.dim)
+                Spacer(minLength: 0)
+                SmallButton(title: open == i ? "CLOSE" : "EDIT", color: ModUI.blue) { open = open == i ? -1 : i }
+                SmallButton(title: "DELETE", color: ModUI.red) { remove(i) }
+            }
+            Text(verbatim: joinText(ModSummonText.describe(sm, itemName(sm.item)), sm.enabled ? "." : " (switched off).")).font(.pixel(10, .semibold)).foregroundColor(ModUI.gold)
+            if open == i { SummonRuleEditor(s: s, rule: rule(i)) }
+        }
+        .padding(10)
+        .background(PixelBox(color: ModUI.card))
+    }
+
+    func add() {
+        var list: [ModSummon] = mob.summons
+        var sm = ModSummon()
+        sm.time = 2
+        sm.message = joinText(mob.name, " answers the call!")
+        list.append(sm)
+        summons.wrappedValue = list
+        open = list.count - 1
+    }
+
+    func remove(_ i: Int) {
+        var list: [ModSummon] = mob.summons
+        if i < 0 || i >= list.count { return }
+        list.remove(at: i)
+        summons.wrappedValue = list
+        open = -1
+    }
+}
+
+/// The DIMENSIONS tab: the mod's dimensions
+struct DimensionListView: View {
+    @ObservedObject var s: ModSession
+    var open: (String) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Whole new places to travel to: their own sky, light, land, regions, weather and creatures, and a way in that you design (a key item, a gateway shape, or both). A world holds up to three custom dimensions.")
+                .font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+            if s.mod.dims.count < 3 {
+                PixelButton(title: "+ NEW DIMENSION", color: ModUI.accent) { add() }
+            }
+            ForEach(s.mod.dims) { d in
+                Button(action: { open(d.id) }) {
+                    HStack(spacing: 10) {
+                        SkySwatch(top: d.skyTop, bottom: d.skyBottom).frame(width: 44, height: 44)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(verbatim: d.name).font(.pixel(14)).foregroundColor(Color.white)
+                            Text(verbatim: summary(d)).font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
+                        }
+                        Spacer(minLength: 0)
+                        if s.mod.off.contains(d.id) { Text("OFF").font(.pixel(11, .bold)).foregroundColor(ModUI.red) }
+                    }
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(PixelBox(color: ModUI.card))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    func summary(_ d: ModDimension) -> String {
+        var parts: [String] = []
+        parts.append(d.ceiling ? "a cavern world" : "open sky")
+        parts.append(joinText(String(d.zones.count), d.zones.count == 1 ? " region" : " regions"))
+        if d.sea > 0 { parts.append(d.liquid == 1 ? "lava seas" : "seas") }
+        if d.islands > 0.05 { parts.append("floating islands") }
+        parts.append(joinText(String(d.spawns.count), d.spawns.count == 1 ? " creature" : " creatures"))
+        parts.append(d.entry.enabled ? d.entry.how.name.lowercased() : "no way in yet")
+        return parts.joined(separator: " \u{00B7} ")
+    }
+
+    func add() {
+        var d = ModDimension()
+        d.id = s.mod.freshID("d")
+        d.name = joinText("Dimension ", String(s.mod.dims.count + 1))
+        s.mod.dims.append(d)
+        s.touch()
+        open(d.id)
+    }
+}
+
+/// Editing one dimension: its sky and light, its land, its regions, its creatures, the way in and out,
+/// and a preview made by the game's own generator
+struct DimensionEditorView: View {
+    @ObservedObject var s: ModSession
+    let id: String
+    @State var page: Int = 0
+    @State var picking: String = ""
+    @State var zonePick: Int = 0
+    @State var preview: PixelBuf? = nil
+    @State var previewOf: ModDimension? = nil
+
+    static let pages: [String] = ["BASICS", "SKY", "LAND", "REGIONS", "LIFE", "WAY IN", "PREVIEW"]
+
+    func b<T>(_ kp: WritableKeyPath<ModDimension, T>, _ d: T) -> Binding<T> { return s.bind(\ModPack.dims, id, kp, d) }
+    var dim: ModDimension { return s.mod.dims.first { $0.id == id } ?? ModDimension() }
+
+    var body: some View {
+        ZStack {
+            VStack(spacing: 10) {
+                header
+                ChoiceRow(options: DimensionEditorView.pages, selected: $page, columns: 7)
+                pageView
+            }
+            if !picking.isEmpty {
+                ItemPickerView(catalog: s.catalog, title: "CHOOSE A BLOCK", blocksOnly: true, pick: { it in
+                    setBlock(picking, SummonRuleEditor.key(it))
+                    picking = ""
+                }, cancel: { picking = "" })
+            }
+        }
+    }
+
+    var header: some View {
+        HStack(spacing: 12) {
+            SkySwatch(top: dim.skyTop, bottom: dim.skyBottom).frame(width: 64, height: 64)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(verbatim: dim.name).font(.pixel(20)).foregroundColor(Color.white)
+                Text(verbatim: dim.entry.enabled ? joinText("Way in: ", dim.entry.how.name.lowercased()) : "No way in yet (visit it from the Mod Test tools)")
+                    .font(.pixel(11, .semibold)).foregroundColor(dim.entry.enabled ? ModUI.gold : Color(hex: 0xFF9060))
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(10)
+        .background(PixelBox(color: ModUI.card))
+    }
+
+    @ViewBuilder
+    var pageView: some View {
+        switch page {
+        case 1: skyPage
+        case 2: landPage
+        case 3: zonesPage
+        case 4: lifePage
+        case 5: entryPage
+        case 6: previewPage
+        default: basicsPage
+        }
+    }
+
+    var basicsPage: some View {
+        ModSection(title: "BASICS") {
+            ModTextField(label: "Name", text: b(\.name, ""), placeholder: "The Frostlands")
+            ModTextField(label: "Description", text: b(\.desc, ""), placeholder: "Optional")
+            ModTextField(label: "Message on arrival", text: b(\.arriveMessage, ""), placeholder: "Snow crunches underfoot.")
+        }
+    }
+
+    var skyPage: some View {
+        VStack(spacing: 10) {
+            ModSection(title: "SKY", help: "Colours at the top and the bottom of the sky, by day and by night.") {
+                ModToggle(label: "A rock roof overhead (a cavern world)", help: "No sky, sun or rain; like the Umbral Realm", isOn: b(\.ceiling, false))
+                ModColorRow(label: "Day: top", color: b(\.skyTop, 0x3A2A6A))
+                ModColorRow(label: "Day: bottom", color: b(\.skyBottom, 0xC07AB0))
+                ModColorRow(label: "Night: top", color: b(\.nightTop, 0x080614))
+                ModColorRow(label: "Night: bottom", color: b(\.nightBottom, 0x241A3A))
+            }
+            ModSection(title: "LIGHT AND TIME") {
+                StatSlider(label: "Daylight", value: b(\.light, 0.8), range: 0...1, step: 0.05, format: "%.2f")
+                ModToggle(label: "Day and night", help: "Off: it is always the same time there", isOn: b(\.cycle, true))
+                if !dim.cycle {
+                    StatSlider(label: "The time it always is", value: b(\.fixedTime, 0.25), range: 0...1, step: 0.01, format: "%.2f")
+                    Text(verbatim: timeWord(dim.fixedTime)).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+                }
+                ModToggle(label: "Sun", isOn: b(\.sun, true))
+                ModToggle(label: "Moon", isOn: b(\.moon, true))
+                ModToggle(label: "Stars", isOn: b(\.stars, true))
+                ModColorRow(label: "Sun colour", color: b(\.sunColor, 0xFFE8A0))
+            }
+            ModSection(title: "AIR AND WEATHER") {
+                Text("Motes in the air").font(.pixel(11, .bold)).foregroundColor(ModUI.dim)
+                ChoiceRow(options: ModDimText.ambients, selected: b(\.ambient, 0), columns: 6)
+                Text("Weather").font(.pixel(11, .bold)).foregroundColor(ModUI.dim)
+                ChoiceRow(options: ModDimText.weathers, selected: b(\.weather, 0), columns: 5)
+                StatSlider(label: "Cold", value: b(\.chill, 0), range: 0...1, step: 0.05, format: "%.2f")
+                ModToggle(label: "Hot", isOn: b(\.hot, false))
+            }
+        }
+    }
+
+    func timeWord(_ t: Double) -> String {
+        if t < 0.04 || t > 0.95 { return "Dawn" }
+        if t < 0.46 { return "Day" }
+        if t < 0.6 { return "Dusk" }
+        return "Night"
+    }
+
+    var landPage: some View {
+        VStack(spacing: 10) {
+            ModSection(title: "THE GROUND", help: "Rows count down from the top of the dimension (320 rows deep).") {
+                IntSlider(label: "Ground level (row)", value: b(\.surface, 150), range: (dim.ceiling ? 80 : 40)...260)
+                StatSlider(label: "Hills", value: b(\.hills, 12), range: 0...40, step: 1, format: "%.0f")
+                StatSlider(label: "Roughness", value: b(\.roughness, 1), range: 0.2...3, step: 0.1, format: "%.1f")
+                StatSlider(label: "Mountains", value: b(\.mountains, 0.2), range: 0...1, step: 0.05, format: "%.2f")
+                blockRow("Rock", dim.stone, "stone")
+            }
+            ModSection(title: "UNDERGROUND") {
+                StatSlider(label: "Caves", value: b(\.caves, 0.4), range: 0...1, step: 0.05, format: "%.2f")
+                ModToggle(label: "Pools deep in the caves", isOn: b(\.pools, true))
+            }
+            ModSection(title: "SEAS AND SKY") {
+                ModToggle(label: "Seas", isOn: seaOn)
+                if dim.sea > 0 {
+                    IntSlider(label: "Sea level (row)", value: b(\.sea, 160), range: 60...280)
+                }
+                ChoiceRow(options: ModDimText.liquids, selected: b(\.liquid, 0), columns: 2)
+                StatSlider(label: "Floating islands", value: b(\.islands, 0), range: 0...1, step: 0.05, format: "%.2f")
+            }
+            ModSection(title: "HAZARDS", help: "A block scattered on the ground, such as spikes or one of your own.") {
+                blockRow("Hazard", dim.hazard, "hazard")
+                if !dim.hazard.isEmpty {
+                    StatSlider(label: "How often", value: b(\.hazardChance, 0.02), range: 0...0.3, step: 0.01, format: "%.2f")
+                    SmallButton(title: "NO HAZARD", color: ModUI.red) { setBlock("hazard", "") }
+                }
+            }
+        }
+    }
+
+    var seaOn: Binding<Bool> {
+        let base: Binding<Int> = b(\.sea, 0)
+        let surf: Int = dim.surface
+        return Binding<Bool>(get: { base.wrappedValue > 0 }, set: { base.wrappedValue = $0 ? clampI(surf + 6, 60, 280) : 0 })
+    }
+
+    func blockRow(_ label: String, _ key: String, _ field: String) -> some View {
+        HStack(spacing: 10) {
+            PatternGrid.cellImage(key, s.catalog).resizable().interpolation(.none).frame(width: 32, height: 32)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(verbatim: label).font(.pixel(11, .bold)).foregroundColor(ModUI.dim)
+                Text(verbatim: key.isEmpty ? "None" : ModGround.name(key, s.mod)).font(.pixel(13, .bold)).foregroundColor(Color.white)
+            }
+            Spacer(minLength: 0)
+            SmallButton(title: "CHOOSE", color: ModUI.blue) { picking = field }
+        }
+    }
+
+    /// A block chosen in the picker goes where it was asked for (a region's blocks are "z<n>:<field>")
+    func setBlock(_ field: String, _ key: String) {
+        guard let i = s.mod.dims.firstIndex(where: { $0.id == id }) else { return }
+        var d: ModDimension = s.mod.dims[i]
+        if field.hasPrefix("z") {
+            let parts: [Substring] = field.dropFirst().split(separator: ":")
+            guard parts.count == 2, let zi = Int(parts[0]), zi >= 0 && zi < d.zones.count else { return }
+            switch parts[1] {
+            case "ground": if !key.isEmpty { d.zones[zi].ground = key }
+            case "filler": if !key.isEmpty { d.zones[zi].filler = key }
+            case "plant": d.zones[zi].plant = key
+            case "log": if !key.isEmpty { d.zones[zi].log = key }
+            case "leaves": if !key.isEmpty { d.zones[zi].leaves = key }
+            default: break
+            }
+        } else {
+            switch field {
+            case "stone": if !key.isEmpty { d.stone = key }
+            case "hazard": d.hazard = key
+            case "gate": d.gateBlock = key.hasPrefix("tile:") ? "" : key
+            default: break
+            }
+        }
+        s.mod.dims[i] = d
+        s.touch()
+    }
+
+    func zb<T>(_ i: Int, _ kp: WritableKeyPath<ModDimZone, T>, _ d: T) -> Binding<T> {
+        let base: Binding<[ModDimZone]> = b(\.zones, [])
+        return Binding<T>(get: { i < base.wrappedValue.count ? base.wrappedValue[i][keyPath: kp] : d }, set: { v in
+            var list: [ModDimZone] = base.wrappedValue
+            if i < list.count {
+                list[i][keyPath: kp] = v
+                base.wrappedValue = list
+            }
+        })
+    }
+
+    var zonesPage: some View {
+        let zones: [ModDimZone] = dim.zones
+        let zi: Int = clampI(zonePick, 0, max(0, zones.count - 1))
+        return VStack(spacing: 10) {
+            Text("Regions lie side by side, each with its own ground, plants and trees: the dimension's biomes. Each counts as one of the game's biomes for ores, structures, summoning and creature rules.")
+                .font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+            ChoiceRow(options: zones.map { $0.name }, selected: $zonePick, columns: 4)
+            HStack(spacing: 8) {
+                if zones.count < 4 {
+                    SmallButton(title: "+ REGION", color: ModUI.accent) {
+                        var l: [ModDimZone] = dim.zones
+                        var z = ModDimZone()
+                        z.name = joinText("Region ", String(l.count + 1))
+                        l.append(z)
+                        b(\.zones, []).wrappedValue = l
+                        zonePick = l.count - 1
+                    }
+                }
+                if zones.count > 1 {
+                    SmallButton(title: "DELETE THIS REGION", color: ModUI.red) {
+                        var l: [ModDimZone] = dim.zones
+                        if zi < l.count { l.remove(at: zi) }
+                        b(\.zones, []).wrappedValue = l
+                        zonePick = 0
+                    }
+                }
+            }
+            if zi < zones.count {
+                ModSection(title: zones[zi].name.uppercased()) {
+                    ModTextField(label: "Name", text: zb(zi, \.name, ""), placeholder: "Frozen Wastes")
+                    Text("Counts as").font(.pixel(11, .bold)).foregroundColor(ModUI.dim)
+                    ChoiceRow(options: ModBiomePicker.all.map { $0.name }, selected: biomeBind(zi), columns: 5)
+                    blockRow("Ground", zones[zi].ground, joinText("z", String(zi), ":ground"))
+                    blockRow("Under the ground", zones[zi].filler, joinText("z", String(zi), ":filler"))
+                    blockRow("Plants", zones[zi].plant, joinText("z", String(zi), ":plant"))
+                    if !zones[zi].plant.isEmpty {
+                        StatSlider(label: "How many plants", value: zb(zi, \.plantChance, 0.1), range: 0...0.8, step: 0.02, format: "%.2f")
+                    }
+                    Text("Trees").font(.pixel(11, .bold)).foregroundColor(ModUI.dim)
+                    ChoiceRow(options: ModDimText.trees, selected: zb(zi, \.trees, 1), columns: 3)
+                    if zones[zi].trees > 0 {
+                        blockRow("Trunk", zones[zi].log, joinText("z", String(zi), ":log"))
+                        blockRow("Leaves", zones[zi].leaves, joinText("z", String(zi), ":leaves"))
+                    }
+                }
+            }
+            if zones.count > 1 {
+                IntSlider(label: "Width of each region (blocks)", value: b(\.zoneWidth, 300), range: 40...2000)
+            }
+        }
+    }
+
+    func biomeBind(_ zi: Int) -> Binding<Int> {
+        let base: Binding<Int> = zb(zi, \.biome, Biome.plains.rawValue)
+        let all: [Biome] = ModBiomePicker.all
+        return Binding<Int>(get: { all.firstIndex { $0.rawValue == base.wrappedValue } ?? 0 }, set: { base.wrappedValue = all[clampI($0, 0, all.count - 1)].rawValue })
+    }
+
+    func sp<T>(_ i: Int, _ kp: WritableKeyPath<ModDimSpawn, T>, _ d: T) -> Binding<T> {
+        let base: Binding<[ModDimSpawn]> = b(\.spawns, [])
+        return Binding<T>(get: { i < base.wrappedValue.count ? base.wrappedValue[i][keyPath: kp] : d }, set: { v in
+            var list: [ModDimSpawn] = base.wrappedValue
+            if i < list.count {
+                list[i][keyPath: kp] = v
+                base.wrappedValue = list
+            }
+        })
+    }
+
+    var creatureChoices: ([String], [String]) {
+        var names: [String] = []
+        var keys: [String] = []
+        for m in s.mod.mobs {
+            names.append(m.name)
+            keys.append(s.mod.key(m.id))
+        }
+        for k in [MobKind.pig, .cow, .sheep, .wolf, .bat, .zombie, .skeleton, .slime, .wraith, .imp, .emberSlime, .cinderBat, .crawler, .golem] {
+            names.append(mobDef(k).name)
+            keys.append(mobDef(k).name)
+        }
+        return (names, keys)
+    }
+
+    var lifePage: some View {
+        let ch: ([String], [String]) = creatureChoices
+        return VStack(spacing: 10) {
+            Text("The creatures of this dimension (the game's own creatures don't come here unless you list them). Bosses are best called with a SUMMON rule that only works in this dimension.")
+                .font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+            ForEach(0..<dim.spawns.count, id: \.self) { i in
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text(verbatim: joinText(String(i + 1), ". ", nameOf(dim.spawns[i].creature))).font(.pixel(13, .bold)).foregroundColor(Color.white)
+                        Spacer(minLength: 0)
+                        SmallButton(title: "DELETE", color: ModUI.red) {
+                            var l: [ModDimSpawn] = dim.spawns
+                            if i < l.count { l.remove(at: i) }
+                            b(\.spawns, []).wrappedValue = l
+                        }
+                    }
+                    ChoiceRow(options: ch.0, selected: creatureBind(i, ch.1), columns: 4)
+                    ChoiceRow(options: ModDimText.places, selected: sp(i, \.place, 0), columns: 3)
+                    ChoiceRow(options: ModDimText.times, selected: sp(i, \.when, 0), columns: 3)
+                    StatSlider(label: "How common", value: sp(i, \.weight, 5), range: 0.1...20, step: 0.1, format: "%.1f")
+                    IntSlider(label: "Group", value: sp(i, \.group, 1), range: 1...4)
+                }
+                .padding(8)
+                .background(PixelBox(color: ModUI.card))
+            }
+            if dim.spawns.count < 8 {
+                PixelButton(title: "+ ADD A CREATURE", color: ModUI.accent) {
+                    var l: [ModDimSpawn] = dim.spawns
+                    var n = ModDimSpawn()
+                    n.creature = ch.1.first ?? mobDef(.zombie).name
+                    l.append(n)
+                    b(\.spawns, []).wrappedValue = l
+                }
+            }
+        }
+    }
+
+    func nameOf(_ key: String) -> String {
+        if let m = s.mod.mobs.first(where: { s.mod.key($0.id) == key }) { return m.name }
+        return key
+    }
+
+    func creatureBind(_ i: Int, _ keys: [String]) -> Binding<Int> {
+        let base: Binding<String> = sp(i, \.creature, "")
+        return Binding<Int>(get: { keys.firstIndex(of: base.wrappedValue) ?? 0 }, set: { v in if !keys.isEmpty { base.wrappedValue = keys[clampI(v, 0, keys.count - 1)] } })
+    }
+
+    var entryPage: some View {
+        VStack(spacing: 10) {
+            ModSection(title: "THE WAY BACK") {
+                ModToggle(label: "A gate where the player arrives", help: "Tapping it takes them back to where they came in", isOn: b(\.returnGate, true))
+                if dim.returnGate {
+                    blockRow("The gate's block (one of this mod's)", dim.gateBlock, "gate")
+                    if dim.gateBlock.isEmpty {
+                        Text("None chosen: a glowing crystal.").font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
+                    }
+                }
+            }
+            ModSection(title: "THE WAY IN", help: "For a portal, draw a frame of your gateway block with EMPTY inside, and use a key item on it.") {
+                SummonRuleEditor(s: s, rule: b(\.entry, ModDimension.defaultEntry), forDimension: true)
+            }
+        }
+    }
+
+    var previewPage: some View {
+        VStack(spacing: 10) {
+            Text("Six chunks of the dimension, from the top to the bottom, made by the same generator the game uses (a sample world). Make the preview again after changing something.")
+                .font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+            PixelButton(title: preview == nil ? "MAKE PREVIEW" : "MAKE IT AGAIN", color: ModUI.blue) {
+                preview = ModDimPreview.render(dim, s.mod)
+                previewOf = dim
+            }
+            if let p = preview {
+                pixImage(p).resizable().interpolation(.none)
+                    .frame(width: CGFloat(p.w) * 1.5, height: CGFloat(p.h) * 1.5)
+                    .background(Color.black)
+                if previewOf != dim {
+                    Text("Changed since this preview was made.").font(.pixel(11, .semibold)).foregroundColor(Color(hex: 0xFF9060))
+                }
+            }
+        }
+    }
+}
+
+/// The dimension an ore or structure is made in: the game's two, or one of the mod's own
+struct ModDimChoice: View {
+    @ObservedObject var s: ModSession
+    @Binding var dim: Int
+    @Binding var dimKey: String
+
+    var body: some View {
+        let names: [String] = ["Overworld", "Umbral Realm"] + s.mod.dims.map { $0.name }
+        let ids: [String] = s.mod.dims.map { $0.id }
+        let sel: Binding<Int> = Binding<Int>(get: {
+            if !dimKey.isEmpty, let i = ids.firstIndex(of: dimKey) { return 2 + i }
+            return dim == 1 ? 1 : 0
+        }, set: { v in
+            if v >= 2 && v - 2 < ids.count {
+                dimKey = ids[v - 2]
+            } else {
+                dimKey = ""
+                dim = v == 1 ? 1 : 0
+            }
+        })
+        return ChoiceRow(options: names, selected: sel, columns: min(5, names.count))
+    }
+}
+
+/// A little square of a dimension's sky (its two colours and the step between)
+struct SkySwatch: View {
+    let top: UInt32
+    let bottom: UInt32
+    var body: some View {
+        VStack(spacing: 0) {
+            Rectangle().fill(Color(hex: top))
+            Rectangle().fill(Color(hex: mixRGB(top, bottom, 0.5)))
+            Rectangle().fill(Color(hex: bottom))
+        }
     }
 }
 

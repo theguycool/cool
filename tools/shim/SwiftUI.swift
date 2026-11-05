@@ -17,6 +17,48 @@ public final class CGImage {
         }
         px = a
     }
+    public var width: Int { return w }
+    public var height: Int { return h }
+}
+/// A bitmap drawing context: the game draws a picture into its own bytes to read its pixels back
+public enum CGInterpolationQuality: Int32 { case `default` = 0, none = 1, low = 2, high = 3, medium = 4 }
+public final class CGContext {
+    let buf: UnsafeMutableRawPointer?
+    let w: Int, h: Int, stride: Int
+    public var interpolationQuality: CGInterpolationQuality = .default
+    public init?(data: UnsafeMutableRawPointer?, width: Int, height: Int, bitsPerComponent: Int, bytesPerRow: Int, space: CGColorSpace, bitmapInfo: UInt32) {
+        if width <= 0 || height <= 0 { return nil }
+        buf = data; w = width; h = height; stride = bytesPerRow
+    }
+    /// Nearest-neighbour copy of the image into the bytes (RGBA, top row first), filling the rect
+    public func draw(_ image: CGImage, in rect: CGRect, byTiling: Bool = false) {
+        guard let b = buf else { return }
+        for y in 0..<h {
+            for x in 0..<w {
+                let sx = min(image.w - 1, x * image.w / max(1, w)), sy = min(image.h - 1, y * image.h / max(1, h))
+                let c: UInt32 = image.px[sy * image.w + sx]
+                let o = y * stride + x * 4
+                b.storeBytes(of: UInt8((c >> 16) & 0xFF), toByteOffset: o, as: UInt8.self)
+                b.storeBytes(of: UInt8((c >> 8) & 0xFF), toByteOffset: o + 1, as: UInt8.self)
+                b.storeBytes(of: UInt8(c & 0xFF), toByteOffset: o + 2, as: UInt8.self)
+                b.storeBytes(of: UInt8((c >> 24) & 0xFF), toByteOffset: o + 3, as: UInt8.self)
+            }
+        }
+    }
+}
+// MARK: UIKit bits (the pasteboard and images, for copying sprites in and out)
+public final class UIImage {
+    public let cgImage: CGImage?
+    public init(cgImage: CGImage) { self.cgImage = cgImage }
+    public init?(data: Data) { return nil }
+    public var size: CGSize { return CGSize(width: CGFloat(cgImage?.w ?? 0), height: CGFloat(cgImage?.h ?? 0)) }
+}
+public final class UIPasteboard {
+    public static let general: UIPasteboard = UIPasteboard()
+    public var string: String? = nil
+    public var image: UIImage? = nil
+    public var hasImages: Bool { return image != nil }
+    public var hasStrings: Bool { return string != nil }
 }
 public final class CGColorSpace {}
 public func CGColorSpaceCreateDeviceRGB() -> CGColorSpace { return CGColorSpace() }
@@ -24,7 +66,7 @@ public final class CGDataProvider { let data: Data; public init?(data: CFData) {
 public enum CGColorRenderingIntent { case defaultIntent }
 public struct CGBitmapInfo: OptionSet { public let rawValue: UInt32; public init(rawValue: UInt32) { self.rawValue = rawValue }
     public static let byteOrder32Little = CGBitmapInfo(rawValue: 2 << 12) }
-public enum CGImageAlphaInfo: UInt32 { case premultipliedFirst = 2 }
+public enum CGImageAlphaInfo: UInt32 { case premultipliedLast = 1, premultipliedFirst = 2 }
 extension CGRect { public var midX: CGFloat { origin.x + size.width / 2 }; public var midY: CGFloat { origin.y + size.height / 2 } }
 
 // MARK: Combine bits

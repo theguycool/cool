@@ -526,6 +526,209 @@ do {
     check(ModPixels.fitted(GameSprites.creatureFrames(.zombie)[0], 16, 16).w == 16, "a game sprite can be copied in as a sample at any size")
 }
 
+// ---------------------------------------------------------------- stage 4
+print("== custom infusions")
+func infusionMod() -> ModPack {
+    var p = ModPack()
+    p.id = "infx"
+    p.name = "Infusions"
+    var fury = ModInfusion()
+    fury.id = "fury"; fury.name = "Fury"; fury.classes = [InfuseClass.melee.rawValue]
+    fury.damagePct = 50; fury.burn = 3; fury.lifeSteal = 10
+    fury.trigger = .onHit; fury.effect = ModEffect(.speed, 25, 6); fury.effectCooldown = 10
+    var ward = ModInfusion()
+    ward.id = "ward"; ward.name = "Ward"; ward.classes = [InfuseClass.armor.rawValue]
+    ward.defense = 3; ward.fireCut = 30; ward.regen = 6; ward.trigger = .whenHurt; ward.effect = ModEffect(.strength, 40, 5)
+    var dig = ModInfusion()
+    dig.id = "dig"; dig.name = "Dig"; dig.classes = [InfuseClass.tool.rawValue]; dig.miningPct = 100
+    var bolt = ModInfusion()
+    bolt.id = "bolt"; bolt.name = "Bolt"; bolt.classes = [InfuseClass.ranged.rawValue]; bolt.damageFlat = 4; bolt.poison = 4
+    var only = ModInfusion()
+    only.id = "only"; only.name = "Only Iron"; only.classes = []; only.items = [.sword(.iron)]; only.damageFlat = 2
+    var twice = ModInfusion()
+    twice.id = "twice"; twice.name = "Twice"; twice.stack = 2; twice.damageFlat = 1
+    var saver = ModInfusion()
+    saver.id = "saver"; saver.name = "Saver"; saver.classes = [InfuseClass.suit.rawValue]; saver.energyPct = 50
+    var mult = ModInfusion()
+    mult.id = "mult"; mult.name = "Mult"; mult.multiply = true; mult.damagePct = 50
+    p.infusions = [fury, ward, dig, bolt, only, twice, saver, mult]
+    var r = ModRecipe()
+    r.id = "furyR"; r.out = .custom("infx:fury"); r.count = 1; r.cost = [ModCost(.mat(.coal), 2)]; r.station = Station.infuser.rawValue
+    p.recipes = [r]
+    let rep: ModReport = ModValidator.check(&p, known: [:])
+    _ = rep
+    return p
+}
+do {
+    let pack: ModPack = infusionMod()
+    check(pack.infusions.count == 8 && pack.infusions[0].id == "fury" && pack.infusions[4].items == [.sword(.iron)], "a mod of eight infusions passes its checks unchanged")
+    let g = arena([pack])
+    let rt: ModRuntime = ModRuntime.shared
+    let nFury: Int = rt.infusionNumber["infx:fury"] ?? -1
+    let nWard: Int = rt.infusionNumber["infx:ward"] ?? -1
+    let nDig: Int = rt.infusionNumber["infx:dig"] ?? -1
+    let nBolt: Int = rt.infusionNumber["infx:bolt"] ?? -1
+    let nOnly: Int = rt.infusionNumber["infx:only"] ?? -1
+    let nTwice: Int = rt.infusionNumber["infx:twice"] ?? -1
+    let nSaver: Int = rt.infusionNumber["infx:saver"] ?? -1
+    let nMult: Int = rt.infusionNumber["infx:mult"] ?? -1
+    let all: [Int] = [nFury, nWard, nDig, nBolt, nOnly, nTwice, nSaver, nMult]
+    check(Set(all).count == 8 && all.allSatisfy { $0 >= customInfusionBase } && nFury == customInfusionBase, "each infusion gets its own number, apart from the game's own (\(all))")
+    check(Item.custom("infx:fury").name == "Fury Compound" && rt.item("infx:fury")?.def.kind == .material, "each infusion has a compound, an item of the mod")
+    let icon: PixelBuf = rt.item("infx:fury")!.icon
+    check(icon.px.contains { $0 & 0xFFFFFF == 0x60E0FF }, "a compound with no picture of its own is a phial in the infusion's colour")
+    check(RecipeBook.all.contains { $0.out == .custom("infx:fury") && $0.station == .infuser }, "a recipe makes the compound at the Infusion Crucible")
+    check(rt.infusion(nFury)!.def.blurb.contains("+50% damage") && rt.infusion(nFury)!.def.blurb.contains("sets alight"), "an infusion describes itself in a line (\(rt.infusion(nFury)!.def.blurb))")
+    // infusing at the crucible
+    g.inv.slots[5] = Stack(item: .sword(.iron), count: 1)
+    let need: String = g.infuseCustom(slot: 5, nFury)
+    check(need.contains("need") && g.inv.slots[5]?.inf == nil, "without a compound nothing happens (\(need))")
+    g.inv.slots[8] = Stack(item: .custom("infx:fury"), count: 2)
+    let done: String = g.infuseCustom(slot: 5, nFury)
+    check(g.inv.slots[5]?.inf == [nFury] && g.inv.total(.custom("infx:fury")) == 1, "infusing works it into the item and uses one compound (\(done))")
+    let again: String = g.infuseCustom(slot: 5, nFury)
+    check(g.inv.slots[5]?.inf == [nFury] && g.inv.total(.custom("infx:fury")) == 1, "an item holds an infusion only as many times as it allows (\(again))")
+    g.inv.slots[9] = Stack(item: .custom("infx:ward"), count: 1)
+    let wrong: String = g.infuseCustom(slot: 5, nWard)
+    check(g.inv.slots[5]?.inf == [nFury] && g.inv.total(.custom("infx:ward")) == 1, "an armour infusion doesn't go on a sword, and its compound is kept (\(wrong))")
+    check(Stack(item: .sword(.stone), count: 1).customProblem(rt.infusion(nOnly)!) != nil && Stack(item: .sword(.iron), count: 1).customProblem(rt.infusion(nOnly)!) == nil,
+          "an infusion for chosen items goes on those and nothing else")
+    let mythril = Stack(item: .sword(.mythril), count: 1, extra: 0, inf: [nTwice])
+    check(mythril.customProblem(rt.infusion(nTwice)!) == nil && Stack(item: .sword(.mythril), count: 1, extra: 0, inf: [nTwice, nTwice]).customProblem(rt.infusion(nTwice)!) != nil,
+          "an infusion allowed twice goes on twice, and no more")
+    check(Stack(item: .sword(.stone), count: 1, extra: 0, inf: [Infusion.honed.rawValue]).customProblem(rt.infusion(nFury)!) != nil, "it needs a free slot, shared with the game's own infusions")
+    check(Stack(item: .mat(.coal), count: 4).customProblem(rt.infusion(nFury)!) != nil, "materials can't be infused")
+    check(Stack(item: .sword(.iron), count: 1, extra: 0, inf: [Infusion.honed.rawValue, nFury]).infusionNames == ["Honed", "Fury"], "the item's description names custom infusions with the game's own")
+    _ = g.removeCustomInfusion(slot: 5, nFury)
+    check(g.inv.slots[5]?.inf == nil && g.inv.slots[5]?.item == .sword(.iron), "an infusion can be drawn out again, the item unharmed")
+    // in a real swing
+    let base: MeleeProfile = Item.sword(.iron).melee
+    check(near(Game.infuseProfile(base, [nFury]).damage, base.damage * 1.5) && near(Game.infuseProfile(base, [nMult]).damage, base.damage * 1.5), "+50% damage, added or multiplied, on its own")
+    check(near(Game.infuseProfile(base, [nFury, nMult]).damage, base.damage * 2.25) && near(Game.infuseProfile(base, [nOnly, nTwice]).damage, base.damage + 3),
+          "a multiplying infusion multiplies what the others give; flat damage adds")
+    let pig: Mob = dummy(g, .pig, g.pb.x + 1.6)
+    pig.maxHP = 500; pig.hp = 500
+    g.inv.slots[0] = Stack(item: .sword(.iron), count: 1, extra: 0, inf: [nFury])
+    g.setSel(0)
+    aimAt(g, pig.b.x, pig.b.cy)
+    g.facing = 1
+    g.hp = 200
+    g.effects.clear()
+    check(near(g.infusedMelee(.sword(.iron)).damage, base.damage * 1.5), "the held sword swings with the infusion's numbers")
+    g.swingEmpty(.sword(.iron))
+    let dealt: Double = 500 - pig.hp
+    check(dealt >= base.damage * 1.5 - 0.01, "a real swing hits 50% harder (\(base.damage) -> \(dealt))")
+    check(pig.burn >= 2.9, "it sets what it hits alight")
+    check(g.hp > 200, "and heals back a share of the blow (\(g.hp - 200))")
+    check(near(g.effects.value(.speed), 25), "its effect is given when it hits (speed \(g.effects.value(.speed)))")
+    g.effects.clear()
+    g.customTrigger(rt.infusion(nFury)!)
+    check(near(g.effects.value(.speed), 0), "but no more often than its rest allows")
+    g.infTriggerCD[nFury] = g.clock - 11
+    g.customTrigger(rt.infusion(nFury)!)
+    check(near(g.effects.value(.speed), 25), "and again once the rest is over")
+    // armour
+    g.inv.armor[0] = Stack(item: .armor(.head, .iron), count: 1)
+    let d0: Double = g.totalDefense
+    g.inv.armor[0] = Stack(item: .armor(.head, .iron), count: 1, extra: 0, inf: [nWard])
+    check(near(g.totalDefense, d0 + 3) && near(g.armorInf.fireCut, 0.3) && near(g.armorInf.regen, 0.1), "worn, it adds defence, fire protection and healing (\(d0) -> \(g.totalDefense))")
+    g.hp = 100
+    g.invuln = 0
+    g.effects.clear()
+    var fire = DamageInfo(amount: 10, type: .fire, source: .environment)
+    fire.originX = g.pb.x
+    _ = g.hurtPlayer(fire)
+    check(near(100 - g.hp, 7, 0.05), "fire hurts 30% less (10 -> \(100 - g.hp))")
+    check(near(g.effects.value(.strength), 40), "an infusion that answers being hurt gives its effect")
+    // tools
+    func mineFrames(_ inf: [Int]) -> Int {
+        let h = arena([pack])
+        let tx: Int = Int(h.pb.x) + 1
+        h.world.set(tx, 99, .stone)
+        h.inv.slots[0] = Stack(item: .tool(.pickaxe, .stone), count: 1, extra: 0, inf: inf.isEmpty ? nil : inf)
+        h.setSel(0)
+        aimAt(h, Double(tx) + 0.5, 99.5)
+        var n: Int = 0
+        while h.world.tile(tx, 99) == .stone && n < 600 { h.mineStep(tx, 99, .pickaxe, .stone, 1.0 / 60.0); n += 1 }
+        return n
+    }
+    let slow: Int = mineFrames([])
+    let fast: Int = mineFrames([nDig])
+    check(Double(fast) < Double(slow) * 0.6, "a mining infusion mines twice as fast (\(slow) -> \(fast) frames)")
+    // shots
+    let s = arena([pack])
+    s.inv.slots[0] = Stack(item: .gun(.pistol), count: 1, extra: 6, inf: [nBolt])
+    s.setSel(0)
+    var shot = Projectile(kind: .bullet, x: s.pb.x + 0.6, y: s.pb.y - 1.0, vx: 30, vy: 0, dmg: 10, fromPlayer: true, gravity: 0)
+    shot.source = .player
+    shot.uid = s.newID()
+    s.infuseShot(&shot, .gun(.pistol))
+    check(near(shot.dmg, 14) && shot.custom == [nBolt], "a ranged infusion adds to the shot's damage (10 -> \(shot.dmg))")
+    // (a pig: the undead shrug off poison)
+    let target: Mob = dummy(s, .pig, s.pb.x + 5)
+    target.maxHP = 200; target.hp = 200
+    shot.y = target.b.cy
+    s.projectiles = [shot]
+    var n: Int = 0
+    while !s.projectiles.isEmpty && n < 120 { s.tick(1.0 / 60.0); n += 1 }
+    check(target.hp < 200 && target.poisonT > 0, "the shot lands and poisons what it hits (\(200 - target.hp) damage)")
+    // the suit
+    check(near(customEnergyMul(Stack(item: .exoCore(.dynamo), count: 1, extra: 0, inf: [nSaver])), 0.5), "an infusion on a suit core halves the energy it uses")
+    // saved with the world
+    let sv = arena([pack])
+    sv.inv.slots[0] = Stack(item: .sword(.iron), count: 1, extra: 0, inf: [nFury, Infusion.keen.rawValue])
+    sv.setSel(0)
+    let back: SaveData = try! JSONDecoder().decode(SaveData.self, from: try! JSONEncoder().encode(sv.makeSave()))
+    check(back.mods?.infusions["infx:fury"] == nFury, "a save remembers each custom infusion's number")
+    var other = ModPack()
+    other.id = "aaa"; other.name = "Other"
+    var o1 = ModInfusion(); o1.id = "x"; o1.name = "X"
+    var o2 = ModInfusion(); o2.id = "y"; o2.name = "Y"
+    other.infusions = [o1, o2]
+    ModRuntime.activate([other, pack], world: back.mods)
+    let g2 = Game.load(back, settings: Settings())
+    g2.setSel(0)
+    let ox: Int = ModRuntime.shared.infusionNumber["aaa:x"] ?? -1
+    check(ModRuntime.shared.infusionNumber["infx:fury"] == nFury && !all.contains(ox) && ox >= customInfusionBase, "loaded with another mod added first, the infusion keeps its number (\(nFury)); the new one gets a free one (\(ox))")
+    check(g2.inv.slots[0]?.inf == [nFury, Infusion.keen.rawValue] && near(g2.infusedMelee(.sword(.iron)).damage, base.damage * 1.5), "the sword comes back holding it, and it still works")
+    ModRuntime.activate([], world: back.mods)
+    let g3 = Game.load(back, settings: Settings())
+    g3.setSel(0)
+    check(g3.inv.slots[0]?.inf == [nFury, Infusion.keen.rawValue] && infusionName(nFury) == "Missing infusion" && near(g3.infusedMelee(.sword(.iron)).damage, base.damage),
+          "with the mod missing the item keeps it (marked missing, doing nothing)")
+    let resave: SaveData = g3.makeSave()
+    check(resave.mods?.infusions["infx:fury"] == nFury, "saving without the mod keeps its number, so nothing is forgotten")
+    // switched off
+    var offPack: ModPack = pack
+    offPack.off = ["fury"]
+    _ = arena([offPack])
+    check(ModRuntime.shared.infusionNumber["infx:fury"] == nil && ModRuntime.shared.item("infx:fury") == nil && ModRuntime.shared.infusionNumber["infx:ward"] != nil,
+          "an infusion switched off is left out, the rest stay")
+    ModRuntime.deactivate()
+    // checks
+    var bad = ModPack()
+    bad.id = "badinf"
+    var gem = ModItem(); gem.id = "gem"; gem.name = "Gem"; gem.kind = .material
+    bad.items = [gem]
+    var f = ModInfusion()
+    f.id = "gem"; f.name = "  "; f.damagePct = 9999; f.stack = 9; f.classes = [7, 2]; f.items = [.mat(.coal), .sword(.iron)]
+    f.burn = 99; f.effectCooldown = 0; f.sparkChance = 5; f.effect = ModEffect(.speed, 900, 9999); f.reach = .infinity
+    bad.infusions = [f] + (0..<30).map { i in var x = ModInfusion(); x.id = "n" + String(i); return x }
+    _ = ModValidator.check(&bad, known: [:])
+    let c: ModInfusion = bad.infusions[0]
+    check(bad.infusions.count == 24, "only 24 infusions fit in one mod")
+    check(c.id != "gem" && !c.id.isEmpty, "an infusion can't share its id with an item of the same mod (\(c.id))")
+    check(c.name == "Infusion" && near(c.damagePct, 100) && c.stack == 3 && c.classes == [2] && c.items == [.sword(.iron)] && near(c.burn, 8) && near(c.effectCooldown, 2) && near(c.sparkChance, 0.4) && near(c.reach, 0),
+          "every number is kept in range and broken settings are cleared")
+    check(c.effect.amount <= 60 && c.effect.seconds <= ModRange.seconds.hi, "its effect is kept in range too")
+    let rt2: ModInfusion = try! JSONDecoder().decode(ModInfusion.self, from: try! JSONEncoder().encode(c))
+    check(rt2 == c, "an infusion survives a JSON round trip")
+    let json: String = String(data: try! JSONEncoder().encode(c), encoding: .utf8)!.lowercased()
+    check(!json.contains("durab"), "infusions have no durability settings (the game has none)")
+    let oldMod: ModPack = try! JSONDecoder().decode(ModPack.self, from: "{\"id\":\"old\",\"name\":\"Old\"}".data(using: .utf8)!)
+    check(oldMod.infusions.isEmpty, "a mod from before has no infusions and loads as it was")
+}
+
 print(fails == 0 ? "ALL \(passes) MOD CREATOR+ CHECKS PASSED" : "\(fails) FAILED, \(passes) passed")
 try? FileManager.default.removeItem(at: scratch)
 exit(fails == 0 ? 0 : 1)

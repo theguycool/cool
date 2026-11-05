@@ -10228,6 +10228,8 @@ struct Projectile {
     var potion: Int = -1
     /// infusions of the weapon that fired it: 1 fire, 2 frost, 4 volatile, 8 voidrend
     var inf: Int = 0
+    /// its custom infusions (their numbers)
+    var custom: [Int] = []
     var angle: Double { return atan2(vy, vx) }
 }
 
@@ -11569,6 +11571,8 @@ final class Game: ObservableObject, @unchecked Sendable {
     var armorInfCache: ArmorInf = ArmorInf()
     var armorInfKey: Int = 0
     @Published var showInfuse: Bool = false
+    /// when each custom infusion last gave its effect (by number)
+    var infTriggerCD: [Int: Double] = [:]
     @Published var showExo: Bool = false
     /// a healing shrine rests between uses
     var healerCD: Double = 0
@@ -15916,7 +15920,7 @@ extension Game {
                             if let sh = s, sh.burn > 0 { m.burn = max(m.burn, sh.burn) }
                         }
                         if p.kind == .fireball { m.burn = max(m.burn, 2.5) }
-                        if p.inf != 0 { shotInfusionHit(p, m, hx, hy) }
+                        if p.inf != 0 || !p.custom.isEmpty { shotInfusionHit(p, m, hx, hy) }
                         spawnParticles(hx, hy, p.kind == .fireball ? 0xFF8030 : 0xE8E0D0, 3, 2.5, 0.25, 8)
                         if p.source.kind == .player {
                             // a clear "it landed" for the player's own shots
@@ -16479,6 +16483,7 @@ extension Game {
         if amount <= 0.001 { return false }
         damagePlayer(amount * dmgInMult * ward, from: info.originX, knock: info.knock * knockTaken, ignoreArmor: info.type.bypassesArmor)
         if hp < before { thornsBack(info, amount) }
+        if hp < before { customHurtTriggers() }
         return hp < before
     }
 
@@ -23670,13 +23675,15 @@ struct ModPack: Codable, Identifiable, Equatable {
     var off: [String] = []
     /// changes to the game's own blocks, items and creatures
     var overrides: [ModOverride] = []
+    /// infusions of this mod (each has a compound: an item under the same key)
+    var infusions: [ModInfusion] = []
     /// entries left out because they could not be read (not saved)
     var skipped: Int = 0
 
     enum CodingKeys: String, CodingKey {
         case format, id, name, desc, author, version, created, edited, sandbox
         case blocks, items, mobs, projectiles, recipes, loot, ores, structures
-        case folder, requires, off, overrides
+        case folder, requires, off, overrides, infusions
     }
 
     init() {}
@@ -23705,6 +23712,7 @@ struct ModPack: Codable, Identifiable, Equatable {
         requires = c.val(.requires, [])
         off = c.val(.off, [])
         overrides = c.list(.overrides, &skip)
+        infusions = c.list(.infusions, &skip)
         skipped = skip
     }
 
@@ -23712,7 +23720,7 @@ struct ModPack: Codable, Identifiable, Equatable {
     func key(_ contentID: String) -> String { return id + ":" + contentID }
 
     var contentCount: Int {
-        return blocks.count + items.count + mobs.count + projectiles.count + recipes.count + loot.count + ores.count + structures.count + overrides.count
+        return blocks.count + items.count + mobs.count + projectiles.count + recipes.count + loot.count + ores.count + structures.count + overrides.count + infusions.count
     }
 
     /// "3 creatures, 2 weapons, 5 blocks..." for the mod list
@@ -23732,6 +23740,7 @@ struct ModPack: Codable, Identifiable, Equatable {
         add(loot.count, "loot table", "loot tables")
         add(projectiles.count, "shot", "shots")
         add(overrides.count, "change to the game", "changes to the game")
+        add(infusions.count, "infusion", "infusions")
         return parts.isEmpty ? "Empty" : parts.joined(separator: ", ")
     }
 
@@ -23747,6 +23756,7 @@ struct ModPack: Codable, Identifiable, Equatable {
         for o in ores { used.insert(o.id) }
         for s in structures { used.insert(s.id) }
         for o in overrides { used.insert(o.id) }
+        for f in infusions { used.insert(f.id) }
         var n: Int = 1
         while used.contains(prefix + String(n)) { n += 1 }
         return prefix + String(n)
@@ -24048,6 +24058,7 @@ enum ModStore {
             for k in p.loot[i].entries.indices { p.loot[i].entries[k].item = fix(p.loot[i].entries[k].item) }
         }
         for i in p.structures.indices { p.structures[i].palette = p.structures[i].palette.map { fixKey($0) } }
+        for i in p.infusions.indices { p.infusions[i].items = p.infusions[i].items.map { fix($0) } }
         return p
     }
 }
@@ -24119,6 +24130,7 @@ struct ModCatalog {
             for m in p.mobs { c.keys[p.key(m.id)] = "mob"; c.names[p.key(m.id)] = m.name }
             for s in p.projectiles { c.keys[p.key(s.id)] = "shot"; c.names[p.key(s.id)] = s.name }
             for l in p.loot { c.keys[p.key(l.id)] = "loot"; c.names[p.key(l.id)] = l.name }
+            for f in p.infusions { c.keys[p.key(f.id)] = "item"; c.names[p.key(f.id)] = joinText(f.name, " Compound") }
         }
         return c
     }
@@ -24212,6 +24224,8 @@ enum ModValidator {
         for m in p.mobs { own[p.key(m.id)] = "mob" }
         for s in p.projectiles { own[p.key(s.id)] = "shot" }
         for l in p.loot { own[p.key(l.id)] = "loot" }
+        // an infusion's compound is an item of the mod
+        for f in p.infusions { own[p.key(f.id)] = "item" }
         func exists(_ it: Item) -> Bool {
             if case .custom(let k) = it {
                 let kind: String = own[k] ?? known[k] ?? ""
@@ -25356,6 +25370,8 @@ struct ModWorldInfo: Codable, Equatable {
     var mods: [ModDep] = []
     /// block key ("mod:id", or "mod:id#alt" for a door's open or a lamp's lit state) -> tile number
     var blocks: [String: Int] = [:]
+    /// custom infusion key -> its number on items
+    var infusions: [String: Int] = [:]
 
     init() {}
 
@@ -25364,6 +25380,7 @@ struct ModWorldInfo: Codable, Equatable {
         var skip: Int = 0
         mods = c.list(.mods, &skip)
         blocks = c.val(.blocks, [:])
+        infusions = c.val(.infusions, [:])
     }
 }
 
@@ -25637,6 +25654,9 @@ final class ModRuntime {
     var spawnRules: [SpawnRule] = []
     /// names of missing mods by id (for "Missing block" labels)
     var missingNames: [String: String] = [:]
+    /// custom infusions by their number on items, and the numbers by key
+    var infusionDefs: [Int: ModInfusionRT] = [:]
+    var infusionNumber: [String: Int] = [:]
 
     var active: Bool { return !packs.isEmpty || !missing.isEmpty }
     var hasWorldGen: Bool { return !ores.isEmpty || !structures.isEmpty }
@@ -25682,6 +25702,7 @@ final class ModRuntime {
         rt.assignBlocks(world)
         rt.buildShots()
         rt.buildItems()
+        rt.buildInfusions(world)
         rt.buildLoot()
         rt.buildMobs()
         rt.buildRecipes()
@@ -25713,6 +25734,7 @@ final class ModRuntime {
         for i in 0..<ModLimits.blockSlots {
             if let k = slotKey[i] { w.blocks[k] = Int(Tile.modBase) + i }
         }
+        for (k, n) in infusionNumber { w.infusions[k] = n }
         return w
     }
 
@@ -28174,6 +28196,7 @@ struct ArmorInf {
     var thorns: Double = 0
 
     mutating func add(_ s: Stack) {
+        for n in s.inf ?? [] where n >= customInfusionBase { addCustom(n) }
         for i in s.infusions {
             switch i {
             case .reinforced: defense += 1.0
@@ -28246,7 +28269,10 @@ extension Game {
     static func infuseProfile(_ p0: MeleeProfile, _ l: [Int]) -> MeleeProfile {
         var p: MeleeProfile = p0
         for r in l {
-            guard let i = Infusion(rawValue: r) else { continue }
+            guard let i = Infusion(rawValue: r) else {
+                p = Game.customProfile(p, r)
+                continue
+            }
             switch i {
             case .honed: p.damage *= 1.2
             case .quickened: p.cooldown *= 0.85
@@ -28263,9 +28289,13 @@ extension Game {
 
     /// After a melee blow lands: frost, poison, voidrend's extra bite and stormcall's spark
     func meleeInfusionHit(_ m: Mob, _ l: [Int], _ dmg: Double) {
-        if l.isEmpty || m.hp <= 0 { return }
+        if l.isEmpty { return }
         for r in l {
-            guard let i = Infusion(rawValue: r) else { continue }
+            guard let i = Infusion(rawValue: r) else {
+                customHit(m, r, dmg, m.b.x, m.b.cy)
+                continue
+            }
+            if m.hp <= 0 { continue }
             switch i {
             case .frostbite:
                 m.slowT = max(m.slowT, m.isBoss ? 1.5 : 3.0)
@@ -28331,10 +28361,12 @@ extension Game {
             }
         }
         p.inf = bits
+        customShot(&p, l)
     }
 
     /// A shot with infusions lands on a creature
     func shotInfusionHit(_ p: Projectile, _ m: Mob?, _ x: Double, _ y: Double) {
+        if let mm = m { for n in p.custom { customHit(mm, n, p.dmg, x, y) } }
         if let mm = m, mm.hp > 0 {
             if p.inf & 1 != 0 && !heatImmune(mm) { mm.burn = max(mm.burn, 3.0) }
             if p.inf & 2 != 0 {
@@ -28375,6 +28407,7 @@ extension Game {
     func mineBoost(_ kind: ToolType?) -> Double {
         var b: Double = 1.0 + effects.value(.mining) / 100.0
         if kind != nil, let s = inv.slots[sel], s.has(.haste) { b *= 1.25 }
+        if kind != nil, let s = inv.slots[sel] { b *= customMining(s) }
         return b
     }
 
@@ -28962,6 +28995,7 @@ struct ExoStats {
         r.complete = s[.chest] != nil && s[.core] != nil
         if s[.chest] == nil { r.notes.insert("Fit a chest frame: every suit is built on one.", at: 0) }
         if s[.core] == nil { r.notes.insert("Fit a power core: without one nothing can run.", at: 0) }
+        for st in s.parts.values { r.drainMul *= customEnergyMul(st) }
         return r
     }
 }
@@ -30188,6 +30222,7 @@ extension ModStore {
         }
         for l in p.loot { for e in l.entries { addItem(e.item) } }
         for s in p.structures { for k in s.palette where k.contains(":") { add(k) } }
+        for f in p.infusions { for it in f.items { addItem(it) } }
         return out
     }
 
@@ -30239,10 +30274,11 @@ extension ModValidator {
             keep.append(o)
         }
         p.overrides = keep
-        let ids: Set<String> = Set(p.blocks.map { $0.id } + p.items.map { $0.id } + p.mobs.map { $0.id } + p.recipes.map { $0.id } + p.ores.map { $0.id } + p.structures.map { $0.id } + p.overrides.map { $0.id } + p.projectiles.map { $0.id } + p.loot.map { $0.id })
+        let ids: Set<String> = Set(p.blocks.map { $0.id } + p.items.map { $0.id } + p.mobs.map { $0.id } + p.recipes.map { $0.id } + p.ores.map { $0.id } + p.structures.map { $0.id } + p.overrides.map { $0.id } + p.projectiles.map { $0.id } + p.loot.map { $0.id } + p.infusions.map { $0.id })
         p.off = p.off.filter { ids.contains($0) }
         _ = known
         checkOrePlus(&p, mn, &r)
+        checkInfusions(&p, mn, sb, known, &r)
     }
 }
 
@@ -30721,6 +30757,493 @@ enum GameSprites {
 
     static func tiles() -> [Tile] {
         return Tile.allCases.filter { !$0.isMod && $0 != .air }
+    }
+}
+
+// MARK: - Mod Creator+: custom infusions
+
+/// When a custom infusion's effect is given to the player
+enum ModInfuseTrigger: Int, Codable, CaseIterable {
+    case none, onHit, onKill, whenHurt, lowHealth
+    var name: String {
+        switch self {
+        case .none: return "Never"
+        case .onHit: return "When it hits"
+        case .onKill: return "When it fells a foe"
+        case .whenHurt: return "When you are hurt"
+        case .lowHealth: return "When your health is low"
+        }
+    }
+}
+
+/// An infusion made in the Mod Creator: what it goes on, the numbers it changes (added to, or
+/// multiplied with, the others), what it does when it strikes or is struck, how it looks, and how
+/// many times one item may hold it. Its compound is an item of the mod with the same key.
+struct ModInfusion: Codable, Identifiable, Equatable {
+    var id: String = ""
+    var name: String = "New Infusion"
+    var desc: String = ""
+    /// its compound's icon (blank: a phial in its colour)
+    var icon: ModPixels = ModPixels(w: 12, h: 12)
+    var color: UInt32 = 0x60E0FF
+    /// Rarity number (basic to boss relic)
+    var rarity: Int = 1
+    /// the kinds of equipment it goes on (InfuseClass numbers)
+    var classes: [Int] = [InfuseClass.melee.rawValue]
+    /// only these items (empty: anything of those kinds)
+    var items: [Item] = []
+    /// percentages multiply with the others (off: they add)
+    var multiply: Bool = false
+    var damagePct: Double = 0
+    var damageFlat: Double = 0
+    var attackSpeedPct: Double = 0
+    var reach: Double = 0
+    var critPct: Double = 0
+    var knockPct: Double = 0
+    var miningPct: Double = 0
+    var defense: Double = 0
+    var moveSpeedPct: Double = 0
+    var fireCut: Double = 0
+    var coldCut: Double = 0
+    var stormCut: Double = 0
+    /// health a minute while worn
+    var regen: Double = 0
+    /// less energy used by suit parts (percent)
+    var energyPct: Double = 0
+    /// on a hit: seconds of fire, seconds of slowing, seconds of poison
+    var burn: Double = 0
+    var slow: Double = 0
+    var poison: Double = 0
+    /// on a hit: the chance of a spark leaping to two more foes
+    var sparkChance: Double = 0
+    /// on a hit: a little blast of this much damage around what was hit
+    var blast: Double = 0
+    /// worn: the share of a melee blow returned to the attacker (percent)
+    var thorns: Double = 0
+    /// on a hit: the share of the damage healed back (percent)
+    var lifeSteal: Double = 0
+    var trigger: ModInfuseTrigger = .none
+    var effect: ModEffect = ModEffect(.speed, 20, 8)
+    var effectCooldown: Double = 10
+    /// sparks of its colour when it does something
+    var particles: Bool = true
+    /// times one item may hold it
+    var stack: Int = 1
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = c.val(.id, "")
+        name = c.val(.name, "Infusion")
+        desc = c.val(.desc, "")
+        icon = c.val(.icon, ModPixels(w: 12, h: 12))
+        color = c.val(.color, 0x60E0FF)
+        rarity = c.val(.rarity, 1)
+        classes = c.val(.classes, [0])
+        items = c.val(.items, [])
+        multiply = c.val(.multiply, false)
+        damagePct = c.val(.damagePct, 0)
+        damageFlat = c.val(.damageFlat, 0)
+        attackSpeedPct = c.val(.attackSpeedPct, 0)
+        reach = c.val(.reach, 0)
+        critPct = c.val(.critPct, 0)
+        knockPct = c.val(.knockPct, 0)
+        miningPct = c.val(.miningPct, 0)
+        defense = c.val(.defense, 0)
+        moveSpeedPct = c.val(.moveSpeedPct, 0)
+        fireCut = c.val(.fireCut, 0)
+        coldCut = c.val(.coldCut, 0)
+        stormCut = c.val(.stormCut, 0)
+        regen = c.val(.regen, 0)
+        energyPct = c.val(.energyPct, 0)
+        burn = c.val(.burn, 0)
+        slow = c.val(.slow, 0)
+        poison = c.val(.poison, 0)
+        sparkChance = c.val(.sparkChance, 0)
+        blast = c.val(.blast, 0)
+        thorns = c.val(.thorns, 0)
+        lifeSteal = c.val(.lifeSteal, 0)
+        trigger = c.val(.trigger, .none)
+        effect = c.val(.effect, ModEffect(.speed, 20, 8))
+        effectCooldown = c.val(.effectCooldown, 10)
+        particles = c.val(.particles, true)
+        stack = c.val(.stack, 1)
+    }
+
+    /// what it does, in a line (for tooltips and the crucible)
+    var blurb: String {
+        var parts: [String] = []
+        func pct(_ v: Double, _ what: String) { if abs(v) > 0.01 { parts.append(joinText(v > 0 ? "+" : "", String(Int(v.rounded())), "% ", what)) } }
+        pct(damagePct, "damage")
+        if abs(damageFlat) > 0.01 { parts.append(joinText("+", String(format: "%.1f", damageFlat), " damage")) }
+        pct(attackSpeedPct, "attack speed")
+        if reach > 0.01 { parts.append(joinText("+", String(format: "%.1f", reach), " reach")) }
+        pct(critPct, "critical chance")
+        pct(knockPct, "knockback")
+        pct(miningPct, "mining speed")
+        if defense > 0.01 { parts.append(joinText("+", String(format: "%.1f", defense), " defence")) }
+        pct(moveSpeedPct, "run speed")
+        pct(fireCut, "less fire harm")
+        pct(coldCut, "less cold")
+        pct(stormCut, "less storm harm")
+        if regen > 0.01 { parts.append(joinText("heals ", String(format: "%.1f", regen), " a minute")) }
+        pct(energyPct, "less suit energy")
+        if burn > 0.01 { parts.append("sets alight") }
+        if slow > 0.01 { parts.append("slows") }
+        if poison > 0.01 { parts.append("poisons") }
+        if sparkChance > 0.01 { parts.append("sparks") }
+        if blast > 0.01 { parts.append("bursts") }
+        pct(thorns, "of blows returned")
+        pct(lifeSteal, "of damage healed")
+        if trigger != .none { parts.append(joinText(effect.kind.short.lowercased(), " ", trigger.name.lowercased())) }
+        return parts.isEmpty ? "No effect yet" : parts.joined(separator: ", ")
+    }
+}
+
+extension ModInfusion {
+    /// Its numbers on a melee profile (percentages of the profile it is given, added or multiplied)
+    func apply(_ p0: MeleeProfile) -> MeleeProfile {
+        var p: MeleeProfile = p0
+        if multiply {
+            p.damage *= 1.0 + damagePct / 100.0
+            p.cooldown /= max(0.2, 1.0 + attackSpeedPct / 100.0)
+            p.knock *= 1.0 + knockPct / 100.0
+            p.critChance *= 1.0 + critPct / 100.0
+        } else {
+            p.damage += p0.damage * damagePct / 100.0
+            p.cooldown = max(0.08, p.cooldown - p0.cooldown * attackSpeedPct / 100.0)
+            p.knock += p0.knock * knockPct / 100.0
+            p.critChance += critPct / 100.0
+        }
+        p.damage += damageFlat
+        p.reach += reach
+        p.critChance = clampD(p.critChance, 0, 1)
+        if burn > 0 { p.burn = max(p.burn, burn) }
+        return p
+    }
+}
+
+/// A custom infusion in a world: its number on items, its key, and what it goes on
+final class ModInfusionRT {
+    let key: String
+    let number: Int
+    let def: ModInfusion
+    let classes: Set<Int>
+    let items: Set<Item>
+
+    init(key: String, number: Int, def: ModInfusion) {
+        self.key = key
+        self.number = number
+        self.def = def
+        self.classes = Set(def.classes)
+        self.items = Set(def.items)
+    }
+
+    /// the share a percentage adds (or the factor it multiplies by)
+    func factor(_ pct: Double) -> Double { return 1.0 + pct / 100.0 }
+}
+
+/// Custom infusions are numbered from here on items (the game's own use 0 to 999)
+let customInfusionBase: Int = 1000
+let maxCustomInfusions: Int = 256
+
+extension ModRuntime {
+    /// Gives each custom infusion its number (the world's own numbers first, so items keep theirs) and
+    /// makes its compound an item of the mod
+    func buildInfusions(_ world: ModWorldInfo?) {
+        var taken: Set<Int> = []
+        if let w = world {
+            for (k, n) in w.infusions where n >= customInfusionBase && n < customInfusionBase + maxCustomInfusions {
+                infusionNumber[k] = n
+                taken.insert(n)
+            }
+        }
+        var next: Int = customInfusionBase
+        for p in packs {
+            for f in p.infusions where !disabled.contains(p.key(f.id)) {
+                let k: String = p.key(f.id)
+                var n: Int = infusionNumber[k] ?? -1
+                if n < 0 {
+                    while taken.contains(next) { next += 1 }
+                    if next >= customInfusionBase + maxCustomInfusions { continue }
+                    n = next
+                    taken.insert(n)
+                    infusionNumber[k] = n
+                }
+                infusionDefs[n] = ModInfusionRT(key: k, number: n, def: f)
+                // its compound: an item of the mod under the same key
+                var it = ModItem()
+                it.id = f.id
+                it.name = joinText(f.name, " Compound")
+                it.desc = joinText("Work it into equipment at an Infusion Crucible: ", f.blurb)
+                it.kind = .material
+                it.stack = 10
+                it.rarity = clampI(f.rarity, 0, 4)
+                let r = ModItemRT(key: k, def: it, modName: p.name)
+                r.icon = compoundIcon(f)
+                items[k] = r
+                itemOrder.append(k)
+            }
+        }
+    }
+
+    func infusion(_ n: Int) -> ModInfusionRT? { return infusionDefs[n] }
+
+    /// The compound's icon: its own picture, or a phial in its colour
+    func compoundIcon(_ f: ModInfusion) -> PixelBuf {
+        if !f.icon.isBlank {
+            var b: PixelBuf = padBuf(f.icon.buf())
+            if f.icon.outlined(true) { b.outline(0x1A1410) }
+            return b
+        }
+        var b = PixelBuf(w: 12, h: 12)
+        let c: UInt32 = f.color & 0xFFFFFF
+        let ring: UInt32 = (Rarity(rawValue: clampI(f.rarity, 0, 4)) ?? .uncommon).color
+        b.rect(5, 0, 2, 2, 0x6A6E78)
+        b.rect(4, 2, 4, 1, ring)
+        b.rect(3, 3, 6, 7, 0x2A2A34)
+        b.rect(4, 4, 4, 5, c)
+        b.set(4, 4, shadeRGB(c, 1.4))
+        b.set(6, 6, shadeRGB(c, 0.6))
+        b.rect(3, 10, 6, 1, ring)
+        b.outline(0x1A1410)
+        return b
+    }
+}
+
+/// The name and colour of any infusion number (the game's own or a custom one)
+func infusionName(_ n: Int) -> String {
+    if let i = Infusion(rawValue: n) { return i.name }
+    return ModRuntime.shared.infusion(n)?.def.name ?? "Missing infusion"
+}
+
+func infusionColor(_ n: Int) -> UInt32 {
+    if let i = Infusion(rawValue: n) { return i.color }
+    return ModRuntime.shared.infusion(n)?.def.color ?? 0xFF00FF
+}
+
+extension Stack {
+    /// names of everything worked into it, custom infusions too
+    var infusionNames: [String] { return (inf ?? []).map { infusionName($0) } }
+
+    /// Why a custom infusion can't go on this item (nil: it can)
+    func customProblem(_ r: ModInfusionRT) -> String? {
+        let slots: Int = infusionSlots(item)
+        if slots <= 0 { return "This can't be infused." }
+        if item.maxStack > 1 { return "Only single items can be infused." }
+        if !r.items.isEmpty {
+            if !r.items.contains(item) { return joinText(r.def.name, " only goes on certain items.") }
+        } else {
+            let cls: [InfuseClass] = infuseClasses(item)
+            if !cls.contains(where: { r.classes.contains($0.rawValue) }) { return joinText(r.def.name, " doesn't go on this kind of equipment.") }
+        }
+        let held: Int = (inf ?? []).filter { $0 == r.number }.count
+        if held >= max(1, r.def.stack) { return r.def.stack > 1 ? joinText("It already holds ", r.def.name, " as many times as it can.") : joinText("It already has ", r.def.name, ".") }
+        if (inf?.count ?? 0) >= slots { return joinText("All ", String(slots), " of its slots are taken.") }
+        return nil
+    }
+}
+
+extension Game {
+    /// Works a custom infusion's compound into the item in a bag slot (checked again here, the item
+    /// never leaves its slot)
+    @discardableResult
+    func infuseCustom(slot i: Int, _ number: Int) -> String {
+        guard let r = ModRuntime.shared.infusion(number) else { return "That infusion's mod is not on." }
+        guard i >= 0 && i < inv.slots.count, var s = inv.slots[i] else { return "That item is gone." }
+        if let why = s.customProblem(r) { return why }
+        let compound: Item = .custom(r.key)
+        if !isCreative && inv.total(compound) < 1 { return joinText("You need a ", r.def.name, " compound.") }
+        if !isCreative { _ = inv.remove(compound, 1) }
+        var list: [Int] = s.inf ?? []
+        list.append(number)
+        s.inf = list
+        inv.slots[i] = s
+        sfx(.infuse, 0.8)
+        spawnParticles(pb.x, pb.y - 1.2, r.def.color, 12, 3.0, 0.7, -4)
+        bumpHUD()
+        return joinText(s.item.name, " now holds ", r.def.name, ".")
+    }
+
+    /// Takes one custom infusion back out of an item (the compound is spent; the item is unharmed)
+    @discardableResult
+    func removeCustomInfusion(slot i: Int, _ number: Int) -> String {
+        guard i >= 0 && i < inv.slots.count, var s = inv.slots[i], var list = s.inf, let k = list.firstIndex(of: number) else { return "Nothing to remove." }
+        list.remove(at: k)
+        s.inf = list.isEmpty ? nil : list
+        inv.slots[i] = s
+        sfx(.tap, 0.6)
+        bumpHUD()
+        return joinText(infusionName(number), " was drawn out of ", s.item.name, ".")
+    }
+
+    /// A custom infusion's numbers on a melee profile
+    static func customProfile(_ p0: MeleeProfile, _ n: Int) -> MeleeProfile {
+        guard let r = ModRuntime.shared.infusion(n) else { return p0 }
+        return r.def.apply(p0)
+    }
+
+    /// What a custom infusion does when a blow or a shot lands on a creature
+    func customHit(_ m: Mob, _ n: Int, _ dmg: Double, _ x: Double, _ y: Double) {
+        guard let r = ModRuntime.shared.infusion(n) else { return }
+        let d: ModInfusion = r.def
+        if m.hp > 0 {
+            if d.burn > 0 && !heatImmune(m) { m.burn = max(m.burn, d.burn) }
+            if d.slow > 0 {
+                m.slowT = max(m.slowT, m.isBoss ? d.slow * 0.5 : d.slow)
+                m.slowAmt = max(m.slowAmt, m.isBoss ? 0.2 : 0.4)
+            }
+            if d.poison > 0 && !poisonImmune(m) {
+                m.poisonT = max(m.poisonT, m.isBoss ? d.poison * 0.5 : d.poison)
+                m.poisonDps = max(m.poisonDps, 1.0)
+                m.poisonByPlayer = true
+            }
+            if d.sparkChance > 0 && Double.random(in: 0...1) < d.sparkChance { stormSpark(m) }
+        }
+        if d.blast > 0 { customBlast(x, y, d.blast, d.color) }
+        if d.lifeSteal > 0 && !dead { heal(dmg * d.lifeSteal / 100.0) }
+        if d.particles { spawnParticles(m.b.x, m.b.cy, d.color, 3, 2.0, 0.3, 4) }
+        if d.trigger == .onHit || (d.trigger == .onKill && m.hp <= 0) { customTrigger(r) }
+    }
+
+    /// A custom infusion's little blast (hurts creatures close by, breaks nothing)
+    func customBlast(_ x: Double, _ y: Double, _ dmg: Double, _ color: UInt32) {
+        var info = DamageInfo(amount: dmg, type: .explosion, source: .player)
+        info.knock = 4
+        info.key = newID()
+        info.cooldown = 0.5
+        for m in mobsNear(x - 2.5, x + 2.5) where m.hp > 0 && !m.removed && !m.tame {
+            if boxDistance(x, y, m.b.left, m.b.top, m.b.right, m.b.y) <= 1.3 {
+                var i2: DamageInfo = info
+                i2.originX = x
+                i2.originY = y
+                applyMobDamage(m, i2)
+            }
+        }
+        spawnParticles(x, y, color, 8, 4.0, 0.3, 4)
+    }
+
+    /// Gives a custom infusion's effect to the player, no more often than its rest allows
+    func customTrigger(_ r: ModInfusionRT) {
+        let d: ModInfusion = r.def
+        if d.trigger == .none { return }
+        if let t = infTriggerCD[r.number], clock - t < d.effectCooldown { return }
+        infTriggerCD[r.number] = clock
+        applyEffects([d.effect])
+        floatText(d.effect.kind.short, pb.x, pb.y - pb.h - 0.4, d.color)
+    }
+
+    /// After the player is hurt: worn custom infusions that answer being hurt (or low health)
+    func customHurtTriggers() {
+        for i in 0..<min(3, inv.armor.count) {
+            guard let s = inv.armor[i], let l = s.inf else { continue }
+            for n in l where n >= customInfusionBase {
+                guard let r = ModRuntime.shared.infusion(n) else { continue }
+                if r.def.trigger == .whenHurt || (r.def.trigger == .lowHealth && hp > 0 && hp < maxHP * 0.3) { customTrigger(r) }
+            }
+        }
+    }
+
+    /// A shot's custom infusions (worked out when it is fired)
+    func customShot(_ p: inout Projectile, _ l: [Int]) {
+        for n in l where n >= customInfusionBase {
+            guard let r = ModRuntime.shared.infusion(n) else { continue }
+            let d: ModInfusion = r.def
+            p.dmg = d.multiply ? p.dmg * r.factor(d.damagePct) : p.dmg + p.dmg * d.damagePct / 100.0
+            p.dmg += d.damageFlat
+            if d.reach > 0 { p.life *= 1.0 + d.reach * 0.1 }
+            p.custom.append(n)
+        }
+    }
+
+    /// The held tool's custom mining infusions
+    func customMining(_ s: Stack) -> Double {
+        var m: Double = 1.0
+        for n in s.inf ?? [] where n >= customInfusionBase {
+            guard let r = ModRuntime.shared.infusion(n) else { continue }
+            m *= r.factor(r.def.miningPct)
+        }
+        return m
+    }
+}
+
+extension ArmorInf {
+    /// A worn custom infusion's numbers
+    mutating func addCustom(_ n: Int) {
+        guard let r = ModRuntime.shared.infusion(n) else { return }
+        let d: ModInfusion = r.def
+        defense += d.defense
+        fireCut = min(0.8, fireCut + d.fireCut / 100.0)
+        coldCut = min(0.9, coldCut + d.coldCut / 100.0)
+        stormCut = min(0.8, stormCut + d.stormCut / 100.0)
+        speed = min(0.4, speed + d.moveSpeedPct / 100.0)
+        regen = min(1.0, regen + d.regen / 60.0)
+        thorns = min(0.6, thorns + d.thorns / 100.0)
+    }
+}
+
+/// Less energy for suit parts holding custom infusions that save it
+func customEnergyMul(_ s: Stack) -> Double {
+    var m: Double = 1.0
+    for n in s.inf ?? [] where n >= customInfusionBase {
+        if let r = ModRuntime.shared.infusion(n) { m *= max(0.3, 1.0 - r.def.energyPct / 100.0) }
+    }
+    return m
+}
+
+extension ModValidator {
+    /// Custom infusions: numbers in range, kinds and items real, ids not shared with items
+    static func checkInfusions(_ p: inout ModPack, _ mn: String, _ sb: Bool, _ known: [String: String], _ r: inout ModReport) {
+        if p.infusions.count > 24 {
+            r.add(1, mn, "Mod", "Only 24 infusions fit in one mod; the rest were left out.")
+            p.infusions = Array(p.infusions.prefix(24))
+        }
+        var used: Set<String> = Set(p.blocks.map { $0.id } + p.items.map { $0.id } + p.mobs.map { $0.id } + p.projectiles.map { $0.id } + p.loot.map { $0.id })
+        let mx: Double = sb ? 400 : 100
+        for i in p.infusions.indices {
+            var f: ModInfusion = p.infusions[i]
+            if f.id.isEmpty || used.contains(f.id) { f.id = joinText("inf", String(i + 1), "x", String(used.count)) }
+            used.insert(f.id)
+            if f.name.trimmingCharacters(in: .whitespaces).isEmpty { f.name = "Infusion" }
+            f.name = String(f.name.prefix(32))
+            f.desc = String(f.desc.prefix(200))
+            if !f.icon.valid { f.icon = ModPixels(w: 12, h: 12) }
+            f.rarity = clampI(f.rarity, 0, 4)
+            f.classes = Array(Set(f.classes.filter { $0 >= 0 && $0 <= 4 })).sorted()
+            if f.classes.isEmpty && f.items.isEmpty { f.classes = [0] }
+            f.items = Array(f.items.filter { it in
+                if case .custom(let k) = it { return known[k] != nil || p.items.contains { p.key($0.id) == k } }
+                return infusionSlots(it) > 0
+            }.prefix(12))
+            func c(_ v: Double, _ lo: Double, _ hi: Double) -> Double { return clampD(v.isFinite ? v : 0, lo, hi) }
+            f.damagePct = c(f.damagePct, -50, mx)
+            f.damageFlat = c(f.damageFlat, 0, sb ? 100 : 20)
+            f.attackSpeedPct = c(f.attackSpeedPct, -50, 60)
+            f.reach = c(f.reach, 0, sb ? 4 : 1.5)
+            f.critPct = c(f.critPct, 0, sb ? 100 : 40)
+            f.knockPct = c(f.knockPct, -80, mx)
+            f.miningPct = c(f.miningPct, 0, mx)
+            f.defense = c(f.defense, 0, sb ? 20 : 4)
+            f.moveSpeedPct = c(f.moveSpeedPct, 0, sb ? 50 : 15)
+            f.fireCut = c(f.fireCut, 0, 60)
+            f.coldCut = c(f.coldCut, 0, 75)
+            f.stormCut = c(f.stormCut, 0, 60)
+            f.regen = c(f.regen, 0, sb ? 60 : 12)
+            f.energyPct = c(f.energyPct, 0, 50)
+            f.burn = c(f.burn, 0, 8)
+            f.slow = c(f.slow, 0, 8)
+            f.poison = c(f.poison, 0, 10)
+            f.sparkChance = c(f.sparkChance, 0, sb ? 1 : 0.4)
+            f.blast = c(f.blast, 0, sb ? 40 : 8)
+            f.thorns = c(f.thorns, 0, 40)
+            f.lifeSteal = c(f.lifeSteal, 0, sb ? 50 : 15)
+            f.effect.amount = f.effect.kind.amountRange.clamp(f.effect.amount, sb)
+            f.effect.seconds = ModRange.seconds.clamp(f.effect.seconds, sb)
+            f.effectCooldown = c(f.effectCooldown, 2, 300)
+            f.stack = clampI(f.stack, 1, 3)
+            p.infusions[i] = f
+        }
     }
 }
 
@@ -38685,8 +39208,8 @@ struct InventoryPanel: View {
             if let st = s {
                 Text(verbatim: st.count > 1 ? joinText(st.item.name, "  x", String(st.count)) : st.item.name).font(.pixel(12))
                 Text(verbatim: st.item.infoLines.joined(separator: " · ")).font(.pixel(10, .semibold)).foregroundColor(Color.white.opacity(0.75))
-                if !st.infusions.isEmpty {
-                    Text(verbatim: joinText("Infused: ", st.infusions.map { $0.name }.joined(separator: ", "))).font(.pixel(10, .semibold)).foregroundColor(Color(hex: 0xC07CFF))
+                if !st.infusionNames.isEmpty {
+                    Text(verbatim: joinText("Infused: ", st.infusionNames.joined(separator: ", "))).font(.pixel(10, .semibold)).foregroundColor(Color(hex: 0xC07CFF))
                 }
             } else {
                 Text("Tap or hover an item to see what it does.").font(.pixel(10, .semibold)).foregroundColor(Color.white.opacity(0.55))
@@ -40982,9 +41505,11 @@ struct ModPackagesScreen: View {
 // MARK: - Mod Creator: editing a mod
 
 enum ModTab: Int, CaseIterable {
-    case info, blocks, items, mobs, shots, recipes, loot, ores, structures, game, reference, check
+    case info, blocks, items, mobs, shots, recipes, loot, ores, structures, infusions, game, reference, check
     var name: String {
         switch self {
+        case .infusions: return "INFUSIONS"
+
         case .reference: return "BLOCK REFERENCE"
 
         case .game: return "GAME CONTENT"
@@ -41014,6 +41539,7 @@ enum ModEditTarget: Equatable {
     case ore(String)
     case structure(String)
     case override(String)
+    case infusion(String)
 }
 
 struct ModEditorView: View {
@@ -41107,6 +41633,7 @@ struct ModEditorView: View {
         case .ore(let id): OreEditorView(s: session, id: id)
         case .structure(let id): StructureEditorView(s: session, id: id)
         case .override(let id): OverrideEditorView(s: session, id: id)
+        case .infusion(let id): InfusionEditorView(s: session, id: id, openRecipe: { rid in target = .recipe(rid) })
         }
     }
 
@@ -41124,6 +41651,7 @@ struct ModEditorView: View {
         case .structures: structureList
         case .game: GameContentList(s: session, open: { id in target = .override(id) })
         case .reference: HardnessReferenceView(s: session)
+        case .infusions: InfusionListView(s: session, open: { id in target = .infusion(id) })
         case .check: ModIssueList(report: session.report)
         }
     }
@@ -43368,6 +43896,7 @@ struct InfusionPanel: View {
     @State var choice: Int = -1
     @State var removing: Int = -1
     @State var note: String = ""
+    @State var customChoice: Int = -1
 
     var body: some View {
         VStack(spacing: 10) {
@@ -43449,7 +43978,15 @@ struct InfusionPanel: View {
         let have: [Infusion] = s.infusions
         return VStack(alignment: .leading, spacing: 4) {
             Text(verbatim: s.item.name).font(.pixel(13))
-            Text(verbatim: joinText(String(have.count), " of ", String(slots), " slots used")).font(.pixel(10, .semibold)).foregroundColor(Color.white.opacity(0.7))
+            Text(verbatim: joinText(String(s.inf?.count ?? 0), " of ", String(slots), " slots used")).font(.pixel(10, .semibold)).foregroundColor(Color.white.opacity(0.7))
+            ForEach((s.inf ?? []).filter { $0 >= customInfusionBase }, id: \.self) { n in
+                HStack(spacing: 6) {
+                    Rectangle().fill(Color(hex: infusionColor(n))).frame(width: 10, height: 10)
+                    Text(verbatim: infusionName(n)).font(.pixel(11)).foregroundColor(Color.white)
+                    Spacer(minLength: 0)
+                    SmallButton(title: "REMOVE", color: Color(hex: 0x5A4A4A)) { note = game.removeCustomInfusion(slot: pick, n) }
+                }
+            }
             ForEach(0..<have.count, id: \.self) { k in
                 HStack(spacing: 6) {
                     Rectangle().fill(Color(hex: have[k].color)).frame(width: 10, height: 10)
@@ -43478,6 +44015,7 @@ struct InfusionPanel: View {
             ScrollView {
                 VStack(spacing: 4) {
                     ForEach(all, id: \.self) { inf in infusionRow(inf) }
+                    customRows
                 }
             }
             .frame(maxHeight: 420)
@@ -43491,6 +44029,7 @@ struct InfusionPanel: View {
         let chosen: Bool = choice == inf.rawValue
         return Button(action: {
             choice = inf.rawValue
+            customChoice = -1
             note = ""
         }) {
             HStack(spacing: 6) {
@@ -43515,7 +44054,9 @@ struct InfusionPanel: View {
         let inf: Infusion? = Infusion(rawValue: choice)
         return VStack(alignment: .leading, spacing: 6) {
             Text("WHAT CHANGES").font(.pixel(13)).foregroundColor(Color(hex: 0xB8A8D8))
-            if let s = picked, let i = inf {
+            if let s = picked, customChoice >= 0, let r = ModRuntime.shared.infusion(customChoice) {
+                customPreview(s, r)
+            } else if let s = picked, let i = inf {
                 previewBody(s, i)
             } else {
                 Text("Pick a piece of equipment and an infusion to see how it changes.")
@@ -44122,8 +44663,8 @@ struct ExoAssemblyPanel: View {
                     ForEach(0..<st.item.infoLines.count, id: \.self) { k in
                         Text(verbatim: st.item.infoLines[k]).font(.pixel(9, .semibold)).foregroundColor(Color.white.opacity(0.75)).lineLimit(2)
                     }
-                    if !st.infusions.isEmpty {
-                        Text(verbatim: joinText("Infused: ", st.infusions.map { $0.name }.joined(separator: ", "))).font(.pixel(9, .semibold)).foregroundColor(Color(hex: 0xC07CFF))
+                    if !st.infusionNames.isEmpty {
+                        Text(verbatim: joinText("Infused: ", st.infusionNames.joined(separator: ", "))).font(.pixel(9, .semibold)).foregroundColor(Color(hex: 0xC07CFF))
                     }
                     SmallButton(title: "TAKE OFF", color: Color(hex: 0x8A4A3A)) { unfit(slot) }
                 } else {
@@ -44156,7 +44697,7 @@ extension SlotView {
         return VStack {
             HStack(spacing: 1) {
                 ForEach(0..<min(3, l.count), id: \.self) { k in
-                    Rectangle().fill(Color(hex: Infusion(rawValue: l[k])?.color ?? 0xFFFFFF)).frame(width: sz, height: sz)
+                    Rectangle().fill(Color(hex: infusionColor(l[k]))).frame(width: sz, height: sz)
                         .overlay(Rectangle().stroke(Color.black, lineWidth: 1))
                 }
                 Spacer(minLength: 0)
@@ -45744,6 +46285,298 @@ struct SpriteLibraryScreen: View {
         guard let e = editing else { return }
         editing = SpriteLibrary.put(e)
         list = SpriteLibrary.load()
+    }
+}
+
+// MARK: - Mod Creator+: the infusion editor
+
+/// The INFUSIONS tab: the mod's own infusions
+struct InfusionListView: View {
+    @ObservedObject var s: ModSession
+    var open: (String) -> Void
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Text("Infusions are worked into equipment at an Infusion Crucible. Each one has a compound: make a recipe for it so players can craft it.")
+                .font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+            PixelButton(title: "+ NEW INFUSION", color: ModUI.accent) {
+                var f = ModInfusion()
+                f.id = s.mod.freshID("f")
+                f.name = joinText("Infusion ", String(s.mod.infusions.count + 1))
+                f.damagePct = 10
+                s.mod.infusions.append(f)
+                s.touch()
+                open(f.id)
+            }
+            ForEach(s.mod.infusions) { f in
+                ModRow(image: pixImage(ModRuntime.shared.compoundIcon(f)), title: f.name, sub: f.blurb, open: { open(f.id) },
+                       copy: {
+                           var c: ModInfusion = f
+                           c.id = s.mod.freshID("f")
+                           c.name = String(joinText(f.name, " copy").prefix(32))
+                           s.mod.infusions.append(c)
+                           s.touch()
+                       },
+                       delete: { s.mod.infusions.removeAll { $0.id == f.id }; s.touch() },
+                       off: s.mod.off.contains(f.id), toggle: {
+                           if s.mod.off.contains(f.id) { s.mod.off.removeAll { $0 == f.id } } else { s.mod.off.append(f.id) }
+                           s.touch()
+                       })
+            }
+        }
+    }
+}
+
+/// Editing one custom infusion
+struct InfusionEditorView: View {
+    @ObservedObject var s: ModSession
+    let id: String
+    var openRecipe: (String) -> Void
+    @State var pickingItem: Bool = false
+
+    func b<T>(_ kp: WritableKeyPath<ModInfusion, T>, _ d: T) -> Binding<T> { return s.bind(\ModPack.infusions, id, kp, d) }
+    var inf: ModInfusion { return s.mod.infusions.first { $0.id == id } ?? ModInfusion() }
+
+    var body: some View {
+        let f: ModInfusion = inf
+        let sb: Bool = s.mod.sandbox
+        return VStack(spacing: 10) {
+            ModSection(title: "ABOUT") {
+                ModTextField(label: "Name", text: b(\.name, ""), placeholder: "Thunderstrike")
+                ModTextField(label: "Description", text: b(\.desc, ""), placeholder: "Optional")
+                Text("Rarity").font(.pixel(12, .bold)).foregroundColor(ModUI.dim)
+                ChoiceRow(options: Rarity.allCases.map { $0.name }, selected: b(\.rarity, 1), columns: 5)
+                ModColorRow(label: "Its colour (sparks and marks on items)", color: b(\.color, 0x60E0FF))
+            }
+            ModSection(title: "COMPOUND ICON", help: "Leave it blank for a phial in its colour") {
+                PixelEditorView(pixels: b(\.icon, ModPixels(w: 12, h: 12)), maxSide: 240, sizes: [12, 16], outlineDefault: true)
+            }
+            ModSection(title: "GOES ON", help: "Kinds of equipment, or (if any are picked below) only certain items") {
+                classChips(f)
+                itemList(f)
+            }
+            ModSection(title: "NUMBERS", help: "Percentages of what the item already does, so a good item stays better than a poor one") {
+                ModToggle(label: "Percentages multiply", help: "Off: they add to those of other infusions", isOn: b(\.multiply, false))
+                StatSlider(label: "Damage %", value: b(\.damagePct, 0), range: -50...(sb ? 400 : 100), step: 1, format: "%.0f")
+                StatSlider(label: "Extra damage", value: b(\.damageFlat, 0), range: 0...(sb ? 100 : 20), step: 0.5)
+                StatSlider(label: "Attack speed %", value: b(\.attackSpeedPct, 0), range: -50...60, step: 1, format: "%.0f")
+                StatSlider(label: "Extra reach", value: b(\.reach, 0), range: 0...(sb ? 4 : 1.5), step: 0.1)
+                StatSlider(label: "Critical chance %", value: b(\.critPct, 0), range: 0...(sb ? 100 : 40), step: 1, format: "%.0f")
+                StatSlider(label: "Knockback %", value: b(\.knockPct, 0), range: -80...(sb ? 400 : 100), step: 1, format: "%.0f")
+                StatSlider(label: "Mining speed %", value: b(\.miningPct, 0), range: 0...(sb ? 400 : 100), step: 1, format: "%.0f")
+                StatSlider(label: "Defence (armour)", value: b(\.defense, 0), range: 0...(sb ? 20 : 4), step: 0.1)
+                StatSlider(label: "Run speed % (armour)", value: b(\.moveSpeedPct, 0), range: 0...(sb ? 50 : 15), step: 1, format: "%.0f")
+                StatSlider(label: "Less fire and lava harm %", value: b(\.fireCut, 0), range: 0...60, step: 1, format: "%.0f")
+                StatSlider(label: "Less cold %", value: b(\.coldCut, 0), range: 0...75, step: 1, format: "%.0f")
+                StatSlider(label: "Less lightning and hail %", value: b(\.stormCut, 0), range: 0...60, step: 1, format: "%.0f")
+                StatSlider(label: "Healing a minute (armour)", value: b(\.regen, 0), range: 0...(sb ? 60 : 12), step: 0.5)
+                StatSlider(label: "Less suit energy %", value: b(\.energyPct, 0), range: 0...50, step: 1, format: "%.0f")
+            }
+            ModSection(title: "WHEN IT STRIKES", help: "What happens to what a weapon or shot hits") {
+                StatSlider(label: "Sets alight (seconds)", value: b(\.burn, 0), range: 0...8, step: 0.5)
+                StatSlider(label: "Slows (seconds)", value: b(\.slow, 0), range: 0...8, step: 0.5)
+                StatSlider(label: "Poisons (seconds)", value: b(\.poison, 0), range: 0...10, step: 0.5)
+                StatSlider(label: "Spark chance", value: b(\.sparkChance, 0), range: 0...(sb ? 1 : 0.4), step: 0.01, format: "%.2f")
+                StatSlider(label: "Little blast (damage)", value: b(\.blast, 0), range: 0...(sb ? 40 : 8), step: 0.5)
+                StatSlider(label: "Health stolen %", value: b(\.lifeSteal, 0), range: 0...(sb ? 50 : 15), step: 1, format: "%.0f")
+                StatSlider(label: "Blow returned % (armour)", value: b(\.thorns, 0), range: 0...40, step: 1, format: "%.0f")
+            }
+            ModSection(title: "EFFECT ON YOU", help: "A timed effect for the player, given now and then") {
+                ChoiceRow(options: ModInfuseTrigger.allCases.map { $0.name }, selected: triggerBind, columns: 3)
+                if f.trigger != .none {
+                    effectEditor
+                    StatSlider(label: "Rests between (seconds)", value: b(\.effectCooldown, 10), range: 2...300, step: 1, format: "%.0f")
+                }
+            }
+            ModSection(title: "STACKING AND LOOKS") {
+                IntSlider(label: "Times one item may hold it", value: b(\.stack, 1), range: 1...3)
+                ModToggle(label: "Sparks of its colour when it works", isOn: b(\.particles, true))
+            }
+            ModSection(title: "ITS COMPOUND'S RECIPE") {
+                let key: String = s.mod.key(f.id)
+                let recs: [ModRecipe] = s.mod.recipes.filter { $0.out == .custom(key) }
+                ForEach(recs) { r in
+                    HStack {
+                        Text(verbatim: joinText("Recipe ", r.id, ": ", r.cost.map { $0.item.name }.joined(separator: ", "))).font(.pixel(11, .semibold)).foregroundColor(Color.white).lineLimit(1)
+                        Spacer()
+                        SmallButton(title: "EDIT", color: ModUI.blue) { openRecipe(r.id) }
+                    }
+                }
+                SmallButton(title: "+ MAKE A RECIPE FOR IT", color: ModUI.accent) {
+                    var r = ModRecipe()
+                    r.id = s.mod.freshID("r")
+                    r.out = .custom(key)
+                    r.count = 1
+                    r.cost = [ModCost(.mat(.waterVial), 1), ModCost(.mat(.crystalShard), 1)]
+                    r.station = Station.infuser.rawValue
+                    s.mod.recipes.append(r)
+                    s.touch()
+                    openRecipe(r.id)
+                }
+            }
+            ModSection(title: "PREVIEW", help: "What it would do to a sample item of the first kind it goes on") {
+                ForEach(0..<previewRows(f).count, id: \.self) { i in
+                    let r: (String, String, String) = previewRows(f)[i]
+                    HStack {
+                        Text(verbatim: r.0).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+                        Spacer()
+                        Text(verbatim: r.1).font(.pixel(11)).foregroundColor(Color.white.opacity(0.7))
+                        Text("→").font(.pixel(11)).foregroundColor(ModUI.dim)
+                        Text(verbatim: r.2).font(.pixel(11)).foregroundColor(r.1 == r.2 ? Color.white : Color(hex: 0x7AF08A))
+                    }
+                }
+                Text(verbatim: f.blurb).font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
+            }
+        }
+    }
+
+    var triggerBind: Binding<Int> {
+        let inner: Binding<ModInfuseTrigger> = b(\.trigger, .none)
+        return Binding<Int>(get: { inner.wrappedValue.rawValue }, set: { inner.wrappedValue = ModInfuseTrigger(rawValue: $0) ?? .none })
+    }
+
+    var effectEditor: some View {
+        let e: Binding<ModEffect> = b(\.effect, ModEffect(.speed, 20, 8))
+        let timed: [ModEffectKind] = ModEffectKind.allCases.filter { $0.timed }
+        let kindB: Binding<Int> = Binding<Int>(get: { timed.firstIndex(of: e.wrappedValue.kind) ?? 0 }, set: { v in
+            var x: ModEffect = e.wrappedValue
+            x.kind = timed[clampI(v, 0, timed.count - 1)]
+            x.amount = x.kind.amountRange.clamp(x.amount, s.mod.sandbox)
+            e.wrappedValue = x
+        })
+        let amount: Binding<Double> = Binding<Double>(get: { e.wrappedValue.amount }, set: { v in var x: ModEffect = e.wrappedValue; x.amount = v; e.wrappedValue = x })
+        let secs: Binding<Double> = Binding<Double>(get: { e.wrappedValue.seconds }, set: { v in var x: ModEffect = e.wrappedValue; x.seconds = v; e.wrappedValue = x })
+        let range: ModRange = e.wrappedValue.kind.amountRange
+        return VStack(alignment: .leading, spacing: 6) {
+            ChoiceRow(options: timed.map { $0.name }, selected: kindB, columns: 4)
+            StatSlider(label: e.wrappedValue.kind.amountLabel, value: amount, range: range.lo...(s.mod.sandbox ? range.sandboxHi : range.hi), step: 0.5)
+            StatSlider(label: "Seconds", value: secs, range: 1...120, step: 1, format: "%.0f")
+        }
+    }
+
+    func classChips(_ f: ModInfusion) -> some View {
+        let names: [String] = ["Melee weapons", "Bows, slings and guns", "Tools", "Armour and suit plating", "Suit cores and modules"]
+        let cls: Binding<[Int]> = b(\.classes, [0])
+        let cols: [GridItem] = [GridItem(.adaptive(minimum: 150), spacing: 6)]
+        return LazyVGrid(columns: cols, spacing: 6) {
+            ForEach(0..<names.count, id: \.self) { i in
+                let on: Bool = cls.wrappedValue.contains(i)
+                SmallButton(title: names[i], color: on ? ModUI.accent : Color(hex: 0x555555)) {
+                    if on { cls.wrappedValue.removeAll { $0 == i } } else { cls.wrappedValue.append(i) }
+                }
+            }
+        }
+    }
+
+    func itemList(_ f: ModInfusion) -> some View {
+        let items: Binding<[Item]> = b(\.items, [])
+        return VStack(alignment: .leading, spacing: 6) {
+            Text(verbatim: f.items.isEmpty ? "Any item of the kinds picked" : "Only these items:").font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+            ForEach(0..<f.items.count, id: \.self) { i in
+                HStack {
+                    Art.shared.icon(f.items[i]).resizable().interpolation(.none).frame(width: 24, height: 24)
+                    Text(verbatim: f.items[i].name).font(.pixel(11)).foregroundColor(Color.white)
+                    Spacer()
+                    SmallButton(title: "✕", color: ModUI.red) { if i < items.wrappedValue.count { items.wrappedValue.remove(at: i) } }
+                }
+            }
+            if pickingItem {
+                GamePickerView(kind: .item, title: "ONLY ON THIS ITEM", pick: { _, it in
+                    if let x = it, !items.wrappedValue.contains(x) { items.wrappedValue.append(x) }
+                    pickingItem = false
+                }, cancel: { pickingItem = false })
+            } else if f.items.count < 12 {
+                SmallButton(title: "+ ONLY ON A CERTAIN ITEM", color: ModUI.blue) { pickingItem = true }
+            }
+        }
+    }
+
+    /// Before-and-after numbers on a sample item of its first kind
+    func previewRows(_ f: ModInfusion) -> [(String, String, String)] {
+        var rows: [(String, String, String)] = []
+        let first: Int = f.classes.first ?? 0
+        func f1(_ v: Double) -> String { return String(format: "%.1f", v) }
+        switch first {
+        case 0, 1:
+            let it: Item = first == 0 ? .sword(.iron) : .gun(.pistol)
+            let p0: MeleeProfile = first == 0 ? it.melee : MeleeProfile(damage: GunType.pistol.damage, cooldown: GunType.pistol.cooldown, reach: 14, halfArc: 0)
+            let p1: MeleeProfile = f.apply(p0)
+            rows.append((joinText(it.name, " damage"), f1(p0.damage), f1(p1.damage)))
+            rows.append(("Time between attacks", String(format: "%.2f s", p0.cooldown), String(format: "%.2f s", p1.cooldown)))
+            if first == 0 {
+                rows.append(("Reach", f1(p0.reach), f1(p1.reach)))
+                rows.append(("Critical chance", joinText(String(Int(p0.critChance * 100)), "%"), joinText(String(Int(p1.critChance * 100)), "%")))
+            }
+        case 2:
+            let s0: Double? = miningSeconds(.stone, .pickaxe, .iron)
+            let s1: Double? = s0.map { $0 / max(0.01, 1.0 + f.miningPct / 100.0) }
+            rows.append(("Iron pickaxe on stone", secondsText(s0), secondsText(s1)))
+        default:
+            let d0: Double = Tier.iron.defense * ArmorSlot.chest.weight
+            rows.append(("Iron chestplate defence", f1(d0), f1(d0 + f.defense)))
+            rows.append(("Run speed", "100%", joinText(String(Int((100 + f.moveSpeedPct).rounded())), "%")))
+        }
+        return rows
+    }
+}
+
+extension InfusionPanel {
+    /// The world's custom infusions (from its mods), in the crucible beside the game's own
+    var customRows: some View {
+        let list: [ModInfusionRT] = ModRuntime.shared.infusionDefs.values.sorted { $0.number < $1.number }
+        return VStack(spacing: 4) {
+            if !list.isEmpty {
+                Text("FROM MODS").font(.pixel(11)).foregroundColor(Color(hex: 0xB8A8D8)).frame(maxWidth: .infinity, alignment: .leading)
+            }
+            ForEach(list, id: \.number) { r in customRow(r) }
+        }
+    }
+
+    func customRow(_ r: ModInfusionRT) -> some View {
+        let compound: Item = .custom(r.key)
+        let owned: Int = game.inv.total(compound)
+        let chosen: Bool = customChoice == r.number
+        return Button(action: {
+            customChoice = r.number
+            choice = -1
+            note = ""
+        }) {
+            HStack(spacing: 6) {
+                SlotView(stack: Stack(item: compound, count: max(1, owned)), selected: chosen, size: 34, dim: owned == 0)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(verbatim: r.def.name).font(.pixel(12)).foregroundColor(Color(hex: (Rarity(rawValue: r.def.rarity) ?? .uncommon).color))
+                    Text(verbatim: r.def.blurb).font(.pixel(10, .semibold)).foregroundColor(Color.white.opacity(0.8)).lineLimit(2)
+                }
+                Spacer(minLength: 0)
+                Text(verbatim: owned > 0 ? joinText("x", String(owned)) : "none").font(.pixel(10)).foregroundColor(Color.white.opacity(0.6))
+            }
+            .padding(4)
+            .background(chosen ? Color(hex: 0x4A3A6A) : Color.black.opacity(0.2))
+        }
+        .buttonStyle(.plain)
+    }
+
+    func customPreview(_ s: Stack, _ r: ModInfusionRT) -> some View {
+        let problem: String? = s.customProblem(r)
+        let owned: Int = game.inv.total(.custom(r.key))
+        let ok: Bool = problem == nil && (owned > 0 || game.isCreative)
+        let p0: MeleeProfile = s.item.melee
+        let p1: MeleeProfile = r.def.apply(p0)
+        return VStack(alignment: .leading, spacing: 5) {
+            Text(verbatim: joinText(s.item.name, " + ", r.def.name)).font(.pixel(12))
+            Text(verbatim: r.def.blurb).font(.pixel(10, .semibold)).foregroundColor(Color.white.opacity(0.8))
+            if infuseClasses(s.item).contains(.melee) {
+                Text(verbatim: joinText("Damage ", String(format: "%.1f", p0.damage), " → ", String(format: "%.1f", p1.damage))).font(.pixel(11)).foregroundColor(Color.white)
+            }
+            if let p = problem { Text(verbatim: p).font(.pixel(11, .semibold)).foregroundColor(Color(hex: 0xFF9A7A)) }
+            PixelButton(title: ok ? "CONFIRM INFUSION" : "CAN'T INFUSE", color: ok ? Color(hex: 0x6A4AA8) : Color(hex: 0x444444)) {
+                if !ok { return }
+                note = game.infuseCustom(slot: pick, r.number)
+                customChoice = -1
+            }
+        }
+        .padding(6)
+        .background(Color.black.opacity(0.25))
     }
 }
 

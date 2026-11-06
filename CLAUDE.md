@@ -1,8 +1,15 @@
 # PixelRealm
 
 A 2D sandbox survival game for iPad, written in SwiftUI and run in Swift Playgrounds. The whole game
-is one file, `PixelRealm.swift` (about 51,900 lines), and it must stay one file: the user pastes it
-into Swift Playgrounds and asks for every change "all in one file".
+is one file, `PixelRealm.swift` (about 52,600 lines, indented with tabs), and it must stay one file:
+the user pastes it into Swift Playgrounds and asks for every change "all in one file".
+
+**The iPad has to be able to build it.** The Mod Creator+ version (2.25 MB, 4-space indents) built here
+but would not load on the iPad, with no error shown. The next version made the editor screens lighter
+and switched to tab indents (1.93 MB). Whether that is enough is not confirmed (nothing runs on an iPad
+from here), so treat these as limits:
+keep the file under 2,000,000 bytes, and watch `tools/buildcost.sh` (the last version known to load,
+598e07b, took 74 s and 870 MB there; 1.93 MB took 95 s and 1,060 MB). Big features add to all of it.
 
 ## Checking a change
 
@@ -20,6 +27,8 @@ compiles and runs headless on Linux. If `/opt/pixelrealm` is missing, run `tools
 - `tools/shots.sh power|weather|sky|cloudsheet|stick|alchemy|modplus [folder]`: PNG screenshots from the game's own renderer (`sky`: clouds by day, dusk, night and storm; `cloudsheet`: every cloud template; `stick`: the combat stick's dial; `alchemy`: mutated creatures, the worn suit, the new stations, and a sheet of the new icons and suit pictures; `modplus`: two custom dimensions and a boss in a phase).
 - `tools/bench.sh`: chunk generation, painting, lighting and tick timings (debug build; compare
   with `GAME_SRC=<old file> tools/bench.sh`).
+- `tools/buildcost.sh`: file size, and the time and peak memory of a debug build like the iPad's
+  (about 100 s). Run it after adding a lot of code.
 
 Suites: `tests`, `round2`, `p2` (general gameplay), `portal`, `boat`, `veh` (vehicles), `combat`,
 `mines`, `weather`, `nightai` (night spawning and monster AI), `stick` (the combat stick), `power` (Sparkworks), `snd` (sound
@@ -46,6 +55,11 @@ What the stand-ins can't tell you:
 
 - **Type-checker speed.** Write explicit types on locals (`let x: Double = ...`), join strings with
   `joinText(...)` instead of long `+` chains, and split big expressions. Keep typecheck near 39 s.
+- **Small SwiftUI bodies.** The real SwiftUI has far more overloads than the stand-ins, so keep each view
+  body short: sections as their own computed properties or functions, button actions in methods,
+  closures with typed parameters (`{ (it: Item) in ... }`), strings and colours worked out in `let`s
+  first, `Double` ranges written out (`0.0...1.0`, `sbRange`), rows of sliders from a table (`DSlider`),
+  and `AnyView` where a `switch` picks between big pages. Indent with tabs (the file is over 1.9 MB).
 - **Saves.** Saved enums (`Tile: UInt8`, `MobKind`, `Mat`, `Gadget`, `RecipeCat`, `SoundID`, `Potion`,
   `Infusion`, `ExoMat`, `ExoPart`, `ExoCore`, `ExoModule`, `ExoSlot`, `Dimension` (custom0-2 were appended)
   and the like) only get new cases appended at the end. Never reorder or remove cases. New `SaveData` fields are optional; new `Settings`

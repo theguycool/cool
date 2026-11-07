@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import glob
 """Builds the Godot project's art, sound and data tables from the Swift game's export.
 
     tools/export.sh /tmp/prexport
@@ -521,8 +522,11 @@ write_table('misc_data.gd', 'Biomes, tiers, the player sprite layout, clouds and
 ])
 
 # loot dropped by creatures, read straight from the Swift mobDrops function
-swift = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'PixelRealm.swift')).read()
-m = re.search(r'func mobDrops\(.*?\n    switch k \{\n(.*?)\n    \}\n', swift, re.S)
+_repo = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
+# the game is four parts, PixelRealm1.swift to PixelRealm4.swift (one file in older versions)
+_parts = sorted(glob.glob(os.path.join(_repo, 'PixelRealm[0-9].swift'))) or [os.path.join(_repo, 'PixelRealm.swift')]
+swift = '\n'.join(open(f).read() for f in _parts)
+m = re.search(r'func mobDrops\(.*?\n(?:    |\t)switch k \{\n(.*?)\n(?:    |\t)\}\n', swift, re.S)
 loot = {}
 item_ids = {it['id'] for it in items}
 

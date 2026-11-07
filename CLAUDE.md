@@ -1,19 +1,21 @@
 # PixelRealm
 
-A 2D sandbox survival game for iPad, written in SwiftUI and run in Swift Playgrounds. The whole game
-is one file, `PixelRealm.swift` (about 43,600 lines, indented with tabs), and it must stay one file:
-the user pastes it into Swift Playgrounds and asks for every change "all in one file".
+A 2D sandbox survival game for iPad, written in SwiftUI and run in Swift Playgrounds. The game is four
+files, `PixelRealm1.swift` to `PixelRealm4.swift` (about 52,600 lines in all, indented with tabs). The
+user pastes each into its own file of one Swift Playgrounds app. It was one file until the user asked
+for four; deliver all four, and treat them as one program (Swift doesn't care which file holds what).
 
-**The iPad has to be able to build it: the game is at that limit now.** This is the last version known
-to start on the user's iPad (commit 598e07b, re-indented with tabs). The Mod Creator+ round added about
-21% more compiled code; it built and passed every test here, but would not start on the iPad, with no
-error shown, even after its screens were slimmed and the file re-indented. It was taken back out. Its
-code is parked in git: commit 98fd773 (the stages are debd213, 9d3845f, f77eabd, 03be003, f11ccad).
-- Treat this version's debug build as the budget: `tools/buildcost.sh` gives 63 s and 860 MB here,
-  against 86 s and 1,059 MB for the Mod Creator+ version on the same machine. Times vary between
-  machines, so compare on one machine (`GAME_SRC=<other file> tools/buildcost.sh`); memory varies less.
-- Add code in small steps, and have the user check each one starts before building on it.
-- Make room by slimming existing code (same features, less code), or ask the user what to drop.
+**The iPad has to be able to build it.** As one file, the Mod Creator+ version built here but would not
+start on the iPad, with no error shown, even with lighter screens and tab indents (1.93 MB). The last
+version known to start there is 598e07b (one file, without Mod Creator+; commit 5e4d8c8 has it with
+tabs). The user then asked for Mod Creator+ in four files. A Swift package's debug build compiles
+each file in its own job, which needs much less memory at once, if the iPad builds that way (not
+confirmed). `tools/buildcost.sh` measures both ways:
+- 598e07b as one file: 63 s and 860 MB here. Mod Creator+ as one job: 86 s and 1,059 MB.
+- Mod Creator+ as one job per file: 24 to 28 s and 405 to 457 MB per job (four jobs, 102 s in all).
+  If the iPad runs the four jobs at once in one process, they could add up; that is not known either.
+- Add big features in steps the user can check on the iPad, and keep the parts about equal in
+  compiled size (`tools/buildcost.sh` prints each job's peak).
 
 ## Checking a change
 
@@ -22,23 +24,29 @@ Swift 6.0.3 under `/opt/pixelrealm` and builds stand-ins for SwiftUI and AVFound
 compiles and runs headless on Linux. If `/opt/pixelrealm` is missing, run `tools/setup.sh` (about a minute).
 
 - `tools/typecheck.sh`: about 39 s. Run it after every batch of edits.
-- The swift-lsp plugin (if loaded) checks the file as it is edited: `compile_flags.txt` points
-  sourcekit-lsp at the stand-ins, and setup.sh installs it. A full check of the file takes about
-  30 s, so wait for its diagnostics; `tools/typecheck.sh` remains the check of record.
+- The swift-lsp plugin (if loaded) checks a file as it is edited: `compile_flags.txt` points
+  sourcekit-lsp at the stand-ins, and setup.sh installs it. It sees one part at a time, so names
+  from the other parts show as missing; `tools/typecheck.sh` (all four parts together) is the check
+  of record.
 - `tools/run-tests.sh [suite ...]`: builds and runs suites from `tools/tests`, four at a time (all
   of them take several minutes). Pass only the suites you touched while iterating, and run them all
   before committing. Full output is in `/tmp/pixelrealm-build/<suite>/out.log`.
-- `tools/shots.sh power|weather|sky|cloudsheet|stick|alchemy [folder]`: PNG screenshots from the game's own renderer (`sky`: clouds by day, dusk, night and storm; `cloudsheet`: every cloud template; `stick`: the combat stick's dial; `alchemy`: mutated creatures, the worn suit, the new stations, and a sheet of the new icons and suit pictures).
+- `tools/shots.sh power|weather|sky|cloudsheet|stick|alchemy|modplus [folder]`: PNG screenshots from the game's own renderer (`sky`: clouds by day, dusk, night and storm; `cloudsheet`: every cloud template; `stick`: the combat stick's dial; `alchemy`: mutated creatures, the worn suit, the new stations, and a sheet of the new icons and suit pictures; `modplus`: two custom dimensions and a boss in a phase).
 - `tools/bench.sh`: chunk generation, painting, lighting and tick timings (debug build; compare
   with `GAME_SRC=<old file> tools/bench.sh`).
-- `tools/buildcost.sh`: file size, and the time and peak memory of a debug build like the iPad's
-  (about 80 s). Run it before delivering anything that adds code, and compare with the budget above.
+- `tools/buildcost.sh`: the game's size, and the time and peak memory of a debug build like the
+  iPad's, as one job and as one job per file (a few minutes). Run it after adding a lot of code.
+- The tools read the four parts (`pr_game_files` in `tools/env.sh`). `GAME_SRC` can name another
+  version: an older one-file game, or a folder holding its parts. Test programs build the parts as
+  one job (`-wmo`) with `@main` removed.
 
 Suites: `tests`, `round2`, `p2` (general gameplay), `portal`, `boat`, `veh` (vehicles), `combat`,
 `mines`, `weather`, `nightai` (night spawning and monster AI), `stick` (the combat stick), `power` (Sparkworks), `snd` (sound
 effects ≤ 1.2 s, thunder ≤ 3.2 s), `oldsave` (saves from an older version still load; uses
 `tools/fixtures`), `mods` (the Mod Creator: file format, store, checks, custom content in play,
-structures, test worlds, an end-to-end run; it uses a scratch mod folder, never the real one), `alchemy`
+structures, test worlds, an end-to-end run; it uses a scratch mod folder, never the real one), `modplus` (Mod Creator+:
+changes to game content, folders, versions, dependencies, ore controls, mining times, the sprite tools, custom infusions,
+boss phases and summoning, custom dimensions, the Logic Studio and its safety limits), `alchemy`
 (potions and status effects, throwing, mutation and its limits, infusions, the exosuit: building, wearing,
 modules, power, saving), and
 `det` and `det2` (world generation fingerprints for generator versions 1 to 4).
@@ -48,8 +56,8 @@ What the stand-ins can't tell you:
   `tools/shim/SwiftUI.swift` with the real signature (setup.sh rebuilds the shim when its source
   changes). Prefer APIs the file already uses: anything that compiles only against the shim breaks
   on the iPad. The shim's `StrokeStyle` takes no `lineCap`, its `Path` has no `isEmpty` or
-  `addRoundedRect`, and there is no `LinearGradient`. (It also stands in for `UIPasteboard`, `UIImage`
-  and `CGContext` drawing, which only the parked Sprite Studio used.)
+  `addRoundedRect`, and there is no `LinearGradient`. The Sprite Studio's clipboard (`UIPasteboard`,
+  `UIImage`, `CGContext` drawing) is stood in with a nearest-neighbour copy; the real scaling is untested.
 - Only the world Canvas is rasterised. SwiftUI panels are compile-checked but never drawn.
 - Nothing has been run on a real iPad from here. Say so in reports.
 
@@ -60,11 +68,12 @@ What the stand-ins can't tell you:
 - **Small SwiftUI bodies.** The real SwiftUI has far more overloads than the stand-ins, so keep each view
   body short: sections as their own computed properties or functions, button actions in methods,
   closures with typed parameters (`{ (it: Item) in ... }`), strings and colours worked out in `let`s
-  first, `Double` ranges written out (`0.0...1.0`), and rows of similar controls built from a table.
-- **Indent with tabs.** Four spaces per level made the file a sixth bigger.
+  first, `Double` ranges written out (`0.0...1.0`, `sbRange`), rows of sliders from a table (`DSlider`),
+  and `AnyView` where a `switch` picks between big pages. Indent with tabs (four spaces per level made
+  the game a sixth bigger).
 - **Saves.** Saved enums (`Tile: UInt8`, `MobKind`, `Mat`, `Gadget`, `RecipeCat`, `SoundID`, `Potion`,
-  `Infusion`, `ExoMat`, `ExoPart`, `ExoCore`, `ExoModule`, `ExoSlot` and the like) only get new cases
-  appended at the end. Never reorder or remove cases. New `SaveData` fields are optional; new `Settings`
+  `Infusion`, `ExoMat`, `ExoPart`, `ExoCore`, `ExoModule`, `ExoSlot`, `Dimension` (custom0-2 were appended)
+  and the like) only get new cases appended at the end. Never reorder or remove cases. New `SaveData` fields are optional; new `Settings`
   fields are decoded with `decodeIfPresent` and a default.
 - **Infusions live on the stack** (`Stack.inf`). Code that moves an item between bag, chest, carried and
   dropped must keep the whole `Stack`, or pass `inf:` to `Inventory.add`; infused items never merge.
@@ -80,15 +89,23 @@ What the stand-ins can't tell you:
   that hides the HUD in `GameView`.
 - **Mod data.** New fields of mod content (`ModBlock`, `ModItem`, `ModMob` and the rest) get a default
   and are decoded with `c.val(.key, default)`, and get a clamp in `ModValidator.check`. Mod enums only
-  get cases appended. Tests never touch the real mod folder or saves: set `ModStore.overrideDir` and
+  get cases appended (also `ModInfuseTrigger`, `ModPhaseWhen`, `ModSummonHow`, and the Logic Studio's
+  `LEvent`, `LOp`, `LEOp`). References inside a mod are content keys: renamed in `ModStore.rekey` and
+  counted in `ModStore.dependencies` (game tiles are `"tile:<n>"`, never renamed). Tests never touch the real mod folder or saves: set `ModStore.overrideDir` and
   use `makeSave()` with a JSON round trip.
 - **Comments** are plain-language doc comments explaining what something does in the game. Match the
-  surrounding style.
+  surrounding style. Each part starts with the same header and imports; keep them alike.
 - Commit and push to the branch the session names. Never put model names in commits.
 
-## Map of the file
+## Map of the parts
 
-Sections start with `// ===== <name> =====` (grep for them):
+Sections start with `// ===== <name> =====` (grep for them). They are spread over the parts in order:
+part 1 `p01_util` to `p16a_combat`; part 2 `p16c_damage` to `p31_exosuit`; part 3 `p32_modplus`, then
+`u01_art` to `u05_menu`; part 4 `u07_mods`, `u08_alchemy`, `u09_modplus`, `u06_root`. New code goes into
+the section it belongs to. A `private` or `fileprivate` name can only be used in its own part, so
+anything used across parts is internal (no modifier).
+
+The sections:
 `p01_util`, `p02_tiles` (Tile, defs, art), `p03_items`, `p04_recipes` (RecipeBook), `p05*` (creature
 sprites), `p06_worldgen`, `p07_chunk`, `p08*` (villages, ruins), `p09_umbral`, `p10_world` (World,
 chunks, `set`), `p11_light`, `p12_phys`, `p13a_mobdefs` (MobKind, MobDef, spawn rules, Mob),
@@ -97,12 +114,16 @@ chunks, `set`), `p11_light`, `p12_phys`, `p13a_mobdefs` (MobKind, MobDef, spawn 
 `think`, the per-kind AIs), `p15b_spawn` (`updateSpawning`), `p16*` (combat, damage, bosses), `p17`
 (vehicles, ships), `p18` (portal, map), `p19_save` (`SaveData`, `makeSave`, `Game.load`), `p20`–`p26`
 (helpers, walls, doors, HUD logic), `p27_power` (Sparkworks), `p28_mods` (Mod Creator: data,
-store, checks, runtime, custom creature AI, structures and capture, test tools), `p29_alchemy` (rarity, potions, effects on creatures, smoke,
+store, checks, runtime, custom creature AI, structures and capture, test tools), `p32_modplus` (Mod Creator+: changes
+to game content, ore controls, sprite tools, custom infusions, boss phases and summoning, custom dimensions, the
+Logic Studio), `p29_alchemy` (rarity, potions, effects on creatures, smoke,
 mutation and its limits, chest extras, the recipes of all three new systems), `p30_infusion`,
 `p31_exosuit` (parts, stats, energy, modules, the worn look, the builder's pictures), `u01_art`, `u02_render`
 (`WorldRenderer.draw` sets the draw order), `u03_hud`, `u04_panels`, `u05_menu`, `u07_mods` (Mod
 Creator screens and editors, the capture and Mod Test panels), `u08_alchemy` (the HUD's effect strip and
-suit bar, the Infusion Crucible screen, the Assembly Station builder), `u06_root`.
+suit bar, the Infusion Crucible screen, the Assembly Station builder), `u09_modplus` (the Mod Creator+ screens: game
+content, ore controls, hardness reference, Sprite Studio, infusion, phase, summoning, dimension and script editors,
+the Mod Test LOGIC tab), `u06_root`.
 
 ## Systems in brief
 
@@ -174,7 +195,24 @@ suit bar, the Infusion Crucible screen, the Assembly Station builder), `u06_root
   Sparkworks machine that charges a worn suit nearby (`runSuitDock`). The sprite draws the suit
   (`HumanStyle.suit`, `paintSuit`).
 
+- **Mod Creator+.**
+  - Changes to game content (`ModOverride`) are built into `OverrideRT` at activation; it restores the
+    game's own tables first (`Tile.setGameDef`, `mobDefTable`), so switching a mod off undoes it. `Item.melee`
+    goes through `baseMelee`.
+  - Ores keep the old placement for old settings (`ModOreRT.place`); new controls use their own random seed.
+  - Custom infusions are numbered from 1000 per world (`ModWorldInfo.infusions`) and live in `Stack.inf` beside
+    the game's; their compound is a mod item under the same key.
+  - Phases: `stepPhases`/`enterPhase` in `updateCustomMob`; numbers on the `Mob` (`mphase`, `phaseDmg`...).
+    Summoning: `ModSummonRT` (an item, a shape, conditions); dimension ways in are summonings with `dimSlot`.
+  - Custom dimensions take slots 2-4 (`Dimension.custom0`...); `dimCount` is 5 everywhere a list is kept per
+    dimension. Their land is `fillCustomChunk`; sky `drawCustomSky`; weather `customWeather`; only their own
+    creatures spawn. A world saved in a dimension whose mod is missing starts at the Overworld spawn.
+  - Logic Studio: scripts are data compiled to `LInstr` and run by `runLogic` a little each frame (`LLimits`:
+    300 steps a script per frame, 3000 in all, groups 8 deep, a loop that never waits is stopped after 10 s).
+    Events are fired from the game with `fireLogic`; variables are saved per world (`SaveData.logicVars`).
+
 ## Working with the user
 
 The user works on an iPad and reads results in the Claude app. Keep reports plain and short. Send
-files with SendUserFile. When delivering the game, attach `PixelRealm.swift` itself.
+files with SendUserFile. When delivering the game, attach all four parts, `PixelRealm1.swift` to
+`PixelRealm4.swift`, and say which changed.

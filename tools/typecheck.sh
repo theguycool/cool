@@ -4,7 +4,7 @@
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/env.sh"
 pr_need_toolchain
-out="$(LD_LIBRARY_PATH="$PR_LIBS" "$PR_BIN/swift-frontend" -typecheck -I "$PR_SHIM" -parse-as-library "$PR_GAME" 2>&1)"
+out="$(LD_LIBRARY_PATH="$PR_LIBS" "$PR_BIN/swift-frontend" -typecheck -I "$PR_SHIM" -parse-as-library $(pr_game_files) 2>&1)"
 status=$?
 echo "$out" | grep -E "error" | head -40
 if [ $status -ne 0 ]; then exit 1; fi

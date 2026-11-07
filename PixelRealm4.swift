@@ -184,6 +184,62 @@ struct ChoiceRow: View {
 	}
 }
 
+/// Rows of equal-width cells, `per` to a row: a plain stand-in for a lazy grid (the dimension editor
+/// crashed on the iPad with lazy grids on its pages)
+struct PlainGrid<Cell: View>: View {
+	let count: Int
+	let per: Int
+	var spacing: CGFloat = 6
+	let cell: (Int) -> Cell
+
+	var body: some View {
+		let k: Int = max(1, per)
+		let rows: Int = (count + k - 1) / k
+		return VStack(spacing: spacing) {
+			ForEach(0..<rows, id: \.self) { (r: Int) in self.row(r, k) }
+		}
+	}
+
+	func row(_ r: Int, _ k: Int) -> some View {
+		let start: Int = r * k
+		let end: Int = min(count, start + k)
+		let blanks: Int = max(0, k - (end - start))
+		return HStack(spacing: spacing) {
+			ForEach(start..<end, id: \.self) { (i: Int) in self.cell(i) }
+			ForEach(0..<blanks, id: \.self) { (_: Int) in Color.clear.frame(maxWidth: .infinity, minHeight: 1) }
+		}
+	}
+}
+
+/// The same choices as ChoiceRow, laid out in plain rows (no lazy grid)
+struct ChoiceRows: View {
+	let options: [String]
+	@Binding var selected: Int
+	var columns: Int = 3
+
+	var body: some View {
+		let per: Int = max(1, min(columns, options.count))
+		return PlainGrid(count: options.count, per: per) { (i: Int) in self.chip(i) }
+	}
+
+	func chip(_ i: Int) -> some View {
+		let on: Bool = selected == i
+		let col: Color = on ? ModUI.accent : Color(hex: 0x555555)
+		return Button {
+			selected = i
+		} label: {
+			Text(verbatim: options[i])
+				.font(.pixel(12))
+				.foregroundColor(Color.white)
+				.lineLimit(2)
+				.minimumScaleFactor(0.7)
+				.frame(maxWidth: .infinity, minHeight: 40)
+				.background(PixelBox(color: col))
+		}
+		.buttonStyle(.plain)
+	}
+}
+
 /// An on/off switch with a line of explanation
 struct ModToggle: View {
 	let label: String
@@ -6626,7 +6682,7 @@ struct SummonRuleEditor: View {
 
 	var howSection: some View {
 		ModSection(title: "WHAT THE PLAYER DOES", help: rule.how.help) {
-			ChoiceRow(options: SummonRuleEditor.howNames, selected: howBind, columns: 3)
+			ChoiceRows(options: SummonRuleEditor.howNames, selected: howBind, columns: 3)
 		}
 	}
 
@@ -6671,9 +6727,9 @@ struct SummonRuleEditor: View {
 
 	var whereSection: some View {
 		ModSection(title: "WHEN AND WHERE", help: "Weather conditions are skipped for players who switch the weather off.") {
-			ChoiceRow(options: ModSummonText.times, selected: rb(\.time), columns: 3)
-			ChoiceRow(options: ModSummonText.weathers, selected: rb(\.weather), columns: 5)
-			ChoiceRow(options: ModSummonText.places, selected: rb(\.place), columns: 3)
+			ChoiceRows(options: ModSummonText.times, selected: rb(\.time), columns: 3)
+			ChoiceRows(options: ModSummonText.weathers, selected: rb(\.weather), columns: 5)
+			ChoiceRows(options: ModSummonText.places, selected: rb(\.place), columns: 3)
 			ModBiomePicker(biomes: rb(\.biomes))
 			Text("Dimensions (none chosen: any)").font(.pixel(11, .bold)).foregroundColor(ModUI.dim)
 			chips(SummonRuleEditor.gameDims, rb(\.dims))
@@ -6691,7 +6747,7 @@ struct SummonRuleEditor: View {
 
 	var entranceSection: some View {
 		ModSection(title: "ITS ENTRANCE") {
-			ChoiceRow(options: ModSummonText.appears, selected: rb(\.appear), columns: 2)
+			ChoiceRows(options: ModSummonText.appears, selected: rb(\.appear), columns: 2)
 			ModTextField(label: "Message", text: rb(\.message), placeholder: "The Frost King answers your call!")
 		}
 	}
@@ -6735,12 +6791,21 @@ struct SummonRuleEditor: View {
 	}
 
 	var palette: some View {
-		let cols: [GridItem] = [GridItem(.adaptive(minimum: 70), spacing: 6)]
-		return LazyVGrid(columns: cols, spacing: 6) {
+		let n: Int = recent.count + 3
+		return PlainGrid(count: n, per: 6) { (i: Int) in self.paletteCell(i) }
+	}
+
+	/// ANY, EMPTY, the blocks used lately, then + BLOCK
+	@ViewBuilder
+	func paletteCell(_ i: Int) -> some View {
+		if i == 0 {
 			brushButton("", "ANY")
+		} else if i == 1 {
 			brushButton("air", "EMPTY")
-			ForEach(recent, id: \.self) { k in brushButton(k, ModGround.name(k, s.mod)) }
-			Button(action: { pickingBlock = true }) {
+		} else if i - 2 < recent.count {
+			brushButton(recent[i - 2], ModGround.name(recent[i - 2], s.mod))
+		} else {
+			Button(action: { self.pickingBlock = true }) {
 				Text("+ BLOCK").font(.pixel(11, .bold)).foregroundColor(Color.white)
 					.frame(maxWidth: .infinity, minHeight: 52)
 					.background(ModUI.blue)
@@ -6765,22 +6830,16 @@ struct SummonRuleEditor: View {
 	}
 
 	func chips(_ opts: [(Int, String)], _ b: Binding<[Int]>) -> some View {
-		let cols: [GridItem] = [GridItem(.adaptive(minimum: 104), spacing: 6)]
 		let chosen: [Int] = b.wrappedValue
-		return LazyVGrid(columns: cols, spacing: 6) {
-			ForEach(0..<opts.count, id: \.self) { k in
-				ToggleChip(title: opts[k].1, on: chosen.contains(opts[k].0)) { SummonRuleEditor.flip(b, opts[k].0) }
-			}
+		return PlainGrid(count: opts.count, per: 4) { (k: Int) in
+			ToggleChip(title: opts[k].1, on: chosen.contains(opts[k].0)) { SummonRuleEditor.flip(b, opts[k].0) }
 		}
 	}
 
 	func keyChips(_ opts: [(String, String)], _ b: Binding<[String]>) -> some View {
-		let cols: [GridItem] = [GridItem(.adaptive(minimum: 104), spacing: 6)]
 		let chosen: [String] = b.wrappedValue
-		return LazyVGrid(columns: cols, spacing: 6) {
-			ForEach(0..<opts.count, id: \.self) { k in
-				ToggleChip(title: opts[k].1, on: chosen.contains(opts[k].0)) { SummonRuleEditor.flipKey(b, opts[k].0) }
-			}
+		return PlainGrid(count: opts.count, per: 4) { (k: Int) in
+			ToggleChip(title: opts[k].1, on: chosen.contains(opts[k].0)) { SummonRuleEditor.flipKey(b, opts[k].0) }
 		}
 	}
 
@@ -6955,7 +7014,7 @@ struct DimensionEditorView: View {
 		ZStack {
 			VStack(spacing: 10) {
 				header
-				ChoiceRow(options: DimensionEditorView.pages, selected: $page, columns: 7)
+				ChoiceRows(options: DimensionEditorView.pages, selected: $page, columns: 7)
 				pageView
 			}
 		}
@@ -6985,15 +7044,18 @@ struct DimensionEditorView: View {
 		.background(PixelBox(color: ModUI.card))
 	}
 
-	var pageView: AnyView {
+	/// The page shown: a plain switch, as the creature editor's pages (wrapping each page in AnyView
+	/// crashed on the iPad)
+	@ViewBuilder
+	var pageView: some View {
 		switch page {
-		case 1: return AnyView(skyPage)
-		case 2: return AnyView(landPage)
-		case 3: return AnyView(zonesPage)
-		case 4: return AnyView(lifePage)
-		case 5: return AnyView(entryPage)
-		case 6: return AnyView(previewPage)
-		default: return AnyView(basicsPage)
+		case 1: skyPage
+		case 2: landPage
+		case 3: zonesPage
+		case 4: lifePage
+		case 5: entryPage
+		case 6: previewPage
+		default: basicsPage
 		}
 	}
 
@@ -7018,7 +7080,7 @@ struct DimensionEditorView: View {
 		return ModSection(title: "SKY", help: "Colours at the top and the bottom of the sky, by day and by night, and the sun's. Choose one, then tap a colour.") {
 			ModToggle(label: "A rock roof overhead (a cavern world)", help: "No sky, sun or rain; like the Umbral Realm", isOn: b(\.ceiling, false))
 			skyPictures
-			ChoiceRow(options: DimensionEditorView.skyColorNames, selected: $skyPick, columns: 5)
+			ChoiceRows(options: DimensionEditorView.skyColorNames, selected: $skyPick, columns: 5)
 			ModColorRow(label: DimensionEditorView.skyColorNames[pick], color: skyColorBind(pick))
 		}
 	}
@@ -7074,9 +7136,9 @@ struct DimensionEditorView: View {
 	var airSection: some View {
 		ModSection(title: "AIR AND WEATHER") {
 			Text("Motes in the air").font(.pixel(11, .bold)).foregroundColor(ModUI.dim)
-			ChoiceRow(options: ModDimText.ambients, selected: b(\.ambient, 0), columns: 6)
+			ChoiceRows(options: ModDimText.ambients, selected: b(\.ambient, 0), columns: 6)
 			Text("Weather").font(.pixel(11, .bold)).foregroundColor(ModUI.dim)
-			ChoiceRow(options: ModDimText.weathers, selected: b(\.weather, 0), columns: 5)
+			ChoiceRows(options: ModDimText.weathers, selected: b(\.weather, 0), columns: 5)
 			StatSlider(label: "Cold", value: b(\.chill, 0), range: 0.0...1.0, step: 0.05, format: "%.2f")
 			ModToggle(label: "Hot", isOn: b(\.hot, false))
 		}
@@ -7119,7 +7181,7 @@ struct DimensionEditorView: View {
 		return ModSection(title: "SEAS AND SKY") {
 			ModToggle(label: "Seas", isOn: seaOn)
 			if seas { IntSlider(label: "Sea level (row)", value: b(\.sea, 160), range: 60...280) }
-			ChoiceRow(options: ModDimText.liquids, selected: b(\.liquid, 0), columns: 2)
+			ChoiceRows(options: ModDimText.liquids, selected: b(\.liquid, 0), columns: 2)
 			StatSlider(label: "Floating islands", value: b(\.islands, 0), range: 0.0...1.0, step: 0.05, format: "%.2f")
 		}
 	}
@@ -7202,7 +7264,7 @@ struct DimensionEditorView: View {
 		return VStack(spacing: 10) {
 			Text("Regions lie side by side, each with its own ground, plants and trees: the dimension's biomes. Each counts as one of the game's biomes for ores, structures, summoning and creature rules.")
 				.font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-			ChoiceRow(options: names, selected: $zonePick, columns: 4)
+			ChoiceRows(options: names, selected: $zonePick, columns: 4)
 			zoneButtons(zones.count, zi)
 			if zi < zones.count { zoneEditor(zi, zones[zi]) }
 			if many { IntSlider(label: "Width of each region (blocks)", value: b(\.zoneWidth, 300), range: 40...2000) }
@@ -7243,13 +7305,13 @@ struct DimensionEditorView: View {
 		return ModSection(title: z.name.uppercased()) {
 			ModTextField(label: "Name", text: zb(zi, \.name, ""), placeholder: "Frozen Wastes")
 			Text("Counts as").font(.pixel(11, .bold)).foregroundColor(ModUI.dim)
-			ChoiceRow(options: DimensionEditorView.biomeNames, selected: biomeBind(zi), columns: 5)
+			ChoiceRows(options: DimensionEditorView.biomeNames, selected: biomeBind(zi), columns: 5)
 			blockRow("Ground", z.ground, joinText(tag, "ground"))
 			blockRow("Under the ground", z.filler, joinText(tag, "filler"))
 			blockRow("Plants", z.plant, joinText(tag, "plant"))
 			if plants { StatSlider(label: "How many plants", value: zb(zi, \.plantChance, 0.1), range: 0.0...0.8, step: 0.02, format: "%.2f") }
 			Text("Trees").font(.pixel(11, .bold)).foregroundColor(ModUI.dim)
-			ChoiceRow(options: ModDimText.trees, selected: zb(zi, \.trees, 1), columns: 3)
+			ChoiceRows(options: ModDimText.trees, selected: zb(zi, \.trees, 1), columns: 3)
 			if trees {
 				blockRow("Trunk", z.log, joinText(tag, "log"))
 				blockRow("Leaves", z.leaves, joinText(tag, "leaves"))
@@ -7311,9 +7373,9 @@ struct DimensionEditorView: View {
 				Spacer(minLength: 0)
 				SmallButton(title: "DELETE", color: ModUI.red) { self.deleteSpawn(i) }
 			}
-			ChoiceRow(options: ch.0, selected: creatureBind(i, ch.1), columns: 4)
-			ChoiceRow(options: ModDimText.places, selected: sp(i, \.place, 0), columns: 3)
-			ChoiceRow(options: ModDimText.times, selected: sp(i, \.when, 0), columns: 3)
+			ChoiceRows(options: ch.0, selected: creatureBind(i, ch.1), columns: 4)
+			ChoiceRows(options: ModDimText.places, selected: sp(i, \.place, 0), columns: 3)
+			ChoiceRows(options: ModDimText.times, selected: sp(i, \.when, 0), columns: 3)
 			StatSlider(label: "How common", value: sp(i, \.weight, 5), range: 0.1...20.0, step: 0.1, format: "%.1f")
 			IntSlider(label: "Group", value: sp(i, \.group, 1), range: 1...4)
 		}

@@ -1635,15 +1635,28 @@ struct ShotEditorView: View {
 struct ModColorRow: View {
 	let label: String
 	@Binding var color: UInt32
+
+	/// swatches in each row of the palette
+	static let perRow: Int = 8
+
 	var body: some View {
-		let cols: [GridItem] = [GridItem](repeating: GridItem(.fixed(30), spacing: 4), count: 16)
+		let rows: Int = (modPalette.count + ModColorRow.perRow - 1) / ModColorRow.perRow
+		let now: Color = Color(hex: color & 0xFFFFFF)
 		return VStack(alignment: .leading, spacing: 4) {
-			Text(verbatim: label).font(.pixel(12, .bold)).foregroundColor(ModUI.dim)
-			LazyVGrid(columns: cols, spacing: 4) {
-				ForEach(0..<modPalette.count, id: \.self) { i in
-					swatch(modPalette[i])
-				}
+			HStack(spacing: 8) {
+				Text(verbatim: label).font(.pixel(12, .bold)).foregroundColor(ModUI.dim)
+				Rectangle().fill(now).frame(width: 22, height: 22).overlay(Rectangle().stroke(Color.white, lineWidth: 1))
 			}
+			ForEach(0..<rows, id: \.self) { (r: Int) in self.paletteRow(r) }
+		}
+	}
+
+	/// One row of the palette (plain rows, not a lazy grid)
+	func paletteRow(_ r: Int) -> some View {
+		let start: Int = r * ModColorRow.perRow
+		let end: Int = min(modPalette.count, start + ModColorRow.perRow)
+		return HStack(spacing: 4) {
+			ForEach(start..<end, id: \.self) { (i: Int) in self.swatch(modPalette[i]) }
 		}
 	}
 
@@ -6929,8 +6942,11 @@ struct DimensionEditorView: View {
 	@State var zonePick: Int = 0
 	@State var preview: PixelBuf? = nil
 	@State var previewOf: ModDimension? = nil
+	/// which sky colour the palette sets (see skyColorNames)
+	@State var skyPick: Int = 0
 
 	static let pages: [String] = ["BASICS", "SKY", "LAND", "REGIONS", "LIFE", "WAY IN", "PREVIEW"]
+	static let skyColorNames: [String] = ["Day: top", "Day: bottom", "Night: top", "Night: bottom", "Sun"]
 
 	func b<T>(_ kp: WritableKeyPath<ModDimension, T>, _ d: T) -> Binding<T> { return s.bind(\ModPack.dims, id, kp, d) }
 	var dim: ModDimension { return s.mod.dims.first { $0.id == id } ?? ModDimension() }
@@ -6998,12 +7014,44 @@ struct DimensionEditorView: View {
 	}
 
 	var skySection: some View {
-		ModSection(title: "SKY", help: "Colours at the top and the bottom of the sky, by day and by night.") {
+		let pick: Int = clampI(skyPick, 0, DimensionEditorView.skyColorNames.count - 1)
+		return ModSection(title: "SKY", help: "Colours at the top and the bottom of the sky, by day and by night, and the sun's. Choose one, then tap a colour.") {
 			ModToggle(label: "A rock roof overhead (a cavern world)", help: "No sky, sun or rain; like the Umbral Realm", isOn: b(\.ceiling, false))
-			ModColorRow(label: "Day: top", color: b(\.skyTop, 0x3A2A6A))
-			ModColorRow(label: "Day: bottom", color: b(\.skyBottom, 0xC07AB0))
-			ModColorRow(label: "Night: top", color: b(\.nightTop, 0x080614))
-			ModColorRow(label: "Night: bottom", color: b(\.nightBottom, 0x241A3A))
+			skyPictures
+			ChoiceRow(options: DimensionEditorView.skyColorNames, selected: $skyPick, columns: 5)
+			ModColorRow(label: DimensionEditorView.skyColorNames[pick], color: skyColorBind(pick))
+		}
+	}
+
+	/// The day sky, the night sky and the sun, as they are now
+	var skyPictures: some View {
+		let d: ModDimension = dim
+		let sun: Color = Color(hex: d.sunColor & 0xFFFFFF)
+		return HStack(alignment: .bottom, spacing: 12) {
+			skyPicture("DAY", d.skyTop, d.skyBottom)
+			skyPicture("NIGHT", d.nightTop, d.nightBottom)
+			VStack(spacing: 2) {
+				Rectangle().fill(sun).frame(width: 28, height: 28).overlay(Rectangle().stroke(Color.black, lineWidth: 1))
+				Text("SUN").font(.pixel(10)).foregroundColor(ModUI.dim)
+			}
+		}
+	}
+
+	func skyPicture(_ name: String, _ top: UInt32, _ bottom: UInt32) -> some View {
+		VStack(spacing: 2) {
+			SkySwatch(top: top, bottom: bottom).frame(width: 96, height: 54)
+			Text(verbatim: name).font(.pixel(10)).foregroundColor(ModUI.dim)
+		}
+	}
+
+	/// The sky colour the palette sets
+	func skyColorBind(_ pick: Int) -> Binding<UInt32> {
+		switch pick {
+		case 1: return b(\.skyBottom, 0xC07AB0)
+		case 2: return b(\.nightTop, 0x080614)
+		case 3: return b(\.nightBottom, 0x241A3A)
+		case 4: return b(\.sunColor, 0xFFE8A0)
+		default: return b(\.skyTop, 0x3A2A6A)
 		}
 	}
 
@@ -7020,7 +7068,6 @@ struct DimensionEditorView: View {
 			ModToggle(label: "Sun", isOn: b(\.sun, true))
 			ModToggle(label: "Moon", isOn: b(\.moon, true))
 			ModToggle(label: "Stars", isOn: b(\.stars, true))
-			ModColorRow(label: "Sun colour", color: b(\.sunColor, 0xFFE8A0))
 		}
 	}
 

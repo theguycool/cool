@@ -91,6 +91,10 @@ What the stand-ins can't tell you:
   `ScrollView`. A picker inside a Mod Creator editor opens through `.modCover(s, key) { ... }`, which
   `ModEditorView` shows above the scrolling page (a pop-up drawn inside the page can open off-screen).
   The sprite canvas takes drags for painting, so a page scrolls from anywhere else.
+- **One palette per page.** The dimension editor's SKY page, with five colour palettes (each a lazy
+  grid), crashed on the iPad with "unknown crash" (not reproducible here; the cause is unconfirmed).
+  `ModColorRow` now draws plain rows, and a page with several colours shows one palette with a choice
+  of which colour it sets.
 - **Mod data.** New fields of mod content (`ModBlock`, `ModItem`, `ModMob` and the rest) get a default
   and are decoded with `c.val(.key, default)`, and get a clamp in `ModValidator.check`. Mod enums only
   get cases appended (also `ModInfuseTrigger`, `ModPhaseWhen`, `ModSummonHow`, and the Logic Studio's

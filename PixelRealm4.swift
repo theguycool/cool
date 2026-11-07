@@ -21,6 +21,8 @@ final class ModSession: ObservableObject, @unchecked Sendable {
 	@Published var report: ModReport = ModReport()
 	/// bumped on every edit (previews key their caches on it)
 	@Published var rev: Int = 0
+	/// a picker shown over the whole editor, above the page that scrolls (see `modCover`)
+	@Published var cover: AnyView? = nil
 
 	init(_ p: ModPack) {
 		mod = p
@@ -264,6 +266,48 @@ func shortDate(_ t: Double) -> String {
 	return f.string(from: Date(timeIntervalSince1970: t))
 }
 
+// MARK: - Mod Creator: pickers over the whole screen
+
+extension View {
+	/// Shows `cover` (a picker) over the whole Mod Creator screen while `key` is not nil. It sits above
+	/// the page that scrolls, so it is always on screen with its CANCEL in reach, however far the page
+	/// was scrolled; a new key shows it again with the new state.
+	func modCover<K: Equatable, C: View>(_ s: ModSession, _ key: K?, @ViewBuilder _ cover: @escaping () -> C) -> some View {
+		return self.modifier(ModCoverLink<K>(session: s, key: key, make: { AnyView(cover()) }))
+	}
+}
+
+/// Keeps the session's cover in step with one editor's picker
+struct ModCoverLink<K: Equatable>: ViewModifier {
+	let session: ModSession
+	let key: K?
+	let make: () -> AnyView
+
+	func body(content: Content) -> some View {
+		content
+			.modifier(ModChangeWatch(value: key, changed: { (k: K?) in self.show(k) }))
+			.onDisappear { if self.key != nil { self.session.cover = nil } }
+	}
+
+	func show(_ k: K?) {
+		session.cover = k == nil ? nil : make()
+	}
+}
+
+/// Runs `changed` when `value` changes (the iOS 17 form of onChange when there is one)
+struct ModChangeWatch<V: Equatable>: ViewModifier {
+	let value: V
+	let changed: (V) -> Void
+
+	func body(content: Content) -> some View {
+		if #available(iOS 17.0, macOS 14.0, *) {
+			content.onChange(of: value) { _, v in changed(v) }
+		} else {
+			content.onChange(of: value) { v in changed(v) }
+		}
+	}
+}
+
 /// Shown before loading a world whose mods are not all installed
 struct ModMissingView: View {
 	let check: ModLoadCheck
@@ -275,8 +319,10 @@ struct ModMissingView: View {
 			VStack(alignment: .leading, spacing: 10) {
 				Text("MODS MISSING").font(.pixel(22)).foregroundColor(Color(hex: 0xFF9060))
 				Text(verbatim: "\u{201C}" + check.save.meta.name + "\u{201D} was made with mods that are not on this iPad:").font(.pixel(13, .semibold)).foregroundColor(Color.white)
-				ForEach(check.missing) { d in
-					Text(verbatim: joinText("• ", d.name, " v", d.version, d.author.isEmpty ? "" : " by " + d.author)).font(.pixel(13)).foregroundColor(ModUI.gold)
+				if check.missing.count > 6 {
+					ScrollView { missingList }.frame(height: 200)
+				} else {
+					missingList
 				}
 				Text("You can load it anyway: their blocks show as magenta placeholders that cannot be broken, and their items wait in your bag. Nothing is deleted, so it all comes back when the mods are installed again.")
 					.font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
@@ -288,6 +334,14 @@ struct ModMissingView: View {
 			.padding(18)
 			.frame(maxWidth: 560)
 			.background(PixelBox(color: ModUI.panel))
+		}
+	}
+
+	var missingList: some View {
+		VStack(alignment: .leading, spacing: 4) {
+			ForEach(check.missing) { d in
+				Text(verbatim: joinText("• ", d.name, " v", d.version, d.author.isEmpty ? "" : " by " + d.author)).font(.pixel(13)).foregroundColor(ModUI.gold)
+			}
 		}
 	}
 }
@@ -748,6 +802,7 @@ struct ModEditorView: View {
 			}
 			.padding(12)
 			.frame(maxWidth: 1000)
+			if let cv = session.cover { cv }
 			if let c = confirm {
 				ModConfirm(title: "DELETE?", text: c.0, yes: "DELETE", yesAction: { c.1(); confirm = nil }, noAction: { confirm = nil })
 			}
@@ -1467,20 +1522,24 @@ struct BlockEditorView: View {
 					functionSettings
 				}
 			}
-			if picking {
-				ItemPickerView(catalog: s.catalog, title: "IT DROPS...", pick: { it in
-					b(\.drop, nil).wrappedValue = it
-					picking = false
-				}, cancel: { picking = false })
-			}
-			if copyFrom {
-				ItemPickerView(catalog: s.catalog, title: "COPY A BLOCK'S PICTURE", blocksOnly: true, pick: { it in
-					let pic: PixelBuf = ModPreview.buf(it, s.catalog)
-					b(\.art, ModPixels(w: 8, h: 8)).wrappedValue = ModPixels(buf: pic).resized(8, 8)
-					copyFrom = false
-				}, cancel: { copyFrom = false })
-			}
 		}
+		.modCover(s, picking ? 1 : nil) { self.dropPicker }
+		.modCover(s, copyFrom ? 2 : nil) { self.copyPicker }
+	}
+
+	var dropPicker: some View {
+		ItemPickerView(catalog: s.catalog, title: "IT DROPS...", pick: { it in
+			b(\.drop, nil).wrappedValue = it
+			picking = false
+		}, cancel: { picking = false })
+	}
+
+	var copyPicker: some View {
+		ItemPickerView(catalog: s.catalog, title: "COPY A BLOCK'S PICTURE", blocksOnly: true, pick: { it in
+			let pic: PixelBuf = ModPreview.buf(it, s.catalog)
+			b(\.art, ModPixels(w: 8, h: 8)).wrappedValue = ModPixels(buf: pic).resized(8, 8)
+			copyFrom = false
+		}, cancel: { copyFrom = false })
 	}
 
 	var tierLine: String {
@@ -1627,18 +1686,23 @@ struct ItemEditorView: View {
 					StatSlider(label: "Tint amount", value: b(\.tintAmt, 0), range: 0...1, step: 0.05, format: "%.2f")
 				}
 			}
-			if picker == 1 {
-				ItemPickerView(catalog: s.catalog, title: "ICON BASED ON...", pick: { it in
-					b(\.baseIcon, nil).wrappedValue = it
-					picker = 0
-				}, cancel: { picker = 0 })
-			}
-			if picker == 2 {
-				ItemPickerView(catalog: s.catalog, title: "AMMUNITION", pick: { it in
-					b(\.ammo, nil).wrappedValue = it
-					picker = 0
-				}, cancel: { picker = 0 })
-			}
+		}
+		.modCover(s, picker == 0 ? nil : picker) { self.pickerCover }
+	}
+
+	@ViewBuilder
+	var pickerCover: some View {
+		if picker == 1 {
+			ItemPickerView(catalog: s.catalog, title: "ICON BASED ON...", pick: { it in
+				b(\.baseIcon, nil).wrappedValue = it
+				picker = 0
+			}, cancel: { picker = 0 })
+		}
+		if picker == 2 {
+			ItemPickerView(catalog: s.catalog, title: "AMMUNITION", pick: { it in
+				b(\.ammo, nil).wrappedValue = it
+				picker = 0
+			}, cancel: { picker = 0 })
 		}
 	}
 
@@ -1920,15 +1984,17 @@ struct MobEditorView: View {
 				ChoiceRow(options: MobEditorView.pages, selected: $page, columns: 5)
 				pageView
 			}
-			if picking >= 0 {
-				ItemPickerView(catalog: s.catalog, title: "DROPS...", pick: { it in
-					var list: [ModDrop] = mob.drops
-					if picking < list.count { list[picking].item = it } else { list.append(ModDrop(it, 1, 1, 0.5)) }
-					b(\.drops, []).wrappedValue = list
-					picking = -1
-				}, cancel: { picking = -1 })
-			}
 		}
+		.modCover(s, picking >= 0 ? picking : nil) { self.pickerCover }
+	}
+
+	var pickerCover: some View {
+		ItemPickerView(catalog: s.catalog, title: "DROPS...", pick: { it in
+			var list: [ModDrop] = mob.drops
+			if picking < list.count { list[picking].item = it } else { list.append(ModDrop(it, 1, 1, 0.5)) }
+			b(\.drops, []).wrappedValue = list
+			picking = -1
+		}, cancel: { picking = -1 })
 	}
 
 	var previewHeader: some View {
@@ -2450,19 +2516,22 @@ struct RecipeEditorView: View {
 				}
 				ModIssueList(report: recipeReport)
 			}
-			if picking >= -1 {
-				ItemPickerView(catalog: cat, title: picking == -1 ? "IT MAKES..." : "INGREDIENT", pick: { it in
-					if picking == -1 {
-						b(\.out, .block(.planks)).wrappedValue = it
-					} else {
-						var list: [ModCost] = rec.cost
-						if picking < list.count { list[picking].item = it } else { list.append(ModCost(it, 1)) }
-						b(\.cost, []).wrappedValue = list
-					}
-					picking = -2
-				}, cancel: { picking = -2 })
-			}
 		}
+		.modCover(s, picking >= -1 ? picking : nil) { self.pickerCover }
+	}
+
+	var pickerCover: some View {
+		let title: String = picking == -1 ? "IT MAKES..." : "INGREDIENT"
+		return ItemPickerView(catalog: s.catalog, title: title, pick: { it in
+			if picking == -1 {
+				b(\.out, .block(.planks)).wrappedValue = it
+			} else {
+				var list: [ModCost] = rec.cost
+				if picking < list.count { list[picking].item = it } else { list.append(ModCost(it, 1)) }
+				b(\.cost, []).wrappedValue = list
+			}
+			picking = -2
+		}, cancel: { picking = -2 })
 	}
 
 	var recipeReport: ModReport {
@@ -2548,15 +2617,17 @@ struct LootEditorView: View {
 					}
 				}
 			}
-			if picking >= 0 {
-				ItemPickerView(catalog: cat, title: "LOOT ENTRY", pick: { it in
-					var list: [ModLootEntry] = table.entries
-					if picking < list.count { list[picking].item = it } else { list.append(ModLootEntry(it, 1, 1, 0)) }
-					b(\.entries, []).wrappedValue = list
-					picking = -1
-				}, cancel: { picking = -1 })
-			}
 		}
+		.modCover(s, picking >= 0 ? picking : nil) { self.pickerCover }
+	}
+
+	var pickerCover: some View {
+		ItemPickerView(catalog: s.catalog, title: "LOOT ENTRY", pick: { it in
+			var list: [ModLootEntry] = table.entries
+			if picking < list.count { list[picking].item = it } else { list.append(ModLootEntry(it, 1, 1, 0)) }
+			b(\.entries, []).wrappedValue = list
+			picking = -1
+		}, cancel: { picking = -1 })
 	}
 
 	func en<T>(_ i: Int, _ kp: WritableKeyPath<ModLootEntry, T>, _ d: T) -> Binding<T> {
@@ -5581,17 +5652,32 @@ struct SpriteLibraryScreen: View {
 
 	var body: some View {
 		VStack(spacing: 10) {
-			HStack {
-				SmallButton(title: "< MODS") { self.back() }
-				Spacer()
-				Text("SPRITE LIBRARY").font(.pixel(22)).foregroundColor(ModUI.gold)
-				Spacer()
+			topBar
+			ScrollView {
+				VStack(spacing: 10) {
+					if editing != nil { editor } else { listPage }
+				}
+				.padding(.bottom, 30)
 			}
-			if editing != nil { editor } else { listPage }
 		}
 		.padding(14)
 		.frame(maxWidth: 1000)
 		.onAppear { self.load() }
+	}
+
+	/// Stays at the top while the page scrolls, so there is always a way back
+	var topBar: some View {
+		HStack(spacing: 8) {
+			if editing != nil {
+				SmallButton(title: "< LIBRARY", color: ModUI.blue) { self.done() }
+				SmallButton(title: "SAVE", color: ModUI.accent) { self.save() }
+			} else {
+				SmallButton(title: "< MODS") { self.back() }
+			}
+			Spacer()
+			Text("SPRITE LIBRARY").font(.pixel(22)).foregroundColor(ModUI.gold)
+			Spacer()
+		}
 	}
 
 	func load() {
@@ -5607,10 +5693,8 @@ struct SpriteLibraryScreen: View {
 			HStack(spacing: 6) {
 				ForEach(SpriteLibraryScreen.sizes, id: \.self) { sz in self.newButton(sz) }
 			}
-			ScrollView {
-				VStack(spacing: 6) {
-					ForEach(list) { pr in self.row(pr) }
-				}
+			VStack(spacing: 6) {
+				ForEach(list) { pr in self.row(pr) }
 			}
 		}
 	}
@@ -5685,11 +5769,7 @@ struct SpriteLibraryScreen: View {
 	var editor: some View {
 		let pr: SpriteProject = editing ?? SpriteProject()
 		return VStack(alignment: .leading, spacing: 8) {
-			HStack(spacing: 6) {
-				ModTextField(label: "Name", text: nameBind, placeholder: "Sprite")
-				SmallButton(title: "SAVE", color: ModUI.accent) { self.save() }
-				SmallButton(title: "DONE", color: ModUI.blue) { self.done() }
-			}
+			ModTextField(label: "Name", text: nameBind, placeholder: "Sprite")
 			frameRow(pr.frames.count)
 			PixelEditorView(pixels: pixBind, maxSide: 420, frames: pr.frames, frameIndex: frame, sizes: [8, 12, 16, 24, 32, 48, 64], outlineDefault: true,
 							onResize: { (w: Int, h: Int) in self.resizeAll(w, h) })
@@ -6524,9 +6604,9 @@ struct SummonRuleEditor: View {
 				whereSection
 				if !forDimension { entranceSection }
 			}
-			if pickingItem { itemPicker }
-			if pickingBlock { blockPicker }
 		}
+		.modCover(s, pickingItem ? 1 : nil) { self.itemPicker }
+		.modCover(s, pickingBlock ? 2 : nil) { self.blockPicker }
 	}
 
 	static let howNames: [String] = ModSummonHow.allCases.map { $0.name }
@@ -6862,8 +6942,8 @@ struct DimensionEditorView: View {
 				ChoiceRow(options: DimensionEditorView.pages, selected: $page, columns: 7)
 				pageView
 			}
-			if !picking.isEmpty { blockPicker }
 		}
+		.modCover(s, picking.isEmpty ? nil : picking) { self.blockPicker }
 	}
 
 	var blockPicker: some View {
@@ -7496,8 +7576,17 @@ struct ScriptEditorView: View {
 				}
 				issues
 			}
-			overlay
 		}
+		.modCover(s, coverKey) { self.overlay }
+	}
+
+	/// which picker is open (nil: none)
+	var coverKey: Int? {
+		if exprPick != nil { return 1 }
+		if itemPick != nil { return 2 }
+		if exprItemPick != nil { return 3 }
+		if blockPick != nil { return 4 }
+		return nil
 	}
 
 	var whereNote: some View {

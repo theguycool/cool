@@ -306,7 +306,9 @@ func census(_ version: Int, _ opts: WorldOptions) -> [Tile: [Int]] {
     }
     return out
 }
-let cs = census(WorldGen.currentVersion, .standard)
+// generator 5's ore rules, the rebalance these checks were written for (worlds made with it keep
+// them); generator 6 brings iron up, checked after these and against generator 5 in world6
+let cs = census(5, .standard)
 // the previous version gave these over the same 180 chunks (measured before the change)
 let before: [Tile: Int] = [.coal: 30060, .copper: 16755, .iron: 15774, .gold: 8744, .diamond: 2537, .mythril: 839]
 let ironNow = Double(cs[.iron]?[0] ?? 0)
@@ -325,6 +327,20 @@ check(shallowKinds == 4 && (cs[.iron]?[3] ?? 0) >= 205, "the upper ground holds 
 var above = 0
 for (t, a) in cs where t.def.style == .ore || [.tin, .saltpeter, .silver, .amethyst].contains(t) { above += a[1] }
 check(above == 0, "no ore forms at or within eight rows of the surface")
+do {
+    // generator 6 (new worlds): iron from row 150, every other ore in its band, nothing at the surface
+    let cs6 = census(WorldGen.currentVersion, .standard)
+    let iron6: [Int] = cs6[.iron] ?? [0, 0, 0, 0, 0]
+    let coal6: Int = cs6[.coal]?[0] ?? 0
+    check(iron6[3] >= 150 && iron6[3] < 205 && Double(coal6) > Double(iron6[0]) * 1.5, "generator 6: iron starts higher (row \(iron6[3])) and coal stays the commonest ore (\(coal6) against \(iron6[0]))")
+    for (t, lo, hi) in [(Tile.tin, 122, 265), (.saltpeter, 112, 205), (.silver, 200, 400), (.amethyst, 150, 330), (.gold, 310, 530)] {
+        let a = cs6[t] ?? [0, 0, 0, 0, 0]
+        check(a[0] > 300 && a[3] >= lo - 1 && a[4] <= hi + 1, "generator 6: \(t.name) stays between rows \(a[3]) and \(a[4]) (its band \(lo)-\(hi))")
+    }
+    var above6 = 0
+    for (t, a) in cs6 where t.def.style == .ore || [.tin, .saltpeter, .silver, .amethyst].contains(t) { above6 += a[1] }
+    check(above6 == 0, "generator 6: still no ore at or within eight rows of the surface")
+}
 do {
     // tin is common in some regions and missing from others
     let g = WorldGen(seed: 1234, infinite: true, rareChance: 1.0, genVersion: WorldGen.currentVersion, options: .standard)

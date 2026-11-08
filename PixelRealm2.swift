@@ -2584,7 +2584,7 @@ extension Game {
 		st.rareChance = s.settings.rareChance
 		// worlds saved before the generation changes keep generating exactly as they did, and
 		// worlds saved before world types existed are standard worlds
-		let g = Game(mode: s.meta.mode, infinite: s.meta.infinite, seed: s.meta.seed, settings: st, genVersion: s.meta.genVersion ?? 1, options: s.meta.options ?? .standard)
+		let g = Game(mode: s.meta.mode, infinite: s.meta.infinite, seed: s.meta.seed, settings: st, genVersion: s.meta.genVersion ?? 1, options: s.meta.options ?? .standard, loadSpawn: false)
 		g.slot = s.meta.slot
 		g.worldName = s.meta.name
 		g.dayCount = s.meta.day
@@ -2972,6 +2972,14 @@ extension Game {
 			m.lair = -1
 		}
 		say("Spawned " + m.def.name, 1.5)
+	}
+
+	/// The debug menu's give: any item of the game or of the world's mods, as many as asked (what does
+	/// not fit falls at the player's feet)
+	func debugGive(_ it: Item, _ n: Int) {
+		let count: Int = clampI(n, 1, 9999)
+		giveItem(it, count, extra: gunLoad(it))
+		say(joinText("Gave ", String(count), " ", it.name, "."), 1.5)
 	}
 
 	func debugGiveKit() {
@@ -3468,6 +3476,13 @@ extension World {
 
 func isDoor(_ t: Tile) -> Bool { return t == .doorClosed || t == .doorOpen }
 
+/// A door the player walked through, waiting to close behind them
+struct WalkDoor {
+	var x: Int
+	var y: Int
+	var t: Double
+}
+
 extension Game {
 	/// The two cells of the door containing (x, y): (top, bottom)
 	func doorCells(_ x: Int, _ y: Int) -> (Int, Int) {
@@ -3502,7 +3517,8 @@ extension Game {
 		spawnParticles(Double(x) + 0.5, Double(y) + 0.5, 0xA97B45, 2, 1.5, 0.3, 8)
 	}
 
-	/// Walking into a closed door opens it (tap a door to close it again)
+	/// Walking into a closed door opens it, and it closes again once the player has gone through (a door
+	/// opened or shut with a tap stays as it was set)
 	func doorTouch(_ ix: Double) {
 		if ix != 0 {
 			let sgn: Double = ix > 0 ? 1.0 : -1.0
@@ -3510,9 +3526,35 @@ extension Game {
 			let fxd: Double = pb.x + sgn * reachX
 			let fx: Int = Int(floor(fxd))
 			for yy in [Int(floor(pb.y - 0.5)), Int(floor(pb.y - 1.4))] {
-				if world.tile(fx, yy) == .doorClosed { setDoor(fx, yy, open: true); break }
+				if world.tile(fx, yy) == .doorClosed {
+					setDoor(fx, yy, open: true)
+					let c: (Int, Int) = doorCells(fx, yy)
+					if !walkDoors.contains(where: { $0.x == fx && $0.y == c.0 }) && walkDoors.count < 16 {
+						walkDoors.append(WalkDoor(x: fx, y: c.0, t: 0))
+					}
+					break
+				}
 			}
 		}
+	}
+
+	/// Closes the doors the player walked through, once they are clear of the doorway
+	func updateWalkDoors(_ dt: Double) {
+		if walkDoors.isEmpty { return }
+		var keep: [WalkDoor] = []
+		for var w in walkDoors {
+			w.t += dt
+			if world.tile(w.x, w.y) != .doorOpen { continue }
+			let c: (Int, Int) = doorCells(w.x, w.y)
+			let away: Bool = abs(pb.x - (Double(w.x) + 0.5)) > pb.w * 0.5 + 1.1 || pb.y < Double(c.0) - 0.5 || pb.top > Double(c.1) + 1.5
+			if w.t > 0.5 && away && !doorBlocked(w.x, c.0, c.1) {
+				setDoor(w.x, w.y, open: false)
+				sfx(.door, at: Double(w.x), 0.5)
+				continue
+			}
+			if w.t < 60 { keep.append(w) }
+		}
+		walkDoors = keep
 	}
 
 	func placeDoor(_ tx: Int, _ ty0: Int) -> Bool {

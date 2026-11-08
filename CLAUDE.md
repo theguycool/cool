@@ -1,7 +1,7 @@
 # PixelRealm
 
 A 2D sandbox survival game for iPad, written in SwiftUI and run in Swift Playgrounds. The game is four
-files, `PixelRealm1.swift` to `PixelRealm4.swift` (about 52,600 lines in all, indented with tabs). The
+files, `PixelRealm1.swift` to `PixelRealm4.swift` (about 53,500 lines in all, indented with tabs). The
 user pastes each into its own file of one Swift Playgrounds app. It was one file until the user asked
 for four; deliver all four, and treat them as one program (Swift doesn't care which file holds what).
 
@@ -13,7 +13,10 @@ each file in its own job, which needs much less memory at once, if the iPad buil
 confirmed). `tools/buildcost.sh` measures both ways:
 - 598e07b as one file: 63 s and 860 MB here. Mod Creator+ as one job: 86 s and 1,059 MB.
 - Mod Creator+ as one job per file: 24 to 28 s and 405 to 457 MB per job (four jobs, 102 s in all).
-  If the iPad runs the four jobs at once in one process, they could add up; that is not known either.
+  With the overhaul's phases 1 and 2 (1.97 MB): 19 to 22 s and 405 to 461 MB per job; as one job
+  71 s and 1,011 MB. The four-file Mod Creator+ version is known to start on the iPad; this one is
+  not confirmed yet. If the iPad runs the four jobs at once in one process, they could add up; that
+  is not known either.
 - Add big features in steps the user can check on the iPad, and keep the parts about equal in
   compiled size (`tools/buildcost.sh` prints each job's peak).
 
@@ -48,8 +51,14 @@ structures, test worlds, an end-to-end run; it uses a scratch mod folder, never 
 changes to game content, folders, versions, dependencies, ore controls, mining times, the sprite tools, custom infusions,
 boss phases and summoning, custom dimensions, the Logic Studio and its safety limits), `alchemy`
 (potions and status effects, throwing, mutation and its limits, infusions, the exosuit: building, wearing,
-modules, power, saving), and
-`det` and `det2` (world generation fingerprints for generator versions 1 to 4).
+modules, power, saving), `overhaul` (dropped items, the bag, live crafting counts, the item browser and
+debug give, the held attack stick, neutral animals, armour and creature damage, the bow zombie, doors
+closing behind the player, the direct camera, clouds at any zoom, fireflies in place), `ghost` (the
+renderer never mixes dimensions' pictures, chunks made again are the same, explore/build/save/quit/load
+cycles through all four kinds of dimension, weather stays in its dimension), `world6` (generator 6
+against 5: trees, ores by depth, seas; fingerprints of generator 5; saplings; monsters kept out of
+lamplight by the real light), and `det` and `det2` (world generation fingerprints for generator
+versions 1 to 4).
 
 What the stand-ins can't tell you:
 - They only declare the SwiftUI and AVFoundation API the game uses. If you use a new API, add it to
@@ -77,14 +86,20 @@ What the stand-ins can't tell you:
   fields are decoded with `decodeIfPresent` and a default.
 - **Infusions live on the stack** (`Stack.inf`). Code that moves an item between bag, chest, carried and
   dropped must keep the whole `Stack`, or pass `inf:` to `Inventory.add`; infused items never merge.
-- **World generation is frozen for existing worlds.** `det` and `det2` must pass unchanged. Changes
-  to generation go behind a new generator version. Version 5 (current) has no villages; versions 1 to 4
-  still generate them (`WorldGen.hasVillages`) so saved worlds keep matching, but nothing in the game
-  uses villagers, trades or village goals any more (`MobKind.villager` stays only for saved numbering).
+- **World generation is frozen for existing worlds.** `det`, `det2` and the generator 5 fingerprints
+  in `world6` must pass unchanged. Changes to generation go behind a new generator version (test
+  `genVersion >= N`). Version 6 (current): more trees (three columns apart, jungle trees four; a grove
+  within 110 blocks of the spawn, `treeDensity6`), iron from row 150 and a little more coal, copper
+  and tin near the top (`oreRules6`, picked by `WorldGen.oreTable`), smaller seas (`smallSeas`:
+  narrower basins, land noise at 700 instead of 800, coasts lifted), and sealed grotto passages that
+  stop with four rows of ground over their end. Version 5 has no villages;
+  versions 1 to 4 still generate them (`WorldGen.hasVillages`) so saved worlds keep matching, but
+  nothing in the game uses villagers, trades or village goals any more (`MobKind.villager` stays only
+  for saved numbering).
 - **A new tile needs:** an appended case, a `Tile.makeDef` entry, 8x8 art in `customTileRows`, and,
   as relevant, `needsSupport`, `toolClass`, `isInteractive`/`interact`, and the exclusions in
-  `creativeItems` for on/off variants. New tiles go after `exoStation` (after the 64 mod tiles);
-  `Tile.isMod` is a range check, so they are not mistaken for mod blocks.
+  `creativeItems` for on/off variants. New tiles go after `sapling` (the last one; all after the 64
+  mod tiles); `Tile.isMod` is a range check, so they are not mistaken for mod blocks.
 - **A new panel** needs its `@Published` show flag added to `updateInputGate` and to the condition
   that hides the HUD in `GameView`.
 - **Scrolling.** Every screen that can grow scrolls, with its way back (the top bar) outside the
@@ -151,12 +166,31 @@ the Mod Test LOGIC tab), `u06_root`.
   `releaseAllInput` clears all of them when a panel covers the controls.
 
 - **Weather.** One `WeatherSim` for the world. `weatherAt(x, y)` gives a `LocalWeather`, and
-  weather devices update in `updateWeatherDevices`.
+  weather devices update in `updateWeatherDevices`. Rain blends from column to column
+  (`landWetness`), so it never steps at a biome border. The ground's wet and snow strips
+  (`updateGroundCells`) belong to the Overworld and only change there. Weather loops are silenced
+  when leaving a world (`Sound.silenceLoops`).
+- **Land pictures.** `RenderCache` keeps a picture of each 16-row section, keyed by dimension, chunk
+  and section (`key`, room for 8 dimensions) and only reused for the chunk it was drawn from
+  (`Chunk.serial`). The key once had room for two dimensions, so custom dimensions showed Overworld
+  and Umbral pictures and the other way round: the "ghost terrain". `Game.load` makes a game with
+  `loadSpawn: false` (the land comes from the save, not made around the spawn first).
+- **Trees, saplings, doors, drops.** Leaves drop saplings (8.5%); a sapling on soil grows on a random
+  world tick (`growSapling`: the biome's kind of tree, a custom region's own log and leaves, only into
+  open air or wild plants). Doors the player walks through close behind them (`walkDoors`); a stack the
+  player throws away waits until they walk off (`DropItem.heldBack`).
 - **Night monsters.** `updateSpawning`:
   - monsters have their own limit (`monsterCap`, set by the Nights setting); wild predators have a
     separate one;
   - `monsterSpawnCD` paces new arrivals;
+  - lamplight keeps monsters away by the real light: `lightForSpawn` floods a separate `LightMap`
+    (`spawnLight`, `compute(..., noteSeen: false)` so the screen's light map still sees its edits)
+    around the spot, on screen or not; a monster needs glow of `spawnGlowMax` (4) or less at its own
+    cells, and caves also refuse daylight over 6;
   - `spawnLog` records why each spawn attempt failed (shown in the debug panel).
+- **Animals and armour.** Wild animals (`isWildAnimal`) leave the player alone until hit
+  (`wildProvoked`: 12 s after the player's last hit); `isThreat` is what targeting and auto-aim use.
+  Armour takes `armorShare(defense)` of each blow (4% a point, at most 80%). `.archer` is the Bow Zombie.
 - **Monster AI.** `think` gives every monster its senses and state (`MobAI`: idle, alert, chase,
   search, back, retreat). The per-kind functions supply the attacks: `st` 3 and up are wind-ups and
   blows, 0 and 1 are walking. The debug panel's AI overlay shows each monster's state and its reason

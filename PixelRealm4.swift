@@ -3035,7 +3035,7 @@ struct ModTestPanel: View {
 			if list.isEmpty { Text("This mod has no recipes yet.").font(.pixel(12)).foregroundColor(ModUI.dim) }
 			ForEach(list) { r in
 				HStack(spacing: 8) {
-					RecipeRow(game: game, recipe: r)
+					RecipeRow.live(game, r)
 					VStack(spacing: 4) {
 						SmallButton(title: "INGREDIENTS", color: ModUI.blue) { note = game.testIngredients(r) }
 						SmallButton(title: "CRAFT", color: game.canCraft(r) ? ModUI.accent : Color(hex: 0x555555)) {
@@ -3180,6 +3180,8 @@ struct StructurePreview: View {
 /// The potion effects on the player: a small flask in the effect's colour and the seconds left
 struct EffectStrip: View {
 	let game: Game
+	/// the HUD's tick: a new value makes SwiftUI draw the strip again (it reads the game, which it does not watch)
+	var tick: Int = 0
 	var body: some View {
 		let list: [(ModEffectKind, Double)] = game.activeEffects()
 		return HStack(spacing: 4) {
@@ -3210,6 +3212,8 @@ struct EffectChip: View {
 /// The worn suit's energy, and the PACK button when it carries a cargo pack
 struct SuitBar: View {
 	let game: Game
+	/// the HUD's tick, so the bar redraws as the suit's energy changes
+	var tick: Int = 0
 	var body: some View {
 		let st: ExoStats = game.suitStats
 		let cap: Double = max(1, st.capacity)
@@ -8796,6 +8800,8 @@ struct RootView: View {
 			reopenMods = !g.testMod.isEmpty
 		}
 		actState.stickReleased()
+		// the weather and engine loops are only kept up by the world's frames: stop them with it
+		Sound.shared.silenceLoops()
 		game = nil
 		ModRuntime.deactivate()
 	}

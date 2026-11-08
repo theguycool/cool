@@ -380,6 +380,8 @@ enum Tile: UInt8, CaseIterable, Codable {
 	case mod00, mod01, mod02, mod03, mod04, mod05, mod06, mod07, mod08, mod09, mod10, mod11, mod12, mod13, mod14, mod15, mod16, mod17, mod18, mod19, mod20, mod21, mod22, mod23, mod24, mod25, mod26, mod27, mod28, mod29, mod30, mod31, mod32, mod33, mod34, mod35, mod36, mod37, mod38, mod39, mod40, mod41, mod42, mod43, mod44, mod45, mod46, mod47, mod48, mod49, mod50, mod51, mod52, mod53, mod54, mod55, mod56, mod57, mod58, mod59, mod60, mod61, mod62, mod63
 	/// alchemy, infusion and the exosuit (appended after the mod tiles, so every saved number stays)
 	case alchemyStill, infuser, exoStation
+	/// a young tree (appended): planted on soil, it grows into a tree that suits the land it stands in
+	case sapling
 
 	// the tables are built once; the reserved mod tiles are rewritten when a world's mods are switched
 	// on (see `patch`), the game's own tiles never change
@@ -729,6 +731,8 @@ enum Tile: UInt8, CaseIterable, Codable {
 			return TileDef(name: "Infusion Crucible", hard: 2.0, tier: 1, solid: false, opaque: false, light: 6, style: .custom, colors: [0x6A5A8A])
 		case .exoStation:
 			return TileDef(name: "Assembly Station", hard: 2.0, tier: 1, solid: false, opaque: false, style: .custom, colors: [0x5A6270])
+		case .sapling:
+			return TileDef(name: "Sapling", hard: 0, solid: false, opaque: false, plant: true, style: .custom, colors: [0x4B9A30])
 		default:
 			// the tiles reserved for mods, until a world's mods give them a meaning (see ModRuntime)
 			return TileDef(name: "Unused Mod Block", hard: 9999, style: .custom, colors: [0xFF00FF, 0x200020, 0xFF00FF, 0x200020, 0xFF00FF], noDrop: true)
@@ -839,6 +843,10 @@ func customTileRows(_ t: Tile) -> ([String], [Character: UInt32])? {
 		// a stone crucible brimming with something that glows
 		return (["..p..p..", ".PvvvvP.", "svVVVVvs", "sSvvvvSs", ".sSSSSs.", "..ssss..", ".ssssss.", "ssssssss"],
 				["p": 0xC07CFF, "P": 0x8A6AB8, "v": 0x9A5ADC, "V": 0xE0B8FF, "s": 0x5A5E68, "S": 0x7A7E88])
+	case .sapling:
+		// a thin stem with a few young leaves
+		return (["........", "...gg...", "..gGgg..", ".gg.bgg.", "..g.b.g.", "....b...", "...bb...", "....b..."],
+				["g": 0x4B9A30, "G": 0x7AC84A, "b": 0x7A5230])
 	case .exoStation:
 		// a gantry with a suit hanging in its clamps
 		return (["kkkkkkkk", "k.mmmm.k", "k.mccm.k", "kmmmmmmk", "k.mmmm.k", "k.m..m.k", "ssssssss", "sysyysys"],
@@ -1170,8 +1178,10 @@ enum Tier: Int, Codable, CaseIterable {
 		let t: [Double] = [2, 4, 5.5, 6.5, 8.5, 10, 14, 19, 26, 36]
 		return t[rawValue]
 	}
+	/// armour points of one piece (times the slot's share: a full set is three times this). Each point
+	/// takes 4% off a blow, at most 80%: a full leather set 19%, iron 41%, diamond 55%, voidium 80%
 	var defense: Double {
-		let t: [Double] = [0, 1.0, 1.0, 1.5, 2.0, 2.3, 3.0, 4.0, 5.0, 6.0]
+		let t: [Double] = [0, 1.6, 2.0, 2.6, 3.4, 3.8, 4.6, 5.4, 6.2, 7.0]
 		return t[rawValue]
 	}
 }
@@ -1734,6 +1744,20 @@ enum Item: Hashable, Codable {
 		}
 	}
 
+	/// The bag's filter groups (see ItemBrowser.groups): 0 blocks, 1 tools, 2 weapons and ammunition,
+	/// 3 armour and suit parts, 4 materials, 5 food and potions, 6 everything else
+	var bagGroup: Int {
+		switch sortGroup {
+		case 0, 1, 2: return 2
+		case 3: return 1
+		case 4: return 3
+		case 5: return 5
+		case 8, 9: return 0
+		case 10: return 4
+		default: return 6
+		}
+	}
+
 	/// Short description lines for tooltips: what the weapon is for, then its numbers
 	var infoLines: [String] {
 		switch self {
@@ -1774,6 +1798,7 @@ enum Item: Hashable, Codable {
 			if g == .wireSnips { return ["Drag over wire to take it back up"] }
 			if g == .probe { return ["Tap a device to set it up, or a wire", "to see its whole network and its power"] }
 			return ["Gadget: use it from the hotbar"]
+		case .block(.sapling): return ["Plant it on grass, dirt or snow", "It grows into a tree that suits the land"]
 		case .block(let t): return [t.solid ? "Building block" : "Placeable", t.light > 0 ? "Gives light" : (t.hardness >= 99 ? "Unbreakable" : String(format: "Hardness %.1f", t.hardness))]
 		case .wall: return ["Background wall"]
 		case .mat(let m): return [m.use]
@@ -2940,6 +2965,29 @@ struct Inventory: Codable {
 		slots[b] = t
 	}
 
+	/// Merges partial stacks of the same item (same load and infusions) into the first of them, bag and
+	/// hotbar alike, so a material spread over many slots ends up in as few as it fits. Gives how many
+	/// stacks were folded in.
+	mutating func mergeStacks() -> Int {
+		var merged: Int = 0
+		for i in 0..<slots.count {
+			guard var a = slots[i] else { continue }
+			let ms: Int = a.item.maxStack
+			if ms <= 1 || a.count >= ms { continue }
+			for j in (i + 1)..<slots.count {
+				if a.count >= ms { break }
+				guard var b = slots[j], b.item == a.item, b.extra == a.extra, b.inf == a.inf else { continue }
+				let put: Int = min(ms - a.count, b.count)
+				a.count += put
+				b.count -= put
+				slots[j] = b.count > 0 ? b : nil
+				merged += 1
+			}
+			slots[i] = a
+		}
+		return merged
+	}
+
 	/// Sorts the bag (everything past the hotbar): equal stacks merge, then items group by kind and name.
 	/// The hotbar is left alone so a sort never moves what the player has ready.
 	mutating func sortBag() {
@@ -3412,6 +3460,19 @@ func skeletonStyle() -> HumanStyle {
 }
 
 /// The Skeleton Archer: a hooded skull with a longbow and no shield
+/// The Bow Zombie, which took the skeleton archer's place: a zombie in a ragged hunter's hood, bow in hand
+func zombieArcherStyle() -> HumanStyle {
+	var s = zombieStyle(2)
+	s.zombieArms = false
+	s.hat = 0x4A3A28
+	s.shirt = 0x5A6A3A
+	s.sleeve = shadeRGB(0x5A6A3A, 0.85)
+	s.belt = 0x5A3A20
+	s.weapon = .bow
+	s.weaponColor = 0x8A5A2A
+	return s
+}
+
 func skeletonArcherStyle() -> HumanStyle {
 	var s = skeletonStyle()
 	s.hat = 0x3E4A36
@@ -3720,7 +3781,7 @@ func creatureArt(_ k: MobKind, _ v: Int) -> ([PixelBuf], CreatureAnim) {
 	case .rex: return (spriteTRex(), a)
 	case .crawler: a.attack = 3; return (spriteCaveCrawler(), a)
 	case .golem: return (spriteStoneGolem(), a)
-	case .archer: return (humanoidFrames(skeletonArcherStyle()), a)
+	case .archer: return (humanoidFrames(zombieArcherStyle()), a)
 	case .sentinel: a.cycle = [0, 1]; return (spriteCrystalSentinel(), a)
 	case .mimic: return (spriteMimic(), a)
 	case .warden: return (spriteHollowWarden(), a)
@@ -5395,9 +5456,11 @@ struct WorldGen {
 	/// 3 = buildings and lairs that never wall off the way along the ground, birch and pine trees,
 	/// surface landmarks, crystal grottos and abandoned mines, 4 = mines grown into branching networks
 	/// (side rooms, drifts down ladders, dead ends, collapses hiding chests, a great chamber),
-	/// 5 = no villages (worlds saved earlier keep the villages they already have, empty of villagers)
+	/// 5 = no villages (worlds saved earlier keep the villages they already have, empty of villagers),
+	/// 6 = more trees (and a grove around the spawn), iron from higher up, a little more coal, copper
+	/// and tin, and seas about a fifth narrower
 	let genVersion: Int
-	static let currentVersion: Int = 5
+	static let currentVersion: Int = 6
 	let options: WorldOptions
 	let rareChance: Double
 	let zones: [Int]
@@ -5472,7 +5535,7 @@ struct WorldGen {
 			while step < 400 && !ok {
 				let off: Int = ((step % 2 == 0) ? 1 : -1) * ((step + 1) / 2) * 5
 				let x: Int = spawnX + sd * dd + off
-				let c: Col = options.flat ? WorldGen.flatColStatic(seed, infinite, width, spawnX, zones, x, lairs: false) : WorldGen.colBaseStatic(seed, infinite, width, spawnX, zones, x, basins: genVersion >= 2)
+				let c: Col = options.flat ? WorldGen.flatColStatic(seed, infinite, width, spawnX, zones, x, lairs: false) : WorldGen.colBaseStatic(seed, infinite, width, spawnX, zones, x, basins: genVersion >= 2, smallSeas: genVersion >= 6)
 				if c.biome != .ocean && c.biome != .swamp && c.land > 0.5 && WorldGen.lairStatic(spawnX, infinite, x, 230) == nil && abs(x - spawnX) < 3800 && abs(x - spawnX) > 200 {
 					found = x
 					ok = true
@@ -5600,44 +5663,52 @@ struct WorldGen {
 	}
 
 	/// The guaranteed sea near spawn, on a seeded side, so every world has an ocean within reach
-	static func homeBasin(_ seed: UInt64, _ spawnX: Int) -> Basin {
+	/// (narrower from generator 6: `small`)
+	static func homeBasin(_ seed: UInt64, _ spawnX: Int, small: Bool = false) -> Basin {
 		let side: Int = hash2(41, 42, seed) < 0.5 ? -1 : 1
 		let off: Int = 560 + Int(hash2(43, 44, seed) * 120.0)
+		if small { return Basin(center: spawnX + side * off, halfW: 112 + Int(hash2(45, 46, seed) * 38.0), ramp: 90) }
 		return Basin(center: spawnX + side * off, halfW: 150 + Int(hash2(45, 46, seed) * 50.0), ramp: 110)
 	}
 
 	/// Random large basins in infinite worlds (about two in five 1600-wide cells), kept clear of spawn and lairs
-	static func cellBasin(_ seed: UInt64, _ spawnX: Int, _ c: Int) -> Basin? {
+	static func cellBasin(_ seed: UInt64, _ spawnX: Int, _ c: Int, small: Bool = false) -> Basin? {
 		if hash2(c, 401, seed) > 0.26 { return nil }
 		let cellW: Int = 1600
-		let hw: Int = 140 + Int(hash2(c, 402, seed) * 220.0)
+		var hw: Int = 140 + Int(hash2(c, 402, seed) * 220.0)
 		let cen: Int = c * cellW + hw + 140 + Int(hash2(c, 403, seed) * Double(max(1, cellW - 2 * hw - 280)))
 		if abs(cen - spawnX) < hw + 900 { return nil }
 		for lc in lairCentersStatic(spawnX, true, cen) where abs(cen - lc) < hw + 330 { return nil }
+		// generator 6: the same seas, a quarter narrower, with shorter shelving coasts
+		if small {
+			hw = hw * 3 / 4
+			return Basin(center: cen, halfW: hw, ramp: 105)
+		}
 		return Basin(center: cen, halfW: hw, ramp: 140)
 	}
 
 	/// 0...1: how strongly x lies inside an ocean basin (1 = open sea, ramping down over the coast)
-	static func oceanBasin(_ seed: UInt64, _ infinite: Bool, _ spawnX: Int, _ x: Int) -> Double {
+	static func oceanBasin(_ seed: UInt64, _ infinite: Bool, _ spawnX: Int, _ x: Int, small: Bool = false) -> Double {
 		func weight(_ b: Basin) -> Double {
 			let d: Double = Double(abs(x - b.center))
 			return 1.0 - smooth(clampD((d - Double(b.halfW)) / Double(b.ramp), 0, 1))
 		}
-		var w: Double = weight(homeBasin(seed, spawnX))
+		var w: Double = weight(homeBasin(seed, spawnX, small: small))
 		if infinite {
 			let c0: Int = floorDiv(x, 1600)
 			for c in (c0 - 1)...(c0 + 1) {
-				if let b = cellBasin(seed, spawnX, c) { w = max(w, weight(b)) }
+				if let b = cellBasin(seed, spawnX, c, small: small) { w = max(w, weight(b)) }
 			}
 		}
 		return w
 	}
 
-	static func colBaseStatic(_ seed: UInt64, _ infinite: Bool, _ width: Int, _ spawnX: Int, _ zones: [Int], _ x: Int, basins: Bool = true) -> Col {
+	static func colBaseStatic(_ seed: UInt64, _ infinite: Bool, _ width: Int, _ spawnX: Int, _ zones: [Int], _ x: Int, basins: Bool = true, smallSeas: Bool = false) -> Col {
 		let fx: Double = Double(x)
 		let H: Int = WorldGen.H
 		let sea: Int = WorldGen.sea
-		var land: Double = fbm1(fx / 800.0, seed &+ 1, 3)
+		// generator 6: seas and continents a little narrower, so a crossing is shorter
+		var land: Double = fbm1(fx / (smallSeas ? 700.0 : 800.0), seed &+ 1, 3)
 		if !infinite {
 			let e: Double = Double(min(x, width - 1 - x))
 			let eo: Double = Double(WorldGen.edgeOcean)
@@ -5661,9 +5732,14 @@ struct WorldGen {
 			land = max(land, lerpD(land, 0.65, lw))
 			if d < 120 { forced = L.kind == .bear ? .forest : .jungle }
 		}
+		// generator 6: the open sea the land field makes on its own ends sooner (land just under the
+		// shore line is lifted a little, so coasts move out to sea; the deep water is unchanged)
+		if smallSeas && land < 0.50 && land > 0.25 {
+			land += 0.06 * (1.0 - smooth(clampD(abs(land - 0.40) / 0.09, 0, 1)))
+		}
 		// ocean basins pull the land value down into deep water (after the spawn/lair guarantees,
 		// which basins are placed well away from)
-		let basin: Double = basins ? WorldGen.oceanBasin(seed, infinite, spawnX, x) : 0
+		let basin: Double = basins ? WorldGen.oceanBasin(seed, infinite, spawnX, x, small: smallSeas) : 0
 		if basin > 0 { land = min(land, lerpD(land, 0.17, basin)) }
 		let mraw: Double = max(fbm1(fx / 420.0, seed &+ 3, 2) - 0.08, 0.56 + 0.40 * WorldGen.rangeBump(seed, infinite, width, x))
 		var mtn: Double = smooth(clampD((mraw - 0.60) / 0.16, 0, 1)) * clampD((land - 0.45) / 0.1, 0, 1)
@@ -5744,7 +5820,7 @@ struct WorldGen {
 			return c
 		}
 		cache.misses &+= 1
-		let c: Col = options.flat ? WorldGen.flatColStatic(seed, infinite, width, spawnX, zones, x, lairs: hasStructures) : WorldGen.colBaseStatic(seed, infinite, width, spawnX, zones, x, basins: genVersion >= 2)
+		let c: Col = options.flat ? WorldGen.flatColStatic(seed, infinite, width, spawnX, zones, x, lairs: hasStructures) : WorldGen.colBaseStatic(seed, infinite, width, spawnX, zones, x, basins: genVersion >= 2, smallSeas: genVersion >= 6)
 		cache.cols[x] = c
 		return c
 	}
@@ -5945,6 +6021,14 @@ struct WorldGen {
 let chunkW: Int = 16
 
 final class Chunk {
+	/// a number no other chunk made in this run has (the renderer only reuses a picture of the land
+	/// for the very chunk it was drawn from)
+	let serial: Int = Chunk.nextSerial()
+	static var serialCount: Int = 0
+	static func nextSerial() -> Int {
+		serialCount += 1
+		return serialCount
+	}
 	let cx: Int
 	let H: Int
 	var tiles: [UInt8]
@@ -6090,6 +6174,21 @@ let oreRules: [OreRule] = [
 	OreRule(tile: .mythril, minY: 455, maxY: 548, thr: 0.945, p: 0.55, salt: 36)
 ]
 
+/// Generator 6: iron from row 150 (some 35 blocks under the ground instead of 90), and a little more
+/// coal, copper and tin; everything deeper as before
+let oreRules6: [OreRule] = [
+	OreRule(tile: .amethyst, minY: 150, maxY: 330, thr: 0.967, p: 0.9, salt: 41),
+	OreRule(tile: .saltpeter, minY: 112, maxY: 205, thr: 0.865, p: 0.55, salt: 42),
+	OreRule(tile: .tin, minY: 122, maxY: 265, thr: 0.832, p: 0.62, salt: 43, region: 0.47),
+	OreRule(tile: .coal, minY: 120, maxY: 340, thr: 0.79, p: 0.66, salt: 31),
+	OreRule(tile: .copper, minY: 125, maxY: 345, thr: 0.82, p: 0.65, salt: 32),
+	OreRule(tile: .silver, minY: 200, maxY: 400, thr: 0.913, p: 0.6, salt: 44),
+	OreRule(tile: .iron, minY: 150, maxY: 450, thr: 0.86, p: 0.56, salt: 33),
+	OreRule(tile: .gold, minY: 310, maxY: 530, thr: 0.885, p: 0.58, salt: 34),
+	OreRule(tile: .diamond, minY: 390, maxY: 548, thr: 0.925, p: 0.55, salt: 35),
+	OreRule(tile: .mythril, minY: 455, maxY: 548, thr: 0.945, p: 0.55, salt: 36)
+]
+
 func oreBias(_ b: Biome, _ t: Tile) -> Double {
 	switch (b, t) {
 	case (.desert, .gold): return 0.045
@@ -6141,10 +6240,13 @@ extension WorldGen {
 		return false
 	}
 
+	/// The ore table this world generates with
+	var oreTable: [OreRule] { return genVersion >= 6 ? oreRules6 : oreRules }
+
 	func oreAt(_ x: Int, _ y: Int, _ biome: Biome) -> Tile? {
 		let fx: Double = Double(x)
 		let fy: Double = Double(y)
-		for r in oreRules {
+		for r in oreTable {
 			if y < r.minY || y > r.maxY { continue }
 			if r.region > 0 && oreRegion(x, r.salt, seed) < r.region { continue }
 			let blob: Double = vnoise(fx * 0.22, fy * 0.22, seed &+ r.salt)
@@ -6164,7 +6266,9 @@ extension WorldGen {
 		return .deepRock
 	}
 
-	func treeDensity(_ b: Biome, _ h: Int) -> Double {
+	/// The chance a column starts a tree (four columns are always kept between trees)
+	func treeDensity(_ b: Biome, _ h: Int, _ x: Int = Int.min) -> Double {
+		if genVersion >= 6 { return treeDensity6(b, h, x) }
 		switch b {
 		case .forest: return 0.14
 		case .plains: return 0.04
@@ -6176,6 +6280,25 @@ extension WorldGen {
 		case .desert: return 0.035
 		default: return 0.0
 		}
+	}
+
+	/// Generator 6: about half as many trees again, and a grove around the spawn, so the first wood is
+	/// never far away (forests stay walkable: trees still stand at least four columns apart)
+	func treeDensity6(_ b: Biome, _ h: Int, _ x: Int) -> Double {
+		var d: Double = 0
+		switch b {
+		case .forest: d = 0.22
+		case .plains: d = 0.10
+		case .jungle: d = 0.24
+		case .savanna: d = 0.065
+		case .tundra: d = 0.12
+		case .swamp: d = 0.13
+		case .mountain: d = h > 98 ? 0.08 : 0.0
+		case .desert: return 0.035
+		default: return 0.0
+		}
+		if x != Int.min && abs(x - spawnX) < 110 && b != .mountain { d = max(d, 0.22) }
+		return d
 	}
 }
 
@@ -6250,7 +6373,7 @@ func generateOverworldChunk(_ g: WorldGen, _ cx: Int) -> Chunk {
 	}
 	func isTree(_ x: Int) -> Bool {
 		let c: Col = colAt(x)
-		let d: Double = g.treeDensity(c.biome, c.h)
+		let d: Double = g.treeDensity(c.biome, c.h, x)
 		if d <= 0 { return false }
 		if hash2(x, 3, g.seed &+ 99) >= d { return false }
 		if c.h > sea - 1 && c.biome != .swamp { return false }
@@ -6284,9 +6407,11 @@ func generateOverworldChunk(_ g: WorldGen, _ cx: Int) -> Chunk {
 				}
 			}
 		}
-		// trees: origin at x, drawn clipped into this chunk
+		// trees: origin at x, drawn clipped into this chunk; four columns apart (from generator 6
+		// three, except the broad jungle trees)
 		if !isTree(x) { continue }
-		if isTree(x - 1) || isTree(x - 2) || isTree(x - 3) { continue }
+		if isTree(x - 1) || isTree(x - 2) { continue }
+		if (g.genVersion < 6 || c.biome == .jungle) && isTree(x - 3) { continue }
 		if abs(colAt(x - 1).h - colAt(x + 1).h) > 1 { continue }
 		let tr: Double = hash2(x, 4, g.seed &+ 98)
 		let gy: Int = c.h
@@ -6558,28 +6683,31 @@ struct GenSampler {
 	let oreSalt: UnsafeMutablePointer<UInt64>
 	let oreTile: UnsafeMutablePointer<UInt8>
 	let nOre: Int
+	/// the ore table of the world being generated (see WorldGen.oreTable)
+	let rules: [OreRule]
 
 	init(_ g: WorldGen) {
 		seed = g.seed
 		H = WorldGen.H
-		nOre = oreRules.count
+		rules = g.oreTable
+		nOre = rules.count
 		region = UnsafeMutablePointer<Double>.allocate(capacity: H)
 		tunnel = UnsafeMutablePointer<Double>.allocate(capacity: H)
 		width = UnsafeMutablePointer<Double>.allocate(capacity: H)
 		cham = UnsafeMutablePointer<Double>.allocate(capacity: H)
 		shaft = UnsafeMutablePointer<Double>.allocate(capacity: H)
-		ores = UnsafeMutablePointer<Double>.allocate(capacity: H * oreRules.count)
-		oreLo = UnsafeMutablePointer<Int>.allocate(capacity: oreRules.count)
-		oreHi = UnsafeMutablePointer<Int>.allocate(capacity: oreRules.count)
-		oreThr = UnsafeMutablePointer<Double>.allocate(capacity: oreRules.count)
-		oreP = UnsafeMutablePointer<Double>.allocate(capacity: oreRules.count)
-		oreSalt = UnsafeMutablePointer<UInt64>.allocate(capacity: oreRules.count)
-		oreTile = UnsafeMutablePointer<UInt8>.allocate(capacity: oreRules.count)
-		for k in 0..<oreRules.count {
-			oreP[k] = oreRules[k].p
-			oreSalt[k] = oreRules[k].salt
-			oreTile[k] = oreRules[k].tile.rawValue
-			oreThr[k] = oreRules[k].thr
+		ores = UnsafeMutablePointer<Double>.allocate(capacity: H * rules.count)
+		oreLo = UnsafeMutablePointer<Int>.allocate(capacity: rules.count)
+		oreHi = UnsafeMutablePointer<Int>.allocate(capacity: rules.count)
+		oreThr = UnsafeMutablePointer<Double>.allocate(capacity: rules.count)
+		oreP = UnsafeMutablePointer<Double>.allocate(capacity: rules.count)
+		oreSalt = UnsafeMutablePointer<UInt64>.allocate(capacity: rules.count)
+		oreTile = UnsafeMutablePointer<UInt8>.allocate(capacity: rules.count)
+		for k in 0..<rules.count {
+			oreP[k] = rules[k].p
+			oreSalt[k] = rules[k].salt
+			oreTile[k] = rules[k].tile.rawValue
+			oreThr[k] = rules[k].thr
 			oreLo[k] = 0
 			oreHi[k] = -1
 		}
@@ -6609,10 +6737,10 @@ struct GenSampler {
 		if caves { startCaves(cx, h) }
 		var k: Int = 0
 		while k < nOre {
-			let lo: Int = max(oreRules[k].minY, h + 9)
-			var hi: Int = min(oreRules[k].maxY, H - 6)
+			let lo: Int = max(rules[k].minY, h + 9)
+			var hi: Int = min(rules[k].maxY, H - 6)
 			// a regional ore is missing from this column altogether outside its region
-			if oreRules[k].region > 0 && oreRegion(cx, oreSalt[k], seed) < oreRules[k].region { hi = lo - 1 }
+			if rules[k].region > 0 && oreRegion(cx, oreSalt[k], seed) < rules[k].region { hi = lo - 1 }
 			oreLo[k] = lo
 			oreHi[k] = hi
 			if hi >= lo { fill(ores + k * H, seed &+ oreSalt[k], fx * 0.22, 0.22, lo, hi) }
@@ -6667,7 +6795,7 @@ struct GenSampler {
 			biasBiome = biome.rawValue
 			var k: Int = 0
 			while k < nOre {
-				oreThr[k] = oreRules[k].thr - oreBias(biome, oreRules[k].tile)
+				oreThr[k] = rules[k].thr - oreBias(biome, rules[k].tile)
 				k += 1
 			}
 		}
@@ -7431,7 +7559,16 @@ extension WorldGen {
 						var clear: Bool = true
 						var j: Int = 0
 						while j <= 16 && clear { clear = caveMouthClear(px + d * j); j += 4 }
-						if !clear { result = (k, false); break }
+						if !clear {
+							// generator 6: the passage stops short enough that its roof keeps four rows of
+							// ground over it, even where the land drops away just there
+							var kk: Int = k
+							if genVersion >= 6 {
+								while kk > 0 && floorY - kk - 4 <= col(sx + d * kk).h + 3 { kk -= 1 }
+							}
+							result = (kk, false)
+							break
+						}
 					}
 					if fk <= h { result = (k, true); break }
 				}
@@ -9198,8 +9335,17 @@ final class World {
 	func supports(_ below: Tile, _ t: Tile) -> Bool {
 		switch t {
 		case .wheat1, .wheat2, .wheat3, .carrot1, .carrot2, .carrot3: return below == .farmland
+		case .sapling: return isSoil(below)
 		case .doorClosed, .doorOpen: return below.solid || below == .doorClosed || below == .doorOpen
 		default: return below.supportsThings || below == .platform
+		}
+	}
+
+	/// Ground a sapling takes root in
+	func isSoil(_ t: Tile) -> Bool {
+		switch t {
+		case .grass, .dirt, .farmland, .jungleGrass, .mossGrass, .dryGrass, .snow, .mud: return true
+		default: return false
 		}
 	}
 
@@ -9612,7 +9758,9 @@ final class LightMap {
 		return valid && x0 >= ox && y0 >= oy && x1 < ox + w && y1 < oy + h
 	}
 
-	func compute(_ world: World, _ nox: Int, _ noy: Int, _ nw: Int, _ nh: Int, _ skyLevel: Int, _ dyn: [(Int, Int, Int)]) {
+	/// Lights the window (nox, noy, nw, nh). `noteSeen` is false for a look at ground off the screen
+	/// (spawning): the screen's own light map still has to see the edits made since it last looked.
+	func compute(_ world: World, _ nox: Int, _ noy: Int, _ nw: Int, _ nh: Int, _ skyLevel: Int, _ dyn: [(Int, Int, Int)], noteSeen: Bool = true) {
 		ox = nox; oy = noy; w = nw; h = nh
 		let n: Int = w * h
 		if sky.count != n {
@@ -9739,13 +9887,15 @@ final class LightMap {
 		sky.withUnsafeMutableBufferPointer { p in propagate(p) }
 		blkBase = blk
 		applyDynamic(dyn)
-		Perf.shared.lightFull += 1
 		valid = true
 		skyUsed = skyLevel
 		dimUsed = world.dim.rawValue
 		stamp = world.version
 		layoutUsed = world.layoutVersion
-		world.editAny = false
+		if noteSeen {
+			Perf.shared.lightFull += 1
+			world.editAny = false
+		}
 	}
 
 	/// Re-lights only what moving light sources touch: starts from the cached tile light and floods
@@ -10265,6 +10415,8 @@ struct DropItem {
 	var age: Double = 0
 	var pickDelay: Double = 0.5
 	var onGround: Bool = false
+	/// thrown away by the player: it is not picked up again until the player has walked off from it
+	var heldBack: Bool = false
 }
 
 struct Particle {
@@ -10351,34 +10503,34 @@ func makeMobDef(_ k: MobKind) -> MobDef {
 	case .giraffe: return MobDef(name: "Giraffe", w: 1.6, h: 3.2, hp: 30, speed: 3.4, dmg: 0, behavior: .skittish)
 	case .frog: return MobDef(name: "Frog", w: 0.5, h: 0.4, hp: 3, speed: 2.0, dmg: 0, behavior: .skittish, jump: 9)
 	case .fish: return MobDef(name: "Fish", w: 0.7, h: 0.4, hp: 3, speed: 2.2, dmg: 0, behavior: .swimmer)
-	case .elephant: return MobDef(name: "Elephant", w: 2.8, h: 2.4, hp: 80, speed: 2.4, dmg: 16, behavior: .defensive, aggro: 10)
-	case .bear: return MobDef(name: "Brown Bear", w: 1.8, h: 1.2, hp: 42, speed: 2.8, dmg: 10, behavior: .defensive, aggro: 11)
-	case .grizzly: return MobDef(name: "Grizzly Bear", w: 2.0, h: 1.4, hp: 70, speed: 3.4, dmg: 16, behavior: .hostile, aggro: 12, hostile: true)
-	case .polarBear: return MobDef(name: "Polar Bear", w: 2.0, h: 1.4, hp: 64, speed: 3.2, dmg: 15, behavior: .hostile, aggro: 12, hostile: true)
-	case .tiger: return MobDef(name: "Tiger", w: 1.7, h: 1.0, hp: 48, speed: 4.6, dmg: 14, behavior: .hostile, aggro: 14, jump: 15, hostile: true)
-	case .wolf: return MobDef(name: "Wolf", w: 1.2, h: 0.9, hp: 24, speed: 4.0, dmg: 6, behavior: .defensive, aggro: 11, jump: 14)
+	case .elephant: return MobDef(name: "Elephant", w: 2.8, h: 2.4, hp: 80, speed: 2.4, dmg: 7, behavior: .defensive, aggro: 10)
+	case .bear: return MobDef(name: "Brown Bear", w: 1.8, h: 1.2, hp: 42, speed: 2.8, dmg: 5, behavior: .defensive, aggro: 11)
+	case .grizzly: return MobDef(name: "Grizzly Bear", w: 2.0, h: 1.4, hp: 70, speed: 3.4, dmg: 7, behavior: .hostile, aggro: 12, hostile: true)
+	case .polarBear: return MobDef(name: "Polar Bear", w: 2.0, h: 1.4, hp: 64, speed: 3.2, dmg: 7, behavior: .hostile, aggro: 12, hostile: true)
+	case .tiger: return MobDef(name: "Tiger", w: 1.7, h: 1.0, hp: 48, speed: 4.6, dmg: 6, behavior: .hostile, aggro: 14, jump: 15, hostile: true)
+	case .wolf: return MobDef(name: "Wolf", w: 1.2, h: 0.9, hp: 24, speed: 4.0, dmg: 3, behavior: .defensive, aggro: 11, jump: 14)
 	case .cat: return MobDef(name: "Cat", w: 0.7, h: 0.6, hp: 10, speed: 3.0, dmg: 0, behavior: .skittish, jump: 13)
-	case .zombie: return MobDef(name: "Zombie", w: 0.7, h: 1.7, hp: 30, speed: 1.8, dmg: 8, behavior: .hostile, aggro: 16, hostile: true)
-	case .skeleton: return MobDef(name: "Skeleton Knight", w: 0.7, h: 1.8, hp: 38, speed: 2.1, dmg: 9, behavior: .hostile, aggro: 15, hostile: true)
-	case .slime: return MobDef(name: "Slime", w: 0.9, h: 0.7, hp: 18, speed: 2.6, dmg: 5, behavior: .hostile, aggro: 12, jump: 11, hostile: true)
-	case .bat: return MobDef(name: "Cave Bat", w: 0.6, h: 0.4, hp: 6, speed: 4.2, dmg: 4, behavior: .flyer, flying: true, aggro: 12, hostile: true)
-	case .scorpion: return MobDef(name: "Scorpion", w: 1.2, h: 0.6, hp: 26, speed: 2.6, dmg: 8, behavior: .hostile, aggro: 11, hostile: true)
-	case .wraith: return MobDef(name: "Wraith", w: 0.9, h: 1.5, hp: 44, speed: 2.8, dmg: 12, behavior: .flyer, flying: true, aggro: 18, hostile: true)
+	case .zombie: return MobDef(name: "Zombie", w: 0.7, h: 1.7, hp: 30, speed: 1.8, dmg: 4, behavior: .hostile, aggro: 16, hostile: true)
+	case .skeleton: return MobDef(name: "Skeleton Knight", w: 0.7, h: 1.8, hp: 38, speed: 2.1, dmg: 5, behavior: .hostile, aggro: 15, hostile: true)
+	case .slime: return MobDef(name: "Slime", w: 0.9, h: 0.7, hp: 18, speed: 2.6, dmg: 3, behavior: .hostile, aggro: 12, jump: 11, hostile: true)
+	case .bat: return MobDef(name: "Cave Bat", w: 0.6, h: 0.4, hp: 6, speed: 4.2, dmg: 2, behavior: .flyer, flying: true, aggro: 12, hostile: true)
+	case .scorpion: return MobDef(name: "Scorpion", w: 1.2, h: 0.6, hp: 26, speed: 2.6, dmg: 4, behavior: .hostile, aggro: 11, hostile: true)
+	case .wraith: return MobDef(name: "Wraith", w: 0.9, h: 1.5, hp: 44, speed: 2.8, dmg: 6, behavior: .flyer, flying: true, aggro: 18, hostile: true)
 	case .villager: return MobDef(name: "Villager", w: 0.7, h: 1.7, hp: 20, speed: 1.4, dmg: 0, behavior: .passive)  // retired: never spawns
-	case .pirate: return MobDef(name: "Pirate", w: 0.7, h: 1.8, hp: 48, speed: 2.5, dmg: 11, behavior: .hostile, aggro: 20, hostile: true)
-	case .pirateGunner: return MobDef(name: "Pirate Gunner", w: 0.7, h: 1.8, hp: 40, speed: 1.9, dmg: 9, behavior: .ranged, aggro: 20, hostile: true)
-	case .pirateCaptain: return MobDef(name: "Pirate Captain", w: 0.8, h: 1.9, hp: 140, speed: 2.5, dmg: 15, behavior: .hostile, aggro: 22, hostile: true)
-	case .imp: return MobDef(name: "Umbral Imp", w: 0.7, h: 1.5, hp: 34, speed: 2.6, dmg: 10, behavior: .ranged, aggro: 18, hostile: true)
-	case .emberSlime: return MobDef(name: "Ember Slime", w: 1.0, h: 0.8, hp: 36, speed: 2.8, dmg: 9, behavior: .hostile, aggro: 12, jump: 12, hostile: true)
-	case .cinderBat: return MobDef(name: "Cinder Bat", w: 0.6, h: 0.4, hp: 14, speed: 4.6, dmg: 7, behavior: .flyer, flying: true, aggro: 14, hostile: true)
-	case .bearBoss: return MobDef(name: "Ursavor, Warden of the Gate", w: 5.2, h: 3.9, hp: 900, speed: 3.0, dmg: 22, behavior: .boss, aggro: 60, hostile: true)
-	case .rex: return MobDef(name: "Tyrannax the Bonecrown", w: 7.0, h: 4.4, hp: 1400, speed: 3.4, dmg: 30, behavior: .boss, aggro: 60, hostile: true)
-	case .crawler: return MobDef(name: "Cave Crawler", w: 1.1, h: 0.6, hp: 22, speed: 4.4, dmg: 7, behavior: .hostile, aggro: 13, jump: 11.5, hostile: true)
-	case .golem: return MobDef(name: "Stone Golem", w: 1.5, h: 2.2, hp: 150, speed: 1.15, dmg: 16, behavior: .hostile, aggro: 12, jump: 9, hostile: true)
-	case .archer: return MobDef(name: "Skeleton Archer", w: 0.7, h: 1.8, hp: 26, speed: 2.3, dmg: 7, behavior: .ranged, aggro: 20, hostile: true)
-	case .sentinel: return MobDef(name: "Crystal Sentinel", w: 1.4, h: 2.0, hp: 320, speed: 3.0, dmg: 12, behavior: .boss, flying: true, aggro: 30, hostile: true)
-	case .mimic: return MobDef(name: "Mimic", w: 1.0, h: 0.95, hp: 90, speed: 3.2, dmg: 13, behavior: .hostile, aggro: 16, jump: 12, hostile: true)
-	case .warden: return MobDef(name: "The Hollow Warden", w: 3.0, h: 4.6, hp: 2200, speed: 2.6, dmg: 26, behavior: .boss, flying: true, aggro: 60, hostile: true)
+	case .pirate: return MobDef(name: "Pirate", w: 0.7, h: 1.8, hp: 48, speed: 2.5, dmg: 6, behavior: .hostile, aggro: 20, hostile: true)
+	case .pirateGunner: return MobDef(name: "Pirate Gunner", w: 0.7, h: 1.8, hp: 40, speed: 1.9, dmg: 5, behavior: .ranged, aggro: 20, hostile: true)
+	case .pirateCaptain: return MobDef(name: "Pirate Captain", w: 0.8, h: 1.9, hp: 140, speed: 2.5, dmg: 8, behavior: .hostile, aggro: 22, hostile: true)
+	case .imp: return MobDef(name: "Umbral Imp", w: 0.7, h: 1.5, hp: 34, speed: 2.6, dmg: 5, behavior: .ranged, aggro: 18, hostile: true)
+	case .emberSlime: return MobDef(name: "Ember Slime", w: 1.0, h: 0.8, hp: 36, speed: 2.8, dmg: 5, behavior: .hostile, aggro: 12, jump: 12, hostile: true)
+	case .cinderBat: return MobDef(name: "Cinder Bat", w: 0.6, h: 0.4, hp: 14, speed: 4.6, dmg: 4, behavior: .flyer, flying: true, aggro: 14, hostile: true)
+	case .bearBoss: return MobDef(name: "Ursavor, Warden of the Gate", w: 5.2, h: 3.9, hp: 900, speed: 3.0, dmg: 10, behavior: .boss, aggro: 60, hostile: true)
+	case .rex: return MobDef(name: "Tyrannax the Bonecrown", w: 7.0, h: 4.4, hp: 1400, speed: 3.4, dmg: 13, behavior: .boss, aggro: 60, hostile: true)
+	case .crawler: return MobDef(name: "Cave Crawler", w: 1.1, h: 0.6, hp: 22, speed: 4.4, dmg: 4, behavior: .hostile, aggro: 13, jump: 11.5, hostile: true)
+	case .golem: return MobDef(name: "Stone Golem", w: 1.5, h: 2.2, hp: 150, speed: 1.15, dmg: 8, behavior: .hostile, aggro: 12, jump: 9, hostile: true)
+	case .archer: return MobDef(name: "Bow Zombie", w: 0.7, h: 1.7, hp: 30, speed: 2.3, dmg: 4, behavior: .ranged, aggro: 20, hostile: true)
+	case .sentinel: return MobDef(name: "Crystal Sentinel", w: 1.4, h: 2.0, hp: 320, speed: 3.0, dmg: 7, behavior: .boss, flying: true, aggro: 30, hostile: true)
+	case .mimic: return MobDef(name: "Mimic", w: 1.0, h: 0.95, hp: 90, speed: 3.2, dmg: 7, behavior: .hostile, aggro: 16, jump: 12, hostile: true)
+	case .warden: return MobDef(name: "The Hollow Warden", w: 3.0, h: 4.6, hp: 2200, speed: 2.6, dmg: 11, behavior: .boss, flying: true, aggro: 60, hostile: true)
 	case .custom: return MobDef(name: "Custom Creature", w: 0.8, h: 1.6, hp: 20, speed: 2, dmg: 4, behavior: .hostile, hostile: true)
 	}
 }
@@ -10430,7 +10582,7 @@ func mobDrops(_ k: MobKind, _ rng: inout RNG, _ sheared: Bool) -> [Stack] {
 	case .golem:
 		add(.block(.stone), 4, 8, 1.0); add(.mat(.ironOre), 1, 3, 0.6); add(.mat(.crystalShard), 1, 2, 0.35)
 		add(.mat(.relicFragment), 1, 1, 0.1)
-	case .archer: add(.mat(.bone), 1, 2, 0.9); add(.ammo(.arrow), 3, 8, 0.8); add(.bow, 1, 1, 0.05)
+	case .archer: add(.food(.rawMeat), 0, 1, 0.3); add(.mat(.string), 0, 2, 0.4); add(.ammo(.arrow), 3, 8, 0.8); add(.bow, 1, 1, 0.05)
 	case .sentinel:
 		add(.mat(.crystalShard), 8, 14, 1.0); add(.mat(.diamond), 2, 4, 1.0); add(.block(.glowCrystal), 4, 8, 1.0)
 		add(.mat(.relicFragment), 2, 3, 1.0); add(.gear(.headlamp), 1, 1, 0.35)
@@ -11169,6 +11321,8 @@ struct Settings: Codable {
 	/// tiles the player can move before the camera starts to follow
 	var camDeadZone: Double = 0.8
 	var camLookAhead: Bool = true
+	/// the camera stays on the player: no dead zone, no look-ahead, a quick smooth follow
+	var camDirect: Bool = false
 	var shakeOn: Bool = true
 	var shakeIntensity: Double = 0.5
 	var showTrajectory: Bool = true
@@ -11233,6 +11387,7 @@ struct Settings: Codable {
 		camFollow = d.camFollow
 		camDeadZone = d.camDeadZone
 		camLookAhead = d.camLookAhead
+		camDirect = d.camDirect
 		shakeOn = d.shakeOn
 		shakeIntensity = d.shakeIntensity
 		tilePx = d.tilePx
@@ -11257,6 +11412,7 @@ struct Settings: Codable {
 		camFollow = (try? c.decodeIfPresent(Double.self, forKey: .camFollow)) ?? 0.55
 		camDeadZone = (try? c.decodeIfPresent(Double.self, forKey: .camDeadZone)) ?? 0.8
 		camLookAhead = (try? c.decodeIfPresent(Bool.self, forKey: .camLookAhead)) ?? true
+		camDirect = (try? c.decodeIfPresent(Bool.self, forKey: .camDirect)) ?? false
 		shakeOn = (try? c.decodeIfPresent(Bool.self, forKey: .shakeOn)) ?? true
 		shakeIntensity = (try? c.decodeIfPresent(Double.self, forKey: .shakeIntensity)) ?? 0.5
 		showTrajectory = (try? c.decodeIfPresent(Bool.self, forKey: .showTrajectory)) ?? true
@@ -11453,6 +11609,8 @@ final class Game: ObservableObject, @unchecked Sendable {
 	var mobs: [Mob] = []
 	var projectiles: [Projectile] = []
 	var drops: [DropItem] = []
+	/// doors the player walked through, closing behind them (see updateWalkDoors)
+	var walkDoors: [WalkDoor] = []
 	var particles: [Particle] = []
 	var floats: [FloatText] = []
 	var vehicles: [Vehicle] = []
@@ -11617,6 +11775,8 @@ final class Game: ObservableObject, @unchecked Sendable {
 
 	// lighting
 	var light: LightMap = LightMap()
+	/// the light around a spot a creature might appear at (see glowForSpawn)
+	let spawnLight: LightMap = LightMap()
 	var lightDark: [UInt32] = []
 	var lightGlow: [UInt32] = []
 	var lightRev: Int = 0
@@ -11655,7 +11815,10 @@ final class Game: ObservableObject, @unchecked Sendable {
 	var tickMs: Double = 0
 	var tickWorstMs: Double = 0
 
-	init(mode: GameMode, infinite: Bool, seed: UInt64, settings: Settings, genVersion: Int = WorldGen.currentVersion, options: WorldOptions = .standard) {
+	/// A new world, with the land around its spawn made. A world being loaded passes `loadSpawn: false`:
+	/// its land comes from the save, around where the player was (making the spawn's land first only
+	/// to throw it away cost a dozen chunks every time a world was loaded).
+	init(mode: GameMode, infinite: Bool, seed: UInt64, settings: Settings, genVersion: Int = WorldGen.currentVersion, options: WorldOptions = .standard, loadSpawn: Bool = true) {
 		self.mode = mode
 		self.settings = settings
 		self.seedValue = seed
@@ -11663,9 +11826,11 @@ final class Game: ObservableObject, @unchecked Sendable {
 		self.world = World(gen: gen)
 		self.tilePx = settings.tilePx
 		self.pb = Body(x: Double(gen.spawnX) + 0.5, y: 100, w: 0.7, h: 1.8)
-		world.loadAround(centerX: gen.spawnX, radius: 6)
-		let sy: Int = world.surfaceY(gen.spawnX)
-		pb.y = Double(sy)
+		if loadSpawn {
+			world.loadAround(centerX: gen.spawnX, radius: 6)
+			let sy: Int = world.surfaceY(gen.spawnX)
+			pb.y = Double(sy)
+		}
 		spawnX = pb.x
 		spawnY = pb.y
 		camX = pb.x
@@ -11741,9 +11906,11 @@ final class Game: ObservableObject, @unchecked Sendable {
 		bumpHUD()
 	}
 
-	func spawnDrop(_ s: Stack, _ x: Double, _ y: Double, _ vx: Double, _ vy: Double) {
+	func spawnDrop(_ s: Stack, _ x: Double, _ y: Double, _ vx: Double, _ vy: Double, heldBack: Bool = false) {
 		if s.count <= 0 { return }
-		drops.append(DropItem(stack: s, x: x, y: y, vx: vx, vy: vy))
+		var d: DropItem = DropItem(stack: s, x: x, y: y, vx: vx, vy: vy)
+		d.heldBack = heldBack
+		drops.append(d)
 	}
 
 	func spawnParticles(_ x: Double, _ y: Double, _ color: UInt32, _ n: Int, _ speed: Double, _ life: Double = 0.6, _ grav: Double = 18) {
@@ -12005,6 +12172,7 @@ extension Game {
 			pb.x += dk.vx * dt
 		}
 		doorTouch(ix)
+		updateWalkDoors(dt)
 		if !pb.onGround && pb.vy > 0 { fallPeak = max(fallPeak, pb.vy) }
 		if pb.onGround && wasAir {
 			if fallPeak > 20.0 && !swimming && mode != .creative && !godMode {
@@ -12146,7 +12314,7 @@ extension Game {
 		if dead || godMode || mode == .creative { return }
 		if invuln > 0 && !ignoreArmor { return }
 		var d: Double = dmg
-		if !ignoreArmor { d *= (1.0 - min(0.75, totalDefense * 0.045)) }
+		if !ignoreArmor { d *= 1.0 - armorShare(totalDefense) }
 		d = max(1.0, d.rounded())
 		hp -= d
 		sfx(.hurt, 0.8)
@@ -12161,6 +12329,11 @@ extension Game {
 		addShake(0.2)
 		bumpHUD()
 		if hp <= 0 { die() }
+	}
+
+	/// The share of a blow that armour takes: 4% a point, at most 80% (never invincible)
+	func armorShare(_ defense: Double) -> Double {
+		return min(0.8, max(0, defense) * 0.04)
 	}
 
 	func heal(_ amount: Double) {
@@ -12213,7 +12386,7 @@ extension Game {
 		let st: Settings = settings
 		// look ahead: further when driving fast, eased in and out
 		var leadTarget: Double = 0
-		if st.camLookAhead {
+		if st.camLookAhead && !st.camDirect {
 			if let v = inVehicle {
 				leadTarget = clampD(v.vx * 0.35, -6.0, 6.0)
 			} else if abs(pb.vx) > 1.0 {
@@ -12224,7 +12397,7 @@ extension Game {
 		let fx: Double = pb.x + camLead
 		let fy: Double = pb.y - 1.6
 		// the target only moves once the player leaves the dead zone around it
-		let dz: Double = clampD(st.camDeadZone, 0, 4)
+		let dz: Double = st.camDirect ? 0 : clampD(st.camDeadZone, 0, 4)
 		if fx > camTX + dz { camTX = fx - dz } else if fx < camTX - dz { camTX = fx + dz }
 		let dzy: Double = dz * 0.75
 		if fy > camTY + dzy { camTY = fy - dzy } else if fy < camTY - dzy { camTY = fy + dzy }
@@ -12233,7 +12406,7 @@ extension Game {
 			camX = camTX
 			camY = camTY
 		} else {
-			let rate: Double = 2.5 + clampD(st.camFollow, 0, 1) * 11.5
+			let rate: Double = st.camDirect ? 12.0 : 2.5 + clampD(st.camFollow, 0, 1) * 11.5
 			let k: Double = 1.0 - exp(-rate * dt)
 			camX += (camTX - camX) * k
 			camY += (camTY - camY) * k
@@ -12405,6 +12578,7 @@ extension Game {
 			case .wheat2: if Double.random(in: 0...1) < grow { world.set(x, y, .wheat3) }
 			case .carrot1: if Double.random(in: 0...1) < grow { world.set(x, y, .carrot2) }
 			case .carrot2: if Double.random(in: 0...1) < grow { world.set(x, y, .carrot3) }
+			case .sapling: if Double.random(in: 0...1) < grow * 0.4 { growSapling(x, y) }
 			case .dirt:
 				if world.dim == .overworld && y < world.skyTop(x) + 1 && world.tile(x, y - 1) == .air {
 					let a: Tile = world.tile(x - 1, y)
@@ -12418,6 +12592,85 @@ extension Game {
 		}
 		updateLeafDecay(dt)
 		// lantern/torch/crop support is checked when neighbours change (see breakTile)
+	}
+
+	/// Open air or a wild plant a growing tree may take the place of (never a torch or anything built)
+	func treeRoom(_ t: Tile) -> Bool {
+		return t == .air || t == .tallGrass || t == .flowerR || t == .flowerY || t == .deadBush
+	}
+
+	/// A sapling grows into a tree that suits the land it stands in: a pine in snow and on mountains, a
+	/// tall jungle tree, a flat-topped savanna tree, a low swamp tree, a birch or an oak elsewhere (in a
+	/// custom dimension, a tree of its region's own log and leaves). It grows as tall as the room above
+	/// it allows, and waits while there is not room for its smallest kind. True when it grew.
+	@discardableResult
+	func growSapling(_ x: Int, _ y: Int) -> Bool {
+		if world.tile(x, y) != .sapling || !world.isSoil(world.tile(x, y + 1)) { return false }
+		let r: Double = Double.random(in: 0..<1)
+		var log: Tile = .log
+		var leaves: Tile = .leaves
+		// 0 oak, 1 birch, 2 pine, 3 jungle, 4 savanna, 5 swamp
+		var shape: Int = 0
+		if let d = customDim {
+			let z: ModDimZoneRT = d.zones[d.zoneIndex(x)]
+			log = z.log
+			leaves = z.leaves
+		} else {
+			switch biomeAt(Double(x)) {
+			case .tundra, .mountain: shape = 2; leaves = .pineLeaves
+			case .jungle: shape = 3; log = .jungleLog; leaves = .jungleLeaves
+			case .savanna: shape = 4
+			case .swamp: shape = 5; leaves = .jungleLeaves
+			default: if r < 0.3 { shape = 1; log = .birchLog; leaves = .birchLeaves }
+			}
+		}
+		let wants: [Int] = [4 + Int(r * 4.0), 6 + Int(r * 4.0), 6 + Int(r * 5.0), 9 + Int(r * 6.0), 5 + Int(r * 3.0), 4 + Int(r * 2.0)]
+		let least: [Int] = [4, 5, 6, 8, 5, 4]
+		// free cells straight up from the sapling (its own cell counts): the trunk and two above it
+		var room: Int = 1
+		while room < wants[shape] + 2 && treeRoom(world.tile(x, y - room)) { room += 1 }
+		let th: Int = min(wants[shape], room - 2)
+		if th < least[shape] { return false }
+		let gy: Int = y + 1
+		for k in 1...th { world.set(x, gy - k, log) }
+		func leaf(_ lx: Int, _ ly: Int) {
+			if treeRoom(world.tile(lx, ly)) { world.set(lx, ly, leaves) }
+		}
+		let top: Int = gy - th
+		switch shape {
+		case 1:
+			for dy in -4...0 {
+				let w: Int = (dy == -4 || dy == 0) ? 1 : 2
+				for dx in -w...w { leaf(x + dx, top + dy) }
+			}
+			leaf(x, top - 5)
+		case 2:
+			var layer: Int = 0
+			while layer < th - 1 {
+				let w: Int = min(3, 1 + layer / 2)
+				for dx in -w...w { leaf(x + dx, top - 1 + layer) }
+				layer += 1
+			}
+			leaf(x, top - 2)
+		case 3:
+			for dy in -3...1 {
+				for dx in -4...4 where !(abs(dx) == 4 && abs(dy + 1) > 1) && abs(dx) + abs(dy + 1) <= 6 { leaf(x + dx, top + dy) }
+			}
+		case 4:
+			for dx in -4...4 { leaf(x + dx, top) }
+			for dx in -2...2 { leaf(x + dx, top - 1) }
+		case 5:
+			for dx in -3...3 {
+				leaf(x + dx, top)
+				if abs(dx) < 3 { leaf(x + dx, top - 1) }
+			}
+		default:
+			for dy in -3...1 {
+				for dx in -2...2 where !(abs(dx) == 2 && (dy == -3 || dy == 1)) { leaf(x + dx, top + dy) }
+			}
+		}
+		spawnParticles(Double(x) + 0.5, Double(top) + 0.5, 0x56A83F, 8, 3.0, 0.6, 10)
+		return true
 	}
 }
 
@@ -12486,9 +12739,29 @@ extension Game {
 		useWasHeld = false
 	}
 
+	/// A wild animal (bear, elephant, wolf, grizzly, polar bear, tiger, scorpion): neutral to the player
+	func isWildAnimal(_ k: MobKind) -> Bool {
+		switch k {
+		case .elephant, .bear, .wolf, .grizzly, .polarBear, .tiger, .scorpion: return true
+		default: return false
+		}
+	}
+
+	/// A wild hunter the player has hurt lately (it fights back for twelve seconds)
+	func wildProvoked(_ m: Mob) -> Bool {
+		return clock - m.lastHitByPlayer < 12.0
+	}
+
+	/// A creature that is out to hurt the player: monsters and enemies, and animals once angered
+	func isThreat(_ m: Mob) -> Bool {
+		if m.angry { return true }
+		if isWildAnimal(m.kind) { return wildProvoked(m) }
+		return m.def.hostile
+	}
+
 	/// a hostile (or angered) creature under or right next to a point
 	func hostileAt(_ wx: Double, _ wy: Double) -> Bool {
-		for m in mobsNear(wx - 4, wx + 4) where m.hp > 0 && !m.tame && (m.def.hostile || m.angry) {
+		for m in mobsNear(wx - 4, wx + 4) where m.hp > 0 && !m.tame && isThreat(m) {
 			if wx >= m.b.left - 0.4 && wx <= m.b.right + 0.4 && wy >= m.b.top - 0.4 && wy <= m.b.y + 0.4 { return true }
 		}
 		return false
@@ -12793,6 +13066,8 @@ extension Game {
 		case armor(Int)
 		case chest(Int)
 		case drop
+		/// creative mode: back to the creative menu
+		case trash
 	}
 
 	func stackAt(_ r: SlotRef) -> Stack? {
@@ -12803,7 +13078,7 @@ extension Game {
 			guard let p = openChest else { return nil }
 			let items: [Stack] = world.chestItems(p.x, p.y)
 			return i >= 0 && i < items.count ? items[i] : nil
-		case .drop: return nil
+		case .drop, .trash: return nil
 		}
 	}
 
@@ -12813,6 +13088,7 @@ extension Game {
 		case .armor(let i): tapArmorSlot(i)
 		case .chest(let i): if let p = openChest { chestTapSlot(p.x, p.y, i) }
 		case .drop: dropCarried()
+		case .trash: discardCarried()
 		}
 	}
 
@@ -12847,6 +13123,27 @@ extension Game {
 		bumpHUD()
 	}
 
+	/// Folds partial stacks together across the bag and hotbar
+	func stackAll() {
+		returnCarried()
+		let n: Int = inv.mergeStacks()
+		say(n > 0 ? "Stacks merged." : "Nothing to merge.", 1.2)
+		bumpHUD()
+	}
+
+	/// Creative mode: the held stack goes back to the creative menu (it leaves the bag). In survival it
+	/// is thrown away instead, as with DROP.
+	func discardCarried() {
+		if carry == nil { return }
+		if !isCreative {
+			dropCarried()
+			return
+		}
+		carry = nil
+		sfx(.tap, 0.5)
+		bumpHUD()
+	}
+
 	/// Moves every bag stack (not the hotbar) whose item the open chest already holds into that chest
 	func quickStack() {
 		guard let p = openChest else { return }
@@ -12878,7 +13175,7 @@ extension Game {
 
 	func dropCarried() {
 		if let c = carry {
-			spawnDrop(c, pb.x + Double(facing) * 0.8, pb.y - 1.2, Double(facing) * 4.0, -4.0)
+			spawnDrop(c, pb.x + Double(facing) * 0.8, pb.y - 1.2, Double(facing) * 4.0, -4.0, heldBack: true)
 			carry = nil
 			bumpHUD()
 		}
@@ -13296,10 +13593,12 @@ extension Game {
 			aimY = t.b.cy
 		}
 		if !pressed {
-			// held: nothing to do while the weapon recovers (this runs every frame), then swing only
-			// if something is actually in reach
+			// held: nothing to do while the weapon recovers (this runs every frame). Held on the attack
+			// stick it swings again as soon as the weapon is ready; a finger held on the world swings
+			// only while something is actually in reach
 			if useCD > 0 || strikeT > 0 { return }
-			if meleeCandidates(p).isEmpty { return }
+			let onStick: Bool = actState.held && !touchActive
+			if !onStick && meleeCandidates(p).isEmpty { return }
 		}
 		startMelee(it, target: target)
 	}
@@ -13331,7 +13630,7 @@ extension Game {
 			let reach: Double = boxDistance(m, shoulderX, shoulderY)
 			if reach > max(p.reach + 1.5, 4.0) { continue }
 			var d: Double = abs(aimX - m.b.x) + abs(aimY - m.b.cy)
-			if !(m.def.hostile || m.angry) { d += 2.0 }
+			if !isThreat(m) { d += 2.0 }
 			if d < bd { bd = d; best = m }
 		}
 		return best
@@ -13434,8 +13733,10 @@ extension Game {
 		switch t {
 		case .tallGrass:
 			if r < 0.14 { out.append(Stack(item: .mat(.seeds), count: 1)) }
-		case .leaves, .jungleLeaves:
-			if r < 0.05 { out.append(Stack(item: .food(.apple), count: 1)) }
+		case .leaves, .jungleLeaves, .birchLeaves, .pineLeaves:
+			if (t == .leaves || t == .jungleLeaves) && r < 0.05 { out.append(Stack(item: .food(.apple), count: 1)) }
+			// about one leaf block in twelve gives a sapling (a felled tree's leaves fall by themselves)
+			if Double.random(in: 0...1) < 0.085 { out.append(Stack(item: .block(.sapling), count: 1)) }
 		case .wheat3:
 			out.append(Stack(item: .food(.wheat), count: 1 + Int.random(in: 0...1)))
 			out.append(Stack(item: .mat(.seeds), count: 1 + Int.random(in: 0...2)))
@@ -14332,7 +14633,7 @@ extension Game {
 		var bs: Double = 1e9
 		for m in mobsNear(ox - range - 4, ox + range + 4) {
 			if m.hp <= 0 || m.removed || m.tame || m.downed { continue }
-			let foe: Bool = m.def.hostile || m.angry
+			let foe: Bool = isThreat(m)
 			if !foe && !weapon { continue }
 			let d: Double = boxDistance(m, ox, oy)
 			if d > range { continue }
@@ -15006,23 +15307,20 @@ extension Game {
 					else { contactHurt(m, d.dmg) }
 				}
 			} else {
+				// animals are neutral: only a blow from the player makes them fight (see hurtMob)
 				wander(m, dt, 0.5)
-				// territorial bears and elephants warn when the player is very close
-				if m.kind != .wolf && dist < 2.8 && abs(dyP) < 2.0 && !peaceful && Double.random(in: 0...1) < 0.01 { m.angry = true; m.t3 = 8.0 }
-				if m.kind == .wolf && isNight && near && !peaceful && Double.random(in: 0...1) < 0.002 { m.angry = true; m.t3 = 12.0 }
 			}
 			stepMob(m, dt)
 		case .grizzly, .polarBear, .tiger, .scorpion:
 			if m.drinkT > 0 { m.drinkT -= dt }
-			// a predator busy with prey, or full after a meal, leaves a bystander alone unless the player
-			// comes right up to it or hits it
-			let provoked: Bool = clock - m.lastHitByPlayer < 8 || dist < 3.5
-			let calm: Bool = (m.preyID != 0 || m.poseT > 0 || m.drinkT > 0) && !provoked
-			if m.kind != .scorpion && (!(near && !peaceful) || calm) && hunt(m, dt, m.drinkT <= 0) {
+			// wild animals hunt their prey but leave the player alone, unless the player hurts them:
+			// then they fight back for a while
+			let provoked: Bool = wildProvoked(m)
+			if !(provoked && !peaceful) && m.kind != .scorpion && hunt(m, dt, m.drinkT <= 0) {
 				// hunting, or resting after a kill
-			} else if calm {
+			} else if !(provoked && !peaceful) {
 				wander(m, dt, 0.4)
-			} else if near && !peaceful {
+			} else if !dead {
 				chase(m, pb.x, 1.0, dt)
 				if m.kind == .tiger && m.b.onGround && dist < 6.5 && dist > 2.0 && m.cd <= 0.4 && Double.random(in: 0...1) < 0.04 {
 					m.b.vy = -11.5
@@ -15571,12 +15869,22 @@ extension Game {
 		if spawnLog.count < 40 || spawnLog[s] != nil { spawnLog[s, default: 0] += 1 }
 	}
 
-	/// Monsters keep away from strong light: a torch, lantern, campfire or lit lamp within 7 blocks
-	func litSpot(_ x: Int, _ y: Int) -> Bool {
-		for ty in (y - 7)...(y + 2) {
-			for tx in (x - 7)...(x + 7) where Tile.lightTable[i8(world.tile(tx, ty).rawValue)] >= 9 { return true }
+	/// The most lamplight a monster may come out in (0...15). A torch (12) keeps them off the ground
+	/// about seven blocks round it in the open, less where walls or ground stand in the way.
+	static let spawnGlowMax: Int = 4
+
+	/// The light at a creature's two cells above its feet at (x, feetY), worked out by the game's own
+	/// light flood over the ground around it, on screen or not: (sky light, light of glowing blocks).
+	/// Torches, lanterns, campfires, lamps, glowing mod blocks and every other light-giving block count,
+	/// fading with distance and held back by walls and ground; a torch in the player's hand does not.
+	func lightForSpawn(_ x: Int, _ feetY: Int) -> (Int, Int) {
+		if !spawnLight.covers(x - 1, feetY - 3, x + 1, feetY) || spawnLight.stamp != world.version || spawnLight.skyUsed != skyLevel || spawnLight.dimUsed != world.dim.rawValue {
+			let r: Int = 18
+			spawnLight.compute(world, x - r, feetY - r, r * 2 + 1, r * 2 + 1, skyLevel, [], noteSeen: false)
 		}
-		return false
+		let a: (Int, Int) = spawnLight.level(x, feetY - 1)
+		let b: (Int, Int) = spawnLight.level(x, feetY - 2)
+		return (max(a.0, b.0), max(a.1, b.1))
 	}
 
 	/// Ground monsters can come out on: earth, sand, snow and rock, never planks, brick, glass or other
@@ -15667,7 +15975,9 @@ extension Game {
 			}
 			if !found { spawnNote("no floor"); return }
 			if place == .cave && world.isSkyExposed(ix, y) { spawnNote("open sky"); return }
-			if light.valid && light.covers(ix, y, ix, y) && light.brightness(ix, y) > 6 && !fullBright { spawnNote("too bright"); return }
+			// lamplight, or daylight reaching in from a cave mouth
+			let lit: (Int, Int) = lightForSpawn(ix, y + 1)
+			if lit.1 > Game.spawnGlowMax || lit.0 > 6 { spawnNote("too bright"); return }
 			sy = Double(y + 1)
 		}
 		let biome: Biome = biomeAt(Double(ix))
@@ -15679,7 +15989,7 @@ extension Game {
 		var monsterBlock: String = ""
 		if eff == .surface {
 			let gy: Int = Int(sy)
-			if litSpot(ix, gy - 1) { monsterBlock = "lit by a lamp" }
+			if lightForSpawn(ix, gy).1 > Game.spawnGlowMax { monsterBlock = "lit by a lamp" }
 			else if !naturalGround(world.tile(ix, gy)) { monsterBlock = "on a building" }
 			else if abs(sy - pb.y) > 30 { monsterBlock = "out of reach" }
 			else if monsterSpawnCD > 0 { monsterBlock = "pacing" }
@@ -15754,6 +16064,8 @@ extension Game {
 				y = Double(gyS)
 			}
 			if def.flying && eff != .ocean { y -= chosen.sky ? Double.random(in: 7...14) : Double.random(in: 1...3) }
+			// each monster of a group only comes out where it is dark enough itself
+			if monster && eff != .ocean && lightForSpawn(Int(floor(x)), Int(floor(y))).1 > Game.spawnGlowMax { continue }
 			if eff != .ocean && !spawnSpotClear(def, x, y) { continue }
 			var made1: Mob? = nil
 			if chosen.slot >= 0 { made1 = addCustomMob(chosen.slot, x, y) } else { made1 = addMob(chosen.kind, x, y) }
@@ -15803,6 +16115,8 @@ extension Game {
 	func hurtMob(_ m: Mob, _ dmg: Double, _ dirX: Double, _ knock: Double, _ byPlayer: Bool, heavy: Bool = false, crit: Bool = false) {
 		if m.hp <= 0 { return }
 		if m.kind == .rex && m.tame && byPlayer { return }
+		// a wild animal remembers being hurt by the player (it fights back, see wildProvoked)
+		if byPlayer { m.lastHitByPlayer = clock }
 		var d: Double = dmg
 		var kb: Double = knock
 		if m.blocking && m.kind == .skeleton && dirX != 0 && dirX * Double(m.dir) < 0 {
@@ -16190,8 +16504,10 @@ extension Game {
 			let dx: Double = px - d.x
 			let dy: Double = py - (d.y - 0.15)
 			let dist: Double = sqrt(dx * dx + dy * dy)
+			// a stack the player threw away waits until they have walked off from it
+			if d.heldBack && dist > 3.6 { d.heldBack = false }
 			var magnet: Bool = false
-			if !dead && d.pickDelay <= 0 && dist < 3.2 && inv.canFit(d.stack.item, 1) {
+			if !dead && d.pickDelay <= 0 && !d.heldBack && dist < 3.2 && inv.canFit(d.stack.item, 1) {
 				magnet = true
 				let k: Double = 16.0
 				b.vx = dx / max(dist, 0.1) * k * (1.0 + (3.2 - dist) * 0.3)
@@ -16212,7 +16528,7 @@ extension Game {
 			d.vx = b.vx
 			d.vy = b.vy
 			d.onGround = b.onGround
-			if !dead && d.pickDelay <= 0 && dist < 0.9 {
+			if !dead && d.pickDelay <= 0 && !d.heldBack && dist < 0.9 {
 				let left: Int = inv.add(d.stack.item, d.stack.count, extra: d.stack.extra, inf: d.stack.inf)
 				if left < d.stack.count {
 					if d.stack.item == .mat(.relicFragment) { journal.relics += d.stack.count - left }

@@ -253,8 +253,10 @@ func duel(_ kind: MobKind, _ dist: Double, secs: Double = 12, wall: Int = 0) -> 
         g.tick(1.0 / 60.0); t += 1.0 / 60.0
         if m.st == 3 { windup = true }
         if g.hp < lastHP {
+            // a 1-point tick is burning (a status effect), not a blow: it does not count for the gaps
+            let blow: Bool = lastHP - g.hp > 1.0
             dmg += lastHP - g.hp; hits += 1
-            minGap = min(minGap, t - last); last = t
+            if blow { minGap = min(minGap, t - last); last = t }
         }
         if g.hp < g.maxHP * 0.4 { g.hp = g.maxHP }
         lastHP = g.hp
@@ -263,7 +265,13 @@ func duel(_ kind: MobKind, _ dist: Double, secs: Double = 12, wall: Int = 0) -> 
     return (dmg, hits, minGap, windup, m, g)
 }
 
-for k in [MobKind.zombie, .skeleton, .slime, .archer, .crawler, .golem, .bat, .wraith, .imp, .emberSlime, .cinderBat, .pirate, .pirateGunner, .scorpion, .grizzly, .tiger] {
+// wild animals are neutral: they leave the player alone unless the player hurts them (the overhaul
+// suite checks that they fight back once hit)
+for k in [MobKind.scorpion, .grizzly, .tiger] {
+    let r = duel(k, 8)
+    check(r.0 == 0, "\(mobDef(k).name) 8 blocks away leaves the player alone (\(Int(r.0)) damage)")
+}
+for k in [MobKind.zombie, .skeleton, .slime, .archer, .crawler, .golem, .bat, .wraith, .imp, .emberSlime, .cinderBat, .pirate, .pirateGunner] {
     let r = duel(k, 8)
     check(r.0 > 0, "\(mobDef(k).name) 8 blocks away notices, closes in and hurts the player (\(Int(r.0)) damage in \(r.1) hits)")
     if r.1 > 1 { check(r.2 >= 0.5, "  ...with a pause between blows, never every frame (shortest gap \(f1(r.2)) s)") }

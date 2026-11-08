@@ -3030,23 +3030,41 @@ extension WorldRenderer {
 				ctx.fill(Path(ellipseIn: mkRect(bx - r * 0.3, by - r * 0.9, r * 1.4, r * 1.4)), with: .color(rgbColor(mixRGB(def.nightTop, def.skyTop, day)).opacity(0.85)))
 			}
 		}
-		// drifting motes
+		// drifting motes, each in its own 12-block cell of the world: they stay put as the camera moves
+		// (fireflies wander around their spot; embers, snow, ash and spores drift through their cell)
 		if def.ambient > 0 {
 			let cols: [UInt32] = [0, 0xFF8A3A, 0xF4F8FF, 0xD8F070, 0x8A8A8A, 0xB0E0A0]
 			let col: UInt32 = cols[clampI(def.ambient, 0, cols.count - 1)]
 			var path: Path = Path()
 			let rise: Double = def.ambient == 2 || def.ambient == 4 ? -1.0 : 1.0
-			var i: Int = 0
-			while i < 48 {
-				let sp: Double = 0.02 + hash2(i, 31, 3) * 0.04
-				let fx: Double = (hash2(i, 32, 3) + g.clock * sp * 0.4 + sin(g.clock * 0.7 + Double(i)) * 0.01).truncatingRemainder(dividingBy: 1.0)
-				var fy: Double = (hash2(i, 33, 3) - rise * g.clock * sp).truncatingRemainder(dividingBy: 1.0)
-				if fy < 0 { fy += 1.0 }
-				let s: Double = def.ambient == 3 ? 3.0 : 2.0
-				path.addRect(mkRect(fx * W, fy * H, s, s))
-				i += 1
+			let flies: Bool = def.ambient == 3
+			let cell: Double = 12.0
+			let v: View2D = View2D(tp: Double(g.tilePx), left: g.camX - W / Double(g.tilePx) * 0.5, top: g.camY - H / Double(g.tilePx) * 0.5, wTiles: W / Double(g.tilePx), hTiles: H / Double(g.tilePx))
+			let cx0: Int = Int(floor(v.left / cell)), cx1: Int = Int(floor((v.left + v.wTiles) / cell))
+			let cy0: Int = Int(floor(v.top / cell)), cy1: Int = Int(floor((v.top + v.hTiles) / cell))
+			for cy in cy0...max(cy0, cy1) {
+				for cx in cx0...max(cx0, cx1) {
+					for k in 0..<3 {
+						let id: Int = cx &* 7919 &+ cy &* 104729 &+ k
+						let sp: Double = 0.4 + hash2(id, 31, 3) * 0.8
+						var ox: Double = hash2(id, 32, 3) * cell
+						var oy: Double = hash2(id, 33, 3) * cell
+						if flies {
+							ox += sin(g.clock * 0.5 + Double(k) * 2.1) * 0.8
+							oy += sin(g.clock * 0.8 + Double(k) * 1.3) * 0.5
+						} else {
+							ox = (ox + sin(g.clock * 0.3 + Double(k)) * 0.6)
+							oy = (oy - rise * g.clock * sp).truncatingRemainder(dividingBy: cell)
+							if oy < 0 { oy += cell }
+						}
+						let wx: Double = Double(cx) * cell + ox
+						let wy: Double = Double(cy) * cell + oy
+						let s: Double = flies ? 3.0 : 2.0
+						path.addRect(mkRect(v.sx(wx), v.sy(wy), s, s))
+					}
+				}
 			}
-			let a: Double = def.ambient == 3 ? 0.5 + 0.5 * sin(g.clock * 3.0) : 0.75
+			let a: Double = flies ? 0.5 + 0.5 * sin(g.clock * 3.0) : 0.75
 			ctx.fill(path, with: .color(rgbColor(col).opacity(a)))
 		}
 	}
@@ -5403,6 +5421,11 @@ final class Sound {
 		if !v.isPlaying { v.play() }
 	}
 
+	/// Silences every loop at once: leaving a world (nothing sets their volumes any more after that)
+	func silenceLoops() {
+		for n in loopNodes { n.volume = 0 }
+	}
+
 	func setLoop(_ id: LoopID, _ volume: Double) {
 		guard running else { return }
 		let target: Float = enabled ? Float(max(0, min(1, volume))) * ambienceVolume : 0
@@ -6346,10 +6369,9 @@ extension Game {
 		let ix: Int = Int(floor(x))
 		let col: Col = gen.col(ix)
 		let cov: Double = coverAt(x)
-		let w0: Double = biomeWetness(gen.col(ix - 14).biome)
-		let w1: Double = biomeWetness(col.biome)
-		let w2: Double = biomeWetness(gen.col(ix + 14).biome)
-		let wetF: Double = (w0 + w1 * 2.0 + w2) * 0.25
+		// blended from one column to the next, so rain changes gradually over a biome border
+		let wa: Double = landWetness(ix)
+		let wetF: Double = wa + (landWetness(ix + 1) - wa) * (x - Double(ix))
 		L.chill = chillAt(y, col)
 		L.snow = L.chill >= 0.5
 		L.hot = col.biome == .desert || col.biome == .savanna || col.biome == .jungle
@@ -6377,6 +6399,14 @@ extension Game {
 		return L
 	}
 
+	/// How readily rain falls at column x: its biome's wetness, with the land 14 columns either side
+	func landWetness(_ x: Int) -> Double {
+		let w0: Double = biomeWetness(gen.col(x - 14).biome)
+		let w1: Double = biomeWetness(gen.col(x).biome)
+		let w2: Double = biomeWetness(gen.col(x + 14).biome)
+		return (w0 + w1 * 2.0 + w2) * 0.25
+	}
+
 	/// How hard a hurricane is felt at x: fully over the sea and at the coast, fading inland
 	func hurricaneReach(_ x: Double, _ h: HurricaneEvent) -> Double {
 		let inland: Double = (h.coastX - x) * h.side
@@ -6402,7 +6432,8 @@ extension Game {
 		if wxCellT < 0.5 { return }
 		let step: Double = wxCellT
 		wxCellT = 0
-		if !settings.weatherOn { return }
+		// the strips are the Overworld's ground: another dimension's weather never lies on them
+		if !settings.weatherOn || world.dim != .overworld { return }
 		let c0: Int = Int(floor(weatherX / groundCellW))
 		for c in (c0 - 4)...(c0 + 4) {
 			let cx: Double = (Double(c) + 0.5) * groundCellW
@@ -8934,23 +8965,39 @@ extension WorldRenderer {
 			ctx.fill(path, with: .color(Color(hex: 0xFF9A4A, alpha: 0.55)))
 			return
 		}
-		if g.dayFactor > 0.3 || g.weatherRain > 0.5 { return }
-		let b: Biome = g.biomeHere
-		if !(b == .forest || b == .plains || b == .swamp || b == .jungle) { return }
 		let tp: Double = v.tp
-		for i in 0..<14 {
-			let wx: Double = g.pb.x - 20.0 + hash2(i, 21, 9) * 40.0 + sin(g.clock * 0.4 + Double(i)) * 2.0
+		for f in fireflySpots(g, v) {
+			let x: Double = v.sx(f.0)
+			let y: Double = v.sy(f.1)
+			let blink: Double = f.2
+			fillOval(&ctx, mkRect(x - tp * 0.22, y - tp * 0.22, tp * 0.44, tp * 0.44), Color(hex: 0xE8FF8A, alpha: 0.18 * blink))
+			fillRect(&ctx, mkRect(x - 1.5, y - 1.5, 3, 3), Color(hex: 0xF4FFC0, alpha: 0.9 * blink))
+		}
+	}
+
+	/// Where the fireflies are now (x and y in blocks, and how bright): at most one for every 6 columns,
+	/// each at a place of its own in the world (it drifts a little around it, but never follows the
+	/// player), over grass on clear nights in the overworld
+	static func fireflySpots(_ g: Game, _ v: View2D) -> [(Double, Double, Double)] {
+		var out: [(Double, Double, Double)] = []
+		if g.dayFactor > 0.3 || g.weatherRain > 0.5 || g.world.dim != .overworld { return out }
+		let c0: Int = Int(floor(v.left / 6.0)) - 1
+		let c1: Int = Int(floor((v.left + v.wTiles) / 6.0)) + 1
+		for cell in c0...max(c0, c1) {
+			if hash2(cell, 20, 9) > 0.55 { continue }
+			let i: Int = cell
+			let wx: Double = Double(cell) * 6.0 + hash2(cell, 21, 9) * 6.0 + sin(g.clock * 0.4 + Double(i)) * 1.2
 			let ix: Int = Int(floor(wx))
+			let b: Biome = g.gen.col(ix).biome
+			if !(b == .forest || b == .plains || b == .swamp || b == .jungle) { continue }
 			let ground: Double = Double(g.world.surfaceY(ix))
 			let wy: Double = ground - 1.0 - hash2(i, 22, 9) * 4.0 + sin(g.clock * 0.7 + Double(i) * 1.7) * 0.6
 			if wy >= Double(g.world.skyTop(ix)) || !v.visible(wx, wy, 1) { continue }
 			let blink: Double = 0.5 + 0.5 * sin(g.clock * 2.2 + Double(i) * 1.3)
 			if blink < 0.25 { continue }
-			let x: Double = v.sx(wx)
-			let y: Double = v.sy(wy)
-			fillOval(&ctx, mkRect(x - tp * 0.22, y - tp * 0.22, tp * 0.44, tp * 0.44), Color(hex: 0xE8FF8A, alpha: 0.18 * blink))
-			fillRect(&ctx, mkRect(x - 1.5, y - 1.5, 3, 3), Color(hex: 0xF4FFC0, alpha: 0.9 * blink))
+			out.append((wx, wy, blink))
 		}
+		return out
 	}
 }
 
@@ -9986,6 +10033,8 @@ struct SectionEntry {
 	var img: Image
 	var rev: Int
 	var used: Int
+	/// the chunk it was drawn from (Chunk.serial)
+	var chunk: Int = 0
 }
 
 final class RenderCache: @unchecked Sendable {
@@ -10014,8 +10063,12 @@ final class RenderCache: @unchecked Sendable {
 		}
 	}
 
+	/// One number for each 16-row section of each chunk in each dimension: room for 64 sections a
+	/// chunk (the tallest dimension has 36) and 8 dimensions (5 are used). It once had room for two
+	/// dimensions only, so the custom dimensions shared numbers with Overworld and Umbral sections a
+	/// section lower, and each showed the other's pictures (ghost land).
 	func key(_ dim: Int, _ cx: Int, _ sy: Int) -> Int {
-		return ((cx &* 64) &+ sy) &* 2 &+ dim
+		return ((cx &* 64) &+ (sy & 63)) &* 8 &+ (dim & 7)
 	}
 
 	/// Drops every cached picture (debug "reset systems"); they are rebuilt as needed
@@ -10547,7 +10600,9 @@ enum WorldRenderer {
 				let k: Int = cache.key(dim, cx, sy)
 				var img: Image? = nil
 				let srev: Int = sy < ch.secRev.count ? ch.secRev[sy] : ch.rev
-				if var e = cache.sections[k] {
+				// a picture is only reused for the chunk it was drawn from: up to date, or for a frame or two
+				// while the pictures that changed are redrawn a few at a time
+				if var e = cache.sections[k], e.chunk == ch.serial {
 					if e.rev == srev || cache.builtThisFrame >= cap {
 						e.used = cache.frame
 						cache.sections[k] = e
@@ -10556,7 +10611,7 @@ enum WorldRenderer {
 				}
 				if img == nil {
 					let im: Image = buildSection(g, ch, sy)
-					cache.sections[k] = SectionEntry(img: im, rev: srev, used: cache.frame)
+					cache.sections[k] = SectionEntry(img: im, rev: srev, used: cache.frame, chunk: ch.serial)
 					cache.builtThisFrame += 1
 					img = im
 				}
@@ -11247,14 +11302,17 @@ enum WorldRenderer {
 		if storm > 0 { tint = mixRGB(tint, mixRGB(0x262B33, 0x6C727E, day), storm) }
 		let sky: UInt32 = mixRGB(0x18223E, 0xB4DCFF, day)
 		let camMid: Double = v.top + v.hTiles * 0.5
-		let px: Double = v.tp / CloudField.pxPerTile
+		// the sky is far away: zooming in past the usual size does not bring the clouds down to the
+		// player, they keep the size and place they have at the usual zoom
+		let ctp: Double = min(v.tp, 24.0)
+		let px: Double = ctp / CloudField.pxPerTile
 		let art: CloudArt = CloudArt.shared
 		let fills: [Double] = [0.46 + 0.45 * cover, 0.40 + 0.52 * cover, 0.26 + 0.60 * cover, clampD((cover - 0.35) / 0.5, 0, 1) * 0.95]
 		for li in 0..<CloudField.layers.count {
 			let L: CloudField.Layer = CloudField.layers[li]
 			if fills[li] <= 0.02 { continue }
 			let left: Double = v.left * L.par
-			let list: [CloudField.Cloud] = CloudField.clouds(seed, li, drift, left, left + v.wTiles, fill: fills[li])
+			let list: [CloudField.Cloud] = CloudField.clouds(seed, li, drift, left, left + W / ctp, fill: fills[li])
 			if list.isEmpty { continue }
 			var layerTint: UInt32 = mixRGB(tint, sky, L.haze)
 			if li == 3 { layerTint = mixRGB(layerTint, 0x30363E, 0.4) }
@@ -11264,8 +11322,8 @@ enum WorldRenderer {
 			c.addFilter(.colorMultiply(rgbColor(layerTint)))
 			for cl in list {
 				let b: PixelBuf = art.shapes[cl.kind]
-				let sx: Double = ((cl.x - left) * v.tp / px).rounded() * px
-				let sy: Double = ((cl.y + rise) * v.tp / px).rounded() * px
+				let sx: Double = ((cl.x - left) * ctp / px).rounded() * px
+				let sy: Double = ((cl.y + rise) * ctp / px).rounded() * px
 				let cw: Double = Double(b.w) * px
 				if sx > W || sx + cw < 0 || sy > H || sy + Double(b.h) * px < 0 { continue }
 				c.opacity = L.opacity * cl.alpha
@@ -12208,9 +12266,9 @@ struct HUDView: View {
 						OutlinedText(text: String(Int(game.totalDefense.rounded())), size: 12)
 					}
 				}
-				if game.suit.worn { SuitBar(game: game) }
+				if game.suit.worn { SuitBar(game: game, tick: hud.tick) }
 			}
-			if !game.activeEffects().isEmpty { EffectStrip(game: game) }
+			if !game.activeEffects().isEmpty { EffectStrip(game: game, tick: hud.tick) }
 			if game.mode == .hardcore { OutlinedText(text: "HARDCORE", size: 11, color: Color(hex: 0xFF6060)) }
 			if !game.testMod.isEmpty { OutlinedText(text: "MOD TEST · NOT SAVED", size: 11, color: Color(hex: 0x60E0FF)) }
 		}
@@ -12383,12 +12441,87 @@ final class SlotFrames: @unchecked Sendable {
 	}
 }
 
+/// Every item, with a search box and groups to narrow it down: the creative palette and the debug menu's
+/// give. Tapping an item calls `tap`; the selected one is ringed.
+struct ItemBrowser: View {
+	let items: [Item]
+	@Binding var search: String
+	@Binding var group: Int
+	var selected: Item? = nil
+	var height: CGFloat = 300
+	var tap: (Item) -> Void
+
+	static let groups: [String] = ["ALL", "BLOCKS", "TOOLS", "WEAPONS", "ARMOR", "MATERIALS", "FOOD", "OTHER"]
+
+	var body: some View {
+		let list: [Item] = ItemBrowser.filter(items, search, group)
+		let cols: [GridItem] = [GridItem(.adaptive(minimum: 40, maximum: 44), spacing: 3)]
+		return VStack(alignment: .leading, spacing: 6) {
+			TextField("Search items by name", text: $search)
+				.font(.pixel(13, .bold))
+				.foregroundColor(Color.white)
+				.padding(8)
+				.background(Color.black.opacity(0.5))
+			groupRow
+			Text(verbatim: joinText(String(list.count), list.count == 1 ? " item" : " items")).font(.pixel(10, .semibold)).foregroundColor(Color.white.opacity(0.6))
+			ScrollView {
+				LazyVGrid(columns: cols, spacing: 3) {
+					ForEach(0..<list.count, id: \.self) { (i: Int) in self.cell(list[i]) }
+				}
+			}
+			.frame(height: height)
+		}
+	}
+
+	var groupRow: some View {
+		VStack(alignment: .leading, spacing: 3) {
+			HStack(spacing: 3) {
+				ForEach(0..<4, id: \.self) { (i: Int) in self.groupButton(i) }
+			}
+			HStack(spacing: 3) {
+				ForEach(4..<ItemBrowser.groups.count, id: \.self) { (i: Int) in self.groupButton(i) }
+			}
+		}
+	}
+
+	func groupButton(_ i: Int) -> some View {
+		let on: Bool = group == i
+		let col: Color = on ? Color(hex: 0x4E8A3E) : Color(hex: 0x555555)
+		return SmallButton(title: ItemBrowser.groups[i], color: col) { self.group = i }
+	}
+
+	func cell(_ it: Item) -> some View {
+		let on: Bool = selected == it
+		return SlotView(stack: Stack(item: it, count: 1), selected: on, size: 40)
+			.onTapGesture { self.tap(it) }
+	}
+
+	/// The items matching a search (by name) and a group (0: all)
+	static func filter(_ items: [Item], _ search: String, _ group: Int) -> [Item] {
+		let q: String = search.trimmingCharacters(in: .whitespaces).lowercased()
+		var out: [Item] = []
+		for it in items {
+			if group > 0 && it.bagGroup != group - 1 { continue }
+			if !q.isEmpty && !it.name.lowercased().contains(q) { continue }
+			out.append(it)
+		}
+		return out
+	}
+}
+
 struct InventoryPanel: View {
 	@ObservedObject var game: Game
 	@ObservedObject var hud: HUDSignal
 	@State var cat: RecipeCat = .basic
 	@State var creativeTab: Bool = false
 	@State var onlyCraftable: Bool = false
+	/// the bag filter (ItemBrowser.groups; 0 shows everything)
+	@State var bagGroup: Int = 0
+	/// an item picked in the creative palette or the crafting list, to read about without taking it
+	@State var infoItem: Item? = nil
+	@State var infoRecipe: Int = -1
+	@State var search: String = ""
+	@State var paletteGroup: Int = 0
 	// drag and drop
 	@State var dragFrom: Game.SlotRef? = nil
 	@State var dragPoint: CGPoint = .zero
@@ -12478,11 +12611,13 @@ struct InventoryPanel: View {
 			.onTapGesture { game.dropCarried() }
 	}
 
-	/// Name and details of the slot last touched or hovered
+	/// Name and details of the item picked in a list, else of the slot last touched or hovered
 	var infoBox: some View {
 		let s: Stack? = hoverRef.flatMap { game.stackAt($0) } ?? game.carry
 		return VStack(alignment: .leading, spacing: 2) {
-			if let st = s {
+			if let it = infoItem {
+				pickedInfo(it)
+			} else if let st = s {
 				Text(verbatim: st.count > 1 ? joinText(st.item.name, "  x", String(st.count)) : st.item.name).font(.pixel(12))
 				Text(verbatim: st.item.infoLines.joined(separator: " · ")).font(.pixel(10, .semibold)).foregroundColor(Color.white.opacity(0.75))
 				if !st.infusionNames.isEmpty {
@@ -12495,6 +12630,33 @@ struct InventoryPanel: View {
 		.frame(maxWidth: 460, minHeight: 34, alignment: .leading)
 		.padding(.horizontal, 6)
 		.background(Color.black.opacity(0.25))
+	}
+
+	/// An item picked in the creative palette or the crafting list: what it is, and for a recipe what it
+	/// takes (and how many of each the bag holds)
+	func pickedInfo(_ it: Item) -> some View {
+		let lines: String = it.infoLines.joined(separator: " · ")
+		let need: String = recipeNeeds()
+		return VStack(alignment: .leading, spacing: 2) {
+			HStack {
+				Text(verbatim: it.name).font(.pixel(12))
+				Spacer()
+				SmallButton(title: "OK") { self.infoItem = nil; self.infoRecipe = -1 }
+			}
+			if !lines.isEmpty { Text(verbatim: lines).font(.pixel(10, .semibold)).foregroundColor(Color.white.opacity(0.75)) }
+			if !need.isEmpty { Text(verbatim: need).font(.pixel(10, .semibold)).foregroundColor(Color(hex: 0xFFE070)) }
+		}
+	}
+
+	func recipeNeeds() -> String {
+		guard infoRecipe >= 0, let r = RecipeBook.all.first(where: { $0.id == infoRecipe }) else { return "" }
+		var parts: [String] = []
+		for c in r.cost {
+			parts.append(joinText(String(c.n), " ", c.item.name, " (have ", String(game.inv.total(c.item)), ")"))
+		}
+		var s: String = joinText("Needs: ", parts.joined(separator: ", "))
+		if !game.recipeStationOK(r) { s = joinText(s, ". At a ", game.recipeStationName(r), ".") }
+		return s
 	}
 
 	var titleText: String {
@@ -12512,6 +12674,7 @@ struct InventoryPanel: View {
 				SmallButton(title: creativeTab ? "CRAFTING" : "ALL ITEMS", color: Color(hex: 0x3E6FAA)) { creativeTab.toggle() }
 			}
 			SmallButton(title: "SORT", color: Color(hex: 0x4E6A8A)) { game.sortBag() }
+			SmallButton(title: "STACK", color: Color(hex: 0x4E6A8A)) { game.stackAll() }
 			if game.openChest != nil {
 				SmallButton(title: "QUICK STACK", color: Color(hex: 0x4E8A3E)) { game.quickStack() }
 			}
@@ -12529,6 +12692,7 @@ struct InventoryPanel: View {
 
 	var leftColumn: some View {
 		VStack(alignment: .leading, spacing: 8) {
+			bagFilter
 			HStack(alignment: .top, spacing: 10) {
 				armorColumn
 				VStack(spacing: 3) {
@@ -12549,6 +12713,30 @@ struct InventoryPanel: View {
 		}
 	}
 
+	/// Show only one kind of item in the bag (the others dim, so nothing moves)
+	var bagFilter: some View {
+		HStack(spacing: 3) {
+			ForEach(0..<ItemBrowser.groups.count, id: \.self) { (i: Int) in self.filterChip(i) }
+		}
+	}
+
+	func filterChip(_ i: Int) -> some View {
+		let on: Bool = bagGroup == i
+		let col: Color = on ? Color(hex: 0x4E8A3E) : Color(hex: 0x4A4A50)
+		return Button(action: { self.bagGroup = i }) {
+			Text(verbatim: ItemBrowser.groups[i]).font(.pixel(9, .bold)).foregroundColor(Color.white)
+				.padding(.horizontal, 5).padding(.vertical, 5)
+				.background(col)
+		}
+		.buttonStyle(.plain)
+	}
+
+	/// whether a slot's stack is outside the bag filter (it is drawn dim)
+	func filteredOut(_ s: Stack?) -> Bool {
+		guard bagGroup > 0, let st = s else { return false }
+		return st.item.bagGroup != bagGroup - 1
+	}
+
 	var holdHint: String {
 		let tail: String = game.openChest != nil ? "move to chest." : "split stack, equip armor."
 		return joinText("Drag to move, swap or stack (onto DROP to throw away). Tap: pick up / place. Hold: ", tail)
@@ -12558,8 +12746,10 @@ struct InventoryPanel: View {
 		let isHot: Bool = i < Inventory.hotbarCount
 		let selected: Bool = isHot && game.sel == i
 		let ring: Color = isHot ? Color(hex: 0xFFE070, alpha: 0.35) : Color.clear
+		let dimmed: Bool = filteredOut(game.inv.slots[i])
 		return dragSlot(.inv(i), game.inv.slots[i], size: 40, selected: selected, tap: { game.tapSlot(i) }, hold: { longPress(i) })
 			.overlay(Rectangle().stroke(ring, lineWidth: 1))
+			.opacity(dimmed ? 0.25 : 1.0)
 	}
 
 	func longPress(_ i: Int) {
@@ -12617,9 +12807,27 @@ struct InventoryPanel: View {
 				Text("Hand empty").font(.pixel(11, .semibold)).foregroundColor(Color.white.opacity(0.6))
 				Spacer()
 			}
+			if game.isCreative { returnZone }
 			dropZone
 		}
 		.frame(height: 40)
+	}
+
+	/// Creative mode: drag a stack here (or tap while holding one) to put it back in the creative menu
+	var returnZone: some View {
+		let box: SlotFrames = frames
+		let active: Bool = dragFrom != nil
+		return Text(active ? "RETURN HERE" : "RETURN")
+			.font(.pixel(11))
+			.foregroundColor(Color.white.opacity(active ? 1.0 : 0.6))
+			.frame(width: 96, height: 36)
+			.background(Color(hex: active ? 0x2A4A7A : 0x2A344A).opacity(0.9))
+			.overlay(Rectangle().stroke(Color(hex: 0x5A8AD0), lineWidth: active ? 2 : 1))
+			.background(GeometryReader { gp -> Color in
+				box.map[.trash] = gp.frame(in: .named("inv"))
+				return Color.clear
+			})
+			.onTapGesture { game.discardCarried() }
 	}
 
 	@ViewBuilder
@@ -12635,16 +12843,28 @@ struct InventoryPanel: View {
 
 	var creativePalette: some View {
 		let items: [Item] = game.creativeItems()
-		let cols: [GridItem] = [GridItem(.adaptive(minimum: 40, maximum: 44), spacing: 3)]
-		return ScrollView {
-			LazyVGrid(columns: cols, spacing: 3) {
-				ForEach(0..<items.count, id: \.self) { i in
-					SlotView(stack: Stack(item: items[i], count: 1), size: 40)
-						.onTapGesture { game.creativeGive(items[i]) }
+		return VStack(alignment: .leading, spacing: 6) {
+			HStack(spacing: 6) {
+				Text("ALL ITEMS").font(.pixel(15))
+				Spacer()
+				if let it = infoItem {
+					SmallButton(title: "TAKE 1", color: Color(hex: 0x4E8A3E)) { game.giveItem(it, 1, extra: game.gunLoad(it)) }
+					SmallButton(title: "TAKE STACK", color: Color(hex: 0x4E8A3E)) { game.creativeGive(it) }
 				}
 			}
+			Text("Tap an item to read about it, tap it again to take a stack. Put things back with RETURN.").font(.pixel(10, .semibold)).foregroundColor(Color.white.opacity(0.7))
+			ItemBrowser(items: items, search: $search, group: $paletteGroup, selected: infoItem, height: 260, tap: { (it: Item) in self.paletteTap(it) })
 		}
-		.frame(minWidth: 280, maxWidth: 420, maxHeight: 360)
+		.frame(minWidth: 280, maxWidth: 420)
+	}
+
+	func paletteTap(_ it: Item) {
+		if infoItem == it {
+			game.creativeGive(it)
+		} else {
+			infoItem = it
+			infoRecipe = -1
+		}
 	}
 
 	var stationText: String {
@@ -12664,6 +12884,19 @@ struct InventoryPanel: View {
 			out.append(r)
 		}
 		return out
+	}
+
+	/// A crafting row with what the bag holds of each ingredient worked out here: the row redraws as soon
+	/// as the bag changes (pick up, use, craft, drop, move)
+	func recipeRow(_ r: Recipe) -> RecipeRow {
+		let rid: Int = r.id
+		var row: RecipeRow = RecipeRow.live(game, r)
+		row.picked = infoRecipe == rid
+		row.info = {
+			self.infoItem = r.out
+			self.infoRecipe = rid
+		}
+		return row
 	}
 
 	func catButton(_ c: RecipeCat) -> some View {
@@ -12689,9 +12922,7 @@ struct InventoryPanel: View {
 			}
 			ScrollView {
 				LazyVStack(alignment: .leading, spacing: 4) {
-					ForEach(list) { r in
-						RecipeRow(game: game, recipe: r)
-					}
+					ForEach(list) { (r: Recipe) in self.recipeRow(r) }
 				}
 			}
 			.frame(maxHeight: 330)
@@ -12700,19 +12931,33 @@ struct InventoryPanel: View {
 	}
 }
 
+/// One recipe in the crafting list. What the bag holds of each ingredient, and whether it can be made,
+/// come in from the panel as plain values, so the row redraws whenever they change.
 struct RecipeRow: View {
 	let game: Game
 	let recipe: Recipe
+	let have: [Int]
+	let ok: Bool
+	let stationOK: Bool
+	var picked: Bool = false
+	var info: () -> Void = {}
+
+	/// A row with what the bag holds worked out now
+	static func live(_ game: Game, _ r: Recipe) -> RecipeRow {
+		var have: [Int] = []
+		for c in r.cost { have.append(game.inv.total(c.item)) }
+		return RecipeRow(game: game, recipe: r, have: have, ok: game.canCraft(r), stationOK: game.recipeStationOK(r))
+	}
+
 	var body: some View {
-		let ok: Bool = game.canCraft(recipe)
-		let stationOK: Bool = game.recipeStationOK(recipe)
 		return HStack(spacing: 6) {
-			SlotView(stack: Stack(item: recipe.out, count: recipe.outCount), size: 34)
+			SlotView(stack: Stack(item: recipe.out, count: recipe.outCount), selected: picked, size: 34)
+				.onTapGesture { self.info() }
 			VStack(alignment: .leading, spacing: 2) {
 				Text(recipe.out.name).font(.pixel(12)).lineLimit(1)
 				HStack(spacing: 4) {
-					ForEach(0..<recipe.cost.count, id: \.self) { k in
-						costView(recipe.cost[k])
+					ForEach(0..<recipe.cost.count, id: \.self) { (k: Int) in
+						self.costView(recipe.cost[k], k < have.count ? have[k] : 0)
 					}
 				}
 				if !stationOK {
@@ -12732,12 +12977,13 @@ struct RecipeRow: View {
 		return SmallButton(title: "MAKE", color: col) { game.craft(recipe) }.opacity(op)
 	}
 
-	func costView(_ c: CostLine) -> some View {
-		let have: Int = game.inv.total(c.item)
-		let enough: Bool = have >= c.n || game.isCreative
+	/// An ingredient: its icon, then what the bag holds out of what it takes ("3/5")
+	func costView(_ c: CostLine, _ held: Int) -> some View {
+		let enough: Bool = held >= c.n || game.isCreative
+		let text: String = joinText(String(min(held, 999)), "/", String(c.n))
 		return HStack(spacing: 1) {
 			Art.shared.icon(c.item).resizable().frame(width: 16, height: 16)
-			Text(String(c.n)).font(.pixel(10)).foregroundColor(pick(enough, 0xFFFFFF, 0xFF6060))
+			Text(verbatim: text).font(.pixel(10)).foregroundColor(pick(enough, 0xFFFFFF, 0xFF6060))
 		}
 	}
 }
@@ -13157,6 +13403,11 @@ struct DebugPanel: View {
 	@State var showPerf: Bool = true
 	@State var showSystems: Bool = false
 	@State var showWorld: Bool = false
+	@State var showGive: Bool = false
+	@State var giveSearch: String = ""
+	@State var giveGroup: Int = 0
+	@State var giveItem: Item? = nil
+	@State var giveCount: Int = 1
 	var body: some View {
 		ScrollView {
 			VStack(alignment: .leading, spacing: 8) {
@@ -13183,6 +13434,8 @@ struct DebugPanel: View {
 				if showSystems { systemsSection }
 				SmallButton(title: showWorld ? "Hide worldgen" : "Worldgen...") { showWorld.toggle() }
 				if showWorld { worldSection }
+				SmallButton(title: showGive ? "Hide give item" : "Give item...") { showGive.toggle() }
+				if showGive { giveSection }
 				section("SPAWN MOB")
 				spawnGrid
 			}
@@ -13191,6 +13444,29 @@ struct DebugPanel: View {
 			.padding(12)
 		}
 		.background(PixelBox(color: Color(hex: 0x1E1E1E)).opacity(0.94))
+	}
+
+	static let giveCounts: [Int] = [1, 10, 64, 100, 500]
+
+	/// Any item of the game or of the world's mods, found by name or group, as many as wanted
+	var giveSection: some View {
+		let items: [Item] = game.creativeItems()
+		let title: String = giveItem.map { joinText("GIVE ", String(giveCount), " ", $0.name) } ?? "Pick an item"
+		return VStack(alignment: .leading, spacing: 6) {
+			section("GIVE ITEM")
+			ItemBrowser(items: items, search: $giveSearch, group: $giveGroup, selected: giveItem, height: 220, tap: { (it: Item) in self.giveItem = it })
+			HStack(spacing: 4) {
+				ForEach(0..<DebugPanel.giveCounts.count, id: \.self) { (i: Int) in self.countButton(DebugPanel.giveCounts[i]) }
+			}
+			SmallButton(title: title, color: Color(hex: 0x4E8A3E)) {
+				if let it = self.giveItem { self.game.debugGive(it, self.giveCount) }
+			}
+		}
+	}
+
+	func countButton(_ n: Int) -> some View {
+		let on: Bool = giveCount == n
+		return SmallButton(title: joinText("x", String(n)), color: on ? Color(hex: 0x4E8A3E) : Color(hex: 0x555555)) { self.giveCount = n }
 	}
 
 	var actions: some View {
@@ -14033,7 +14309,11 @@ struct CameraSettingsSection: View {
 			}
 			label("Dead zone (blocks)", settings.camDeadZone)
 			Slider(value: $settings.camDeadZone, in: 0.0...3.0, step: 0.1)
-			Toggle("Look ahead while moving", isOn: $settings.camLookAhead)
+			Toggle("Follow the player directly", isOn: $settings.camDirect)
+			Text("On: the camera stays right on the player, with no dead zone or look-ahead.").font(.pixel(10, .semibold)).foregroundColor(Color.white.opacity(0.7))
+			if !settings.camDirect {
+				Toggle("Look ahead while moving", isOn: $settings.camLookAhead)
+			}
 			Toggle("Screen shake", isOn: $settings.shakeOn)
 			if settings.shakeOn {
 				label("Shake intensity", settings.shakeIntensity)

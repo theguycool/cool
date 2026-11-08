@@ -7429,8 +7429,8 @@ extension Game {
 				continue
 			}
 			if weather.fx() < windBreak(t) * f {
-				breakTile(tx, y, false, dropChance: 0.5)
 				let c: UInt32 = t.def.colors.first ?? 0x8A7A60
+				stormTear(tx, y, weather.wind >= 0 ? 1.0 : -1.0)
 				spawnParticles(Double(tx) + 0.5, Double(y) + 0.5, c, 4, 7.0, 0.7, 6)
 				return true
 			}
@@ -7457,7 +7457,7 @@ extension Game {
 			let t: Tile = world.tile(tx, y)
 			if t != .air && !t.liquid {
 				if weather.fx() < windBreak(t) * f {
-					breakTile(tx, y, false, dropChance: 0.5)
+					stormTear(tx, y, fromDir)
 					return true
 				}
 				return false
@@ -8745,9 +8745,18 @@ struct NightSettingsSection: View {
 				choice("ALWAYS", settings.showWires == 1) { settings.showWires = 1 }
 				choice("FAINT", settings.showWires == 2) { settings.showWires = 2 }
 			}
+			buildingPart
 		}
 		.font(.pixel(13, .bold))
 		.foregroundColor(Color.white)
+	}
+
+	var buildingPart: some View {
+		VStack(alignment: .leading, spacing: 6) {
+			Text("BUILDINGS").font(.pixel(15)).foregroundColor(Color(hex: 0xFFE066))
+			Toggle("Structural physics", isOn: $settings.structural)
+			Text("Blocks you build need support: each holds up so much weight and reaches out so far (shown in its info). Too far out or too heavy, it cracks and falls. The land itself never falls.").font(.pixel(11, .semibold))
+		}
 	}
 }
 
@@ -10417,6 +10426,7 @@ enum WorldRenderer {
 			drawSky(&ctx, W, H, g, v)
 		}
 		drawSections(&ctx, g, v, cache)
+		if !g.stress.isEmpty { drawStress(&ctx, g, v) }
 		drawGroundWeather(&ctx, g, v)
 		drawWaves(&ctx, g, v)
 		drawRift(&ctx, g, v)
@@ -10424,7 +10434,9 @@ enum WorldRenderer {
 		drawPowerDevices(&ctx, g, v)
 		drawShips(&ctx, g, v)
 		drawVehicles(&ctx, g, v)
+		drawLifts(&ctx, g, v)
 		drawDrops(&ctx, g, v)
+		drawFlyingBlocks(&ctx, g, v)
 		drawMobs(&ctx, g, v)
 		drawPlayer(&ctx, g, v)
 		drawProjectiles(&ctx, g, v)
@@ -10969,7 +10981,10 @@ enum WorldRenderer {
 		if g.mounted != nil || g.inVehicle != nil { showItem = false }
 		if showItem && !pose { drawHeldItem(&ctx, g, v) }
 		let shade: Double = openShade(g, g.pb.x, g.pb.cy)
-		if g.landT > 0 {
+		if g.seat != nil {
+			// sitting: lower on the seat
+			drawSetPosed(&ctx, v, s, 0, left, g.hurtT > 0, g.pb.x, g.pb.y - 0.12, alpha, shade, 0, 0.74)
+		} else if g.landT > 0 {
 			// a brief squash on landing from a fall
 			let k: Double = g.landT / 0.12
 			drawSetPosed(&ctx, v, s, fr, left, g.hurtT > 0, g.pb.x, g.pb.y, alpha, shade, 0, 1.0 - 0.1 * k)
@@ -10991,6 +11006,78 @@ enum WorldRenderer {
 					ctx.stroke(p, with: .color(Color.white.opacity(0.7)), lineWidth: 1)
 				}
 			}
+		}
+	}
+
+	/// Blocks on the move (falling sand, blocks thrown by blasts and storms, a structure coming down),
+	/// turning as they fly
+	static func drawFlyingBlocks(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
+		if g.fallingBlocks.isEmpty { return }
+		let art: Art = Art.shared
+		let s: Double = v.tp
+		for fb in g.fallingBlocks {
+			if !v.visible(fb.x, fb.y - 0.5, 2) { continue }
+			let img: Image = art.icon(.block(fb.tile))
+			if abs(fb.ang) < 0.01 {
+				ctx.draw(img, in: v.rect(fb.x - 0.5, fb.y - 1.0, 1.0, 1.0))
+			} else {
+				var c: GraphicsContext = ctx
+				c.translateBy(x: CGFloat(v.sx(fb.x)), y: CGFloat(v.sy(fb.y - 0.5)))
+				c.rotate(by: Angle(radians: fb.ang))
+				c.draw(img, in: mkRect(-s * 0.5, -s * 0.5, s, s))
+			}
+		}
+	}
+
+	/// Lift cars: a floor plate, two posts and a roof bar, the cable up the rails, and a lamp lit
+	/// while it moves
+	static func drawLifts(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
+		for l in g.lifts {
+			if !v.visible(Double(l.x) + 0.5, l.y - 1.5, 4) { continue }
+			let x0: Double = l.x0 + 0.05
+			let w: Double = 2.9
+			fillRect(&ctx, v.rect(x0, l.y, w, 0.3), Color(hex: 0x4A5260))
+			fillRect(&ctx, v.rect(x0, l.y, w, 0.1), Color(hex: 0x9AA4B0))
+			fillRect(&ctx, v.rect(x0, l.y - 3.0, 0.15, 3.0), Color(hex: 0x5A6270))
+			fillRect(&ctx, v.rect(x0 + w - 0.15, l.y - 3.0, 0.15, 3.0), Color(hex: 0x5A6270))
+			fillRect(&ctx, v.rect(x0, l.y - 3.05, w, 0.18), Color(hex: 0x5A6270))
+			fillRect(&ctx, v.rect(Double(l.x) + 0.47, l.y - 6.0, 0.06, 2.95), Color(hex: 0x2A2A2A))
+			let lamp: Color = l.target != nil ? Color(hex: 0x6AF06A) : Color(hex: 0x8A3030)
+			fillRect(&ctx, v.rect(Double(l.x) + 0.35, l.y - 2.85, 0.3, 0.2), lamp)
+		}
+	}
+
+	/// Cracks in built blocks under strain (structural physics): fine ones, heavy ones past 90%
+	static func drawStress(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
+		if !g.settings.structural { return }
+		var fine: Path = Path()
+		var heavy: Path = Path()
+		let s: Double = v.tp
+		for (k, f) in g.stress {
+			let x: Int = floorDiv(k, 4096)
+			let y: Int = k - x * 4096
+			if !v.visible(Double(x) + 0.5, Double(y) + 0.5, 1) { continue }
+			let px: Double = v.sx(Double(x))
+			let py: Double = v.sy(Double(y))
+			if f > 0.9 {
+				crackLines(&heavy, px, py, s, true)
+			} else {
+				crackLines(&fine, px, py, s, false)
+			}
+		}
+		ctx.stroke(fine, with: .color(Color.black.opacity(0.45)), lineWidth: 1)
+		ctx.stroke(heavy, with: .color(Color.black.opacity(0.75)), lineWidth: 2)
+	}
+
+	/// One crack across a block at screen (px, py), s pixels wide (a branch on heavy ones)
+	static func crackLines(_ p: inout Path, _ px: Double, _ py: Double, _ s: Double, _ branch: Bool) {
+		p.move(to: CGPoint(x: px + s * 0.22, y: py + s * 0.08))
+		p.addLine(to: CGPoint(x: px + s * 0.48, y: py + s * 0.38))
+		p.addLine(to: CGPoint(x: px + s * 0.34, y: py + s * 0.62))
+		p.addLine(to: CGPoint(x: px + s * 0.66, y: py + s * 0.92))
+		if branch {
+			p.move(to: CGPoint(x: px + s * 0.48, y: py + s * 0.38))
+			p.addLine(to: CGPoint(x: px + s * 0.8, y: py + s * 0.3))
 		}
 	}
 
@@ -12369,6 +12456,9 @@ struct HUDView: View {
 
 	var contextButtons: some View {
 		HStack(spacing: 6) {
+			if game.canToggleWall {
+				SmallButton(title: game.wallMode ? "AS WALL" : "AS BLOCK", color: game.wallMode ? Color(hex: 0x6A5A8A) : Color(hex: 0x4E6A3E)) { game.toggleWallMode() }
+			}
 			if game.vehicleNearby != nil {
 				SmallButton(title: "DRIVE", color: Color(hex: 0x4E8A3E)) { game.driveNearby() }
 				SmallButton(title: "PACK UP", color: Color(hex: 0x6A5A2A)) { game.packUpVehicle() }

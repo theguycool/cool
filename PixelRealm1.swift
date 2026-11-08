@@ -1,6 +1,5 @@
 // PIXEL REALM v2, part 1 of 4: utilities, tiles, items, recipes, creature sprites, world generation, chunks, structures, the Umbral
-// Realm, the world, light, physics, creatures, vehicles, the game state, the player, input, tools, creature AI,
-// spawning and combat.
+// Realm, the world, light, physics, creatures, vehicles, the game state, the player, input and tools.
 // The game is four files that go together in one Swift Playgrounds app: PixelRealm1.swift to
 // PixelRealm4.swift. Each goes in its own file in the app (delete ContentView.swift; MyApp.swift can
 // hold part 1). All art is generated in code.
@@ -382,6 +381,15 @@ enum Tile: UInt8, CaseIterable, Codable {
 	case alchemyStill, infuser, exoStation
 	/// a young tree (appended): planted on soil, it grows into a tree that suits the land it stands in
 	case sapling
+	/// furniture (appended): to sit on, sleep in, keep things in, or to make a room look lived in. A bed
+	/// is two tiles, its head on the left
+	case chair, table, bedL, bedR, cabinet, wardrobe, shelf, bookshelf, floorLamp, sofa
+	/// stairs (appended), rising to the right (R) or the left (L): a full-width lower step and a
+	/// half-width upper one, walked up like any step (see World.stairHit)
+	case stairWoodR, stairWoodL, stairStoneR, stairStoneL, stairBrickR, stairBrickL
+	/// elevators (appended): the rail a lift car runs on, the button that calls it to a floor, and the
+	/// car itself (an item: placed on a rail it becomes a moving Lift)
+	case liftRail, liftButton, liftCar
 
 	// the tables are built once; the reserved mod tiles are rewritten when a world's mods are switched
 	// on (see `patch`), the game's own tiles never change
@@ -396,9 +404,11 @@ enum Tile: UInt8, CaseIterable, Codable {
 	static var hardTable: [Double] = Tile.allCases.map { Tile.makeDef($0).hard }
 	static var tierTable: [Int] = Tile.allCases.map { Tile.makeDef($0).tier }
 	/// things can rest on or hang from these (solid tiles, plus tree trunks, which have no collision)
-	static var supportTable: [Bool] = Tile.allCases.map { Tile.makeDef($0).solid || isLogTile($0) }
+	static var supportTable: [Bool] = Tile.allCases.map { Tile.makeDef($0).solid || isLogTile($0) || stairSide($0) != 0 }
 	/// rain, hail and lightning stop at these (anything solid, glass, platforms, leaves, water)
-	static var rainStopTable: [Bool] = Tile.allCases.map { Tile.makeDef($0).solid || Tile.makeDef($0).platform || Tile.makeDef($0).liquid || isLeafTile($0) }
+	static var rainStopTable: [Bool] = Tile.allCases.map { Tile.makeDef($0).solid || Tile.makeDef($0).platform || Tile.makeDef($0).liquid || isLeafTile($0) || stairSide($0) != 0 }
+	/// stairs by raw value: 1 rising to the right, 2 rising to the left, 0 not a stair (see World.stairHit)
+	static let stairTable: [UInt8] = Tile.allCases.map { stairSide($0) }
 	static let deviceTable: [Bool] = Tile.allCases.map { isWeatherDevice($0) }
 	static let powerTable: [Bool] = Tile.allCases.map { powerRole($0) != .none }
 	/// the tool that mines each reserved mod tile at full speed
@@ -733,6 +743,38 @@ enum Tile: UInt8, CaseIterable, Codable {
 			return TileDef(name: "Assembly Station", hard: 2.0, tier: 1, solid: false, opaque: false, style: .custom, colors: [0x5A6270])
 		case .sapling:
 			return TileDef(name: "Sapling", hard: 0, solid: false, opaque: false, plant: true, style: .custom, colors: [0x4B9A30])
+		case .chair:
+			return TileDef(name: "Chair", hard: 0.4, solid: false, opaque: false, style: .custom, colors: [0xA0703A])
+		case .table:
+			return TileDef(name: "Table", hard: 0.5, solid: false, opaque: false, platform: true, style: .custom, colors: [0xC89B5E])
+		case .bedL:
+			return TileDef(name: "Bed", hard: 0.4, solid: false, opaque: false, platform: true, style: .custom, colors: [0xC03838])
+		case .bedR:
+			return TileDef(name: "Bed", hard: 0.4, solid: false, opaque: false, platform: true, style: .custom, colors: [0xC03838], drop: .block(.bedL))
+		case .cabinet:
+			return TileDef(name: "Cabinet", hard: 0.6, solid: false, opaque: false, platform: true, style: .custom, colors: [0x9A6A38])
+		case .wardrobe:
+			return TileDef(name: "Wardrobe", hard: 0.6, solid: false, opaque: false, style: .custom, colors: [0x7A5230])
+		case .shelf:
+			return TileDef(name: "Shelf", hard: 0.3, solid: false, opaque: false, platform: true, style: .custom, colors: [0xC89B5E])
+		case .bookshelf:
+			return TileDef(name: "Bookshelf", hard: 0.6, solid: false, opaque: false, platform: true, style: .custom, colors: [0x8F6732])
+		case .floorLamp:
+			return TileDef(name: "Floor Lamp", hard: 0.3, solid: false, opaque: false, light: 13, style: .custom, colors: [0xFFE680])
+		case .sofa:
+			return TileDef(name: "Sofa", hard: 0.4, solid: false, opaque: false, style: .custom, colors: [0x3A6AA8])
+		case .stairWoodR, .stairWoodL:
+			return TileDef(name: "Wooden Stairs", hard: 0.6, solid: false, opaque: false, style: .custom, colors: [0xC89B5E], drop: .block(.stairWoodR))
+		case .stairStoneR, .stairStoneL:
+			return TileDef(name: "Stone Stairs", hard: 1.4, tier: 1, solid: false, opaque: false, style: .custom, colors: [0x8A8A8A], drop: .block(.stairStoneR))
+		case .stairBrickR, .stairBrickL:
+			return TileDef(name: "Brick Stairs", hard: 1.6, tier: 1, solid: false, opaque: false, style: .custom, colors: [0xB0503A], drop: .block(.stairBrickR))
+		case .liftRail:
+			return TileDef(name: "Lift Rail", hard: 0.5, solid: false, opaque: false, style: .custom, colors: [0x9AA4B0])
+		case .liftButton:
+			return TileDef(name: "Lift Button", hard: 0.3, solid: false, opaque: false, light: 4, style: .custom, colors: [0x5A6270])
+		case .liftCar:
+			return TileDef(name: "Lift Car", hard: 0.5, solid: false, opaque: false, style: .custom, colors: [0x7A8490])
 		default:
 			// the tiles reserved for mods, until a world's mods give them a meaning (see ModRuntime)
 			return TileDef(name: "Unused Mod Block", hard: 9999, style: .custom, colors: [0xFF00FF, 0x200020, 0xFF00FF, 0x200020, 0xFF00FF], noDrop: true)
@@ -843,6 +885,57 @@ func customTileRows(_ t: Tile) -> ([String], [Character: UInt32])? {
 		// a stone crucible brimming with something that glows
 		return (["..p..p..", ".PvvvvP.", "svVVVVvs", "sSvvvvSs", ".sSSSSs.", "..ssss..", ".ssssss.", "ssssssss"],
 				["p": 0xC07CFF, "P": 0x8A6AB8, "v": 0x9A5ADC, "V": 0xE0B8FF, "s": 0x5A5E68, "S": 0x7A7E88])
+	case .chair:
+		// side on, its back to the left
+		return (["b.......", "b.......", "b.......", "bsssss..", "bSSSSS..", "b....l..", "b....l..", "b....l.."],
+				["b": 0x7A5230, "s": 0xC08A50, "S": 0x9A6A38, "l": 0x7A5230])
+	case .table:
+		return (["........", "........", "tttttttt", "TTTTTTTT", ".l....l.", ".l....l.", ".l....l.", ".l....l."],
+				["t": 0xC89B5E, "T": 0x8F6732, "l": 0x7A5230])
+	case .bedL:
+		// the headboard and the pillow
+		return (["hh......", "hh......", "hh......", "hhwwwbbb", "hhWWWBBB", "hhffffff", "hh......", "h......."],
+				["h": 0x7A5230, "w": 0xF0EEE6, "W": 0xC8C4B8, "b": 0xC83A3A, "B": 0x962828, "f": 0x8F6732])
+	case .bedR:
+		// the foot of the bed
+		return (["........", "........", ".......f", "bbbbbbbf", "BBBBBBBf", "ffffffff", ".......f", ".......f"],
+				["b": 0xC83A3A, "B": 0x962828, "f": 0x7A5230])
+	case .cabinet:
+		return (["tttttttt", "cddkkddc", "cddkkddc", "cddddddc", "cddddddc", "cddddddc", "cccccccc", "c......c"],
+				["t": 0xC89B5E, "c": 0x7A5230, "d": 0xB07E48, "k": 0xE8C84A])
+	case .wardrobe:
+		return (["cccccccc", "cdddcddc", "cddkckdc", "cdddcddc", "cdddcddc", "cdddcddc", "cccccccc", "c......c"],
+				["c": 0x5E3E22, "d": 0x8F6732, "k": 0xE8C84A])
+	case .shelf:
+		return (["........", "........", "..r..g..", ".rr.ggb.", "pppppppp", "PPPPPPPP", ".k....k.", "........"],
+				["r": 0xC83A3A, "g": 0x4E9A3E, "b": 0x3A6AA8, "p": 0xC89B5E, "P": 0x8F6732, "k": 0x5A5A5A])
+	case .bookshelf:
+		return (["wwwwwwww", "wrgbywbw", "wrgbyrbw", "wwwwwwww", "wbyrgwrw", "wbyrgbrw", "wwwwwwww", "w......w"],
+				["w": 0x7A5230, "r": 0xB83A3A, "g": 0x3E8A4E, "b": 0x3A5AA8, "y": 0xD8B040])
+	case .floorLamp:
+		return (["..yyyy..", ".yYYYYy.", ".yyyyyy.", "...ss...", "...ss...", "...ss...", "..ssss..", ".ssssss."],
+				["y": 0xE8C060, "Y": 0xFFF2B0, "s": 0x4A4A52])
+	case .sofa:
+		return (["........", "bbbbbbbb", "BbbbbbbB", "aBccccBa", "aBCCCCBa", "aaaaaaaa", "l......l", "........"],
+				["b": 0x4A7AB8, "B": 0x3A6AA8, "a": 0x2E5A90, "c": 0x5A8AC8, "C": 0x4A7AB8, "l": 0x5E3E22])
+	case .stairWoodR, .stairWoodL:
+		let r: [String] = ["....tttt", "....pppp", "....pppp", "....PPPP", "tttttttt", "pppppppp", "pppppppp", "PPPPPPPP"]
+		return (t == .stairWoodR ? r : r.map { String($0.reversed()) }, ["t": 0xE0B47A, "p": 0xC89B5E, "P": 0x8F6732])
+	case .stairStoneR, .stairStoneL:
+		let r: [String] = ["....tttt", "....sSss", "....ssSs", "....dddd", "tttttttt", "sSssSsss", "ssSsssSs", "dddddddd"]
+		return (t == .stairStoneR ? r : r.map { String($0.reversed()) }, ["t": 0xB0B0B0, "s": 0x8A8A8A, "S": 0x9A9A9A, "d": 0x5E5E5E])
+	case .stairBrickR, .stairBrickL:
+		let r: [String] = ["....tttt", "....bbmb", "....bbmb", "....mmmm", "tttttttt", "bbmbbbmb", "bbmbbbmb", "mmmmmmmm"]
+		return (t == .stairBrickR ? r : r.map { String($0.reversed()) }, ["t": 0xD07050, "b": 0xB0503A, "m": 0x8A8070])
+	case .liftRail:
+		return (["Mm....mM", "Mm....mM", "Mm....mM", "MmxxxxmM", "Mm....mM", "Mm....mM", "Mm....mM", "MmxxxxmM"],
+				["M": 0x5A6270, "m": 0x9AA4B0, "x": 0x7A5230])
+	case .liftButton:
+		return (["........", "..pppp..", "..pUUp..", "..pppp..", "..pDDp..", "..pppp..", "........", "........"],
+				["p": 0x4A5260, "U": 0x5AD05A, "D": 0xE05050])
+	case .liftCar:
+		return (["kkkkkkkk", "k.k..k.k", "k.k..k.k", "k.k..k.k", "k.k..k.k", "k......k", "ffffffff", "FFFFFFFF"],
+				["k": 0x5A6270, "f": 0x9AA4B0, "F": 0x4A5260])
 	case .sapling:
 		// a thin stem with a few young leaves
 		return (["........", "...gg...", "..gGgg..", ".gg.bgg.", "..g.b.g.", "....b...", "...bb...", "....b..."],
@@ -1799,7 +1892,8 @@ enum Item: Hashable, Codable {
 			if g == .probe { return ["Tap a device to set it up, or a wire", "to see its whole network and its power"] }
 			return ["Gadget: use it from the hotbar"]
 		case .block(.sapling): return ["Plant it on grass, dirt or snow", "It grows into a tree that suits the land"]
-		case .block(let t): return [t.solid ? "Building block" : "Placeable", t.light > 0 ? "Gives light" : (t.hardness >= 99 ? "Unbreakable" : String(format: "Hardness %.1f", t.hardness))]
+		case .block(let t) where furnitureBlurb(t) != nil: return [furnitureBlurb(t) ?? "", weightLine(t)]
+		case .block(let t): return [t.solid ? "Building block" : "Placeable", t.light > 0 ? "Gives light" : (t.hardness >= 99 ? "Unbreakable" : String(format: "Hardness %.1f", t.hardness)), weightLine(t)]
 		case .wall: return ["Background wall"]
 		case .mat(let m): return [m.use]
 		case .custom(let k): return ModRuntime.shared.item(k)?.infoLines ?? ["From a mod that is not installed", "Kept safe until the mod is back"]
@@ -2843,6 +2937,8 @@ enum RecipeBook {
 		add(.block(.autoCrafter), 1, [(.block(.workbench), 1), (fe, 4), (.mat(.goldBar), 2), (.mat(.crystalShard), 1)], .tinker, .power)
 		add(.block(.emberDynamo), 1, [(.mat(.emberBar), 4), (.block(.obsidian), 6), (.mat(.crystalShard), 2), (.block(.accumulator), 1)], .forge, .power)
 		addFeatureRecipes(add)
+		// appended last so every older recipe keeps its number
+		addBuildingRecipes(add)
 		return list
 	}
 }
@@ -6040,6 +6136,10 @@ final class Chunk {
 	var ceilY: [Int] = [Int](repeating: 0, count: chunkW)
 	var back: [UInt8] = []
 	var walls: [UInt8] = []
+	/// which blocks were put there rather than generated (see World.isBuilt); empty until the first
+	var built: [UInt8] = []
+	/// how many stair tiles the chunk holds (-1: not counted yet; see World.stairsNear)
+	var stairs: Int = -1
 	/// Sparkworks wiring over each cell (see Wire), and how many cells have any
 	var wires: [UInt8] = []
 	var wireCount: Int = 0
@@ -9149,6 +9249,9 @@ final class World {
 	var editY1: Int = 0
 	/// bumps when chunks load/unload or the dimension changes
 	var layoutVersion: Int = 0
+	/// structural physics is on: every change is noted for it to look at (see Game.updateStructures)
+	var structWatch: Bool = false
+	var structEdits: [IntPair] = []
 
 	func noteEdit(_ x: Int, _ y: Int) {
 		if !editAny {
@@ -9308,6 +9411,13 @@ final class World {
 		c.dirty = true
 		c.rev &+= 1
 		version += 1
+		// a new block is not "built" until whoever put it there says so (see setBuilt)
+		if !c.built.isEmpty { c.built[lx * H + y] = 0 }
+		if c.stairs >= 0 {
+			if Tile.stairTable[Int(old.rawValue)] != 0 { c.stairs -= 1 }
+			if Tile.stairTable[Int(t.rawValue)] != 0 { c.stairs += 1 }
+		}
+		if structWatch && structEdits.count < 128 { structEdits.append(IntPair(x: x, y: y)) }
 		// a roof can add or remove house walls up to 12 rows below it
 		c.bumpRows(y - 1, y + 13)
 		if old.opaque != t.opaque {
@@ -9328,6 +9438,7 @@ final class World {
 		case .weatherStation, .dopplerStation, .stormSiren, .lightningRod, .windTurbine, .rainBarrel, .rainCistern, .weatherVane, .heater: return true
 		case .crankGen, .solarPanel, .fuelGen, .emberDynamo, .battery, .accumulator, .pressurePlate, .lever: return true
 		case .alchemyStill, .infuser, .exoStation: return true
+		case .chair, .table, .bedL, .bedR, .cabinet, .wardrobe, .bookshelf, .floorLamp, .sofa: return true
 		default: return false
 		}
 	}
@@ -10248,8 +10359,114 @@ extension World {
 		return m > 0 ? Double(n) / Double(m) : 0
 	}
 
+	// MARK: stairs
+	// A stair tile is not solid; it has two solid parts instead: a full-width lower step (its bottom
+	// half) and an upper step on its high side (top half, the right half for R, the left for L).
+	// Bodies collide with those parts, and step up half a tile at a time.
+
+	func stairAt(_ x: Int, _ y: Int) -> UInt8 {
+		if y < 0 || y >= H { return 0 }
+		return Tile.stairTable[Int(tile(x, y).rawValue)]
+	}
+
+	/// Whether any stairs stand in the loaded chunks covering columns x0...x1 (counted once per chunk)
+	func stairsNear(_ x0: Double, _ x1: Double) -> Bool {
+		var cx: Int = floorDiv(Int(floor(x0)), chunkW)
+		let c1: Int = floorDiv(Int(floor(x1)), chunkW)
+		while cx <= c1 {
+			if let c = chunk(cx) {
+				if c.stairs < 0 {
+					var n: Int = 0
+					for r in c.tiles where Tile.stairTable[Int(r)] != 0 { n += 1 }
+					c.stairs = n
+				}
+				if c.stairs > 0 { return true }
+			}
+			cx += 1
+		}
+		return false
+	}
+
+	/// Whether a box overlaps the solid part of any stair
+	func stairHit(_ x0: Double, _ y0: Double, _ x1: Double, _ y1: Double) -> Bool {
+		let tx0: Int = Int(floor(x0))
+		let tx1: Int = Int(floor(x1 - 0.0001))
+		let ty0: Int = Int(floor(y0))
+		let ty1: Int = Int(floor(y1 - 0.0001))
+		if tx1 < tx0 || ty1 < ty0 { return false }
+		for tx in tx0...tx1 {
+			for ty in ty0...ty1 {
+				let s: UInt8 = stairAt(tx, ty)
+				if s == 0 { continue }
+				let fx: Double = Double(tx)
+				let fy: Double = Double(ty)
+				// the lower step, full width
+				if y1 > fy + 0.5 && y0 < fy + 1.0 { return true }
+				// the upper step, on the high side
+				let hx: Double = s == 1 ? fx + 0.5 : fx
+				if y1 > fy && y0 < fy + 0.5 && x1 > hx && x0 < hx + 0.5 { return true }
+			}
+		}
+		return false
+	}
+
+	/// Solid tiles, and the solid parts of stairs when there are any about
+	func boxBlocked(_ x0: Double, _ y0: Double, _ x1: Double, _ y1: Double, _ stairs: Bool) -> Bool {
+		if boxSolid(x0, y0, x1, y1) { return true }
+		return stairs && stairHit(x0, y0, x1, y1)
+	}
+
+	/// The first stair top a body's feet meet coming down from prevY to ny over x0...x1
+	func stairLanding(_ x0: Double, _ x1: Double, _ prevY: Double, _ ny: Double) -> Double? {
+		let tx0: Int = Int(floor(x0))
+		let tx1: Int = Int(floor(x1 - 0.0001))
+		let ty0: Int = Int(floor(prevY - 0.001))
+		let ty1: Int = Int(floor(ny + 0.0005))
+		if tx1 < tx0 || ty1 < ty0 { return nil }
+		var best: Double? = nil
+		for tx in tx0...tx1 {
+			for ty in ty0...ty1 {
+				let s: UInt8 = stairAt(tx, ty)
+				if s == 0 { continue }
+				let low: Double = Double(ty) + 0.5
+				if low >= prevY - 0.001 && low <= ny + 0.0005 { best = min(best ?? low, low) }
+				let hx: Double = s == 1 ? Double(tx) + 0.5 : Double(tx)
+				if x1 > hx + 0.001 && x0 < hx + 0.499 {
+					let up: Double = Double(ty)
+					if up >= prevY - 0.001 && up <= ny + 0.0005 { best = min(best ?? up, up) }
+				}
+			}
+		}
+		return best
+	}
+
+	/// The first stair underside a body's head meets going up from prevTop to newTop over x0...x1
+	func stairCeiling(_ x0: Double, _ x1: Double, _ prevTop: Double, _ newTop: Double) -> Double? {
+		let tx0: Int = Int(floor(x0))
+		let tx1: Int = Int(floor(x1 - 0.0001))
+		let ty0: Int = Int(floor(newTop)) - 1
+		let ty1: Int = Int(floor(prevTop))
+		if tx1 < tx0 || ty1 < ty0 { return nil }
+		var best: Double? = nil
+		for tx in tx0...tx1 {
+			for ty in ty0...ty1 {
+				let s: UInt8 = stairAt(tx, ty)
+				if s == 0 { continue }
+				let low: Double = Double(ty) + 1.0
+				if low <= prevTop + 0.001 && low >= newTop - 0.0005 { best = max(best ?? low, low) }
+				let hx: Double = s == 1 ? Double(tx) + 0.5 : Double(tx)
+				if x1 > hx + 0.001 && x0 < hx + 0.499 {
+					let up: Double = Double(ty) + 0.5
+					if up <= prevTop + 0.001 && up >= newTop - 0.0005 { best = max(best ?? up, up) }
+				}
+			}
+		}
+		return best
+	}
+
 	/// Moves a body with gravity-free integration; the caller sets vx/vy. Collides with solid tiles,
-	/// one-way platforms and decks. stepUp = max ledge height (tiles) climbed automatically.
+	/// stairs, one-way platforms and decks. stepUp = max ledge height (tiles) climbed automatically
+	/// (half a tile at a time on stairs).
 	func moveBody(_ b: inout Body, _ dt: Double, stepUp: Double, dropThrough: Bool, decks: [Deck]) {
 		Perf.shared.countMove()
 		b.wasOnGround = b.onGround
@@ -10261,11 +10478,13 @@ extension World {
 		let steps: Int = max(1, Int(ceil(speed * dt / 0.3)))
 		let sdt: Double = dt / Double(steps)
 		let hw: Double = b.w * 0.5
+		let st: Bool = stairsNear(b.x - hw - 1.0, b.x + hw + 1.0)
+		let liftStep: Double = st ? 0.5 : 1.0
 		// unstick: if inside solid, push upward
-		if boxSolid(b.x - hw + 0.02, b.y - b.h + 0.02, b.x + hw - 0.02, b.y - 0.02) {
+		if boxBlocked(b.x - hw + 0.02, b.y - b.h + 0.02, b.x + hw - 0.02, b.y - 0.02, st) {
 			var k: Int = 0
-			while k < 6 && boxSolid(b.x - hw + 0.02, b.y - b.h + 0.02, b.x + hw - 0.02, b.y - 0.02) {
-				b.y -= 1.0
+			while k < (st ? 12 : 6) && boxBlocked(b.x - hw + 0.02, b.y - b.h + 0.02, b.x + hw - 0.02, b.y - 0.02, st) {
+				b.y -= liftStep
 				k += 1
 			}
 		}
@@ -10273,19 +10492,19 @@ extension World {
 			// horizontal
 			if b.vx != 0 {
 				let nx: Double = b.x + b.vx * sdt
-				if !boxSolid(nx - hw, b.y - b.h + 0.001, nx + hw, b.y - 0.001) {
+				if !boxBlocked(nx - hw, b.y - b.h + 0.001, nx + hw, b.y - 0.001, st) {
 					b.x = nx
 				} else {
 					var done: Bool = false
 					if (b.wasOnGround || b.onGround) && stepUp > 0 {
-						var lift: Double = 1.0
+						var lift: Double = liftStep
 						while lift <= stepUp + 0.001 && !done {
-							if !boxSolid(nx - hw, b.y - lift - b.h + 0.001, nx + hw, b.y - lift - 0.001) {
+							if !boxBlocked(nx - hw, b.y - lift - b.h + 0.001, nx + hw, b.y - lift - 0.001, st) {
 								b.x = nx
 								b.y -= lift
 								done = true
 							}
-							lift += 1.0
+							lift += liftStep
 						}
 					}
 					if !done {
@@ -10305,7 +10524,11 @@ extension World {
 						// find top of the colliding row at feet
 						landY = floor(ny + 0.0005)
 						if landY < prevY - 0.0001 { landY = prevY }
+						if st, let sl = stairLanding(b.x - hw, b.x + hw, prevY, ny), sl < landY { landY = max(sl, prevY) }
 						landed = true
+					} else if st, let sl = stairLanding(b.x - hw, b.x + hw, prevY, ny) {
+						landed = true
+						landY = sl
 					} else {
 						// platforms
 						let rowF: Int = Int(floor(ny + 0.0005))
@@ -10342,6 +10565,10 @@ extension World {
 					if boxSolid(b.x - hw, ny - b.h, b.x + hw, ny - 0.001) {
 						let ceilRow: Double = floor(ny - b.h) + 1.0
 						b.y = ceilRow + b.h
+						b.vy = 0
+						b.hitCeil = true
+					} else if st, let sc = stairCeiling(b.x - hw, b.x + hw, prevY - b.h, ny - b.h) {
+						b.y = sc + b.h
 						b.vy = 0
 						b.hitCeil = true
 					} else {
@@ -11356,6 +11583,8 @@ struct Settings: Codable {
 	var nightDanger: Int = 1
 	/// how wiring is drawn: 0 only while a wiring tool or the probe is in hand, 1 always, 2 always but faint
 	var showWires: Int = 0
+	/// structural physics: built blocks need support and can only carry so much (see updateStructures)
+	var structural: Bool = false
 
 	var shakeScale: Double { return shakeOn ? shakeIntensity : 0 }
 
@@ -11437,6 +11666,7 @@ struct Settings: Codable {
 		reduceFlashes = (try? c.decodeIfPresent(Bool.self, forKey: .reduceFlashes)) ?? false
 		nightDanger = clampI((try? c.decodeIfPresent(Int.self, forKey: .nightDanger)) ?? 1, 0, 2)
 		showWires = clampI((try? c.decodeIfPresent(Int.self, forKey: .showWires)) ?? 0, 0, 2)
+		structural = (try? c.decodeIfPresent(Bool.self, forKey: .structural)) ?? false
 	}
 }
 
@@ -11626,6 +11856,21 @@ final class Game: ObservableObject, @unchecked Sendable {
 	var spawnLast: String = ""
 	var shipTimer: Double = 20.0
 	var fallingBlocks: [FallingBlock] = []
+	/// placing a held block as a wall instead (the HUD's WALL switch)
+	var wallMode: Bool = false
+	/// the item in hand while the use button is held, and whether that hold used it up (see updateUse)
+	var lastUsedItem: Item? = nil
+	var handEmptied: Bool = false
+	/// the chair or sofa the player is sitting on
+	var seat: IntPair? = nil
+	/// the lift cars of this dimension, and those left in the others
+	var lifts: [Lift] = []
+	var liftStash: [[Lift]] = [[Lift]](repeating: [], count: dimCount)
+	/// structural physics: changes waiting to be looked at, a moment's wait to gather them, and the
+	/// blocks under strain (drawn cracked)
+	var structQueue: [IntPair] = []
+	var structT: Double = 0
+	var stress: [Int: Double] = [:]
 	var decayZones: [DecayZone] = []
 	/// short-lived lights from explosions (fed into the light map as moving lights, then removed)
 	var flashes: [LightFlash] = []
@@ -11967,7 +12212,8 @@ extension Game {
 		updateTime(dt)
 		updateInputGate()
 		mobGrid.rebuild(mobs)
-		decksCache = (ships.isEmpty && vehicles.isEmpty) ? [] : buildDecks()
+		updateLifts(dt)
+		decksCache = (ships.isEmpty && vehicles.isEmpty && lifts.isEmpty) ? [] : buildDecks()
 		updatePointerTimers(dt)
 		updateInputEdges()
 		updatePlayer(dt)
@@ -11986,7 +12232,10 @@ extension Game {
 		if !pauseSpawning { updateSpawning(dt) }
 		if !pauseProjectiles { updateProjectiles(dt) }
 		updateCombatFX(dt)
-		if !pauseWorldTicks { updateFallingBlocks(dt) }
+		if !pauseWorldTicks {
+			updateFallingBlocks(dt)
+			updateStructures(dt)
+		}
 		updateDrops(dt)
 		if !pauseVehicles { updateVehicles(dt) }
 		if !pauseMobs { updateShips(dt) }
@@ -12059,6 +12308,10 @@ extension Game {
 		}
 		if let r = mounted {
 			rideRex(r, ix, jumpPressed, dt)
+			return
+		}
+		if seat != nil && stayInSeat(ix, jumpPressed) {
+			lastVy = 0
 			return
 		}
 		var runMax: Double = 7.4 * speedMult * (wearing(.swiftBoots) ? 1.18 : 1.0) * wxSlow * (1.0 + effects.value(.speed) / 100.0) * (1.0 + armorInf.speed) * suitSpeedMul
@@ -12843,8 +13096,10 @@ extension Game {
 		switch t {
 		case .chest, .workbench, .furnace, .campfire, .portalOff, .doorClosed, .doorOpen, .anvil, .tinkerBench, .riftForge, .alchemyStill, .infuser, .exoStation: return true
 		case .weatherStation, .dopplerStation, .stormSiren, .lightningRod, .windTurbine, .rainBarrel, .rainCistern, .weatherVane, .heater, .shutterClosed, .shutterOpen: return true
+		case .chair, .sofa, .bedL, .bedR, .cabinet, .wardrobe, .liftButton: return true
 		default: break
 		}
+		if liftAt(wx, wy) != nil { return true }
 		if let m = mobAtPoint(wx, wy, 0.15) {
 			if m.tame { return true }
 		}
@@ -12869,6 +13124,7 @@ extension Game {
 			probeAt(wx, wy)
 			return
 		}
+		if case .gadget(.wrench)? = heldItem, wrenchLift(wx, wy) { return }
 		if t == .exoStation {
 			openExo()
 			return
@@ -12933,7 +13189,23 @@ extension Game {
 		case .weatherStation, .dopplerStation, .stormSiren, .lightningRod, .windTurbine, .rainBarrel, .rainCistern, .weatherVane, .heater, .shutterClosed, .shutterOpen:
 			useWeatherDevice(tx, ty, t)
 			return
+		case .chair, .sofa:
+			sitOn(tx, ty)
+			return
+		case .bedL, .bedR:
+			sleepIn(tx, ty)
+			return
+		case .cabinet, .wardrobe:
+			openStorage(tx, ty)
+			return
+		case .liftButton:
+			callLift(tx, ty)
+			return
 		default: break
+		}
+		if let l = liftAt(wx, wy) {
+			rideLiftTap(l, wy)
+			return
 		}
 		if let m = mobAtPoint(wx, wy, 0.2) {
 			interactMob(m)
@@ -13370,6 +13642,7 @@ func allGameItems() -> [Item] {
 	for t in Tile.allCases {
 		if t.isMod { continue }
 		switch t {
+		case .bedR, .stairWoodL, .stairStoneL, .stairBrickL: continue
 		case .air, .water, .lava, .bedrock, .portalFrame, .portalOff, .portalOn, .wheat1, .wheat2, .carrot1, .carrot2, .doorOpen,
 			 .logBlock, .jungleLogBlock, .palmLogBlock, .birchLogBlock, .shutterOpen, .lampOn, .gateOpen: continue
 		default: out.append(.block(t))
@@ -13409,6 +13682,8 @@ func toolClass(_ t: Tile) -> ToolType {
 	case .log, .jungleLog, .palmLog, .logBlock, .jungleLogBlock, .palmLogBlock, .planks, .workbench, .chest, .platform, .leaves, .jungleLeaves, .cactus, .hay, .reed, .lantern, .torch, .ladder, .tinkerBench,
 		 .birchLog, .birchLogBlock, .birchLeaves, .pineLeaves, .weatherStation, .rainBarrel, .shutterClosed, .shutterOpen:
 		return .axe
+	case .chair, .table, .bedL, .bedR, .cabinet, .wardrobe, .shelf, .bookshelf, .sofa, .stairWoodR, .stairWoodL:
+		return .axe
 	case .dirt, .grass, .sand, .snow, .mud, .dryGrass, .jungleGrass, .mossGrass, .farmland, .sandbag:
 		return .shovel
 	default:
@@ -13423,6 +13698,34 @@ func isLogTile(_ t: Tile) -> Bool {
 func isLeafTile(_ t: Tile) -> Bool {
 	return t == .leaves || t == .jungleLeaves || t == .birchLeaves || t == .pineLeaves
 }
+
+/// Which way a stair rises: 1 to the right, 2 to the left, 0 for anything that is not a stair
+func stairSide(_ t: Tile) -> UInt8 {
+	switch t {
+	case .stairWoodR, .stairStoneR, .stairBrickR: return 1
+	case .stairWoodL, .stairStoneL, .stairBrickL: return 2
+	default: return 0
+	}
+}
+
+/// The stair facing the other way (the same tile for anything else)
+func stairMirror(_ t: Tile) -> Tile {
+	switch t {
+	case .stairWoodR: return .stairWoodL
+	case .stairWoodL: return .stairWoodR
+	case .stairStoneR: return .stairStoneL
+	case .stairStoneL: return .stairStoneR
+	case .stairBrickR: return .stairBrickL
+	case .stairBrickL: return .stairBrickR
+	default: return t
+	}
+}
+
+/// Furniture that stores things like a chest (its contents live in World.chests)
+func isStorageFurniture(_ t: Tile) -> Bool { return t == .cabinet || t == .wardrobe }
+
+/// Furniture the player can sit on
+func isSeat(_ t: Tile) -> Bool { return t == .chair || t == .sofa }
 
 struct DecayZone {
 	var x: Int
@@ -13506,11 +13809,20 @@ extension Game {
 		} else if bowCharge > 0 {
 			bowCharge = 0
 		}
-		if !useHeld { return }
-		guard let it = held else {
-			useBareHand(dt, pressed)
+		if !useHeld {
+			handEmptied = false
+			lastUsedItem = nil
 			return
 		}
+		guard let it = held else {
+			// a stack used up while the button is held (the last ladder or block placed) does not turn
+			// the hold into mining with bare hands: that waits for the next press
+			if lastUsedItem != nil { handEmptied = true }
+			lastUsedItem = nil
+			if !handEmptied { useBareHand(dt, pressed) }
+			return
+		}
+		lastUsedItem = it
 		// a custom dimension's gate, then a mod's summoning item (tried before the item's own use)
 		if pressed && world.dim.isCustom && tryReturnGate() { return }
 		if pressed && !logicRT.isEmpty && tryLogicTap() { return }
@@ -13758,6 +14070,9 @@ extension Game {
 		case .chest:
 			for s in world.removeChest(x, y) { out.append(s) }
 			out.append(Stack(item: .block(.chest), count: 1))
+		case .cabinet, .wardrobe:
+			for s in world.removeChest(x, y) { out.append(s) }
+			out.append(Stack(item: .block(t), count: 1))
 		default:
 			if let d = t.def.drop { out.append(Stack(item: d, count: 1)) }
 			else if !t.def.noDrop { out.append(Stack(item: .block(t), count: 1)) }
@@ -13773,6 +14088,9 @@ extension Game {
 			if isDoor(world.tile(x, y - 1)) { world.set(x, y - 1, .air) }
 			if isDoor(world.tile(x, y + 1)) { world.set(x, y + 1, .air) }
 		}
+		// a bed is taken down whole (it drops once)
+		if t == .bedL && world.tile(x + 1, y) == .bedR { world.set(x + 1, y, .air) }
+		if t == .bedR && world.tile(x - 1, y) == .bedL { world.set(x - 1, y, .air) }
 		if world.set(x, y, .air) == .air && t != .air { return }
 		if byPlayer && t.isMod && !logicRT.isEmpty, let k = modBlockKey(t) { fireLogic(.blockBroken, x: x, y: y, block: true, key: k) }
 		if isLogTile(t) && decayZones.count < 24 { decayZones.append(DecayZone(x: x, y: y, t: 30)) }
@@ -13858,12 +14176,12 @@ extension Game {
 			if !world.supports(below, t) { return false }
 		}
 		if isCreative || flying { return true }
-		// needs an adjacent tile to attach to
+		// needs an adjacent tile to attach to, or a wall behind it
 		let n: [Tile] = [world.tile(tx - 1, ty), world.tile(tx + 1, ty), world.tile(tx, ty - 1), world.tile(tx, ty + 1)]
 		for k in n {
 			if k != .air && !k.liquid && !(k.isPlant && k != .torch) { return true }
 		}
-		return false
+		return world.wallAt(tx, ty) != 0
 	}
 
 	func usePlaceBlock(_ t: Tile, _ dt: Double) {
@@ -13879,11 +14197,20 @@ extension Game {
 			}
 			return
 		}
+		// the WALL switch: the block goes up as a passable wall instead
+		if wallMode && canBeWall(t.placedForm) {
+			placeBlockAsWall(t.placedForm)
+			return
+		}
+		// aiming at a ladder with ladders in hand builds it on; beds, stairs and lift cars place their own way
+		if t == .ladder && extendLadder(tx, ty) { return }
+		if placeSpecial(t, tx, ty) { return }
 		// a log item builds a solid log block (tree trunks themselves have no collision)
 		let placed: Tile = t.placedForm
 		if !canPlaceAt(tx, ty, placed) { return }
 		// plants / crops need special support handled in canPlaceAt through needsSupport
 		world.set(tx, ty, placed)
+		world.setBuilt(tx, ty, true)
 		if t == .chest { world.setChestItems(tx, ty, []) }
 		if placed.isMod, ModRuntime.shared.blockDef(placed)?.function == .storage { world.setChestItems(tx, ty, []) }
 		// parts that point a way face the way the player does
@@ -14995,1587 +15322,5 @@ extension Game {
 			if b != a { out.append(Stack(item: .mat(b), count: 1 + rng.int(3))) }
 		}
 		return out
-	}
-}
-
-// ===== p15a_mobai =====
-
-// MARK: - Mob AI
-
-extension Game {
-	func buildDecks() -> [Deck] {
-		var out: [Deck] = []
-		let sea: Double = Double(WorldGen.sea)
-		for s in ships where s.sink < 3.0 {
-			let dy: Double = s.deckY(sea)
-			out.append(Deck(x0: s.x - PirateShip.deckHalf, x1: s.x + PirateShip.deckHalf - 0.1, y: dy, vx: s.speed * Double(s.dir), id: s.id))
-		}
-		// a parked vehicle you can stand on (only while it is roughly level)
-		for v in vehicles where !v.rider && v.upright {
-			out.append(Deck(x0: v.b.x - v.b.w * 0.5, x1: v.b.x + v.b.w * 0.5, y: v.b.y - v.b.h, vx: v.vx, id: 1_000_000 + v.id))
-		}
-		return out
-	}
-
-	func allDecks() -> [Deck] { return decksCache }
-
-	func accelX(_ m: Mob, _ target: Double, _ a: Double, _ dt: Double) {
-		let d: Double = target - m.b.vx
-		let s: Double = a * dt
-		if d > s { m.b.vx += s } else if d < -s { m.b.vx -= s } else { m.b.vx = target }
-	}
-
-	func stepMob(_ m: Mob, _ dt: Double, stepUp: Double = 1.0) {
-		let d: MobDef = m.def
-		if d.flying {
-			// keep flyers from sinking; their AI sets vy directly
-		} else if m.b.inWater {
-			m.b.vy += 12.0 * dt
-			m.b.vy = clampD(m.b.vy, -5.0, 5.0)
-			if m.hp > 0 && d.behavior != .swimmer { m.b.vy -= 26.0 * dt }
-		} else {
-			m.b.vy = min(m.b.vy + gravityG * dt, terminalV)
-		}
-		if m.knock > 0 { m.knock -= dt }
-		if m.leapReq {
-			// a harder leap at a wall it is stuck against (see think)
-			m.leapReq = false
-			if m.b.onGround && !d.flying {
-				m.b.vy = -d.jump * 1.22
-				m.b.vx = (m.aimX >= m.b.x ? 1.0 : -1.0) * max(2.5, d.speed)
-				m.leapT = 1.6
-			}
-		}
-		// slowed creatures cover less ground (their AI still asks for its usual speed)
-		let sm: Double = m.speedMul
-		if sm < 0.999 {
-			m.b.vx *= sm
-			if d.flying { m.b.vy *= sm }
-		}
-		world.moveBody(&m.b, dt, stepUp: d.flying ? 0 : stepUp, dropThrough: false, decks: decksCache)
-		if sm < 0.999 {
-			m.b.vx /= sm
-			if d.flying { m.b.vy /= sm }
-		}
-		if m.b.deck >= 0 && m.b.deck < decksCache.count { m.b.x += decksCache[m.b.deck].vx * dt }
-		if m.boat >= 0 { clampToDeck(m) }
-		if m.b.onGround { m.anim += abs(m.b.vx) * dt * 0.8 } else { m.anim += dt * 0.5 }
-	}
-
-	func cliffAhead(_ m: Mob, _ dir: Int) -> Bool {
-		let fx: Int = Int(floor(m.b.x + Double(dir) * (m.b.w * 0.5 + 0.6)))
-		let fy: Int = Int(floor(m.b.y + 0.2))
-		var d: Int = 0
-		while d < 5 {
-			let t: Tile = world.tile(fx, fy + d)
-			if t.solid || t == .platform || t.liquid { return false }
-			d += 1
-		}
-		return true
-	}
-
-	func wander(_ m: Mob, _ dt: Double, _ speedK: Double) {
-		let d: MobDef = m.def
-		m.t1 -= dt
-		if m.t1 <= 0 {
-			if m.st == 0 {
-				m.st = 1
-				m.dir = Bool.random() ? 1 : -1
-				if abs(m.b.x - m.homeX) > 24 { m.dir = m.b.x > m.homeX ? -1 : 1 }
-				m.t1 = Double.random(in: 1.5...4.5)
-			} else {
-				m.st = 0
-				m.t1 = Double.random(in: 1.0...4.0)
-			}
-		}
-		if m.st == 1 {
-			if cliffAhead(m, m.dir) || (m.b.hitWall && !m.b.onGround) { m.dir = -m.dir }
-			if m.b.hitWall && m.b.onGround { m.dir = -m.dir }
-			accelX(m, Double(m.dir) * d.speed * speedK, 14, dt)
-		} else {
-			accelX(m, 0, 18, dt)
-		}
-	}
-
-	func flee(_ m: Mob, _ fromX: Double, _ dt: Double, _ speedK: Double) {
-		let dirX: Double = m.b.x >= fromX ? 1.0 : -1.0
-		m.dir = Int(dirX)
-		accelX(m, dirX * m.def.speed * speedK, 30, dt)
-		if m.b.hitWall && m.b.onGround { m.b.vy = -m.def.jump }
-	}
-
-	func chase(_ m: Mob, _ tx: Double, _ speedK: Double, _ dt: Double) {
-		let d: MobDef = m.def
-		let dirX: Double = tx >= m.b.x ? 1.0 : -1.0
-		if abs(tx - m.b.x) > 0.35 {
-			m.dir = Int(dirX)
-			accelX(m, dirX * d.speed * speedK, 26, dt)
-		} else {
-			accelX(m, 0, 30, dt)
-		}
-		if m.b.hitWall && m.b.onGround { m.b.vy = -d.jump }
-		if m.b.inWater { m.b.vy -= 18 * dt }
-	}
-
-	func contactHurt(_ m: Mob, _ dmg: Double) {
-		if m.cd > 0 || dead { return }
-		// touching: overlapping across, and up and down anything from overlapping to standing on the
-		// player's head (or the player on its back)
-		let across: Bool = pb.right > m.b.left + 0.05 && pb.left < m.b.right - 0.05
-		let upDown: Bool = pb.y > m.b.top - 0.2 && pb.top < m.b.y + 0.2
-		if across && upDown {
-			var info = DamageInfo(amount: dmg, type: .contact, source: .mob(m, faction(of: m)))
-			info.knock = 6.5
-			info.originX = m.b.x
-			if hurtPlayer(info) { m.cd = 0.9; m.atkT = Mob.atkDur }
-		}
-	}
-
-	/// A creature's swing: hits the player and any creature from another side inside the reach box
-	func mobStrike(_ m: Mob, reach: Double, height: Double, dmg: Double, knock: Double) {
-		m.atkT = Mob.atkDur
-		// a mutated creature's swing reaches as far as it has grown
-		let k: Double = max(1.0, m.mutSize)
-		let reach: Double = reach * k
-		let height: Double = height * k
-		let x0: Double = m.dir > 0 ? m.b.x - 0.3 : m.b.x - reach - 0.3
-		let x1: Double = m.dir > 0 ? m.b.x + reach + 0.3 : m.b.x + 0.3
-		var info = DamageInfo(amount: dmg, type: .melee, source: .mob(m, faction(of: m)))
-		info.dirX = Double(m.dir)
-		info.knock = knock
-		info.originX = m.b.x
-		info.key = newID()
-		damageBox(x0, m.b.y - height, x1, m.b.y + 0.1, info)
-	}
-
-	func updateMobs(_ dt: Double) {
-		let t0: Double = perfNow()
-		let px: Double = pb.x
-		let py: Double = pb.y
-		let offScreen: Double = viewTilesW * 0.5 + 6.0
-		frameNo &+= 1
-		// iterated by index because AI code may append new mobs while it runs
-		var i: Int = 0
-		while i < mobs.count {
-			let m: Mob = mobs[i]
-			i += 1
-			if m.hp <= 0 || m.removed { continue }
-			let dx: Double = abs(m.b.x - px)
-			let dy: Double = abs(m.b.y - py)
-			if !m.persistent && !m.tame && !m.isBoss && (dx > 115 || dy > 85) {
-				m.removed = true
-				continue
-			}
-			// a monster nobody is fighting that stays well off-screen wanders off after a while, making
-			// room for another; at daybreak the night's hunters out of sight go back where they came from
-			if m.def.hostile && !m.persistent && !m.tame && !m.isBoss && m.boat < 0 && m.lair == 0 {
-				if (dx > offScreen || dy > 40) && m.ai != .chase {
-					m.farT += dt
-					if m.farT > ((m.hunter && !isNight) ? 4.0 : 40.0) {
-						m.removed = true
-						continue
-					}
-				} else {
-					m.farT = 0
-				}
-			}
-			if m.hurtT > 0 { m.hurtT -= dt }
-			if m.cd > 0 { m.cd -= dt }
-			if m.flash > 0 { m.flash -= dt }
-			if m.lean != 0 { m.lean *= (1.0 - min(1.0, dt * 7.0)); if abs(m.lean) < 0.01 { m.lean = 0 } }
-			if m.atkT > 0 { m.atkT -= dt }
-			if m.turnT > 0 {
-				m.turnT -= dt
-				if m.turnT <= 0 { m.turnT = 0; m.face = m.dir }
-			} else if m.face != m.dir {
-				if m.face == 0 { m.face = m.dir } else { m.turnT = Mob.turnDur }
-			}
-			if m.regrow > 0 {
-				m.regrow -= dt
-				if m.regrow <= 0 { m.sheared = false }
-			}
-			if !world.isLoaded(Int(floor(m.b.x))) { continue }
-			if m.dazeGuard > 0 { m.dazeGuard -= dt }
-			if m.daze > 0 {
-				// reeling from a club: it stands (or hangs) where it is and does nothing else
-				m.daze -= dt
-				if m.daze <= 0 { m.daze = 0; m.dazeGuard = 1.2 }
-				m.b.vx *= max(0, 1.0 - dt * 9.0)
-				if m.def.flying { m.b.vy *= max(0, 1.0 - dt * 9.0) }
-				stepMob(m, dt)
-				mobHazards(m, dt)
-				continue
-			}
-			// creatures well off screen wait until the player comes closer (saves a lot of work)
-			if !m.isBoss && !m.tame && m.boat < 0 && (dx > 72 || dy > 56) { continue }
-			// mid-distance creatures think and move at a third of the rate, staggered by id, with the
-			// skipped time folded into their next step so they still cover the same ground
-			var step: Double = dt
-			if !m.isBoss && !m.tame && m.boat < 0 && (dx > 40 || dy > 30) {
-				m.aiAccum += dt
-				if (frameNo &+ m.id) % 3 != 0 {
-					Perf.shared.countSkip()
-					continue
-				}
-				step = min(0.1, m.aiAccum)
-			}
-			m.aiAccum = 0
-			updateMob(m, step)
-			if m.hp > 0 { mobHazards(m, step) }
-		}
-		updateDying(dt)
-		// compact once: drop removed mobs and finished death animations
-		if mobs.contains(where: { $0.removed }) { mobs.removeAll { $0.removed } }
-		Perf.shared.aiMs = Perf.smooth(Perf.shared.aiMs, perfNow() - t0)
-	}
-
-	func nearestHostileTo(_ x: Double, _ y: Double, _ r: Double) -> Mob? {
-		var best: Mob? = nil
-		var bd: Double = r * r
-		for o in mobs {
-			if o.hp <= 0 || o.tame || !o.def.hostile { continue }
-			let dx: Double = o.b.x - x
-			let dy: Double = o.b.cy - y
-			let d: Double = dx * dx + dy * dy
-			if d < bd { bd = d; best = o }
-		}
-		return best
-	}
-
-	func updateMob(_ m: Mob, _ dt: Double) {
-		if m.kind == .custom {
-			updateCustomMob(m, dt)
-			return
-		}
-		let d: MobDef = m.def
-		if m.kind == .bearBoss || m.kind == .rex {
-			updateBossMob(m, dt)
-			return
-		}
-		if m.kind == .sentinel { updateSentinel(m, dt); return }
-		if m.kind == .warden { updateWarden(m, dt); return }
-		if m.boat >= 0 && updateCrew(m, dt) { return }
-		let toPX: Double = pb.x - m.b.x
-		let dist: Double = abs(toPX)
-		let dyP: Double = (pb.y - pb.h * 0.5) - m.b.cy
-		let near: Bool = dist < d.aggro && abs(dyP) < 14 && !dead
-		let peaceful: Bool = settings.peaceful
-		if m.tame {
-			updatePet(m, dt)
-			return
-		}
-		// monsters decide for themselves whether they are after the player (see think)
-		var engaged: Bool = near && !peaceful
-		if m.kind.thinks { engaged = think(m, dt, dist, dyP) }
-		switch m.kind {
-		case .custom:
-			// run by updateCustomMob (never reaches here)
-			stepMob(m, dt)
-		case .pig, .cow, .sheep, .villager:  // (villagers are retired and never appear)
-			if m.t2 > 0 {
-				m.t2 -= dt
-				flee(m, m.tx, dt, 1.9)
-			} else if !animalLife(m, dt) {
-				wander(m, dt, 0.55)
-			}
-			stepMob(m, dt)
-		case .giraffe, .chicken, .frog, .cat:
-			if m.t2 > 0 {
-				m.t2 -= dt
-				flee(m, m.tx, dt, 1.7)
-			} else if !(dist < 6.0 && !dead && m.kind != .cat) && m.kind != .cat && animalLife(m, dt) {
-				// handled: resting, heading for water or the herd
-			} else if dist < 6.0 && !dead && m.kind != .cat {
-				flee(m, pb.x, dt, 1.4)
-			} else {
-				wander(m, dt, 0.5)
-			}
-			if m.kind == .frog && m.b.onGround && m.st == 1 && Double.random(in: 0...1) < 0.04 { m.b.vy = -9; m.b.vx = Double(m.dir) * 3.5 }
-			stepMob(m, dt)
-		case .elephant, .bear, .wolf:
-			if m.drinkT > 0 && m.kind == .wolf { m.drinkT -= dt }
-			// a wolf that turns on the player forgets its prey
-			if m.angry { m.preyID = 0 }
-			if !m.angry && m.kind == .wolf && hunt(m, dt, isNight && m.drinkT <= 0) {
-				// a wolf pack runs down prey at night
-			} else if m.angry && !dead {
-				m.t3 -= dt
-				if m.t3 <= 0 || dist > 30 { m.angry = false } else {
-					chase(m, pb.x, 1.0, dt)
-					if m.kind == .wolf && m.b.onGround && dist < 4.0 && Double.random(in: 0...1) < 0.03 { m.b.vy = -12; m.b.vx = Double(m.dir) * 7.0 }
-					if peaceful { m.angry = false }
-					else { contactHurt(m, d.dmg) }
-				}
-			} else {
-				// animals are neutral: only a blow from the player makes them fight (see hurtMob)
-				wander(m, dt, 0.5)
-			}
-			stepMob(m, dt)
-		case .grizzly, .polarBear, .tiger, .scorpion:
-			if m.drinkT > 0 { m.drinkT -= dt }
-			// wild animals hunt their prey but leave the player alone, unless the player hurts them:
-			// then they fight back for a while
-			let provoked: Bool = wildProvoked(m)
-			if !(provoked && !peaceful) && m.kind != .scorpion && hunt(m, dt, m.drinkT <= 0) {
-				// hunting, or resting after a kill
-			} else if !(provoked && !peaceful) {
-				wander(m, dt, 0.4)
-			} else if !dead {
-				chase(m, pb.x, 1.0, dt)
-				if m.kind == .tiger && m.b.onGround && dist < 6.5 && dist > 2.0 && m.cd <= 0.4 && Double.random(in: 0...1) < 0.04 {
-					m.b.vy = -11.5
-					m.b.vx = Double(m.dir) * 10.0
-					m.t3 = 0.6
-				}
-				contactHurt(m, d.dmg)
-			} else {
-				wander(m, dt, 0.5)
-			}
-			stepMob(m, dt)
-		case .zombie:
-			updateZombie(m, dt, engaged, dyP)
-		case .skeleton, .pirate, .pirateCaptain:
-			updateSwordsman(m, dt, engaged, dist, dyP)
-		case .pirateGunner, .imp:
-			updateShooter(m, dt, engaged, dist, dyP)
-		case .slime, .emberSlime:
-			updateSlime(m, dt, engaged, dyP)
-		case .crow, .bat, .cinderBat, .wraith:
-			updateFlyer(m, dt, engaged, dist, dyP)
-		case .fish:
-			updateFish(m, dt)
-		case .crawler:
-			updateCrawler(m, dt, engaged, dist, dyP)
-		case .golem:
-			updateGolem(m, dt, engaged, dist, dyP)
-		case .archer:
-			updateArcher(m, dt, engaged, dist, dyP)
-		case .mimic:
-			updateMimic(m, dt, !peaceful && !dead && dist < 20, dist, dyP)
-		case .bearBoss, .rex, .sentinel, .warden:
-			break
-		}
-	}
-
-	// MARK: hostile minds
-
-	/// How far a monster's attack reaches (across, up or down) and whether it is shot from afar
-	/// How far a creature's attack reaches: a mutated creature's blows reach as far as its size
-	func attackReach(_ m: Mob) -> (Double, Double, Bool) {
-		let r: (Double, Double, Bool) = attackReachBase(m)
-		if m.mutSize <= 1.001 || r.2 { return r }
-		return (r.0 * m.mutSize, r.1 * m.mutSize, r.2)
-	}
-
-	func attackReachBase(_ m: Mob) -> (Double, Double, Bool) {
-		switch m.kind {
-		case .zombie: return (1.5, 1.7, false)
-		case .skeleton, .pirate, .pirateCaptain: return (2.0, 1.6, false)
-		case .pirateGunner, .imp: return (17.0, 9.0, true)
-		case .archer: return (18.0, 10.0, true)
-		case .crawler: return (4.6, 2.0, false)
-		case .golem: return (3.3, 2.4, false)
-		case .custom: return ModRuntime.shared.mob(m.cslot)?.reach ?? (m.b.w * 0.5 + 0.5, 1.4, false)
-		default: return (m.b.w * 0.5 + 0.5, 1.4, false)
-		}
-	}
-
-	/// A monster's senses and its plan, the same for every kind (each has its own attacks).
-	/// It notices the player by sight (a clear line from its eyes, rechecked a few times a second),
-	/// by sound up close, or by being hit; after a beat of surprise it gives chase; when the player
-	/// slips out of sight it searches where they were last seen, then goes home. Stuck against a wall
-	/// it tries one harder leap, then backs off and comes again. Night hunters spawned on the surface
-	/// roam toward the player before they have seen them. Returns whether it is after the player;
-	/// `aimX` is where it is heading.
-	func think(_ m: Mob, _ dt: Double, _ dist: Double, _ dyP: Double) -> Bool {
-		let d: MobDef = m.def
-		m.aiT += dt
-		if m.leapT > 0 { m.leapT -= dt }
-		if m.hunter && (m.kind == .skeleton || m.kind == .archer) && inSunlight(m) { m.burn = 2.0 }
-		if dead || settings.peaceful {
-			m.why = dead ? .playerGone : .peaceful
-			if m.ai != .idle && m.ai != .back { m.ai = .back; m.aiT = 0 }
-			if m.ai == .back && (abs(m.b.x - m.homeX) < 2.0 || m.aiT > 8.0) { m.ai = .idle; m.aiT = 0 }
-			m.aimX = m.homeX
-			return false
-		}
-		m.losT -= dt
-		if m.losT <= 0 {
-			// its eyes (a golem looks over a low wall) to the player's head or chest
-			m.losT = 0.18 + Double(m.id % 7) * 0.02
-			let ey: Double = m.kind == .golem ? m.b.top - 0.5 : shotY(m)
-			m.sees = m.kind == .wraith || world.lineClear(m.b.x, ey, pb.x, pb.y - pb.h * 0.6) || world.lineClear(m.b.x, ey, pb.x, pb.top + 0.2)
-			// smoke hides the player from eyes on either side of it
-			if m.sees && !smokes.isEmpty && (inSmoke(pb.x, pb.cy) || inSmoke(m.b.x, m.b.cy)) { m.sees = false }
-		}
-		// sight reaches across most of the screen (further for the night's hunters, and for one already
-		// fighting); footsteps and scent carry through walls over a shorter distance
-		let base: Double = max(d.aggro, 16.0)
-		let sight: Double = base * (m.hunter ? 1.25 : 1.0) * (m.ai == .chase ? 1.5 : 1.0)
-		let sense: Double = base * 0.7
-		let hurt: Bool = clock - m.lastHitByPlayer < 0.6
-		let heard: Bool = dist < 3.5 && abs(dyP) < 3.0
-		let detect: Bool = hurt || heard || (dist < sight && abs(dyP) < 12.0 && m.sees)
-		let sensed: Bool = dist < sense && abs(dyP) < 10.0
-		if detect || sensed {
-			m.seenX = pb.x
-			m.seenY = pb.y
-			m.lostT = 0
-		} else {
-			m.lostT += dt
-		}
-		let hunting: Bool = m.hunter && isNight && world.dim == .overworld && dist < 80
-		switch m.ai {
-		case .idle, .back:
-			if detect {
-				m.ai = hurt ? .chase : .alert
-				m.aiT = 0
-			} else if sensed {
-				// something moving nearby, out of sight: it goes to look
-				m.ai = .search
-				m.aiT = 0
-			} else if hunting {
-				// a hunter roams toward where the player is, give or take
-				m.ai = .search
-				m.aiT = 0
-				m.seenX = pb.x + Double.random(in: -6...6)
-				m.seenY = pb.y
-			}
-		case .alert:
-			if m.aiT > 0.35 { m.ai = .chase; m.aiT = 0 }
-		case .chase:
-			if m.lostT > 2.5 { m.ai = .search; m.aiT = 0 }
-		case .search:
-			if detect {
-				m.ai = .chase
-				m.aiT = 0
-			} else if sensed {
-				m.aiT = 0
-			} else if (abs(m.b.x - m.seenX) < 1.2 && m.aiT > 2.0) || m.aiT > (hunting ? 14.0 : 8.0) {
-				if hunting {
-					m.seenX = pb.x + Double.random(in: -8...8)
-					m.seenY = pb.y
-					m.aiT = 0
-				} else {
-					m.ai = .back
-					m.aiT = 0
-				}
-			}
-		case .retreat:
-			if m.aiT > 2.5 { m.ai = detect ? .chase : .search; m.aiT = 0 }
-		}
-		switch m.ai {
-		case .alert, .chase: m.aimX = pb.x
-		case .search: m.aimX = m.seenX
-		case .retreat: m.aimX = m.b.x + (m.b.x >= m.seenX ? 6.0 : -6.0)
-		case .back: m.aimX = m.homeX
-		case .idle: m.aimX = m.b.x
-		}
-		if m.ai == .back && abs(m.b.x - m.homeX) < 2.0 { m.ai = .idle; m.aiT = 0 }
-		// getting nowhere (pressed against a wall it can't get over, or hopping at it): one harder
-		// leap, then back off and come again. One already within reach of its attack is not stuck.
-		let reach: (Double, Double, Bool) = attackReach(m)
-		let inReach: Bool = dist <= reach.0 && abs(dyP) <= reach.1 && (!reach.2 || m.sees)
-		// (states 0 and 1 are walking about; 3 and up are its attacks)
-		let pushing: Bool = (m.ai == .chase || m.ai == .search) && abs(m.aimX - m.b.x) > 1.0 && m.st <= 1 && !(m.ai == .chase && inReach)
-		if pushing {
-			if abs(m.b.x - m.progX) > 0.6 {
-				m.progX = m.b.x
-				m.blockedT = max(0, m.blockedT - 0.5)
-			} else {
-				// a cactus or spikes in the way: it gives up on that much sooner
-				let ax: Int = Int(floor(m.b.x + Double(m.dir) * (m.b.w * 0.5 + 0.3)))
-				let thorny: Bool = world.tile(ax, Int(floor(m.b.y - 0.5))).hurts
-				m.blockedT += thorny ? dt * 3.0 : dt
-			}
-			// (applied in stepMob, after the creature's own moves, so its usual hop can't cancel it)
-			if !d.flying && m.blockedT > 0.9 && m.leapT <= 0 { m.leapReq = true }
-			if m.blockedT > 3.2 {
-				m.ai = .retreat
-				m.aiT = 0
-				m.blockedT = 0
-			}
-		} else if m.st <= 1 {
-			m.progX = m.b.x
-			m.blockedT = max(0, m.blockedT - dt * 0.5)
-		}
-		// the reason it is not attacking right now (shown by the AI overlay)
-		if m.ai == .retreat || m.blockedT > 0.9 { m.why = .blocked }
-		else if m.ai != .chase && m.ai != .alert { m.why = .notSeen }
-		else if dist > reach.0 { m.why = .outOfRange }
-		else if abs(dyP) > reach.1 { m.why = .tooHigh }
-		else if reach.2 && !m.sees { m.why = .noSight }
-		else if m.cd > 0 { m.why = .cooldown }
-		else { m.why = .none }
-		return m.ai != .idle && m.ai != .back
-	}
-
-	// MARK: specific AIs
-
-	/// Out in full daylight under an open sky (the undead burn)
-	func inSunlight(_ m: Mob) -> Bool {
-		return world.dim == .overworld && dayFactor > 0.7 && precipAt(m.b.x) < 0.5 && wxHere.cloud < 0.9 && world.isSkyExposed(Int(floor(m.b.x)), Int(floor(m.b.y - 1))) && !m.b.inWater
-	}
-
-	func updateZombie(_ m: Mob, _ dt: Double, _ aggro: Bool, _ dyP: Double) {
-		let d: MobDef = m.def
-		if inSunlight(m) { m.burn = 2.0 }
-		let dist: Double = abs(pb.x - m.b.x)
-		if m.st == 3 {
-			// arms drawn back: the swipe lands a moment later, so a quick step back dodges it
-			m.t3 -= dt
-			accelX(m, 0, 40, dt)
-			if m.t3 <= 0 {
-				m.st = 4
-				m.t3 = 0.25
-				mobStrike(m, reach: 1.2, height: 1.8, dmg: d.dmg, knock: 6.5)
-			}
-		} else if m.st == 4 {
-			m.t3 -= dt
-			accelX(m, 0, 40, dt)
-			if m.t3 <= 0 {
-				m.st = 0
-				m.cd = 0.9
-			}
-		} else if aggro {
-			chase(m, m.aimX, 1.0, dt)
-			if m.ai == .chase && (m.sees || dist < 1.0) && m.cd <= 0 && dist < 1.5 && abs(dyP) < 1.7 {
-				m.st = 3
-				m.t3 = 0.32
-				m.dir = pb.x >= m.b.x ? 1 : -1
-			}
-		} else {
-			wander(m, dt, 0.45)
-		}
-		stepMob(m, dt)
-	}
-
-	/// skeleton knight (shield), pirate and captain (cutlass)
-	func updateSwordsman(_ m: Mob, _ dt: Double, _ aggro: Bool, _ dist: Double, _ dyP: Double) {
-		let d: MobDef = m.def
-		let isSkel: Bool = m.kind == .skeleton
-		if m.st == 3 {
-			// wind-up
-			m.t3 -= dt
-			accelX(m, 0, 40, dt)
-			if m.t3 <= 0 {
-				m.st = 4
-				m.t3 = 0.22
-				// strike
-				mobStrike(m, reach: 2.2, height: 1.9, dmg: d.dmg, knock: 7.0)
-			}
-		} else if m.st == 4 {
-			m.t3 -= dt
-			accelX(m, 0, 40, dt)
-			if m.t3 <= 0 {
-				m.st = 0
-				m.cd = m.kind == .pirateCaptain ? 0.9 : 1.2
-			}
-		} else if aggro {
-			let sp: Double = dist > 8 ? 1.15 : 0.95
-			if isSkel {
-				// raise the shield while approaching, drop it to attack
-				m.blocking = dist > 2.4 && dist < 11 && m.ai == .chase
-				if m.ai == .chase && m.sees && dist < 2.0 && m.cd <= 0 && abs(dyP) < 1.6 {
-					m.st = 3
-					m.t3 = 0.38
-					m.blocking = false
-					m.dir = pb.x >= m.b.x ? 1 : -1
-				}
-				chase(m, m.aimX, m.blocking ? 0.7 : sp, dt)
-			} else {
-				if m.ai == .chase && m.sees && dist < 2.0 && m.cd <= 0 && abs(dyP) < 1.6 {
-					m.st = 3
-					m.t3 = 0.3
-					m.dir = pb.x >= m.b.x ? 1 : -1
-				}
-				chase(m, m.aimX, sp, dt)
-			}
-		} else {
-			m.blocking = false
-			wander(m, dt, 0.4)
-		}
-		if m.st == 0 && !aggro { m.blocking = false }
-		stepMob(m, dt)
-	}
-
-	/// pirate gunner and imp: keep range and shoot
-	func updateShooter(_ m: Mob, _ dt: Double, _ aggro: Bool, _ dist: Double, _ dyP: Double) {
-		let isImp: Bool = m.kind == .imp
-		if m.st == 3 {
-			m.t3 -= dt
-			accelX(m, 0, 40, dt)
-			m.dir = pb.x >= m.b.x ? 1 : -1
-			if m.t3 <= 0 {
-				if clearShot(m) {
-					m.st = 6
-					m.t3 = 0.18
-					shootAtPlayer(m, isImp)
-				} else if m.t3 < -0.8 {
-					m.st = 0
-					m.cd = 0.4
-					m.blockedT += 0.6
-				}
-			}
-		} else if m.st == 6 {
-			m.t3 -= dt
-			accelX(m, 0, 40, dt)
-			if m.t3 <= 0 { m.st = 0; m.cd = isImp ? 1.9 : 2.2 }
-		} else if aggro {
-			let want: Double = isImp ? 8.0 : 9.0
-			if (m.ai != .chase && m.ai != .alert) || !m.sees || m.blockedT > 0.5 || !m.b.onGround {
-				// no clear shot (or climbing for one): move in until there is one
-				chase(m, m.aimX, 0.9, dt)
-			} else if dist < want - 3.0 {
-				flee(m, pb.x, dt, 0.8)
-			} else if dist > want + 3.0 {
-				chase(m, pb.x, 0.9, dt)
-			} else {
-				accelX(m, 0, 20, dt)
-				m.dir = pb.x >= m.b.x ? 1 : -1
-			}
-			if m.ai == .chase && m.sees && m.b.onGround && m.cd <= 0 && dist < 17 && abs(dyP) < 9 {
-				m.st = 3
-				m.t3 = 0.5
-			}
-		} else {
-			wander(m, dt, 0.4)
-		}
-		stepMob(m, dt)
-	}
-
-	func shootAtPlayer(_ m: Mob, _ fire: Bool) {
-		let ox: Double = m.b.x + Double(m.dir) * 0.6
-		let oy: Double = shotY(m)
-		var dx: Double = pb.x - ox
-		var dy: Double = shotAimY(m) - oy
-		let len: Double = max(0.001, sqrt(dx * dx + dy * dy))
-		dx /= len
-		dy /= len
-		let sp: Double = fire ? 11.0 : 20.0
-		var p = Projectile(kind: fire ? .fireball : .bullet, x: ox, y: oy, vx: dx * sp, vy: dy * sp, dmg: m.def.dmg, fromPlayer: false, gravity: 0)
-		p.life = 3.0
-		p.owner = m.id
-		p.source = .mob(m, faction(of: m))
-		p.uid = newID()
-		projectiles.append(p)
-		spawnParticles(ox, oy, fire ? 0xFF7020 : 0xFFE080, 4, 2.5, 0.18, 0)
-	}
-
-	func updateSlime(_ m: Mob, _ dt: Double, _ aggro: Bool, _ dyP: Double) {
-		let d: MobDef = m.def
-		m.t1 -= dt
-		if m.b.onGround {
-			m.b.vx *= 0.8
-			if m.t1 <= 0 {
-				if aggro {
-					let dirX: Double = m.aimX >= m.b.x ? 1.0 : -1.0
-					m.dir = Int(dirX)
-					m.b.vy = -d.jump
-					m.b.vx = dirX * d.speed * 1.6
-					m.t1 = Double.random(in: 0.7...1.3)
-				} else {
-					m.dir = Bool.random() ? 1 : -1
-					m.b.vy = -8.5
-					m.b.vx = Double(m.dir) * 2.0
-					m.t1 = Double.random(in: 1.5...3.5)
-				}
-			}
-		}
-		if aggro && !m.b.onGround {
-			// a little steering in mid-hop, so a bounce at a wall carries over it
-			accelX(m, (m.aimX >= m.b.x ? 1.0 : -1.0) * d.speed * 1.6, 5, dt)
-		}
-		if m.kind == .emberSlime && Double.random(in: 0...1) < 0.1 {
-			spawnParticles(m.b.x, m.b.y - 0.4, 0xFF8A20, 1, 1.2, 0.4, -3)
-		}
-		if aggro && m.ai == .chase { contactHurt(m, d.dmg) }
-		stepMob(m, dt)
-	}
-
-	func updateFlyer(_ m: Mob, _ dt: Double, _ aggro: Bool, _ dist: Double, _ dyP: Double) {
-		let d: MobDef = m.def
-		m.anim += dt * 8.0
-		var tx: Double = m.homeX
-		var ty: Double = m.homeY
-		var spd: Double = d.speed * 0.6
-		if m.kind == .crow {
-			// wander around home; flee when approached
-			m.t1 -= dt
-			if m.t1 <= 0 {
-				m.t1 = Double.random(in: 2...5)
-				m.tx = m.homeX + Double.random(in: -12...12)
-				let gy: Double = Double(world.surfaceY(Int(floor(m.tx))))
-				m.ty = gy - Double.random(in: 3...8)
-			}
-			tx = m.tx
-			ty = m.ty
-			if dist < 5.0 && !dead {
-				tx = m.b.x + (m.b.x - pb.x) * 3
-				ty = m.b.y - 6
-				spd = d.speed * 1.4
-			}
-		} else if aggro {
-			tx = m.aimX
-			ty = (m.ai == .chase ? pb.y : m.seenY) - 1.3 + sin(clock * 3.0 + Double(m.id)) * 1.2
-			spd = d.speed
-		} else {
-			m.t1 -= dt
-			if m.t1 <= 0 {
-				m.t1 = Double.random(in: 1.5...4)
-				m.tx = m.b.x + Double.random(in: -8...8)
-				m.ty = m.b.y + Double.random(in: -4...4)
-			}
-			tx = m.tx
-			ty = m.ty
-		}
-		var ax: Double = tx - m.b.x
-		var ay: Double = ty - m.b.y
-		let len: Double = max(0.001, sqrt(ax * ax + ay * ay))
-		ax /= len
-		ay /= len
-		m.b.vx += (ax * spd - m.b.vx) * min(1.0, dt * 4.0)
-		m.b.vy += (ay * spd - m.b.vy) * min(1.0, dt * 4.0)
-		if abs(m.b.vx) > 0.3 { m.dir = m.b.vx > 0 ? 1 : -1 }
-		if m.kind == .wraith {
-			// drifts through walls, slower inside solid tiles
-			let inside: Bool = world.solid(Int(floor(m.b.x)), Int(floor(m.b.y - 0.7)))
-			let k: Double = inside ? 0.5 : 1.0
-			m.b.x += m.b.vx * dt * k
-			m.b.y += m.b.vy * dt * k
-		} else {
-			world.moveBody(&m.b, dt, stepUp: 0, dropThrough: false, decks: [])
-			if m.b.hitWall || m.b.hitCeil || m.b.onGround { m.b.vy = -1.0; m.t1 = 0 }
-		}
-		if aggro && m.kind != .crow && m.ai == .chase { contactHurt(m, d.dmg) }
-	}
-
-	func updateFish(_ m: Mob, _ dt: Double) {
-		m.anim += dt * 6.0
-		if !m.b.inWater {
-			// flopping on land
-			m.b.vy = min(m.b.vy + gravityG * dt, terminalV)
-			world.moveBody(&m.b, dt, stepUp: 0, dropThrough: false, decks: [])
-			m.t2 += dt
-			if m.t2 > 1.0 { m.t2 = 0; hurtMob(m, 1, 0, 0, false) }
-			return
-		}
-		m.t1 -= dt
-		if m.t1 <= 0 {
-			m.t1 = Double.random(in: 1.5...4)
-			m.tx = m.b.x + Double.random(in: -8...8)
-			m.ty = m.b.y + Double.random(in: -3...3)
-		}
-		if abs(pb.x - m.b.x) < 4 && abs(pb.y - m.b.y) < 3 && pb.inWater {
-			m.tx = m.b.x + (m.b.x - pb.x) * 3
-			m.ty = m.b.y + (m.b.y - pb.y) * 2
-		}
-		var ax: Double = m.tx - m.b.x
-		var ay: Double = m.ty - m.b.y
-		let len: Double = max(0.001, sqrt(ax * ax + ay * ay))
-		ax /= len
-		ay /= len
-		let sp: Double = m.def.speed
-		m.b.vx += (ax * sp - m.b.vx) * min(1.0, dt * 3.0)
-		m.b.vy += (ay * sp * 0.6 - m.b.vy) * min(1.0, dt * 3.0)
-		if abs(m.b.vx) > 0.2 { m.dir = m.b.vx > 0 ? 1 : -1 }
-		let nx: Double = m.b.x + m.b.vx * dt
-		let ny: Double = m.b.y + m.b.vy * dt
-		let tx: Int = Int(floor(nx))
-		let ty: Int = Int(floor(ny - 0.2))
-		if world.tile(tx, ty) == .water && world.tile(tx, Int(floor(ny))) != .air {
-			m.b.x = nx
-			m.b.y = ny
-		} else {
-			m.t1 = 0
-			m.b.vx = -m.b.vx
-			m.b.vy = -m.b.vy
-		}
-		let hw: Double = m.b.w * 0.5
-		m.b.inWater = world.liquidFraction(m.b.x - hw, m.b.y - m.b.h, m.b.x + hw, m.b.y, false) > 0.3
-	}
-
-	// MARK: pets
-
-	func updatePet(_ m: Mob, _ dt: Double) {
-		let d: MobDef = m.def
-		let toP: Double = pb.x - m.b.x
-		let dist: Double = abs(toP)
-		if dist > 45 || abs(pb.y - m.b.y) > 30 {
-			m.b.x = pb.x - Double(facing) * 1.5
-			m.b.y = pb.y
-			m.b.vx = 0
-			m.b.vy = 0
-			return
-		}
-		if m.st == 7 {
-			accelX(m, 0, 20, dt)
-			stepMob(m, dt)
-			return
-		}
-		// attack nearby hostiles
-		var target: Mob? = nil
-		if m.kind == .wolf {
-			target = nearestHostileTo(pb.x, pb.y - 1, 9.0)
-		}
-		if let t = target, t.hp > 0 {
-			chase(m, t.b.x, 1.2, dt)
-			if m.cd <= 0 && abs(t.b.x - m.b.x) < 1.6 && abs(t.b.cy - m.b.cy) < 1.5 {
-				hurtMob(t, 7, Double(m.dir), 5.0, true)
-				m.cd = 0.7
-			}
-		} else if dist > 3.5 {
-			let sp: Double = dist > 12 ? 1.8 : 1.15
-			chase(m, pb.x, sp, dt)
-		} else {
-			accelX(m, 0, 20, dt)
-		}
-		_ = d
-		stepMob(m, dt)
-	}
-
-	func tryTame(_ m: Mob) -> Bool {
-		if m.tame { return false }
-		guard let it = heldItem else { return false }
-		var ok: Bool = false
-		if m.kind == .wolf, case .mat(let mm) = it, mm == .bone { ok = true }
-		if m.kind == .cat, case .food(let f) = it, f == .rawFish || f == .cookedFish { ok = true }
-		if !ok { return false }
-		if !isCreative { inv.removeAt(sel, 1) }
-		if Double.random(in: 0...1) < 0.6 {
-			m.tame = true
-			m.persistent = true
-			m.angry = false
-			m.hp = m.maxHP
-			say("You tamed the " + m.def.name.lowercased() + "!", 3.0)
-			spawnParticles(m.b.x, m.b.y - 1, 0xFF6080, 10, 3.0, 0.8, -4)
-		} else {
-			say("The " + m.def.name.lowercased() + " isn't convinced yet...", 2.0)
-		}
-		useCD = 0.5
-		bumpHUD()
-		return true
-	}
-}
-
-// ===== p15b_spawn =====
-
-// MARK: - Mob spawning
-
-extension Game {
-	/// Notes how a spawn attempt ended (the debug panel shows the tally)
-	func spawnNote(_ s: String) {
-		spawnLast = s
-		if spawnLog.count < 40 || spawnLog[s] != nil { spawnLog[s, default: 0] += 1 }
-	}
-
-	/// The most lamplight a monster may come out in (0...15). A torch (12) keeps them off the ground
-	/// about seven blocks round it in the open, less where walls or ground stand in the way.
-	static let spawnGlowMax: Int = 4
-
-	/// The light at a creature's two cells above its feet at (x, feetY), worked out by the game's own
-	/// light flood over the ground around it, on screen or not: (sky light, light of glowing blocks).
-	/// Torches, lanterns, campfires, lamps, glowing mod blocks and every other light-giving block count,
-	/// fading with distance and held back by walls and ground; a torch in the player's hand does not.
-	func lightForSpawn(_ x: Int, _ feetY: Int) -> (Int, Int) {
-		if !spawnLight.covers(x - 1, feetY - 3, x + 1, feetY) || spawnLight.stamp != world.version || spawnLight.skyUsed != skyLevel || spawnLight.dimUsed != world.dim.rawValue {
-			let r: Int = 18
-			spawnLight.compute(world, x - r, feetY - r, r * 2 + 1, r * 2 + 1, skyLevel, [], noteSeen: false)
-		}
-		let a: (Int, Int) = spawnLight.level(x, feetY - 1)
-		let b: (Int, Int) = spawnLight.level(x, feetY - 2)
-		return (max(a.0, b.0), max(a.1, b.1))
-	}
-
-	/// Ground monsters can come out on: earth, sand, snow and rock, never planks, brick, glass or other
-	/// building blocks (so not on the roof or floor of a house)
-	func naturalGround(_ t: Tile) -> Bool {
-		switch t {
-		case .grass, .dirt, .stone, .sand, .snow, .ice, .sandstone, .mud, .dryGrass, .jungleGrass, .mossGrass,
-			 .slate, .deepRock, .obsidian, .ashStone, .farmland, .coal, .copper, .iron, .tin, .saltpeter: return true
-		default: return false
-		}
-	}
-
-	/// How many monsters may be about at once (surface or underground) at this night-danger setting
-	func monsterCap(_ place: SpawnPlace) -> Int {
-		let d: Int = clampI(settings.nightDanger, 0, 2)
-		if place == .surface || place == .ocean { return [3, 6, 10][d] }
-		return [6, 9, 12][d]
-	}
-
-	func updateSpawning(_ dt: Double) {
-		if monsterSpawnCD > 0 { monsterSpawnCD -= dt }
-		spawnTimer -= dt
-		if spawnTimer > 0 { return }
-		spawnTimer = Double.random(in: 0.45...1.0)
-		if dead { return }
-		var passive: Int = 0
-		var hostile: Int = 0
-		var predators: Int = 0
-		var aquatic: Int = 0
-		for m in mobs {
-			if m.hp <= 0 || m.removed || m.tame || m.persistent { continue }
-			let dx: Double = abs(m.b.x - pb.x)
-			if dx > 100 { continue }
-			if m.kind == .fish { aquatic += 1 }
-			else if m.def.hostile {
-				// only creatures still in play hold a place: bosses, lair guards and crews have their own
-				// rules, and one standing frozen far off-screen is about to leave
-				if m.isBoss || m.boat >= 0 || m.lair != 0 || dx > 72 || abs(m.b.y - pb.y) > 56 { continue }
-				if m.kind.isPredator { predators += 1 } else { hostile += 1 }
-			}
-			else { passive += 1 }
-		}
-		let px: Int = Int(floor(pb.x))
-		var place: SpawnPlace = .surface
-		if world.dim == .umbral {
-			place = .umbral
-		} else {
-			let sh: Int = world.dim.isCustom ? customSurface(px) : gen.col(px).h
-			let open: Bool = world.isSkyExposed(px, Int(pb.y) - 1)
-			let depth: Int = Int(pb.y) - sh
-			if depth > 18 && !open { place = .cave }
-		}
-		// just past the edge of the screen, so what comes is soon in sight
-		let half: Double = viewTilesW * 0.5 + 3.0
-		let side: Double = Bool.random() ? 1.0 : -1.0
-		let sx: Double = pb.x + side * (half + Double.random(in: 1...16))
-		let ix: Int = Int(floor(sx))
-		if !world.isLoaded(ix) { spawnNote("spot not loaded"); return }
-		if !gen.infinite && (ix < 4 || ix > gen.width - 5) { return }
-		var sy: Double = 0
-		var eff: SpawnPlace = place
-		if place == .surface {
-			let h: Int = world.surfaceY(ix)
-			let ht: Tile = world.tile(ix, h)
-			if ht.liquid {
-				eff = .ocean
-				var wy: Int = h + 1
-				var dep: Int = 0
-				while world.tile(ix, wy) == .water && dep < 40 { wy += 1; dep += 1 }
-				if dep < 5 { spawnNote("shallow water"); return }
-				sy = Double(h + 2 + Int.random(in: 0..<max(1, dep - 3)))
-			} else if ht.solid {
-				if world.solid(ix, h - 1) || world.solid(ix, h - 2) || world.tile(ix, h - 1).liquid { spawnNote("no headroom"); return }
-				sy = Double(h)
-			} else { spawnNote("no ground"); return }
-		} else {
-			let startY: Int = Int(pb.y) + Int.random(in: -20...20)
-			var found: Bool = false
-			var y: Int = startY
-			var tries: Int = 0
-			while tries < 22 {
-				if !world.solid(ix, y) && !world.solid(ix, y - 1) && !world.solid(ix, y - 2) && world.solid(ix, y + 1) && !world.tile(ix, y).liquid {
-					found = true
-					break
-				}
-				y += 1
-				tries += 1
-			}
-			if !found { spawnNote("no floor"); return }
-			if place == .cave && world.isSkyExposed(ix, y) { spawnNote("open sky"); return }
-			// lamplight, or daylight reaching in from a cave mouth
-			let lit: (Int, Int) = lightForSpawn(ix, y + 1)
-			if lit.1 > Game.spawnGlowMax || lit.0 > 6 { spawnNote("too bright"); return }
-			sy = Double(y + 1)
-		}
-		let biome: Biome = biomeAt(Double(ix))
-		// under a dark storm by day, now and then the night's creatures come out too
-		let stormDark: Bool = world.dim == .overworld && settings.weatherOn && wxHere.cloud > 0.9 && wxHere.precip > 0.6 && Double.random(in: 0...1) < 0.35
-		let night: Bool = isNight || stormDark
-		// on the surface, monsters stay out of lamplight, off roofs and away from ground far above or
-		// below the player (somewhere they could never reach them from)
-		var monsterBlock: String = ""
-		if eff == .surface {
-			let gy: Int = Int(sy)
-			if lightForSpawn(ix, gy).1 > Game.spawnGlowMax { monsterBlock = "lit by a lamp" }
-			else if !naturalGround(world.tile(ix, gy)) { monsterBlock = "on a building" }
-			else if abs(sy - pb.y) > 30 { monsterBlock = "out of reach" }
-			else if monsterSpawnCD > 0 { monsterBlock = "pacing" }
-		}
-		let cap: Int = monsterCap(eff)
-		var capped: Bool = false
-		var cands: [SpawnRule] = []
-		var total: Double = 0
-		// the custom creatures of the world's mods spawn by the same rules, beside the game's own
-		let rt: ModRuntime = ModRuntime.shared
-		// a custom dimension has only its own creatures
-		let rules: [SpawnRule] = world.dim.isCustom ? (customDim?.spawnRules ?? []) : (rt.spawnRules.isEmpty ? spawnRules : spawnRules + rt.spawnRules)
-		var customN: Int = -1
-		for r in rules {
-			if r.place != eff { continue }
-			if r.when == .day && night { continue }
-			if r.when == .night && !night { continue }
-			if !r.biomes.isEmpty && !r.biomes.contains(biome) { continue }
-			if eff == .cave || eff == .umbral || r.slot >= 0 {
-				if Int(sy) < r.minY || Int(sy) > r.maxY { continue }
-			}
-			var d: MobDef = mobDef(r.kind)
-			if r.slot >= 0 {
-				guard let cr = rt.mob(r.slot) else { continue }
-				d = cr.mdef
-				if customN < 0 { customN = customMobCount() }
-				if customN >= ModLimits.maxActiveMobs || customNearby(r.slot) >= r.maxNearby { continue }
-			}
-			if d.hostile {
-				if !monstersEnabled || settings.peaceful { continue }
-				if r.kind.isPredator {
-					// wild predators have their own small number and come by day too
-					if predators >= 3 { continue }
-				} else {
-					if hostile >= cap { capped = true; continue }
-					if !monsterBlock.isEmpty { continue }
-				}
-			} else if r.kind == .fish || (r.slot >= 0 && r.place == .ocean) {
-				if aquatic >= 9 { continue }
-			} else {
-				if passive >= 9 { continue }
-			}
-			cands.append(r)
-			total += r.weight
-		}
-		if cands.isEmpty || total <= 0 {
-			if capped { spawnNote("monster limit reached") }
-			else if !monsterBlock.isEmpty && night { spawnNote(monsterBlock) }
-			else { spawnNote(night ? "nothing for this place" : "nothing for this place by day") }
-			return
-		}
-		var pick: Double = Double.random(in: 0..<total)
-		var chosen: SpawnRule = cands[0]
-		for r in cands {
-			pick -= r.weight
-			if pick <= 0 { chosen = r; break }
-		}
-		let def: MobDef = chosen.slot >= 0 ? (rt.mob(chosen.slot)?.mdef ?? mobDef(chosen.kind)) : mobDef(chosen.kind)
-		let monster: Bool = def.hostile && !chosen.kind.isPredator
-		var n: Int = 1 + Int.random(in: 0..<max(1, chosen.group))
-		if monster { n = min(n, cap - hostile) }
-		var made: Int = 0
-		for k in 0..<n {
-			let ox: Double = Double(k) * 1.1 * side + Double.random(in: -0.4...0.4)
-			let x: Double = sx + ox
-			var y: Double = sy
-			// every member finds its own footing: the ground in its own column on the surface, and
-			// nobody appears inside a wall or hanging over a drop
-			if eff == .surface && !def.flying {
-				let gyS: Int = world.surfaceY(Int(floor(x)))
-				if world.tile(Int(floor(x)), gyS).liquid || abs(gyS - Int(sy)) > 3 { continue }
-				y = Double(gyS)
-			}
-			if def.flying && eff != .ocean { y -= chosen.sky ? Double.random(in: 7...14) : Double.random(in: 1...3) }
-			// each monster of a group only comes out where it is dark enough itself
-			if monster && eff != .ocean && lightForSpawn(Int(floor(x)), Int(floor(y))).1 > Game.spawnGlowMax { continue }
-			if eff != .ocean && !spawnSpotClear(def, x, y) { continue }
-			var made1: Mob? = nil
-			if chosen.slot >= 0 { made1 = addCustomMob(chosen.slot, x, y) } else { made1 = addMob(chosen.kind, x, y) }
-			guard let m = made1 else { continue }
-			m.homeX = x
-			m.homeY = y
-			// the night's monsters on the surface come looking for the player
-			if monster && eff == .surface && night { m.hunter = true }
-			if chosen.kind == .sheep && Double.random(in: 0...1) < 0.1 { m.sheared = true }
-			made += 1
-		}
-		if made == 0 { spawnNote("no room to stand"); return }
-		spawnNote(joinText("spawned ", def.name))
-		if monster && eff == .surface {
-			let d: Int = clampI(settings.nightDanger, 0, 2)
-			monsterSpawnCD = [8.0, 4.0, 2.0][d] * Double.random(in: 0.8...1.25)
-		}
-	}
-
-	/// How many of one custom creature are about near the player
-	func customNearby(_ slot: Int) -> Int {
-		var n: Int = 0
-		for m in mobs where m.kind == .custom && m.cslot == slot && m.hp > 0 && !m.removed && abs(m.b.x - pb.x) < 100 { n += 1 }
-		return n
-	}
-
-	/// Room for a creature of this size standing at (x, y): no solid tile inside its box, and (unless it
-	/// flies) something to stand on under its feet
-	func spawnSpotClear(_ d: MobDef, _ x: Double, _ y: Double) -> Bool {
-		let hw: Double = d.w * 0.5
-		if world.boxSolid(x - hw + 0.02, y - d.h, x + hw - 0.02, y - 0.05) { return false }
-		if d.flying { return true }
-		let gy: Int = Int(floor(y + 0.05))
-		let l: Int = Int(floor(x - hw + 0.05))
-		let r: Int = Int(floor(x + hw - 0.05))
-		var footing: Int = 0
-		for tx in l...r where world.solid(tx, gy) || world.tile(tx, gy).isPlatform { footing += 1 }
-		return footing * 2 >= (r - l + 1)
-	}
-}
-
-// ===== p16a_combat =====
-
-// MARK: - Combat: damage, death, projectiles, drops, particles
-
-extension Game {
-	func hurtMob(_ m: Mob, _ dmg: Double, _ dirX: Double, _ knock: Double, _ byPlayer: Bool, heavy: Bool = false, crit: Bool = false) {
-		if m.hp <= 0 { return }
-		if m.kind == .rex && m.tame && byPlayer { return }
-		// a wild animal remembers being hurt by the player (it fights back, see wildProvoked)
-		if byPlayer { m.lastHitByPlayer = clock }
-		var d: Double = dmg
-		var kb: Double = knock
-		if m.blocking && m.kind == .skeleton && dirX != 0 && dirX * Double(m.dir) < 0 {
-			if heavy {
-				// a hammer blow knocks the shield aside and leaves the skeleton open for a moment
-				m.blocking = false
-				m.cd = max(m.cd, 0.9)
-				spawnParticles(m.b.x - Double(m.dir) * 0.5, m.b.y - 1.0, 0xFFF0C0, 8, 5.0, 0.25, 0)
-				floatText("Guard broken", m.b.x, m.b.top - 0.4, 0xFFD080)
-			} else {
-				d *= 0.1
-				kb *= 0.25
-				spawnParticles(m.b.x - Double(m.dir) * 0.5, m.b.y - 1.0, 0xE8F0FF, 5, 4.0, 0.2, 0)
-				floatText("Blocked", m.b.x, m.b.top - 0.4, 0xA0C0FF)
-			}
-		}
-		if d < 0.5 { d = 0.5 }
-		m.hp -= d
-		m.hurtT = 0.22
-		m.flash = 0.12
-		if dirX != 0 && kb > 0 { m.lean = clampD(dirX * kb / 9.0, -1, 1) }
-		var resist: Double = m.isBoss ? 0.97 : (m.def.w > 2.0 ? 0.6 : 0.0)
-		if m.kind == .golem { resist = heavy ? 0.45 : 0.88 }
-		if m.kind == .custom, let r = ModRuntime.shared.mob(m.cslot) { resist = max(resist, clampD(r.def.knockResist, 0, 1)) }
-		if dirX != 0 && kb > 0 {
-			m.b.vx = dirX * kb * (1.0 - resist)
-			if resist < 0.9 { m.b.vy = min(m.b.vy, -3.5) }
-		}
-		if crit && byPlayer {
-			floatText(String(Int(d.rounded())) + "!", m.b.x, m.b.top - 0.35, 0xFFE040)
-		} else {
-			floatText(String(Int(d.rounded())), m.b.x, m.b.top - 0.2, byPlayer ? 0xFFFFFF : 0xFFAA40)
-		}
-		spawnParticles(m.b.x, m.b.cy, m.kind == .skeleton ? 0xE8E8E0 : 0xB02828, 4, 3.0, 0.4, 14)
-		switch m.def.behavior {
-		case .passive, .skittish:
-			m.t2 = 3.5
-			m.tx = m.b.x - (dirX == 0 ? 1.0 : dirX) * 6.0
-		case .defensive:
-			// animals only hold a grudge against the player; hurt by anything else they just bolt
-			if !byPlayer { break }
-			m.angry = true
-			m.t3 = 10.0
-			if m.kind == .wolf {
-				for o in mobs where o.kind == .wolf && !o.tame && abs(o.b.x - m.b.x) < 16 {
-					o.angry = true
-					o.t3 = 12.0
-				}
-			}
-		default: break
-		}
-		if m.boat >= 0 { alertShip(m.boat) }
-		if m.kind == .custom && !logicRT.isEmpty, let r = ModRuntime.shared.mob(m.cslot) { fireLogic(.hurt, mob: m, key: r.key) }
-		if m.hp <= 0 { killMob(m, byPlayer) }
-	}
-
-	func killMob(_ m: Mob, _ byPlayer: Bool) {
-		if m.kind == .rex && m.tame {
-			downRex(m)
-			return
-		}
-		m.hp = 0
-		m.deathT = 0
-		m.burn = 0
-		// a creature the player hit recently still counts as the player's kill if lava, a fall or
-		// another creature finishes it off
-		let credit: Bool = byPlayer || clock - m.lastHitByPlayer < 6.0
-		var rng = RNG(UInt64(truncatingIfNeeded: m.id) &* 6364136223846793005 &+ UInt64(truncatingIfNeeded: Int(clock * 1000)))
-		for s in mobDrops(m.kind, &rng, m.sheared) {
-			spawnDrop(s, m.b.x, m.b.y - m.b.h * 0.5, Double.random(in: -2...2), -4.5)
-		}
-		if m.kind == .custom { dropModLoot(m, &rng) }
-		if m.kind == .custom && !logicRT.isEmpty, let r = ModRuntime.shared.mob(m.cslot) { fireLogic(.dies, mob: m, key: r.key) }
-		for s in alchemyDrops(m, &rng, credit) {
-			spawnDrop(s, m.b.x, m.b.y - m.b.h * 0.5, Double.random(in: -2...2), -4.5)
-		}
-		var col: UInt32 = 0xB02828
-		if m.kind == .skeleton { col = 0xE8E8E0 }
-		if m.kind == .slime { col = 0x60C060 }
-		if m.kind == .emberSlime { col = 0xFF8A20 }
-		spawnParticles(m.b.x, m.b.cy, col, Int(10 + m.b.w * 4), 5.0, 0.7, 14)
-		if credit { kills += 1 }
-		if m.kind == .bearBoss { onBearDefeated(m) }
-		if m.kind == .rex { onRexDefeated(m) }
-		if m.kind == .sentinel || m.kind == .warden { onGuardianDefeated(m) }
-		for s in m.loot { spawnDrop(s, m.b.x, m.b.y - m.b.h * 0.5, Double.random(in: -2.5...2.5), -5.0) }
-		m.loot = []
-		if m === activeBoss { activeBoss = nil }
-		bumpHUD()
-	}
-
-	func addMob(_ kind: MobKind, _ x: Double, _ y: Double) -> Mob {
-		let m = Mob(id: newID(), kind: kind, x: x, y: y)
-		if kind == .zombie { m.variant = Int.random(in: 0...2) }
-		if mobHealthMult != 1.0 {
-			m.maxHP *= mobHealthMult
-			m.hp = m.maxHP
-		}
-		mobs.append(m)
-		return m
-	}
-
-	// MARK: projectiles
-
-	/// Steps every projectile. Collision is swept along the whole frame's movement, so fast arrows and
-	/// bullets cannot skip over a target between frames, and the first thing along the path is hit.
-	func updateProjectiles(_ dt: Double) {
-		if projectiles.isEmpty { return }
-		let list: [Projectile] = projectiles
-		// projectiles created while stepping (none today, but explosions could) land in the fresh array
-		projectiles = []
-		var keep: [Projectile] = []
-		keep.reserveCapacity(list.count)
-		for p0 in list {
-			var p: Projectile = p0
-			if stepProjectile(&p, dt) { keep.append(p) }
-		}
-		if !projectiles.isEmpty { keep.append(contentsOf: projectiles) }
-		projectiles = keep
-	}
-
-	/// Returns false when the projectile is used up
-	func stepProjectile(_ p: inout Projectile, _ dt: Double) -> Bool {
-		p.life -= dt
-		if p.life <= 0 {
-			if p.mod >= 0 { modShotLanded(p, p.x, p.y, mob: nil, player: false) }
-			if p.kind == .bomb { explode(p.x, p.y, radius: 3.4, power: p.dmg, source: p.source, breakBlocks: true) }
-			if p.kind == .flask { burstFlaskOrPotion(p, p.x, p.y, nil) }
-			return false
-		}
-		if p.stuck > 0 {
-			p.stuck -= dt
-			if p.stuck <= 0 && (p.kind == .arrow || p.kind == .quarrel) && p.source.kind == .player && !isCreative && Double.random(in: 0...1) < 0.35 {
-				// some arrows and bolts survive and can be picked back up
-				spawnDrop(Stack(item: .ammo(p.kind == .arrow ? .arrow : .bolt), count: 1), p.x, p.y, 0, -1)
-			}
-			return p.stuck > 0
-		}
-		if p.kind == .shock { return stepShock(&p, dt) }
-		p.vy = min(p.vy + p.gravity * dt, 40.0)
-		let nx: Double = p.x + p.vx * dt
-		let ny: Double = p.y + p.vy * dt
-		// first solid tile along the path
-		var wallT: Double = 2.0
-		var wallTile: (Int, Int) = (0, 0)
-		if let hit = world.segmentSolidT(p.x, p.y, nx, ny) {
-			wallT = hit.2
-			wallTile = (hit.0, hit.1)
-		}
-		// first creature (or the player) along the path, before the wall
-		if p.kind != .bomb {
-			if let target = firstEntityOnPath(p, nx, ny, maxT: wallT) {
-				let hx: Double = p.x + (nx - p.x) * target.t
-				let hy: Double = p.y + (ny - p.y) * target.t
-				if p.kind == .flask {
-					burstFlaskOrPotion(p, hx, hy, target.mob)
-					return false
-				}
-				let dirx: Double = p.vx >= 0 ? 1.0 : -1.0
-				var info = DamageInfo(amount: p.dmg, type: .projectile, source: p.source)
-				info.dirX = dirx
-				info.knock = p.knock > 0 ? p.knock : (p.kind == .bullet ? 4.0 : (p.kind == .arrow ? 3.5 : 3.0))
-				info.originX = p.x
-				info.originY = p.y
-				info.key = p.uid
-				info.cooldown = 1.0
-				if p.kind == .fireball { info.type = .fire }
-				if let m = target.mob {
-					if applyMobDamage(m, info) {
-						if p.mod >= 0 {
-							let s: ModProjectile? = p.mod < ModRuntime.shared.shots.count ? ModRuntime.shared.shots[p.mod] : nil
-							if let sh = s, sh.explode > 0 {
-								modShotLanded(p, hx, hy, mob: m, player: false)
-								return false
-							}
-							if let sh = s, sh.burn > 0 { m.burn = max(m.burn, sh.burn) }
-						}
-						if p.kind == .fireball { m.burn = max(m.burn, 2.5) }
-						if p.inf != 0 || !p.custom.isEmpty { shotInfusionHit(p, m, hx, hy) }
-						spawnParticles(hx, hy, p.kind == .fireball ? 0xFF8030 : 0xE8E0D0, 3, 2.5, 0.25, 8)
-						if p.source.kind == .player {
-							// a clear "it landed" for the player's own shots
-							sfx(.arrowHit, 0.55)
-							lockTarget = m
-							lockT = 2.0
-						}
-					}
-					p.lastHit = m.id
-				} else {
-					_ = hurtPlayer(info)
-					if p.mod >= 0 {
-						modShotLanded(p, hx, hy, mob: nil, player: true)
-						return false
-					}
-					if p.kind == .fireball { playerBurn = max(playerBurn, 1.5); spawnParticles(hx, hy, 0xFF8030, 8, 4.0, 0.4, 6) }
-				}
-				if p.pierce > 0 && target.mob != nil {
-					p.pierce -= 1
-					p.dmg *= 0.7
-				} else {
-					return false
-				}
-			}
-		}
-		if wallT <= 1.0 {
-			let hx: Double = p.x + (nx - p.x) * wallT
-			let hy: Double = p.y + (ny - p.y) * wallT
-			if p.mod >= 0 {
-				modShotLanded(p, hx, hy, mob: nil, player: false)
-				return false
-			}
-			if p.inf & 4 != 0 { volatileBurst(hx, hy) }
-			switch p.kind {
-			case .flask:
-				burstFlaskOrPotion(p, hx, hy, nil)
-				return false
-			case .pebble:
-				spawnParticles(hx, hy, 0x9A9A9A, 4, 2.5, 0.3, 14)
-				return false
-			case .arrow, .quarrel:
-				// stick into the block, nudged back out of it slightly so it reads as embedded
-				p.x = hx - p.vx * 0.004
-				p.y = hy - p.vy * 0.004
-				p.stuckAngle = atan2(p.vy, p.vx)
-				p.vx = 0
-				p.vy = 0
-				p.stuck = 4.0
-				p.gravity = 0
-				spawnParticles(hx, hy, 0xA0A0A0, 2, 1.5, 0.2, 8)
-				return true
-			case .rock:
-				rockImpact(p, hx, hy)
-				return false
-			case .bomb:
-				// bounce off the face it struck, losing energy, and come to rest on top of the ground
-				// (it used to work its way into the floor and go off inside the rock)
-				let tx: Double = Double(wallTile.0)
-				let ty: Double = Double(wallTile.1)
-				let onTop: Bool = abs(hy - ty) < 0.02 && p.vy > 0
-				let onBottom: Bool = abs(hy - (ty + 1.0)) < 0.02 && p.vy < 0
-				if onTop || onBottom {
-					// the ground grips it: it settles close to where it came down
-					p.vy = -p.vy * 0.35
-					p.vx *= onTop ? 0.4 : 0.7
-					p.x = hx
-					p.y = onTop ? ty - 0.02 : ty + 1.02
-					if onTop && abs(p.vy) < 1.5 { p.vy = 0; p.vx *= 0.6 }
-				} else {
-					p.vx = -p.vx * 0.45
-					p.x = p.vx < 0 ? tx - 0.02 : tx + 1.02
-					p.y = hy
-				}
-				if world.solid(Int(floor(p.x)), Int(floor(p.y))) { p.y = Double(world.groundBelow(Int(floor(p.x)), Int(floor(p.y)) - 4)) - 0.02 }
-				return true
-			default:
-				spawnParticles(hx, hy, p.kind == .fireball ? 0xFF8030 : 0xFFE080, 5, 3.0, 0.25, 6)
-				if p.kind == .fireball { igniteNear(hx, hy, p.source) }
-				return false
-			}
-		}
-		p.x = nx
-		p.y = ny
-		// player shots also damage pirate ships
-		if p.source.kind == .player {
-			for s in ships {
-				let dy: Double = s.deckY(Double(WorldGen.sea))
-				if abs(p.x - s.x) < 4.6 && p.y > dy - 3.0 && p.y < dy + 2.0 {
-					s.hp -= p.dmg * 0.5
-					s.hitT = 0.2
-					spawnParticles(p.x, p.y, 0x8A5A2E, 4, 3.0, 0.3, 12)
-					return false
-				}
-			}
-		}
-		if p.kind == .fireball && Double.random(in: 0...1) < 0.5 { spawnParticles(p.x, p.y, 0xFFB040, 1, 1.0, 0.25, -2) }
-		if p.kind == .arrow && p.source.kind == .player && p.trail < 6 { p.trail += 1 }
-		return true
-	}
-
-	struct PathHit {
-		var t: Double
-		var mob: Mob?
-	}
-
-	/// Nearest creature or player the segment passes through that this projectile is allowed to hurt
-	func firstEntityOnPath(_ p: Projectile, _ nx: Double, _ ny: Double, maxT: Double) -> PathHit? {
-		var best: PathHit? = nil
-		var bt: Double = min(1.0, maxT)
-		let pad: Double = max(0.08, p.w * 0.5)
-		if !dead && canHarm(p.source, targetFaction: .player, targetID: 0, area: false) {
-			if let t = segmentBoxT(p.x, p.y, nx, ny, pb.left - pad, pb.top - pad, pb.right + pad, pb.y + pad), t <= bt {
-				bt = t
-				best = PathHit(t: t, mob: nil)
-			}
-		}
-		let x0: Double = min(p.x, nx) - 4.0
-		let x1: Double = max(p.x, nx) + 4.0
-		for m in mobsNear(x0, x1) {
-			if m.hp <= 0 || m.id == p.lastHit || m.downed { continue }
-			if !canHarm(p.source, targetFaction: faction(of: m), targetID: m.id, area: false) { continue }
-			if let t = segmentBoxT(p.x, p.y, nx, ny, m.b.left - pad, m.b.top - pad, m.b.right + pad, m.b.y + pad), t <= bt {
-				bt = t
-				best = PathHit(t: t, mob: m)
-			}
-		}
-		return best
-	}
-
-	/// Boss shockwaves run along the ground and hurt anything standing in them
-	func stepShock(_ p: inout Projectile, _ dt: Double) -> Bool {
-		p.x += p.vx * dt
-		let gy: Int = world.groundBelow(Int(floor(p.x)), Int(floor(p.y)) - 3)
-		p.y = Double(gy) - 0.5
-		if world.solid(Int(floor(p.x)), Int(floor(p.y - 0.6))) && world.solid(Int(floor(p.x + p.vx * 0.1)), Int(floor(p.y - 0.4))) { return false }
-		var info = DamageInfo(amount: p.dmg, type: .stomp, source: p.source)
-		info.dirX = p.vx >= 0 ? 1 : -1
-		info.knock = 7.0
-		info.originX = p.x - p.vx
-		info.originY = p.y
-		info.key = p.uid
-		info.cooldown = 2.0
-		damageBox(p.x - 0.5, p.y - 0.9, p.x + 0.5, p.y + 0.5, info)
-		if Double.random(in: 0...1) < 0.5 { spawnParticles(p.x, p.y + 0.3, 0xA08860, 1, 1.5, 0.3, 6) }
-		return true
-	}
-
-	func rockImpact(_ p: Projectile, _ x: Double, _ y: Double) {
-		spawnParticles(x, y, 0x8A8A8A, 10, 5.0, 0.5, 16)
-		addShake(0.25)
-		var info = DamageInfo(amount: p.dmg, type: .impact, source: p.source)
-		info.knock = 5.0
-		info.originX = x
-		info.originY = y - 1.0
-		info.key = p.uid
-		info.cooldown = 1.0
-		damageArea(x, y - 0.8, radius: 1.8, info, falloff: false, lineOfSight: false)
-	}
-
-	/// Fireballs set fire to whatever stands where they burst
-	func igniteNear(_ x: Double, _ y: Double, _ src: DamageSource) {
-		for m in mobsNear(x - 1.5, x + 1.5) where m.hp > 0 && !heatImmune(m) {
-			if abs(m.b.cy - y) < m.b.h * 0.5 + 1.0 && canHarm(src, targetFaction: faction(of: m), targetID: m.id, area: true) {
-				m.burn = max(m.burn, 2.0)
-			}
-		}
-	}
-
-	func throwBomb() {
-		if useCD > 0 { return }
-		if !isCreative { inv.removeAt(sel, 1) }
-		facing = aimFacing()
-		let ox: Double = pb.x + Double(facing) * 0.4
-		let oy: Double = pb.y - 1.3
-		// thrown on the arc that lands it on the spot aimed at (then it may bounce a little)
-		let a: Double = lobAngle(aimX - ox, aimY - oy, throwSpeed, throwGravity)
-		var p = Projectile(kind: .bomb, x: ox, y: oy, vx: cos(a) * throwSpeed, vy: sin(a) * throwSpeed, dmg: 26, fromPlayer: true, gravity: throwGravity)
-		p.life = 1.8
-		p.w = 0.4
-		p.source = DamageSource.player
-		p.uid = newID()
-		projectiles.append(p)
-		useCD = 0.45
-		swingT = 0.18
-		swingDir = facing
-		bumpHUD()
-	}
-
-	// MARK: drops
-
-	func updateDrops(_ dt: Double) {
-		var i: Int = 0
-		while i < drops.count {
-			var d: DropItem = drops[i]
-			d.age += dt
-			if d.pickDelay > 0 { d.pickDelay -= dt }
-			if d.age > 400 {
-				drops.remove(at: i)
-				continue
-			}
-			var b = Body(x: d.x, y: d.y, w: 0.3, h: 0.3)
-			b.vx = d.vx
-			b.vy = d.vy
-			let px: Double = pb.x
-			let py: Double = pb.y - pb.h * 0.5
-			let dx: Double = px - d.x
-			let dy: Double = py - (d.y - 0.15)
-			let dist: Double = sqrt(dx * dx + dy * dy)
-			// a stack the player threw away waits until they have walked off from it
-			if d.heldBack && dist > 3.6 { d.heldBack = false }
-			var magnet: Bool = false
-			if !dead && d.pickDelay <= 0 && !d.heldBack && dist < 3.2 && inv.canFit(d.stack.item, 1) {
-				magnet = true
-				let k: Double = 16.0
-				b.vx = dx / max(dist, 0.1) * k * (1.0 + (3.2 - dist) * 0.3)
-				b.vy = dy / max(dist, 0.1) * k * (1.0 + (3.2 - dist) * 0.3)
-			} else {
-				b.vy = min(b.vy + gravityG * 0.8 * dt, 18)
-				b.vx *= (1.0 - min(1.0, dt * (d.onGround ? 6.0 : 0.6)))
-			}
-			if magnet {
-				b.x += b.vx * dt
-				b.y += b.vy * dt
-			} else {
-				world.moveBody(&b, dt, stepUp: 0, dropThrough: false, decks: decksCache)
-				if b.inWater { b.vy = min(b.vy, 1.5); b.vx *= 0.9 }
-			}
-			d.x = b.x
-			d.y = b.y
-			d.vx = b.vx
-			d.vy = b.vy
-			d.onGround = b.onGround
-			if !dead && d.pickDelay <= 0 && !d.heldBack && dist < 0.9 {
-				let left: Int = inv.add(d.stack.item, d.stack.count, extra: d.stack.extra, inf: d.stack.inf)
-				if left < d.stack.count {
-					if d.stack.item == .mat(.relicFragment) { journal.relics += d.stack.count - left }
-					sfx(.pickup, 0.5)
-					floatText("+" + String(d.stack.count - left) + " " + d.stack.item.name, px, pb.y - pb.h - 0.5, 0xFFF0A0)
-					bumpHUD()
-				}
-				if left == 0 {
-					drops.remove(at: i)
-					continue
-				} else {
-					d.stack.count = left
-				}
-			}
-			drops[i] = d
-			i += 1
-		}
-	}
-
-	// MARK: particles and floating text
-
-	func updateParticles(_ dt: Double) {
-		// compact in place: remove(at:) in a loop was O(n^2) when bursts of particles expired together
-		let n: Int = particles.count
-		var w: Int = 0
-		particles.withUnsafeMutableBufferPointer { bp in
-			var i: Int = 0
-			while i < n {
-				var p: Particle = bp[i]
-				p.life -= dt
-				if p.life > 0 {
-					p.vy += p.gravity * dt
-					p.x += p.vx * dt
-					p.y += p.vy * dt
-					bp[w] = p
-					w += 1
-				}
-				i += 1
-			}
-		}
-		if w < n { particles.removeLast(n - w) }
-		var j: Int = 0
-		while j < floats.count {
-			floats[j].life -= dt
-			floats[j].y -= dt * 1.1
-			if floats[j].life <= 0 { floats.remove(at: j); continue }
-			j += 1
-		}
 	}
 }

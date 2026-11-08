@@ -13,10 +13,12 @@ each file in its own job, which needs much less memory at once, if the iPad buil
 confirmed). `tools/buildcost.sh` measures both ways:
 - 598e07b as one file: 63 s and 860 MB here. Mod Creator+ as one job: 86 s and 1,059 MB.
 - Mod Creator+ as one job per file: 24 to 28 s and 405 to 457 MB per job (four jobs, 102 s in all).
-  With the overhaul's phases 1 and 2 (1.97 MB): 19 to 22 s and 405 to 461 MB per job; as one job
-  71 s and 1,011 MB. The four-file Mod Creator+ version is known to start on the iPad; this one is
-  not confirmed yet. If the iPad runs the four jobs at once in one process, they could add up; that
-  is not known either.
+  With the overhaul's phases 1 and 2 (3c0fb81, 1.97 MB): 19 to 22 s and 405 to 461 MB per job; as
+  one job 71 s and 1,011 MB. This version builds and starts on the iPad (the user confirmed it), so
+  four parts at these sizes are known to work. Phase 3 (2.03 MB) moved creature AI, spawning and
+  combat from part 1 to part 2 to keep the parts level: 420 to 450 MB per job (not yet confirmed on
+  the iPad). If the iPad runs the four jobs at once in one process, they could add up; that is not
+  known.
 - Add big features in steps the user can check on the iPad, and keep the parts about equal in
   compiled size (`tools/buildcost.sh` prints each job's peak).
 
@@ -34,7 +36,7 @@ compiles and runs headless on Linux. If `/opt/pixelrealm` is missing, run `tools
 - `tools/run-tests.sh [suite ...]`: builds and runs suites from `tools/tests`, four at a time (all
   of them take several minutes). Pass only the suites you touched while iterating, and run them all
   before committing. Full output is in `/tmp/pixelrealm-build/<suite>/out.log`.
-- `tools/shots.sh power|weather|sky|cloudsheet|stick|alchemy|modplus [folder]`: PNG screenshots from the game's own renderer (`sky`: clouds by day, dusk, night and storm; `cloudsheet`: every cloud template; `stick`: the combat stick's dial; `alchemy`: mutated creatures, the worn suit, the new stations, and a sheet of the new icons and suit pictures; `modplus`: two custom dimensions and a boss in a phase).
+- `tools/shots.sh power|weather|sky|cloudsheet|stick|alchemy|modplus|building [folder]`: PNG screenshots from the game's own renderer (`sky`: clouds by day, dusk, night and storm; `cloudsheet`: every cloud template; `stick`: the combat stick's dial; `alchemy`: mutated creatures, the worn suit, the new stations, and a sheet of the new icons and suit pictures; `modplus`: two custom dimensions and a boss in a phase; `building`: a furnished house with stairs and a lift, a blast throwing blocks, a beam under strain).
 - `tools/bench.sh`: chunk generation, painting, lighting and tick timings (debug build; compare
   with `GAME_SRC=<old file> tools/bench.sh`).
 - `tools/buildcost.sh`: the game's size, and the time and peak memory of a debug build like the
@@ -57,8 +59,9 @@ closing behind the player, the direct camera, clouds at any zoom, fireflies in p
 renderer never mixes dimensions' pictures, chunks made again are the same, explore/build/save/quit/load
 cycles through all four kinds of dimension, weather stays in its dimension), `world6` (generator 6
 against 5: trees, ores by depth, seas; fingerprints of generator 5; saplings; monsters kept out of
-lamplight by the real light), and `det` and `det2` (world generation fingerprints for generator
-versions 1 to 4).
+lamplight by the real light), `build3` (blocks as walls, ladders built on by holding, furniture,
+stairs, lifts, block weight, blasts, storms carrying blocks, structural physics), and `det` and
+`det2` (world generation fingerprints for generator versions 1 to 4).
 
 What the stand-ins can't tell you:
 - They only declare the SwiftUI and AVFoundation API the game uses. If you use a new API, add it to
@@ -98,8 +101,10 @@ What the stand-ins can't tell you:
   for saved numbering).
 - **A new tile needs:** an appended case, a `Tile.makeDef` entry, 8x8 art in `customTileRows`, and,
   as relevant, `needsSupport`, `toolClass`, `isInteractive`/`interact`, and the exclusions in
-  `creativeItems` for on/off variants. New tiles go after `sapling` (the last one; all after the 64
-  mod tiles); `Tile.isMod` is a range check, so they are not mistaken for mod blocks.
+  `creativeItems` for on/off variants, and a line in `blockPhysOf` (its weight, carry and reach).
+  New tiles go after `liftCar` (the last one; all after the 64 mod tiles); `Tile.isMod` is a range
+  check, so they are not mistaken for mod blocks. Tile numbers must stay at or under 247 (a wall made
+  from a block is stored as 8 + its number in one byte).
 - **A new panel** needs its `@Published` show flag added to `updateInputGate` and to the condition
   that hides the HUD in `GameView`.
 - **Scrolling.** Every screen that can grow scrolls, with its way back (the top bar) outside the
@@ -127,7 +132,7 @@ What the stand-ins can't tell you:
 ## Map of the parts
 
 Sections start with `// ===== <name> =====` (grep for them). They are spread over the parts in order:
-part 1 `p01_util` to `p16a_combat`; part 2 `p16c_damage` to `p31_exosuit`; part 3 `p32_modplus`, then
+part 1 `p01_util` to `p14d_tools`; part 2 `p15a_mobai` to `p31c_blockphys`; part 3 `p32_modplus`, then
 `u01_art` to `u05_menu`; part 4 `u07_mods`, `u08_alchemy`, `u09_modplus`, `u06_root`. New code goes into
 the section it belongs to. A `private` or `fileprivate` name can only be used in its own part, so
 anything used across parts is internal (no modifier).
@@ -145,7 +150,9 @@ store, checks, runtime, custom creature AI, structures and capture, test tools),
 to game content, ore controls, sprite tools, custom infusions, boss phases and summoning, custom dimensions, the
 Logic Studio), `p29_alchemy` (rarity, potions, effects on creatures, smoke,
 mutation and its limits, chest extras, the recipes of all three new systems), `p30_infusion`,
-`p31_exosuit` (parts, stats, energy, modules, the worn look, the builder's pictures), `u01_art`, `u02_render`
+`p31_exosuit` (parts, stats, energy, modules, the worn look, the builder's pictures), `p31b_building` (block
+walls, ladders, furniture, lifts), `p31c_blockphys` (block weight, flying blocks, blasts, structural
+physics), `u01_art`, `u02_render`
 (`WorldRenderer.draw` sets the draw order), `u03_hud`, `u04_panels`, `u05_menu`, `u07_mods` (Mod
 Creator screens and editors, the capture and Mod Test panels), `u08_alchemy` (the HUD's effect strip and
 suit bar, the Infusion Crucible screen, the Assembly Station builder), `u09_modplus` (the Mod Creator+ screens: game
@@ -178,7 +185,29 @@ the Mod Test LOGIC tab), `u06_root`.
 - **Trees, saplings, doors, drops.** Leaves drop saplings (8.5%); a sapling on soil grows on a random
   world tick (`growSapling`: the biome's kind of tree, a custom region's own log and leaves, only into
   open air or wild plants). Doors the player walks through close behind them (`walkDoors`); a stack the
-  player throws away waits until they walk off (`DropItem.heldBack`).
+  player throws away waits until they walk off (`DropItem.heldBack`). A hold that uses up the stack in
+  hand does not turn into mining by hand until the next press (`handEmptied`).
+- **Building (p31b_building).** The HUD's AS WALL/AS BLOCK switch (`wallMode`) puts any solid block up
+  as a background wall: wall values 1-7 are the old wall kinds, 8+n is a wall of tile n
+  (`blockWallValue`, `blockWallTile`; the painter keeps a darkened copy of every tile's art). Holding
+  ladders on a ladder builds it on toward the aim (`extendLadder`). Furniture tiles (`chair` ...
+  `sofa`): seats (`seat`, `stayInSeat`), beds (two tiles, `sleepIn` sets the spawn and skips the night),
+  storage (`cabinet`, `wardrobe`: World.chests like a chest). Stairs (`stairWoodR`... R/L) are not
+  solid: `moveBody` collides with their two half-tile steps (`stairHit`, `stairLanding`,
+  `stairCeiling`) and steps up half a tile at a time when `stairsNear` (per-chunk counts). Lifts:
+  `Lift` cars on `liftRail` columns with `liftButton` floors two blocks beside, a deck in
+  `buildDecks`, moved by `updateLifts` before the decks are built (riders carried), saved per
+  dimension (`SaveData.lifts`).
+- **Block physics (p31c_blockphys).** `BlockPhys` (weight, carry, span) per tile, `tileWeight`; item
+  info shows them (`weightLine`). `World.isBuilt` (a per-chunk layer, `ChunkSave.built`) marks what the
+  player placed; `World.set` clears it and placing code sets it. `FallingBlock` is every block on the
+  move (sand, blasts, storms, collapses): it flies, turns, is carried by the wind (`windOnBlock`),
+  bounces and slides, and settles back into a block (`settleBlock`). `blastBlocks` destroys, throws
+  (toward the open side) or spares each block by hardness and weight; storms throw torn building
+  blocks (`stormTear`). Structural physics (`Settings.structural`, off by default): edits are noted by
+  `World.set` while `structWatch`; `checkStructure` gathers the built blocks around one (up to 5000),
+  finds the standing ones bottom-up, spreads reach from them, then passes loads down the support
+  tree; crushed blocks break, unsupported ones fall, strained ones are drawn cracked (`stress`).
 - **Night monsters.** `updateSpawning`:
   - monsters have their own limit (`monsterCap`, set by the Nights setting); wild predators have a
     separate one;

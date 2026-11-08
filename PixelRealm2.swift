@@ -1,5 +1,6 @@
-// PIXEL REALM v2, part 2 of 4: damage, bosses, vehicles and ships, the portal and map, saving, helpers, walls and doors, Sparkworks
-// (power), the Mod Creator's data, checks and runtime, potions and mutation, infusions and the exosuit.
+// PIXEL REALM v2, part 2 of 4: creature AI, spawning, combat and damage, bosses, vehicles and ships, the portal and map, saving,
+// helpers, walls and doors, Sparkworks (power), the Mod Creator's data, checks and runtime, potions and mutation, infusions,
+// the exosuit, building (furniture, stairs, lifts) and block physics.
 // The game is four files that go together in one Swift Playgrounds app: PixelRealm1.swift to
 // PixelRealm4.swift. Each goes in its own file in the app (delete ContentView.swift; MyApp.swift can
 // hold part 1). All art is generated in code.
@@ -9,6 +10,1590 @@ import AVFoundation
 #if canImport(UIKit)
 import UIKit
 #endif
+
+// ===== p15a_mobai =====
+
+// MARK: - Mob AI
+
+extension Game {
+	func buildDecks() -> [Deck] {
+		var out: [Deck] = []
+		let sea: Double = Double(WorldGen.sea)
+		for s in ships where s.sink < 3.0 {
+			let dy: Double = s.deckY(sea)
+			out.append(Deck(x0: s.x - PirateShip.deckHalf, x1: s.x + PirateShip.deckHalf - 0.1, y: dy, vx: s.speed * Double(s.dir), id: s.id))
+		}
+		// a parked vehicle you can stand on (only while it is roughly level)
+		for v in vehicles where !v.rider && v.upright {
+			out.append(Deck(x0: v.b.x - v.b.w * 0.5, x1: v.b.x + v.b.w * 0.5, y: v.b.y - v.b.h, vx: v.vx, id: 1_000_000 + v.id))
+		}
+		// lift cars
+		for l in lifts { out.append(Deck(x0: l.x0, x1: l.x1, y: l.y, vx: 0, id: l.deckID)) }
+		return out
+	}
+
+	func allDecks() -> [Deck] { return decksCache }
+
+	func accelX(_ m: Mob, _ target: Double, _ a: Double, _ dt: Double) {
+		let d: Double = target - m.b.vx
+		let s: Double = a * dt
+		if d > s { m.b.vx += s } else if d < -s { m.b.vx -= s } else { m.b.vx = target }
+	}
+
+	func stepMob(_ m: Mob, _ dt: Double, stepUp: Double = 1.0) {
+		let d: MobDef = m.def
+		if d.flying {
+			// keep flyers from sinking; their AI sets vy directly
+		} else if m.b.inWater {
+			m.b.vy += 12.0 * dt
+			m.b.vy = clampD(m.b.vy, -5.0, 5.0)
+			if m.hp > 0 && d.behavior != .swimmer { m.b.vy -= 26.0 * dt }
+		} else {
+			m.b.vy = min(m.b.vy + gravityG * dt, terminalV)
+		}
+		if m.knock > 0 { m.knock -= dt }
+		if m.leapReq {
+			// a harder leap at a wall it is stuck against (see think)
+			m.leapReq = false
+			if m.b.onGround && !d.flying {
+				m.b.vy = -d.jump * 1.22
+				m.b.vx = (m.aimX >= m.b.x ? 1.0 : -1.0) * max(2.5, d.speed)
+				m.leapT = 1.6
+			}
+		}
+		// slowed creatures cover less ground (their AI still asks for its usual speed)
+		let sm: Double = m.speedMul
+		if sm < 0.999 {
+			m.b.vx *= sm
+			if d.flying { m.b.vy *= sm }
+		}
+		world.moveBody(&m.b, dt, stepUp: d.flying ? 0 : stepUp, dropThrough: false, decks: decksCache)
+		if sm < 0.999 {
+			m.b.vx /= sm
+			if d.flying { m.b.vy /= sm }
+		}
+		if m.b.deck >= 0 && m.b.deck < decksCache.count { m.b.x += decksCache[m.b.deck].vx * dt }
+		if m.boat >= 0 { clampToDeck(m) }
+		if m.b.onGround { m.anim += abs(m.b.vx) * dt * 0.8 } else { m.anim += dt * 0.5 }
+	}
+
+	func cliffAhead(_ m: Mob, _ dir: Int) -> Bool {
+		let fx: Int = Int(floor(m.b.x + Double(dir) * (m.b.w * 0.5 + 0.6)))
+		let fy: Int = Int(floor(m.b.y + 0.2))
+		var d: Int = 0
+		while d < 5 {
+			let t: Tile = world.tile(fx, fy + d)
+			if t.solid || t == .platform || t.liquid { return false }
+			d += 1
+		}
+		return true
+	}
+
+	func wander(_ m: Mob, _ dt: Double, _ speedK: Double) {
+		let d: MobDef = m.def
+		m.t1 -= dt
+		if m.t1 <= 0 {
+			if m.st == 0 {
+				m.st = 1
+				m.dir = Bool.random() ? 1 : -1
+				if abs(m.b.x - m.homeX) > 24 { m.dir = m.b.x > m.homeX ? -1 : 1 }
+				m.t1 = Double.random(in: 1.5...4.5)
+			} else {
+				m.st = 0
+				m.t1 = Double.random(in: 1.0...4.0)
+			}
+		}
+		if m.st == 1 {
+			if cliffAhead(m, m.dir) || (m.b.hitWall && !m.b.onGround) { m.dir = -m.dir }
+			if m.b.hitWall && m.b.onGround { m.dir = -m.dir }
+			accelX(m, Double(m.dir) * d.speed * speedK, 14, dt)
+		} else {
+			accelX(m, 0, 18, dt)
+		}
+	}
+
+	func flee(_ m: Mob, _ fromX: Double, _ dt: Double, _ speedK: Double) {
+		let dirX: Double = m.b.x >= fromX ? 1.0 : -1.0
+		m.dir = Int(dirX)
+		accelX(m, dirX * m.def.speed * speedK, 30, dt)
+		if m.b.hitWall && m.b.onGround { m.b.vy = -m.def.jump }
+	}
+
+	func chase(_ m: Mob, _ tx: Double, _ speedK: Double, _ dt: Double) {
+		let d: MobDef = m.def
+		let dirX: Double = tx >= m.b.x ? 1.0 : -1.0
+		if abs(tx - m.b.x) > 0.35 {
+			m.dir = Int(dirX)
+			accelX(m, dirX * d.speed * speedK, 26, dt)
+		} else {
+			accelX(m, 0, 30, dt)
+		}
+		if m.b.hitWall && m.b.onGround { m.b.vy = -d.jump }
+		if m.b.inWater { m.b.vy -= 18 * dt }
+	}
+
+	func contactHurt(_ m: Mob, _ dmg: Double) {
+		if m.cd > 0 || dead { return }
+		// touching: overlapping across, and up and down anything from overlapping to standing on the
+		// player's head (or the player on its back)
+		let across: Bool = pb.right > m.b.left + 0.05 && pb.left < m.b.right - 0.05
+		let upDown: Bool = pb.y > m.b.top - 0.2 && pb.top < m.b.y + 0.2
+		if across && upDown {
+			var info = DamageInfo(amount: dmg, type: .contact, source: .mob(m, faction(of: m)))
+			info.knock = 6.5
+			info.originX = m.b.x
+			if hurtPlayer(info) { m.cd = 0.9; m.atkT = Mob.atkDur }
+		}
+	}
+
+	/// A creature's swing: hits the player and any creature from another side inside the reach box
+	func mobStrike(_ m: Mob, reach: Double, height: Double, dmg: Double, knock: Double) {
+		m.atkT = Mob.atkDur
+		// a mutated creature's swing reaches as far as it has grown
+		let k: Double = max(1.0, m.mutSize)
+		let reach: Double = reach * k
+		let height: Double = height * k
+		let x0: Double = m.dir > 0 ? m.b.x - 0.3 : m.b.x - reach - 0.3
+		let x1: Double = m.dir > 0 ? m.b.x + reach + 0.3 : m.b.x + 0.3
+		var info = DamageInfo(amount: dmg, type: .melee, source: .mob(m, faction(of: m)))
+		info.dirX = Double(m.dir)
+		info.knock = knock
+		info.originX = m.b.x
+		info.key = newID()
+		damageBox(x0, m.b.y - height, x1, m.b.y + 0.1, info)
+	}
+
+	func updateMobs(_ dt: Double) {
+		let t0: Double = perfNow()
+		let px: Double = pb.x
+		let py: Double = pb.y
+		let offScreen: Double = viewTilesW * 0.5 + 6.0
+		frameNo &+= 1
+		// iterated by index because AI code may append new mobs while it runs
+		var i: Int = 0
+		while i < mobs.count {
+			let m: Mob = mobs[i]
+			i += 1
+			if m.hp <= 0 || m.removed { continue }
+			let dx: Double = abs(m.b.x - px)
+			let dy: Double = abs(m.b.y - py)
+			if !m.persistent && !m.tame && !m.isBoss && (dx > 115 || dy > 85) {
+				m.removed = true
+				continue
+			}
+			// a monster nobody is fighting that stays well off-screen wanders off after a while, making
+			// room for another; at daybreak the night's hunters out of sight go back where they came from
+			if m.def.hostile && !m.persistent && !m.tame && !m.isBoss && m.boat < 0 && m.lair == 0 {
+				if (dx > offScreen || dy > 40) && m.ai != .chase {
+					m.farT += dt
+					if m.farT > ((m.hunter && !isNight) ? 4.0 : 40.0) {
+						m.removed = true
+						continue
+					}
+				} else {
+					m.farT = 0
+				}
+			}
+			if m.hurtT > 0 { m.hurtT -= dt }
+			if m.cd > 0 { m.cd -= dt }
+			if m.flash > 0 { m.flash -= dt }
+			if m.lean != 0 { m.lean *= (1.0 - min(1.0, dt * 7.0)); if abs(m.lean) < 0.01 { m.lean = 0 } }
+			if m.atkT > 0 { m.atkT -= dt }
+			if m.turnT > 0 {
+				m.turnT -= dt
+				if m.turnT <= 0 { m.turnT = 0; m.face = m.dir }
+			} else if m.face != m.dir {
+				if m.face == 0 { m.face = m.dir } else { m.turnT = Mob.turnDur }
+			}
+			if m.regrow > 0 {
+				m.regrow -= dt
+				if m.regrow <= 0 { m.sheared = false }
+			}
+			if !world.isLoaded(Int(floor(m.b.x))) { continue }
+			if m.dazeGuard > 0 { m.dazeGuard -= dt }
+			if m.daze > 0 {
+				// reeling from a club: it stands (or hangs) where it is and does nothing else
+				m.daze -= dt
+				if m.daze <= 0 { m.daze = 0; m.dazeGuard = 1.2 }
+				m.b.vx *= max(0, 1.0 - dt * 9.0)
+				if m.def.flying { m.b.vy *= max(0, 1.0 - dt * 9.0) }
+				stepMob(m, dt)
+				mobHazards(m, dt)
+				continue
+			}
+			// creatures well off screen wait until the player comes closer (saves a lot of work)
+			if !m.isBoss && !m.tame && m.boat < 0 && (dx > 72 || dy > 56) { continue }
+			// mid-distance creatures think and move at a third of the rate, staggered by id, with the
+			// skipped time folded into their next step so they still cover the same ground
+			var step: Double = dt
+			if !m.isBoss && !m.tame && m.boat < 0 && (dx > 40 || dy > 30) {
+				m.aiAccum += dt
+				if (frameNo &+ m.id) % 3 != 0 {
+					Perf.shared.countSkip()
+					continue
+				}
+				step = min(0.1, m.aiAccum)
+			}
+			m.aiAccum = 0
+			updateMob(m, step)
+			if m.hp > 0 { mobHazards(m, step) }
+		}
+		updateDying(dt)
+		// compact once: drop removed mobs and finished death animations
+		if mobs.contains(where: { $0.removed }) { mobs.removeAll { $0.removed } }
+		Perf.shared.aiMs = Perf.smooth(Perf.shared.aiMs, perfNow() - t0)
+	}
+
+	func nearestHostileTo(_ x: Double, _ y: Double, _ r: Double) -> Mob? {
+		var best: Mob? = nil
+		var bd: Double = r * r
+		for o in mobs {
+			if o.hp <= 0 || o.tame || !o.def.hostile { continue }
+			let dx: Double = o.b.x - x
+			let dy: Double = o.b.cy - y
+			let d: Double = dx * dx + dy * dy
+			if d < bd { bd = d; best = o }
+		}
+		return best
+	}
+
+	func updateMob(_ m: Mob, _ dt: Double) {
+		if m.kind == .custom {
+			updateCustomMob(m, dt)
+			return
+		}
+		let d: MobDef = m.def
+		if m.kind == .bearBoss || m.kind == .rex {
+			updateBossMob(m, dt)
+			return
+		}
+		if m.kind == .sentinel { updateSentinel(m, dt); return }
+		if m.kind == .warden { updateWarden(m, dt); return }
+		if m.boat >= 0 && updateCrew(m, dt) { return }
+		let toPX: Double = pb.x - m.b.x
+		let dist: Double = abs(toPX)
+		let dyP: Double = (pb.y - pb.h * 0.5) - m.b.cy
+		let near: Bool = dist < d.aggro && abs(dyP) < 14 && !dead
+		let peaceful: Bool = settings.peaceful
+		if m.tame {
+			updatePet(m, dt)
+			return
+		}
+		// monsters decide for themselves whether they are after the player (see think)
+		var engaged: Bool = near && !peaceful
+		if m.kind.thinks { engaged = think(m, dt, dist, dyP) }
+		switch m.kind {
+		case .custom:
+			// run by updateCustomMob (never reaches here)
+			stepMob(m, dt)
+		case .pig, .cow, .sheep, .villager:  // (villagers are retired and never appear)
+			if m.t2 > 0 {
+				m.t2 -= dt
+				flee(m, m.tx, dt, 1.9)
+			} else if !animalLife(m, dt) {
+				wander(m, dt, 0.55)
+			}
+			stepMob(m, dt)
+		case .giraffe, .chicken, .frog, .cat:
+			if m.t2 > 0 {
+				m.t2 -= dt
+				flee(m, m.tx, dt, 1.7)
+			} else if !(dist < 6.0 && !dead && m.kind != .cat) && m.kind != .cat && animalLife(m, dt) {
+				// handled: resting, heading for water or the herd
+			} else if dist < 6.0 && !dead && m.kind != .cat {
+				flee(m, pb.x, dt, 1.4)
+			} else {
+				wander(m, dt, 0.5)
+			}
+			if m.kind == .frog && m.b.onGround && m.st == 1 && Double.random(in: 0...1) < 0.04 { m.b.vy = -9; m.b.vx = Double(m.dir) * 3.5 }
+			stepMob(m, dt)
+		case .elephant, .bear, .wolf:
+			if m.drinkT > 0 && m.kind == .wolf { m.drinkT -= dt }
+			// a wolf that turns on the player forgets its prey
+			if m.angry { m.preyID = 0 }
+			if !m.angry && m.kind == .wolf && hunt(m, dt, isNight && m.drinkT <= 0) {
+				// a wolf pack runs down prey at night
+			} else if m.angry && !dead {
+				m.t3 -= dt
+				if m.t3 <= 0 || dist > 30 { m.angry = false } else {
+					chase(m, pb.x, 1.0, dt)
+					if m.kind == .wolf && m.b.onGround && dist < 4.0 && Double.random(in: 0...1) < 0.03 { m.b.vy = -12; m.b.vx = Double(m.dir) * 7.0 }
+					if peaceful { m.angry = false }
+					else { contactHurt(m, d.dmg) }
+				}
+			} else {
+				// animals are neutral: only a blow from the player makes them fight (see hurtMob)
+				wander(m, dt, 0.5)
+			}
+			stepMob(m, dt)
+		case .grizzly, .polarBear, .tiger, .scorpion:
+			if m.drinkT > 0 { m.drinkT -= dt }
+			// wild animals hunt their prey but leave the player alone, unless the player hurts them:
+			// then they fight back for a while
+			let provoked: Bool = wildProvoked(m)
+			if !(provoked && !peaceful) && m.kind != .scorpion && hunt(m, dt, m.drinkT <= 0) {
+				// hunting, or resting after a kill
+			} else if !(provoked && !peaceful) {
+				wander(m, dt, 0.4)
+			} else if !dead {
+				chase(m, pb.x, 1.0, dt)
+				if m.kind == .tiger && m.b.onGround && dist < 6.5 && dist > 2.0 && m.cd <= 0.4 && Double.random(in: 0...1) < 0.04 {
+					m.b.vy = -11.5
+					m.b.vx = Double(m.dir) * 10.0
+					m.t3 = 0.6
+				}
+				contactHurt(m, d.dmg)
+			} else {
+				wander(m, dt, 0.5)
+			}
+			stepMob(m, dt)
+		case .zombie:
+			updateZombie(m, dt, engaged, dyP)
+		case .skeleton, .pirate, .pirateCaptain:
+			updateSwordsman(m, dt, engaged, dist, dyP)
+		case .pirateGunner, .imp:
+			updateShooter(m, dt, engaged, dist, dyP)
+		case .slime, .emberSlime:
+			updateSlime(m, dt, engaged, dyP)
+		case .crow, .bat, .cinderBat, .wraith:
+			updateFlyer(m, dt, engaged, dist, dyP)
+		case .fish:
+			updateFish(m, dt)
+		case .crawler:
+			updateCrawler(m, dt, engaged, dist, dyP)
+		case .golem:
+			updateGolem(m, dt, engaged, dist, dyP)
+		case .archer:
+			updateArcher(m, dt, engaged, dist, dyP)
+		case .mimic:
+			updateMimic(m, dt, !peaceful && !dead && dist < 20, dist, dyP)
+		case .bearBoss, .rex, .sentinel, .warden:
+			break
+		}
+	}
+
+	// MARK: hostile minds
+
+	/// How far a monster's attack reaches (across, up or down) and whether it is shot from afar
+	/// How far a creature's attack reaches: a mutated creature's blows reach as far as its size
+	func attackReach(_ m: Mob) -> (Double, Double, Bool) {
+		let r: (Double, Double, Bool) = attackReachBase(m)
+		if m.mutSize <= 1.001 || r.2 { return r }
+		return (r.0 * m.mutSize, r.1 * m.mutSize, r.2)
+	}
+
+	func attackReachBase(_ m: Mob) -> (Double, Double, Bool) {
+		switch m.kind {
+		case .zombie: return (1.5, 1.7, false)
+		case .skeleton, .pirate, .pirateCaptain: return (2.0, 1.6, false)
+		case .pirateGunner, .imp: return (17.0, 9.0, true)
+		case .archer: return (18.0, 10.0, true)
+		case .crawler: return (4.6, 2.0, false)
+		case .golem: return (3.3, 2.4, false)
+		case .custom: return ModRuntime.shared.mob(m.cslot)?.reach ?? (m.b.w * 0.5 + 0.5, 1.4, false)
+		default: return (m.b.w * 0.5 + 0.5, 1.4, false)
+		}
+	}
+
+	/// A monster's senses and its plan, the same for every kind (each has its own attacks).
+	/// It notices the player by sight (a clear line from its eyes, rechecked a few times a second),
+	/// by sound up close, or by being hit; after a beat of surprise it gives chase; when the player
+	/// slips out of sight it searches where they were last seen, then goes home. Stuck against a wall
+	/// it tries one harder leap, then backs off and comes again. Night hunters spawned on the surface
+	/// roam toward the player before they have seen them. Returns whether it is after the player;
+	/// `aimX` is where it is heading.
+	func think(_ m: Mob, _ dt: Double, _ dist: Double, _ dyP: Double) -> Bool {
+		let d: MobDef = m.def
+		m.aiT += dt
+		if m.leapT > 0 { m.leapT -= dt }
+		if m.hunter && (m.kind == .skeleton || m.kind == .archer) && inSunlight(m) { m.burn = 2.0 }
+		if dead || settings.peaceful {
+			m.why = dead ? .playerGone : .peaceful
+			if m.ai != .idle && m.ai != .back { m.ai = .back; m.aiT = 0 }
+			if m.ai == .back && (abs(m.b.x - m.homeX) < 2.0 || m.aiT > 8.0) { m.ai = .idle; m.aiT = 0 }
+			m.aimX = m.homeX
+			return false
+		}
+		m.losT -= dt
+		if m.losT <= 0 {
+			// its eyes (a golem looks over a low wall) to the player's head or chest
+			m.losT = 0.18 + Double(m.id % 7) * 0.02
+			let ey: Double = m.kind == .golem ? m.b.top - 0.5 : shotY(m)
+			m.sees = m.kind == .wraith || world.lineClear(m.b.x, ey, pb.x, pb.y - pb.h * 0.6) || world.lineClear(m.b.x, ey, pb.x, pb.top + 0.2)
+			// smoke hides the player from eyes on either side of it
+			if m.sees && !smokes.isEmpty && (inSmoke(pb.x, pb.cy) || inSmoke(m.b.x, m.b.cy)) { m.sees = false }
+		}
+		// sight reaches across most of the screen (further for the night's hunters, and for one already
+		// fighting); footsteps and scent carry through walls over a shorter distance
+		let base: Double = max(d.aggro, 16.0)
+		let sight: Double = base * (m.hunter ? 1.25 : 1.0) * (m.ai == .chase ? 1.5 : 1.0)
+		let sense: Double = base * 0.7
+		let hurt: Bool = clock - m.lastHitByPlayer < 0.6
+		let heard: Bool = dist < 3.5 && abs(dyP) < 3.0
+		let detect: Bool = hurt || heard || (dist < sight && abs(dyP) < 12.0 && m.sees)
+		let sensed: Bool = dist < sense && abs(dyP) < 10.0
+		if detect || sensed {
+			m.seenX = pb.x
+			m.seenY = pb.y
+			m.lostT = 0
+		} else {
+			m.lostT += dt
+		}
+		let hunting: Bool = m.hunter && isNight && world.dim == .overworld && dist < 80
+		switch m.ai {
+		case .idle, .back:
+			if detect {
+				m.ai = hurt ? .chase : .alert
+				m.aiT = 0
+			} else if sensed {
+				// something moving nearby, out of sight: it goes to look
+				m.ai = .search
+				m.aiT = 0
+			} else if hunting {
+				// a hunter roams toward where the player is, give or take
+				m.ai = .search
+				m.aiT = 0
+				m.seenX = pb.x + Double.random(in: -6...6)
+				m.seenY = pb.y
+			}
+		case .alert:
+			if m.aiT > 0.35 { m.ai = .chase; m.aiT = 0 }
+		case .chase:
+			if m.lostT > 2.5 { m.ai = .search; m.aiT = 0 }
+		case .search:
+			if detect {
+				m.ai = .chase
+				m.aiT = 0
+			} else if sensed {
+				m.aiT = 0
+			} else if (abs(m.b.x - m.seenX) < 1.2 && m.aiT > 2.0) || m.aiT > (hunting ? 14.0 : 8.0) {
+				if hunting {
+					m.seenX = pb.x + Double.random(in: -8...8)
+					m.seenY = pb.y
+					m.aiT = 0
+				} else {
+					m.ai = .back
+					m.aiT = 0
+				}
+			}
+		case .retreat:
+			if m.aiT > 2.5 { m.ai = detect ? .chase : .search; m.aiT = 0 }
+		}
+		switch m.ai {
+		case .alert, .chase: m.aimX = pb.x
+		case .search: m.aimX = m.seenX
+		case .retreat: m.aimX = m.b.x + (m.b.x >= m.seenX ? 6.0 : -6.0)
+		case .back: m.aimX = m.homeX
+		case .idle: m.aimX = m.b.x
+		}
+		if m.ai == .back && abs(m.b.x - m.homeX) < 2.0 { m.ai = .idle; m.aiT = 0 }
+		// getting nowhere (pressed against a wall it can't get over, or hopping at it): one harder
+		// leap, then back off and come again. One already within reach of its attack is not stuck.
+		let reach: (Double, Double, Bool) = attackReach(m)
+		let inReach: Bool = dist <= reach.0 && abs(dyP) <= reach.1 && (!reach.2 || m.sees)
+		// (states 0 and 1 are walking about; 3 and up are its attacks)
+		let pushing: Bool = (m.ai == .chase || m.ai == .search) && abs(m.aimX - m.b.x) > 1.0 && m.st <= 1 && !(m.ai == .chase && inReach)
+		if pushing {
+			if abs(m.b.x - m.progX) > 0.6 {
+				m.progX = m.b.x
+				m.blockedT = max(0, m.blockedT - 0.5)
+			} else {
+				// a cactus or spikes in the way: it gives up on that much sooner
+				let ax: Int = Int(floor(m.b.x + Double(m.dir) * (m.b.w * 0.5 + 0.3)))
+				let thorny: Bool = world.tile(ax, Int(floor(m.b.y - 0.5))).hurts
+				m.blockedT += thorny ? dt * 3.0 : dt
+			}
+			// (applied in stepMob, after the creature's own moves, so its usual hop can't cancel it)
+			if !d.flying && m.blockedT > 0.9 && m.leapT <= 0 { m.leapReq = true }
+			if m.blockedT > 3.2 {
+				m.ai = .retreat
+				m.aiT = 0
+				m.blockedT = 0
+			}
+		} else if m.st <= 1 {
+			m.progX = m.b.x
+			m.blockedT = max(0, m.blockedT - dt * 0.5)
+		}
+		// the reason it is not attacking right now (shown by the AI overlay)
+		if m.ai == .retreat || m.blockedT > 0.9 { m.why = .blocked }
+		else if m.ai != .chase && m.ai != .alert { m.why = .notSeen }
+		else if dist > reach.0 { m.why = .outOfRange }
+		else if abs(dyP) > reach.1 { m.why = .tooHigh }
+		else if reach.2 && !m.sees { m.why = .noSight }
+		else if m.cd > 0 { m.why = .cooldown }
+		else { m.why = .none }
+		return m.ai != .idle && m.ai != .back
+	}
+
+	// MARK: specific AIs
+
+	/// Out in full daylight under an open sky (the undead burn)
+	func inSunlight(_ m: Mob) -> Bool {
+		return world.dim == .overworld && dayFactor > 0.7 && precipAt(m.b.x) < 0.5 && wxHere.cloud < 0.9 && world.isSkyExposed(Int(floor(m.b.x)), Int(floor(m.b.y - 1))) && !m.b.inWater
+	}
+
+	func updateZombie(_ m: Mob, _ dt: Double, _ aggro: Bool, _ dyP: Double) {
+		let d: MobDef = m.def
+		if inSunlight(m) { m.burn = 2.0 }
+		let dist: Double = abs(pb.x - m.b.x)
+		if m.st == 3 {
+			// arms drawn back: the swipe lands a moment later, so a quick step back dodges it
+			m.t3 -= dt
+			accelX(m, 0, 40, dt)
+			if m.t3 <= 0 {
+				m.st = 4
+				m.t3 = 0.25
+				mobStrike(m, reach: 1.2, height: 1.8, dmg: d.dmg, knock: 6.5)
+			}
+		} else if m.st == 4 {
+			m.t3 -= dt
+			accelX(m, 0, 40, dt)
+			if m.t3 <= 0 {
+				m.st = 0
+				m.cd = 0.9
+			}
+		} else if aggro {
+			chase(m, m.aimX, 1.0, dt)
+			if m.ai == .chase && (m.sees || dist < 1.0) && m.cd <= 0 && dist < 1.5 && abs(dyP) < 1.7 {
+				m.st = 3
+				m.t3 = 0.32
+				m.dir = pb.x >= m.b.x ? 1 : -1
+			}
+		} else {
+			wander(m, dt, 0.45)
+		}
+		stepMob(m, dt)
+	}
+
+	/// skeleton knight (shield), pirate and captain (cutlass)
+	func updateSwordsman(_ m: Mob, _ dt: Double, _ aggro: Bool, _ dist: Double, _ dyP: Double) {
+		let d: MobDef = m.def
+		let isSkel: Bool = m.kind == .skeleton
+		if m.st == 3 {
+			// wind-up
+			m.t3 -= dt
+			accelX(m, 0, 40, dt)
+			if m.t3 <= 0 {
+				m.st = 4
+				m.t3 = 0.22
+				// strike
+				mobStrike(m, reach: 2.2, height: 1.9, dmg: d.dmg, knock: 7.0)
+			}
+		} else if m.st == 4 {
+			m.t3 -= dt
+			accelX(m, 0, 40, dt)
+			if m.t3 <= 0 {
+				m.st = 0
+				m.cd = m.kind == .pirateCaptain ? 0.9 : 1.2
+			}
+		} else if aggro {
+			let sp: Double = dist > 8 ? 1.15 : 0.95
+			if isSkel {
+				// raise the shield while approaching, drop it to attack
+				m.blocking = dist > 2.4 && dist < 11 && m.ai == .chase
+				if m.ai == .chase && m.sees && dist < 2.0 && m.cd <= 0 && abs(dyP) < 1.6 {
+					m.st = 3
+					m.t3 = 0.38
+					m.blocking = false
+					m.dir = pb.x >= m.b.x ? 1 : -1
+				}
+				chase(m, m.aimX, m.blocking ? 0.7 : sp, dt)
+			} else {
+				if m.ai == .chase && m.sees && dist < 2.0 && m.cd <= 0 && abs(dyP) < 1.6 {
+					m.st = 3
+					m.t3 = 0.3
+					m.dir = pb.x >= m.b.x ? 1 : -1
+				}
+				chase(m, m.aimX, sp, dt)
+			}
+		} else {
+			m.blocking = false
+			wander(m, dt, 0.4)
+		}
+		if m.st == 0 && !aggro { m.blocking = false }
+		stepMob(m, dt)
+	}
+
+	/// pirate gunner and imp: keep range and shoot
+	func updateShooter(_ m: Mob, _ dt: Double, _ aggro: Bool, _ dist: Double, _ dyP: Double) {
+		let isImp: Bool = m.kind == .imp
+		if m.st == 3 {
+			m.t3 -= dt
+			accelX(m, 0, 40, dt)
+			m.dir = pb.x >= m.b.x ? 1 : -1
+			if m.t3 <= 0 {
+				if clearShot(m) {
+					m.st = 6
+					m.t3 = 0.18
+					shootAtPlayer(m, isImp)
+				} else if m.t3 < -0.8 {
+					m.st = 0
+					m.cd = 0.4
+					m.blockedT += 0.6
+				}
+			}
+		} else if m.st == 6 {
+			m.t3 -= dt
+			accelX(m, 0, 40, dt)
+			if m.t3 <= 0 { m.st = 0; m.cd = isImp ? 1.9 : 2.2 }
+		} else if aggro {
+			let want: Double = isImp ? 8.0 : 9.0
+			if (m.ai != .chase && m.ai != .alert) || !m.sees || m.blockedT > 0.5 || !m.b.onGround {
+				// no clear shot (or climbing for one): move in until there is one
+				chase(m, m.aimX, 0.9, dt)
+			} else if dist < want - 3.0 {
+				flee(m, pb.x, dt, 0.8)
+			} else if dist > want + 3.0 {
+				chase(m, pb.x, 0.9, dt)
+			} else {
+				accelX(m, 0, 20, dt)
+				m.dir = pb.x >= m.b.x ? 1 : -1
+			}
+			if m.ai == .chase && m.sees && m.b.onGround && m.cd <= 0 && dist < 17 && abs(dyP) < 9 {
+				m.st = 3
+				m.t3 = 0.5
+			}
+		} else {
+			wander(m, dt, 0.4)
+		}
+		stepMob(m, dt)
+	}
+
+	func shootAtPlayer(_ m: Mob, _ fire: Bool) {
+		let ox: Double = m.b.x + Double(m.dir) * 0.6
+		let oy: Double = shotY(m)
+		var dx: Double = pb.x - ox
+		var dy: Double = shotAimY(m) - oy
+		let len: Double = max(0.001, sqrt(dx * dx + dy * dy))
+		dx /= len
+		dy /= len
+		let sp: Double = fire ? 11.0 : 20.0
+		var p = Projectile(kind: fire ? .fireball : .bullet, x: ox, y: oy, vx: dx * sp, vy: dy * sp, dmg: m.def.dmg, fromPlayer: false, gravity: 0)
+		p.life = 3.0
+		p.owner = m.id
+		p.source = .mob(m, faction(of: m))
+		p.uid = newID()
+		projectiles.append(p)
+		spawnParticles(ox, oy, fire ? 0xFF7020 : 0xFFE080, 4, 2.5, 0.18, 0)
+	}
+
+	func updateSlime(_ m: Mob, _ dt: Double, _ aggro: Bool, _ dyP: Double) {
+		let d: MobDef = m.def
+		m.t1 -= dt
+		if m.b.onGround {
+			m.b.vx *= 0.8
+			if m.t1 <= 0 {
+				if aggro {
+					let dirX: Double = m.aimX >= m.b.x ? 1.0 : -1.0
+					m.dir = Int(dirX)
+					m.b.vy = -d.jump
+					m.b.vx = dirX * d.speed * 1.6
+					m.t1 = Double.random(in: 0.7...1.3)
+				} else {
+					m.dir = Bool.random() ? 1 : -1
+					m.b.vy = -8.5
+					m.b.vx = Double(m.dir) * 2.0
+					m.t1 = Double.random(in: 1.5...3.5)
+				}
+			}
+		}
+		if aggro && !m.b.onGround {
+			// a little steering in mid-hop, so a bounce at a wall carries over it
+			accelX(m, (m.aimX >= m.b.x ? 1.0 : -1.0) * d.speed * 1.6, 5, dt)
+		}
+		if m.kind == .emberSlime && Double.random(in: 0...1) < 0.1 {
+			spawnParticles(m.b.x, m.b.y - 0.4, 0xFF8A20, 1, 1.2, 0.4, -3)
+		}
+		if aggro && m.ai == .chase { contactHurt(m, d.dmg) }
+		stepMob(m, dt)
+	}
+
+	func updateFlyer(_ m: Mob, _ dt: Double, _ aggro: Bool, _ dist: Double, _ dyP: Double) {
+		let d: MobDef = m.def
+		m.anim += dt * 8.0
+		var tx: Double = m.homeX
+		var ty: Double = m.homeY
+		var spd: Double = d.speed * 0.6
+		if m.kind == .crow {
+			// wander around home; flee when approached
+			m.t1 -= dt
+			if m.t1 <= 0 {
+				m.t1 = Double.random(in: 2...5)
+				m.tx = m.homeX + Double.random(in: -12...12)
+				let gy: Double = Double(world.surfaceY(Int(floor(m.tx))))
+				m.ty = gy - Double.random(in: 3...8)
+			}
+			tx = m.tx
+			ty = m.ty
+			if dist < 5.0 && !dead {
+				tx = m.b.x + (m.b.x - pb.x) * 3
+				ty = m.b.y - 6
+				spd = d.speed * 1.4
+			}
+		} else if aggro {
+			tx = m.aimX
+			ty = (m.ai == .chase ? pb.y : m.seenY) - 1.3 + sin(clock * 3.0 + Double(m.id)) * 1.2
+			spd = d.speed
+		} else {
+			m.t1 -= dt
+			if m.t1 <= 0 {
+				m.t1 = Double.random(in: 1.5...4)
+				m.tx = m.b.x + Double.random(in: -8...8)
+				m.ty = m.b.y + Double.random(in: -4...4)
+			}
+			tx = m.tx
+			ty = m.ty
+		}
+		var ax: Double = tx - m.b.x
+		var ay: Double = ty - m.b.y
+		let len: Double = max(0.001, sqrt(ax * ax + ay * ay))
+		ax /= len
+		ay /= len
+		m.b.vx += (ax * spd - m.b.vx) * min(1.0, dt * 4.0)
+		m.b.vy += (ay * spd - m.b.vy) * min(1.0, dt * 4.0)
+		if abs(m.b.vx) > 0.3 { m.dir = m.b.vx > 0 ? 1 : -1 }
+		if m.kind == .wraith {
+			// drifts through walls, slower inside solid tiles
+			let inside: Bool = world.solid(Int(floor(m.b.x)), Int(floor(m.b.y - 0.7)))
+			let k: Double = inside ? 0.5 : 1.0
+			m.b.x += m.b.vx * dt * k
+			m.b.y += m.b.vy * dt * k
+		} else {
+			world.moveBody(&m.b, dt, stepUp: 0, dropThrough: false, decks: [])
+			if m.b.hitWall || m.b.hitCeil || m.b.onGround { m.b.vy = -1.0; m.t1 = 0 }
+		}
+		if aggro && m.kind != .crow && m.ai == .chase { contactHurt(m, d.dmg) }
+	}
+
+	func updateFish(_ m: Mob, _ dt: Double) {
+		m.anim += dt * 6.0
+		if !m.b.inWater {
+			// flopping on land
+			m.b.vy = min(m.b.vy + gravityG * dt, terminalV)
+			world.moveBody(&m.b, dt, stepUp: 0, dropThrough: false, decks: [])
+			m.t2 += dt
+			if m.t2 > 1.0 { m.t2 = 0; hurtMob(m, 1, 0, 0, false) }
+			return
+		}
+		m.t1 -= dt
+		if m.t1 <= 0 {
+			m.t1 = Double.random(in: 1.5...4)
+			m.tx = m.b.x + Double.random(in: -8...8)
+			m.ty = m.b.y + Double.random(in: -3...3)
+		}
+		if abs(pb.x - m.b.x) < 4 && abs(pb.y - m.b.y) < 3 && pb.inWater {
+			m.tx = m.b.x + (m.b.x - pb.x) * 3
+			m.ty = m.b.y + (m.b.y - pb.y) * 2
+		}
+		var ax: Double = m.tx - m.b.x
+		var ay: Double = m.ty - m.b.y
+		let len: Double = max(0.001, sqrt(ax * ax + ay * ay))
+		ax /= len
+		ay /= len
+		let sp: Double = m.def.speed
+		m.b.vx += (ax * sp - m.b.vx) * min(1.0, dt * 3.0)
+		m.b.vy += (ay * sp * 0.6 - m.b.vy) * min(1.0, dt * 3.0)
+		if abs(m.b.vx) > 0.2 { m.dir = m.b.vx > 0 ? 1 : -1 }
+		let nx: Double = m.b.x + m.b.vx * dt
+		let ny: Double = m.b.y + m.b.vy * dt
+		let tx: Int = Int(floor(nx))
+		let ty: Int = Int(floor(ny - 0.2))
+		if world.tile(tx, ty) == .water && world.tile(tx, Int(floor(ny))) != .air {
+			m.b.x = nx
+			m.b.y = ny
+		} else {
+			m.t1 = 0
+			m.b.vx = -m.b.vx
+			m.b.vy = -m.b.vy
+		}
+		let hw: Double = m.b.w * 0.5
+		m.b.inWater = world.liquidFraction(m.b.x - hw, m.b.y - m.b.h, m.b.x + hw, m.b.y, false) > 0.3
+	}
+
+	// MARK: pets
+
+	func updatePet(_ m: Mob, _ dt: Double) {
+		let d: MobDef = m.def
+		let toP: Double = pb.x - m.b.x
+		let dist: Double = abs(toP)
+		if dist > 45 || abs(pb.y - m.b.y) > 30 {
+			m.b.x = pb.x - Double(facing) * 1.5
+			m.b.y = pb.y
+			m.b.vx = 0
+			m.b.vy = 0
+			return
+		}
+		if m.st == 7 {
+			accelX(m, 0, 20, dt)
+			stepMob(m, dt)
+			return
+		}
+		// attack nearby hostiles
+		var target: Mob? = nil
+		if m.kind == .wolf {
+			target = nearestHostileTo(pb.x, pb.y - 1, 9.0)
+		}
+		if let t = target, t.hp > 0 {
+			chase(m, t.b.x, 1.2, dt)
+			if m.cd <= 0 && abs(t.b.x - m.b.x) < 1.6 && abs(t.b.cy - m.b.cy) < 1.5 {
+				hurtMob(t, 7, Double(m.dir), 5.0, true)
+				m.cd = 0.7
+			}
+		} else if dist > 3.5 {
+			let sp: Double = dist > 12 ? 1.8 : 1.15
+			chase(m, pb.x, sp, dt)
+		} else {
+			accelX(m, 0, 20, dt)
+		}
+		_ = d
+		stepMob(m, dt)
+	}
+
+	func tryTame(_ m: Mob) -> Bool {
+		if m.tame { return false }
+		guard let it = heldItem else { return false }
+		var ok: Bool = false
+		if m.kind == .wolf, case .mat(let mm) = it, mm == .bone { ok = true }
+		if m.kind == .cat, case .food(let f) = it, f == .rawFish || f == .cookedFish { ok = true }
+		if !ok { return false }
+		if !isCreative { inv.removeAt(sel, 1) }
+		if Double.random(in: 0...1) < 0.6 {
+			m.tame = true
+			m.persistent = true
+			m.angry = false
+			m.hp = m.maxHP
+			say("You tamed the " + m.def.name.lowercased() + "!", 3.0)
+			spawnParticles(m.b.x, m.b.y - 1, 0xFF6080, 10, 3.0, 0.8, -4)
+		} else {
+			say("The " + m.def.name.lowercased() + " isn't convinced yet...", 2.0)
+		}
+		useCD = 0.5
+		bumpHUD()
+		return true
+	}
+}
+
+// ===== p15b_spawn =====
+
+// MARK: - Mob spawning
+
+extension Game {
+	/// Notes how a spawn attempt ended (the debug panel shows the tally)
+	func spawnNote(_ s: String) {
+		spawnLast = s
+		if spawnLog.count < 40 || spawnLog[s] != nil { spawnLog[s, default: 0] += 1 }
+	}
+
+	/// The most lamplight a monster may come out in (0...15). A torch (12) keeps them off the ground
+	/// about seven blocks round it in the open, less where walls or ground stand in the way.
+	static let spawnGlowMax: Int = 4
+
+	/// The light at a creature's two cells above its feet at (x, feetY), worked out by the game's own
+	/// light flood over the ground around it, on screen or not: (sky light, light of glowing blocks).
+	/// Torches, lanterns, campfires, lamps, glowing mod blocks and every other light-giving block count,
+	/// fading with distance and held back by walls and ground; a torch in the player's hand does not.
+	func lightForSpawn(_ x: Int, _ feetY: Int) -> (Int, Int) {
+		if !spawnLight.covers(x - 1, feetY - 3, x + 1, feetY) || spawnLight.stamp != world.version || spawnLight.skyUsed != skyLevel || spawnLight.dimUsed != world.dim.rawValue {
+			let r: Int = 18
+			spawnLight.compute(world, x - r, feetY - r, r * 2 + 1, r * 2 + 1, skyLevel, [], noteSeen: false)
+		}
+		let a: (Int, Int) = spawnLight.level(x, feetY - 1)
+		let b: (Int, Int) = spawnLight.level(x, feetY - 2)
+		return (max(a.0, b.0), max(a.1, b.1))
+	}
+
+	/// Ground monsters can come out on: earth, sand, snow and rock, never planks, brick, glass or other
+	/// building blocks (so not on the roof or floor of a house)
+	func naturalGround(_ t: Tile) -> Bool {
+		switch t {
+		case .grass, .dirt, .stone, .sand, .snow, .ice, .sandstone, .mud, .dryGrass, .jungleGrass, .mossGrass,
+			 .slate, .deepRock, .obsidian, .ashStone, .farmland, .coal, .copper, .iron, .tin, .saltpeter: return true
+		default: return false
+		}
+	}
+
+	/// How many monsters may be about at once (surface or underground) at this night-danger setting
+	func monsterCap(_ place: SpawnPlace) -> Int {
+		let d: Int = clampI(settings.nightDanger, 0, 2)
+		if place == .surface || place == .ocean { return [3, 6, 10][d] }
+		return [6, 9, 12][d]
+	}
+
+	func updateSpawning(_ dt: Double) {
+		if monsterSpawnCD > 0 { monsterSpawnCD -= dt }
+		spawnTimer -= dt
+		if spawnTimer > 0 { return }
+		spawnTimer = Double.random(in: 0.45...1.0)
+		if dead { return }
+		var passive: Int = 0
+		var hostile: Int = 0
+		var predators: Int = 0
+		var aquatic: Int = 0
+		for m in mobs {
+			if m.hp <= 0 || m.removed || m.tame || m.persistent { continue }
+			let dx: Double = abs(m.b.x - pb.x)
+			if dx > 100 { continue }
+			if m.kind == .fish { aquatic += 1 }
+			else if m.def.hostile {
+				// only creatures still in play hold a place: bosses, lair guards and crews have their own
+				// rules, and one standing frozen far off-screen is about to leave
+				if m.isBoss || m.boat >= 0 || m.lair != 0 || dx > 72 || abs(m.b.y - pb.y) > 56 { continue }
+				if m.kind.isPredator { predators += 1 } else { hostile += 1 }
+			}
+			else { passive += 1 }
+		}
+		let px: Int = Int(floor(pb.x))
+		var place: SpawnPlace = .surface
+		if world.dim == .umbral {
+			place = .umbral
+		} else {
+			let sh: Int = world.dim.isCustom ? customSurface(px) : gen.col(px).h
+			let open: Bool = world.isSkyExposed(px, Int(pb.y) - 1)
+			let depth: Int = Int(pb.y) - sh
+			if depth > 18 && !open { place = .cave }
+		}
+		// just past the edge of the screen, so what comes is soon in sight
+		let half: Double = viewTilesW * 0.5 + 3.0
+		let side: Double = Bool.random() ? 1.0 : -1.0
+		let sx: Double = pb.x + side * (half + Double.random(in: 1...16))
+		let ix: Int = Int(floor(sx))
+		if !world.isLoaded(ix) { spawnNote("spot not loaded"); return }
+		if !gen.infinite && (ix < 4 || ix > gen.width - 5) { return }
+		var sy: Double = 0
+		var eff: SpawnPlace = place
+		if place == .surface {
+			let h: Int = world.surfaceY(ix)
+			let ht: Tile = world.tile(ix, h)
+			if ht.liquid {
+				eff = .ocean
+				var wy: Int = h + 1
+				var dep: Int = 0
+				while world.tile(ix, wy) == .water && dep < 40 { wy += 1; dep += 1 }
+				if dep < 5 { spawnNote("shallow water"); return }
+				sy = Double(h + 2 + Int.random(in: 0..<max(1, dep - 3)))
+			} else if ht.solid {
+				if world.solid(ix, h - 1) || world.solid(ix, h - 2) || world.tile(ix, h - 1).liquid { spawnNote("no headroom"); return }
+				sy = Double(h)
+			} else { spawnNote("no ground"); return }
+		} else {
+			let startY: Int = Int(pb.y) + Int.random(in: -20...20)
+			var found: Bool = false
+			var y: Int = startY
+			var tries: Int = 0
+			while tries < 22 {
+				if !world.solid(ix, y) && !world.solid(ix, y - 1) && !world.solid(ix, y - 2) && world.solid(ix, y + 1) && !world.tile(ix, y).liquid {
+					found = true
+					break
+				}
+				y += 1
+				tries += 1
+			}
+			if !found { spawnNote("no floor"); return }
+			if place == .cave && world.isSkyExposed(ix, y) { spawnNote("open sky"); return }
+			// lamplight, or daylight reaching in from a cave mouth
+			let lit: (Int, Int) = lightForSpawn(ix, y + 1)
+			if lit.1 > Game.spawnGlowMax || lit.0 > 6 { spawnNote("too bright"); return }
+			sy = Double(y + 1)
+		}
+		let biome: Biome = biomeAt(Double(ix))
+		// under a dark storm by day, now and then the night's creatures come out too
+		let stormDark: Bool = world.dim == .overworld && settings.weatherOn && wxHere.cloud > 0.9 && wxHere.precip > 0.6 && Double.random(in: 0...1) < 0.35
+		let night: Bool = isNight || stormDark
+		// on the surface, monsters stay out of lamplight, off roofs and away from ground far above or
+		// below the player (somewhere they could never reach them from)
+		var monsterBlock: String = ""
+		if eff == .surface {
+			let gy: Int = Int(sy)
+			if lightForSpawn(ix, gy).1 > Game.spawnGlowMax { monsterBlock = "lit by a lamp" }
+			else if !naturalGround(world.tile(ix, gy)) { monsterBlock = "on a building" }
+			else if abs(sy - pb.y) > 30 { monsterBlock = "out of reach" }
+			else if monsterSpawnCD > 0 { monsterBlock = "pacing" }
+		}
+		let cap: Int = monsterCap(eff)
+		var capped: Bool = false
+		var cands: [SpawnRule] = []
+		var total: Double = 0
+		// the custom creatures of the world's mods spawn by the same rules, beside the game's own
+		let rt: ModRuntime = ModRuntime.shared
+		// a custom dimension has only its own creatures
+		let rules: [SpawnRule] = world.dim.isCustom ? (customDim?.spawnRules ?? []) : (rt.spawnRules.isEmpty ? spawnRules : spawnRules + rt.spawnRules)
+		var customN: Int = -1
+		for r in rules {
+			if r.place != eff { continue }
+			if r.when == .day && night { continue }
+			if r.when == .night && !night { continue }
+			if !r.biomes.isEmpty && !r.biomes.contains(biome) { continue }
+			if eff == .cave || eff == .umbral || r.slot >= 0 {
+				if Int(sy) < r.minY || Int(sy) > r.maxY { continue }
+			}
+			var d: MobDef = mobDef(r.kind)
+			if r.slot >= 0 {
+				guard let cr = rt.mob(r.slot) else { continue }
+				d = cr.mdef
+				if customN < 0 { customN = customMobCount() }
+				if customN >= ModLimits.maxActiveMobs || customNearby(r.slot) >= r.maxNearby { continue }
+			}
+			if d.hostile {
+				if !monstersEnabled || settings.peaceful { continue }
+				if r.kind.isPredator {
+					// wild predators have their own small number and come by day too
+					if predators >= 3 { continue }
+				} else {
+					if hostile >= cap { capped = true; continue }
+					if !monsterBlock.isEmpty { continue }
+				}
+			} else if r.kind == .fish || (r.slot >= 0 && r.place == .ocean) {
+				if aquatic >= 9 { continue }
+			} else {
+				if passive >= 9 { continue }
+			}
+			cands.append(r)
+			total += r.weight
+		}
+		if cands.isEmpty || total <= 0 {
+			if capped { spawnNote("monster limit reached") }
+			else if !monsterBlock.isEmpty && night { spawnNote(monsterBlock) }
+			else { spawnNote(night ? "nothing for this place" : "nothing for this place by day") }
+			return
+		}
+		var pick: Double = Double.random(in: 0..<total)
+		var chosen: SpawnRule = cands[0]
+		for r in cands {
+			pick -= r.weight
+			if pick <= 0 { chosen = r; break }
+		}
+		let def: MobDef = chosen.slot >= 0 ? (rt.mob(chosen.slot)?.mdef ?? mobDef(chosen.kind)) : mobDef(chosen.kind)
+		let monster: Bool = def.hostile && !chosen.kind.isPredator
+		var n: Int = 1 + Int.random(in: 0..<max(1, chosen.group))
+		if monster { n = min(n, cap - hostile) }
+		var made: Int = 0
+		for k in 0..<n {
+			let ox: Double = Double(k) * 1.1 * side + Double.random(in: -0.4...0.4)
+			let x: Double = sx + ox
+			var y: Double = sy
+			// every member finds its own footing: the ground in its own column on the surface, and
+			// nobody appears inside a wall or hanging over a drop
+			if eff == .surface && !def.flying {
+				let gyS: Int = world.surfaceY(Int(floor(x)))
+				if world.tile(Int(floor(x)), gyS).liquid || abs(gyS - Int(sy)) > 3 { continue }
+				y = Double(gyS)
+			}
+			if def.flying && eff != .ocean { y -= chosen.sky ? Double.random(in: 7...14) : Double.random(in: 1...3) }
+			// each monster of a group only comes out where it is dark enough itself
+			if monster && eff != .ocean && lightForSpawn(Int(floor(x)), Int(floor(y))).1 > Game.spawnGlowMax { continue }
+			if eff != .ocean && !spawnSpotClear(def, x, y) { continue }
+			var made1: Mob? = nil
+			if chosen.slot >= 0 { made1 = addCustomMob(chosen.slot, x, y) } else { made1 = addMob(chosen.kind, x, y) }
+			guard let m = made1 else { continue }
+			m.homeX = x
+			m.homeY = y
+			// the night's monsters on the surface come looking for the player
+			if monster && eff == .surface && night { m.hunter = true }
+			if chosen.kind == .sheep && Double.random(in: 0...1) < 0.1 { m.sheared = true }
+			made += 1
+		}
+		if made == 0 { spawnNote("no room to stand"); return }
+		spawnNote(joinText("spawned ", def.name))
+		if monster && eff == .surface {
+			let d: Int = clampI(settings.nightDanger, 0, 2)
+			monsterSpawnCD = [8.0, 4.0, 2.0][d] * Double.random(in: 0.8...1.25)
+		}
+	}
+
+	/// How many of one custom creature are about near the player
+	func customNearby(_ slot: Int) -> Int {
+		var n: Int = 0
+		for m in mobs where m.kind == .custom && m.cslot == slot && m.hp > 0 && !m.removed && abs(m.b.x - pb.x) < 100 { n += 1 }
+		return n
+	}
+
+	/// Room for a creature of this size standing at (x, y): no solid tile inside its box, and (unless it
+	/// flies) something to stand on under its feet
+	func spawnSpotClear(_ d: MobDef, _ x: Double, _ y: Double) -> Bool {
+		let hw: Double = d.w * 0.5
+		if world.boxSolid(x - hw + 0.02, y - d.h, x + hw - 0.02, y - 0.05) { return false }
+		if d.flying { return true }
+		let gy: Int = Int(floor(y + 0.05))
+		let l: Int = Int(floor(x - hw + 0.05))
+		let r: Int = Int(floor(x + hw - 0.05))
+		var footing: Int = 0
+		for tx in l...r where world.solid(tx, gy) || world.tile(tx, gy).isPlatform { footing += 1 }
+		return footing * 2 >= (r - l + 1)
+	}
+}
+
+// ===== p16a_combat =====
+
+// MARK: - Combat: damage, death, projectiles, drops, particles
+
+extension Game {
+	func hurtMob(_ m: Mob, _ dmg: Double, _ dirX: Double, _ knock: Double, _ byPlayer: Bool, heavy: Bool = false, crit: Bool = false) {
+		if m.hp <= 0 { return }
+		if m.kind == .rex && m.tame && byPlayer { return }
+		// a wild animal remembers being hurt by the player (it fights back, see wildProvoked)
+		if byPlayer { m.lastHitByPlayer = clock }
+		var d: Double = dmg
+		var kb: Double = knock
+		if m.blocking && m.kind == .skeleton && dirX != 0 && dirX * Double(m.dir) < 0 {
+			if heavy {
+				// a hammer blow knocks the shield aside and leaves the skeleton open for a moment
+				m.blocking = false
+				m.cd = max(m.cd, 0.9)
+				spawnParticles(m.b.x - Double(m.dir) * 0.5, m.b.y - 1.0, 0xFFF0C0, 8, 5.0, 0.25, 0)
+				floatText("Guard broken", m.b.x, m.b.top - 0.4, 0xFFD080)
+			} else {
+				d *= 0.1
+				kb *= 0.25
+				spawnParticles(m.b.x - Double(m.dir) * 0.5, m.b.y - 1.0, 0xE8F0FF, 5, 4.0, 0.2, 0)
+				floatText("Blocked", m.b.x, m.b.top - 0.4, 0xA0C0FF)
+			}
+		}
+		if d < 0.5 { d = 0.5 }
+		m.hp -= d
+		m.hurtT = 0.22
+		m.flash = 0.12
+		if dirX != 0 && kb > 0 { m.lean = clampD(dirX * kb / 9.0, -1, 1) }
+		var resist: Double = m.isBoss ? 0.97 : (m.def.w > 2.0 ? 0.6 : 0.0)
+		if m.kind == .golem { resist = heavy ? 0.45 : 0.88 }
+		if m.kind == .custom, let r = ModRuntime.shared.mob(m.cslot) { resist = max(resist, clampD(r.def.knockResist, 0, 1)) }
+		if dirX != 0 && kb > 0 {
+			m.b.vx = dirX * kb * (1.0 - resist)
+			if resist < 0.9 { m.b.vy = min(m.b.vy, -3.5) }
+		}
+		if crit && byPlayer {
+			floatText(String(Int(d.rounded())) + "!", m.b.x, m.b.top - 0.35, 0xFFE040)
+		} else {
+			floatText(String(Int(d.rounded())), m.b.x, m.b.top - 0.2, byPlayer ? 0xFFFFFF : 0xFFAA40)
+		}
+		spawnParticles(m.b.x, m.b.cy, m.kind == .skeleton ? 0xE8E8E0 : 0xB02828, 4, 3.0, 0.4, 14)
+		switch m.def.behavior {
+		case .passive, .skittish:
+			m.t2 = 3.5
+			m.tx = m.b.x - (dirX == 0 ? 1.0 : dirX) * 6.0
+		case .defensive:
+			// animals only hold a grudge against the player; hurt by anything else they just bolt
+			if !byPlayer { break }
+			m.angry = true
+			m.t3 = 10.0
+			if m.kind == .wolf {
+				for o in mobs where o.kind == .wolf && !o.tame && abs(o.b.x - m.b.x) < 16 {
+					o.angry = true
+					o.t3 = 12.0
+				}
+			}
+		default: break
+		}
+		if m.boat >= 0 { alertShip(m.boat) }
+		if m.kind == .custom && !logicRT.isEmpty, let r = ModRuntime.shared.mob(m.cslot) { fireLogic(.hurt, mob: m, key: r.key) }
+		if m.hp <= 0 { killMob(m, byPlayer) }
+	}
+
+	func killMob(_ m: Mob, _ byPlayer: Bool) {
+		if m.kind == .rex && m.tame {
+			downRex(m)
+			return
+		}
+		m.hp = 0
+		m.deathT = 0
+		m.burn = 0
+		// a creature the player hit recently still counts as the player's kill if lava, a fall or
+		// another creature finishes it off
+		let credit: Bool = byPlayer || clock - m.lastHitByPlayer < 6.0
+		var rng = RNG(UInt64(truncatingIfNeeded: m.id) &* 6364136223846793005 &+ UInt64(truncatingIfNeeded: Int(clock * 1000)))
+		for s in mobDrops(m.kind, &rng, m.sheared) {
+			spawnDrop(s, m.b.x, m.b.y - m.b.h * 0.5, Double.random(in: -2...2), -4.5)
+		}
+		if m.kind == .custom { dropModLoot(m, &rng) }
+		if m.kind == .custom && !logicRT.isEmpty, let r = ModRuntime.shared.mob(m.cslot) { fireLogic(.dies, mob: m, key: r.key) }
+		for s in alchemyDrops(m, &rng, credit) {
+			spawnDrop(s, m.b.x, m.b.y - m.b.h * 0.5, Double.random(in: -2...2), -4.5)
+		}
+		var col: UInt32 = 0xB02828
+		if m.kind == .skeleton { col = 0xE8E8E0 }
+		if m.kind == .slime { col = 0x60C060 }
+		if m.kind == .emberSlime { col = 0xFF8A20 }
+		spawnParticles(m.b.x, m.b.cy, col, Int(10 + m.b.w * 4), 5.0, 0.7, 14)
+		if credit { kills += 1 }
+		if m.kind == .bearBoss { onBearDefeated(m) }
+		if m.kind == .rex { onRexDefeated(m) }
+		if m.kind == .sentinel || m.kind == .warden { onGuardianDefeated(m) }
+		for s in m.loot { spawnDrop(s, m.b.x, m.b.y - m.b.h * 0.5, Double.random(in: -2.5...2.5), -5.0) }
+		m.loot = []
+		if m === activeBoss { activeBoss = nil }
+		bumpHUD()
+	}
+
+	func addMob(_ kind: MobKind, _ x: Double, _ y: Double) -> Mob {
+		let m = Mob(id: newID(), kind: kind, x: x, y: y)
+		if kind == .zombie { m.variant = Int.random(in: 0...2) }
+		if mobHealthMult != 1.0 {
+			m.maxHP *= mobHealthMult
+			m.hp = m.maxHP
+		}
+		mobs.append(m)
+		return m
+	}
+
+	// MARK: projectiles
+
+	/// Steps every projectile. Collision is swept along the whole frame's movement, so fast arrows and
+	/// bullets cannot skip over a target between frames, and the first thing along the path is hit.
+	func updateProjectiles(_ dt: Double) {
+		if projectiles.isEmpty { return }
+		let list: [Projectile] = projectiles
+		// projectiles created while stepping (none today, but explosions could) land in the fresh array
+		projectiles = []
+		var keep: [Projectile] = []
+		keep.reserveCapacity(list.count)
+		for p0 in list {
+			var p: Projectile = p0
+			if stepProjectile(&p, dt) { keep.append(p) }
+		}
+		if !projectiles.isEmpty { keep.append(contentsOf: projectiles) }
+		projectiles = keep
+	}
+
+	/// Returns false when the projectile is used up
+	func stepProjectile(_ p: inout Projectile, _ dt: Double) -> Bool {
+		p.life -= dt
+		if p.life <= 0 {
+			if p.mod >= 0 { modShotLanded(p, p.x, p.y, mob: nil, player: false) }
+			if p.kind == .bomb { explode(p.x, p.y, radius: 3.4, power: p.dmg, source: p.source, breakBlocks: true) }
+			if p.kind == .flask { burstFlaskOrPotion(p, p.x, p.y, nil) }
+			return false
+		}
+		if p.stuck > 0 {
+			p.stuck -= dt
+			if p.stuck <= 0 && (p.kind == .arrow || p.kind == .quarrel) && p.source.kind == .player && !isCreative && Double.random(in: 0...1) < 0.35 {
+				// some arrows and bolts survive and can be picked back up
+				spawnDrop(Stack(item: .ammo(p.kind == .arrow ? .arrow : .bolt), count: 1), p.x, p.y, 0, -1)
+			}
+			return p.stuck > 0
+		}
+		if p.kind == .shock { return stepShock(&p, dt) }
+		p.vy = min(p.vy + p.gravity * dt, 40.0)
+		let nx: Double = p.x + p.vx * dt
+		let ny: Double = p.y + p.vy * dt
+		// first solid tile along the path
+		var wallT: Double = 2.0
+		var wallTile: (Int, Int) = (0, 0)
+		if let hit = world.segmentSolidT(p.x, p.y, nx, ny) {
+			wallT = hit.2
+			wallTile = (hit.0, hit.1)
+		}
+		// first creature (or the player) along the path, before the wall
+		if p.kind != .bomb {
+			if let target = firstEntityOnPath(p, nx, ny, maxT: wallT) {
+				let hx: Double = p.x + (nx - p.x) * target.t
+				let hy: Double = p.y + (ny - p.y) * target.t
+				if p.kind == .flask {
+					burstFlaskOrPotion(p, hx, hy, target.mob)
+					return false
+				}
+				let dirx: Double = p.vx >= 0 ? 1.0 : -1.0
+				var info = DamageInfo(amount: p.dmg, type: .projectile, source: p.source)
+				info.dirX = dirx
+				info.knock = p.knock > 0 ? p.knock : (p.kind == .bullet ? 4.0 : (p.kind == .arrow ? 3.5 : 3.0))
+				info.originX = p.x
+				info.originY = p.y
+				info.key = p.uid
+				info.cooldown = 1.0
+				if p.kind == .fireball { info.type = .fire }
+				if let m = target.mob {
+					if applyMobDamage(m, info) {
+						if p.mod >= 0 {
+							let s: ModProjectile? = p.mod < ModRuntime.shared.shots.count ? ModRuntime.shared.shots[p.mod] : nil
+							if let sh = s, sh.explode > 0 {
+								modShotLanded(p, hx, hy, mob: m, player: false)
+								return false
+							}
+							if let sh = s, sh.burn > 0 { m.burn = max(m.burn, sh.burn) }
+						}
+						if p.kind == .fireball { m.burn = max(m.burn, 2.5) }
+						if p.inf != 0 || !p.custom.isEmpty { shotInfusionHit(p, m, hx, hy) }
+						spawnParticles(hx, hy, p.kind == .fireball ? 0xFF8030 : 0xE8E0D0, 3, 2.5, 0.25, 8)
+						if p.source.kind == .player {
+							// a clear "it landed" for the player's own shots
+							sfx(.arrowHit, 0.55)
+							lockTarget = m
+							lockT = 2.0
+						}
+					}
+					p.lastHit = m.id
+				} else {
+					_ = hurtPlayer(info)
+					if p.mod >= 0 {
+						modShotLanded(p, hx, hy, mob: nil, player: true)
+						return false
+					}
+					if p.kind == .fireball { playerBurn = max(playerBurn, 1.5); spawnParticles(hx, hy, 0xFF8030, 8, 4.0, 0.4, 6) }
+				}
+				if p.pierce > 0 && target.mob != nil {
+					p.pierce -= 1
+					p.dmg *= 0.7
+				} else {
+					return false
+				}
+			}
+		}
+		if wallT <= 1.0 {
+			let hx: Double = p.x + (nx - p.x) * wallT
+			let hy: Double = p.y + (ny - p.y) * wallT
+			if p.mod >= 0 {
+				modShotLanded(p, hx, hy, mob: nil, player: false)
+				return false
+			}
+			if p.inf & 4 != 0 { volatileBurst(hx, hy) }
+			switch p.kind {
+			case .flask:
+				burstFlaskOrPotion(p, hx, hy, nil)
+				return false
+			case .pebble:
+				spawnParticles(hx, hy, 0x9A9A9A, 4, 2.5, 0.3, 14)
+				return false
+			case .arrow, .quarrel:
+				// stick into the block, nudged back out of it slightly so it reads as embedded
+				p.x = hx - p.vx * 0.004
+				p.y = hy - p.vy * 0.004
+				p.stuckAngle = atan2(p.vy, p.vx)
+				p.vx = 0
+				p.vy = 0
+				p.stuck = 4.0
+				p.gravity = 0
+				spawnParticles(hx, hy, 0xA0A0A0, 2, 1.5, 0.2, 8)
+				return true
+			case .rock:
+				rockImpact(p, hx, hy)
+				return false
+			case .bomb:
+				// bounce off the face it struck, losing energy, and come to rest on top of the ground
+				// (it used to work its way into the floor and go off inside the rock)
+				let tx: Double = Double(wallTile.0)
+				let ty: Double = Double(wallTile.1)
+				let onTop: Bool = abs(hy - ty) < 0.02 && p.vy > 0
+				let onBottom: Bool = abs(hy - (ty + 1.0)) < 0.02 && p.vy < 0
+				if onTop || onBottom {
+					// the ground grips it: it settles close to where it came down
+					p.vy = -p.vy * 0.35
+					p.vx *= onTop ? 0.4 : 0.7
+					p.x = hx
+					p.y = onTop ? ty - 0.02 : ty + 1.02
+					if onTop && abs(p.vy) < 1.5 { p.vy = 0; p.vx *= 0.6 }
+				} else {
+					p.vx = -p.vx * 0.45
+					p.x = p.vx < 0 ? tx - 0.02 : tx + 1.02
+					p.y = hy
+				}
+				if world.solid(Int(floor(p.x)), Int(floor(p.y))) { p.y = Double(world.groundBelow(Int(floor(p.x)), Int(floor(p.y)) - 4)) - 0.02 }
+				return true
+			default:
+				spawnParticles(hx, hy, p.kind == .fireball ? 0xFF8030 : 0xFFE080, 5, 3.0, 0.25, 6)
+				if p.kind == .fireball { igniteNear(hx, hy, p.source) }
+				return false
+			}
+		}
+		p.x = nx
+		p.y = ny
+		// player shots also damage pirate ships
+		if p.source.kind == .player {
+			for s in ships {
+				let dy: Double = s.deckY(Double(WorldGen.sea))
+				if abs(p.x - s.x) < 4.6 && p.y > dy - 3.0 && p.y < dy + 2.0 {
+					s.hp -= p.dmg * 0.5
+					s.hitT = 0.2
+					spawnParticles(p.x, p.y, 0x8A5A2E, 4, 3.0, 0.3, 12)
+					return false
+				}
+			}
+		}
+		if p.kind == .fireball && Double.random(in: 0...1) < 0.5 { spawnParticles(p.x, p.y, 0xFFB040, 1, 1.0, 0.25, -2) }
+		if p.kind == .arrow && p.source.kind == .player && p.trail < 6 { p.trail += 1 }
+		return true
+	}
+
+	struct PathHit {
+		var t: Double
+		var mob: Mob?
+	}
+
+	/// Nearest creature or player the segment passes through that this projectile is allowed to hurt
+	func firstEntityOnPath(_ p: Projectile, _ nx: Double, _ ny: Double, maxT: Double) -> PathHit? {
+		var best: PathHit? = nil
+		var bt: Double = min(1.0, maxT)
+		let pad: Double = max(0.08, p.w * 0.5)
+		if !dead && canHarm(p.source, targetFaction: .player, targetID: 0, area: false) {
+			if let t = segmentBoxT(p.x, p.y, nx, ny, pb.left - pad, pb.top - pad, pb.right + pad, pb.y + pad), t <= bt {
+				bt = t
+				best = PathHit(t: t, mob: nil)
+			}
+		}
+		let x0: Double = min(p.x, nx) - 4.0
+		let x1: Double = max(p.x, nx) + 4.0
+		for m in mobsNear(x0, x1) {
+			if m.hp <= 0 || m.id == p.lastHit || m.downed { continue }
+			if !canHarm(p.source, targetFaction: faction(of: m), targetID: m.id, area: false) { continue }
+			if let t = segmentBoxT(p.x, p.y, nx, ny, m.b.left - pad, m.b.top - pad, m.b.right + pad, m.b.y + pad), t <= bt {
+				bt = t
+				best = PathHit(t: t, mob: m)
+			}
+		}
+		return best
+	}
+
+	/// Boss shockwaves run along the ground and hurt anything standing in them
+	func stepShock(_ p: inout Projectile, _ dt: Double) -> Bool {
+		p.x += p.vx * dt
+		let gy: Int = world.groundBelow(Int(floor(p.x)), Int(floor(p.y)) - 3)
+		p.y = Double(gy) - 0.5
+		if world.solid(Int(floor(p.x)), Int(floor(p.y - 0.6))) && world.solid(Int(floor(p.x + p.vx * 0.1)), Int(floor(p.y - 0.4))) { return false }
+		var info = DamageInfo(amount: p.dmg, type: .stomp, source: p.source)
+		info.dirX = p.vx >= 0 ? 1 : -1
+		info.knock = 7.0
+		info.originX = p.x - p.vx
+		info.originY = p.y
+		info.key = p.uid
+		info.cooldown = 2.0
+		damageBox(p.x - 0.5, p.y - 0.9, p.x + 0.5, p.y + 0.5, info)
+		if Double.random(in: 0...1) < 0.5 { spawnParticles(p.x, p.y + 0.3, 0xA08860, 1, 1.5, 0.3, 6) }
+		return true
+	}
+
+	func rockImpact(_ p: Projectile, _ x: Double, _ y: Double) {
+		spawnParticles(x, y, 0x8A8A8A, 10, 5.0, 0.5, 16)
+		addShake(0.25)
+		var info = DamageInfo(amount: p.dmg, type: .impact, source: p.source)
+		info.knock = 5.0
+		info.originX = x
+		info.originY = y - 1.0
+		info.key = p.uid
+		info.cooldown = 1.0
+		damageArea(x, y - 0.8, radius: 1.8, info, falloff: false, lineOfSight: false)
+	}
+
+	/// Fireballs set fire to whatever stands where they burst
+	func igniteNear(_ x: Double, _ y: Double, _ src: DamageSource) {
+		for m in mobsNear(x - 1.5, x + 1.5) where m.hp > 0 && !heatImmune(m) {
+			if abs(m.b.cy - y) < m.b.h * 0.5 + 1.0 && canHarm(src, targetFaction: faction(of: m), targetID: m.id, area: true) {
+				m.burn = max(m.burn, 2.0)
+			}
+		}
+	}
+
+	func throwBomb() {
+		if useCD > 0 { return }
+		if !isCreative { inv.removeAt(sel, 1) }
+		facing = aimFacing()
+		let ox: Double = pb.x + Double(facing) * 0.4
+		let oy: Double = pb.y - 1.3
+		// thrown on the arc that lands it on the spot aimed at (then it may bounce a little)
+		let a: Double = lobAngle(aimX - ox, aimY - oy, throwSpeed, throwGravity)
+		var p = Projectile(kind: .bomb, x: ox, y: oy, vx: cos(a) * throwSpeed, vy: sin(a) * throwSpeed, dmg: 26, fromPlayer: true, gravity: throwGravity)
+		p.life = 1.8
+		p.w = 0.4
+		p.source = DamageSource.player
+		p.uid = newID()
+		projectiles.append(p)
+		useCD = 0.45
+		swingT = 0.18
+		swingDir = facing
+		bumpHUD()
+	}
+
+	// MARK: drops
+
+	func updateDrops(_ dt: Double) {
+		var i: Int = 0
+		while i < drops.count {
+			var d: DropItem = drops[i]
+			d.age += dt
+			if d.pickDelay > 0 { d.pickDelay -= dt }
+			if d.age > 400 {
+				drops.remove(at: i)
+				continue
+			}
+			var b = Body(x: d.x, y: d.y, w: 0.3, h: 0.3)
+			b.vx = d.vx
+			b.vy = d.vy
+			let px: Double = pb.x
+			let py: Double = pb.y - pb.h * 0.5
+			let dx: Double = px - d.x
+			let dy: Double = py - (d.y - 0.15)
+			let dist: Double = sqrt(dx * dx + dy * dy)
+			// a stack the player threw away waits until they have walked off from it
+			if d.heldBack && dist > 3.6 { d.heldBack = false }
+			var magnet: Bool = false
+			if !dead && d.pickDelay <= 0 && !d.heldBack && dist < 3.2 && inv.canFit(d.stack.item, 1) {
+				magnet = true
+				let k: Double = 16.0
+				b.vx = dx / max(dist, 0.1) * k * (1.0 + (3.2 - dist) * 0.3)
+				b.vy = dy / max(dist, 0.1) * k * (1.0 + (3.2 - dist) * 0.3)
+			} else {
+				b.vy = min(b.vy + gravityG * 0.8 * dt, 18)
+				b.vx *= (1.0 - min(1.0, dt * (d.onGround ? 6.0 : 0.6)))
+			}
+			if magnet {
+				b.x += b.vx * dt
+				b.y += b.vy * dt
+			} else {
+				world.moveBody(&b, dt, stepUp: 0, dropThrough: false, decks: decksCache)
+				if b.inWater { b.vy = min(b.vy, 1.5); b.vx *= 0.9 }
+			}
+			d.x = b.x
+			d.y = b.y
+			d.vx = b.vx
+			d.vy = b.vy
+			d.onGround = b.onGround
+			if !dead && d.pickDelay <= 0 && !d.heldBack && dist < 0.9 {
+				let left: Int = inv.add(d.stack.item, d.stack.count, extra: d.stack.extra, inf: d.stack.inf)
+				if left < d.stack.count {
+					if d.stack.item == .mat(.relicFragment) { journal.relics += d.stack.count - left }
+					sfx(.pickup, 0.5)
+					floatText("+" + String(d.stack.count - left) + " " + d.stack.item.name, px, pb.y - pb.h - 0.5, 0xFFF0A0)
+					bumpHUD()
+				}
+				if left == 0 {
+					drops.remove(at: i)
+					continue
+				} else {
+					d.stack.count = left
+				}
+			}
+			drops[i] = d
+			i += 1
+		}
+	}
+
+	// MARK: particles and floating text
+
+	func updateParticles(_ dt: Double) {
+		// compact in place: remove(at:) in a loop was O(n^2) when bursts of particles expired together
+		let n: Int = particles.count
+		var w: Int = 0
+		particles.withUnsafeMutableBufferPointer { bp in
+			var i: Int = 0
+			while i < n {
+				var p: Particle = bp[i]
+				p.life -= dt
+				if p.life > 0 {
+					p.vy += p.gravity * dt
+					p.x += p.vx * dt
+					p.y += p.vy * dt
+					bp[w] = p
+					w += 1
+				}
+				i += 1
+			}
+		}
+		if w < n { particles.removeLast(n - w) }
+		var j: Int = 0
+		while j < floats.count {
+			floats[j].life -= dt
+			floats[j].y -= dt * 1.1
+			if floats[j].life <= 0 { floats.remove(at: j); continue }
+			j += 1
+		}
+	}
+}
 
 // ===== p16c_damage =====
 
@@ -357,22 +1942,7 @@ extension Game {
 				damagePlayer(power * 0.45 * (1.0 - 0.65 * clampD(d / radius, 0, 1)), from: x, knock: 9.0)
 			}
 		}
-		if breakBlocks {
-			let r: Int = Int(ceil(radius * 0.7))
-			let tx: Int = Int(floor(x))
-			let ty: Int = Int(floor(y))
-			for dy in -r...r {
-				for dx in -r...r {
-					let dd: Double = Double(dx * dx + dy * dy)
-					if dd > radius * radius * 0.5 { continue }
-					let t: Tile = world.tile(tx + dx, ty + dy)
-					if t == .air || t.liquid || t.hardness > 2.7 || Tile.tierTable[t.idx] > 4 { continue }
-					if t == .chest || t == .portalOff || t == .portalOn || t == .portalFrame { continue }
-					if t.isMod && (ModRuntime.shared.blockDef(t)?.blastProof ?? true) { continue }
-					breakTile(tx + dx, ty + dy, false, dropChance: 0.35)
-				}
-			}
-		}
+		if breakBlocks { blastBlocks(x, y, radius: radius, power: power) }
 		for s in ships where abs(s.x - x) < radius + 4.5 && abs(s.deckY(Double(WorldGen.sea)) - y) < radius + 2 {
 			s.hp -= power
 			s.hitT = 0.3
@@ -524,36 +2094,68 @@ extension Game {
 		}
 	}
 
+	/// Moves the blocks on the move. Sand drops straight down; a thrown block also flies sideways,
+	/// turns, is carried by a storm's wind (less the heavier it is), bounces off walls and slides along
+	/// the ground until it is slow, then settles back into a block (settleBlock). Anything still in the
+	/// air after 14 s settles where it is. A heavy, fast block hurts what it hits.
 	func updateFallingBlocks(_ dt: Double) {
 		if fallingBlocks.isEmpty { return }
 		var keep: [FallingBlock] = []
 		for fb0 in fallingBlocks {
 			var fb: FallingBlock = fb0
+			fb.age += dt
 			fb.vy = min(fb.vy + gravityG * dt, terminalV)
+			if fb.flung {
+				windOnBlock(&fb, dt)
+				fb.vx *= exp(-dt * 0.35)
+				fb.ang += fb.spin * dt
+				let nx: Double = fb.x + fb.vx * dt
+				let side: Double = nx + (fb.vx >= 0 ? 0.45 : -0.45)
+				if world.solid(Int(floor(side)), Int(floor(fb.y - 0.5))) {
+					fb.vx = -fb.vx * 0.3
+					fb.spin *= -0.5
+				} else {
+					fb.x = nx
+				}
+			}
 			let ny: Double = fb.y + fb.vy * dt
-			// crush whatever is underneath while moving fast enough
-			if fb.vy > 4.0 {
-				var info = DamageInfo(amount: 2.0 + fb.vy * 0.4, type: .crush, source: .environment)
+			// crush whatever is in the way while moving fast enough (heavier blocks hit harder)
+			let speed: Double = max(fb.vy, abs(fb.vx))
+			if speed > 4.0 {
+				var info = DamageInfo(amount: (2.0 + speed * 0.4) * clampD(0.5 + fb.mass * 0.3, 0.5, 2.5), type: .crush, source: .environment)
 				info.originX = fb.x
 				info.originY = fb.y - 1.0
 				info.key = fb.uid
 				info.cooldown = 5.0
-				damageBox(fb.x - 0.45, fb.y - 1.0, fb.x + 0.45, ny, info)
+				damageBox(fb.x - 0.45, fb.y - 1.0, fb.x + 0.45, max(ny, fb.y), info)
 			}
 			let tx: Int = Int(floor(fb.x))
+			if fb.vy < 0 {
+				// rising: a ceiling stops it
+				if world.solid(tx, Int(floor(ny - 1.0))) { fb.vy = 0 } else { fb.y = ny }
+				keep.append(fb)
+				continue
+			}
 			let landRow: Int = Int(floor(ny))
 			if world.tile(tx, landRow).supportsThings || world.tile(tx, landRow).isPlatform || landRow >= world.H - 2 {
-				let restY: Int = landRow - 1
-				let cur: Tile = world.tile(tx, restY)
-				if cur == .air || cur.liquid || cur.isPlant {
-					world.set(tx, restY, fb.tile)
-				} else {
-					spawnDrop(Stack(item: .block(fb.tile), count: 1), fb.x, Double(restY), 0, -2)
+				if fb.flung && abs(fb.vx) > 2.5 && fb.age < 10 {
+					// still going: a little bounce, and it slides on
+					fb.y = Double(landRow)
+					fb.vy = -min(4.0, fb.vy * 0.25)
+					fb.vx *= 0.55
+					fb.spin *= 0.6
+					keep.append(fb)
+					continue
 				}
-				spawnParticles(fb.x, Double(landRow), 0xE0D08A, 4, 2.0, 0.3, 10)
+				settleBlock(fb, landRow - 1)
+				spawnParticles(fb.x, Double(landRow), fb.tile.def.colors.first ?? 0xE0D08A, 4, 2.0, 0.3, 10)
 				continue
 			}
 			fb.y = ny
+			if fb.age > 14.0 || fb.y > Double(world.H - 2) {
+				settleBlock(fb, Int(floor(fb.y - 0.5)))
+				continue
+			}
 			keep.append(fb)
 		}
 		fallingBlocks = keep
@@ -583,12 +2185,24 @@ struct LightFlash {
 	var level: Int { return Int((Double(peak) * strength).rounded()) }
 }
 
+/// A block on the move: sand with nothing under it, or a block knocked loose by a blast, a storm or
+/// a structure giving way. x is its centre, y its bottom edge.
 struct FallingBlock {
 	var x: Double
 	var y: Double
 	var vy: Double
 	var tile: Tile
 	var uid: Int
+	var vx: Double = 0
+	/// how it is turned (drawn), and how fast it turns
+	var ang: Double = 0
+	var spin: Double = 0
+	var mass: Double = 1.6
+	var age: Double = 0
+	/// thrown (it slides and bounces before it settles, and the wind carries it)
+	var flung: Bool = false
+	/// it was part of something built (it counts as built again once it settles)
+	var built: Bool = false
 }
 
 // ===== p16b_bosses =====
@@ -2127,6 +3741,10 @@ extension Game {
 		vehicleStash[world.dim.rawValue] = vehicles
 		vehicles = vehicleStash[dim.rawValue]
 		vehicleStash[dim.rawValue] = []
+		liftStash[world.dim.rawValue] = lifts
+		lifts = liftStash[dim.rawValue]
+		liftStash[dim.rawValue] = []
+		seat = nil
 		mobs.removeAll()
 		projectiles.removeAll()
 		drops.removeAll()
@@ -2384,6 +4002,8 @@ struct ChunkSave: Codable {
 	var walls: Data? = nil
 	/// Sparkworks wiring (nil in older saves and chunks with none)
 	var wires: Data? = nil
+	/// which blocks the player built (nil: none; see World.isBuilt)
+	var built: Data? = nil
 }
 
 struct SaveMeta: Codable {
@@ -2447,6 +4067,8 @@ struct SaveData: Codable {
 	var dimReturn: DimReturn? = nil
 	/// the Logic Studio variables of the world's mods (nil: none)
 	var logicVars: [String: Double]? = nil
+	/// lift cars in every dimension (nil: none)
+	var lifts: [LiftSave]? = nil
 }
 
 func mobToSave(_ m: Mob) -> MobSave {
@@ -2533,12 +4155,12 @@ extension Game {
 				let i: Int = (ox - c.x0) * c.H + oy
 				if i >= 0 && i < tiles.count && tiles[i] == Tile.air.rawValue { tiles[i] = Tile.chest.rawValue }
 			}
-			cs.append(ChunkSave(dim: cur, cx: k, data: Data(World.rle(tiles)), walls: c.walls.isEmpty ? nil : Data(World.rle(c.walls)), wires: c.wireCount == 0 ? nil : Data(World.rle(c.wires))))
+			cs.append(ChunkSave(dim: cur, cx: k, data: Data(World.rle(tiles)), walls: c.walls.isEmpty ? nil : Data(World.rle(c.walls)), wires: c.wireCount == 0 ? nil : Data(World.rle(c.wires)), built: c.built.isEmpty ? nil : Data(World.rle(c.built))))
 		}
 		for d in 0..<world.parked.count {
 			for (k, c) in world.parked[d] {
 				if d == cur && world.chunks[k] != nil { continue }
-				cs.append(ChunkSave(dim: d, cx: k, data: Data(World.rle(c.tiles)), walls: c.walls.isEmpty ? nil : Data(World.rle(c.walls)), wires: c.wireCount == 0 ? nil : Data(World.rle(c.wires))))
+				cs.append(ChunkSave(dim: d, cx: k, data: Data(World.rle(c.tiles)), walls: c.walls.isEmpty ? nil : Data(World.rle(c.walls)), wires: c.wireCount == 0 ? nil : Data(World.rle(c.wires)), built: c.built.isEmpty ? nil : Data(World.rle(c.built))))
 			}
 		}
 		var chestList: [ChestEntry] = []
@@ -2567,7 +4189,8 @@ extension Game {
 		// the world's mods: those it was made with (a missing one stays listed, so it is never forgotten)
 		var mi: ModWorldInfo? = modInfo
 		if ModRuntime.shared.active { mi = ModRuntime.shared.worldInfo() }
-		return SaveData(meta: meta, settings: settings, px: px, py: py, hp: max(1, hp), maxHP: maxHP, hunger: hunger, timeOfDay: timeOfDay, kills: kills, spawnX: spawnX, spawnY: spawnY, inv: inv, sel: sel, defeated: Array(defeated), gotMap: gotMap, portalOpened: portalOpened, chests: chestList, chunks: cs, vehicles: vs, pets: pets, rex: rs, nextID: nextID, journal: journal, weather: weather, bodyCold: bodyCold, power: powerSave(), mods: mi, effects: effectsSave(), mutants: mutantSaves(), suit: suit.isEmpty ? nil : suit, bosses: bossSaves(), dimReturn: dimReturn, logicVars: logicVars.isEmpty ? nil : logicVars)
+		let ls: [LiftSave] = liftSaves()
+		return SaveData(meta: meta, settings: settings, px: px, py: py, hp: max(1, hp), maxHP: maxHP, hunger: hunger, timeOfDay: timeOfDay, kills: kills, spawnX: spawnX, spawnY: spawnY, inv: inv, sel: sel, defeated: Array(defeated), gotMap: gotMap, portalOpened: portalOpened, chests: chestList, chunks: cs, vehicles: vs, pets: pets, rex: rs, nextID: nextID, journal: journal, weather: weather, bodyCold: bodyCold, power: powerSave(), mods: mi, effects: effectsSave(), mutants: mutantSaves(), suit: suit.isEmpty ? nil : suit, bosses: bossSaves(), dimReturn: dimReturn, logicVars: logicVars.isEmpty ? nil : logicVars, lifts: ls.isEmpty ? nil : ls)
 	}
 
 	@discardableResult
@@ -2626,6 +4249,10 @@ extension Game {
 				if ch.wires.count != chunkW * H { ch.wires = [] }
 				ch.wireCount = ch.wires.reduce(0) { $0 + ($1 != 0 ? 1 : 0) }
 			}
+			if let bd = c.built {
+				ch.built = World.unrle([UInt8](bd), chunkW * H)
+				if ch.built.count != chunkW * H { ch.built = [] }
+			}
 			ch.dirty = true
 			ch.rebuildSky()
 			fillSurface(ch, g.gen, Dimension(rawValue: c.dim) ?? .overworld)
@@ -2669,6 +4296,7 @@ extension Game {
 			let list: [Vehicle] = s.vehicles[d].map { Vehicle.restore($0) }
 			if d == dim.rawValue { g.vehicles = list } else { g.vehicleStash[d] = list }
 		}
+		if let ls = s.lifts { g.restoreLifts(ls) }
 		w.loadAround(centerX: Int(floor(startX)), radius: 4)
 		g.pb.x = startX
 		g.pb.y = startY
@@ -3408,6 +5036,7 @@ extension World {
 let wallKinds: [Int] = [1, 2, 4, 5, 6, 7]
 
 func wallName(_ k: Int) -> String {
+	if let t = blockWallTile(k) { return joinText(t.def.name, " Wall") }
 	switch k {
 	case 1: return "Dirt Wall"
 	case 2: return "Stone Wall"
@@ -3421,6 +5050,7 @@ func wallName(_ k: Int) -> String {
 }
 
 func wallSourceTile(_ k: Int) -> Tile {
+	if let t = blockWallTile(k) { return t }
 	switch k {
 	case 1: return .dirt
 	case 2: return .stone
@@ -3570,6 +5200,8 @@ extension Game {
 		if !inReach(Double(tx) + 0.5, Double(ty) + 0.5) { return false }
 		world.set(tx, ty - 1, .doorClosed)
 		world.set(tx, ty, .doorClosed)
+		world.setBuilt(tx, ty - 1, true)
+		world.setBuilt(tx, ty, true)
 		return true
 	}
 
@@ -3610,7 +5242,9 @@ extension Game {
 			mining = false
 			world.setWall(tx, ty, 0)
 			spawnParticles(Double(tx) + 0.5, Double(ty) + 0.5, shadeRGB(wallSourceTile(k).def.colors.first ?? 0x888888, 0.6), 5, 3.0, 0.4, 14)
-			if !isCreative { spawnDrop(Stack(item: .wall(k), count: 1), Double(tx) + 0.5, Double(ty) + 0.5, 0, -2) }
+			// a block put up as a wall comes back as the block
+			let back: Item = blockWallTile(k).map { Item.block($0) } ?? .wall(k)
+			if !isCreative { spawnDrop(Stack(item: back, count: 1), Double(tx) + 0.5, Double(ty) + 0.5, 0, -2) }
 		}
 		return true
 	}
@@ -3803,9 +5437,19 @@ final class SectionPainter: @unchecked Sendable {
 			ws.append(w)
 			for i in 0..<64 { wp.append(i < w.px.count ? w.px[i] : 0xFF000000) }
 		}
+		// walls made from any block (wall value 8 + its tile number): its art, darkened
+		while wp.count < (blockWallBase - 1) * 64 { wp.append(0) }
+		for raw in 0..<tb.count {
+			let b: PixelBuf = tb[raw]
+			for k in 0..<64 {
+				let c: UInt32 = k < b.px.count ? b.px[k] : 0
+				let a: UInt32 = c >> 24
+				wp.append(a == 0 ? 0 : (c & 0xFF000000) | shadeRGB(c & 0xFFFFFF, 0.5))
+			}
+		}
 		wallBufs = ws
 		wallPx = wp
-		wallCount = srcs.count
+		wallCount = blockWallBase - 1 + tb.count
 	}
 
 	/// Redraws the art of the tiles reserved for mods (their meaning changes with a world's mods)
@@ -3818,9 +5462,11 @@ final class SectionPainter: @unchecked Sendable {
 			tileBufs[raw] = b
 			var allClear: Bool = true
 			var allSolid: Bool = true
+			let wb: Int = (blockWallBase - 1 + raw) * 64
 			for k in 0..<64 {
 				let c: UInt32 = k < b.px.count ? b.px[k] : 0
 				tilePx[raw * 64 + k] = c
+				if wb + k < wallPx.count { wallPx[wb + k] = (c >> 24) == 0 ? 0 : (c & 0xFF000000) | shadeRGB(c & 0xFFFFFF, 0.5) }
 				let a: UInt32 = c >> 24
 				if a != 0 { allClear = false }
 				if a != 255 { allSolid = false }
@@ -13677,4 +15323,1049 @@ func suitLookOf(_ s: ExoSuit) -> SuitLook {
 	l.pack = mods.contains(.cargo)
 	l.jets = mods.contains(.hover)
 	return l
+}
+
+// ===== p31b_building =====
+
+// MARK: - Building: blocks placed as walls, ladders built on, furniture, lifts
+
+/// A wall made from any block (as opposed to the seven old wall kinds) is stored in the wall layer as
+/// 8 + the block's tile number
+let blockWallBase: Int = 8
+
+/// The wall value of a block placed as a wall (0 if it cannot be one)
+func blockWallValue(_ t: Tile) -> Int {
+	let v: Int = blockWallBase + Int(t.rawValue)
+	return v <= 255 ? v : 0
+}
+
+/// The block a wall was made from (nil for the old wall kinds)
+func blockWallTile(_ k: Int) -> Tile? {
+	if k < blockWallBase || k > 255 { return nil }
+	return Tile(rawValue: UInt8(k - blockWallBase))
+}
+
+/// Blocks that can be put up as a wall instead: anything solid that is only a block (not a machine,
+/// a chest, a door, the rift or bedrock)
+func canBeWall(_ t: Tile) -> Bool {
+	if !t.solid || t.liquid || t.isPower || t.hardness >= 9000 { return false }
+	if isDoor(t) || t == .chest || t == .furnace || t == .portalFrame || t == .portalOff || t == .portalOn { return false }
+	if t.isMod, let b = ModRuntime.shared.blockDef(t), b.function != .none { return false }
+	return blockWallValue(t) > 0
+}
+
+/// The words for one piece of furniture (nil for anything else)
+func furnitureBlurb(_ t: Tile) -> String? {
+	switch t {
+	case .chair, .sofa: return "Furniture: tap it to sit down"
+	case .bedL, .bedR: return "Furniture: sleep through the night, and wake here"
+	case .cabinet, .wardrobe: return "Furniture: keeps things like a chest"
+	case .table, .shelf, .bookshelf: return "Furniture: things can stand on top"
+	case .floorLamp: return "Furniture: a bright lamp"
+	case .stairWoodR, .stairStoneR, .stairBrickR, .stairWoodL, .stairStoneL, .stairBrickL: return "Stairs: walk up them; they face the way you place them"
+	case .liftRail: return "Lift: a column of rails for a lift car"
+	case .liftButton: return "Lift: beside the rails, calls the car to this floor"
+	case .liftCar: return "Lift: place it on a lift rail"
+	default: return nil
+	}
+}
+
+extension Game {
+	// MARK: walls
+
+	/// Whether the held item is a block that can go up as a wall (the HUD shows the WALL switch then)
+	var canToggleWall: Bool {
+		guard let it = heldItem, case .block(let t) = it else { return false }
+		return canBeWall(t.placedForm)
+	}
+
+	/// The HUD's WALL switch: blocks go up as passable walls, or solid as usual
+	func toggleWallMode() {
+		wallMode.toggle()
+		say(wallMode ? "Blocks now go up as walls you can walk through." : "Blocks now go up solid.", 1.6)
+		bumpHUD()
+	}
+
+	/// Puts the held block up as a wall behind the aimed spot (passable, drawn darker, mined back into
+	/// the block)
+	func placeBlockAsWall(_ t: Tile) {
+		let v: Int = blockWallValue(t)
+		if v == 0 { return }
+		usePlaceWall(v)
+	}
+
+	// MARK: ladders
+
+	/// Holding a ladder against one already up builds it on: the next rung goes at the end the player
+	/// aims toward (down past its foot when aiming level or lower, up past its top when aiming above
+	/// the head; it stops when that end is out of reach or blocked), so a long ladder needs no tapping,
+	/// never has a gap and never doubles up. Each rung uses one ladder (none in creative, where it can
+	/// be built on up to 24 blocks away).
+	func extendLadder(_ tx: Int, _ ty: Int) -> Bool {
+		if world.tile(tx, ty) != .ladder { return false }
+		let up: Bool = aimY < pb.y - pb.h
+		for d in [up ? -1 : 1] {
+			var y: Int = ty
+			var n: Int = 0
+			while world.tile(tx, y + d) == .ladder && n < 400 {
+				y += d
+				n += 1
+			}
+			let ny: Int = y + d
+			if ny < 2 || ny >= world.H - 2 { continue }
+			let cur: Tile = world.tile(tx, ny)
+			if !(cur == .air || cur.liquid || (cur.isPlant && cur != .torch && cur != .lantern)) { continue }
+			// within reach (in creative, anywhere within 24 blocks)
+			let near: Bool = isCreative ? abs(Double(ny) + 0.5 - pb.cy) <= 24 && abs(Double(tx) + 0.5 - pb.x) <= 24 : inReach(Double(tx) + 0.5, Double(ny) + 0.5)
+			if !near { continue }
+			world.set(tx, ny, .ladder)
+			world.setBuilt(tx, ny, true)
+			if !isCreative { inv.removeAt(sel, 1) }
+			sfx(.place, 0.5)
+			placeCD = 0.12
+			swingT = 0.12
+			bumpHUD()
+			return true
+		}
+		return false
+	}
+
+	// MARK: furniture
+
+	/// Places a piece of furniture or a stair: a bed takes two tiles (its foot to the right of the
+	/// aimed one, or to the left if that is taken), stairs rise away from the player. True when it
+	/// was handled (placed or refused); false for anything else.
+	func placeSpecial(_ t: Tile, _ tx: Int, _ ty: Int) -> Bool {
+		if stairSide(t) != 0 {
+			let s: Tile = stairSide(t) == 1 ? t : stairMirror(t)
+			let placed: Tile = aimX >= pb.x ? s : stairMirror(s)
+			if !canPlaceAt(tx, ty, placed) { return true }
+			finishPlace(placed, tx, ty)
+			return true
+		}
+		if t == .bedL || t == .bedR {
+			if !canPlaceAt(tx, ty, .bedL) { return true }
+			var hx: Int = tx
+			if !bedSpotFree(tx + 1, ty) {
+				if !bedSpotFree(tx - 1, ty) { say("A bed needs two spaces side by side.", 1.5); return true }
+				hx = tx - 1
+			}
+			world.set(hx, ty, .bedL)
+			world.set(hx + 1, ty, .bedR)
+			world.setBuilt(hx, ty, true)
+			world.setBuilt(hx + 1, ty, true)
+			if !isCreative { inv.removeAt(sel, 1) }
+			sfx(.place, 0.6)
+			placeCD = 0.25
+			swingT = 0.14
+			bumpHUD()
+			return true
+		}
+		if t == .liftCar {
+			placeLiftCar(tx, ty)
+			return true
+		}
+		return false
+	}
+
+	func bedSpotFree(_ x: Int, _ y: Int) -> Bool {
+		let cur: Tile = world.tile(x, y)
+		if !(cur == .air || (cur.isPlant && cur != .torch && cur != .lantern)) { return false }
+		return world.supports(world.tile(x, y + 1), .bedL)
+	}
+
+	/// The common end of placing a block: the tile, its record as something built, the item used up
+	func finishPlace(_ placed: Tile, _ tx: Int, _ ty: Int) {
+		world.set(tx, ty, placed)
+		world.setBuilt(tx, ty, true)
+		if !isCreative { inv.removeAt(sel, 1) }
+		sfx(.place, 0.6)
+		placeCD = 0.11
+		swingT = 0.14
+		swingDir = aimFacing()
+		facing = swingDir
+		bumpHUD()
+	}
+
+	/// Sits on a chair or sofa: the player rests on it until they walk or jump off
+	func sitOn(_ tx: Int, _ ty: Int) {
+		if !isSeat(world.tile(tx, ty)) { return }
+		if mounted != nil || inVehicle != nil { return }
+		seat = IntPair(x: tx, y: ty)
+		pb.x = Double(tx) + 0.5
+		pb.y = Double(ty) + 1.0
+		pb.vx = 0
+		pb.vy = 0
+		say("You sit down. Walk or jump to get up.", 1.6)
+		bumpHUD()
+	}
+
+	/// Keeps a seated player on their seat; false (and standing up) once they move, jump, or the seat
+	/// is gone
+	func stayInSeat(_ ix: Double, _ jumpPressed: Bool) -> Bool {
+		guard let s = seat else { return false }
+		if ix != 0 || jumpPressed || downHeld || !isSeat(world.tile(s.x, s.y)) {
+			seat = nil
+			bumpHUD()
+			return false
+		}
+		pb.x = Double(s.x) + 0.5
+		pb.y = Double(s.y) + 1.0
+		pb.vx = 0
+		pb.vy = 0
+		pb.onGround = true
+		fallPeak = 0
+		return true
+	}
+
+	/// A bed: at night, with no monster near, the player sleeps until morning and is healed a little;
+	/// at any time it becomes where they wake after dying
+	func sleepIn(_ tx: Int, _ ty: Int) {
+		let t: Tile = world.tile(tx, ty)
+		if t != .bedL && t != .bedR { return }
+		let hx: Int = t == .bedR ? tx - 1 : tx
+		spawnX = Double(hx) + 1.0
+		spawnY = Double(ty) + 1.0
+		if world.dim != .overworld {
+			say("This bed is now where you wake up. (Nights only pass in the Overworld.)", 3.0)
+			return
+		}
+		if !isNight {
+			say("You can only sleep at night. This bed is now where you wake up.", 2.5)
+			return
+		}
+		for m in mobs where m.hp > 0 && !m.removed && isThreat(m) && abs(m.b.x - pb.x) < 16 && abs(m.b.y - pb.y) < 10 {
+			say("You can't sleep now: there are monsters nearby.", 2.0)
+			return
+		}
+		// on to the next morning
+		if timeOfDay > 0.5 { dayCount += 1 }
+		timeOfDay = 0.02
+		hp = min(maxHP, hp + 6.0)
+		fadeT = 1.0
+		light.valid = false
+		say("You sleep until morning. This bed is where you wake up.", 3.0)
+		bumpHUD()
+	}
+
+	/// A cabinet or wardrobe opens like a chest
+	func openStorage(_ tx: Int, _ ty: Int) {
+		sfx(.chestOpen, 0.6)
+		openChest = IntPair(x: tx, y: ty)
+		showInventory = true
+		bumpHUD()
+	}
+}
+
+extension RecipeBook {
+	/// Furniture, stairs and lifts (appended after every older recipe, so their numbers stay)
+	static func addBuildingRecipes(_ add: (Item, Int, [(Item, Int)], Station, RecipeCat) -> Void) {
+		let planks: Item = .block(.planks)
+		let stick: Item = .mat(.stick)
+		let fe: Item = .mat(.ironBar)
+		let cu: Item = .mat(.copperBar)
+		let glass: Item = .block(.glass)
+		add(.block(.chair), 1, [(planks, 3), (stick, 2)], .bench, .build)
+		add(.block(.table), 1, [(planks, 4), (stick, 2)], .bench, .build)
+		add(.block(.bedL), 1, [(planks, 4), (.mat(.wool), 3)], .bench, .build)
+		add(.block(.cabinet), 1, [(planks, 6), (cu, 1)], .bench, .build)
+		add(.block(.wardrobe), 1, [(planks, 8), (cu, 1)], .bench, .build)
+		add(.block(.shelf), 2, [(planks, 2), (stick, 1)], .bench, .build)
+		add(.block(.bookshelf), 1, [(planks, 6), (.mat(.leather), 2)], .bench, .build)
+		add(.block(.floorLamp), 1, [(fe, 1), (glass, 1), (.block(.torch), 1)], .bench, .build)
+		add(.block(.sofa), 1, [(planks, 3), (.mat(.wool), 2), (.mat(.leather), 1)], .bench, .build)
+		add(.block(.stairWoodR), 4, [(planks, 3)], .bench, .build)
+		add(.block(.stairStoneR), 4, [(.block(.stone), 3)], .bench, .build)
+		add(.block(.stairBrickR), 4, [(.block(.brick), 3)], .bench, .build)
+		add(.block(.liftRail), 4, [(fe, 1), (planks, 2)], .anvil, .build)
+		add(.block(.liftButton), 1, [(cu, 1), (.block(.stone), 1)], .bench, .build)
+		add(.block(.liftCar), 1, [(fe, 6), (planks, 4), (glass, 2)], .anvil, .build)
+	}
+}
+
+// MARK: - Lifts
+
+/// An elevator car: a platform three blocks wide riding up and down a column of lift rails, with
+/// the rail column in its middle. Floors are where lift buttons stand two blocks beside the rails;
+/// the car stops level with the floor of each. Riders, creatures and dropped things standing on it
+/// move with it; it stops if anything solid or anybody is in its way.
+final class Lift {
+	let id: Int
+	var x: Int
+	/// the car's floor (where a rider's feet are)
+	var y: Double
+	var vy: Double = 0
+	var target: Double? = nil
+	/// 0 slow, 1 normal, 2 fast
+	var speed: Int = 1
+	/// how far it moved this frame
+	var dy: Double = 0
+	static let speeds: [Double] = [2.5, 4.5, 7.5]
+	static let speedNames: [String] = ["slow", "normal", "fast"]
+
+	init(id: Int, x: Int, y: Double) {
+		self.id = id
+		self.x = x
+		self.y = y
+	}
+
+	var x0: Double { return Double(x) - 1.0 }
+	var x1: Double { return Double(x) + 2.0 }
+	var deckID: Int { return 2_000_000 + id }
+}
+
+struct LiftSave: Codable {
+	var d: Int
+	var x: Int
+	var y: Double
+	var speed: Int
+}
+
+extension Game {
+	func liftOnColumn(_ x: Int) -> Lift? {
+		for l in lifts where l.x == x { return l }
+		return nil
+	}
+
+	/// The lift whose car covers a point (for taps)
+	func liftAt(_ wx: Double, _ wy: Double) -> Lift? {
+		for l in lifts where wx >= l.x0 && wx < l.x1 && wy >= l.y - 3.2 && wy <= l.y + 0.4 { return l }
+		return nil
+	}
+
+	/// Whether the car can be at floor height y: a rail in the cell above its floor, and nothing solid
+	/// in the three cells across its floor's row or the two rows above it
+	func liftCanBe(_ l: Lift, _ y: Double) -> Bool {
+		let row: Int = Int(floor(y - 0.001))
+		if world.tile(l.x, row) != .liftRail { return false }
+		for dx in -1...1 {
+			for r in (row - 1)...row where world.tile(l.x + dx, r).solid { return false }
+		}
+		return true
+	}
+
+	/// The floors of a lift: rows beside its rails with a lift button, reachable along unbroken rail
+	func liftStops(_ l: Lift) -> [Double] {
+		var out: [Double] = []
+		let row0: Int = Int(floor(l.y - 0.001))
+		for dir in [-1, 1] {
+			var r: Int = row0
+			var n: Int = 0
+			while world.tile(l.x, r) == .liftRail && n < 300 {
+				if world.tile(l.x - 2, r) == .liftButton || world.tile(l.x + 2, r) == .liftButton { out.append(Double(r + 1)) }
+				r += dir
+				n += 1
+			}
+		}
+		return Array(Set(out)).sorted()
+	}
+
+	/// Puts a lift car on the rail at the aimed spot, its floor at the bottom of that rail cell
+	func placeLiftCar(_ tx: Int, _ ty: Int) {
+		if !inReach(Double(tx) + 0.5, Double(ty) + 0.5) { return }
+		if world.tile(tx, ty) != .liftRail {
+			say("Place the lift car on a lift rail.", 1.6)
+			placeCD = 0.3
+			return
+		}
+		if liftOnColumn(tx) != nil {
+			say("This rail already has a car.", 1.6)
+			placeCD = 0.3
+			return
+		}
+		let l: Lift = Lift(id: newID(), x: tx, y: Double(ty + 1))
+		if !liftCanBe(l, l.y) {
+			say("The car needs three blocks of clear space across the rail.", 2.0)
+			placeCD = 0.3
+			return
+		}
+		lifts.append(l)
+		if !isCreative { inv.removeAt(sel, 1) }
+		sfx(.place, 0.7)
+		placeCD = 0.3
+		say("Lift car placed. Buttons two blocks beside the rails make floors.", 2.5)
+		bumpHUD()
+	}
+
+	/// Sends a lift to the floor at y (true if it can go there)
+	@discardableResult
+	func sendLift(_ l: Lift, _ y: Double) -> Bool {
+		if abs(l.y - y) < 0.02 { return false }
+		l.target = y
+		sfx(.tap, 0.6)
+		return true
+	}
+
+	/// A tap on a lift button calls the car to this floor
+	func callLift(_ bx: Int, _ by: Int) {
+		for x in [bx - 2, bx + 2] {
+			guard let l = liftOnColumn(x) else { continue }
+			let y: Double = Double(by + 1)
+			if liftStops(l).contains(y) {
+				if !sendLift(l, y) { say("The lift is here.", 1.2) }
+				return
+			}
+		}
+		say("No lift car on rails beside this button.", 1.6)
+	}
+
+	/// A tap on the car: up to the next floor when tapping its upper half, down when tapping low
+	func rideLiftTap(_ l: Lift, _ wy: Double) {
+		let up: Bool = wy < l.y - 1.5
+		let stops: [Double] = liftStops(l)
+		let from: Double = l.target ?? l.y
+		let next: Double? = up ? stops.filter { $0 < from - 0.02 }.max() : stops.filter { $0 > from + 0.02 }.min()
+		if let n = next {
+			sendLift(l, n)
+		} else {
+			say(up ? "No floor above." : "No floor below.", 1.2)
+		}
+	}
+
+	/// The wrench: on a lift button it changes the car's speed, on the car it packs the car up
+	func wrenchLift(_ wx: Double, _ wy: Double) -> Bool {
+		let tx: Int = Int(floor(wx))
+		let ty: Int = Int(floor(wy))
+		if world.tile(tx, ty) == .liftButton {
+			for x in [tx - 2, tx + 2] {
+				guard let l = liftOnColumn(x) else { continue }
+				l.speed = (l.speed + 1) % Lift.speeds.count
+				say(joinText("Lift speed: ", Lift.speedNames[l.speed], "."), 1.5)
+				return true
+			}
+			return false
+		}
+		if let l = liftAt(wx, wy) {
+			lifts.removeAll { $0 === l }
+			spawnDrop(Stack(item: .block(.liftCar), count: 1), Double(l.x) + 0.5, l.y - 0.5, 0, -2)
+			say("Lift car packed up.", 1.2)
+			return true
+		}
+		return false
+	}
+
+	/// Moves the lifts: each eases toward its floor; riders standing on it move with it. A car whose
+	/// rail is gone falls apart into its item.
+	func updateLifts(_ dt: Double) {
+		if lifts.isEmpty { return }
+		var gone: [Lift] = []
+		for l in lifts {
+			l.dy = 0
+			if !liftCanBe(l, l.y) && world.tile(l.x, Int(floor(l.y - 0.001))) != .liftRail {
+				gone.append(l)
+				continue
+			}
+			guard let t = l.target else { continue }
+			let dist: Double = t - l.y
+			if abs(dist) < 0.01 {
+				l.y = t
+				l.vy = 0
+				l.target = nil
+				sfx(.door, at: Double(l.x), 0.4)
+				continue
+			}
+			let vmax: Double = Lift.speeds[clampI(l.speed, 0, Lift.speeds.count - 1)]
+			let acc: Double = 7.0
+			let want: Double = (dist > 0 ? 1.0 : -1.0) * min(vmax, sqrt(2.0 * acc * abs(dist)) + 0.3)
+			l.vy += clampD(want - l.vy, -acc * dt, acc * dt)
+			var step: Double = l.vy * dt
+			if abs(step) > abs(dist) { step = dist }
+			let ny: Double = l.y + step
+			if !liftCanBe(l, ny) || (step > 0 && liftBlockedBelow(l, ny)) {
+				l.vy = 0
+				l.target = nil
+				say("The lift is blocked.", 1.2)
+				continue
+			}
+			carryOnLift(l, step)
+			l.y = ny
+			l.dy = step
+		}
+		for l in gone {
+			lifts.removeAll { $0 === l }
+			spawnDrop(Stack(item: .block(.liftCar), count: 1), Double(l.x) + 0.5, l.y - 0.5, 0, -2)
+		}
+	}
+
+	/// Somebody under the car's floor in the way of a car going down
+	func liftBlockedBelow(_ l: Lift, _ ny: Double) -> Bool {
+		if !dead && pb.right > l.x0 && pb.left < l.x1 && pb.top < ny && pb.top >= l.y - 0.05 && !(abs(pb.y - l.y) < 0.08) { return true }
+		for m in mobsNear(l.x0 - 1, l.x1 + 1) where m.hp > 0 && !m.removed {
+			if m.b.right > l.x0 && m.b.left < l.x1 && m.b.top < ny && m.b.top >= l.y - 0.05 && !(abs(m.b.y - l.y) < 0.08) { return true }
+		}
+		return false
+	}
+
+	/// Moves whatever stands on the car's floor along with it
+	func carryOnLift(_ l: Lift, _ step: Double) {
+		if !dead && pb.right > l.x0 + 0.05 && pb.left < l.x1 - 0.05 && abs(pb.y - l.y) < 0.12 && pb.vy >= -0.5 {
+			pb.y = l.y + step
+			if step < 0 { pb.vy = min(pb.vy, 0) }
+		}
+		for m in mobsNear(l.x0 - 1, l.x1 + 1) where m.hp > 0 && !m.removed && !m.def.flying {
+			if m.b.right > l.x0 + 0.05 && m.b.left < l.x1 - 0.05 && abs(m.b.y - l.y) < 0.12 && m.b.vy >= -0.5 {
+				m.b.y = l.y + step
+			}
+		}
+		for i in 0..<drops.count where drops[i].x > l.x0 && drops[i].x < l.x1 && abs(drops[i].y - l.y) < 0.15 {
+			drops[i].y = l.y + step
+			drops[i].vy = 0
+		}
+	}
+
+	func liftSaves() -> [LiftSave] {
+		var out: [LiftSave] = []
+		for d in 0..<dimCount {
+			let list: [Lift] = d == world.dim.rawValue ? lifts : liftStash[d]
+			// where the car is now (a rider is saved where they stand, on it)
+			for l in list { out.append(LiftSave(d: d, x: l.x, y: l.y, speed: l.speed)) }
+		}
+		return out
+	}
+
+	func restoreLifts(_ saves: [LiftSave]) {
+		for s in saves where s.d >= 0 && s.d < dimCount {
+			let l: Lift = Lift(id: newID(), x: s.x, y: s.y)
+			l.speed = clampI(s.speed, 0, Lift.speeds.count - 1)
+			if s.d == world.dim.rawValue { lifts.append(l) } else { liftStash[s.d].append(l) }
+		}
+	}
+}
+
+// ===== p31c_blockphys =====
+
+// MARK: - Block weight, flying blocks and structures
+
+/// A block as building material: how heavy it is (stone 2.5), how much weight can rest on it before
+/// it gives way, and how many blocks it can reach out sideways from a support. One table used by
+/// blasts, storms, falling blocks and structural physics.
+struct BlockPhys {
+	var weight: Double
+	var carry: Double
+	var span: Int
+}
+
+enum BlockPhysTable {
+	static let table: [BlockPhys] = Tile.allCases.map { blockPhysOf($0) }
+}
+
+/// The material numbers of the game's own blocks (mod blocks are worked out from their hardness)
+func blockPhysOf(_ t: Tile) -> BlockPhys {
+	switch t {
+	case .air, .water, .lava: return BlockPhys(weight: 0, carry: 0, span: 0)
+	case .bedrock: return BlockPhys(weight: 20, carry: 9999, span: 9)
+	case .grass, .dirt, .farmland, .dryGrass, .jungleGrass, .mossGrass: return BlockPhys(weight: 1.5, carry: 30, span: 1)
+	case .mud: return BlockPhys(weight: 1.8, carry: 20, span: 1)
+	case .sand: return BlockPhys(weight: 1.6, carry: 20, span: 0)
+	case .snow: return BlockPhys(weight: 0.4, carry: 4, span: 1)
+	case .ice: return BlockPhys(weight: 0.9, carry: 16, span: 2)
+	case .stone, .fossil: return BlockPhys(weight: 2.5, carry: 150, span: 2)
+	case .slate: return BlockPhys(weight: 2.7, carry: 160, span: 2)
+	case .deepRock: return BlockPhys(weight: 3.0, carry: 200, span: 2)
+	case .sandstone: return BlockPhys(weight: 2.2, carry: 90, span: 2)
+	case .obsidian: return BlockPhys(weight: 2.6, carry: 260, span: 3)
+	case .ashStone: return BlockPhys(weight: 2.4, carry: 120, span: 2)
+	case .coal, .saltpeter: return BlockPhys(weight: 2.2, carry: 120, span: 2)
+	case .copper, .tin, .diamond, .crystalOre: return BlockPhys(weight: 3.5, carry: 150, span: 2)
+	case .iron, .mythril, .emberOre, .voidOre: return BlockPhys(weight: 4.0, carry: 170, span: 2)
+	case .silver: return BlockPhys(weight: 4.5, carry: 160, span: 2)
+	case .gold: return BlockPhys(weight: 6.0, carry: 140, span: 2)
+	case .amethyst: return BlockPhys(weight: 2.6, carry: 120, span: 2)
+	case .planks: return BlockPhys(weight: 0.6, carry: 24, span: 4)
+	case .logBlock, .jungleLogBlock, .palmLogBlock, .birchLogBlock: return BlockPhys(weight: 0.8, carry: 40, span: 5)
+	case .glass: return BlockPhys(weight: 1.0, carry: 6, span: 1)
+	case .brick, .mossBrick: return BlockPhys(weight: 2.0, carry: 120, span: 3)
+	case .crackedBrick: return BlockPhys(weight: 1.9, carry: 60, span: 2)
+	case .stormBrick: return BlockPhys(weight: 2.6, carry: 220, span: 3)
+	case .shingles: return BlockPhys(weight: 0.8, carry: 16, span: 4)
+	case .hay: return BlockPhys(weight: 0.3, carry: 3, span: 2)
+	case .amethystBlock: return BlockPhys(weight: 2.6, carry: 160, span: 3)
+	case .sandbag: return BlockPhys(weight: 1.4, carry: 60, span: 1)
+	case .crate: return BlockPhys(weight: 0.7, carry: 14, span: 2)
+	case .platform: return BlockPhys(weight: 0.3, carry: 8, span: 4)
+	case .ladder: return BlockPhys(weight: 0.3, carry: 8, span: 1)
+	case .liftRail: return BlockPhys(weight: 1.2, carry: 40, span: 1)
+	case .doorClosed, .doorOpen, .shutterClosed, .shutterOpen: return BlockPhys(weight: 0.7, carry: 10, span: 1)
+	case .gateClosed, .gateOpen: return BlockPhys(weight: 3.0, carry: 60, span: 2)
+	case .stairWoodR, .stairWoodL: return BlockPhys(weight: 0.5, carry: 20, span: 3)
+	case .stairStoneR, .stairStoneL: return BlockPhys(weight: 2.0, carry: 120, span: 2)
+	case .stairBrickR, .stairBrickL: return BlockPhys(weight: 1.8, carry: 110, span: 2)
+	case .chair, .shelf: return BlockPhys(weight: 0.4, carry: 4, span: 1)
+	case .table, .floorLamp: return BlockPhys(weight: 0.6, carry: 8, span: 1)
+	case .bedL, .bedR: return BlockPhys(weight: 0.8, carry: 8, span: 1)
+	case .sofa: return BlockPhys(weight: 1.0, carry: 8, span: 1)
+	case .cabinet: return BlockPhys(weight: 1.2, carry: 10, span: 1)
+	case .bookshelf: return BlockPhys(weight: 1.4, carry: 10, span: 1)
+	case .wardrobe: return BlockPhys(weight: 1.6, carry: 10, span: 1)
+	case .chest, .workbench: return BlockPhys(weight: 1.0, carry: 10, span: 1)
+	case .furnace, .alchemyStill: return BlockPhys(weight: 3.0, carry: 20, span: 1)
+	case .anvil: return BlockPhys(weight: 7.0, carry: 40, span: 1)
+	case .torch, .lantern, .cobweb: return BlockPhys(weight: 0.1, carry: 1, span: 1)
+	default:
+		let d: TileDef = Tile.makeDef(t)
+		if isLeafTile(t) || d.plant { return BlockPhys(weight: 0.1, carry: 1, span: 1) }
+		return blockPhysFrom(d)
+	}
+}
+
+/// Material numbers from a block's hardness (mod blocks, and anything without its own entry)
+func blockPhysFrom(_ d: TileDef) -> BlockPhys {
+	if !d.solid { return BlockPhys(weight: 0.5, carry: 6, span: 1) }
+	let w: Double = clampD(0.6 + d.hard * 0.9, 0.3, 8.0)
+	return BlockPhys(weight: w, carry: 20.0 + d.hard * 40.0, span: d.hard < 1.0 ? 3 : 2)
+}
+
+/// A block's material numbers
+func blockPhys(_ t: Tile) -> BlockPhys {
+	if t.isMod { return blockPhysFrom(t.def) }
+	let i: Int = Int(t.rawValue)
+	return i < BlockPhysTable.table.count ? BlockPhysTable.table[i] : BlockPhys(weight: 1, carry: 20, span: 2)
+}
+
+func tileWeight(_ t: Tile) -> Double { return blockPhys(t).weight }
+
+/// Part of a structure: something that holds other blocks up (solid blocks, platforms, ladders,
+/// stairs, lift rails); everything else (furniture, machines, torches) only rests on it as a load
+func isStructural(_ t: Tile) -> Bool {
+	return t.solid || t.isPlatform || t == .ladder || t == .liftRail || stairSide(t) != 0
+}
+
+/// The item info line with a block's weight (and, for building blocks, what it holds and reaches)
+func weightLine(_ t: Tile) -> String {
+	let p: BlockPhys = blockPhys(t)
+	if !isStructural(t) { return String(format: "Weight %.1f", p.weight) }
+	return joinText(String(format: "Weight %.1f", p.weight), " · holds ", String(Int(p.carry)), " · reaches ", String(p.span))
+}
+
+/// How hard a blast has to be to break a block (a blast nearly that strong only knocks it loose)
+func blastResist(_ t: Tile) -> Double {
+	if Tile.tierTable[t.idx] > 4 { return 99 }
+	return t.hardness + tileWeight(t) * 0.25
+}
+
+extension World {
+	/// Whether the block at (x, y) was put there (by the player, or settled there after being thrown):
+	/// what structural physics looks at. The generated land never counts.
+	func isBuilt(_ x: Int, _ y: Int) -> Bool {
+		if y < 0 || y >= H { return false }
+		let cx: Int = floorDiv(x, chunkW)
+		guard let c = chunk(cx), !c.built.isEmpty else { return false }
+		return c.built[(x - cx * chunkW) * H + y] != 0
+	}
+
+	func setBuilt(_ x: Int, _ y: Int, _ on: Bool) {
+		if y < 0 || y >= H { return }
+		let cx: Int = floorDiv(x, chunkW)
+		guard let c = chunk(cx) else { return }
+		if c.built.isEmpty {
+			if !on { return }
+			c.built = [UInt8](repeating: 0, count: chunkW * H)
+		}
+		let i: Int = (x - cx * chunkW) * H + y
+		let v: UInt8 = on ? 1 : 0
+		if c.built[i] == v { return }
+		c.built[i] = v
+		c.dirty = true
+	}
+}
+
+// MARK: flying blocks
+
+extension Game {
+	/// Knocks a block loose: it leaves its place and flies with the given speed, by its weight, until
+	/// it lands and settles back into a block (see updateFallingBlocks). Too many already flying: it
+	/// just breaks.
+	func displaceBlock(_ x: Int, _ y: Int, vx: Double, vy: Double) {
+		let t: Tile = world.tile(x, y)
+		if t == .air || t.liquid { return }
+		if fallingBlocks.count >= 120 {
+			breakTile(x, y, false, dropChance: 0.4)
+			return
+		}
+		let built: Bool = world.isBuilt(x, y)
+		if world.set(x, y, .air) != t { return }
+		var fb: FallingBlock = FallingBlock(x: Double(x) + 0.5, y: Double(y) + 1.0, vy: vy, tile: t, uid: newID())
+		fb.vx = vx
+		fb.mass = max(0.2, tileWeight(t))
+		fb.spin = clampD(vx * 0.6, -9, 9)
+		fb.built = built
+		fb.flung = true
+		fallingBlocks.append(fb)
+		// what stood on it comes down too
+		let above: Tile = world.tile(x, y - 1)
+		if world.needsSupport(above) && !world.supports(.air, above) { breakTile(x, y - 1, false) }
+	}
+
+	/// What a blast does to the blocks around it, nearest first. Each block takes the blast's strength
+	/// where it stands (falling off with distance) against what it can stand (blastResist: its hardness
+	/// and weight): strong enough, it is destroyed. If it survives and has room to move, it is knocked
+	/// loose and thrown when the blast was nearly strong enough to break it, or when the blast's push
+	/// (which reaches further) is more than its weight can hold against: light blocks are thrown from
+	/// further off, and fly further. Otherwise it is untouched. Chests and storage keep their place
+	/// (and contents).
+	func blastBlocks(_ x: Double, _ y: Double, radius: Double, power power0: Double) {
+		// a blast breaks blocks by its size as much as by how hard it hits creatures (a mod's explosive
+		// shot with little damage still breaks the ground it was made to; a bomb is both)
+		let power: Double = max(power0, radius * 7.6)
+		let reach: Double = radius + 0.6
+		let pushReach: Double = radius + 2.5
+		let r: Int = Int(ceil(pushReach))
+		let tx: Int = Int(floor(x))
+		let ty: Int = Int(floor(y))
+		var cells: [(Int, Int, Double)] = []
+		for dy in -r...r {
+			for dx in -r...r {
+				let cx: Double = Double(tx + dx) + 0.5 - x
+				let cy: Double = Double(ty + dy) + 0.5 - y
+				let d: Double = sqrt(cx * cx + cy * cy)
+				if d <= pushReach { cells.append((tx + dx, ty + dy, d)) }
+			}
+		}
+		cells.sort { $0.2 < $1.2 }
+		for (cx, cy, d) in cells {
+			let t: Tile = world.tile(cx, cy)
+			if t == .air || t.liquid || t.hardness >= 9000 { continue }
+			if t == .chest || isStorageFurniture(t) || t == .portalOff || t == .portalOn || t == .portalFrame { continue }
+			if t.isMod && (ModRuntime.shared.blockDef(t)?.blastProof ?? true) { continue }
+			let f: Double = min(1.0, d / reach)
+			let blast: Double = power * 0.16 * (1.0 - f * f)
+			let shove: Double = power * 0.12 * max(0, 1.0 - d / pushReach)
+			let resist: Double = blastResist(t)
+			let w: Double = tileWeight(t)
+			let hold: Double = w * 0.5 + t.hardness * 0.25
+			if blast >= resist {
+				breakTile(cx, cy, false, dropChance: 0.35)
+			} else if t.solid && (blast >= resist * 0.5 || shove >= hold) && openSide(cx, cy) {
+				var ux: Double = Double(cx) + 0.5 - x
+				var uy: Double = Double(cy) + 0.5 - y
+				let len: Double = max(0.3, sqrt(ux * ux + uy * uy))
+				ux /= len
+				uy /= len
+				let push: Double = clampD((max(blast - resist * 0.5, 0) + shove) * 6.0 / max(0.4, w), 3.0, 16.0)
+				// away from the blast where there is room, else out of the open side (up out of a crater)
+				let away: Int = ux >= 0 ? 1 : -1
+				var vx: Double = ux * push
+				var vy: Double = min(-2.5, uy * push - 3.0)
+				if !world.solid(cx, cy - 1) {
+					if world.solid(cx + away, cy) { vx = ux * push * 0.4 }
+					vy = min(vy, -(3.0 + push * 0.7))
+				} else if !world.solid(cx + away, cy) {
+					vx = Double(away) * push
+				} else if !world.solid(cx - away, cy) {
+					vx = -Double(away) * push * 0.5
+				} else {
+					vx = 0
+					vy = 0
+				}
+				displaceBlock(cx, cy, vx: vx, vy: vy)
+			}
+		}
+	}
+
+	/// Whether a block has room to move: anything not solid beside, above or below it (a block buried in
+	/// the ground stays put; the edge of a fresh crater has room)
+	func openSide(_ x: Int, _ y: Int) -> Bool {
+		return !world.solid(x - 1, y) || !world.solid(x + 1, y) || !world.solid(x, y - 1) || !world.solid(x, y + 1)
+	}
+
+	/// A storm tears a block loose: plants, leaves and the like are broken off; a building block is
+	/// lifted and carried, by its weight (see the wind in updateFallingBlocks)
+	func stormTear(_ x: Int, _ y: Int, _ windDir: Double) {
+		let t: Tile = world.tile(x, y)
+		if t.solid && !t.liquid && t.hardness < 9000 && !isStorageFurniture(t) && t != .chest {
+			let light: Double = 1.0 / max(0.3, tileWeight(t))
+			displaceBlock(x, y, vx: windDir * clampD(4.0 * light, 1.5, 9.0), vy: -clampD(3.0 + 4.0 * light, 3.0, 10.0))
+		} else {
+			breakTile(x, y, false, dropChance: 0.5)
+		}
+	}
+
+	/// The wind on a flying block: a tornado's swirl and lift, a hurricane's gale, felt less by heavy
+	/// blocks
+	func windOnBlock(_ fb: inout FallingBlock, _ dt: Double) {
+		if weather.tornado == nil && weather.hurricane == nil { return }
+		let light: Double = 1.0 / (1.0 + fb.mass)
+		let tf: (Double, Double, Double) = tornadoField(fb.x, fb.y - 0.5)
+		if tf.2 > 0 {
+			fb.vx += clampD((tf.0 - fb.vx) * 2.4, -40, 40) * light * dt
+			if tf.1 < -1.0 { fb.vy += (-gravityG * 0.9 + clampD((tf.1 - fb.vy) * 2.2, -30, 30)) * light * dt }
+		}
+		if let h = weather.hurricane, world.dim == .overworld {
+			let w: Double = weather.wind * h.force * hurricaneReach(fb.x, h)
+			fb.vx += clampD(w - fb.vx, -12, 12) * 0.6 * light * dt
+		}
+	}
+
+	/// Puts a block that has come to rest back into the world: in the cell it landed in, or one beside
+	/// or above it that is free; with nowhere to go, it drops as an item
+	func settleBlock(_ fb: FallingBlock, _ row: Int) {
+		let tx: Int = Int(floor(fb.x))
+		let spots: [(Int, Int)] = [(tx, row), (tx, row - 1), (tx - 1, row), (tx + 1, row), (tx, row - 2)]
+		for (sx, sy) in spots {
+			let cur: Tile = world.tile(sx, sy)
+			if !(cur == .air || cur.liquid || (cur.isPlant && cur != .torch && cur != .lantern)) { continue }
+			let below: Tile = world.tile(sx, sy + 1)
+			if !(below.supportsThings || below.isPlatform) && sy != row { continue }
+			world.set(sx, sy, fb.tile)
+			if fb.built { world.setBuilt(sx, sy, true) }
+			spawnParticles(Double(sx) + 0.5, Double(sy) + 1.0, fb.tile.def.colors.first ?? 0xA09080, 4, 2.0, 0.3, 10)
+			return
+		}
+		let item: Item = fb.tile.def.drop ?? .block(fb.tile)
+		spawnDrop(Stack(item: item, count: 1), fb.x, Double(row), 0, -2)
+	}
+}
+
+// MARK: structural physics
+
+/// What a structure check found: the blocks crushed by more weight than they can carry (worst first),
+/// the blocks nothing holds up (lowest first), those under strain (how close to their limit,
+/// 0.7...1), how many blocks were looked at, and where they were
+struct StructCheck {
+	var crushed: [IntPair] = []
+	var fails: [IntPair] = []
+	var strained: [(IntPair, Double)] = []
+	var count: Int = 0
+	var minX: Int = Int.max
+	var maxX: Int = Int.min
+	var minY: Int = Int.max
+	var maxY: Int = Int.min
+}
+
+/// One block of a structure while it is being looked at
+struct StructNode {
+	var x: Int
+	var y: Int
+	var phys: BlockPhys
+	/// how much further it can hold out (0: nothing holds it)
+	var sup: Int = 0
+	var parent: Int = -1
+	var load: Double = 0
+}
+
+extension Game {
+	/// Structural physics (Settings.structural): built blocks (what the player placed) make up
+	/// structures standing on the land, which never moves. A block standing on a held block is held;
+	/// a block beside or under one is held if it is within its reach (`span`) of a standing support;
+	/// everything resting on a block (the blocks it holds up, furniture on it) must not weigh more than
+	/// it can carry. Blocks out of reach, or carrying too much, crack and fall. Only structures next
+	/// to a change are looked at, a little at a time, and never more than `maxNodes` blocks at once.
+	func updateStructures(_ dt: Double) {
+		if !settings.structural {
+			if world.structWatch {
+				world.structWatch = false
+				world.structEdits.removeAll()
+				structQueue.removeAll()
+				stress.removeAll()
+			}
+			return
+		}
+		world.structWatch = true
+		if !world.structEdits.isEmpty {
+			// only changes next to something built matter (grass spreading, crops growing do not)
+			for e in world.structEdits where structQueue.count < 48 && builtNear(e.x, e.y) {
+				if !structQueue.contains(e) { structQueue.append(e) }
+			}
+			world.structEdits.removeAll()
+			structT = max(structT, 0.12)
+		}
+		if structT > 0 {
+			structT -= dt
+			return
+		}
+		if structQueue.isEmpty { return }
+		let e: IntPair = structQueue.removeFirst()
+		let fails: Int = settleStructure(e.x, e.y, maxFalls: 12)
+		if fails > 0 {
+			// what was resting on them is looked at again once they are gone
+			structQueue.append(e)
+			structT = 0.18
+		}
+	}
+
+	/// Looks at the structure around (x, y) and brings down what cannot stand (at most `maxFalls`
+	/// blocks, worst first). Returns how many fell.
+	@discardableResult
+	func settleStructure(_ x: Int, _ y: Int, maxFalls: Int) -> Int {
+		let res: StructCheck = checkStructure(x, y)
+		// strain marks: those of the blocks just looked at are replaced
+		if res.count > 0 && !stress.isEmpty {
+			stress = stress.filter { (kv: (key: Int, value: Double)) -> Bool in
+				let sx: Int = floorDiv(kv.key, 4096)
+				let sy: Int = kv.key - sx * 4096
+				return sx < res.minX || sx > res.maxX || sy < res.minY || sy > res.maxY
+			}
+		}
+		for (p, f) in res.strained { stress[structKey(p.x, p.y)] = f }
+		var n: Int = 0
+		// a block carrying more than it can breaks under the weight
+		for p in res.crushed {
+			if n >= maxFalls { break }
+			if world.tile(p.x, p.y) == .air { continue }
+			stress[structKey(p.x, p.y)] = nil
+			breakTile(p.x, p.y, false)
+			n += 1
+		}
+		// a block nothing holds up falls (and settles where it lands)
+		for p in res.fails {
+			if n >= maxFalls { break }
+			let t: Tile = world.tile(p.x, p.y)
+			if t == .air { continue }
+			stress[structKey(p.x, p.y)] = nil
+			if fallingBlocks.count < 120 && t.solid {
+				displaceBlock(p.x, p.y, vx: Double.random(in: -0.6...0.6), vy: 0)
+			} else {
+				breakTile(p.x, p.y, false)
+			}
+			n += 1
+		}
+		if n > 0 {
+			sfx(.breakWood, at: Double(x) + 0.5, 0.7)
+			addShake(min(0.5, 0.08 * Double(n)))
+		} else if res.count > 0 {
+			// a creak and some dust where it is near its limit
+			let worst: (IntPair, Double)? = res.strained.max { $0.1 < $1.1 }
+			if let w = worst, w.1 > 0.92 {
+				sfx(.digWood, at: Double(w.0.x) + 0.5, 0.4)
+				spawnParticles(Double(w.0.x) + 0.5, Double(w.0.y) + 1.0, 0xB0A080, 3, 1.5, 0.6, 12)
+			}
+		}
+		return n
+	}
+
+	func structKey(_ x: Int, _ y: Int) -> Int { return x &* 4096 &+ y }
+
+	/// Something built in the 3x3 around (x, y)
+	func builtNear(_ x: Int, _ y: Int) -> Bool {
+		for dy in -1...1 { for dx in -1...1 where world.isBuilt(x + dx, y + dy) { return true } }
+		return false
+	}
+
+	/// The structure check (see updateStructures)
+	func checkStructure(_ x0: Int, _ y0: Int) -> StructCheck {
+		let maxNodes: Int = 5000
+		var nodes: [StructNode] = []
+		var index: [Int: Int] = [:]
+		var stack: [Int] = []
+		func consider(_ x: Int, _ y: Int) {
+			let k: Int = structKey(x, y)
+			if index[k] != nil { return }
+			let t: Tile = world.tile(x, y)
+			if !isStructural(t) || !world.isBuilt(x, y) { return }
+			index[k] = nodes.count
+			stack.append(nodes.count)
+			nodes.append(StructNode(x: x, y: y, phys: blockPhys(t)))
+		}
+		for dy in -1...1 { for dx in -1...1 { consider(x0 + dx, y0 + dy) } }
+		var out: StructCheck = StructCheck()
+		if nodes.isEmpty { return out }
+		while let i = stack.popLast() {
+			if nodes.count > maxNodes {
+				// too big to look at in one go: left standing
+				out.count = nodes.count
+				return out
+			}
+			let nx: Int = nodes[i].x
+			let ny: Int = nodes[i].y
+			consider(nx - 1, ny)
+			consider(nx + 1, ny)
+			consider(nx, ny - 1)
+			consider(nx, ny + 1)
+		}
+		// standing: on the land, built into it at the side, or on a standing block of the same column
+		// (worked out from the bottom up); each holds out to its full reach
+		var sup: [Int] = [Int](repeating: 0, count: nodes.count)
+		var parent: [Int] = [Int](repeating: -1, count: nodes.count)
+		var depth: [Int] = [Int](repeating: 0, count: nodes.count)
+		var buckets: [[Int]] = [[Int]](repeating: [], count: 11)
+		let upward: [Int] = Array(0..<nodes.count).sorted { nodes[$0].y > nodes[$1].y }
+		for i in upward {
+			let n: StructNode = nodes[i]
+			let full: Int = clampI(n.phys.span + 1, 1, 10)
+			if landAt(n.x, n.y + 1) || landAt(n.x - 1, n.y) || landAt(n.x + 1, n.y) {
+				sup[i] = full
+			} else if let j = index[structKey(n.x, n.y + 1)], sup[j] > 0 {
+				sup[i] = full
+				parent[i] = j
+				depth[i] = depth[j] + 1
+			}
+			if sup[i] > 0 { buckets[sup[i]].append(i) }
+		}
+		// reach spreads out from the standing blocks: one less for each block out sideways or down,
+		// the same up (a block resting on a held block is held as well as it is), never more than a
+		// block's own reach
+		var done: [Bool] = [Bool](repeating: false, count: nodes.count)
+		var level: Int = 10
+		while level >= 1 {
+			if buckets[level].isEmpty {
+				level -= 1
+				continue
+			}
+			let i: Int = buckets[level].removeLast()
+			if done[i] || sup[i] != level { continue }
+			done[i] = true
+			let n: StructNode = nodes[i]
+			let nbr: [(Int, Int, Bool)] = [(n.x, n.y - 1, true), (n.x - 1, n.y, false), (n.x + 1, n.y, false), (n.x, n.y + 1, false)]
+			for (ax, ay, up) in nbr {
+				guard let j = index[structKey(ax, ay)], !done[j] else { continue }
+				let cap: Int = clampI(nodes[j].phys.span + 1, 1, 10)
+				let cand: Int = min(cap, up ? level : level - 1)
+				if cand > sup[j] {
+					sup[j] = cand
+					parent[j] = i
+					depth[j] = depth[i] + 1
+					buckets[cand].append(j)
+				}
+			}
+		}
+		// the load flows down the support tree, the furthest blocks first: each block carries itself,
+		// what rests on it, and what it holds up
+		let byDepth: [Int] = Array(0..<nodes.count).sorted { depth[$0] > depth[$1] }
+		for i in byDepth {
+			let n: StructNode = nodes[i]
+			var load: Double = nodes[i].load + n.phys.weight
+			let above: Tile = world.tile(n.x, n.y - 1)
+			if above != .air && !isStructural(above) && !above.liquid { load += tileWeight(above) }
+			nodes[i].load = load
+			nodes[i].sup = sup[i]
+			if parent[i] >= 0 { nodes[parent[i]].load += load }
+		}
+		var fails: [(IntPair, Double)] = []
+		var crushed: [(IntPair, Double)] = []
+		var strained: [(IntPair, Double)] = []
+		for i in 0..<nodes.count {
+			let n: StructNode = nodes[i]
+			let p: IntPair = IntPair(x: n.x, y: n.y)
+			out.minX = min(out.minX, n.x)
+			out.maxX = max(out.maxX, n.x)
+			out.minY = min(out.minY, n.y)
+			out.maxY = max(out.maxY, n.y)
+			if n.sup <= 0 {
+				// nothing holds it: the lowest come down first
+				fails.append((p, Double(n.y)))
+				continue
+			}
+			let carried: Double = n.load - n.phys.weight
+			let f: Double = carried / max(0.1, n.phys.carry)
+			if f > 1.0 {
+				crushed.append((p, f))
+			} else if f > 0.7 || (n.sup == 1 && n.phys.span > 1) {
+				strained.append((p, max(0.7, f)))
+			}
+		}
+		crushed.sort { $0.1 > $1.1 }
+		fails.sort { $0.1 > $1.1 }
+		out.crushed = crushed.map { $0.0 }
+		out.fails = fails.map { $0.0 }
+		out.strained = strained
+		out.count = nodes.count
+		return out
+	}
+
+	/// The land holds structures up: a solid block that was not built, or the bottom of the world
+	func landAt(_ x: Int, _ y: Int) -> Bool {
+		if y >= world.H - 1 { return true }
+		let t: Tile = world.tile(x, y)
+		return t.solid && !world.isBuilt(x, y)
+	}
 }

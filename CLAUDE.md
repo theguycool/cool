@@ -16,11 +16,11 @@ confirmed). `tools/buildcost.sh` measures both ways:
   With the overhaul's phases 1 and 2 (3c0fb81, 1.97 MB): 19 to 22 s and 405 to 461 MB per job; as
   one job 71 s and 1,011 MB. This version builds and starts on the iPad (the user confirmed it), so
   four parts at these sizes are known to work. Phase 3 (2.03 MB) moved creature AI, spawning and
-  combat from part 1 to part 2 to keep the parts level: 420 to 450 MB per job (not yet confirmed on
-  the iPad). Phase 4, vehicles (2.13 MB, most of it in `p33_vehicles` at the start of part 4, the
-  lightest part): 440 to 455 MB per job, 105 s in all; as one job 95 s and 1,053 MB (not yet
-  confirmed on the iPad). If the iPad runs the four jobs at once in one process, they could add up;
-  that is not known.
+  combat from part 1 to part 2 to keep the parts level: 420 to 450 MB per job. Phase 4, vehicles
+  (95c235f, 2.13 MB, most of it in `p33_vehicles` at the start of part 4, the lightest part): 440 to
+  455 MB per job, 105 s in all; as one job 95 s and 1,053 MB. The user confirmed phases 3 and 4 build
+  and run on the iPad, so four parts of up to about 455 MB per job are known to work. If the iPad
+  runs the four jobs at once in one process, they could add up; that is not known.
 - Add big features in steps the user can check on the iPad, and keep the parts about equal in
   compiled size (`tools/buildcost.sh` prints each job's peak).
 

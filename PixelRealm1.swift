@@ -285,7 +285,7 @@ struct PixelBuf {
 		for i in 0..<o.px.count {
 			let c: UInt32 = o.px[i]
 			if (c >> 24) == 0 { continue }
-			o.px[i] = 0xFF000000 | mixRGB(c & 0xFFFFFF, rgb, amount)
+			o.px[i] = (c & 0xFF000000) | mixRGB(c & 0xFFFFFF, rgb, amount)
 		}
 		return o
 	}
@@ -430,7 +430,7 @@ enum Tile: UInt8, CaseIterable, Codable {
 		liquidTable[i] = false
 		hurtTable[i] = d.hurt
 		platformTable[i] = d.platform
-		plantTable[i] = false
+		plantTable[i] = d.plant
 		hardTable[i] = d.hard
 		tierTable[i] = d.tier
 		supportTable[i] = d.solid
@@ -460,6 +460,17 @@ enum Tile: UInt8, CaseIterable, Codable {
 		case .jungleLog: return .jungleLogBlock
 		case .palmLog: return .palmLogBlock
 		case .birchLog: return .birchLogBlock
+		default: return self
+		}
+	}
+
+	/// The other way round: the tree trunk a solid log block stands for (trees are never walls)
+	var trunkForm: Tile {
+		switch self {
+		case .logBlock: return .log
+		case .jungleLogBlock: return .jungleLog
+		case .palmLogBlock: return .palmLog
+		case .birchLogBlock: return .birchLog
 		default: return self
 		}
 	}
@@ -9615,7 +9626,10 @@ final class World {
 	func isSoil(_ t: Tile) -> Bool {
 		switch t {
 		case .grass, .dirt, .farmland, .jungleGrass, .mossGrass, .dryGrass, .snow, .mud: return true
-		default: return false
+		default:
+			// a custom dimension's own ground takes saplings too
+			guard dim.isCustom, let d = ModRuntime.shared.dimRT(dim) else { return false }
+			return d.soils.contains(t.rawValue)
 		}
 	}
 
@@ -12496,12 +12510,28 @@ final class Game: ObservableObject, @unchecked Sendable {
 		return smooth((t - 0.92) / 0.08)
 	}
 
+	/// How bright the open sky is (0 dark ... 15 noon): night light from the moon, daylight from the sun
+	/// (a mod's sun or moon can give more or less of it)
 	var skyLevel: Int {
 		if world.dim != .overworld {
 			guard let d = customDim, !d.def.ceiling else { return 0 }
-			return Int((clampD(d.def.light, 0, 1) * (6.0 + 9.0 * dayFactor)).rounded())
+			// a sun or moon switched off still lights the sky as the game's would
+			let sb: Double = d.def.sun ? (d.def.sunBody?.bright ?? 1.0) : 1.0
+			let mb: Double = d.def.moon ? (d.def.moonBody?.bright ?? 1.0) : 1.0
+			let lv: Double = clampD(d.def.light, 0, 1) * skyLight(sb, mb)
+			return Int(clampD(lv, 0, 15).rounded())
 		}
-		return Int((6.0 + 9.0 * dayFactor).rounded())
+		let rt: ModRuntime = ModRuntime.shared
+		if rt.overSun == nil && rt.overMoon == nil { return Int((6.0 + 9.0 * dayFactor).rounded()) }
+		let lv: Double = skyLight(rt.overSun?.bright ?? 1.0, rt.overMoon?.bright ?? 1.0)
+		return Int(clampD(lv, 0, 15).rounded())
+	}
+
+	/// Open sky's light (15 at noon, 6 at midnight with the game's sun and moon): a sun's brightness
+	/// scales the daylight it adds, a moon's the light of the night (never the day's)
+	func skyLight(_ sun: Double, _ moon: Double) -> Double {
+		let night: Double = 6.0 * (dayFactor + (1.0 - dayFactor) * moon)
+		return night + 9.0 * dayFactor * sun
 	}
 
 	var isNight: Bool { return dayFactor < 0.35 }
@@ -12637,7 +12667,12 @@ extension Game {
 	}
 
 	func updateTime(_ dt: Double) {
-		if freezeTime || world.dim != .overworld { return }
+		if freezeTime { return }
+		// the world's clock runs on in a custom dimension with day and night (it used to stop there,
+		// so a dimension entered at night stayed dark for good)
+		if world.dim != .overworld {
+			guard let d = customDim, d.def.cycle, !d.def.ceiling else { return }
+		}
 		timeOfDay += dt / dayLength
 		if timeOfDay >= 1.0 {
 			timeOfDay -= 1.0
@@ -12682,6 +12717,9 @@ extension Game {
 		var runMax: Double = 7.4 * speedMult * (wearing(.swiftBoots) ? 1.18 : 1.0) * wxSlow * (1.0 + effects.value(.speed) / 100.0) * (1.0 + armorInf.speed) * suitSpeedMul
 		// heavy weapons commit you to the blow: slower on your feet while it lasts
 		if swingT > 0 || strikeT > 0, let it = heldItem, it.isMeleeWeapon { runMax *= it.melee.moveScale }
+		// a mod's sticky block holds the player back
+		let sticky: Bool = inStickyBlock()
+		if sticky { runMax *= 0.35 }
 		if ix != 0 {
 			facing = ix > 0 ? 1 : -1
 		}
@@ -12779,6 +12817,10 @@ extension Game {
 			if !jumpHeld && pb.vy < -5.0 { g *= 2.6 }
 			pb.vy = min(pb.vy + g * dt, terminalV)
 		}
+		if sticky {
+			pb.vy = clampD(pb.vy, -5.0, 2.2)
+			fallPeak = 0
+		}
 		if (downHeld || stickY > 0.6) { dropT = 0.22 }
 		if dropT > 0 { dropT -= dt }
 		let decks: [Deck] = allDecks()
@@ -12827,6 +12869,8 @@ extension Game {
 			while y <= y1 {
 				let t: Tile = world.tile(tx, y)
 				if t == .ladder { return tx }
+				// a mod's climbable block works the same way
+				if t.isMod && ModRuntime.shared.climbTiles.contains(t.rawValue) { return tx }
 				// a platform laid over the top of a ladder (a hatch) is climbed through and stepped onto
 				if t == .platform && world.tile(tx, y + 1) == .ladder { return tx }
 				y += 1
@@ -12836,6 +12880,22 @@ extension Game {
 	}
 
 	func onLadder() -> Bool { return ladderColumn() != nil }
+
+	/// Whether the player's body is in a mod's sticky block
+	func inStickyBlock() -> Bool {
+		let st: Set<UInt8> = ModRuntime.shared.stickyTiles
+		if st.isEmpty { return false }
+		let hw: Double = pb.w * 0.5
+		let x0: Int = Int(floor(pb.x - hw + 0.02))
+		let x1: Int = Int(floor(pb.x + hw - 0.02))
+		let y0: Int = Int(floor(pb.top + 0.02))
+		let y1: Int = Int(floor(pb.y - 0.02))
+		if x1 < x0 || y1 < y0 { return false }
+		for ty in y0...y1 {
+			for tx in x0...x1 where st.contains(world.tile(tx, ty).rawValue) { return true }
+		}
+		return false
+	}
 
 	/// A ledge in front of the player whose top is at most about 2.5 blocks above the feet, with room
 	/// to stand on it
@@ -13151,9 +13211,7 @@ extension Game {
 		}
 		let layoutChanged: Bool = light.layoutUsed != world.layoutVersion
 		let needsStatic: Bool = !light.valid || !covered || light.skyUsed != skyLevel || light.dimUsed != world.dim.rawValue || edited || layoutChanged
-		var amb: Double = fullBright ? 1.0 : (world.dim == .umbral ? 0.2 : (world.dim.isCustom ? 0.12 : 0.07))
-		// an Owlsight Draught lifts the dark
-		if nightVision { amb = max(amb, 0.5) }
+		let amb: Double = ambientLight()
 		if !needsStatic {
 			// only moving lights changed: cheap partial relight
 			if light.dynUsed == key { return }
@@ -13183,6 +13241,15 @@ extension Game {
 		light.buildPixels(&lightDark, &lightGlow, amb, 1.0 - dayFactor)
 		lightRev &+= 1
 		Perf.shared.lightMs = Perf.smooth(Perf.shared.lightMs, perfNow() - t0)
+	}
+
+	/// The least light anywhere: the dimension's own glow (a cavern dimension glows as brightly as its
+	/// maker set its light, as it has no sky to light it), or more with an Owlsight Draught
+	func ambientLight() -> Double {
+		var amb: Double = fullBright ? 1.0 : (world.dim == .umbral ? 0.2 : (world.dim.isCustom ? 0.12 : 0.07))
+		if !fullBright, let d = customDim, d.def.ceiling { amb = max(amb, 0.12 + 0.22 * clampD(d.def.light, 0, 1)) }
+		if effects.value(.nightVision) > 0 { amb = max(amb, 0.5) }
+		return amb
 	}
 
 	// MARK: random world ticks (crops, grass)
@@ -13238,6 +13305,7 @@ extension Game {
 		var shape: Int = 0
 		if let d = customDim {
 			let z: ModDimZoneRT = d.zones[d.zoneIndex(x)]
+			if !z.designs.isEmpty { return growDesign(d, z, x, y) }
 			log = z.log
 			leaves = z.leaves
 		} else {
@@ -13296,6 +13364,46 @@ extension Game {
 		}
 		spawnParticles(Double(x) + 0.5, Double(top) + 0.5, 0x56A83F, 8, 3.0, 0.6, 10)
 		return true
+	}
+
+	/// A sapling in a region with tree designs grows into one of them that suits the ground under it,
+	/// as tall as the room above allows (it waits while even its smallest won't fit). True when it grew.
+	func growDesign(_ d: ModDimRT, _ z: ModDimZoneRT, _ x: Int, _ y: Int) -> Bool {
+		let below: Tile = world.tile(x, y + 1)
+		guard let tr = d.pickDesign(z, below, Double.random(in: 0..<1)) else { return false }
+		let gy: Int = y + 1
+		let seed: UInt64 = UInt64.random(in: 0...UInt64.max)
+		let painted: Bool = tr.def.shape == .painted
+		let least: Int = painted ? 1 : clampI(tr.def.minHeight, 1, 24)
+		var h: Int = painted ? 1 : max(least, clampI(tr.def.maxHeight, 1, 24))
+		while h >= least {
+			let cells: [TreeCell] = TreeShapes.cells(tr.def, h, seed)
+			// every cell of its trunk and branches has to be free (the sapling's own cell counts)
+			var fits: Bool = !cells.isEmpty
+			for c in cells where c.part != 3 {
+				let t: Tile = world.tile(x + c.dx, gy - c.dy)
+				let own: Bool = c.dx == 0 && c.dy == 1
+				if !(own || treeRoom(t)) || gy - c.dy < 2 {
+					fits = false
+					break
+				}
+			}
+			if fits {
+				world.set(x, y, .air)
+				var top: Int = y
+				for c in cells {
+					let cx: Int = x + c.dx
+					let cy: Int = gy - c.dy
+					if cy < 2 || !treeRoom(world.tile(cx, cy)) { continue }
+					world.set(cx, cy, tr.tile(c.part))
+					top = min(top, cy)
+				}
+				spawnParticles(Double(x) + 0.5, Double(top) + 0.5, 0x56A83F, 8, 3.0, 0.6, 10)
+				return true
+			}
+			h -= 1
+		}
+		return false
 	}
 }
 
@@ -14064,10 +14172,13 @@ func toolClass(_ t: Tile) -> ToolType {
 }
 
 func isLogTile(_ t: Tile) -> Bool {
+	// a mod tree's pass-through trunk counts too (felled by an axe, keeping its leaves alive)
+	if t.isMod { return ModRuntime.shared.treeRole(t) == 1 }
 	return t == .log || t == .jungleLog || t == .palmLog || t == .birchLog
 }
 
 func isLeafTile(_ t: Tile) -> Bool {
+	if t.isMod { return ModRuntime.shared.treeRole(t) == 2 }
 	return t == .leaves || t == .jungleLeaves || t == .birchLeaves || t == .pineLeaves
 }
 
@@ -14406,6 +14517,8 @@ extension Game {
 	func tileDropStacks(_ t: Tile, _ x: Int, _ y: Int) -> [Stack] {
 		if t.isMod, let st = ModRuntime.shared.blockDrops(t) {
 			var mod: [Stack] = st
+			// a mod tree's leaves give saplings as the game's do (they grow its designs where they belong)
+			if isLeafTile(t) && Double.random(in: 0...1) < 0.085 { mod.append(Stack(item: .block(.sapling), count: 1)) }
 			// a custom storage block spills what it held
 			if ModRuntime.shared.blockDef(t)?.function == .storage, world.chests[world.chestKey(x, y)] != nil {
 				mod.append(contentsOf: world.removeChest(x, y))

@@ -1,6 +1,7 @@
 // PIXEL REALM v2, part 2 of 4: creature AI, spawning, combat and damage, bosses, vehicles and ships, the portal and map, saving,
 // helpers, walls and doors, Sparkworks (power), the Mod Creator's data, checks and runtime, potions and mutation, infusions,
-// the exosuit, building (furniture, stairs, lifts) and block physics.
+// the exosuit, building (furniture, stairs, lifts) and block physics, then the start of Mod Creator+ (game content changes,
+// versions and folders, ore controls, sprite tools).
 // The game is four files that go together in one Swift Playgrounds app: PixelRealm1.swift to
 // PixelRealm4.swift. Each goes in its own file in the app (delete ContentView.swift; MyApp.swift can
 // hold part 1). All art is generated in code.
@@ -8358,29 +8359,34 @@ struct ModPixels: Codable, Equatable {
 		}
 	}
 
-	/// Big enough to draw on, small enough to stay cheap, and the bytes match the size
-	var valid: Bool { return w >= 1 && h >= 1 && w <= 64 && h <= 64 && rgba.count == w * h * 4 }
+	/// Big enough to draw on, small enough to stay cheap, and the bytes match the size (up to 96 for
+	/// the game's big creatures, whose sprites can be edited)
+	var valid: Bool { return w >= 1 && h >= 1 && w <= ModPixels.maxSide && h <= ModPixels.maxSide && rgba.count == w * h * 4 }
 
-	/// The pixel as 0xAARRGGBB (0 outside the picture)
+	static let maxSide: Int = 96
+
+	/// The pixel as 0xAARRGGBB with its own opacity (0 outside the picture, or all but invisible)
 	func argb(_ x: Int, _ y: Int) -> UInt32 {
 		if x < 0 || y < 0 || x >= w || y >= h || !valid { return 0 }
 		let i: Int = (y * w + x) * 4
 		let a: UInt32 = UInt32(rgba[i + 3])
-		if a < 128 { return 0 }
+		if a < 8 { return 0 }
 		let r: UInt32 = UInt32(rgba[i])
 		let g: UInt32 = UInt32(rgba[i + 1])
 		let b: UInt32 = UInt32(rgba[i + 2])
-		return 0xFF000000 | (r << 16) | (g << 8) | b
+		return (a << 24) | (r << 16) | (g << 8) | b
 	}
 
+	/// Sets a pixel, keeping its opacity (pictures saved before pixels could be part see-through only
+	/// ever held fully solid or fully clear ones, so they read the same)
 	mutating func setARGB(_ x: Int, _ y: Int, _ c: UInt32) {
 		if x < 0 || y < 0 || x >= w || y >= h || !valid { return }
 		let i: Int = (y * w + x) * 4
-		let on: Bool = (c >> 24) != 0
-		rgba[i] = UInt8((c >> 16) & 0xFF)
-		rgba[i + 1] = UInt8((c >> 8) & 0xFF)
-		rgba[i + 2] = UInt8(c & 0xFF)
-		rgba[i + 3] = on ? 255 : 0
+		let a: UInt8 = UInt8((c >> 24) & 0xFF)
+		rgba[i] = a == 0 ? 0 : UInt8((c >> 16) & 0xFF)
+		rgba[i + 1] = a == 0 ? 0 : UInt8((c >> 8) & 0xFF)
+		rgba[i + 2] = a == 0 ? 0 : UInt8(c & 0xFF)
+		rgba[i + 3] = a
 	}
 
 	/// The picture as a game pixel buffer
@@ -8396,7 +8402,7 @@ struct ModPixels: Codable, Equatable {
 		if !valid { return true }
 		var i: Int = 3
 		while i < rgba.count {
-			if rgba[i] >= 128 { return false }
+			if rgba[i] >= 8 { return false }
 			i += 4
 		}
 		return true
@@ -8433,11 +8439,26 @@ enum ModBlockCategory: Int, Codable, CaseIterable {
 
 enum ModCollision: Int, Codable, CaseIterable {
 	case solid, platform, none
+	/// climbed like a ladder; sticky: slows what moves through it; decoration: like a flower (appended)
+	case climbable, sticky, decor
 	var name: String {
 		switch self {
 		case .solid: return "Solid"
 		case .platform: return "Platform (stand on top)"
-		case .none: return "No collision"
+		case .none: return "Pass through"
+		case .climbable: return "Climbable"
+		case .sticky: return "Sticky"
+		case .decor: return "Decoration"
+		}
+	}
+	var help: String {
+		switch self {
+		case .solid: return "A wall and a floor: nothing passes it."
+		case .platform: return "Walk and jump up through it, land on top of it (hold down to drop through)."
+		case .none: return "Everything passes through it, as through a tree trunk."
+		case .climbable: return "Passed through, and climbed like a ladder: jump or up to climb, down to go down."
+		case .sticky: return "Passed through slowly, like a cobweb: walking, jumping and falling all slow down in it."
+		case .decor: return "Like a flower or tall grass: passed through, needs ground under it, and a block built there replaces it."
 		}
 	}
 }
@@ -9429,6 +9450,11 @@ struct ModPack: Codable, Identifiable, Equatable {
 	/// Logic Studio scripts and the variables they keep (optional)
 	var scripts: [ModScript] = []
 	var variables: [String] = []
+	/// the Overworld's sun and moon as this mod draws them (nil: the game's)
+	var skySun: ModSkyBody? = nil
+	var skyMoon: ModSkyBody? = nil
+	/// tree designs for its dimensions' regions
+	var trees: [ModTree] = []
 	/// entries left out because they could not be read (not saved)
 	var skipped: Int = 0
 
@@ -9436,6 +9462,7 @@ struct ModPack: Codable, Identifiable, Equatable {
 		case format, id, name, desc, author, version, created, edited, sandbox
 		case blocks, items, mobs, projectiles, recipes, loot, ores, structures
 		case folder, requires, off, overrides, infusions, dims, scripts, variables
+		case skySun, skyMoon, trees
 	}
 
 	init() {}
@@ -9468,6 +9495,9 @@ struct ModPack: Codable, Identifiable, Equatable {
 		dims = c.list(.dims, &skip)
 		scripts = c.list(.scripts, &skip)
 		variables = c.val(.variables, [])
+		skySun = c.val(.skySun, nil)
+		skyMoon = c.val(.skyMoon, nil)
+		trees = c.list(.trees, &skip)
 		skipped = skip
 	}
 
@@ -9475,7 +9505,7 @@ struct ModPack: Codable, Identifiable, Equatable {
 	func key(_ contentID: String) -> String { return id + ":" + contentID }
 
 	var contentCount: Int {
-		return blocks.count + items.count + mobs.count + projectiles.count + recipes.count + loot.count + ores.count + structures.count + overrides.count + infusions.count + dims.count + scripts.count
+		return blocks.count + items.count + mobs.count + projectiles.count + recipes.count + loot.count + ores.count + structures.count + overrides.count + infusions.count + dims.count + scripts.count + trees.count
 	}
 
 	/// "3 creatures, 2 weapons, 5 blocks..." for the mod list
@@ -9513,6 +9543,7 @@ struct ModPack: Codable, Identifiable, Equatable {
 		for o in ores { used.insert(o.id) }
 		for s in structures { used.insert(s.id) }
 		for o in overrides { used.insert(o.id) }
+		for t in trees { used.insert(t.id) }
 		for f in infusions { used.insert(f.id) }
 		for d in dims { used.insert(d.id) }
 		for sc in scripts { used.insert(sc.id) }
@@ -9850,6 +9881,12 @@ enum ModStore {
 			d.entry.pattern.cells = d.entry.pattern.cells.map { fixRef($0) }
 			d.entry.dimKeys = d.entry.dimKeys.map { fixRef($0) }
 			p.dims[i] = d
+		}
+		for i in p.trees.indices {
+			p.trees[i].trunk = fixRef(p.trees[i].trunk)
+			p.trees[i].branch = fixRef(p.trees[i].branch)
+			p.trees[i].leaves = fixRef(p.trees[i].leaves)
+			p.trees[i].ground = fixRef(p.trees[i].ground)
 		}
 		for i in p.scripts.indices { p.scripts[i] = LKeys.rekey(p.scripts[i], fixRef, fix) }
 		return p
@@ -11439,6 +11476,13 @@ final class ModRuntime {
 	var slotArt: [PixelBuf?] = [PixelBuf?](repeating: nil, count: ModLimits.blockSlots)
 	var slotDrop: [Stack?] = [Stack?](repeating: nil, count: ModLimits.blockSlots)
 	var slotTool: [ToolType] = [ToolType](repeating: .pickaxe, count: ModLimits.blockSlots)
+	/// a pass-through tree form of a solid block (for trees in custom dimensions): the block it stands
+	/// for, and the part it plays (0 not a tree form, 1 trunk or branch, 2 leaves)
+	var slotTreeBase: [Tile?] = [Tile?](repeating: nil, count: ModLimits.blockSlots)
+	var slotTreeRole: [UInt8] = [UInt8](repeating: 0, count: ModLimits.blockSlots)
+	/// mod blocks climbed like a ladder, and those that slow what moves through them
+	var climbTiles: Set<UInt8> = []
+	var stickyTiles: Set<UInt8> = []
 	var tileForKey: [String: Tile] = [:]
 	var items: [String: ModItemRT] = [:]
 	var itemOrder: [String] = []
@@ -11466,6 +11510,9 @@ final class ModRuntime {
 	var logic: LogicRT = LogicRT()
 	/// the world's three custom dimension slots, and the key each holds (kept for missing mods)
 	var dimSlots: [ModDimRT?] = [nil, nil, nil]
+	/// the Overworld's sun and moon as the mods draw them (the last mod that sets one wins)
+	var overSun: ModSkyBody? = nil
+	var overMoon: ModSkyBody? = nil
 	var dimSlotKey: [String?] = [nil, nil, nil]
 
 	var active: Bool { return !packs.isEmpty || !missing.isEmpty }
@@ -11517,6 +11564,10 @@ final class ModRuntime {
 		rt.buildMobs()
 		rt.buildSummons()
 		rt.buildDims(world)
+		for p in rt.packs {
+			if let b = p.skySun { rt.overSun = b }
+			if let b = p.skyMoon { rt.overMoon = b }
+		}
 		rt.logic = LogicRT.build(rt.packs, rt.disabled)
 		rt.buildRecipes()
 		rt.buildOres()
@@ -11594,6 +11645,45 @@ final class ModRuntime {
 			slotTool[i] = ToolType(rawValue: b.tool) ?? .pickaxe
 			if let t = Tile(rawValue: UInt8(base + i)) { tileForKey[k] = t }
 		}
+		// pass-through forms of the solid blocks trees in custom dimensions are made of (after every
+		// block, so blocks keep the numbers they had). A world keeps the forms it has, even once its
+		// mod no longer needs them, so the trees already grown there stay as they were.
+		var forms: [(String, Tile, Int)] = treeFormsWanted()
+		if let w = world {
+			for k in w.blocks.keys.sorted() where (k.hasSuffix("#tree") || k.hasSuffix("#leaf")) && !forms.contains(where: { $0.0 == k }) {
+				guard let bt = ModGround.resolve(String(k.dropLast(5)), self), bt != .air, !bt.liquid else { continue }
+				if let bi = slot(bt), slotDef[bi] == nil { continue }
+				forms.append((k, bt, k.hasSuffix("#leaf") ? 2 : 1))
+			}
+		}
+		for (k, bt, role) in forms {
+			var i: Int = -1
+			if let found = slotKey.firstIndex(where: { $0 == k }) { i = found }
+			if i < 0 {
+				while free < ModLimits.blockSlots && taken[free] { free += 1 }
+				if free >= ModLimits.blockSlots {
+					overflow += 1
+					continue
+				}
+				i = free
+				taken[i] = true
+				slotKey[i] = k
+			}
+			slotTreeBase[i] = bt
+			slotTreeRole[i] = UInt8(role)
+			if let bi = slot(bt), let b0 = slotDef[bi] {
+				var b: ModBlock = b0
+				b.function = .none
+				b.vehRole = .none
+				b.collision = role == 2 ? .platform : .none
+				slotDef[i] = b
+				slotTool[i] = slotTool[bi]
+			} else {
+				slotDef[i] = nil
+				slotTool[i] = toolClass(bt)
+			}
+			if let t = Tile(rawValue: UInt8(base + i)) { tileForKey[k] = t }
+		}
 		if overflow > 0 {
 			var rep = ModReport()
 			rep.add(2, "Mods", "Blocks", String(overflow) + " custom blocks did not fit (a world holds " + String(ModLimits.blockSlots) + ") and were left out.")
@@ -11603,6 +11693,55 @@ final class ModRuntime {
 
 	/// The tile of a block key (nil if it has none in this world)
 	func tile(_ key: String) -> Tile? { return tileForKey[key] }
+
+	/// The solid blocks the trees of the custom dimensions are made of, each with the part it plays
+	/// (1 trunk or branch, 2 leaves): each gets a pass-through tree form, so no tree is a wall
+	func treeFormsWanted() -> [(String, Tile, Int)] {
+		var out: [(String, Tile, Int)] = []
+		var seen: Set<String> = []
+		func want(_ k: String, _ role: Int) {
+			if k.isEmpty { return }
+			let fk: String = k + (role == 2 ? "#leaf" : "#tree")
+			if seen.contains(fk) { return }
+			guard let t = ModGround.resolve(k, self), t != .air, !t.liquid, t.trunkForm == t else { return }
+			if let i = slot(t) {
+				guard let b = slotDef[i], b.collision == .solid, !slotAlt[i] else { return }
+			} else if !t.solid {
+				return
+			}
+			seen.insert(fk)
+			out.append((fk, t, role))
+		}
+		for p in packs {
+			for d in p.dims where !disabled.contains(p.key(d.id)) {
+				for z in d.zones {
+					want(z.log, 1)
+					want(z.leaves, 2)
+					for tid in z.treeKinds {
+						guard let tr = p.trees.first(where: { $0.id == tid }), !disabled.contains(p.key(tid)) else { continue }
+						want(tr.trunk, 1)
+						want(tr.branch, 1)
+						want(tr.leaves, 2)
+					}
+				}
+			}
+		}
+		return out
+	}
+
+	/// The part a tile plays as a tree form: 1 trunk or branch, 2 leaves, 0 not a tree form
+	func treeRole(_ t: Tile) -> UInt8 {
+		guard let i = slot(t) else { return 0 }
+		return slotTreeRole[i]
+	}
+
+	/// The tile a tree is made of for a block key: the block's pass-through tree form when it is solid
+	/// (role 1 trunk or branch, 2 leaves), the tree trunk of a log block, or the block itself
+	func treeTile(_ key: String, _ role: Int) -> Tile? {
+		if let t = tileForKey[key + (role == 2 ? "#leaf" : "#tree")] { return t }
+		guard let t = ModGround.resolve(key, self) else { return nil }
+		return t.trunkForm
+	}
 
 	/// Slot index of a tile (nil for game tiles)
 	@inline(__always) func slot(_ t: Tile) -> Int? {
@@ -11635,6 +11774,20 @@ final class ModRuntime {
 
 	/// The tile definition the game uses for a slot
 	func tileDef(_ i: Int) -> TileDef {
+		if slotTreeRole[i] != 0, let bt = slotTreeBase[i] {
+			// a tree form: the block it stands for, passed through (leaves can be stood on, as the game's)
+			var d: TileDef = Tile.makeDef(bt)
+			if let bi = slot(bt) { d = tileDef(bi) }
+			d.solid = false
+			d.opaque = false
+			d.platform = slotTreeRole[i] == 2
+			d.plant = false
+			d.hurt = false
+			d.liquid = false
+			d.drop = nil
+			d.noDrop = false
+			return d
+		}
 		guard let b = slotDef[i] else {
 			var d = TileDef(name: missingLabel(i))
 			d.hard = 9999
@@ -11649,6 +11802,7 @@ final class ModRuntime {
 		d.tier = b.tier
 		d.solid = b.collision == .solid
 		d.platform = b.collision == .platform
+		d.plant = b.collision == .decor
 		d.opaque = d.solid && !b.transparent
 		d.light = b.light
 		d.hurt = b.function == .trap
@@ -11676,6 +11830,14 @@ final class ModRuntime {
 	/// What breaking a custom block drops (nil: the game's usual rule)
 	func blockDrops(_ t: Tile) -> [Stack]? {
 		guard let i = slot(t) else { return nil }
+		if slotTreeRole[i] != 0 {
+			// a tree form gives what the block it stands for gives
+			guard let bt = slotTreeBase[i] else { return [] }
+			if slot(bt) != nil { return blockDrops(bt) ?? [] }
+			let bd: TileDef = Tile.makeDef(bt)
+			if bd.noDrop { return [] }
+			return [Stack(item: bd.drop ?? .block(bt), count: 1)]
+		}
 		guard let b = slotDef[i] else { return [] }
 		if slotAlt[i] {
 			if let main = partner(t) { return [Stack(item: .block(main), count: 1)] }
@@ -11921,10 +12083,16 @@ final class ModRuntime {
 	/// Puts this runtime's blocks into the tile tables and art, and its recipes into the recipe book
 	func install() {
 		let base: Int = Int(Tile.modBase)
+		climbTiles = []
+		stickyTiles = []
 		for i in 0..<ModLimits.blockSlots {
 			guard let t = Tile(rawValue: UInt8(base + i)) else { continue }
 			slotArt[i] = slotArtBuf(i)
 			Tile.patch(t, tileDef(i), tool: slotTool[i])
+			if let b = slotDef[i], slotTreeRole[i] == 0 {
+				if b.collision == .climbable { climbTiles.insert(t.rawValue) }
+				if b.collision == .sticky { stickyTiles.insert(t.rawValue) }
+			}
 			if let b = slotDef[i], !slotAlt[i], !b.dropSelf, let d = b.drop {
 				slotDrop[i] = Stack(item: resolve(d), count: b.dropCount)
 			}
@@ -11937,6 +12105,10 @@ final class ModRuntime {
 
 	/// The picture a slot draws: the block's art (an open door shows its edge, an unlit lamp is darker)
 	func slotArtBuf(_ i: Int) -> PixelBuf {
+		if slotTreeRole[i] != 0, let bt = slotTreeBase[i] {
+			if let bi = slot(bt) { return slotArtBuf(bi) }
+			return tileBuf(bt)
+		}
 		guard let b = slotDef[i] else { return missingTileBuf() }
 		var art: PixelBuf = b.art.isBlank ? greyTileBuf() : b.art.buf()
 		if b.art.outlined(false) { art.outline(0x101010) }
@@ -11949,7 +12121,7 @@ final class ModRuntime {
 		}
 		if b.function == .lamp && !slotAlt[i] {
 			for k in 0..<art.px.count where (art.px[k] >> 24) != 0 {
-				art.px[k] = 0xFF000000 | shadeRGB(art.px[k] & 0xFFFFFF, 0.55)
+				art.px[k] = (art.px[k] & 0xFF000000) | shadeRGB(art.px[k] & 0xFFFFFF, 0.55)
 			}
 		}
 		return art
@@ -11960,7 +12132,7 @@ extension ModRuntime {
 	/// The custom blocks and items the creative palette and the test tools offer
 	func paletteItems() -> [Item] {
 		var out: [Item] = []
-		for i in 0..<ModLimits.blockSlots where slotDef[i] != nil && !slotAlt[i] {
+		for i in 0..<ModLimits.blockSlots where slotDef[i] != nil && !slotAlt[i] && slotTreeRole[i] == 0 {
 			if let t = Tile(rawValue: UInt8(Int(Tile.modBase) + i)) { out.append(.block(t)) }
 		}
 		for k in itemOrder { out.append(.custom(k)) }
@@ -12109,7 +12281,8 @@ func recolorBuf(_ b: PixelBuf, hue: Double, sat: Double, bright: Double, tint: U
 		let v2: Double = clampD(hsv.2 * bright, 0, 1)
 		var rgb: UInt32 = hsvToRGB(hsv.0 + turn, s2, v2)
 		if amt > 0.01 { rgb = mixRGB(rgb, tint & 0xFFFFFF, amt) }
-		o.px[i] = 0xFF000000 | rgb
+		// a part see-through pixel stays as see-through
+		o.px[i] = (c & 0xFF000000) | rgb
 	}
 	return o
 }
@@ -16569,5 +16742,1130 @@ extension Game {
 		if y >= world.H - 1 { return true }
 		let t: Tile = world.tile(x, y)
 		return t.solid && !world.isBuilt(x, y)
+	}
+}
+
+// ===== p32_modplus =====
+
+// MARK: - Mod Creator+: changing the game's own content
+
+/// What a change to the game's own content applies to
+enum ModOverrideKind: Int, Codable, CaseIterable {
+	case block, item, creature
+	var name: String {
+		switch self {
+		case .block: return "Game block"
+		case .item: return "Game item"
+		case .creature: return "Game creature"
+		}
+	}
+}
+
+/// A change a mod makes to something of the game itself: a block's hardness, a weapon's damage, a
+/// creature's health and so on. Only the numbers set here change (nil: the game's own value), the
+/// original is never touched (switching the mod off, or this change off, puts it back), and each
+/// change can be switched off by itself.
+struct ModOverride: Codable, Identifiable, Equatable {
+	var id: String = ""
+	var kind: ModOverrideKind = .block
+	/// the block (tile number), item, or creature (kind number) changed
+	var tile: Int = Int(Tile.stone.rawValue)
+	var item: Item? = nil
+	var mob: Int = MobKind.zombie.rawValue
+	var enabled: Bool = true
+	// blocks
+	var hardness: Double? = nil
+	var tier: Int? = nil
+	var light: Int? = nil
+	var unbreakable: Bool? = nil
+	// items
+	var damage: Double? = nil
+	var cooldown: Double? = nil
+	var reach: Double? = nil
+	var knock: Double? = nil
+	var crit: Double? = nil
+	var mineSpeed: Double? = nil
+	var defense: Double? = nil
+	var hunger: Double? = nil
+	var heal: Double? = nil
+	// creatures
+	var hp: Double? = nil
+	var mobDamage: Double? = nil
+	var speed: Double? = nil
+	var detect: Double? = nil
+	var jump: Double? = nil
+	/// a creature's own sprite, painted over the game's (nil: the game's): every frame, in the game's
+	/// order (standing, walking, the rest)
+	var frames: [ModPixels]? = nil
+
+	init() {}
+
+	init(from decoder: Decoder) throws {
+		let c = try decoder.container(keyedBy: CodingKeys.self)
+		id = c.val(.id, "")
+		kind = c.val(.kind, .block)
+		tile = c.val(.tile, Int(Tile.stone.rawValue))
+		item = c.val(.item, nil)
+		mob = c.val(.mob, MobKind.zombie.rawValue)
+		enabled = c.val(.enabled, true)
+		hardness = c.val(.hardness, nil)
+		tier = c.val(.tier, nil)
+		light = c.val(.light, nil)
+		unbreakable = c.val(.unbreakable, nil)
+		damage = c.val(.damage, nil)
+		cooldown = c.val(.cooldown, nil)
+		reach = c.val(.reach, nil)
+		knock = c.val(.knock, nil)
+		crit = c.val(.crit, nil)
+		mineSpeed = c.val(.mineSpeed, nil)
+		defense = c.val(.defense, nil)
+		hunger = c.val(.hunger, nil)
+		heal = c.val(.heal, nil)
+		hp = c.val(.hp, nil)
+		mobDamage = c.val(.mobDamage, nil)
+		speed = c.val(.speed, nil)
+		detect = c.val(.detect, nil)
+		jump = c.val(.jump, nil)
+		frames = c.val(.frames, nil)
+	}
+
+	/// what it changes, by name
+	var targetName: String {
+		switch kind {
+		case .block: return Tile(rawValue: UInt8(clampI(tile, 0, 255)))?.name ?? "Block"
+		case .item: return item?.name ?? "Item"
+		case .creature: return MobKind(rawValue: mob).map { mobDef($0).name } ?? "Creature"
+		}
+	}
+
+	/// how many numbers it changes
+	var changedCount: Int {
+		let opts: [Bool] = [hardness != nil, tier != nil, light != nil, unbreakable != nil, damage != nil, cooldown != nil, reach != nil, knock != nil,
+							crit != nil, mineSpeed != nil, defense != nil, hunger != nil, heal != nil, hp != nil, mobDamage != nil, speed != nil, detect != nil, jump != nil,
+							frames != nil]
+		return opts.filter { $0 }.count
+	}
+
+	/// Later changes win, field by field (the mod lower in the load order goes on top)
+	mutating func merge(_ o: ModOverride) {
+		if let v = o.hardness { hardness = v }
+		if let v = o.tier { tier = v }
+		if let v = o.light { light = v }
+		if let v = o.unbreakable { unbreakable = v }
+		if let v = o.damage { damage = v }
+		if let v = o.cooldown { cooldown = v }
+		if let v = o.reach { reach = v }
+		if let v = o.knock { knock = v }
+		if let v = o.crit { crit = v }
+		if let v = o.mineSpeed { mineSpeed = v }
+		if let v = o.defense { defense = v }
+		if let v = o.hunger { hunger = v }
+		if let v = o.heal { heal = v }
+		if let v = o.hp { hp = v }
+		if let v = o.mobDamage { mobDamage = v }
+		if let v = o.speed { speed = v }
+		if let v = o.detect { detect = v }
+		if let v = o.jump { jump = v }
+		if let v = o.frames { frames = v }
+	}
+
+	/// A melee profile with this change's numbers
+	func apply(_ p0: MeleeProfile) -> MeleeProfile {
+		var p: MeleeProfile = p0
+		if let v = damage { p.damage = v }
+		if let v = cooldown { p.cooldown = v }
+		if let v = reach { p.reach = v }
+		if let v = knock { p.knock = v }
+		if let v = crit { p.critChance = v }
+		return p
+	}
+}
+
+/// The changes to game content of the mods a world uses, merged and ready (empty without mods). The
+/// game's own tables are put back before every new set goes in, so nothing stays changed by accident.
+final class OverrideRT {
+	static var shared: OverrideRT = OverrideRT()
+	/// tiles and creatures whose table entries are changed now
+	static var patchedTiles: Set<Int> = []
+	static var patchedMobs: Set<Int> = []
+
+	var blocks: [Int: ModOverride] = [:]
+	var items: [Item: ModOverride] = [:]
+	var mobs: [Int: ModOverride] = [:]
+	/// creatures whose sprite a mod repainted: their frames, ready to draw
+	var mobArt: [Int: [PixelBuf]] = [:]
+	var isEmpty: Bool { return blocks.isEmpty && items.isEmpty && mobs.isEmpty }
+
+	static func build(_ packs: [ModPack], _ disabled: Set<String>) -> OverrideRT {
+		let o = OverrideRT()
+		for p in packs {
+			for v in p.overrides where v.enabled && !disabled.contains(p.key(v.id)) {
+				switch v.kind {
+				case .block:
+					guard let t = Tile(rawValue: UInt8(clampI(v.tile, 0, 255))), !t.isMod, t != .air, t != .bedrock else { continue }
+					var m: ModOverride = o.blocks[v.tile] ?? v
+					if o.blocks[v.tile] != nil { m.merge(v) }
+					o.blocks[v.tile] = m
+				case .item:
+					guard let it = v.item, ModOverrideCheck.itemAllowed(it) else { continue }
+					var m: ModOverride = o.items[it] ?? v
+					if o.items[it] != nil { m.merge(v) }
+					o.items[it] = m
+				case .creature:
+					guard let k = MobKind(rawValue: v.mob), k != .custom, k != .villager else { continue }
+					var m: ModOverride = o.mobs[v.mob] ?? v
+					if o.mobs[v.mob] != nil { m.merge(v) }
+					o.mobs[v.mob] = m
+				}
+			}
+		}
+		for (raw, m) in o.mobs {
+			guard let fr = m.frames, !fr.isEmpty, fr.allSatisfy({ $0.valid }) else { continue }
+			var bufs: [PixelBuf] = []
+			for f in fr { bufs.append(OverrideRT.frameBuf(f)) }
+			o.mobArt[raw] = bufs
+		}
+		return o
+	}
+
+	/// One repainted frame as the game draws it (with a dark outline when the maker switched it on;
+	/// frames copied from the game already have theirs)
+	static func frameBuf(_ f: ModPixels) -> PixelBuf {
+		if !f.outlined(false) { return f.buf() }
+		var b: PixelBuf = padBuf(f.buf())
+		b.outline(0x101010)
+		return b
+	}
+
+	/// A game creature's frames as a mod repainted them (nil: the game's own). Sheared sheep and tame
+	/// wolves keep the game's look for that state.
+	func creatureArt(_ k: MobKind, _ variant: Int) -> [PixelBuf]? {
+		if mobArt.isEmpty { return nil }
+		if variant != 0 && (k == .sheep || k == .wolf) { return nil }
+		return mobArt[k.rawValue]
+	}
+
+	/// Puts the changes into the game's tables (after putting back the last set)
+	func install() {
+		for raw in OverrideRT.patchedTiles {
+			if let t = Tile(rawValue: UInt8(clampI(raw, 0, 255))) { Tile.setGameDef(t, Tile.makeDef(t)) }
+		}
+		for raw in OverrideRT.patchedMobs {
+			if let k = MobKind(rawValue: raw), raw < mobDefTable.count { mobDefTable[raw] = makeMobDef(k) }
+		}
+		OverrideRT.patchedTiles = []
+		OverrideRT.patchedMobs = []
+		for (raw, o) in blocks {
+			guard let t = Tile(rawValue: UInt8(clampI(raw, 0, 255))) else { continue }
+			var d: TileDef = Tile.makeDef(t)
+			if let v = o.hardness { d.hard = v }
+			if let v = o.tier { d.tier = v }
+			if let v = o.light { d.light = v }
+			if o.unbreakable == true { d.hard = 9999 }
+			Tile.setGameDef(t, d)
+			OverrideRT.patchedTiles.insert(raw)
+		}
+		for (raw, o) in mobs {
+			guard let k = MobKind(rawValue: raw), raw < mobDefTable.count else { continue }
+			var d: MobDef = makeMobDef(k)
+			if let v = o.hp { d.hp = v }
+			if let v = o.mobDamage { d.dmg = v }
+			if let v = o.speed { d.speed = v }
+			if let v = o.detect { d.aggro = v }
+			if let v = o.jump { d.jump = v }
+			mobDefTable[raw] = d
+			OverrideRT.patchedMobs.insert(raw)
+		}
+	}
+
+	/// a tool's mining speed when a mod changed it (nil: the game's own)
+	func toolSpeed(_ it: Item) -> Double? {
+		if items.isEmpty { return nil }
+		return items[it]?.mineSpeed
+	}
+}
+
+/// What the override editor may change, and the ranges it allows
+enum ModOverrideCheck {
+	static func itemAllowed(_ it: Item) -> Bool {
+		switch it {
+		case .sword, .spear, .hammer, .knife, .club, .relic, .tool, .armor, .food, .gun, .bow, .sling: return true
+		default: return false
+		}
+	}
+
+	/// Every game item that can be changed, in a sensible order
+	static func items() -> [Item] {
+		return allGameItems().filter { itemAllowed($0) }
+	}
+
+	/// Every game block that can be changed
+	static func tiles() -> [Tile] {
+		return Tile.allCases.filter { !$0.isMod && $0 != .air && $0 != .bedrock && $0 != .portalOn && $0 != .portalOff && $0 != .portalFrame }
+	}
+
+	/// Every game creature that can be changed
+	static func mobs() -> [MobKind] {
+		return MobKind.allCases.filter { $0 != .custom && $0 != .villager }
+	}
+
+	static func clamp(_ o: inout ModOverride, _ sandbox: Bool) {
+		if let v = o.hardness { o.hardness = ModRange.hardness.clamp(v, sandbox) }
+		if let v = o.tier { o.tier = clampI(v, 0, 9) }
+		if let v = o.light { o.light = clampI(v, 0, 15) }
+		if let v = o.damage { o.damage = ModRange.damage.clamp(v, sandbox) }
+		if let v = o.cooldown { o.cooldown = ModRange.cooldown.clamp(v, sandbox) }
+		if let v = o.reach { o.reach = ModRange.reach.clamp(v, sandbox) }
+		if let v = o.knock { o.knock = ModRange.knock.clamp(v, sandbox) }
+		if let v = o.crit { o.crit = clampD(v.isFinite ? v : 0, 0, 1) }
+		if let v = o.mineSpeed { o.mineSpeed = ModRange.toolSpeed.clamp(v, sandbox) }
+		if let v = o.defense { o.defense = ModRange.defense.clamp(v, sandbox) }
+		if let v = o.hunger { o.hunger = ModRange.heal.clamp(v, sandbox) }
+		if let v = o.heal { o.heal = ModRange.heal.clamp(v, sandbox) }
+		if let v = o.hp { o.hp = ModRange.bossHP.clamp(max(1, v), sandbox) }
+		if let fr = o.frames {
+			// only whole, sound pictures, at most 12 frames, all one size
+			let good: [ModPixels] = fr.filter { $0.valid }.prefix(12).map { $0 }
+			if good.isEmpty { o.frames = nil } else {
+				let w0: Int = good[0].w
+				let h0: Int = good[0].h
+				o.frames = good.map { ($0.w == w0 && $0.h == h0) ? $0 : $0.resized(w0, h0) }
+			}
+		}
+		if let v = o.mobDamage { o.mobDamage = ModRange.damage.clamp(v, sandbox) }
+		if let v = o.speed { o.speed = ModRange.mobSpeed.clamp(v, sandbox) }
+		if let v = o.detect { o.detect = ModRange.detect.clamp(v, sandbox) }
+		if let v = o.jump { o.jump = ModRange.jump.clamp(v, sandbox) }
+		if o.kind == .creature && o.hp != nil { o.hp = max(1, min(o.hp ?? 1, sandbox ? 20000 : 4000)) }
+	}
+}
+
+extension Tile {
+	/// Changes a game tile's entry in every table (a mod's override, or putting the original back)
+	static func setGameDef(_ t: Tile, _ d: TileDef) {
+		let i: Int = Int(t.rawValue)
+		if t.isMod || i >= defTable.count { return }
+		defTable[i] = d
+		hardTable[i] = d.hard
+		tierTable[i] = d.tier
+		lightTable[i] = d.light
+	}
+}
+
+// MARK: - The game's own numbers, as the editors show them
+
+/// How quickly a tool breaks a block: the same numbers mining uses (bare hands: kind nil). The time a
+/// block takes is hardness x 1.5 divided by this; nil when the tool can't break it at all.
+func miningSpeed(_ t: Tile, _ kind: ToolType?, _ tier: Tier?, toolSpeed: Double? = nil) -> Double? {
+	let def: TileDef = t.def
+	if def.hard >= 9999 { return nil }
+	let cls: ToolType = toolClass(t)
+	if def.tier > 0 {
+		let pt: Int = (kind == cls) ? (tier?.rawValue ?? 0) : 0
+		if pt < def.tier { return nil }
+	}
+	var speed: Double = 1.0
+	if let k = kind, let tr = tier { speed = (toolSpeed ?? tr.mineSpeed) * (k == cls ? 1.0 : 0.35) }
+	return speed
+}
+
+/// Seconds a block takes to break with a tool (nil: it can't)
+func miningSeconds(_ t: Tile, _ kind: ToolType?, _ tier: Tier?, toolSpeed: Double? = nil) -> Double? {
+	guard let s = miningSpeed(t, kind, tier, toolSpeed: toolSpeed) else { return nil }
+	let need: Double = max(0.05, t.def.hard * 1.5)
+	return need / max(0.001, s)
+}
+
+/// Seconds a mod block would take with a tool, from its own numbers (before it is in any world)
+func miningSecondsFor(hardness: Double, tier: Int, blockTool: ToolType, unbreakable: Bool, _ kind: ToolType?, _ toolTier: Int, toolSpeed: Double) -> Double? {
+	if unbreakable || hardness >= 9999 { return nil }
+	if tier > 0 {
+		let pt: Int = kind == blockTool ? toolTier : 0
+		if pt < tier { return nil }
+	}
+	var speed: Double = 1.0
+	if let k = kind { speed = toolSpeed * (k == blockTool ? 1.0 : 0.35) }
+	let need: Double = max(0.05, hardness * 1.5)
+	return need / max(0.001, speed)
+}
+
+func secondsText(_ s: Double?) -> String {
+	guard let v = s else { return "can't" }
+	if v < 10 { return String(format: "%.2f s", v) }
+	return String(format: "%.0f s", v)
+}
+
+// MARK: - Starting from game content
+
+extension ModBlock {
+	/// A custom block copied from one of the game's blocks: its picture and numbers, ready to change
+	static func fromGame(_ t: Tile) -> ModBlock {
+		var b = ModBlock()
+		b.name = joinText(t.name, " (custom)")
+		b.art = ModPixels(buf: tileBuf(t))
+		b.hardness = min(40, t.def.hard)
+		b.unbreakable = t.def.hard >= 9999
+		b.tool = toolClass(t).rawValue
+		b.tier = t.def.tier
+		b.light = t.def.light
+		b.transparent = !t.def.opaque
+		b.collision = t.def.solid ? .solid : (t.def.platform ? .platform : .none)
+		b.category = t.def.light > 0 ? .light : .building
+		return b
+	}
+}
+
+extension ModItem {
+	/// A custom item copied from one of the game's items: its kind, look and numbers
+	static func fromGame(_ it: Item) -> ModItem {
+		var m = ModItem()
+		m.name = joinText(it.name, " (custom)")
+		m.baseIcon = it
+		m.stack = it.maxStack
+		let p: MeleeProfile = it.melee
+		switch it {
+		case .sword, .spear, .hammer, .knife, .club, .relic:
+			m.kind = .melee
+			m.damage = p.damage
+			m.cooldown = p.cooldown
+			m.reach = p.reach
+			m.arc = p.halfArc
+			m.knock = p.knock
+			m.maxHits = p.maxHits
+			m.heavy = p.heavy
+			m.daze = p.daze
+			m.burn = p.burn
+			m.windup = p.windup
+			m.combo = p.combo
+			m.backstab = p.backstab
+			m.undeadMult = p.undeadMult
+			m.crit = p.critChance
+			m.trail = p.trail
+			m.style = p.style.rawValue
+		case .tool(let k, let t):
+			m.kind = .tool
+			m.toolType = k.rawValue
+			m.toolTier = t.rawValue
+			m.toolSpeed = t.mineSpeed
+			m.damage = p.damage
+			m.cooldown = p.cooldown
+		case .armor(let s, let t):
+			m.kind = .armor
+			m.slot = s.rawValue
+			m.defense = t.defense * s.weight
+			m.look = t.rawValue
+		case .food(let f):
+			m.kind = .food
+			m.hunger = f.hunger
+			if f.heal > 0 { m.effects = [ModEffect(.heal, f.heal, 0)] }
+		case .gun(let g):
+			m.kind = .gun
+			m.damage = g.damage
+			m.cooldown = g.cooldown
+			m.speed = g.speed
+			m.gravity = g.gravity
+			m.pierce = g.pierce
+			m.magazine = g.magazine
+			m.reload = g.reloadTime
+			m.needsPress = g.needsPress
+			if let a = g.ammo { m.ammo = .ammo(a) }
+		case .bow, .sling:
+			m.kind = .bow
+			m.damage = 8
+		default:
+			m.kind = .material
+		}
+		return m
+	}
+}
+
+extension ModMob {
+	/// A custom creature copied from one of the game's: its look (as its base) and its numbers
+	static func fromGame(_ k: MobKind) -> ModMob {
+		var m = ModMob()
+		let d: MobDef = mobDef(k)
+		m.name = joinText(d.name, " (custom)")
+		m.base = k.rawValue
+		m.hp = d.hp
+		m.damage = d.dmg
+		m.speed = d.speed
+		m.detect = d.aggro
+		m.jump = d.jump
+		switch d.behavior {
+		case .passive, .skittish: m.category = .passive
+		case .defensive: m.category = .neutral
+		case .boss: m.category = .boss
+		case .flyer: m.category = .flying
+		case .swimmer: m.category = .water
+		default: m.category = d.hostile ? .hostile : .neutral
+		}
+		m.behavior.chase = d.hostile
+		m.behavior.attackPlayer = d.hostile
+		return m
+	}
+}
+
+// MARK: - Versions, folders and dependencies
+
+/// A saved snapshot of a mod
+struct ModVersion: Codable {
+	var label: String
+	var time: Double
+	var mod: ModPack
+}
+
+/// A snapshot as the version list shows it
+struct ModVersionInfo: Identifiable {
+	var id: String { return file }
+	var file: String
+	var label: String
+	var time: Double
+	var version: String
+}
+
+extension ModStore {
+	static var versionDir: URL {
+		let u: URL = dir.appendingPathComponent("versions", isDirectory: true)
+		try? FileManager.default.createDirectory(at: u, withIntermediateDirectories: true)
+		return u
+	}
+	static let maxVersions: Int = 12
+
+	/// Keeps a copy of the mod as it is now, under a label (the oldest copies go past the limit)
+	@discardableResult
+	static func saveVersion(_ p: ModPack, label: String) -> Bool {
+		if p.id.isEmpty { return false }
+		let now: Double = Date().timeIntervalSince1970
+		let v: ModVersion = ModVersion(label: label.isEmpty ? "Saved version" : String(label.prefix(40)), time: now, mod: p)
+		guard let d = try? JSONEncoder().encode(v) else { return false }
+		let name: String = joinText(p.id, "@", String(Int(now * 1000)), ".json")
+		do {
+			try d.write(to: versionDir.appendingPathComponent(name), options: .atomic)
+		} catch {
+			return false
+		}
+		let list: [ModVersionInfo] = versions(p.id)
+		if list.count > maxVersions {
+			for old in list.suffix(list.count - maxVersions) { try? FileManager.default.removeItem(at: versionDir.appendingPathComponent(old.file)) }
+		}
+		return true
+	}
+
+	/// The saved versions of a mod, newest first
+	static func versions(_ id: String) -> [ModVersionInfo] {
+		let names: [String] = (try? FileManager.default.contentsOfDirectory(atPath: versionDir.path)) ?? []
+		var out: [ModVersionInfo] = []
+		for n in names where n.hasPrefix(id + "@") && n.hasSuffix(".json") {
+			guard let d = try? Data(contentsOf: versionDir.appendingPathComponent(n)), let v = try? JSONDecoder().decode(ModVersion.self, from: d) else { continue }
+			out.append(ModVersionInfo(file: n, label: v.label, time: v.time, version: v.mod.version))
+		}
+		out.sort { $0.time > $1.time }
+		return out
+	}
+
+	/// Puts a saved version back as the mod (keeping a copy of how it was just before)
+	static func restoreVersion(_ id: String, _ file: String) -> ModPack? {
+		guard let d = try? Data(contentsOf: versionDir.appendingPathComponent(file)), var v = try? JSONDecoder().decode(ModVersion.self, from: d) else { return nil }
+		if let cur = pack(id) { saveVersion(cur, label: "Before restoring an older version") }
+		v.mod.id = id
+		return save(v.mod) ? pack(id) : nil
+	}
+
+	static func deleteVersion(_ file: String) {
+		try? FileManager.default.removeItem(at: versionDir.appendingPathComponent(file))
+	}
+
+	/// The other mods this mod needs: those it names, and those whose content it uses
+	static func dependencies(_ p: ModPack) -> [String] {
+		var out: [String] = p.requires.filter { $0 != p.id }
+		func add(_ k: String) {
+			let m: String = splitModKey(k).0
+			if !m.isEmpty && m != p.id && !out.contains(m) { out.append(m) }
+		}
+		func addItem(_ it: Item?) {
+			if let i = it, case .custom(let k) = i { add(k) }
+		}
+		for b in p.blocks { addItem(b.drop) }
+		for i in p.items {
+			addItem(i.ammo)
+			addItem(i.baseIcon)
+		}
+		for m in p.mobs {
+			for d in m.drops { addItem(d.item) }
+			if !m.behavior.guardKey.isEmpty { add(m.behavior.guardKey) }
+		}
+		for r in p.recipes {
+			addItem(r.out)
+			for c in r.cost { addItem(c.item) }
+		}
+		for l in p.loot { for e in l.entries { addItem(e.item) } }
+		for s in p.structures { for k in s.palette where k.contains(":") { add(k) } }
+		for f in p.infusions { for it in f.items { addItem(it) } }
+		for m in p.mobs {
+			for f in m.phases where f.helper.contains(":") { add(f.helper) }
+			for sm in m.summons {
+				addItem(sm.item)
+				for k in sm.pattern.cells where k.contains(":") && !k.hasPrefix("tile:") { add(k) }
+			}
+		}
+		for o in p.ores {
+			for k in o.hosts where k.contains(":") && !k.hasPrefix("tile:") { add(k) }
+			if o.near.contains(":") && !o.near.hasPrefix("tile:") { add(o.near) }
+		}
+		for m in p.mobs { for sm in m.summons { for k in sm.dimKeys { add(k) } } }
+		for d in p.dims {
+			for k in [d.stone, d.hazard, d.gateBlock] where k.contains(":") && !k.hasPrefix("tile:") { add(k) }
+			for z in d.zones {
+				for k in [z.ground, z.filler, z.plant, z.log, z.leaves] where k.contains(":") && !k.hasPrefix("tile:") { add(k) }
+			}
+			for sp in d.spawns where sp.creature.contains(":") { add(sp.creature) }
+			addItem(d.entry.item)
+			for k in d.entry.pattern.cells where k.contains(":") && !k.hasPrefix("tile:") { add(k) }
+		}
+		for t in p.trees {
+			for k in [t.trunk, t.branch, t.leaves, t.ground] where k.contains(":") && !k.hasPrefix("tile:") { add(k) }
+		}
+		for sc in p.scripts { LKeys.uses(sc, add, addItem) }
+		return out
+	}
+
+	/// Folder names in use, sorted
+	static func folders() -> [String] {
+		var out: Set<String> = []
+		for e in entries() { if let p = e.pack, !p.folder.isEmpty { out.insert(p.folder) } }
+		return out.sorted()
+	}
+}
+
+extension ModValidator {
+	/// The Mod Creator+ parts of a mod: changes to game content, the folder, needed mods and content
+	/// switched off
+	static func checkPlus(_ p: inout ModPack, _ mn: String, _ sb: Bool, _ known: [String: String], _ r: inout ModReport) {
+		if p.folder.count > 24 { p.folder = String(p.folder.prefix(24)) }
+		var req: [String] = []
+		for q in p.requires where !q.isEmpty && q != p.id && !req.contains(q) { req.append(q) }
+		if req.count > 12 { req = Array(req.prefix(12)) }
+		p.requires = req
+		if p.overrides.count > 64 {
+			r.add(1, mn, "Mod", "Only 64 changes to game content fit in one mod; the rest were left out.")
+			p.overrides = Array(p.overrides.prefix(64))
+		}
+		var used: Set<String> = Set(p.blocks.map { $0.id } + p.items.map { $0.id } + p.mobs.map { $0.id })
+		var keep: [ModOverride] = []
+		for var o in p.overrides {
+			if o.id.isEmpty || used.contains(o.id) { o.id = p.freshID("g") + String(keep.count) }
+			used.insert(o.id)
+			let place: String = joinText("Change to \u{201C}", o.targetName, "\u{201D}")
+			switch o.kind {
+			case .block:
+				guard let t = Tile(rawValue: UInt8(clampI(o.tile, 0, 255))), ModOverrideCheck.tiles().contains(t) else {
+					r.add(1, mn, place, "That block can't be changed; the change was left out.")
+					continue
+				}
+			case .item:
+				guard let it = o.item, ModOverrideCheck.itemAllowed(it) else {
+					r.add(1, mn, place, "That item can't be changed; the change was left out.")
+					continue
+				}
+			case .creature:
+				guard let k = MobKind(rawValue: o.mob), k != .custom, k != .villager else {
+					r.add(1, mn, place, "That creature can't be changed; the change was left out.")
+					continue
+				}
+			}
+			ModOverrideCheck.clamp(&o, sb)
+			keep.append(o)
+		}
+		p.overrides = keep
+		let ids: Set<String> = Set(p.blocks.map { $0.id } + p.items.map { $0.id } + p.mobs.map { $0.id } + p.recipes.map { $0.id } + p.ores.map { $0.id } + p.structures.map { $0.id } + p.overrides.map { $0.id } + p.projectiles.map { $0.id } + p.loot.map { $0.id } + p.infusions.map { $0.id } + p.dims.map { $0.id } + p.scripts.map { $0.id })
+		p.off = p.off.filter { ids.contains($0) }
+		_ = known
+		checkOrePlus(&p, mn, &r)
+		checkInfusions(&p, mn, sb, known, &r)
+		checkBosses(&p, mn, sb, known, &r)
+		checkDims(&p, mn, sb, known, &r)
+		checkScripts(&p, mn, sb, known, &r)
+		let dimIDs: Set<String> = Set(p.dims.map { $0.id })
+		for i in p.ores.indices where !p.ores[i].dimKey.isEmpty && !dimIDs.contains(p.ores[i].dimKey) { p.ores[i].dimKey = "" }
+		for i in p.structures.indices where !p.structures[i].dimKey.isEmpty && !dimIDs.contains(p.structures[i].dimKey) { p.structures[i].dimKey = "" }
+	}
+}
+
+// MARK: - Mod Creator+: ore generation
+
+extension ModOre {
+	static let placeNames: [String] = ["Inside the rock", "On cave walls", "Near the surface", "Under water"]
+	static let placeHelp: [String] = ["Anywhere in its host ground between the two depths.",
+									  "Only where the ground meets a cave (a block with open air beside it).",
+									  "Within a few blocks of the top of the ground (the depths are ignored).",
+									  "In the ground under seas and lakes (the depths are ignored)."]
+	static let shapeNames: [String] = ["Lumps", "Streaks", "Scattered"]
+}
+
+/// Where one ore is generated, worked out once per world
+extension ModOreRT {
+	/// Places this ore in one freshly made chunk. With the original settings (inside the rock, every
+	/// chunk, lumps, any host of its kind) it uses the same random numbers in the same order as before
+	/// these controls existed, so worlds made with older mods keep generating the same ore.
+	func place(_ g: WorldGen, _ ch: Chunk) {
+		let H: Int = ch.H
+		var rng = RNG(hashU(ch.cx, 0x51ED, g.seed &+ salt))
+		var extra = RNG(hashU(ch.cx, 0x7A11, g.seed &+ salt))
+		if rarity < 1.0 && extra.double() >= rarity { return }
+		var colOK: [Bool] = [Bool](repeating: true, count: chunkW)
+		if !biomes.isEmpty {
+			var any: Bool = false
+			for lx in 0..<chunkW {
+				colOK[lx] = biomes.contains(g.col(ch.x0 + lx).biome.rawValue)
+				if colOK[lx] { any = true }
+			}
+			if !any { return }
+		}
+		let whole: Int = Int(veins)
+		let n: Int = min(24, whole + (rng.double() < veins - Double(whole) ? 1 : 0))
+		let y0: Int = clampI(minY, 1, H - 2)
+		let y1: Int = clampI(maxY, y0, H - 2)
+		var v: Int = 0
+		while v < n {
+			var lx: Int = rng.int(chunkW)
+			var y: Int = y0 + rng.int(y1 - y0 + 1)
+			v += 1
+			var lo: Int = y0
+			var hi: Int = y1
+			if place == 2 || place == 3 {
+				// near the top of the ground (or the sea bed): the depths do not apply
+				y = clampI(ch.surf[lx] + extra.int(3), 1, H - 2)
+				lo = max(1, y - 3)
+				hi = min(H - 2, y + 4)
+			}
+			if let near = nearTile {
+				var found: Bool = hasNear(ch, lx, y, near)
+				var tries: Int = 0
+				while !found && tries < 10 {
+					lx = extra.int(chunkW)
+					y = lo + extra.int(max(1, hi - lo + 1))
+					found = hasNear(ch, lx, y, near)
+					tries += 1
+				}
+				if !found { continue }
+			}
+			var k: Int = 0
+			switch shape {
+			case 1:
+				// a streak: a line in one direction, wandering a little
+				let dirs: [(Int, Int)] = [(1, 0), (-1, 0), (1, 1), (-1, 1), (1, -1), (-1, -1), (0, 1), (0, -1)]
+				let d: (Int, Int) = dirs[extra.int(dirs.count)]
+				while k < size {
+					put(ch, g, lx, y, colOK)
+					lx = clampI(lx + d.0, 0, chunkW - 1)
+					y = clampI(y + d.1, lo, hi)
+					if extra.int(4) == 0 { y = clampI(y + (extra.int(2) == 0 ? -1 : 1), lo, hi) }
+					k += 1
+				}
+			case 2:
+				// scattered single blocks around the spot
+				while k < size {
+					put(ch, g, clampI(lx + extra.int(7) - 3, 0, chunkW - 1), clampI(y + extra.int(7) - 3, lo, hi), colOK)
+					k += 1
+				}
+			default:
+				// a short random walk keeps each vein in one lump, inside this chunk and the ore's depths
+				while k < size {
+					put(ch, g, lx, y, colOK)
+					switch rng.int(4) {
+					case 0: lx = min(chunkW - 1, lx + 1)
+					case 1: lx = max(0, lx - 1)
+					case 2: y = min(hi, y + 1)
+					default: y = max(lo, y - 1)
+					}
+					k += 1
+				}
+			}
+		}
+	}
+
+	/// One block of ore, if the spot is right for it
+	func put(_ ch: Chunk, _ g: WorldGen, _ lx: Int, _ y: Int, _ colOK: [Bool]) {
+		if !colOK[lx] { return }
+		let t: Tile = ch.get(lx, y)
+		if hostTiles.isEmpty {
+			if !modOreHost(t, host) { return }
+		} else if !hostTiles.contains(t.rawValue) {
+			return
+		}
+		switch place {
+		case 1:
+			// a cave wall: open air beside it
+			let open: Bool = (lx > 0 && ch.get(lx - 1, y) == .air) || (lx < chunkW - 1 && ch.get(lx + 1, y) == .air) || ch.get(lx, y - 1) == .air || ch.get(lx, y + 1) == .air
+			if !open { return }
+		case 3:
+			// under water: water just above in this column
+			var wet: Bool = false
+			for dy in 1...4 where ch.get(lx, y - dy) == .water { wet = true }
+			if !wet { return }
+		default: break
+		}
+		ch.setLocal(lx, y, tile)
+	}
+
+	/// Another ore within three blocks (in this chunk)
+	func hasNear(_ ch: Chunk, _ lx: Int, _ y: Int, _ t: Tile) -> Bool {
+		for dy in -3...3 {
+			for dx in -3...3 {
+				let x: Int = lx + dx
+				if x < 0 || x >= chunkW { continue }
+				if ch.get(x, y + dy) == t { return true }
+			}
+		}
+		return false
+	}
+}
+
+/// Picks of game ground for an ore's host and neighbour: game tiles as "tile:<number>"
+enum ModGround {
+	static let hosts: [Tile] = [.stone, .slate, .deepRock, .dirt, .sand, .mud, .snow, .sandstone, .ashStone, .grass, .ice, .obsidian]
+	static let ores: [Tile] = [.coal, .copper, .tin, .iron, .silver, .gold, .saltpeter, .amethyst, .diamond, .mythril, .emberOre, .voidOre, .crystalOre]
+
+	static func key(_ t: Tile) -> String { return joinText("tile:", String(Int(t.rawValue))) }
+
+	/// A host or neighbour key as a tile in a world (game tiles directly, mod blocks through the runtime)
+	static func resolve(_ k: String, _ rt: ModRuntime) -> Tile? {
+		if k.hasPrefix("tile:") {
+			guard let n = Int(k.dropFirst(5)), let t = Tile(rawValue: UInt8(clampI(n, 0, 255))) else { return nil }
+			return t
+		}
+		return rt.tileForKey[k]
+	}
+
+	static func name(_ k: String, _ p: ModPack) -> String {
+		if k.hasPrefix("tile:") {
+			if let n = Int(k.dropFirst(5)), let t = Tile(rawValue: UInt8(clampI(n, 0, 255))) { return t.name }
+			return "Block"
+		}
+		let s: (String, String) = splitModKey(k)
+		return p.blocks.first { $0.id == s.1 }?.name ?? k
+	}
+}
+
+/// A picture of where an ore forms: a slice of a sample world (six chunks wide, from the sky to the
+/// bottom), generated by the game's own world generator, with the ore marked
+enum ModOrePreview {
+	static let seed: UInt64 = 20_240_611
+	static let chunks: Int = 6
+
+	/// The picture (one pixel a block wide and two rows tall) and how many blocks of ore it holds
+	static func render(_ o: ModOre, _ p: ModPack) -> (PixelBuf, Int) {
+		let dim: Dimension = o.dim == 1 ? .umbral : .overworld
+		let g = WorldGen(seed: seed, infinite: true, rareChance: 0.28)
+		let marker: Tile = .amethystBlock
+		var hosts: Set<UInt8> = []
+		for k in o.hosts {
+			if k.hasPrefix("tile:"), let n = Int(k.dropFirst(5)) { hosts.insert(UInt8(clampI(n, 0, 255))) }
+		}
+		var near: Tile? = nil
+		if o.near.hasPrefix("tile:"), let n = Int(o.near.dropFirst(5)) { near = Tile(rawValue: UInt8(clampI(n, 0, 255))) }
+		let salt: UInt64 = UInt64(truncatingIfNeeded: modChecksum(Data((p.id + o.id).utf8)))
+		let rtOre = ModOreRT(tile: marker, dim: o.dim, minY: o.minY, maxY: o.maxY, veins: o.veins, size: o.size, host: o.host, salt: salt,
+							 place: o.place, biomes: Set(o.biomes), rarity: o.rarity, shape: o.shape, nearTile: near, hostTiles: hosts)
+		let H: Int = dimHeight(dim)
+		let rows: Int = (H + 1) / 2
+		var b = PixelBuf(w: chunks * chunkW, h: rows)
+		var count: Int = 0
+		let ore: UInt32 = 0xFF40FF
+		for c in 0..<chunks {
+			let ch: Chunk = generateChunk(g, dim, c - chunks / 2)
+			rtOre.place(g, ch)
+			for lx in 0..<chunkW {
+				let surf: Int = ch.surf[lx]
+				for r in 0..<rows {
+					let y0: Int = r * 2
+					var col: UInt32 = 0
+					var hit: Bool = false
+					for y in y0..<min(H, y0 + 2) {
+						let t: Tile = ch.get(lx, y)
+						if t == marker { hit = true; count += 1 }
+					}
+					let t: Tile = ch.get(lx, y0)
+					if hit {
+						col = ore
+					} else if t == .air {
+						col = y0 < surf ? (dim == .umbral ? 0x2A1A3A : 0x7AB8F0) : 0x16161C
+					} else if t == .water {
+						col = 0x2E5FD0
+					} else if t == .lava {
+						col = 0xE8601A
+					} else {
+						col = shadeRGB(t.def.colors.first ?? 0x808080, 0.8)
+					}
+					b.set(c * chunkW + lx, r, col)
+				}
+			}
+		}
+		return (b, count)
+	}
+}
+
+extension ModValidator {
+	/// The ore controls kept in range; hosts and neighbours must be real blocks
+	static func checkOrePlus(_ p: inout ModPack, _ mn: String, _ r: inout ModReport) {
+		let own: Set<String> = Set(p.blocks.map { p.key($0.id) })
+		let biomeRaws: Set<Int> = Set(ModBiomePicker.all.map { $0.rawValue })
+		func validKey(_ k: String) -> Bool {
+			if k.hasPrefix("tile:") {
+				guard let n = Int(k.dropFirst(5)), let t = Tile(rawValue: UInt8(clampI(n, 0, 255))) else { return false }
+				return !t.isMod && t != .air && t != .bedrock
+			}
+			return own.contains(k)
+		}
+		for i in p.ores.indices {
+			var o: ModOre = p.ores[i]
+			o.place = clampI(o.place, 0, 3)
+			o.shape = clampI(o.shape, 0, 2)
+			o.rarity = clampD(o.rarity.isFinite ? o.rarity : 1, 0.01, 1)
+			o.biomes = Array(Set(o.biomes.filter { biomeRaws.contains($0) })).sorted()
+			let hosts: [String] = o.hosts.filter { validKey($0) }
+			if hosts.count != o.hosts.count { r.add(1, mn, joinText("Ore \u{201C}", o.name, "\u{201D}"), "A host block no longer exists and was taken off the list.") }
+			o.hosts = Array(hosts.prefix(8))
+			if !o.near.isEmpty && !validKey(o.near) {
+				o.near = ""
+				r.add(1, mn, joinText("Ore \u{201C}", o.name, "\u{201D}"), "The ore it formed next to no longer exists: it forms anywhere now.")
+			}
+			p.ores[i] = o
+		}
+	}
+}
+
+// MARK: - Mod Creator+: sprite tools
+
+extension ModPixels {
+	/// whether the game draws this picture with a dark outline (nil: the usual for what it is)
+	func outlined(_ usual: Bool) -> Bool { return outline ?? usual }
+
+	func flippedH() -> ModPixels {
+		var o = ModPixels(w: w, h: h)
+		o.outline = outline
+		for y in 0..<h { for x in 0..<w { o.setARGB(w - 1 - x, y, argb(x, y)) } }
+		return o
+	}
+
+	func flippedV() -> ModPixels {
+		var o = ModPixels(w: w, h: h)
+		o.outline = outline
+		for y in 0..<h { for x in 0..<w { o.setARGB(x, h - 1 - y, argb(x, y)) } }
+		return o
+	}
+
+	/// moved by a pixel or more, wrapping round the edges (nothing is lost)
+	func shifted(_ dx: Int, _ dy: Int) -> ModPixels {
+		var o = ModPixels(w: w, h: h)
+		o.outline = outline
+		for y in 0..<h {
+			for x in 0..<w { o.setARGB(((x + dx) % w + w) % w, ((y + dy) % h + h) % h, argb(x, y)) }
+		}
+		return o
+	}
+
+	/// stretched or shrunk to a new size (each pixel copied from the nearest)
+	func scaled(_ nw: Int, _ nh: Int) -> ModPixels {
+		var o = ModPixels(w: nw, h: nh)
+		o.outline = outline
+		for y in 0..<o.h {
+			for x in 0..<o.w { o.setARGB(x, y, argb(x * w / max(1, o.w), y * h / max(1, o.h))) }
+		}
+		return o
+	}
+
+	/// a quarter turn clockwise (width and height swap)
+	func rotated() -> ModPixels {
+		var o = ModPixels(w: h, h: w)
+		o.outline = outline
+		for y in 0..<h { for x in 0..<w { o.setARGB(h - 1 - y, x, argb(x, y)) } }
+		return o
+	}
+
+	/// A game picture fitted into this many pixels (nearest pixel, see-through kept)
+	static func fitted(_ b: PixelBuf, _ nw: Int, _ nh: Int) -> ModPixels {
+		var o = ModPixels(w: nw, h: nh)
+		for y in 0..<o.h {
+			for x in 0..<o.w {
+				let sx: Int = min(b.w - 1, x * b.w / max(1, o.w))
+				let sy: Int = min(b.h - 1, y * b.h / max(1, o.h))
+				o.setARGB(x, y, b.px[sy * b.w + sx])
+			}
+		}
+		return o
+	}
+
+	/// A picture of any size squeezed into this many pixels by averaging (for pasted photos and
+	/// drawings): `bytes` are RGBA, top row first
+	static func fromRGBA(_ bytes: [UInt8], _ sw: Int, _ sh: Int, _ nw: Int, _ nh: Int) -> ModPixels {
+		var o = ModPixels(w: nw, h: nh)
+		if sw <= 0 || sh <= 0 || bytes.count < sw * sh * 4 { return o }
+		for y in 0..<o.h {
+			for x in 0..<o.w {
+				let x0: Int = x * sw / o.w
+				let x1: Int = max(x0 + 1, (x + 1) * sw / o.w)
+				let y0: Int = y * sh / o.h
+				let y1: Int = max(y0 + 1, (y + 1) * sh / o.h)
+				var r: Int = 0
+				var g: Int = 0
+				var b: Int = 0
+				var a: Int = 0
+				var n: Int = 0
+				for yy in y0..<min(sh, y1) {
+					for xx in x0..<min(sw, x1) {
+						let i: Int = (yy * sw + xx) * 4
+						let al: Int = Int(bytes[i + 3])
+						r += Int(bytes[i]) * al
+						g += Int(bytes[i + 1]) * al
+						b += Int(bytes[i + 2]) * al
+						a += al
+						n += 1
+					}
+				}
+				if n == 0 || a / n < 8 { continue }
+				let rr: UInt32 = UInt32(clampI(r / max(1, a), 0, 255))
+				let gg: UInt32 = UInt32(clampI(g / max(1, a), 0, 255))
+				let bb: UInt32 = UInt32(clampI(b / max(1, a), 0, 255))
+				let aa: UInt32 = UInt32(clampI(a / n, 0, 255))
+				o.setARGB(x, y, (aa << 24) | (rr << 16) | (gg << 8) | bb)
+			}
+		}
+		return o
+	}
+
+	/// The picture as a short text code, to copy between mods, worlds and iPads
+	func spriteCode() -> String {
+		return joinText("PRSPR1:", String(w), "x", String(h), ":", (outline ?? true) ? "o" : "n", ":", rgba.base64EncodedString())
+	}
+
+	/// A picture read back from its text code (nil: not a sprite code, or damaged)
+	static func fromSpriteCode(_ code: String) -> ModPixels? {
+		let parts: [Substring] = code.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: ":", maxSplits: 3, omittingEmptySubsequences: false)
+		if parts.count != 4 || parts[0] != "PRSPR1" { return nil }
+		let wh: [Substring] = parts[1].split(separator: "x")
+		guard wh.count == 2, let w = Int(wh[0]), let h = Int(wh[1]), w >= 1, h >= 1, w <= ModPixels.maxSide, h <= ModPixels.maxSide else { return nil }
+		guard let data = Data(base64Encoded: String(parts[3])), data.count == w * h * 4 else { return nil }
+		var p = ModPixels(w: w, h: h)
+		p.rgba = data
+		p.outline = parts[2] == "o"
+		return p.valid ? p : nil
+	}
+}
+
+/// Copying sprites in and out through the iPad's clipboard: as a text code (exact), or a picture
+/// (any image copied from Photos or a drawing app, shrunk to the sprite's size)
+enum SpriteClipboard {
+	static func copy(_ p: ModPixels) {
+		UIPasteboard.general.string = p.spriteCode()
+	}
+
+	static func pasteCode() -> ModPixels? {
+		guard let s = UIPasteboard.general.string else { return nil }
+		return ModPixels.fromSpriteCode(s)
+	}
+
+	/// The image on the clipboard shrunk to w x h pixels (nil: no image there)
+	static func pasteImage(_ w: Int, _ h: Int) -> ModPixels? {
+		guard let img = UIPasteboard.general.image, let cg = img.cgImage else { return nil }
+		return pixels(cg, w, h)
+	}
+
+	/// A picture's pixels at its own size (capped at 256 on a side), then shrunk by averaging
+	static func pixels(_ cg: CGImage, _ w: Int, _ h: Int) -> ModPixels? {
+		let sw: Int = min(256, max(1, cg.width))
+		let sh: Int = min(256, max(1, cg.height))
+		var bytes: [UInt8] = [UInt8](repeating: 0, count: sw * sh * 4)
+		let space: CGColorSpace = CGColorSpaceCreateDeviceRGB()
+		let ok: Bool = bytes.withUnsafeMutableBytes { (bp: UnsafeMutableRawBufferPointer) -> Bool in
+			guard let ctx = CGContext(data: bp.baseAddress, width: sw, height: sh, bitsPerComponent: 8, bytesPerRow: sw * 4, space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+			ctx.interpolationQuality = .medium
+			ctx.draw(cg, in: CGRect(x: 0, y: 0, width: sw, height: sh))
+			return true
+		}
+		if !ok { return nil }
+		return ModPixels.fromRGBA(bytes, sw, sh, w, h)
+	}
+}
+
+/// A sprite saved in the sprite library: finished or not, ready to use in any mod or as a reference
+struct SpriteProject: Codable, Identifiable, Equatable {
+	var id: String = ""
+	var name: String = "Sprite"
+	var frames: [ModPixels] = [ModPixels(w: 16, h: 16)]
+	var edited: Double = 0
+
+	init() {}
+
+	init(from decoder: Decoder) throws {
+		let c = try decoder.container(keyedBy: CodingKeys.self)
+		id = c.val(.id, "")
+		name = c.val(.name, "Sprite")
+		var skip: Int = 0
+		frames = c.list(.frames, &skip)
+		if frames.isEmpty { frames = [ModPixels(w: 16, h: 16)] }
+		edited = c.val(.edited, 0)
+	}
+}
+
+/// The sprite library: sprites kept on this iPad apart from any mod
+enum SpriteLibrary {
+	static let maxSprites: Int = 120
+	static var url: URL { return ModStore.dir.appendingPathComponent("sprites.json") }
+
+	static func load() -> [SpriteProject] {
+		guard let d = try? Data(contentsOf: url) else { return [] }
+		let raw: [Lenient<SpriteProject>] = (try? JSONDecoder().decode([Lenient<SpriteProject>].self, from: d)) ?? []
+		return raw.compactMap { $0.value }.filter { !$0.frames.isEmpty && $0.frames.allSatisfy { $0.valid } }
+	}
+
+	static func saveAll(_ list: [SpriteProject]) {
+		guard let d = try? JSONEncoder().encode(Array(list.prefix(maxSprites))) else { return }
+		try? d.write(to: url, options: .atomic)
+	}
+
+	/// Adds a sprite or replaces the one with its id; returns it as saved
+	@discardableResult
+	static func put(_ p0: SpriteProject) -> SpriteProject {
+		var p: SpriteProject = p0
+		if p.id.isEmpty { p.id = joinText("s", String(Int(Date().timeIntervalSince1970 * 1000) % 1_000_000_000), String(Int.random(in: 10...99))) }
+		if p.name.trimmingCharacters(in: .whitespaces).isEmpty { p.name = "Sprite" }
+		p.name = String(p.name.prefix(32))
+		p.frames = Array(p.frames.prefix(ModLimits.maxFrames)).filter { $0.valid }
+		if p.frames.isEmpty { p.frames = [ModPixels(w: 16, h: 16)] }
+		p.edited = Date().timeIntervalSince1970
+		var list: [SpriteProject] = load()
+		if let i = list.firstIndex(where: { $0.id == p.id }) { list[i] = p } else { list.insert(p, at: 0) }
+		saveAll(list)
+		return p
+	}
+
+	static func delete(_ id: String) {
+		saveAll(load().filter { $0.id != id })
+	}
+
+	static func duplicate(_ id: String) -> SpriteProject? {
+		guard var p = load().first(where: { $0.id == id }) else { return nil }
+		p.id = ""
+		p.name = String(joinText(p.name, " (copy)").prefix(32))
+		return put(p)
+	}
+}
+
+/// The game's own pictures, to use as a reference or a starting sample: creatures (each frame),
+/// items and blocks
+enum GameSprites {
+	static func creatureFrames(_ k: MobKind) -> [PixelBuf] {
+		return creatureArt(k, 0).0
+	}
+
+	static let creatures: [MobKind] = MobKind.allCases.filter { $0 != .custom && $0 != .villager }
+
+	static func items() -> [Item] {
+		return allGameItems().filter { if case .block = $0 { return false }; if case .wall = $0 { return false }; return true }
+	}
+
+	static func tiles() -> [Tile] {
+		return Tile.allCases.filter { !$0.isMod && $0 != .air }
 	}
 }

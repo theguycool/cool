@@ -1,4 +1,5 @@
-// PIXEL REALM v2, part 4 of 4: vehicles of every kind (flight, weapons, damage, the assembler, the autopilot), the Mod Creator screens, the potion and exosuit screens, the Mod Creator+ screens, and the app itself.
+// PIXEL REALM v2, part 4 of 4: the Mod Creator screens, the potion and exosuit screens, the Mod Creator+ screens (with the
+// sprite editor, the sun and moon editor and the tree designer), and the app itself.
 // The game is four files that go together in one Swift Playgrounds app: PixelRealm1.swift to
 // PixelRealm4.swift. Each goes in its own file in the app (delete ContentView.swift; MyApp.swift can
 // hold part 1). All art is generated in code.
@@ -8,1454 +9,6 @@ import AVFoundation
 #if canImport(UIKit)
 import UIKit
 #endif
-
-// ===== p33_vehicles =====
-
-// MARK: - Vehicles of every kind: blocks on vehicles, flight, weapons, damage, turning, assembling, the autopilot
-// A vehicle is a rigid body built cell by cell (p13b_vehicles, p17_vehicles_ships). This part adds what
-// makes planes, helicopters, airships, tanks and anything in between work: every cell can be any block,
-// each cell weighs what it is made of, and the air acts on each cell where it is (lift on wings, drag on
-// exposed faces, thrust along propellers, rotor lift, hot air in balloons), so a design flies, floats or
-// tumbles because of how it is built.
-
-/// Hitting the ground faster than this (blocks per second, straight into it) breaks parts
-let vehicleCrashSpeed: Double = 21.0
-
-/// The numbers of the flight model
-enum Aero {
-	/// lift per wing cell: kLift x airspeed^2 x lift coefficient (a 10-mass plane with 3 wing cells
-	/// leaves the ground at about 11 blocks a second)
-	static let kLift: Double = 0.8
-	/// drag per exposed face: kDrag x drag coefficient x airspeed^2
-	static let kDrag: Double = 0.022
-	/// how much a face tucked behind another still feels the air (skin friction)
-	static let shielded: Double = 0.06
-	/// share of the wing drag coefficient applied (the wing's own profile drag)
-	static let dragShare: Double = 1.0
-	/// lift slope per radian, the angle where a wing stalls, the post-stall lift
-	static let liftSlope: Double = 5.0
-	static let stallAngle: Double = 0.27
-	/// how far an elevator's flap turns the airflow (radians at full stick), and the elevator's size
-	/// against a wing's
-	static let flap: Double = 0.55
-	static let elevatorArea: Double = 1.0
-	/// a wing's camber: it lifts a little even meeting the air head on (radians of extra angle)
-	static let camber: Double = 0.07
-	/// static thrust of an air propeller per engine of power, and the airspeed where it fades out
-	static let propThrust: Double = 110.0
-	static let propVmax: Double = 64.0
-	/// a jet's thrust (it is its own engine)
-	static let jetThrust: Double = 165.0
-	/// rotor lift per engine of power at full blade pitch
-	static let rotorLift: Double = 265.0
-	/// a heated balloon envelope's lift (mass it can hold up at full heat), and how many envelopes one burner heats
-	static let envLift: Double = 1.3
-	static let burnerCells: Int = 12
-	/// how far the cyclic tilts a helicopter at full stick, and how firmly it holds the tilt
-	static let cyclicTilt: Double = 0.3
-	/// hands off, a helicopter tilts against its drift to hover in place (radians per block a second)
-	static let hoverHold: Double = 0.035
-	/// the turning rotor disc resists the air across it (what keeps a helicopter's speed down)
-	static let rotorDrag: Double = 0.25
-	/// up and down on the stick ask a helicopter for this climb or sink rate (blocks a second)
-	static let climbRate: Double = 9.0
-	static let cyclicP: Double = 16.0
-	static let cyclicD: Double = 7.5
-	/// how fast blade pitch follows the stick, and how fast a burner heats the balloon and venting cools it
-	static let collectiveRate: Double = 0.9
-	static let heatRate: Double = 0.14
-	static let ventRate: Double = 0.22
-	/// a balloon's canopy against the air going up or down through it (a cold balloon comes down slowly)
-	static let canopyDrag: Double = 8.0
-	/// the cyclic's trim: how fast it learns to hold the tilt against an off-centre rotor
-	static let cyclicI: Double = 6.0
-	/// the pitch control: full stick asks for this pitch rate (radians a second); the elevators are moved
-	/// to get it (as far as they can at this speed), and the trim learns what holds the nose steady
-	static let pitchRate: Double = 0.9
-	static let rateGain: Double = 1.3
-	static let trimRate: Double = 1.6
-	/// the stall guard: past this share of the stall angle the nose is eased down instead of pulled up
-	static let alphaGuard: Double = 0.75
-	/// hands off, how fast the nose comes back to level (radians a second per radian)
-	static let levelRate: Double = 0.4
-	/// seconds a turn to face the other way takes in flight
-	static let turnTime: Double = 1.4
-}
-
-/// Air thins with height: full below the hills, about half at the top of the sky
-func airDensity(_ y: Double) -> Double {
-	let top: Double = Double(WorldGen.sea) - 60.0
-	if y >= top { return 1.0 }
-	return max(0.45, 1.0 - 0.55 * (top - y) / max(1.0, top))
-}
-
-/// A wing's lift coefficient at an angle of attack (radians, folded to -pi/2...pi/2): straight up to
-/// the stall, then it falls away to a flat plate's
-func liftCoefficient(_ a: Double) -> Double {
-	let s: Double = Aero.stallAngle
-	let m: Double = abs(a)
-	let sign: Double = a >= 0 ? 1.0 : -1.0
-	if m <= s { return Aero.liftSlope * a }
-	let peak: Double = Aero.liftSlope * s
-	let flat: Double = 0.9 * sin(2.0 * m)
-	let fade: Double = clampD((m - s) / 0.16, 0, 1)
-	return sign * (peak * 0.85 * (1.0 - fade) + flat * fade)
-}
-
-/// A wing's drag coefficient: a little on its own, more as it lifts, a flat plate's beyond the stall
-func wingDrag(_ a: Double, _ cl: Double) -> Double {
-	let sa: Double = sin(a)
-	return 0.012 + 0.06 * cl * cl + 1.1 * sa * sa
-}
-
-/// How much a part catches the air (a bare block is 1)
-func partDrag(_ t: PartType) -> Double {
-	switch t {
-	case .cockpit: return 0.45
-	case .jet: return 0.3
-	case .airProp, .tailRotor, .rotor: return 0.4
-	case .envelope: return 3.0
-	case .wheel, .offroadWheel: return 0.45
-	case .headlight, .steering, .autopilot, .autoGun, .propeller, .paddle: return 0.5
-	default: return 1.0
-	}
-}
-
-/// The mass of a block built onto a vehicle: its building weight (planks 0.6, stone 2.5)
-func vehicleBlockMass(_ b: Tile, _ t: PartType) -> Double {
-	if b.isMod, t != .block, let m = ModRuntime.shared.blockDef(b), m.vehMass > 0 { return m.vehMass }
-	return max(0.05, tileWeight(b))
-}
-
-/// How much water a cell pushes aside when under (its buoyancy): a solid block a whole cell (so wood
-/// floats and stone sinks), anything else a little
-func cellDisplacement(_ v: Vehicle, _ c: PartCell, _ t: PartType) -> Double {
-	if t == .block, let b = v.blocks[c] { return b.solid ? 1.0 : 0.2 }
-	return partDisplacement(t)
-}
-
-/// How much damage a part takes before it breaks off
-func partHP(_ t: PartType) -> Double {
-	switch t {
-	case .armor: return 160
-	case .track, .jet, .drill, .diamondDrill, .voidDrill, .cannon: return 55
-	case .engine, .hull, .cargo, .frame, .offroadWheel: return 40
-	case .cockpit, .rotor, .autoGun, .burner, .fuelTank: return 30
-	case .wheel, .seat, .wing, .airProp: return 22
-	case .elevator, .propeller, .paddle, .steering, .tailRotor, .autopilot: return 14
-	case .headlight: return 10
-	case .envelope: return 7
-	case .block: return 30
-	}
-}
-
-/// How much damage one cell takes before it breaks (a block by its hardness and weight)
-func vehicleCellHP(_ v: Vehicle, _ c: PartCell, _ t: PartType) -> Double {
-	if let b = v.blocks[c] {
-		let base: Double = 8.0 + min(90.0, b.hardness * 14.0) + tileWeight(b) * 4.0
-		return t == .block ? base : max(base, partHP(t))
-	}
-	return partHP(t)
-}
-
-/// What a cell taken off a vehicle gives back: its block, or the part
-func vehicleCellItem(_ r: VCell) -> Item {
-	if let b = r.tile { return .block(b) }
-	return .part(r.type == .block ? .frame : r.type)
-}
-
-/// A block turned to face the other way (stairs rise the other way, a bed's head moves)
-func mirroredTile(_ t: Tile) -> Tile {
-	switch t {
-	case .stairWoodR: return .stairWoodL
-	case .stairWoodL: return .stairWoodR
-	case .stairStoneR: return .stairStoneL
-	case .stairStoneL: return .stairStoneR
-	case .stairBrickR: return .stairBrickL
-	case .stairBrickL: return .stairBrickR
-	case .bedL: return .bedR
-	case .bedR: return .bedL
-	default: return t
-	}
-}
-
-/// Blocks the assembler leaves in the world: the ground's own, liquids, lifts and portals
-func canAssemble(_ t: Tile) -> Bool {
-	if t == .air || t.liquid || t == .bedrock { return false }
-	switch t {
-	case .liftRail, .liftButton, .liftCar, .portalOn, .portalOff: return false
-	default: return true
-	}
-}
-
-/// Where a shot meets a vehicle: how far along its step, which vehicle, which cell
-struct VehicleHit {
-	var t: Double
-	var v: Vehicle
-	var cell: PartCell
-}
-
-extension Game {
-	// MARK: power
-
-	/// The engines' power goes where it is needed: driving wheels on a ground vehicle, every air
-	/// propeller, every rotor (a rotor takes as much as three engines' worth, a propeller one and a half).
-	/// The share for the wheels (1 for a car or a tank: they get it all)
-	func groundShare(_ v: Vehicle) -> Double {
-		let wheels: Double = v.wings == 0 && v.rotors == 0 ? 1.0 : 0.0
-		let total: Double = wheels + Double(v.airProps) * 1.5 + Double(v.rotors) * 3.0
-		return total <= 0 ? 0 : wheels / total
-	}
-
-	/// Engine power each air propeller and each rotor gets (in engines); `anyway` works it out as if
-	/// fuelled and crewed (for the checklist)
-	func airPower(_ v: Vehicle, anyway: Bool = false) -> (Double, Double) {
-		if v.engines == 0 { return (0, 0) }
-		if !anyway && (!(v.fuel > 0 || isCreative) || !(v.hasSeat && v.hasSteering)) { return (0, 0) }
-		let wheels: Double = v.wings == 0 && v.rotors == 0 ? 1.0 : 0.0
-		let total: Double = wheels + Double(v.airProps) * 1.5 + Double(v.rotors) * 3.0
-		if total <= 0 { return (0, 0) }
-		let e: Double = v.enginePower
-		return (e * 1.5 / total, e * 3.0 / total)
-	}
-
-	/// The most the rotors can lift (force) here, at full blade pitch
-	func rotorMax(_ v: Vehicle, anyway: Bool = false) -> Double {
-		let p: (Double, Double) = airPower(v, anyway: anyway)
-		return Aero.rotorLift * p.1 * Double(v.rotors) * (0.35 + 0.65 * airDensity(v.py))
-	}
-
-	/// The most the balloons can lift (force) here, at full heat
-	func balloonMax(_ v: Vehicle) -> Double {
-		if v.burners == 0 || v.envelopes == 0 { return 0 }
-		let heated: Double = Double(min(v.envelopes, v.burners * Aero.burnerCells))
-		return gravityG * Aero.envLift * heated * airDensity(v.py)
-	}
-
-	/// The wings' lift at a speed, flying level at a good angle (for the checklist and instruments)
-	func wingLiftAt(_ v: Vehicle, _ speed: Double) -> Double {
-		return Aero.kLift * speed * speed * Double(v.wings) * 1.1
-	}
-
-	/// The push the propellers and jets give at a speed, at full throttle
-	func thrustAt(_ v: Vehicle, _ speed: Double) -> Double {
-		let p: (Double, Double) = airPower(v, anyway: true)
-		let prop: Double = Aero.propThrust * p.0 * Double(v.airProps) * max(0, 1.0 - speed / Aero.propVmax)
-		let jet: Double = Aero.jetThrust * Double(v.jets) * max(0.35, 1.0 - speed / 90.0)
-		return prop + jet
-	}
-
-	// MARK: the flight model
-
-	/// Forces of the air on every part, for one physics step: drag on each part's exposed faces, lift on
-	/// wings and elevators from the real airflow over each one (its speed, the angle it meets the wing at,
-	/// the wind), thrust from propellers and jets along the vehicle's axis, rotor lift along the rotor
-	/// shaft, and the hot air in the balloons pushing straight up. Each force acts at its own part, so the
-	/// layout decides how the vehicle pitches: a tail far behind steadies it, balloons above keep it
-	/// upright, a heavy nose tips it forward.
-	func airForces(_ v: Vehicle, _ h: Double, _ throttle: Double) {
-		let c: Double = v.cosA
-		let s: Double = v.sinA
-		let rho: Double = airDensity(v.py)
-		let power: (Double, Double) = airPower(v)
-		let canFly: Bool = (v.fuel > 0 || isCreative) && v.hasSeat && v.hasSteering
-		// while turning round the throttle keeps pushing toward the nose, whichever way the stick points
-		let steer: Double = v.turnT > 0 ? abs(throttle) * Double(v.fwd) : throttle
-		let thr: Double = canFly ? steer : 0
-		// the elevators turn the nose the way the stick says (up: toward the top of the screen)
-		let noseX: Double = Double(v.fwd) * c
-		let noseSign: Double = noseX >= 0 ? 1.0 : -1.0
-		let rateErr: Double = pitchRateWanted(v) - (-v.angVel * noseSign)
-		let cmd: Double = clampD(v.trim + Aero.rateGain * rateErr, -1, 1)
-		let wantSpin: Double = -cmd * noseSign
-		let bank: Double = v.turnT > 0 ? 0.7 + 0.3 * abs(cos(Double.pi * v.turnT)) : 1.0
-		let rotorF: Double = Aero.rotorLift * power.1 * v.collective * (0.35 + 0.65 * rho)
-		let heated: Double = v.envelopes > 0 ? min(1.0, Double(v.burners * Aero.burnerCells) / Double(v.envelopes)) : 0
-		let envF: Double = gravityG * Aero.envLift * v.heat * heated * rho
-		var fx: Double = 0
-		var fy: Double = 0
-		var torque: Double = 0
-		var lift: Double = 0
-		var thrust: Double = 0
-		var stalled: Bool = false
-		var alpha: Double = 0
-		for (cell, t) in v.parts {
-			let lx: Double = Double(cell.dx) + 0.5 - v.comX
-			let ly: Double = Double(cell.dy) + 0.5 - v.comY
-			let rx: Double = lx * c - ly * s
-			let ry: Double = lx * s + ly * c
-			// the air going past this part (the wind, less the part's own motion), in the vehicle's frame
-			let ux: Double = v.windX - (v.vx - v.angVel * ry)
-			let uy: Double = -(v.vy + v.angVel * rx)
-			let bx: Double = ux * c + uy * s
-			let by: Double = -ux * s + uy * c
-			var fbx: Double = 0
-			var fby: Double = 0
-			let k: Double = v.boost[cell] ?? 1.0
-			if t == .wing || t == .elevator {
-				let f: (Double, Double, Double, Bool, Double) = wingForce(t, bx, by, lx, rho, wantSpin, t == .wing ? bank * k : k)
-				fbx = f.0
-				fby = f.1
-				if t == .wing {
-					lift += f.2
-					alpha = max(alpha, f.4)
-				}
-				if f.3 { stalled = true }
-			} else {
-				let d: (Double, Double) = faceDrag(v, cell, t, bx, by, rho)
-				fbx = d.0
-				fby = d.1
-				switch t {
-				case .airProp:
-					if power.0 > 0 && abs(thr) > 0.05 {
-						// along the vehicle's axis either way (the blades reverse at half strength)
-						let eff: Double = max(0, 1.0 - abs(bx) / Aero.propVmax)
-						let w: Double = thr > 0 ? thr : thr * 0.5
-						let f: Double = Aero.propThrust * power.0 * eff * w * k * (0.4 + 0.6 * rho)
-						fbx += f
-						thrust += abs(f)
-					}
-				case .jet:
-					if canFly && abs(thr) > 0.05 {
-						// it pushes away from its exhaust; pulled back, its reverser brakes at a third
-						let dirX: Double = -Double((v.face[cell] ?? (-1, 0)).0)
-						let along: Double = thr * dirX
-						let w: Double = along > 0 ? along : along * 0.35
-						let f: Double = Aero.jetThrust * w * k * dirX * (0.7 + 0.3 * rho) * max(0.35, 1.0 - abs(bx) / 90.0)
-						fbx += f
-						thrust += abs(f)
-					}
-				case .rotor:
-					if rotorF > 0 {
-						fby -= rotorF * k
-						lift += rotorF * k
-						// the disc drags against air going across it
-						fbx += Aero.rotorDrag * rho * bx * abs(bx) * min(1.0, v.collective * 1.5)
-					}
-				default:
-					break
-				}
-			}
-			// to the world, then onto the body at this part
-			var wfx: Double = fbx * c - fby * s
-			var wfy: Double = fbx * s + fby * c
-			if t == .envelope && envF > 0 {
-				// hot air rises: straight up, whatever the tilt (so balloons above keep it upright)
-				wfy -= envF * k
-				lift += envF * k
-			}
-			fx += wfx
-			fy += wfy
-			torque += rx * wfy - ry * wfx
-			wfx = 0
-			wfy = 0
-		}
-		let invM: Double = 1.0 / v.mass
-		v.vx += fx * invM * h
-		v.vy += fy * invM * h
-		v.angVel += torque / v.inertia * h
-		if v.rotors > 0 && rotorF > 0 { cyclic(v, thr, h) }
-		v.liftNow = lift
-		v.thrustNow = thrust
-		v.stall = stalled
-		v.alpha = alpha
-	}
-
-	/// The pitch rate the pilot asks for (nose up positive), eased off near the stall: past the guard
-	/// angle the nose is brought down a little, so holding the stick back climbs steeply without stalling
-	/// while there is speed (slow it down too far and it still sinks)
-	func pitchRateWanted(_ v: Vehicle) -> Double {
-		var want: Double = v.pitch * Aero.pitchRate
-		// hands off in flight, the nose eases back toward level (it holds a gentle climb or dive no longer)
-		if abs(v.pitch) < 0.05 && v.contacts == 0 && v.auto == 0 {
-			let noseUp: Double = -Double(v.fwd) * v.sinA
-			want = clampD(-noseUp * Aero.levelRate, -0.3, 0.3)
-		}
-		let guardA: Double = Aero.stallAngle * Aero.alphaGuard
-		// the angle the wing is heading for: now, plus where the nose is still swinging
-		let noseX: Double = Double(v.fwd) * v.cosA
-		let upRate: Double = -v.angVel * (noseX >= 0 ? 1.0 : -1.0)
-		let ahead: Double = v.alpha + max(0, upRate) * 0.3
-		if v.wings > 0 && ahead > guardA && v.airspeed > 4.0 { want = min(want, -(ahead - guardA) * 5.0) }
-		return want
-	}
-
-	/// One wing or elevator: lift across the airflow and drag along it, from the angle the air meets it
-	/// (folded so the wing works flying either way), with an elevator's flap turned by the stick.
-	/// Returns the body-frame force, the lift, and whether it has stalled.
-	func wingForce(_ t: PartType, _ bx: Double, _ by: Double, _ lx: Double, _ rho: Double, _ wantSpin: Double, _ scale: Double) -> (Double, Double, Double, Bool, Double) {
-		let sp2: Double = bx * bx + by * by
-		if sp2 < 0.09 { return (0, 0, 0, false, 0) }
-		let sp: Double = sqrt(sp2)
-		let dx: Double = bx / sp
-		let dy: Double = by / sp
-		var a: Double = atan2(-dy, -dx)
-		if a > Double.pi * 0.5 { a -= Double.pi } else if a < -Double.pi * 0.5 { a += Double.pi }
-		// the camber lifts toward the top of the wing whichever way the air comes
-		if t == .wing { a += dx < 0 ? Aero.camber : -Aero.camber }
-		var area: Double = 1.0
-		if t == .elevator {
-			// the flap, tilted the way that turns the nose as asked (behind or ahead of the centre of mass)
-			area = Aero.elevatorArea
-			let flow: Double = bx < 0 ? 1.0 : -1.0
-			let side: Double = lx >= 0 ? 1.0 : -1.0
-			a += -wantSpin * side * flow * Aero.flap
-		}
-		let cl: Double = liftCoefficient(a)
-		let cd: Double = wingDrag(a, cl)
-		let q: Double = Aero.kLift * rho * sp2 * area * scale
-		let fbx: Double = q * cl * -dy + q * Aero.dragShare * cd * dx
-		let fby: Double = q * cl * dx + q * Aero.dragShare * cd * dy
-		let stalled: Bool = t == .wing && abs(a) > Aero.stallAngle && sp > 4.0
-		return (fbx, fby, abs(q * cl), stalled, sp > 4.0 ? abs(a) : 0)
-	}
-
-	/// Drag on a part's faces that meet the air (a face tucked behind another part barely feels it)
-	func faceDrag(_ v: Vehicle, _ cell: PartCell, _ t: PartType, _ bx: Double, _ by: Double, _ rho: Double) -> (Double, Double) {
-		let cdp: Double = partDrag(t) * Aero.kDrag * rho
-		var fx: Double = 0
-		var fy: Double = 0
-		if abs(bx) > 0.01 {
-			let up: Int = bx < 0 ? 1 : -1
-			let ex: Double = v.parts[PartCell(dx: cell.dx + up, dy: cell.dy)] == nil ? 1.0 : Aero.shielded
-			fx = cdp * ex * bx * abs(bx)
-		}
-		if abs(by) > 0.01 {
-			let up: Int = by < 0 ? 1 : -1
-			let ey: Double = v.parts[PartCell(dx: cell.dx, dy: cell.dy + up)] == nil ? 1.0 : Aero.shielded
-			let canopy: Double = t == .envelope ? Aero.canopyDrag : 1.0
-			fy = cdp * ey * canopy * by * abs(by)
-		}
-		return (fx, fy)
-	}
-
-	/// The cyclic: the rotor tilts the helicopter toward the stick and holds it there (so it flies
-	/// that way). A single rotor needs a tail rotor for this; without one its torque swings the
-	/// helicopter round and it can hardly be steered. Two rotors turn opposite ways and need none.
-	func cyclic(_ v: Vehicle, _ thr: Double, _ h: Double) {
-		let steady: Bool = v.tailRotors > 0 || v.rotors >= 2
-		// the stick tilts it; hands off it leans against its drift and comes to a hover
-		var target: Double = clampD(thr, -1, 1) * Aero.cyclicTilt
-		if abs(thr) < 0.1 { target = clampD(-v.vx * Aero.hoverHold, -Aero.cyclicTilt, Aero.cyclicTilt) }
-		let a: Double = remainder(v.angle, 2.0 * Double.pi)
-		let auth: Double = (0.35 + 0.65 * v.collective) * (steady ? 1.0 : 0.2)
-		// the trim builds up against a steady pull (an off-centre rotor or load) so the tilt holds
-		if steady { v.cycI = clampD(v.cycI + (target - a) * Aero.cyclicI * h, -12, 12) }
-		v.angVel += (Aero.cyclicP * (target - a) + v.cycI - Aero.cyclicD * v.angVel) * auth * h
-		if !steady { v.angVel += sin(clock * 2.3 + Double(v.id)) * 4.0 * v.collective * h }
-	}
-
-	/// Once a frame: blade pitch and burner heat follow the stick (hands off, they hold the height), the
-	/// elevator trim settles, and the nose end is worked out from the way the vehicle moves
-	func flightControls(_ v: Vehicle, _ dt: Double) {
-		let piloted: Bool = (v.rider || v.auto == 2) && v.hasSeat && v.hasSteering
-		let airborne: Bool = v.contacts == 0 && v.submerged <= 0.02
-		let along: Double = v.vx * v.cosA + v.vy * v.sinA
-		if abs(along) > 3.0 { v.fwd = along > 0 ? 1 : -1 }
-		else if abs(v.throttle) > 0.2 && v.rider { v.fwd = v.throttle > 0 ? 1 : -1 }
-		if v.rotors > 0 {
-			if !piloted || airPower(v).1 <= 0 {
-				v.collective = max(0, v.collective - dt * 0.4)
-			} else if airborne || v.pitch > 0.05 {
-				// the stick asks for a climb or sink rate (hands off: none, a hover); the blade pitch is set
-				// for it, as far as the rotor can lift
-				let need: Double = max(0, v.mass * gravityG - balloonLiftNow(v))
-				let hover: Double = need / max(1.0, rotorMax(v))
-				let wantVy: Double = -v.pitch * Aero.climbRate
-				let want: Double = clampD(hover + (v.vy - wantVy) * 0.05, 0, 1)
-				let step: Double = Aero.collectiveRate * dt
-				v.collective += clampD((want - v.collective) * min(1.0, 4.0 * dt), -step, step)
-			} else {
-				v.collective = max(0, v.collective - dt * 0.6)
-			}
-			if !airborne { v.cycI *= (1.0 - min(1.0, 2.0 * dt)) }
-		}
-		if v.burners > 0 && v.envelopes > 0 {
-			let fuelOK: Bool = v.fuel > 0 || isCreative
-			if !piloted || !fuelOK {
-				v.heat = max(0, v.heat - dt * 0.035)
-			} else if abs(v.pitch) > 0.05 {
-				v.heat = clampD(v.heat + v.pitch * (v.pitch > 0 ? Aero.heatRate : Aero.ventRate) * dt, 0, 1)
-			} else if airborne {
-				// hands off: the burner keeps the balloon just warm enough to float (no faster than it can heat)
-				let full: Double = balloonMax(v)
-				let need: Double = max(0, v.mass * gravityG - v.liftNow + balloonLiftNow(v))
-				let eq: Double = full > 1 ? need / full : 0
-				let want: Double = clampD(eq + v.vy * 0.05, 0, 1)
-				v.heat += clampD(want - v.heat, -Aero.ventRate * dt, Aero.heatRate * dt)
-			} else {
-				v.heat = max(0, v.heat - dt * 0.05)
-			}
-		}
-		if v.elevators > 0 {
-			if airborne && v.turnT == 0 {
-				// the trim learns the elevator that gives the pitch rate asked for (hands off: none, so the
-				// nose stays where it is)
-				let noseX: Double = Double(v.fwd) * v.cosA
-				let upRate: Double = -v.angVel * (noseX >= 0 ? 1.0 : -1.0)
-				v.trim = clampD(v.trim + (pitchRateWanted(v) - upRate) * Aero.trimRate * dt, -0.9, 0.9)
-			} else if !airborne {
-				v.trim *= (1.0 - min(1.0, 0.8 * dt))
-			}
-		}
-	}
-
-	/// The balloons' lift right now (force)
-	func balloonLiftNow(_ v: Vehicle) -> Double {
-		return balloonMax(v) * v.heat
-	}
-
-	/// Fuel for what flies: rotors turning, jets, burners (driving and propellers already burn it)
-	func airFuel(_ v: Vehicle, _ dt: Double) {
-		if isCreative || v.fuel <= 0 { return }
-		var use: Double = 0
-		let thr: Double = abs(v.throttle)
-		if v.rotors > 0 && v.collective > 0.05 && thr <= 0.1 { use += Double(v.engines) * (0.4 + 0.6 * v.collective) }
-		if v.jets > 0 && thr > 0.05 && (v.rider || v.auto == 2) { use += Double(v.jets) * 2.5 * thr }
-		if v.burners > 0 && v.heat > 0.05 && (v.rider || v.auto == 2) { use += Double(v.burners) * 0.6 * v.heat }
-		v.fuel = max(0, v.fuel - use * dt)
-	}
-}
-
-extension Game {
-	// MARK: every frame
-
-	/// What a vehicle does besides moving, once a frame (even at rest): the flight controls and fuel,
-	/// the guns, the autopilot when nobody drives, a turn in progress, rotor blades striking the ground,
-	/// fuel tanks that burst
-	func vehicleExtras(_ v: Vehicle, _ dt: Double) {
-		if v.parts.isEmpty { return }
-		if v.hitT > 0 { v.hitT -= dt }
-		if v.aero {
-			v.windX = world.dim == .overworld && settings.weatherOn ? weatherAt(v.px, v.py).wind * 0.6 : 0
-			if v.auto == 2 && !v.rider { autopilotSteer(v, 0, 0, dt) }
-			flightControls(v, dt)
-			airFuel(v, dt)
-			if v.rotors > 0 { rotorBlades(v, dt) }
-			let spin: Double = v.rotors > 0 ? v.collective : min(1.0, abs(v.throttle))
-			if v.rotors + v.airProps + v.tailRotors > 0 && airPower(v).0 + airPower(v).1 > 0 { v.propRot += dt * (4.0 + 26.0 * spin) }
-			v.airspeed = sqrt((v.vx - v.windX) * (v.vx - v.windX) + v.vy * v.vy)
-		} else if v.auto == 2 && !v.rider {
-			autopilotSteer(v, 0, 0, dt)
-		}
-		if v.turnT > 0 { stepTurn(v, dt) }
-		if v.cannons + v.guns > 0 { runVehicleWeapons(v, dt) }
-	}
-
-	/// Fuel tanks that burst last frame go off now
-	func flushVehicleBlasts() {
-		if vehBlasts.isEmpty { return }
-		let list: [(Double, Double)] = vehBlasts
-		vehBlasts.removeAll()
-		for b in list { explode(b.0, b.1, radius: 2.0, power: 14, source: .environment, breakBlocks: false) }
-	}
-
-	/// Rotor blades sweep a line two cells either side of the hub; if they cut into the ground the
-	/// rotor is wrecked in a moment
-	func rotorBlades(_ v: Vehicle, _ dt: Double) {
-		if v.collective < 0.05 && v.propRot == 0 { return }
-		if !(airPower(v).1 > 0) { return }
-		var struck: PartCell? = nil
-		for (c, t) in v.parts where t == .rotor {
-			var k: Double = -2.4
-			while k <= 2.41 {
-				let p: (Double, Double) = v.toWorld(Double(c.dx) + 0.5 + k, Double(c.dy) + 0.02)
-				if world.solid(Int(floor(p.0)), Int(floor(p.1))) { struck = c; break }
-				k += 0.8
-			}
-			if struck != nil { break }
-		}
-		guard let c = struck else { v.bladeHit = 0; return }
-		v.bladeHit += dt
-		let at: (Double, Double) = v.cellCenter(c)
-		if Double.random(in: 0...1) < 0.4 { spawnParticles(at.0, at.1 - 0.5, 0xFFE080, 2, 4.0, 0.25, 8) }
-		damageVehicle(v, c, 40.0 * dt, at.0, at.1)
-	}
-
-	// MARK: damage
-
-	/// A hard landing or a crash: each part that hit the ground too fast takes damage by how much too fast
-	func crashDamage(_ v: Vehicle, _ crash: [PartCell: Double]) {
-		if !settings.vehicleDamage { return }
-		var worst: Double = 0
-		for (c, over) in crash where v.parts[c] != nil {
-			let at: (Double, Double) = v.cellCenter(c)
-			damageVehicle(v, c, over * 3.2 * (1.0 + v.mass / 30.0), at.0, at.1)
-			worst = max(worst, over)
-		}
-		if worst > 0 {
-			addShake(min(0.8, 0.2 + worst * 0.05))
-			sfx(.land, at: v.px, 0.9)
-		}
-	}
-
-	/// Damage to one cell; when it has taken all it can, it breaks off
-	func damageVehicle(_ v: Vehicle, _ c: PartCell, _ amount: Double, _ x: Double, _ y: Double) {
-		guard let t = v.parts[c], amount > 0 else { return }
-		if !settings.vehicleDamage { return }
-		let hp: Double = vehicleCellHP(v, c, t) * (v.boost[c] ?? 1.0)
-		let d: Double = (v.dmg[c] ?? 0) + amount
-		v.dmg[c] = d
-		v.hitT = 0.15
-		if d >= hp { breakVehicleCell(v, c) }
-	}
-
-	/// A cell breaks off: it flies off as debris (a block keeps flying as a falling block), whatever is no
-	/// longer joined to the driver's part becomes a wreck of its own, falling with its own physics, and a
-	/// burst fuel tank goes off
-	func breakVehicleCell(_ v: Vehicle, _ c: PartCell) {
-		guard let t = v.parts[c] else { return }
-		let at: (Double, Double) = v.cellCenter(c)
-		let pv: (Double, Double) = (v.vx - v.angVel * (at.1 - v.py), v.vy + v.angVel * (at.0 - v.px))
-		let color: UInt32 = v.blocks[c].map { $0.def.colors.first ?? 0x8A8A8A } ?? 0x8A8A94
-		spawnParticles(at.0, at.1, color, 10, 4.5, 0.6, 14)
-		spawnParticles(at.0, at.1, 0x5A5A5A, 6, 2.5, 0.9, -2)
-		sfx(v.blocks[c] != nil && toolClass(v.blocks[c]!) == .axe ? .breakWood : .breakStone, at: at.0, 0.9)
-		addShake(0.2)
-		if t == .fuelTank && (v.fuel > 4 || isCreative) { vehBlasts.append(at) }
-		if t == .envelope { spawnParticles(at.0, at.1, 0xF0E4D0, 6, 5.0, 0.4, 4) }
-		// what the stores carried spills out of every store that comes away
-		let stores: [(PartCell, (Double, Double))] = v.parts.keys.filter { vehicleStores(v, $0) }.map { ($0, v.cellCenter($0)) }
-		let seat: PartCell? = seatCell(v)
-		let wasDriver: Bool = v.rider && inVehicle === v
-		// the transform before anything changes: the wrecks keep their place in the world
-		let old: Vehicle = v
-		var off: [VCell] = old.cutAway(c, keep: seat == c ? nil : seat)
-		if let first = off.first, first.cell == c {
-			off.removeFirst()
-			if let b = first.tile, b.solid, fallingBlocks.count < 120 {
-				var fb: FallingBlock = FallingBlock(x: at.0, y: at.1 + 0.5, vy: pv.1 - 3.0, tile: b, uid: newID())
-				fb.vx = pv.0 + Double.random(in: -2...2)
-				fb.mass = max(0.2, tileWeight(b))
-				fb.spin = Double.random(in: -6...6)
-				fb.flung = true
-				fallingBlocks.append(fb)
-			} else if Double.random(in: 0...1) < 0.35 {
-				spawnDrop(Stack(item: vehicleCellItem(first), count: 1), at.0, at.1, pv.0 * 0.5, -4)
-			}
-		}
-		if !off.isEmpty { makeWrecks(old, off) }
-		for (sc, sp) in stores where v.parts[sc] == nil {
-			let k: IntPair = cargoSpot(v, sc)
-			if let p = openChest, p == k { openChest = nil }
-			for st in world.removeChest(k.x, k.y) { spawnDrop(st, sp.0, sp.1, Double.random(in: -2...2), -3.5) }
-		}
-		if v.parts.isEmpty {
-			if wasDriver { dismount() }
-			return
-		}
-		v.recompute(keepAnchor: true)
-		v.kit = -1
-		if wasDriver && (seatCell(v) == nil || !v.hasSteering) {
-			dismount()
-			say("Your seat was shot away!", 2.0)
-		}
-		bumpHUD()
-	}
-
-	/// Pieces broken off a vehicle become wrecks: vehicles of their own (no seat, so nobody drives them)
-	/// that keep the place, turn and speed they had
-	func makeWrecks(_ from: Vehicle, _ cells: [VCell]) {
-		var left: [PartCell: VCell] = [:]
-		for r in cells { left[r.cell] = r }
-		while let start = left.keys.first {
-			var group: [VCell] = []
-			var stack: [PartCell] = [start]
-			while let cur = stack.popLast() {
-				guard let r = left[cur] else { continue }
-				left[cur] = nil
-				group.append(r)
-				let n: [PartCell] = [PartCell(dx: cur.dx + 1, dy: cur.dy), PartCell(dx: cur.dx - 1, dy: cur.dy), PartCell(dx: cur.dx, dy: cur.dy + 1), PartCell(dx: cur.dx, dy: cur.dy - 1)]
-				for k in n where left[k] != nil { stack.append(k) }
-			}
-			if vehicles.count >= 40 {
-				for r in group {
-					let p: (Double, Double) = from.cellCenter(r.cell)
-					if Double.random(in: 0...1) < 0.4 { spawnDrop(Stack(item: vehicleCellItem(r), count: 1), p.0, p.1, 0, -3) }
-				}
-				continue
-			}
-			let w: Vehicle = Vehicle(id: newID(), first: .frame, x: 0, y: 0)
-			w.parts.removeAll()
-			for r in group {
-				w.parts[r.cell] = r.type
-				if let b = r.tile { w.blocks[r.cell] = b }
-			}
-			w.recompute(keepAnchor: false)
-			let p: (Double, Double) = from.toWorld(w.comX, w.comY)
-			w.px = p.0
-			w.py = p.1
-			w.angle = from.angle
-			w.vx = from.vx - from.angVel * (p.1 - from.py) + Double.random(in: -1.5...1.5)
-			w.vy = from.vy + from.angVel * (p.0 - from.px) - 2.0
-			w.angVel = from.angVel + Double.random(in: -1.5...1.5)
-			w.updateBox()
-			vehicles.append(w)
-		}
-	}
-
-	/// Blasts damage every part in reach (less further out) and shove the vehicle away
-	func blastVehicles(_ x: Double, _ y: Double, radius: Double, power: Double) {
-		let list: [Vehicle] = vehicles
-		for v in list {
-			if v.b.right < x - radius - 1 || v.b.left > x + radius + 1 || v.b.y < y - radius - 1 || v.b.top > y + radius + 1 { continue }
-			var hits: [(PartCell, Double)] = []
-			for (c, _) in v.parts {
-				let p: (Double, Double) = v.cellCenter(c)
-				let d: Double = sqrt((p.0 - x) * (p.0 - x) + (p.1 - y) * (p.1 - y))
-				if d > radius + 0.5 { continue }
-				hits.append((c, power * 1.1 * (1.0 - 0.6 * clampD(d / max(0.5, radius), 0, 1))))
-			}
-			if hits.isEmpty { continue }
-			let dx: Double = v.px - x
-			let dy: Double = v.py - y
-			let dl: Double = max(0.5, sqrt(dx * dx + dy * dy))
-			let push: Double = power * 0.9 * Double(hits.count) / Double(max(1, v.parts.count)) / max(1.0, v.mass * 0.25)
-			v.vx += dx / dl * min(14.0, push)
-			v.vy += dy / dl * min(14.0, push) - 1.0
-			v.asleep = false
-			for h in hits where v.parts[h.0] != nil {
-				let p: (Double, Double) = v.cellCenter(h.0)
-				damageVehicle(v, h.0, h.1, p.0, p.1)
-			}
-		}
-	}
-
-	/// The first vehicle cell a shot's step passes through. Shots from monsters, and from other vehicles'
-	/// guns, hit vehicles; the player's own shots pass their vehicles, and a gun never hits its own vehicle.
-	func vehicleOnPath(_ p: Projectile, _ nx: Double, _ ny: Double, maxT: Double) -> VehicleHit? {
-		let fromVehicle: Bool = p.owner >= 2_000_000
-		if p.source.kind == .player && !fromVehicle { return nil }
-		var best: VehicleHit? = nil
-		var bt: Double = min(1.0, maxT)
-		let x0: Double = min(p.x, nx)
-		let x1: Double = max(p.x, nx)
-		let y0: Double = min(p.y, ny)
-		let y1: Double = max(p.y, ny)
-		for v in vehicles {
-			if fromVehicle && p.owner == 2_000_000 + v.id { continue }
-			if x1 < v.b.left || x0 > v.b.right || y1 < v.b.top || y0 > v.b.y { continue }
-			let a: (Double, Double) = v.toLocal(p.x, p.y)
-			let b: (Double, Double) = v.toLocal(nx, ny)
-			let len: Double = sqrt((b.0 - a.0) * (b.0 - a.0) + (b.1 - a.1) * (b.1 - a.1))
-			let n: Int = max(1, Int(ceil(len / 0.2)))
-			var i: Int = 0
-			while i <= n {
-				let t: Double = Double(i) / Double(n)
-				if t > bt { break }
-				let lx: Double = a.0 + (b.0 - a.0) * t
-				let ly: Double = a.1 + (b.1 - a.1) * t
-				let c: PartCell = PartCell(dx: Int(floor(lx)), dy: Int(floor(ly)))
-				if v.parts[c] != nil {
-					bt = t
-					best = VehicleHit(t: t, v: v, cell: c)
-					break
-				}
-				i += 1
-			}
-		}
-		return best
-	}
-
-	/// A shot strikes a vehicle part
-	func shotHitsVehicle(_ p: Projectile, _ vh: VehicleHit, _ x: Double, _ y: Double) {
-		if p.kind == .shell {
-			shellBurst(p, x, y)
-			return
-		}
-		if p.mod >= 0 { modShotLanded(p, x, y, mob: nil, player: false) }
-		var amount: Double = p.dmg
-		if p.kind == .fireball { amount *= 1.3 }
-		if vh.v.parts[vh.cell] == .armor { spawnParticles(x, y, 0xFFE8A0, 4, 4.0, 0.2, 6) } else { spawnParticles(x, y, 0xC8C8C8, 3, 3.0, 0.3, 10) }
-		sfx(.arrowHit, at: x, 0.5)
-		damageVehicle(vh.v, vh.cell, amount, x, y)
-	}
-
-	/// A cannon shell bursts: a small blast that breaks and throws blocks like a bomb's
-	func shellBurst(_ p: Projectile, _ x: Double, _ y: Double) {
-		explode(x, y, radius: 2.3, power: p.dmg, source: p.source, breakBlocks: true)
-	}
-
-	// MARK: weapons
-
-	/// The guns turn toward where the driver aims (each within its own arc) and fire while the attack
-	/// stick is held. Cannons fire shells (one gunpowder each) and kick the vehicle back; machine guns
-	/// fire a stream of bullets.
-	func runVehicleWeapons(_ v: Vehicle, _ dt: Double) {
-		for (c, cd) in v.gunCD where cd > 0 { v.gunCD[c] = cd - dt }
-		let driving: Bool = v.rider && inVehicle === v
-		let firing: Bool = driving && useHeld && aimValid
-		for (c, t) in v.parts where t == .cannon || t == .autoGun {
-			let f: (Int, Int) = v.face[c] ?? (1, 0)
-			let base: Double = v.angle + atan2(Double(f.1), Double(f.0))
-			let o: (Double, Double) = v.cellCenter(c)
-			var want: Double = base
-			if driving && aimValid { want = atan2(aimY - o.1, aimX - o.0) }
-			let rel: Double = clampD(remainder(want - base, 2.0 * Double.pi), -1.4, 1.4)
-			let a: Double = base + rel
-			let cur: Double = v.aimAng[c] ?? base
-			let turn: Double = remainder(a - cur, 2.0 * Double.pi)
-			let rate: Double = (t == .cannon ? 3.0 : 6.0) * dt
-			let na: Double = cur + clampD(turn, -rate, rate)
-			v.aimAng[c] = na
-			if firing && (v.gunCD[c] ?? 0) <= 0 && abs(remainder(want - na, 2.0 * Double.pi)) < 0.35 {
-				fireVehicleGun(v, c, t, na, o)
-			}
-		}
-	}
-
-	func fireVehicleGun(_ v: Vehicle, _ c: PartCell, _ t: PartType, _ a: Double, _ o: (Double, Double)) {
-		let cannon: Bool = t == .cannon
-		if !isCreative {
-			let ammo: Item = cannon ? .mat(.gunpowder) : .ammo(.bullet)
-			if !inv.remove(ammo, 1) {
-				v.gunCD[c] = 1.0
-				if vehSayT <= clock {
-					vehSayT = clock + 3.0
-					say(cannon ? "The cannon needs gunpowder." : "The machine gun needs bullets.", 2.0)
-				}
-				return
-			}
-		}
-		let k: Double = v.boost[c] ?? 1.0
-		let mx: Double = o.0 + cos(a) * 0.9
-		let my: Double = o.1 + sin(a) * 0.9
-		let speed: Double = cannon ? 34.0 : 44.0
-		var p = Projectile(kind: cannon ? .shell : .bullet, x: mx, y: my, vx: cos(a) * speed + v.vx, vy: sin(a) * speed + v.vy, dmg: cannon ? 24 * k : 4.5 * k, fromPlayer: true, gravity: cannon ? 14 : 3)
-		p.life = cannon ? 4.0 : 1.3
-		p.w = cannon ? 0.35 : 0.15
-		p.source = .player
-		p.owner = 2_000_000 + v.id
-		p.uid = newID()
-		p.knock = cannon ? 9 : 3
-		projectiles.append(p)
-		v.gunCD[c] = cannon ? 2.0 : 0.13
-		if cannon {
-			// the recoil kicks the vehicle back, around the cannon
-			let j: Double = 10.0
-			let rx: Double = o.0 - v.px
-			let ry: Double = o.1 - v.py
-			let jx: Double = -cos(a) * j
-			let jy: Double = -sin(a) * j
-			v.vx += jx / v.mass
-			v.vy += jy / v.mass
-			v.angVel += (rx * jy - ry * jx) / v.inertia
-			v.asleep = false
-			spawnParticles(mx, my, 0xFFC050, 8, 5.0, 0.25, 2)
-			spawnParticles(mx, my, 0x8A8A8A, 6, 2.0, 0.8, -3)
-			addShake(0.25)
-			sfx(.blunderbuss, at: mx, 0.9)
-		} else {
-			if Double.random(in: 0...1) < 0.5 { spawnParticles(mx, my, 0xFFE080, 2, 3.0, 0.12, 0) }
-			sfx(.gun, at: mx, 0.3)
-		}
-	}
-
-	/// Where the guns aim with the attack stick held but not pushed: the nearest foe in range and in
-	/// sight, led a little for its speed (nil: none, the guns look ahead)
-	func vehicleAutoAim(_ v: Vehicle) -> (Double, Double)? {
-		var best: Mob? = nil
-		var bd: Double = 26.0
-		for m in mobsNear(v.px - 26, v.px + 26) where m.hp > 0 && !m.removed && !m.downed && isThreat(m) {
-			let d: Double = abs(m.b.x - v.px) + abs(m.b.cy - v.py) * 0.7
-			if d < bd && world.lineClear(v.px, v.py, m.b.x, m.b.cy) {
-				bd = d
-				best = m
-			}
-		}
-		guard let m = best else { return nil }
-		let lead: Double = bd / 40.0
-		return (m.b.x + m.b.vx * lead, m.b.cy + m.b.vy * lead)
-	}
-
-	// MARK: repairs and storage
-
-	/// Holding an iron bar, a tap on a damaged part mends it (the bar is used up)
-	func repairVehiclePart(_ v: Vehicle, _ c: PartCell) -> Bool {
-		guard let it = heldItem, it == .mat(.ironBar), let d = v.dmg[c], d > 0.5 else { return false }
-		v.dmg[c] = nil
-		if !isCreative { inv.removeAt(sel, 1) }
-		let p: (Double, Double) = v.cellCenter(c)
-		spawnParticles(p.0, p.1, 0xFFE8A0, 6, 2.5, 0.4, 4)
-		sfx(.craft, at: p.0, 0.6)
-		say("Mended.", 1.0)
-		bumpHUD()
-		return true
-	}
-
-	/// Cells that hold things: cargo crates, and chests, cabinets, wardrobes or a mod's storage built on
-	func vehicleStores(_ v: Vehicle, _ c: PartCell) -> Bool {
-		guard let t = v.parts[c] else { return false }
-		if t == .cargo { return true }
-		guard t == .block, let b = v.blocks[c] else { return false }
-		if b == .chest || b == .cabinet || b == .wardrobe { return true }
-		if b.isMod, ModRuntime.shared.blockDef(b)?.function == .storage { return true }
-		return false
-	}
-
-	/// Puts a whole stack (infusions and all) in the bag, dropping what does not fit
-	func giveStack(_ st: Stack) {
-		let left: Int = inv.add(st.item, st.count, extra: st.extra, inf: st.inf)
-		if left > 0 {
-			var rest: Stack = st
-			rest.count = left
-			spawnDrop(rest, pb.x, pb.y - 1.0, Double(facing) * 3.0, -4.0)
-		}
-		bumpHUD()
-	}
-
-	/// What the controls do in this vehicle (said when getting in)
-	func controlsHint(_ v: Vehicle) -> String {
-		if v.rotors > 0 { return "Flying. Stick up and down: climb and sink (let go to hover). Left and right: tilt and fly that way." }
-		if v.burners > 0 && v.envelopes > 0 { return "Ballooning. Stick up: heat the balloon and rise; down: let it cool and sink. Left and right: the propellers." }
-		if v.wings > 0 { return "Flying. Left and right: the throttle. Up and down: pitch the nose (gather speed on the ground, then pull up). TURN turns round." }
-		if v.tracks > 0 { return "Driving a tracked vehicle: slow, but it climbs anything. Jump to get out when stopped." }
-		return "Driving. Hold the stick to move; in the air it tilts the vehicle. Jump to get out when stopped."
-	}
-}
-
-extension Game {
-	// MARK: turning round
-
-	/// TURN is offered while driving: in flight it is a banked turn out of the screen and back; standing
-	/// still (or nearly), the vehicle simply faces the other way if it has room
-	var canTurnVehicle: Bool {
-		guard let v = inVehicle else { return false }
-		return v.turnT == 0 && (v.aero || v.speed < 2.0)
-	}
-
-	func turnVehicle() {
-		guard let v = inVehicle, v.turnT == 0 else { return }
-		let flying: Bool = v.aero && v.contacts == 0 && v.submerged <= 0.02 && v.speed > 3.0
-		if flying {
-			v.turnT = 0.001
-			v.turnVX = v.vx
-			v.turned = false
-			v.asleep = false
-			return
-		}
-		if v.speed > 2.0 {
-			say("Slow down to turn round.", 1.5)
-			return
-		}
-		if !mirrorVehicle(v, check: true) { say("No room to turn round here.", 1.8) }
-	}
-
-	/// A turn in flight: it banks round out of the screen and back (drawn narrowing to its edge and
-	/// widening again), the wings lift a little less while banked, and halfway round it faces and flies
-	/// the other way, keeping its airspeed less what the turn costs
-	func stepTurn(_ v: Vehicle, _ dt: Double) {
-		v.turnT = min(1.0, v.turnT + dt / Aero.turnTime)
-		if !v.turned && v.turnT >= 0.5 {
-			v.turned = true
-			_ = mirrorVehicle(v, check: false)
-			v.vx = -v.vx * 0.92
-		}
-		if v.turnT >= 1.0 { v.turnT = 0 }
-	}
-
-	/// Mirrors a vehicle left to right about its centre of mass (it then faces the other way). With
-	/// `check`, only if the mirrored vehicle fits where it is. Stores keep what they hold.
-	@discardableResult
-	func mirrorVehicle(_ v: Vehicle, check: Bool) -> Bool {
-		let sx: Int = v.minX + v.maxX
-		if check {
-			for (c, _) in v.parts {
-				let p: (Double, Double) = v.cellCenter(c)
-				let mx: Double = 2.0 * v.px - p.0
-				if world.boxSolid(mx - 0.4, p.1 - 0.4, mx + 0.4, p.1 + 0.4) { return false }
-			}
-		}
-		var np: [PartCell: PartType] = [:]
-		var nb: [PartCell: Tile] = [:]
-		var nd: [PartCell: Double] = [:]
-		var moved: [(IntPair, [Stack])] = []
-		for (c, t) in v.parts {
-			let m: PartCell = PartCell(dx: sx - c.dx, dy: c.dy)
-			np[m] = t
-			if let b = v.blocks[c] { nb[m] = mirroredTile(b) }
-			if let d = v.dmg[c] { nd[m] = d }
-			if vehicleStores(v, c) {
-				let k: IntPair = cargoSpot(v, c)
-				if let p = openChest, p == k { openChest = nil }
-				moved.append((cargoSpot(v, m), world.removeChest(k.x, k.y)))
-			}
-		}
-		let cx: Double = v.px
-		let cy: Double = v.py
-		v.parts = np
-		v.blocks = nb
-		v.dmg = nd
-		v.gunCD.removeAll()
-		v.aimAng.removeAll()
-		v.drillWork.removeAll()
-		v.recompute(keepAnchor: false)
-		v.angle = -v.angle
-		v.angVel = -v.angVel
-		v.px = cx
-		v.py = cy
-		v.dir = -v.dir
-		v.fwd = -v.fwd
-		v.kit = -1
-		v.asleep = false
-		v.updateBox()
-		for m in moved { world.setChestItems(m.0.x, m.0.y, m.1) }
-		return true
-	}
-
-	// MARK: building blocks onto vehicles
-
-	/// The ON VEHICLE switch shows while a block is in hand near a vehicle
-	var canBuildOnVehicle: Bool {
-		guard inVehicle == nil, !dead, let it = heldItem, case .block(let t) = it else { return false }
-		if t == .doorClosed || t == .doorOpen || t == .liftCar || t == .sapling || t.isPlant { return false }
-		return nearestVehicle(8) != nil
-	}
-
-	func toggleVehicleBuild() {
-		vehicleBuild.toggle()
-		say(vehicleBuild ? "Blocks now go onto the vehicle: tap a green square." : "Blocks go into the world again.", 2.0)
-		bumpHUD()
-	}
-
-	/// Builds the block in hand onto the vehicle at the aim point (it becomes one of its cells, with its
-	/// weight, and moves with it). A mod block made to work as a vehicle part does that part's work.
-	func attachBlockToVehicle(_ t: Tile) -> Bool {
-		guard let (v, c) = vehicleCellAtAim() else {
-			if nearestVehicle(8) == nil { return false }
-			if placeCD <= 0 { say("Tap a green square next to the vehicle.", 1.5) }
-			placeCD = 0.3
-			return true
-		}
-		var part: PartType = .block
-		if t.isMod, let d = ModRuntime.shared.blockDef(t), let p = d.vehRole.part { part = p }
-		if let problem = attachProblem(v, c, part) {
-			say(problem, 2.0)
-			placeCD = 0.3
-			return true
-		}
-		liftIfBuried(v, c)
-		v.parts[c] = part
-		v.blocks[c] = t
-		v.recompute(keepAnchor: true)
-		v.kit = -1
-		if t == .chest || t == .cabinet || t == .wardrobe { world.setChestItems(cargoSpot(v, c).x, cargoSpot(v, c).y, []) }
-		if !isCreative { inv.removeAt(sel, 1) }
-		sfx(.place, 0.6)
-		placeCD = 0.16
-		swingT = 0.14
-		bumpHUD()
-		return true
-	}
-
-	/// The free cell next to a vehicle under the aim point (the one a block or part would go in)
-	func vehicleCellAtAim() -> (Vehicle, PartCell)? {
-		for v in vehicles {
-			if aimX < v.b.left - 1.5 || aimX > v.b.right + 1.5 || aimY < v.b.top - 1.5 || aimY > v.b.y + 1.5 { continue }
-			let c: PartCell = v.cellAt(aimX, aimY)
-			if v.parts[c] == nil && v.hasNeighbor(c) { return (v, c) }
-		}
-		return nil
-	}
-
-	// MARK: the assembler
-
-	/// The Vehicle Assembler: a tap on a structure you built turns it (every built block joined to it)
-	/// into a vehicle, joined to a vehicle it touches if there is one; a tap on a parked vehicle puts its
-	/// blocks back into the world and its parts in your bag
-	func useAssembler(_ pressed: Bool) {
-		if !pressed || useCD > 0 { return }
-		useCD = 0.4
-		swingT = 0.15
-		if !inReach(aimX, aimY) {
-			say("Tap closer to you.", 1.2)
-			return
-		}
-		if let hit = vehicleAtPoint(aimX, aimY) {
-			disassembleVehicle(hit.0)
-			return
-		}
-		let tx: Int = Int(floor(aimX))
-		let ty: Int = Int(floor(aimY))
-		if !world.isBuilt(tx, ty) || !canAssemble(world.tile(tx, ty)) {
-			say("Tap a block you built: it and every built block joined to it become one vehicle.", 3.0)
-			return
-		}
-		assembleStructure(tx, ty)
-	}
-
-	/// The built blocks joined to (x, y), side by side (up to 800)
-	func builtStructure(_ x: Int, _ y: Int) -> [IntPair] {
-		var out: [IntPair] = []
-		var seen: Set<IntPair> = []
-		var stack: [IntPair] = [IntPair(x: x, y: y)]
-		while let p = stack.popLast() {
-			if seen.contains(p) { continue }
-			seen.insert(p)
-			if !world.isBuilt(p.x, p.y) || !canAssemble(world.tile(p.x, p.y)) { continue }
-			out.append(p)
-			if out.count >= 800 { break }
-			stack.append(IntPair(x: p.x + 1, y: p.y))
-			stack.append(IntPair(x: p.x - 1, y: p.y))
-			stack.append(IntPair(x: p.x, y: p.y + 1))
-			stack.append(IntPair(x: p.x, y: p.y - 1))
-		}
-		return out
-	}
-
-	func assembleStructure(_ x: Int, _ y: Int) {
-		let cells: [IntPair] = builtStructure(x, y)
-		if cells.isEmpty { return }
-		if cells.count >= 800 {
-			say("That structure is too big to move (800 blocks at most).", 2.5)
-			return
-		}
-		// a vehicle the structure touches takes it in (it must be roughly level)
-		var host: Vehicle? = nil
-		for v in vehicles where abs(remainder(v.angle, 2.0 * Double.pi)) < 0.08 && !v.rider {
-			for p in cells {
-				let c: PartCell = v.cellAt(Double(p.x) + 0.5, Double(p.y) + 0.5)
-				if v.parts[c] == nil && v.hasNeighbor(c) { host = v; break }
-			}
-			if host != nil { break }
-		}
-		var x0: Int = Int.max
-		var y1: Int = Int.min
-		for p in cells { x0 = min(x0, p.x); y1 = max(y1, p.y) }
-		let v: Vehicle = host ?? Vehicle(id: newID(), first: .frame, x: 0, y: 0)
-		if host == nil { v.parts.removeAll() }
-		var stores: [(PartCell, [Stack])] = []
-		var added: Int = 0
-		for p in cells {
-			let t: Tile = world.tile(p.x, p.y)
-			let c: PartCell = host != nil ? v.cellAt(Double(p.x) + 0.5, Double(p.y) + 0.5) : PartCell(dx: p.x - x0, dy: p.y - y1)
-			if v.parts[c] != nil {
-				// no cell free for it in the vehicle: it goes to the bag (with what it held)
-				giveItem(.block(t), 1)
-				if t == .chest || t == .cabinet || t == .wardrobe { for st in world.removeChest(p.x, p.y) { giveStack(st) } }
-				continue
-			}
-			var part: PartType = .block
-			if t.isMod, let d = ModRuntime.shared.blockDef(t), let pp = d.vehRole.part { part = pp }
-			v.parts[c] = part
-			v.blocks[c] = t
-			added += 1
-			if t == .chest || t == .cabinet || t == .wardrobe || (t.isMod && ModRuntime.shared.blockDef(t)?.function == .storage) {
-				stores.append((c, world.removeChest(p.x, p.y)))
-			}
-		}
-		for p in cells {
-			world.setBuilt(p.x, p.y, false)
-			world.set(p.x, p.y, .air)
-		}
-		if host == nil {
-			v.recompute(keepAnchor: false)
-			v.placeBox(left: Double(x0), bottom: Double(y1 + 1))
-			vehicles.append(v)
-		} else {
-			v.recompute(keepAnchor: true)
-		}
-		v.kit = -1
-		v.asleep = false
-		for s in stores { world.setChestItems(cargoSpot(v, s.0).x, cargoSpot(v, s.0).y, s.1) }
-		spawnParticles(v.b.x, v.b.y - v.b.h * 0.5, 0x30C0E0, 14, 4.0, 0.6, 2)
-		sfx(.craft, 0.8)
-		let massS: String = String(format: "%.0f", v.mass)
-		let what: String = host == nil ? "a new vehicle" : "the vehicle"
-		say(joinText("Assembled ", String(added), " blocks into ", what, " (mass ", massS, "). ", vehicleCheck(v).hint), 4.0)
-		bumpHUD()
-	}
-
-	/// Puts a parked, level vehicle's blocks back into the world, each in the cell it is over (blocks
-	/// that have no room go to the bag, as do the parts); stores keep their things as chests
-	func disassembleVehicle(_ v: Vehicle) {
-		if v.rider || v.speed > 1.0 || !v.upright {
-			say("Park it level and get out first.", 2.0)
-			return
-		}
-		var placed: Int = 0
-		var bagged: Int = 0
-		for (c, t) in v.parts {
-			let p: (Double, Double) = v.cellCenter(c)
-			let tx: Int = Int(floor(p.0))
-			let ty: Int = Int(floor(p.1))
-			var held: [Stack] = []
-			if vehicleStores(v, c) {
-				let k: IntPair = cargoSpot(v, c)
-				if let o = openChest, o == k { openChest = nil }
-				held = world.removeChest(k.x, k.y)
-			}
-			let here: Tile = world.tile(tx, ty)
-			let free: Bool = here == .air || here.liquid || here.isPlant
-			if let b = v.blocks[c], free {
-				world.set(tx, ty, b)
-				world.setBuilt(tx, ty, true)
-				if b == .chest || b == .cabinet || b == .wardrobe || (b.isMod && ModRuntime.shared.blockDef(b)?.function == .storage) {
-					world.setChestItems(tx, ty, held)
-					held = []
-				}
-				placed += 1
-			} else {
-				giveItem(vehicleCellItem(VCell(cell: c, type: t, tile: v.blocks[c])), 1)
-				bagged += 1
-			}
-			for st in held { giveStack(st) }
-		}
-		vehicles.removeAll { $0 === v }
-		spawnParticles(v.b.x, v.b.y - v.b.h * 0.5, 0x30C0E0, 14, 4.0, 0.6, 2)
-		sfx(.craft, 0.8)
-		say(joinText("Taken apart: ", String(placed), " blocks back in place, ", String(bagged), " to your bag."), 3.0)
-		bumpHUD()
-	}
-
-	// MARK: the autopilot
-
-	/// AUTO cycles the autopilot: off, cruise (it holds the speed and the height you had), route (it
-	/// drives the points you marked, round and round, even with nobody aboard)
-	func cycleAutopilot() {
-		guard let v = inVehicle, v.autopilots > 0 else { return }
-		var next: Int = (v.auto + 1) % 3
-		if next == 2 && v.route.count < 2 { next = 0 }
-		v.auto = next
-		v.holdThr = abs(v.throttle) > 0.1 ? v.throttle : (abs(v.vx) > 1.5 ? (v.vx > 0 ? 0.7 : -0.7) : 0)
-		v.holdY = v.py
-		v.holdVX = v.vx
-		if next == 2 { v.routeAt = nearestWaypoint(v) }
-		let names: [String] = ["Autopilot off.", "Autopilot: cruise. It holds your speed and height; steer any time.", "Autopilot: route. It drives your marked points round and round, even if you get out."]
-		say(names[next], 3.0)
-		bumpHUD()
-	}
-
-	/// MARK adds where the vehicle is now to its route (up to 16 points)
-	func markWaypoint() {
-		guard let v = inVehicle, v.autopilots > 0 else { return }
-		if v.route.count >= 16 { v.route.removeFirst() }
-		v.route.append(VWaypoint(x: v.px, y: v.py))
-		let n: Int = v.route.count
-		say(n < 2 ? "Point 1 marked. Drive on and mark more." : joinText("Point ", String(n), " marked. AUTO twice to drive the route."), 2.0)
-		bumpHUD()
-	}
-
-	func clearRoute() {
-		guard let v = inVehicle else { return }
-		v.route.removeAll()
-		if v.auto == 2 { v.auto = 0 }
-		say("Route cleared.", 1.5)
-		bumpHUD()
-	}
-
-	func nearestWaypoint(_ v: Vehicle) -> Int {
-		var best: Int = 0
-		var bd: Double = 1e18
-		for (i, w) in v.route.enumerated() {
-			let d: Double = (w.x - v.px) * (w.x - v.px) + (w.y - v.py) * (w.y - v.py)
-			if d < bd { bd = d; best = i }
-		}
-		return best
-	}
-
-	/// The autopilot's hands on the controls. The driver's own input wins while the stick is pushed
-	/// (and cruise then takes up the new speed or height). Cruise holds the throttle, and in the air the
-	/// height; a route steers for each point in turn.
-	func autopilotSteer(_ v: Vehicle, _ ix: Double, _ up: Double, _ dt: Double) {
-		if v.autopilots == 0 { v.auto = 0; return }
-		let touched: Bool = abs(ix) > 0.1 || abs(up) > 0.1
-		if v.auto == 1 {
-			if abs(ix) > 0.1 { v.holdThr = ix } else { v.throttle = v.holdThr }
-			if abs(up) > 0.1 { v.holdY = v.py } else if v.aero { v.pitch = holdHeight(v, v.holdY) }
-			return
-		}
-		if v.auto != 2 || v.route.count < 2 { return }
-		if touched && v.rider { return }
-		if v.routeAt >= v.route.count { v.routeAt = 0 }
-		let w: VWaypoint = v.route[v.routeAt]
-		let dx: Double = w.x - v.px
-		let dy: Double = w.y - v.py
-		let flyer: Bool = v.aero && (v.rotors > 0 || v.envelopes > 0 || v.wings > 0)
-		let arrived: Bool = abs(dx) < 2.5 && (!flyer || abs(dy) < 3.0)
-		if arrived {
-			v.routeAt = (v.routeAt + 1) % v.route.count
-			return
-		}
-		if v.wings > 0 && v.rotors == 0 && v.envelopes == 0 {
-			// a plane flies on at full throttle and turns round when the point is behind it
-			let ahead: Double = dx * Double(v.fwd) * (v.cosA >= 0 ? 1.0 : -1.0)
-			if ahead < -6.0 && v.turnT == 0 && v.contacts == 0 && v.speed > 3.0 {
-				v.turnT = 0.001
-				v.turnVX = v.vx
-				v.turned = false
-			}
-			v.throttle = Double(v.fwd)
-			v.pitch = holdHeight(v, w.y)
-			return
-		}
-		let gain: Double = flyer ? 0.15 : 0.35
-		var thr: Double = clampD(dx * gain, -1, 1)
-		if abs(thr) < 0.35 { thr = thr >= 0 ? 0.35 : -0.35 }
-		if flyer && abs(dx) < 6.0 { thr *= abs(dx) / 6.0 }
-		v.throttle = thr
-		v.pitch = flyer ? holdHeight(v, w.y) : 0
-	}
-
-	/// The up/down input that brings the vehicle to a height and holds it there
-	func holdHeight(_ v: Vehicle, _ y: Double) -> Double {
-		let err: Double = v.py - y
-		if v.wings > 0 && v.rotors == 0 && v.envelopes == 0 {
-			return clampD(err * 0.12 + v.vy * 0.12, -0.7, 0.7)
-		}
-		return clampD(err * 0.35 + v.vy * 0.3, -1, 1)
-	}
-}
-
-extension Game {
-	// MARK: what kind of vehicle, and is it ready
-
-	/// What the design is, from what it is built of (a hybrid when it is more than one thing)
-	func vehicleKindName(_ v: Vehicle) -> String {
-		var kinds: [String] = []
-		if v.rotors > 0 { kinds.append("HELICOPTER") }
-		if v.envelopes > 0 && v.burners > 0 { kinds.append("AIRSHIP") }
-		if v.wings > 0 && v.rotors == 0 { kinds.append(v.airProps + v.jets > 0 ? (v.jets > 0 ? "JET" : "PLANE") : "GLIDER") }
-		var hulls: Int = 0
-		for (_, t) in v.parts where t == .hull { hulls += 1 }
-		if hulls > 0 { kinds.append("BOAT") }
-		// on an aircraft, wheels are its landing gear
-		let flies: Bool = v.rotors > 0 || v.wings > 0 || (v.envelopes > 0 && v.burners > 0)
-		if v.wheels >= 2 {
-			if v.tracks > 0 { kinds.append(v.cannons > 0 ? "TANK" : "TRACKED") }
-			else if kinds.isEmpty { kinds.append(v.parts.count >= 14 || cargoCount(v) >= 2 ? "TRUCK" : "CAR") }
-			else if !flies { kinds.append("WHEELS") }
-		}
-		if kinds.isEmpty { return v.parts.contains { $0.value == .block } ? "STRUCTURE" : "VEHICLE" }
-		if kinds.count == 1 { return kinds[0] }
-		return joinText(kinds.prefix(2).joined(separator: " + "), " HYBRID")
-	}
-
-	func cargoCount(_ v: Vehicle) -> Int {
-		var n: Int = 0
-		for c in v.parts.keys where vehicleStores(v, c) { n += 1 }
-		return n
-	}
-
-	/// The checklist for anything that flies, fights or runs on tracks: what it needs, and whether its
-	/// design can do it (lift against weight, a tail behind the centre of mass, power for its rotors)
-	func flightCheck(_ v: Vehicle) -> VehicleCheck {
-		var lines: [String] = []
-		var oks: [Bool] = []
-		func add(_ ok: Bool, _ s: String) {
-			lines.append(s)
-			oks.append(ok)
-		}
-		let weight: Double = v.mass * gravityG
-		let massS: String = String(format: "%.1f", v.mass)
-		add(v.hasSeat && v.hasSteering, v.hasCockpit ? "Cockpit" : "Seat and steering wheel (or a cockpit)")
-		var hint: String = joinText("Mass ", massS, ". Refuel: hold coal or wood and tap it.")
-		if v.rotors > 0 {
-			let lift: Double = rotorMax(v, anyway: true) + balloonMax(v)
-			let pct: Int = Int((lift / max(1, weight) * 100).rounded())
-			add(v.engines > 0, joinText("Engines to turn the rotor (", String(v.engines), ")"))
-			add(lift > weight * 1.05, joinText("Rotor lift ", String(pct), "% of the weight"))
-			add(v.tailRotors > 0 || v.rotors >= 2, "Tail rotor (or a second main rotor)")
-			hint = lift > weight * 1.05 ? joinText("Mass ", massS, ". Stick up to lift off; let go to hover.") : "Too heavy for the rotor: add engines or take weight off."
-		} else if v.envelopes > 0 {
-			let lift: Double = balloonMax(v)
-			let pct: Int = Int((lift / max(1, weight) * 100).rounded())
-			let need: Int = (v.envelopes + Aero.burnerCells - 1) / Aero.burnerCells
-			add(v.burners >= need, joinText("Burners: ", String(v.burners), " of ", String(need), " (one heats 12 envelopes)"))
-			add(lift > weight * 1.05, joinText("Balloon lift ", String(pct), "% of the weight (full heat)"))
-			add(v.airProps > 0 && v.engines > 0, "Propeller and engine to move (optional)")
-			oks[oks.count - 1] = true
-			hint = lift > weight * 1.05 ? joinText("Mass ", massS, ". Stick up to heat the balloon and rise.") : "Not enough balloon for the weight: add envelopes (and burners)."
-		} else if v.wings > 0 {
-			let takeoff: Double = sqrt(weight / max(0.01, Aero.kLift * Double(v.wings) * 1.15))
-			let thrust: Bool = (v.airProps > 0 && v.engines > 0) || v.jets > 0
-			add(thrust, "Air propeller with an engine, or a jet")
-			add(takeoff < 20.0, joinText("Wings lift it at ", String(Int(takeoff.rounded())), " blocks/s (", String(v.wings), " wing cells)"))
-			// the push it has at that speed against its weight: under a fifth, it never gets there
-			let push: Double = thrustAt(v, takeoff) / max(1, weight)
-			add(push >= 0.2, joinText("Thrust ", String(Int((push * 100).rounded())), "% of the weight at take-off (20% needed)"))
-			let tail: (Bool, Bool) = tailCheck(v)
-			add(tail.0, "Tail elevator, well behind the centre of mass")
-			add(tail.1, "Centre of mass ahead of the wings (or it flips)")
-			if takeoff >= 20.0 { hint = "The wings are too small for its weight: add wing cells." }
-			else if push < 0.2 { hint = "Too heavy for its engines: add engines or a jet, or take weight off." }
-			else { hint = "Throttle up along the ground; at speed, stick up to lift off." }
-		}
-		if v.tracks > 0 || v.cannons + v.guns > 0 {
-			if v.rotors == 0 && v.wings == 0 && v.envelopes == 0 {
-				add(v.wheels >= 2, joinText("Tracks or wheels under the hull (", String(v.wheels), ")"))
-				add(v.engines > 0, "Engine")
-			}
-			if v.cannons + v.guns > 0 {
-				let ammo: Bool = isCreative || (v.cannons == 0 || inv.total(.mat(.gunpowder)) > 0) && (v.guns == 0 || inv.total(.ammo(.bullet)) > 0)
-				add(ammo, v.cannons > 0 ? "Gunpowder in your bag (cannon shells)" : "Bullets in your bag (machine gun)")
-				if v.rotors == 0 && v.wings == 0 && v.envelopes == 0 { hint = "Drive with the stick; aim and fire with the attack stick." }
-			}
-		}
-		if v.engines > 0 || v.jets > 0 || v.burners > 0 { add(v.fuel > 0.5 || isCreative, fuelLine(v)) }
-		var ready: Bool = true
-		for o in oks where !o { ready = false }
-		return VehicleCheck(title: vehicleKindName(v), lines: lines, oks: oks, ready: ready, hint: hint)
-	}
-
-	/// Is there a tail elevator well behind the centre of mass, and is the centre of mass ahead of the
-	/// wings' middle (so the plane noses down when slow instead of flipping onto its back)?
-	func tailCheck(_ v: Vehicle) -> (Bool, Bool) {
-		var wingX: Double = 0
-		var n: Int = 0
-		var tailX: Double = 0
-		var tn: Int = 0
-		for (c, t) in v.parts {
-			if t == .wing { wingX += Double(c.dx) + 0.5; n += 1 }
-			if t == .elevator { tailX += Double(c.dx) + 0.5; tn += 1 }
-		}
-		if n == 0 { return (tn > 0, true) }
-		wingX /= Double(n)
-		// the nose: the end the thrust is at, or failing that the end away from the tail
-		var front: Double = 1
-		if tn > 0 { tailX /= Double(tn); front = tailX < v.comX ? 1 : -1 }
-		let tailOK: Bool = tn > 0 && (tailX - v.comX) * front < -1.5
-		let balanced: Bool = (v.comX - wingX) * front > -0.6
-		return (tailOK, balanced)
-	}
-
-	/// The flight instruments shown while flying: speed, height, climb, lift against weight, the
-	/// rotor or burner, fuel, and a stall warning
-	func flightReadout(_ v: Vehicle) -> [String] {
-		var out: [String] = []
-		let alt: Int = Int((Double(WorldGen.sea) - v.b.y).rounded())
-		let climb: Double = -v.vy
-		out.append(joinText("SPD ", String(Int(v.airspeed.rounded())), "  ALT ", String(alt), "  ", climb >= 0 ? "▲" : "▼", String(format: "%.1f", abs(climb))))
-		let weight: Double = max(1, v.mass * gravityG)
-		let liftPct: Int = Int((v.liftNow / weight * 100).rounded())
-		var l2: String = joinText("LIFT ", String(liftPct), "%")
-		if v.rotors > 0 { l2 = joinText(l2, "  ROTOR ", String(Int((v.collective * 100).rounded())), "%") }
-		if v.burners > 0 && v.envelopes > 0 { l2 = joinText(l2, "  HEAT ", String(Int((v.heat * 100).rounded())), "%") }
-		if v.airProps + v.jets > 0 { l2 = joinText(l2, "  THR ", String(Int((abs(v.throttle) * 100).rounded())), "%") }
-		out.append(l2)
-		if v.engines + v.jets + v.burners > 0 && !isCreative { out.append(joinText("FUEL ", String(Int(v.fuel)), "/", String(Int(v.fuelCapacity)))) }
-		if v.stall { out.append("STALL!") }
-		return out
-	}
-
-	/// A line about the guns (reload) and the autopilot, while driving
-	func vehicleStatusLine(_ v: Vehicle) -> String? {
-		var parts: [String] = []
-		if v.cannons > 0 {
-			var cd: Double = 0
-			for (c, t) in v.parts where t == .cannon { cd = max(cd, v.gunCD[c] ?? 0) }
-			parts.append(cd > 0.05 ? joinText("CANNON ", String(format: "%.1f", cd), "s") : "CANNON READY")
-		}
-		if v.autopilots > 0 {
-			let modes: [String] = ["AUTO OFF", "AUTO CRUISE", "AUTO ROUTE"]
-			var s: String = modes[max(0, min(2, v.auto))]
-			if v.auto == 2 { s = joinText(s, " ", String(v.routeAt + 1), "/", String(v.route.count)) }
-			else if !v.route.isEmpty { s = joinText(s, " · ", String(v.route.count), " PTS") }
-			parts.append(s)
-		}
-		return parts.isEmpty ? nil : parts.joined(separator: "  ")
-	}
-}
 
 // ===== u07_mods =====
 
@@ -2999,7 +1552,7 @@ struct BlockEditorView: View {
 					ModToggle(label: "Blast proof", help: "Explosions do not break it", isOn: b(\.blastProof, false))
 				}
 				BlockMiningTimes(block: block, tools: s.mod.items.filter { $0.kind == .tool })
-				ModSection(title: "BODY") {
+				ModSection(title: "BODY", help: block.collision.help) {
 					ChoiceRow(options: ModCollision.allCases.map { $0.name }, selected: collisionBind, columns: 3)
 					ModToggle(label: "See-through", help: "Light passes it and you see the wall behind", isOn: b(\.transparent, false))
 					IntSlider(label: "Light given off", value: b(\.light, 0), range: 0...15)
@@ -5625,11 +4178,14 @@ struct GameContentList: View {
 	@ObservedObject var s: ModSession
 	var open: (String) -> Void
 	@State var picking: ModOverrideKind? = nil
+	@State var showSky: Bool = false
+	@State var skyPick: Int = 0
 
 	var body: some View {
 		VStack(alignment: .leading, spacing: 8) {
 			Text("Change the game's own blocks, items and creatures: only the numbers you set change, the originals are kept, and switching a change off (or the whole mod) puts the game back as it was.")
 				.font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+			skyPart
 			if let k = picking {
 				GamePickerView(kind: k, title: joinText("CHANGE A ", k.name.uppercased()), pick: { raw, it in add(k, raw, it) }, cancel: { picking = nil })
 			} else {
@@ -5644,6 +4200,32 @@ struct GameContentList: View {
 			}
 			ForEach(s.mod.overrides) { o in row(o) }
 		}
+	}
+
+	/// The Overworld's sun and moon as this mod draws them
+	var skyPart: some View {
+		let shown: Bool = showSky
+		let pick: Int = clampI(skyPick, 0, 1)
+		let sun: String = s.mod.skySun == nil ? "the game's" : "its own"
+		let moon: String = s.mod.skyMoon == nil ? "the game's" : "its own"
+		let line: String = joinText("The Overworld's sky: ", sun, " sun, ", moon, " moon")
+		return VStack(alignment: .leading, spacing: 8) {
+			HStack(spacing: 8) {
+				Text(verbatim: line).font(.pixel(12, .bold)).foregroundColor(Color.white)
+				Spacer(minLength: 0)
+				SmallButton(title: shown ? "CLOSE" : "SUN AND MOON...", color: ModUI.blue) { self.showSky.toggle() }
+			}
+			if shown {
+				ChoiceRows(options: DimensionEditorView.bodyNames, selected: $skyPick, columns: 2)
+				if pick == 0 {
+					SkyBodyEditor(sky: s.modBind(\.skySun), moon: false)
+				} else {
+					SkyBodyEditor(sky: s.modBind(\.skyMoon), moon: true, skyTop: 0x060A1E, skyBottom: 0x18223E)
+				}
+			}
+		}
+		.padding(8)
+		.background(PixelBox(color: ModUI.card))
 	}
 
 	func add(_ k: ModOverrideKind, _ raw: Int, _ it: Item?) {
@@ -5723,6 +4305,143 @@ struct OverrideField: View {
 		}
 		.padding(6)
 		.background(Color.black.opacity(changed ? 0.3 : 0.15))
+	}
+}
+
+/// A game creature's own sprite, repainted by a mod: its frames copied from the game to paint over (the
+/// game then draws them in place of its own, timed the same), put back to the game's, or saved as a new
+/// custom creature that starts from it
+struct CreatureSpriteEditor: View {
+	@ObservedObject var s: ModSession
+	let id: String
+	@State var frame: Int = 0
+	@State var note: String = ""
+
+	var override: ModOverride { return s.mod.overrides.first { $0.id == id } ?? ModOverride() }
+	var kind: MobKind { return MobKind(rawValue: override.mob) ?? .zombie }
+
+	var body: some View {
+		let fr: [ModPixels] = override.frames ?? []
+		let help: String = fr.isEmpty ? "Paint over the game's own sprite: every frame, pixel by pixel." : "The game draws these frames instead of its own (standing, walking, then the rest, in the game's order)."
+		return ModSection(title: "ITS SPRITE", help: help) {
+			if fr.isEmpty { startRow } else { editor(fr) }
+			if !note.isEmpty { Text(verbatim: note).font(.pixel(11, .semibold)).foregroundColor(ModUI.gold) }
+		}
+	}
+
+	var startRow: some View {
+		let bufs: [PixelBuf] = GameSprites.creatureFrames(kind)
+		return HStack(spacing: 8) {
+			ForEach(0..<min(6, bufs.count), id: \.self) { (i: Int) in
+				pixImage(bufs[i]).resizable().interpolation(.none).frame(width: 44, height: 44).background(Color.black.opacity(0.35))
+			}
+			Spacer()
+			SmallButton(title: "EDIT ITS SPRITE", color: ModUI.accent) { self.startEditing() }
+		}
+	}
+
+	func editor(_ fr: [ModPixels]) -> some View {
+		let i: Int = min(frame, fr.count - 1)
+		return VStack(alignment: .leading, spacing: 8) {
+			frameRow(fr.count)
+			PixelEditorView(pixels: frameBind(i), maxSide: 360, frames: fr, frameIndex: i, sizes: [], outlineDefault: false)
+			HStack(spacing: 6) {
+				SmallButton(title: "BACK TO THE GAME'S SPRITE", color: ModUI.red) { self.setFrames(nil) }
+				SmallButton(title: "SAVE AS A NEW CREATURE", color: ModUI.blue) { self.saveAsCreature() }
+			}
+		}
+	}
+
+	func frameRow(_ n: Int) -> some View {
+		HStack(spacing: 6) {
+			ForEach(0..<n, id: \.self) { (i: Int) in
+				SmallButton(title: joinText("FRAME ", String(i + 1)), color: self.frame == i ? ModUI.accent : Color(hex: 0x555555)) { self.frame = i }
+			}
+			if n < 12 { SmallButton(title: "+ FRAME", color: ModUI.blue) { self.copyFrame() } }
+			if n > 1 { SmallButton(title: "DELETE FRAME", color: ModUI.red) { self.deleteFrame() } }
+		}
+	}
+
+	func frameBind(_ i: Int) -> Binding<ModPixels> {
+		return Binding<ModPixels>(get: {
+			let fr: [ModPixels] = self.override.frames ?? []
+			return i < fr.count ? fr[i] : ModPixels(w: 24, h: 24)
+		}, set: { (v: ModPixels) in
+			var fr: [ModPixels] = self.override.frames ?? []
+			if i < fr.count {
+				fr[i] = v
+				self.setFrames(fr)
+			}
+		})
+	}
+
+	func setFrames(_ fr: [ModPixels]?) {
+		guard let k = s.mod.overrides.firstIndex(where: { $0.id == id }) else { return }
+		s.mod.overrides[k].frames = fr
+		s.touch()
+		if fr == nil { frame = 0 }
+	}
+
+	/// The game's own frames, copied in to paint over (they already have the game's outline)
+	func startEditing() {
+		let bufs: [PixelBuf] = GameSprites.creatureFrames(kind)
+		guard let f0 = bufs.first else { return }
+		if f0.w > ModPixels.maxSide || f0.h > ModPixels.maxSide {
+			note = joinText("Its sprite is too big to paint here (", String(f0.w), " x ", String(f0.h), ").")
+			return
+		}
+		var fr: [ModPixels] = []
+		for b in bufs {
+			var p: ModPixels = ModPixels(buf: b)
+			p.outline = false
+			fr.append(p)
+		}
+		frame = 0
+		setFrames(fr)
+	}
+
+	func copyFrame() {
+		var fr: [ModPixels] = override.frames ?? []
+		if fr.isEmpty || fr.count >= 12 { return }
+		let i: Int = min(frame, fr.count - 1)
+		fr.insert(fr[i], at: i + 1)
+		setFrames(fr)
+		frame = i + 1
+	}
+
+	func deleteFrame() {
+		var fr: [ModPixels] = override.frames ?? []
+		if fr.count <= 1 { return }
+		fr.remove(at: min(frame, fr.count - 1))
+		setFrames(fr)
+		frame = max(0, min(frame, fr.count - 1))
+	}
+
+	/// A new custom creature with this sprite and the game creature's numbers (its body and hit box
+	/// come from the game creature): standing, two walking frames, and its attack
+	func saveAsCreature() {
+		let fr: [ModPixels] = override.frames ?? []
+		if fr.isEmpty { return }
+		let k: MobKind = kind
+		let d: MobDef = makeMobDef(k)
+		let anim: CreatureAnim = creatureArt(k, 0).1
+		var m = ModMob()
+		m.id = s.mod.freshID("m")
+		m.name = String(joinText(d.name, " (own look)").prefix(32))
+		m.base = k.rawValue
+		m.customArt = true
+		var pick: [Int] = [0, min(1, fr.count - 1), min(2, fr.count - 1)]
+		pick.append(anim.attack >= 0 && anim.attack < fr.count ? anim.attack : fr.count - 1)
+		m.frames = pick.map { fr[$0] }
+		m.hp = d.hp
+		m.damage = d.dmg
+		m.speed = d.speed
+		m.detect = d.aggro
+		m.jump = d.jump
+		m.category = d.hostile ? .hostile : (d.flying ? .flying : .passive)
+		s.mod.mobs.append(m)
+		s.touch()
+		note = joinText("Saved as a new creature, \u{201C}", m.name, "\u{201D}, in CREATURES.")
 	}
 }
 
@@ -5862,6 +4581,7 @@ struct OverrideEditorView: View {
 			OverrideField(label: "Speed", original: d.speed, value: b(\.speed), range: sbRange(0, 8, 20, sb), step: 0.1)
 			OverrideField(label: "Notices you from", original: d.aggro, value: b(\.detect), range: sbRange(2, 32, 64, sb), step: 1, format: "%.0f")
 			OverrideField(label: "Jump", original: d.jump, value: b(\.jump), range: sbRange(0, 20, 30, sb), step: 0.5)
+			CreatureSpriteEditor(s: s, id: id)
 		})
 	}
 
@@ -6399,11 +5119,232 @@ struct HardnessReferenceView: View {
 
 // MARK: - Mod Creator+: the Sprite Studio
 
-/// The pixel editor used for every picture in the Mod Creator: zoom and pan, pen, eraser, fill, colour
-/// picker, lines and boxes, mirror drawing, undo and redo, flips, shifts and turns, a reference picture
-/// beside or under the canvas (or copied in as a starting sample), the outline switch, other sizes,
-/// copying in and out as text or a picture, the sprite library, and onion skin and an animation preview
-/// for sprites with frames.
+/// The Sprite Studio's tools
+enum SpriteTool: Int, CaseIterable {
+	case pen, erase, fill, pick, line, box, circle, select, shade, dither, pan
+	var name: String {
+		switch self {
+		case .pen: return "PEN"
+		case .erase: return "ERASE"
+		case .fill: return "FILL"
+		case .pick: return "PICK"
+		case .line: return "LINE"
+		case .box: return "BOX"
+		case .circle: return "CIRCLE"
+		case .select: return "SELECT"
+		case .shade: return "SHADE"
+		case .dither: return "DITHER"
+		case .pan: return "PAN"
+		}
+	}
+	/// tools that paint with the brush as the finger moves
+	var brush: Bool { return self == .pen || self == .erase || self == .shade || self == .dither }
+	/// tools drawn from where the finger went down to where it lifts
+	var shape: Bool { return self == .line || self == .box || self == .circle }
+}
+
+/// A rectangle of pixels the SELECT tool has chosen (inclusive corners)
+struct SpriteSel: Equatable {
+	var x0: Int
+	var y0: Int
+	var x1: Int
+	var y1: Int
+	var w: Int { return x1 - x0 + 1 }
+	var h: Int { return y1 - y0 + 1 }
+	func contains(_ x: Int, _ y: Int) -> Bool { return x >= x0 && x <= x1 && y >= y0 && y <= y1 }
+	static func from(_ a: (Int, Int), _ b: (Int, Int)) -> SpriteSel {
+		return SpriteSel(x0: min(a.0, b.0), y0: min(a.1, b.1), x1: max(a.0, b.0), y1: max(a.1, b.1))
+	}
+}
+
+/// One pixel painted in the current stroke, and what it was before (pixel-perfect lines put back the
+/// corner pixel of an L, and shading touches each pixel once a stroke)
+struct StrokeCell {
+	var x: Int
+	var y: Int
+	var before: UInt32
+}
+
+/// How the Sprite Studio paints: brushes, opacity and blending, shading, shapes and selections. Pure
+/// functions on a picture, so they are the same in the editor and the tests.
+enum SpritePaint {
+	/// the pixels a brush of this size and shape covers, centred on (x, y)
+	static func brushCells(_ x: Int, _ y: Int, _ size: Int, _ round: Bool) -> [(Int, Int)] {
+		let s: Int = clampI(size, 1, 8)
+		if s == 1 { return [(x, y)] }
+		var out: [(Int, Int)] = []
+		let lo: Int = -(s - 1) / 2
+		let hi: Int = s / 2
+		let r: Double = Double(s) * 0.5
+		for dy in lo...hi {
+			for dx in lo...hi {
+				if round {
+					let fx: Double = Double(dx) - Double(lo + hi) * 0.5
+					let fy: Double = Double(dy) - Double(lo + hi) * 0.5
+					if fx * fx + fy * fy > r * r + 0.25 { continue }
+				}
+				out.append((x + dx, y + dy))
+			}
+		}
+		return out
+	}
+
+	/// `src` laid over `dst` (both 0xAARRGGBB, not premultiplied)
+	static func over(_ src: UInt32, _ dst: UInt32) -> UInt32 {
+		let sa: Double = Double(src >> 24) / 255.0
+		if sa >= 0.999 { return src }
+		let da: Double = Double(dst >> 24) / 255.0
+		let oa: Double = sa + da * (1.0 - sa)
+		if oa <= 0.001 { return 0 }
+		let k: Double = da * (1.0 - sa)
+		let r: Double = (Double((src >> 16) & 0xFF) * sa + Double((dst >> 16) & 0xFF) * k) / oa
+		let g: Double = (Double((src >> 8) & 0xFF) * sa + Double((dst >> 8) & 0xFF) * k) / oa
+		let b: Double = (Double(src & 0xFF) * sa + Double(dst & 0xFF) * k) / oa
+		let a: UInt32 = UInt32(clampD(oa * 255.0, 0, 255).rounded())
+		return (a << 24) | (UInt32(clampD(r, 0, 255).rounded()) << 16) | (UInt32(clampD(g, 0, 255).rounded()) << 8) | UInt32(clampD(b, 0, 255).rounded())
+	}
+
+	/// The colour as the pen lays it: its opacity scaled by the pen's
+	static func penColor(_ c: UInt32, _ opacity: Double) -> UInt32 {
+		let a: Double = Double(c >> 24) * clampD(opacity, 0.05, 1)
+		return (UInt32(clampD(a, 8, 255).rounded()) << 24) | (c & 0xFFFFFF)
+	}
+
+	/// One pixel painted: laid over what is there (blend), or set as it is (then a part see-through
+	/// colour makes a part see-through pixel)
+	static func paint(_ px: inout ModPixels, _ x: Int, _ y: Int, _ c: UInt32, _ blend: Bool) {
+		if blend { px.setARGB(x, y, over(c, px.argb(x, y))) } else { px.setARGB(x, y, c) }
+	}
+
+	/// Rubbing out: all of it at full strength, some of its opacity at less
+	static func erase(_ px: inout ModPixels, _ x: Int, _ y: Int, _ opacity: Double) {
+		if opacity >= 0.99 { px.setARGB(x, y, 0); return }
+		let c: UInt32 = px.argb(x, y)
+		if c == 0 { return }
+		let a: Double = Double(c >> 24) * (1.0 - clampD(opacity, 0, 1))
+		px.setARGB(x, y, a < 8 ? 0 : ((UInt32(a.rounded()) << 24) | (c & 0xFFFFFF)))
+	}
+
+	/// Shading: a shade darker or lighter, its opacity kept
+	static func shade(_ px: inout ModPixels, _ x: Int, _ y: Int, _ darker: Bool) {
+		let c: UInt32 = px.argb(x, y)
+		if c == 0 { return }
+		px.setARGB(x, y, (c & 0xFF000000) | shadeRGB(c & 0xFFFFFF, darker ? 0.82 : 1.2))
+	}
+
+	/// A box, its edge or filled
+	static func boxCells(_ a: (Int, Int), _ b: (Int, Int), _ filled: Bool) -> [(Int, Int)] {
+		var out: [(Int, Int)] = []
+		let x0: Int = min(a.0, b.0)
+		let x1: Int = max(a.0, b.0)
+		let y0: Int = min(a.1, b.1)
+		let y1: Int = max(a.1, b.1)
+		for y in y0...y1 {
+			for x in x0...x1 where filled || x == x0 || x == x1 || y == y0 || y == y1 { out.append((x, y)) }
+		}
+		return out
+	}
+
+	/// An ellipse fitted in the box from a to b, its edge or filled
+	static func ellipseCells(_ a: (Int, Int), _ b: (Int, Int), _ filled: Bool) -> [(Int, Int)] {
+		let x0: Int = min(a.0, b.0)
+		let x1: Int = max(a.0, b.0)
+		let y0: Int = min(a.1, b.1)
+		let y1: Int = max(a.1, b.1)
+		let cx: Double = Double(x0 + x1 + 1) * 0.5
+		let cy: Double = Double(y0 + y1 + 1) * 0.5
+		let rx: Double = Double(x1 - x0 + 1) * 0.5
+		let ry: Double = Double(y1 - y0 + 1) * 0.5
+		func inside(_ x: Int, _ y: Int) -> Bool {
+			if x < x0 || x > x1 || y < y0 || y > y1 { return false }
+			let dx: Double = (Double(x) + 0.5 - cx) / rx
+			let dy: Double = (Double(y) + 0.5 - cy) / ry
+			return dx * dx + dy * dy <= 1.0 + 0.12 / max(1.0, min(rx, ry))
+		}
+		var out: [(Int, Int)] = []
+		for y in y0...y1 {
+			for x in x0...x1 where inside(x, y) {
+				let edge: Bool = !inside(x - 1, y) || !inside(x + 1, y) || !inside(x, y - 1) || !inside(x, y + 1)
+				if filled || edge { out.append((x, y)) }
+			}
+		}
+		return out
+	}
+
+	/// Pixel-perfect lines: when the newest pixel makes an L with the two before it, the corner
+	/// pixel is put back (single-pixel lines stay one pixel thick)
+	static func perfectCorner(_ stroke: [StrokeCell], _ x: Int, _ y: Int) -> Bool {
+		if stroke.count < 2 { return false }
+		let a: StrokeCell = stroke[stroke.count - 2]
+		let b: StrokeCell = stroke[stroke.count - 1]
+		if abs(a.x - x) != 1 || abs(a.y - y) != 1 { return false }
+		return (b.x == a.x && b.y == y) || (b.y == a.y && b.x == x)
+	}
+
+	/// The pixels of a selection, lifted out of the picture
+	static func cut(_ px: ModPixels, _ s: SpriteSel) -> ModPixels {
+		var o = ModPixels(w: max(1, s.w), h: max(1, s.h))
+		for y in 0..<s.h {
+			for x in 0..<s.w { o.setARGB(x, y, px.argb(s.x0 + x, s.y0 + y)) }
+		}
+		return o
+	}
+
+	/// Pixels laid into the picture at (ox, oy); clear pixels leave what is under them
+	static func drop(_ px: inout ModPixels, _ part: ModPixels, _ ox: Int, _ oy: Int) {
+		for y in 0..<part.h {
+			for x in 0..<part.w {
+				let c: UInt32 = part.argb(x, y)
+				if c != 0 { px.setARGB(ox + x, oy + y, over(c, px.argb(ox + x, oy + y))) }
+			}
+		}
+	}
+
+	static func clearSel(_ px: inout ModPixels, _ s: SpriteSel) {
+		for y in s.y0...s.y1 {
+			for x in s.x0...s.x1 { px.setARGB(x, y, 0) }
+		}
+	}
+}
+
+/// Colour sets for the Sprite Studio, and the player's own saved colours (kept on this iPad)
+enum SpritePalettes {
+	static let names: [String] = ["GAME", "EARTH", "METAL", "SKIN", "SKY", "FIRE", "GREYS", "MINE"]
+	static let sets: [[UInt32]] = [
+		modPalette,
+		[0x2A1A10, 0x4A2E1A, 0x6A4224, 0x8A5A30, 0xAA7A44, 0xC89A5C, 0xE0BC80, 0xF0DCA8, 0x3A4A1E, 0x4E6A26, 0x5DAA3A, 0x8ACA5A,
+		 0x5A5048, 0x7A7064, 0x9A9080, 0xC0B8A4],
+		[0x1E2028, 0x3A3E4A, 0x5A606E, 0x7E8696, 0xA8B0BE, 0xD0D8E4, 0x6A4A20, 0xA8783A, 0xE0B050, 0xFFE08A, 0x4A1E1E, 0x8A3A2A,
+		 0x2AA8A0, 0x6FE6EC, 0x8A3CD0, 0xD8A8FF],
+		[0x3A2014, 0x6A3A24, 0x9A5A3A, 0xC88660, 0xE8B090, 0xF8D8C0, 0x7A2A3A, 0xC04A5A, 0x2A3A6A, 0x4A6AAA, 0x2A5A3A, 0x5A9A5A,
+		 0xD8C8A0, 0xF0E8D0, 0x6A4A8A, 0xA88AC8],
+		[0x0A1030, 0x1D2B53, 0x2A4A8A, 0x3E86D8, 0x6AA8F0, 0xB4DCFF, 0xF0F8FF, 0xFFFFFF, 0x0A3A4A, 0x1A6A7A, 0x3AA0B0, 0x7AD0D8,
+		 0xF08A4A, 0xF0B06A, 0x8A6AB0, 0xC8A8E0],
+		[0x3A0A0A, 0x7A1A0A, 0xB0300A, 0xE0601A, 0xFF8A30, 0xFFC050, 0xFFE88A, 0xFFFFD0, 0x2A0A3A, 0x5A1A8A, 0x9A3AE0, 0xC880FF,
+		 0x0A3A2A, 0x1A8A5A, 0x3AE0A0, 0xA0FFD8],
+		[0x000000, 0x111111, 0x222222, 0x333333, 0x444444, 0x555555, 0x666666, 0x777777, 0x888888, 0x999999, 0xAAAAAA, 0xBBBBBB,
+		 0xCCCCCC, 0xDDDDDD, 0xEEEEEE, 0xFFFFFF]
+	]
+	static let key: String = "pr.sprite.myColours"
+
+	/// The player's own colours (0xAARRGGBB, opacity kept)
+	static func loadMine() -> [UInt32] {
+		guard let list = UserDefaults.standard.array(forKey: key) as? [Int] else { return [] }
+		return list.prefix(32).map { UInt32(truncatingIfNeeded: $0) }
+	}
+
+	static func saveMine(_ list: [UInt32]) {
+		UserDefaults.standard.set(list.prefix(32).map { Int($0) }, forKey: key)
+	}
+}
+
+/// The pixel editor used for every picture in the Mod Creator: zoom and pan, brushes of any size
+/// (square or round) with opacity and blending, pixel-perfect lines, eraser, fill, colour picker,
+/// lines, boxes and circles (open or filled), selections (move, copy, paste, flip, delete), shading
+/// and dithering, mirror drawing, undo and redo, flips, shifts and turns, palettes and the player's
+/// own colours, a reference picture beside or under the canvas (or copied in as a starting sample),
+/// the outline switch, other sizes, copying in and out as text or a picture, the sprite library, and
+/// onion skin and an animation preview for sprites with frames.
 struct PixelEditorView: View {
 	@Binding var pixels: ModPixels
 	var maxSide: CGFloat = 320
@@ -6424,6 +5365,7 @@ struct PixelEditorView: View {
 	@State var redo: [ModPixels] = []
 	@State var stroking: Bool = false
 	@State var lastCell: Int = -1
+	@State var lastXY: (Int, Int)? = nil
 	@State var mixR: Double = 120
 	@State var mixG: Double = 160
 	@State var mixB: Double = 90
@@ -6446,12 +5388,36 @@ struct PixelEditorView: View {
 	@State var codeText: String = ""
 	@State var libName: String = ""
 	@State var library: [SpriteProject] = []
+	// brushes, opacity, shapes, shading
+	@State var brushSize: Int = 1
+	@State var brushRound: Bool = false
+	@State var perfect: Bool = true
+	@State var filled: Bool = false
+	@State var opacity: Double = 1.0
+	@State var blend: Bool = true
+	@State var darken: Bool = true
+	@State var stroke: [StrokeCell] = []
+	/// pixels already painted this stroke (each once: lingering does not pile up see-through paint)
+	@State var touched: Set<Int> = []
+	// selections
+	@State var sel: SpriteSel? = nil
+	@State var floating: ModPixels? = nil
+	@State var floatX: Int = 0
+	@State var floatY: Int = 0
+	@State var moveFrom: (Int, Int)? = nil
+	// palettes
+	@State var paletteIx: Int = 0
+	@State var mine: [UInt32] = SpritePalettes.loadMine()
+	@State var removing: Bool = false
 
-	static let toolNames: [String] = ["PEN", "ERASE", "FILL", "PICK", "LINE", "BOX", "MOVE"]
+	/// what COPY in a selection keeps, shared by every picture (copy from one, paste into another)
+	static var clip: ModPixels? = nil
+
+	var current: SpriteTool { return SpriteTool(rawValue: tool) ?? .pen }
 
 	/// pixels per picture pixel on screen
 	var cell: CGFloat {
-		let fit: CGFloat = max(4, floor(maxSide / CGFloat(max(pixels.w, pixels.h))))
+		let fit: CGFloat = max(3, floor(maxSide / CGFloat(max(pixels.w, pixels.h))))
 		return zoom > 0 ? zoom : fit
 	}
 
@@ -6469,6 +5435,8 @@ struct PixelEditorView: View {
 					if refMode == 1, let r = ref { refBeside(r) }
 				}
 			}
+			toolOptions
+			if sel != nil { selectionBar }
 			palette
 			if showMixer { mixer }
 			panelTabs
@@ -6491,25 +5459,35 @@ struct PixelEditorView: View {
 		let grid: Bool = showGrid
 		let ox: CGFloat = panX
 		let oy: CGFloat = panY
-		let a: (Int, Int)? = shapeA
-		let b: (Int, Int)? = shapeB
-		let t: Int = tool
-		let col: UInt32 = color
+		let preview: [(Int, Int)] = shapePreview
+		let col: UInt32 = SpritePaint.penColor(color, opacity)
+		let s: SpriteSel? = sel
+		let fl: ModPixels? = floating
+		let fx: Int = floatX
+		let fy: Int = floatY
 		return Canvas { ctx, size in
 			PixelEditorView.paintCanvas(&ctx, px, c, ox, oy, under, op, onionFrame, grid)
-			if let s0 = a, let s1 = b, t == 4 || t == 5 {
-				let cells: [(Int, Int)] = t == 4 ? PixelEditorView.lineCells(s0, s1) : PixelEditorView.boxCells(s0, s1)
-				for (x, y) in cells {
-					let r: CGRect = CGRect(x: CGFloat(x) * c - ox, y: CGFloat(y) * c - oy, width: c, height: c)
-					ctx.fill(Path(r), with: .color(Color(hex: col & 0xFFFFFF).opacity(0.75)))
-				}
-			}
+			PixelEditorView.paintOverlay(&ctx, c, ox, oy, preview, col, s, fl, fx, fy)
 		}
 		.frame(width: viewW, height: viewH)
 		.clipped()
 		.overlay(Rectangle().stroke(Color.white.opacity(0.35), lineWidth: 1))
 		.contentShape(Rectangle())
 		.gesture(DragGesture(minimumDistance: 0).onChanged { v in dragged(v.startLocation, v.location) }.onEnded { v in ended(v.location) })
+	}
+
+	/// the cells of the line, box or circle being drawn
+	var shapePreview: [(Int, Int)] {
+		guard let a = shapeA, let b = shapeB, current.shape else { return [] }
+		return shapeCells(a, b)
+	}
+
+	func shapeCells(_ a: (Int, Int), _ b: (Int, Int)) -> [(Int, Int)] {
+		switch current {
+		case .line: return PixelEditorView.lineCells(a, b)
+		case .box: return SpritePaint.boxCells(a, b, filled)
+		default: return SpritePaint.ellipseCells(a, b, filled)
+		}
 	}
 
 	static func paintCanvas(_ ctx: inout GraphicsContext, _ px: ModPixels, _ c: CGFloat, _ ox: CGFloat, _ oy: CGFloat, _ under: PixelBuf?, _ op: Double, _ onionFrame: ModPixels?, _ grid: Bool) {
@@ -6550,7 +5528,8 @@ struct PixelEditorView: View {
 				let v: UInt32 = px.argb(x, y)
 				if (v >> 24) == 0 { continue }
 				let r: CGRect = CGRect(x: CGFloat(x) * c - ox, y: CGFloat(y) * c - oy, width: c, height: c)
-				ctx.fill(Path(r), with: .color(Color(hex: v & 0xFFFFFF)))
+				let a: Double = Double(v >> 24) / 255.0
+				ctx.fill(Path(r), with: .color(Color(hex: v & 0xFFFFFF).opacity(a)))
 			}
 		}
 		if grid && c >= 8 {
@@ -6569,6 +5548,30 @@ struct PixelEditorView: View {
 		}
 	}
 
+	/// The shape being drawn, the lifted pixels of a selection being moved, and the selection's edge
+	static func paintOverlay(_ ctx: inout GraphicsContext, _ c: CGFloat, _ ox: CGFloat, _ oy: CGFloat, _ preview: [(Int, Int)], _ col: UInt32, _ s: SpriteSel?, _ fl: ModPixels?, _ fx: Int, _ fy: Int) {
+		let a: Double = Double(col >> 24) / 255.0 * 0.85
+		for (x, y) in preview {
+			let r: CGRect = CGRect(x: CGFloat(x) * c - ox, y: CGFloat(y) * c - oy, width: c, height: c)
+			ctx.fill(Path(r), with: .color(Color(hex: col & 0xFFFFFF).opacity(a)))
+		}
+		if let f = fl {
+			for y in 0..<f.h {
+				for x in 0..<f.w {
+					let v: UInt32 = f.argb(x, y)
+					if v == 0 { continue }
+					let r: CGRect = CGRect(x: CGFloat(fx + x) * c - ox, y: CGFloat(fy + y) * c - oy, width: c, height: c)
+					ctx.fill(Path(r), with: .color(Color(hex: v & 0xFFFFFF).opacity(Double(v >> 24) / 255.0)))
+				}
+			}
+		}
+		if let s0 = s {
+			let r: CGRect = CGRect(x: CGFloat(s0.x0) * c - ox, y: CGFloat(s0.y0) * c - oy, width: CGFloat(s0.w) * c, height: CGFloat(s0.h) * c)
+			ctx.stroke(Path(r), with: .color(Color.black), lineWidth: 3)
+			ctx.stroke(Path(r), with: .color(Color.white), lineWidth: 1)
+		}
+	}
+
 	func cellAt(_ p: CGPoint) -> (Int, Int)? {
 		let c: CGFloat = cell
 		let x: Int = Int(floor((p.x + panX) / c))
@@ -6577,75 +5580,241 @@ struct PixelEditorView: View {
 		return (x, y)
 	}
 
+	/// the cell under the finger, kept inside the picture (for selections dragged past the edge)
+	func cellClamped(_ p: CGPoint) -> (Int, Int) {
+		let c: CGFloat = cell
+		let x: Int = clampI(Int(floor((p.x + panX) / c)), 0, pixels.w - 1)
+		let y: Int = clampI(Int(floor((p.y + panY) / c)), 0, pixels.h - 1)
+		return (x, y)
+	}
+
 	func remember() {
 		undo.append(pixels)
-		if undo.count > 50 { undo.removeFirst() }
+		if undo.count > 80 { undo.removeFirst() }
 		redo.removeAll()
 	}
 
+	// MARK: drawing with the finger
+
 	func dragged(_ start: CGPoint, _ p: CGPoint) {
-		if tool == 6 {
-			if !stroking {
-				stroking = true
-				panStart = CGPoint(x: panX, y: panY)
-			}
-			let maxX: CGFloat = max(0, cell * CGFloat(pixels.w) - viewW)
-			let maxY: CGFloat = max(0, cell * CGFloat(pixels.h) - viewH)
-			panX = min(maxX, max(0, panStart.x - (p.x - start.x)))
-			panY = min(maxY, max(0, panStart.y - (p.y - start.y)))
-			return
-		}
-		guard let (x, y) = cellAt(p) else { return }
-		if tool == 4 || tool == 5 {
+		switch current {
+		case .pan:
+			panDrag(start, p)
+		case .select:
+			selectDrag(start, p)
+		case .line, .box, .circle:
+			guard let xy = cellAt(p) else { return }
 			if shapeA == nil, let s = cellAt(start) { shapeA = s }
-			shapeB = (x, y)
-			return
+			shapeB = xy
+		case .fill, .pick:
+			guard let xy = cellAt(p), !stroking else { return }
+			stroking = true
+			if current == .pick {
+				let picked: UInt32 = pixels.argb(xy.0, xy.1)
+				if (picked >> 24) != 0 { pickColor(picked) }
+				tool = SpriteTool.pen.rawValue
+				return
+			}
+			remember()
+			var px: ModPixels = pixels
+			PixelEditorView.floodFill(&px, xy.0, xy.1, SpritePaint.penColor(color, opacity))
+			pixels = px
+			useColor(color)
+		default:
+			guard let xy = cellAt(p) else { return }
+			brushDrag(xy)
 		}
-		let idx: Int = y * pixels.w + x
+	}
+
+	func panDrag(_ start: CGPoint, _ p: CGPoint) {
 		if !stroking {
 			stroking = true
-			if tool != 3 { remember() }
+			panStart = CGPoint(x: panX, y: panY)
+		}
+		let maxX: CGFloat = max(0, cell * CGFloat(pixels.w) - viewW)
+		let maxY: CGFloat = max(0, cell * CGFloat(pixels.h) - viewH)
+		panX = min(maxX, max(0, panStart.x - (p.x - start.x)))
+		panY = min(maxY, max(0, panStart.y - (p.y - start.y)))
+	}
+
+	/// The brush tools: each pixel the finger crosses (fast strokes are joined up), the brush laid
+	/// around it, the mirror copy too
+	func brushDrag(_ xy: (Int, Int)) {
+		let idx: Int = xy.1 * pixels.w + xy.0
+		if !stroking {
+			stroking = true
+			remember()
+			stroke = []
+			touched = []
+			lastXY = nil
 		} else if idx == lastCell {
 			return
 		}
 		lastCell = idx
 		var px: ModPixels = pixels
-		switch tool {
-		case 1:
-			px.setARGB(x, y, 0)
-			if mirror { px.setARGB(px.w - 1 - x, y, 0) }
-		case 2:
-			PixelEditorView.floodFill(&px, x, y, color)
-		case 3:
-			let picked: UInt32 = px.argb(x, y)
-			if (picked >> 24) != 0 { pickColor(picked) }
-			tool = 0
-			return
-		default:
-			px.setARGB(x, y, color)
-			if mirror { px.setARGB(px.w - 1 - x, y, color) }
-		}
+		let path: [(Int, Int)] = lastXY.map { PixelEditorView.lineCells($0, xy).dropFirst().map { $0 } } ?? [xy]
+		for (x, y) in path { brushAt(&px, x, y) }
+		lastXY = xy
 		pixels = px
-		useColor(color)
+		if current == .pen || current == .dither { useColor(color) }
+	}
+
+	func brushAt(_ px: inout ModPixels, _ x: Int, _ y: Int) {
+		let t: SpriteTool = current
+		let col: UInt32 = SpritePaint.penColor(color, opacity)
+		let single: Bool = t == .pen && brushSize == 1 && perfect && !mirror
+		// pixel-perfect: a one-pixel pen stroke never leaves L-shaped corners
+		if single && SpritePaint.perfectCorner(stroke, x, y) {
+			let b: StrokeCell = stroke.removeLast()
+			px.setARGB(b.x, b.y, b.before)
+			touched.remove(b.y * px.w + b.x)
+		}
+		var cells: [(Int, Int)] = SpritePaint.brushCells(x, y, brushSize, brushRound)
+		if mirror { cells += cells.map { (px.w - 1 - $0.0, $0.1) } }
+		for (cx, cy) in cells {
+			if cx < 0 || cy < 0 || cx >= px.w || cy >= px.h { continue }
+			let k: Int = cy * px.w + cx
+			if touched.contains(k) { continue }
+			touched.insert(k)
+			let before: UInt32 = px.argb(cx, cy)
+			switch t {
+			case .erase: SpritePaint.erase(&px, cx, cy, opacity)
+			case .shade: SpritePaint.shade(&px, cx, cy, darken)
+			case .dither: if (cx + cy) % 2 == 0 { SpritePaint.paint(&px, cx, cy, col, blend) }
+			default: SpritePaint.paint(&px, cx, cy, col, blend)
+			}
+			if single && cx == x && cy == y { stroke.append(StrokeCell(x: cx, y: cy, before: before)) }
+		}
 	}
 
 	func ended(_ p: CGPoint) {
-		if (tool == 4 || tool == 5), let a = shapeA {
+		if current.shape, let a = shapeA {
 			let b: (Int, Int) = cellAt(p) ?? shapeB ?? a
 			remember()
 			var px: ModPixels = pixels
-			let cells: [(Int, Int)] = tool == 4 ? PixelEditorView.lineCells(a, b) : PixelEditorView.boxCells(a, b)
-			for (x, y) in cells {
-				px.setARGB(x, y, color)
-				if mirror { px.setARGB(px.w - 1 - x, y, color) }
+			let col: UInt32 = SpritePaint.penColor(color, opacity)
+			for (x, y) in shapeCells(a, b) {
+				SpritePaint.paint(&px, x, y, col, blend)
+				if mirror { SpritePaint.paint(&px, px.w - 1 - x, y, col, blend) }
 			}
 			pixels = px
 			useColor(color)
 		}
+		if current == .select { selectEnded() }
 		shapeA = nil
 		shapeB = nil
 		stroking = false
 		lastCell = -1
+		lastXY = nil
+		stroke = []
+		touched = []
+	}
+
+	// MARK: selections
+
+	/// Dragging inside the selection lifts its pixels and moves them; anywhere else chooses a new one
+	func selectDrag(_ start: CGPoint, _ p: CGPoint) {
+		let s0: (Int, Int) = cellClamped(start)
+		let cur: (Int, Int) = cellClamped(p)
+		if !stroking {
+			stroking = true
+			if let s = sel, s.contains(s0.0, s0.1) {
+				if floating == nil {
+					// lift the chosen pixels off the picture to move them
+					remember()
+					var px: ModPixels = pixels
+					floating = SpritePaint.cut(px, s)
+					SpritePaint.clearSel(&px, s)
+					pixels = px
+					floatX = s.x0
+					floatY = s.y0
+				}
+				moveFrom = (s0.0 - floatX, s0.1 - floatY)
+			} else {
+				dropFloating()
+				moveFrom = nil
+				sel = SpriteSel.from(s0, s0)
+			}
+		}
+		if let m = moveFrom, let f = floating {
+			floatX = cur.0 - m.0
+			floatY = cur.1 - m.1
+			sel = SpriteSel(x0: floatX, y0: floatY, x1: floatX + f.w - 1, y1: floatY + f.h - 1)
+		} else {
+			sel = SpriteSel.from(s0, cur)
+		}
+	}
+
+	func selectEnded() {
+		if floating != nil { dropFloating() }
+		moveFrom = nil
+	}
+
+	/// Puts moved pixels down where they are now
+	func dropFloating() {
+		guard let f = floating else { return }
+		var px: ModPixels = pixels
+		SpritePaint.drop(&px, f, floatX, floatY)
+		pixels = px
+		floating = nil
+	}
+
+	var selectionBar: some View {
+		HStack(spacing: 4) {
+			Text("SELECTION").font(.pixel(10)).foregroundColor(ModUI.dim)
+			SmallButton(title: "COPY", color: ModUI.blue) { copySel() }
+			SmallButton(title: "PASTE", color: ModUI.blue) { pasteSel() }
+			SmallButton(title: "FLIP ↔") { flipSel() }
+			SmallButton(title: "DELETE", color: ModUI.red) { deleteSel() }
+			SmallButton(title: "DONE") { dropFloating(); sel = nil }
+		}
+	}
+
+	func copySel() {
+		guard let s = sel else { return }
+		PixelEditorView.clip = floating ?? SpritePaint.cut(pixels, s)
+		note = "Copied. PASTE puts it here or in another picture."
+	}
+
+	func pasteSel() {
+		guard let c = PixelEditorView.clip else { note = "Copy a selection first."; return }
+		dropFloating()
+		remember()
+		let ox: Int = sel?.x0 ?? 0
+		let oy: Int = sel?.y0 ?? 0
+		floating = c
+		floatX = ox
+		floatY = oy
+		sel = SpriteSel(x0: ox, y0: oy, x1: ox + c.w - 1, y1: oy + c.h - 1)
+		tool = SpriteTool.select.rawValue
+		note = "Pasted: drag it where you want it, then DONE."
+	}
+
+	func flipSel() {
+		guard let s = sel else { return }
+		remember()
+		if let f = floating {
+			floating = f.flippedH()
+			return
+		}
+		var px: ModPixels = pixels
+		let part: ModPixels = SpritePaint.cut(px, s).flippedH()
+		SpritePaint.clearSel(&px, s)
+		SpritePaint.drop(&px, part, s.x0, s.y0)
+		pixels = px
+	}
+
+	func deleteSel() {
+		guard let s = sel else { return }
+		remember()
+		if floating != nil {
+			floating = nil
+		} else {
+			var px: ModPixels = pixels
+			SpritePaint.clearSel(&px, s)
+			pixels = px
+		}
+		sel = nil
 	}
 
 	static func lineCells(_ a: (Int, Int), _ b: (Int, Int)) -> [(Int, Int)] {
@@ -6670,20 +5839,7 @@ struct PixelEditorView: View {
 	}
 
 	static func boxCells(_ a: (Int, Int), _ b: (Int, Int)) -> [(Int, Int)] {
-		var out: [(Int, Int)] = []
-		let x0: Int = min(a.0, b.0)
-		let x1: Int = max(a.0, b.0)
-		let y0: Int = min(a.1, b.1)
-		let y1: Int = max(a.1, b.1)
-		for x in x0...x1 {
-			out.append((x, y0))
-			out.append((x, y1))
-		}
-		for y in y0...y1 {
-			out.append((x0, y))
-			out.append((x1, y))
-		}
-		return out
+		return SpritePaint.boxCells(a, b, false)
 	}
 
 	static func floodFill(_ px: inout ModPixels, _ sx: Int, _ sy: Int, _ col: UInt32) {
@@ -6693,7 +5849,7 @@ struct PixelEditorView: View {
 		var guardN: Int = 0
 		while let cur = stack.popLast() {
 			guardN += 1
-			if guardN > 8000 { break }
+			if guardN > 40000 { break }
 			let (x, y) = cur
 			if x < 0 || y < 0 || x >= px.w || y >= px.h { continue }
 			if px.argb(x, y) != target { continue }
@@ -6721,36 +5877,62 @@ struct PixelEditorView: View {
 	}
 
 	func setZoom(_ z: CGFloat) {
-		zoom = min(48, max(4, z))
+		zoom = min(48, max(3, z))
 		panX = 0
 		panY = 0
 	}
 
 	var toolGrid: some View {
-		let cols: [GridItem] = [GridItem(.fixed(78), spacing: 4), GridItem(.fixed(78), spacing: 4)]
-		return LazyVGrid(columns: cols, spacing: 4) {
-			ForEach(0..<PixelEditorView.toolNames.count, id: \.self) { i in
-				SmallButton(title: PixelEditorView.toolNames[i], color: tool == i ? ModUI.accent : Color(hex: 0x555555)) { tool = i }
+		PlainGrid(count: SpriteTool.allCases.count + 1, per: 3, spacing: 4) { (i: Int) in self.toolButton(i) }
+			.frame(width: 250)
+	}
+
+	func toolButton(_ i: Int) -> some View {
+		if i >= SpriteTool.allCases.count {
+			return SmallButton(title: mirror ? "MIRROR ON" : "MIRROR", color: mirror ? ModUI.accent : Color(hex: 0x555555)) { mirror.toggle() }
+		}
+		let name: String = SpriteTool.allCases[i].name
+		return SmallButton(title: name, color: tool == i ? ModUI.accent : Color(hex: 0x555555)) { selectTool(i) }
+	}
+
+	func selectTool(_ i: Int) {
+		if tool == SpriteTool.select.rawValue && i != tool { dropFloating(); sel = nil }
+		tool = i
+	}
+
+	/// The chosen tool's settings: brush size and shape, pixel-perfect, filled shapes, darker or lighter
+	@ViewBuilder
+	var toolOptions: some View {
+		let t: SpriteTool = current
+		if t.brush || t == .line {
+			HStack(spacing: 6) {
+				if t.brush {
+					Text(verbatim: joinText("BRUSH ", String(brushSize))).font(.pixel(11)).foregroundColor(Color.white)
+					SmallButton(title: "−") { brushSize = max(1, brushSize - 1) }
+					SmallButton(title: "+") { brushSize = min(8, brushSize + 1) }
+					SmallButton(title: brushRound ? "ROUND" : "SQUARE") { brushRound.toggle() }
+				}
+				if t == .pen && brushSize == 1 {
+					SmallButton(title: perfect ? "PIXEL-PERFECT ON" : "PIXEL-PERFECT OFF", color: perfect ? ModUI.accent : Color(hex: 0x555555)) { perfect.toggle() }
+				}
+				if t == .shade {
+					SmallButton(title: darken ? "DARKER" : "LIGHTER", color: darken ? Color(hex: 0x3A3A5A) : Color(hex: 0x8A8A5A)) { darken.toggle() }
+				}
 			}
-			SmallButton(title: mirror ? "MIRROR ON" : "MIRROR", color: mirror ? ModUI.accent : Color(hex: 0x555555)) { mirror.toggle() }
+		} else if t == .box || t == .circle {
+			HStack(spacing: 6) {
+				SmallButton(title: filled ? "FILLED" : "OUTLINE", color: filled ? ModUI.accent : Color(hex: 0x555555)) { filled.toggle() }
+			}
+		} else if t == .select && sel == nil {
+			Text("Drag to choose pixels; drag inside the choice to move them.").font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
 		}
 	}
 
 	var editButtons: some View {
 		VStack(alignment: .leading, spacing: 4) {
 			HStack(spacing: 4) {
-				SmallButton(title: "UNDO", color: undo.isEmpty ? Color(hex: 0x444444) : Color(hex: 0x5A5A70)) {
-					if let last = undo.popLast() {
-						redo.append(pixels)
-						pixels = last
-					}
-				}
-				SmallButton(title: "REDO", color: redo.isEmpty ? Color(hex: 0x444444) : Color(hex: 0x5A5A70)) {
-					if let next = redo.popLast() {
-						undo.append(pixels)
-						pixels = next
-					}
-				}
+				SmallButton(title: "UNDO", color: undo.isEmpty ? Color(hex: 0x444444) : Color(hex: 0x5A5A70)) { undoStep() }
+				SmallButton(title: "REDO", color: redo.isEmpty ? Color(hex: 0x444444) : Color(hex: 0x5A5A70)) { redoStep() }
 				SmallButton(title: "CLEAR", color: ModUI.red) {
 					remember()
 					var e = ModPixels(w: pixels.w, h: pixels.h)
@@ -6769,16 +5951,36 @@ struct PixelEditorView: View {
 				SmallButton(title: "▲") { change { $0.shifted(0, -1) } }
 				SmallButton(title: "▼") { change { $0.shifted(0, 1) } }
 			}
-			let on: Bool = pixels.outlined(outlineDefault)
-			SmallButton(title: on ? "OUTLINE ON" : "OUTLINE OFF", color: on ? ModUI.accent : Color(hex: 0x555555)) {
-				var p: ModPixels = pixels
-				p.outline = !on
-				pixels = p
-			}
+			outlineButton
+		}
+	}
+
+	var outlineButton: some View {
+		let on: Bool = pixels.outlined(outlineDefault)
+		return SmallButton(title: on ? "OUTLINE ON" : "OUTLINE OFF", color: on ? ModUI.accent : Color(hex: 0x555555)) {
+			var p: ModPixels = pixels
+			p.outline = !on
+			pixels = p
+		}
+	}
+
+	func undoStep() {
+		floating = nil
+		if let last = undo.popLast() {
+			redo.append(pixels)
+			pixels = last
+		}
+	}
+
+	func redoStep() {
+		if let next = redo.popLast() {
+			undo.append(pixels)
+			pixels = next
 		}
 	}
 
 	func change(_ f: (ModPixels) -> ModPixels) {
+		dropFloating()
 		remember()
 		pixels = f(pixels)
 	}
@@ -6799,10 +6001,24 @@ struct PixelEditorView: View {
 					.background(Color(hex: 0x6AA0D8).opacity(0.5))
 				if frames.count > 1 { animation }
 			}
-			HStack(spacing: 6) {
-				Rectangle().fill(Color(hex: color & 0xFFFFFF)).frame(width: 26, height: 26).overlay(Rectangle().stroke(Color.white, lineWidth: 2))
-				Text(verbatim: joinText(String(pixels.w), " x ", String(pixels.h))).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+			currentSwatch
+		}
+	}
+
+	/// The colour in use, over a checker so its opacity shows
+	var currentSwatch: some View {
+		let a: Double = Double(SpritePaint.penColor(color, opacity) >> 24) / 255.0
+		let pct: Int = Int((a * 100).rounded())
+		return HStack(spacing: 6) {
+			ZStack {
+				HStack(spacing: 0) {
+					Rectangle().fill(Color(hex: 0xC8C8C8)).frame(width: 13, height: 26)
+					Rectangle().fill(Color(hex: 0x6A6A6A)).frame(width: 13, height: 26)
+				}
+				Rectangle().fill(Color(hex: color & 0xFFFFFF).opacity(a)).frame(width: 26, height: 26)
 			}
+			.overlay(Rectangle().stroke(Color.white, lineWidth: 2))
+			Text(verbatim: joinText(String(pixels.w), " x ", String(pixels.h), "  ", String(pct), "%")).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
 		}
 	}
 
@@ -6830,35 +6046,82 @@ struct PixelEditorView: View {
 
 	// MARK: colours
 
+	var paletteColors: [UInt32] {
+		if paletteIx >= SpritePalettes.sets.count { return mine }
+		return SpritePalettes.sets[paletteIx]
+	}
+
 	var palette: some View {
-		let cols: [GridItem] = [GridItem](repeating: GridItem(.fixed(34), spacing: 4), count: 16)
+		let cols: [UInt32] = paletteColors
 		return VStack(alignment: .leading, spacing: 4) {
-			LazyVGrid(columns: cols, spacing: 4) {
-				ForEach(0..<modPalette.count, id: \.self) { i in swatch(modPalette[i]) }
+			HStack(spacing: 4) {
+				ForEach(0..<SpritePalettes.names.count, id: \.self) { (i: Int) in self.paletteChip(i) }
+			}
+			if cols.isEmpty {
+				Text("Your own colours go here: mix one, then SAVE COLOUR.").font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
+			} else {
+				PlainGrid(count: cols.count, per: 16, spacing: 4) { (i: Int) in self.swatch(cols[i]) }
 			}
 			if !recent.isEmpty {
 				HStack(spacing: 4) {
 					Text("RECENT").font(.pixel(9)).foregroundColor(ModUI.dim)
-					ForEach(0..<recent.count, id: \.self) { i in swatch(recent[i] & 0xFFFFFF) }
+					ForEach(0..<recent.count, id: \.self) { (i: Int) in self.swatch(recent[i]) }
 				}
 			}
-			SmallButton(title: showMixer ? "HIDE COLOUR MIXER" : "MIX A COLOUR...") { showMixer.toggle() }
+			HStack(spacing: 6) {
+				SmallButton(title: showMixer ? "HIDE COLOUR MIXER" : "MIX A COLOUR...") { showMixer.toggle() }
+				SmallButton(title: "SAVE COLOUR", color: ModUI.blue) { saveColour() }
+				if paletteIx >= SpritePalettes.sets.count && !mine.isEmpty {
+					SmallButton(title: removing ? "TAP ONE TO REMOVE" : "REMOVE...", color: removing ? ModUI.red : Color(hex: 0x555555)) { removing.toggle() }
+				}
+			}
 		}
 	}
 
-	func swatch(_ c: UInt32) -> some View {
-		let on: Bool = (color & 0xFFFFFF) == c
-		return Rectangle().fill(Color(hex: c))
-			.frame(width: 34, height: 34)
+	func paletteChip(_ i: Int) -> some View {
+		let on: Bool = paletteIx == i
+		return SmallButton(title: SpritePalettes.names[i], color: on ? ModUI.blue : Color(hex: 0x4A4A50)) {
+			paletteIx = i
+			removing = false
+		}
+	}
+
+	func swatch(_ c0: UInt32) -> some View {
+		let c: UInt32 = (c0 >> 24) == 0 ? (0xFF000000 | c0) : c0
+		let on: Bool = (color & 0xFFFFFF) == (c & 0xFFFFFF)
+		let a: Double = Double(c >> 24) / 255.0
+		return Rectangle().fill(Color(hex: c & 0xFFFFFF).opacity(a))
+			.frame(width: 30, height: 30)
+			.background(Color(hex: 0x8A8A8A))
 			.overlay(Rectangle().stroke(on ? Color.white : Color.black, lineWidth: on ? 3 : 1))
-			.onTapGesture {
-				color = 0xFF000000 | c
-				if tool == 1 || tool == 3 || tool == 6 { tool = 0 }
-			}
+			.onTapGesture { self.tapSwatch(c) }
+	}
+
+	func tapSwatch(_ c: UInt32) {
+		if removing {
+			mine.removeAll { $0 == c }
+			SpritePalettes.saveMine(mine)
+			if mine.isEmpty { removing = false }
+			return
+		}
+		pickColor(0xFF000000 | (c & 0xFFFFFF))
+		if (c >> 24) < 255 { opacity = Double(c >> 24) / 255.0 }
+		let t: SpriteTool = current
+		if t == .erase || t == .pick || t == .pan || t == .select || t == .shade { selectTool(SpriteTool.pen.rawValue) }
+	}
+
+	func saveColour() {
+		let c: UInt32 = SpritePaint.penColor(color, opacity)
+		if mine.contains(c) { note = "That colour is saved already."; return }
+		mine.append(c)
+		if mine.count > 32 { mine.removeFirst() }
+		SpritePalettes.saveMine(mine)
+		paletteIx = SpritePalettes.sets.count
+		note = "Saved to MINE (kept on this iPad)."
 	}
 
 	func pickColor(_ c: UInt32) {
-		color = c
+		color = 0xFF000000 | (c & 0xFFFFFF)
 		mixR = Double((c >> 16) & 0xFF)
 		mixG = Double((c >> 8) & 0xFF)
 		mixB = Double(c & 0xFF)
@@ -6876,6 +6139,11 @@ struct PixelEditorView: View {
 			StatSlider(label: "Red", value: mixBind(0), range: 0...255, step: 1, format: "%.0f")
 			StatSlider(label: "Green", value: mixBind(1), range: 0...255, step: 1, format: "%.0f")
 			StatSlider(label: "Blue", value: mixBind(2), range: 0...255, step: 1, format: "%.0f")
+			StatSlider(label: "Opacity (pen)", value: $opacity, range: 0.05...1.0, step: 0.05, format: "%.2f")
+			HStack(spacing: 6) {
+				SmallButton(title: blend ? "BLEND ON" : "BLEND OFF", color: blend ? ModUI.accent : Color(hex: 0x555555)) { blend.toggle() }
+				Text(verbatim: blend ? "See-through paint mixes with what is under it." : "See-through paint makes see-through pixels.").font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
+			}
 		}
 	}
 
@@ -6888,7 +6156,8 @@ struct PixelEditorView: View {
 			let g: UInt32 = UInt32(clampD(mixG, 0, 255))
 			let b: UInt32 = UInt32(clampD(mixB, 0, 255))
 			color = 0xFF000000 | (r << 16) | (g << 8) | b
-			if tool != 0 && tool != 2 && tool != 4 && tool != 5 { tool = 0 }
+			let t: SpriteTool = current
+			if !(t == .pen || t == .fill || t.shape || t == .dither) { selectTool(SpriteTool.pen.rawValue) }
 		})
 	}
 
@@ -8464,6 +7733,326 @@ struct DimensionListView: View {
 
 /// Editing one dimension: its sky and light, its land, its regions, its creatures, the way in and out,
 /// and a preview made by the game's own generator
+/// A mod's own sun or moon: switched on, its picture (or the round one in its colour), how big it is,
+/// its glow, rays, turning and pulsing, how it moves across the sky and how much light it gives. Used by
+/// the dimension editor and, for the Overworld, by the GAME CONTENT tab.
+struct SkyBodyEditor: View {
+	@Binding var sky: ModSkyBody?
+	let moon: Bool
+	/// the sky's colour behind it in the preview
+	var skyTop: UInt32 = 0x3E86D8
+	var skyBottom: UInt32 = 0xB4DCFF
+	@State var colorPick: Int = 0
+
+	static let colorNames: [String] = ["Its colour", "Its glow"]
+	static let pathNames: [String] = ["Rises and sets", "Stays in one place"]
+	static let numbers: [DSlider<ModSkyBody>] = [
+		DSlider(label: "Size (times the game's)", kp: \.size, lo: 0.3, hi: 3, sbHi: 3, step: 0.05, format: "%.2f"),
+		DSlider(label: "Glow", kp: \.glow, lo: 0, hi: 1, sbHi: 1, step: 0.05, format: "%.2f"),
+		DSlider(label: "Pulsing glow", kp: \.pulse, lo: 0, hi: 1, sbHi: 1, step: 0.05, format: "%.2f"),
+		DSlider(label: "Turning (degrees a second)", kp: \.spin, lo: -180, hi: 180, sbHi: 180, step: 1, format: "%.0f"),
+		DSlider(label: "Light it gives (1 = the game's)", kp: \.bright, lo: 0, hi: 2, sbHi: 2, step: 0.05, format: "%.2f")
+	]
+	static let pathNumbers: [DSlider<ModSkyBody>] = [
+		DSlider(label: "How high it climbs", kp: \.arc, lo: 0.2, hi: 1.2, sbHi: 1.2, step: 0.05, format: "%.2f")
+	]
+	static let placeNumbers: [DSlider<ModSkyBody>] = [
+		DSlider(label: "Across (left ... right)", kp: \.posX, lo: 0, hi: 1, sbHi: 1, step: 0.01, format: "%.2f"),
+		DSlider(label: "Down (top ... horizon)", kp: \.posY, lo: 0, hi: 1, sbHi: 1, step: 0.01, format: "%.2f")
+	]
+
+	var fresh: ModSkyBody { return moon ? ModSkyBody.moon() : ModSkyBody() }
+
+	func f<T>(_ kp: WritableKeyPath<ModSkyBody, T>) -> Binding<T> {
+		let base: Binding<ModSkyBody?> = $sky
+		let start: ModSkyBody = fresh
+		return Binding<T>(get: { (base.wrappedValue ?? start)[keyPath: kp] }, set: { v in
+			var b: ModSkyBody = base.wrappedValue ?? start
+			b[keyPath: kp] = v
+			base.wrappedValue = b
+		})
+	}
+
+	var onBind: Binding<Bool> {
+		let base: Binding<ModSkyBody?> = $sky
+		let start: ModSkyBody = fresh
+		return Binding<Bool>(get: { base.wrappedValue != nil }, set: { on in base.wrappedValue = on ? start : nil })
+	}
+
+	var body: some View {
+		let own: Bool = sky != nil
+		let word: String = moon ? "moon" : "sun"
+		return VStack(alignment: .leading, spacing: 8) {
+			ModToggle(label: joinText("Its own ", word), help: joinText("Off: the game's ", word, " as it always was"), isOn: onBind)
+			if own { fields }
+		}
+	}
+
+	var fields: some View {
+		let b: ModSkyBody = sky ?? fresh
+		let pick: Int = clampI(colorPick, 0, 1)
+		let fixed: Bool = b.path == 1
+		let pictured: Bool = !b.art.isBlank
+		return VStack(alignment: .leading, spacing: 8) {
+			SkyBodyPreview(b: b, moon: moon, top: skyTop, bottom: skyBottom).frame(height: 130)
+			Text("Its picture (leave it blank for a round one in its colour)").font(.pixel(11, .bold)).foregroundColor(ModUI.dim)
+			PixelEditorView(pixels: f(\.art), maxSide: 240, sizes: [16, 24, 32], outlineDefault: false)
+			if pictured { SmallButton(title: "BACK TO A ROUND ONE", color: ModUI.red) { self.f(\.art).wrappedValue = ModPixels(w: 16, h: 16) } }
+			ChoiceRows(options: SkyBodyEditor.colorNames, selected: $colorPick, columns: 2)
+			ModColorRow(label: SkyBodyEditor.colorNames[pick], color: pick == 0 ? f(\.color) : f(\.glowColor))
+			ModToggle(label: "Rays", help: "Short rays all round it, in its glow's colour", isOn: f(\.rays))
+			sliderRows(SkyBodyEditor.numbers)
+			ChoiceRows(options: SkyBodyEditor.pathNames, selected: f(\.path), columns: 2)
+			if fixed {
+				Text("It hangs there day and night.").font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+				sliderRows(SkyBodyEditor.placeNumbers)
+			} else {
+				sliderRows(SkyBodyEditor.pathNumbers)
+			}
+		}
+	}
+
+	func sliderRows(_ list: [DSlider<ModSkyBody>]) -> some View {
+		VStack(alignment: .leading, spacing: 8) {
+			ForEach(0..<list.count, id: \.self) { (i: Int) in self.slider(list[i]) }
+		}
+	}
+
+	func slider(_ d: DSlider<ModSkyBody>) -> StatSlider {
+		let r: ClosedRange<Double> = d.lo...d.hi
+		return StatSlider(label: d.label, value: f(d.kp), range: r, step: d.step, format: d.format)
+	}
+}
+
+/// A strip of sky with a sun or moon in it, as the game draws it (at the top of its path, or where it stays)
+struct SkyBodyPreview: View {
+	let b: ModSkyBody
+	let moon: Bool
+	let top: UInt32
+	let bottom: UInt32
+
+	var body: some View {
+		let body: ModSkyBody = b
+		let isMoon: Bool = moon
+		let t0: UInt32 = top
+		let b0: UInt32 = bottom
+		return Canvas { ctx, size in
+			let w: Double = Double(size.width)
+			let h: Double = Double(size.height)
+			let full: CGRect = CGRect(x: 0, y: 0, width: w, height: h)
+			vGradient(&ctx, full, [rgbColor(t0), rgbColor(b0)], 0, h)
+			// noon for a sun, midnight for a moon: the top of its path
+			WorldRenderer.drawSkyBody(&ctx, w, h * 1.6, 0, body, isMoon ? 0.75 : 0.25, isMoon, isMoon ? 44.0 : 56.0, false, t0)
+		}
+		.background(Color.black)
+	}
+}
+
+/// A tree design's cells as a small picture: three of them, short, middling and tall, in the colours of
+/// the blocks they are made of
+enum TreePreview {
+	static func colour(_ k: String, _ p: ModPack, _ d: UInt32) -> UInt32 {
+		if k.isEmpty { return d }
+		if k.hasPrefix("tile:") {
+			guard let n = Int(k.dropFirst(5)), let t = Tile(rawValue: UInt8(clampI(n, 0, 255))) else { return d }
+			return t.def.colors.first ?? d
+		}
+		let s: (String, String) = splitModKey(k)
+		if let b = p.blocks.first(where: { $0.id == s.1 }) { return ModDimPreview.averageColor(b.art) }
+		return d
+	}
+
+	static func render(_ t: ModTree, _ p: ModPack) -> PixelBuf {
+		let px: Int = 3
+		let cellsW: Int = 3 * (treeReach * 2 + 1)
+		let rows: Int = 34
+		var b = PixelBuf(w: cellsW * px, h: (rows + 2) * px)
+		let sky: UInt32 = 0x8AC0F0
+		for i in 0..<b.px.count { b.px[i] = 0xFF000000 | sky }
+		let trunk: UInt32 = colour(t.trunk, p, 0x6B4A2A)
+		let branch: UInt32 = t.branch.isEmpty ? shadeRGB(trunk, 0.85) : colour(t.branch, p, trunk)
+		let leaves: UInt32 = colour(t.leaves, p, 0x3E8A2E)
+		let ground: UInt32 = colour(t.ground.isEmpty ? ModGround.key(.grass) : t.ground, p, 0x5DAA3A)
+		func plot(_ cx: Int, _ cy: Int, _ c: UInt32) {
+			if cx < 0 || cy < 0 || cx >= cellsW || cy >= rows + 2 { return }
+			for y in 0..<px {
+				for x in 0..<px { b.px[(cy * px + y) * b.w + cx * px + x] = 0xFF000000 | c }
+			}
+		}
+		for x in 0..<cellsW {
+			plot(x, rows, ground)
+			plot(x, rows + 1, shadeRGB(ground, 0.7))
+		}
+		let lo: Int = clampI(t.minHeight, 1, 24)
+		let hi: Int = max(lo, clampI(t.maxHeight, 1, 24))
+		let heights: [Int] = [lo, (lo + hi) / 2, hi]
+		for k in 0..<3 {
+			let root: Int = treeReach + k * (treeReach * 2 + 1)
+			let cells: [TreeCell] = TreeShapes.cells(t, heights[k], UInt64(1234 + k * 977))
+			for c in cells {
+				let col: UInt32 = c.part == 1 ? trunk : (c.part == 2 ? branch : leaves)
+				plot(root + c.dx, rows - c.dy, col)
+			}
+		}
+		return b
+	}
+}
+
+/// Painting a tree cell by cell: empty, trunk, branch or leaves. Its root is the middle of the bottom row.
+struct TreeGridEditor: View {
+	@Binding var grid: ModTreeGrid
+	@State var brush: Int = 3
+
+	static let brushes: [String] = ["EMPTY", "TRUNK", "BRANCH", "LEAVES"]
+	static let colours: [UInt32] = [0x1A2030, 0x7A5230, 0xA07040, 0x3E9A30]
+
+	var body: some View {
+		let g: ModTreeGrid = grid
+		let cell: CGFloat = min(26, 300 / CGFloat(max(1, g.w)))
+		let cw: CGFloat = cell * CGFloat(g.w)
+		let ch: CGFloat = cell * CGFloat(g.h)
+		return VStack(alignment: .leading, spacing: 8) {
+			ChoiceRows(options: TreeGridEditor.brushes, selected: $brush, columns: 4)
+			canvas(g, cell).frame(width: cw, height: ch)
+			IntSlider(label: "Width", value: sizeBind(true), range: 3...15)
+			IntSlider(label: "Height", value: sizeBind(false), range: 3...24)
+			HStack(spacing: 8) {
+				SmallButton(title: "CLEAR", color: ModUI.red) { self.clear() }
+				SmallButton(title: "START FROM THE SAMPLE", color: ModUI.blue) { self.sample() }
+			}
+		}
+	}
+
+	func canvas(_ g: ModTreeGrid, _ cell: CGFloat) -> some View {
+		let cols: [UInt32] = TreeGridEditor.colours
+		return Canvas { ctx, size in
+			for y in 0..<g.h {
+				for x in 0..<g.w {
+					let v: Int = Int(g.at(x, y))
+					let r: CGRect = CGRect(x: CGFloat(x) * cell, y: CGFloat(y) * cell, width: cell - 1, height: cell - 1)
+					ctx.fill(Path(r), with: .color(Color(hex: cols[clampI(v, 0, 3)])))
+				}
+			}
+			// the root, where it stands on the ground
+			let mid: CGFloat = CGFloat(g.w / 2) * cell
+			ctx.fill(Path(CGRect(x: mid, y: CGFloat(g.h) * cell - 3, width: cell - 1, height: 3)), with: .color(Color(hex: 0xFFE066)))
+		}
+		.gesture(DragGesture(minimumDistance: 0).onChanged { (v: DragGesture.Value) in self.paint(v.location, cell) })
+	}
+
+	func paint(_ p: CGPoint, _ cell: CGFloat) {
+		let x: Int = Int(floor(p.x / cell))
+		let y: Int = Int(floor(p.y / cell))
+		var g: ModTreeGrid = grid
+		if x < 0 || y < 0 || x >= g.w || y >= g.h || !g.valid { return }
+		let v: UInt8 = UInt8(clampI(brush, 0, 3))
+		if g.cells[y * g.w + x] == v { return }
+		g.cells[y * g.w + x] = v
+		grid = g
+	}
+
+	func sizeBind(_ wide: Bool) -> Binding<Int> {
+		let base: Binding<ModTreeGrid> = $grid
+		return Binding<Int>(get: { wide ? base.wrappedValue.w : base.wrappedValue.h }, set: { v in
+			let g: ModTreeGrid = base.wrappedValue
+			if (wide ? g.w : g.h) == v { return }
+			base.wrappedValue = wide ? g.resized(v, g.h) : g.resized(g.w, v)
+		})
+	}
+
+	func clear() {
+		var g: ModTreeGrid = grid
+		g.cells = [UInt8](repeating: 0, count: g.w * g.h)
+		grid = g
+	}
+
+	func sample() {
+		var g: ModTreeGrid = grid
+		g.cells = ModTreeGrid.sample(g.w, g.h)
+		grid = g
+	}
+}
+
+/// Editing one tree design: its name and shape, the blocks it is made of, its sizes and how often it grows,
+/// and for a painted design the picture of it
+struct TreeDesignEditor: View {
+	@ObservedObject var s: ModSession
+	let id: String
+	var pickBlock: (String) -> Void
+	var done: () -> Void
+
+	func b<T>(_ kp: WritableKeyPath<ModTree, T>, _ d: T) -> Binding<T> { return s.bind(\ModPack.trees, id, kp, d) }
+	var tree: ModTree { return s.mod.trees.first { $0.id == id } ?? ModTree() }
+
+	static let shapeNames: [String] = ModTreeShape.allCases.map { $0.name }
+
+	var body: some View {
+		let t: ModTree = tree
+		let painted: Bool = t.shape == .painted
+		let pic: Image = pixImage(TreePreview.render(t, s.mod))
+		return ModSection(title: t.name.uppercased(), help: "Its trunk, branches and leaves are always passed through, like the game's trees.") {
+			pic.resizable().interpolation(.none).frame(width: 237, height: 150)
+			ModTextField(label: "Name", text: b(\.name, ""), placeholder: "Crystal Oak")
+			Text("Shape").font(.pixel(11, .bold)).foregroundColor(ModUI.dim)
+			ChoiceRows(options: TreeDesignEditor.shapeNames, selected: shapeBind, columns: 3)
+			blocksPart(t)
+			if painted {
+				TreeGridEditor(grid: b(\.grid, ModTreeGrid()))
+			} else {
+				sizesPart(t)
+			}
+			StatSlider(label: "How often it grows (among the region's designs)", value: b(\.weight, 1), range: 0.1...20.0, step: 0.1, format: "%.1f")
+			SmallButton(title: "DONE", color: ModUI.accent) { self.done() }
+		}
+	}
+
+	func blocksPart(_ t: ModTree) -> some View {
+		VStack(alignment: .leading, spacing: 8) {
+			blockRow("Trunk", t.trunk, "trunk", "")
+			blockRow("Branches", t.branch, "branch", t.branch.isEmpty ? "" : "SAME AS THE TRUNK")
+			blockRow("Leaves", t.leaves, "leaves", "")
+			blockRow("Grows only on", t.ground, "ground", t.ground.isEmpty ? "" : "ANY GROUND")
+		}
+	}
+
+	func sizesPart(_ t: ModTree) -> some View {
+		VStack(alignment: .leading, spacing: 8) {
+			IntSlider(label: "Shortest trunk", value: b(\.minHeight, 4), range: 1...24)
+			IntSlider(label: "Tallest trunk", value: b(\.maxHeight, 7), range: 1...24)
+			IntSlider(label: "Crown (how far the leaves reach)", value: b(\.crown, 2), range: 0...6)
+			IntSlider(label: "Branches", value: b(\.branches, 1), range: 0...4)
+			StatSlider(label: "Fullness of the leaves", value: b(\.density, 0.9), range: 0.2...1.0, step: 0.05, format: "%.2f")
+			ModToggle(label: "A thick trunk", help: "Two blocks wide", isOn: b(\.thick, false))
+		}
+	}
+
+	func blockRow(_ label: String, _ key: String, _ field: String, _ clear: String) -> some View {
+		let img: Image = PatternGrid.cellImage(key, s.catalog)
+		let name: String = key.isEmpty ? (field == "branch" ? "The trunk's block" : "Any") : ModGround.name(key, s.mod)
+		let canClear: Bool = !clear.isEmpty
+		return HStack(spacing: 10) {
+			img.resizable().interpolation(.none).frame(width: 32, height: 32)
+			VStack(alignment: .leading, spacing: 2) {
+				Text(verbatim: label).font(.pixel(11, .bold)).foregroundColor(ModUI.dim)
+				Text(verbatim: name).font(.pixel(13, .bold)).foregroundColor(Color.white)
+			}
+			Spacer(minLength: 0)
+			if canClear { SmallButton(title: clear) { self.clearField(field) } }
+			SmallButton(title: "CHOOSE", color: ModUI.blue) { self.pickBlock(field) }
+		}
+	}
+
+	func clearField(_ field: String) {
+		if field == "branch" { b(\.branch, "").wrappedValue = "" }
+		if field == "ground" { b(\.ground, "").wrappedValue = "" }
+	}
+
+	var shapeBind: Binding<Int> {
+		let base: Binding<ModTreeShape> = b(\.shape, .round)
+		return Binding<Int>(get: { base.wrappedValue.rawValue }, set: { base.wrappedValue = ModTreeShape(rawValue: $0) ?? .round })
+	}
+}
+
 struct DimensionEditorView: View {
 	@ObservedObject var s: ModSession
 	let id: String
@@ -8474,8 +8063,13 @@ struct DimensionEditorView: View {
 	@State var previewOf: ModDimension? = nil
 	/// which sky colour the palette sets (see skyColorNames)
 	@State var skyPick: Int = 0
+	/// the sun (0) or the moon (1) on the SUN & MOON page
+	@State var bodyPick: Int = 0
+	/// the tree design open on the TREES page
+	@State var treeEdit: String = ""
 
-	static let pages: [String] = ["BASICS", "SKY", "LAND", "REGIONS", "LIFE", "WAY IN", "PREVIEW"]
+	static let pages: [String] = ["BASICS", "SKY", "SUN & MOON", "LAND", "REGIONS", "TREES", "LIFE", "WAY IN", "PREVIEW"]
+	static let bodyNames: [String] = ["SUN", "MOON"]
 	static let skyColorNames: [String] = ["Day: top", "Day: bottom", "Night: top", "Night: bottom", "Sun"]
 
 	func b<T>(_ kp: WritableKeyPath<ModDimension, T>, _ d: T) -> Binding<T> { return s.bind(\ModPack.dims, id, kp, d) }
@@ -8485,7 +8079,7 @@ struct DimensionEditorView: View {
 		ZStack {
 			VStack(spacing: 10) {
 				header
-				ChoiceRows(options: DimensionEditorView.pages, selected: $page, columns: 7)
+				ChoiceRows(options: DimensionEditorView.pages, selected: $page, columns: 5)
 				pageView
 			}
 		}
@@ -8521,13 +8115,90 @@ struct DimensionEditorView: View {
 	var pageView: some View {
 		switch page {
 		case 1: skyPage
-		case 2: landPage
-		case 3: zonesPage
-		case 4: lifePage
-		case 5: entryPage
-		case 6: previewPage
+		case 2: bodiesPage
+		case 3: landPage
+		case 4: zonesPage
+		case 5: treesPage
+		case 6: lifePage
+		case 7: entryPage
+		case 8: previewPage
 		default: basicsPage
 		}
+	}
+
+	var bodiesPage: some View {
+		let d: ModDimension = dim
+		let pick: Int = clampI(bodyPick, 0, 1)
+		let roof: Bool = d.ceiling
+		return ModSection(title: "SUN AND MOON", help: "Give the dimension a sun and a moon of its own: a picture or a round one in your colour, its size and glow, how it crosses the sky, and how much light it gives (it lights the land as the game's do).") {
+			if roof { Text("This is a cavern world: it has no sky, so they are never seen.").font(.pixel(11, .semibold)).foregroundColor(Color(hex: 0xFF9060)) }
+			ChoiceRows(options: DimensionEditorView.bodyNames, selected: $bodyPick, columns: 2)
+			if pick == 0 {
+				SkyBodyEditor(sky: b(\.sunBody, nil), moon: false, skyTop: d.skyTop, skyBottom: d.skyBottom)
+			} else {
+				SkyBodyEditor(sky: b(\.moonBody, nil), moon: true, skyTop: d.nightTop, skyBottom: d.nightBottom)
+			}
+		}
+	}
+
+	var treesPage: some View {
+		let list: [ModTree] = s.mod.trees
+		let editing: Bool = !treeEdit.isEmpty && list.contains { $0.id == treeEdit }
+		let canAdd: Bool = list.count < ModTree.maxDesigns
+		return VStack(spacing: 10) {
+			Text("Tree designs belong to the whole mod: choose which grow in each region on the REGIONS page. Their trunks, branches and leaves are always passed through, like the game's trees: a solid block chosen for them grows as a pass-through form of itself (each such block uses one of a world's 64 mod block numbers).")
+				.font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+			if editing {
+				TreeDesignEditor(s: s, id: treeEdit, pickBlock: { (f: String) in self.picking = joinText("t:", f) }, done: { self.treeEdit = "" })
+			} else {
+				ForEach(list) { (t: ModTree) in self.treeRow(t) }
+				if canAdd { SmallButton(title: "+ TREE DESIGN", color: ModUI.accent) { self.addTree() } }
+			}
+		}
+	}
+
+	func treeRow(_ t: ModTree) -> some View {
+		let pic: Image = pixImage(TreePreview.render(t, s.mod))
+		let uses: Int = treeUses(t.id)
+		let where0: String = uses == 0 ? "not grown in any region yet" : joinText("grows in ", String(uses), uses == 1 ? " region" : " regions")
+		let line: String = joinText(t.shape.name, " \u{00B7} ", where0)
+		return HStack(spacing: 8) {
+			pic.resizable().interpolation(.none).frame(width: 111, height: 70)
+			VStack(alignment: .leading, spacing: 2) {
+				Text(verbatim: t.name).font(.pixel(13)).foregroundColor(Color.white)
+				Text(verbatim: line).font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
+			}
+			Spacer(minLength: 0)
+			SmallButton(title: "EDIT", color: ModUI.blue) { self.treeEdit = t.id }
+			SmallButton(title: "\u{2715}", color: ModUI.red) { self.deleteTree(t.id) }
+		}
+		.padding(8)
+		.background(PixelBox(color: ModUI.card))
+	}
+
+	func treeUses(_ tid: String) -> Int {
+		var n: Int = 0
+		for d in s.mod.dims {
+			for z in d.zones where z.treeKinds.contains(tid) { n += 1 }
+		}
+		return n
+	}
+
+	func addTree() {
+		var t = ModTree()
+		t.id = s.mod.freshID("tree")
+		t.name = joinText("Tree ", String(s.mod.trees.count + 1))
+		s.mod.trees.append(t)
+		s.touch()
+		treeEdit = t.id
+	}
+
+	func deleteTree(_ tid: String) {
+		s.mod.trees.removeAll { $0.id == tid }
+		for i in s.mod.dims.indices {
+			for k in s.mod.dims[i].zones.indices { s.mod.dims[i].zones[k].treeKinds.removeAll { $0 == tid } }
+		}
+		s.touch()
 	}
 
 	var basicsPage: some View {
@@ -8689,8 +8360,24 @@ struct DimensionEditorView: View {
 		}
 	}
 
-	/// A block chosen in the picker goes where it was asked for (a region's blocks are "z<n>:<field>")
+	/// A block chosen in the picker goes where it was asked for (a region's blocks are "z<n>:<field>",
+	/// the open tree design's "t:<field>")
 	func setBlock(_ field: String, _ key: String) {
+		if field.hasPrefix("t:") {
+			guard let ti = s.mod.trees.firstIndex(where: { $0.id == treeEdit }) else { return }
+			var t: ModTree = s.mod.trees[ti]
+			let part: String = String(field.dropFirst(2))
+			switch part {
+			case "trunk": if !key.isEmpty { t.trunk = key }
+			case "branch": t.branch = key
+			case "leaves": if !key.isEmpty { t.leaves = key }
+			case "ground": t.ground = key
+			default: break
+			}
+			s.mod.trees[ti] = t
+			s.touch()
+			return
+		}
 		guard let i = s.mod.dims.firstIndex(where: { $0.id == id }) else { return }
 		var d: ModDimension = s.mod.dims[i]
 		if field.hasPrefix("z") {
@@ -8783,11 +8470,41 @@ struct DimensionEditorView: View {
 			if plants { StatSlider(label: "How many plants", value: zb(zi, \.plantChance, 0.1), range: 0.0...0.8, step: 0.02, format: "%.2f") }
 			Text("Trees").font(.pixel(11, .bold)).foregroundColor(ModUI.dim)
 			ChoiceRows(options: ModDimText.trees, selected: zb(zi, \.trees, 1), columns: 3)
-			if trees {
+			if trees { treeKindsPart(zi, z) }
+			if trees && z.treeKinds.isEmpty {
 				blockRow("Trunk", z.log, joinText(tag, "log"))
 				blockRow("Leaves", z.leaves, joinText(tag, "leaves"))
 			}
 		}
+	}
+
+	func treeKindsPart(_ zi: Int, _ z: ModDimZone) -> some View {
+		let list: [ModTree] = s.mod.trees
+		let none: Bool = list.isEmpty
+		return VStack(alignment: .leading, spacing: 6) {
+			Text("Tree designs that grow here (none chosen: simple trees of the trunk and leaves below)").font(.pixel(11, .bold)).foregroundColor(ModUI.dim)
+			if none {
+				Text("Make designs on the TREES page.").font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+			} else {
+				PlainGrid(count: list.count, per: 3) { (i: Int) in self.treeChip(zi, z, list[i]) }
+			}
+		}
+	}
+
+	func treeChip(_ zi: Int, _ z: ModDimZone, _ t: ModTree) -> some View {
+		let on: Bool = z.treeKinds.contains(t.id)
+		return ToggleChip(title: t.name, on: on) { self.toggleTree(zi, t.id) }
+	}
+
+	func toggleTree(_ zi: Int, _ tid: String) {
+		let bind: Binding<[String]> = zb(zi, \.treeKinds, [])
+		var l: [String] = bind.wrappedValue
+		if let k = l.firstIndex(of: tid) {
+			l.remove(at: k)
+		} else if l.count < ModTree.maxDesigns {
+			l.append(tid)
+		}
+		bind.wrappedValue = l
 	}
 
 	func biomeBind(_ zi: Int) -> Binding<Int> {

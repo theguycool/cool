@@ -1,5 +1,6 @@
-// PIXEL REALM v2, part 3 of 4: Mod Creator+ (game content changes, ore controls, sprite tools, custom infusions, boss phases and
-// summoning, custom dimensions, the Logic Studio), then art, sound, drawing the world, the HUD, panels and menus.
+// PIXEL REALM v2, part 3 of 4: the rest of Mod Creator+ (custom infusions, boss phases and summoning, custom dimensions with
+// their suns, moons and trees, the Logic Studio), art, sound, drawing the world, the HUD, panels and menus, then vehicles of
+// every kind (flight, weapons, damage, the assembler, the autopilot).
 // The game is four files that go together in one Swift Playgrounds app: PixelRealm1.swift to
 // PixelRealm4.swift. Each goes in its own file in the app (delete ContentView.swift; MyApp.swift can
 // hold part 1). All art is generated in code.
@@ -10,1086 +11,7 @@ import AVFoundation
 import UIKit
 #endif
 
-// ===== p32_modplus =====
-
-// MARK: - Mod Creator+: changing the game's own content
-
-/// What a change to the game's own content applies to
-enum ModOverrideKind: Int, Codable, CaseIterable {
-	case block, item, creature
-	var name: String {
-		switch self {
-		case .block: return "Game block"
-		case .item: return "Game item"
-		case .creature: return "Game creature"
-		}
-	}
-}
-
-/// A change a mod makes to something of the game itself: a block's hardness, a weapon's damage, a
-/// creature's health and so on. Only the numbers set here change (nil: the game's own value), the
-/// original is never touched (switching the mod off, or this change off, puts it back), and each
-/// change can be switched off by itself.
-struct ModOverride: Codable, Identifiable, Equatable {
-	var id: String = ""
-	var kind: ModOverrideKind = .block
-	/// the block (tile number), item, or creature (kind number) changed
-	var tile: Int = Int(Tile.stone.rawValue)
-	var item: Item? = nil
-	var mob: Int = MobKind.zombie.rawValue
-	var enabled: Bool = true
-	// blocks
-	var hardness: Double? = nil
-	var tier: Int? = nil
-	var light: Int? = nil
-	var unbreakable: Bool? = nil
-	// items
-	var damage: Double? = nil
-	var cooldown: Double? = nil
-	var reach: Double? = nil
-	var knock: Double? = nil
-	var crit: Double? = nil
-	var mineSpeed: Double? = nil
-	var defense: Double? = nil
-	var hunger: Double? = nil
-	var heal: Double? = nil
-	// creatures
-	var hp: Double? = nil
-	var mobDamage: Double? = nil
-	var speed: Double? = nil
-	var detect: Double? = nil
-	var jump: Double? = nil
-
-	init() {}
-
-	init(from decoder: Decoder) throws {
-		let c = try decoder.container(keyedBy: CodingKeys.self)
-		id = c.val(.id, "")
-		kind = c.val(.kind, .block)
-		tile = c.val(.tile, Int(Tile.stone.rawValue))
-		item = c.val(.item, nil)
-		mob = c.val(.mob, MobKind.zombie.rawValue)
-		enabled = c.val(.enabled, true)
-		hardness = c.val(.hardness, nil)
-		tier = c.val(.tier, nil)
-		light = c.val(.light, nil)
-		unbreakable = c.val(.unbreakable, nil)
-		damage = c.val(.damage, nil)
-		cooldown = c.val(.cooldown, nil)
-		reach = c.val(.reach, nil)
-		knock = c.val(.knock, nil)
-		crit = c.val(.crit, nil)
-		mineSpeed = c.val(.mineSpeed, nil)
-		defense = c.val(.defense, nil)
-		hunger = c.val(.hunger, nil)
-		heal = c.val(.heal, nil)
-		hp = c.val(.hp, nil)
-		mobDamage = c.val(.mobDamage, nil)
-		speed = c.val(.speed, nil)
-		detect = c.val(.detect, nil)
-		jump = c.val(.jump, nil)
-	}
-
-	/// what it changes, by name
-	var targetName: String {
-		switch kind {
-		case .block: return Tile(rawValue: UInt8(clampI(tile, 0, 255)))?.name ?? "Block"
-		case .item: return item?.name ?? "Item"
-		case .creature: return MobKind(rawValue: mob).map { mobDef($0).name } ?? "Creature"
-		}
-	}
-
-	/// how many numbers it changes
-	var changedCount: Int {
-		let opts: [Bool] = [hardness != nil, tier != nil, light != nil, unbreakable != nil, damage != nil, cooldown != nil, reach != nil, knock != nil,
-							crit != nil, mineSpeed != nil, defense != nil, hunger != nil, heal != nil, hp != nil, mobDamage != nil, speed != nil, detect != nil, jump != nil]
-		return opts.filter { $0 }.count
-	}
-
-	/// Later changes win, field by field (the mod lower in the load order goes on top)
-	mutating func merge(_ o: ModOverride) {
-		if let v = o.hardness { hardness = v }
-		if let v = o.tier { tier = v }
-		if let v = o.light { light = v }
-		if let v = o.unbreakable { unbreakable = v }
-		if let v = o.damage { damage = v }
-		if let v = o.cooldown { cooldown = v }
-		if let v = o.reach { reach = v }
-		if let v = o.knock { knock = v }
-		if let v = o.crit { crit = v }
-		if let v = o.mineSpeed { mineSpeed = v }
-		if let v = o.defense { defense = v }
-		if let v = o.hunger { hunger = v }
-		if let v = o.heal { heal = v }
-		if let v = o.hp { hp = v }
-		if let v = o.mobDamage { mobDamage = v }
-		if let v = o.speed { speed = v }
-		if let v = o.detect { detect = v }
-		if let v = o.jump { jump = v }
-	}
-
-	/// A melee profile with this change's numbers
-	func apply(_ p0: MeleeProfile) -> MeleeProfile {
-		var p: MeleeProfile = p0
-		if let v = damage { p.damage = v }
-		if let v = cooldown { p.cooldown = v }
-		if let v = reach { p.reach = v }
-		if let v = knock { p.knock = v }
-		if let v = crit { p.critChance = v }
-		return p
-	}
-}
-
-/// The changes to game content of the mods a world uses, merged and ready (empty without mods). The
-/// game's own tables are put back before every new set goes in, so nothing stays changed by accident.
-final class OverrideRT {
-	static var shared: OverrideRT = OverrideRT()
-	/// tiles and creatures whose table entries are changed now
-	static var patchedTiles: Set<Int> = []
-	static var patchedMobs: Set<Int> = []
-
-	var blocks: [Int: ModOverride] = [:]
-	var items: [Item: ModOverride] = [:]
-	var mobs: [Int: ModOverride] = [:]
-	var isEmpty: Bool { return blocks.isEmpty && items.isEmpty && mobs.isEmpty }
-
-	static func build(_ packs: [ModPack], _ disabled: Set<String>) -> OverrideRT {
-		let o = OverrideRT()
-		for p in packs {
-			for v in p.overrides where v.enabled && !disabled.contains(p.key(v.id)) {
-				switch v.kind {
-				case .block:
-					guard let t = Tile(rawValue: UInt8(clampI(v.tile, 0, 255))), !t.isMod, t != .air, t != .bedrock else { continue }
-					var m: ModOverride = o.blocks[v.tile] ?? v
-					if o.blocks[v.tile] != nil { m.merge(v) }
-					o.blocks[v.tile] = m
-				case .item:
-					guard let it = v.item, ModOverrideCheck.itemAllowed(it) else { continue }
-					var m: ModOverride = o.items[it] ?? v
-					if o.items[it] != nil { m.merge(v) }
-					o.items[it] = m
-				case .creature:
-					guard let k = MobKind(rawValue: v.mob), k != .custom, k != .villager else { continue }
-					var m: ModOverride = o.mobs[v.mob] ?? v
-					if o.mobs[v.mob] != nil { m.merge(v) }
-					o.mobs[v.mob] = m
-				}
-			}
-		}
-		return o
-	}
-
-	/// Puts the changes into the game's tables (after putting back the last set)
-	func install() {
-		for raw in OverrideRT.patchedTiles {
-			if let t = Tile(rawValue: UInt8(clampI(raw, 0, 255))) { Tile.setGameDef(t, Tile.makeDef(t)) }
-		}
-		for raw in OverrideRT.patchedMobs {
-			if let k = MobKind(rawValue: raw), raw < mobDefTable.count { mobDefTable[raw] = makeMobDef(k) }
-		}
-		OverrideRT.patchedTiles = []
-		OverrideRT.patchedMobs = []
-		for (raw, o) in blocks {
-			guard let t = Tile(rawValue: UInt8(clampI(raw, 0, 255))) else { continue }
-			var d: TileDef = Tile.makeDef(t)
-			if let v = o.hardness { d.hard = v }
-			if let v = o.tier { d.tier = v }
-			if let v = o.light { d.light = v }
-			if o.unbreakable == true { d.hard = 9999 }
-			Tile.setGameDef(t, d)
-			OverrideRT.patchedTiles.insert(raw)
-		}
-		for (raw, o) in mobs {
-			guard let k = MobKind(rawValue: raw), raw < mobDefTable.count else { continue }
-			var d: MobDef = makeMobDef(k)
-			if let v = o.hp { d.hp = v }
-			if let v = o.mobDamage { d.dmg = v }
-			if let v = o.speed { d.speed = v }
-			if let v = o.detect { d.aggro = v }
-			if let v = o.jump { d.jump = v }
-			mobDefTable[raw] = d
-			OverrideRT.patchedMobs.insert(raw)
-		}
-	}
-
-	/// a tool's mining speed when a mod changed it (nil: the game's own)
-	func toolSpeed(_ it: Item) -> Double? {
-		if items.isEmpty { return nil }
-		return items[it]?.mineSpeed
-	}
-}
-
-/// What the override editor may change, and the ranges it allows
-enum ModOverrideCheck {
-	static func itemAllowed(_ it: Item) -> Bool {
-		switch it {
-		case .sword, .spear, .hammer, .knife, .club, .relic, .tool, .armor, .food, .gun, .bow, .sling: return true
-		default: return false
-		}
-	}
-
-	/// Every game item that can be changed, in a sensible order
-	static func items() -> [Item] {
-		return allGameItems().filter { itemAllowed($0) }
-	}
-
-	/// Every game block that can be changed
-	static func tiles() -> [Tile] {
-		return Tile.allCases.filter { !$0.isMod && $0 != .air && $0 != .bedrock && $0 != .portalOn && $0 != .portalOff && $0 != .portalFrame }
-	}
-
-	/// Every game creature that can be changed
-	static func mobs() -> [MobKind] {
-		return MobKind.allCases.filter { $0 != .custom && $0 != .villager }
-	}
-
-	static func clamp(_ o: inout ModOverride, _ sandbox: Bool) {
-		if let v = o.hardness { o.hardness = ModRange.hardness.clamp(v, sandbox) }
-		if let v = o.tier { o.tier = clampI(v, 0, 9) }
-		if let v = o.light { o.light = clampI(v, 0, 15) }
-		if let v = o.damage { o.damage = ModRange.damage.clamp(v, sandbox) }
-		if let v = o.cooldown { o.cooldown = ModRange.cooldown.clamp(v, sandbox) }
-		if let v = o.reach { o.reach = ModRange.reach.clamp(v, sandbox) }
-		if let v = o.knock { o.knock = ModRange.knock.clamp(v, sandbox) }
-		if let v = o.crit { o.crit = clampD(v.isFinite ? v : 0, 0, 1) }
-		if let v = o.mineSpeed { o.mineSpeed = ModRange.toolSpeed.clamp(v, sandbox) }
-		if let v = o.defense { o.defense = ModRange.defense.clamp(v, sandbox) }
-		if let v = o.hunger { o.hunger = ModRange.heal.clamp(v, sandbox) }
-		if let v = o.heal { o.heal = ModRange.heal.clamp(v, sandbox) }
-		if let v = o.hp { o.hp = ModRange.bossHP.clamp(max(1, v), sandbox) }
-		if let v = o.mobDamage { o.mobDamage = ModRange.damage.clamp(v, sandbox) }
-		if let v = o.speed { o.speed = ModRange.mobSpeed.clamp(v, sandbox) }
-		if let v = o.detect { o.detect = ModRange.detect.clamp(v, sandbox) }
-		if let v = o.jump { o.jump = ModRange.jump.clamp(v, sandbox) }
-		if o.kind == .creature && o.hp != nil { o.hp = max(1, min(o.hp ?? 1, sandbox ? 20000 : 4000)) }
-	}
-}
-
-extension Tile {
-	/// Changes a game tile's entry in every table (a mod's override, or putting the original back)
-	static func setGameDef(_ t: Tile, _ d: TileDef) {
-		let i: Int = Int(t.rawValue)
-		if t.isMod || i >= defTable.count { return }
-		defTable[i] = d
-		hardTable[i] = d.hard
-		tierTable[i] = d.tier
-		lightTable[i] = d.light
-	}
-}
-
-// MARK: - The game's own numbers, as the editors show them
-
-/// How quickly a tool breaks a block: the same numbers mining uses (bare hands: kind nil). The time a
-/// block takes is hardness x 1.5 divided by this; nil when the tool can't break it at all.
-func miningSpeed(_ t: Tile, _ kind: ToolType?, _ tier: Tier?, toolSpeed: Double? = nil) -> Double? {
-	let def: TileDef = t.def
-	if def.hard >= 9999 { return nil }
-	let cls: ToolType = toolClass(t)
-	if def.tier > 0 {
-		let pt: Int = (kind == cls) ? (tier?.rawValue ?? 0) : 0
-		if pt < def.tier { return nil }
-	}
-	var speed: Double = 1.0
-	if let k = kind, let tr = tier { speed = (toolSpeed ?? tr.mineSpeed) * (k == cls ? 1.0 : 0.35) }
-	return speed
-}
-
-/// Seconds a block takes to break with a tool (nil: it can't)
-func miningSeconds(_ t: Tile, _ kind: ToolType?, _ tier: Tier?, toolSpeed: Double? = nil) -> Double? {
-	guard let s = miningSpeed(t, kind, tier, toolSpeed: toolSpeed) else { return nil }
-	let need: Double = max(0.05, t.def.hard * 1.5)
-	return need / max(0.001, s)
-}
-
-/// Seconds a mod block would take with a tool, from its own numbers (before it is in any world)
-func miningSecondsFor(hardness: Double, tier: Int, blockTool: ToolType, unbreakable: Bool, _ kind: ToolType?, _ toolTier: Int, toolSpeed: Double) -> Double? {
-	if unbreakable || hardness >= 9999 { return nil }
-	if tier > 0 {
-		let pt: Int = kind == blockTool ? toolTier : 0
-		if pt < tier { return nil }
-	}
-	var speed: Double = 1.0
-	if let k = kind { speed = toolSpeed * (k == blockTool ? 1.0 : 0.35) }
-	let need: Double = max(0.05, hardness * 1.5)
-	return need / max(0.001, speed)
-}
-
-func secondsText(_ s: Double?) -> String {
-	guard let v = s else { return "can't" }
-	if v < 10 { return String(format: "%.2f s", v) }
-	return String(format: "%.0f s", v)
-}
-
-// MARK: - Starting from game content
-
-extension ModBlock {
-	/// A custom block copied from one of the game's blocks: its picture and numbers, ready to change
-	static func fromGame(_ t: Tile) -> ModBlock {
-		var b = ModBlock()
-		b.name = joinText(t.name, " (custom)")
-		b.art = ModPixels(buf: tileBuf(t))
-		b.hardness = min(40, t.def.hard)
-		b.unbreakable = t.def.hard >= 9999
-		b.tool = toolClass(t).rawValue
-		b.tier = t.def.tier
-		b.light = t.def.light
-		b.transparent = !t.def.opaque
-		b.collision = t.def.solid ? .solid : (t.def.platform ? .platform : .none)
-		b.category = t.def.light > 0 ? .light : .building
-		return b
-	}
-}
-
-extension ModItem {
-	/// A custom item copied from one of the game's items: its kind, look and numbers
-	static func fromGame(_ it: Item) -> ModItem {
-		var m = ModItem()
-		m.name = joinText(it.name, " (custom)")
-		m.baseIcon = it
-		m.stack = it.maxStack
-		let p: MeleeProfile = it.melee
-		switch it {
-		case .sword, .spear, .hammer, .knife, .club, .relic:
-			m.kind = .melee
-			m.damage = p.damage
-			m.cooldown = p.cooldown
-			m.reach = p.reach
-			m.arc = p.halfArc
-			m.knock = p.knock
-			m.maxHits = p.maxHits
-			m.heavy = p.heavy
-			m.daze = p.daze
-			m.burn = p.burn
-			m.windup = p.windup
-			m.combo = p.combo
-			m.backstab = p.backstab
-			m.undeadMult = p.undeadMult
-			m.crit = p.critChance
-			m.trail = p.trail
-			m.style = p.style.rawValue
-		case .tool(let k, let t):
-			m.kind = .tool
-			m.toolType = k.rawValue
-			m.toolTier = t.rawValue
-			m.toolSpeed = t.mineSpeed
-			m.damage = p.damage
-			m.cooldown = p.cooldown
-		case .armor(let s, let t):
-			m.kind = .armor
-			m.slot = s.rawValue
-			m.defense = t.defense * s.weight
-			m.look = t.rawValue
-		case .food(let f):
-			m.kind = .food
-			m.hunger = f.hunger
-			if f.heal > 0 { m.effects = [ModEffect(.heal, f.heal, 0)] }
-		case .gun(let g):
-			m.kind = .gun
-			m.damage = g.damage
-			m.cooldown = g.cooldown
-			m.speed = g.speed
-			m.gravity = g.gravity
-			m.pierce = g.pierce
-			m.magazine = g.magazine
-			m.reload = g.reloadTime
-			m.needsPress = g.needsPress
-			if let a = g.ammo { m.ammo = .ammo(a) }
-		case .bow, .sling:
-			m.kind = .bow
-			m.damage = 8
-		default:
-			m.kind = .material
-		}
-		return m
-	}
-}
-
-extension ModMob {
-	/// A custom creature copied from one of the game's: its look (as its base) and its numbers
-	static func fromGame(_ k: MobKind) -> ModMob {
-		var m = ModMob()
-		let d: MobDef = mobDef(k)
-		m.name = joinText(d.name, " (custom)")
-		m.base = k.rawValue
-		m.hp = d.hp
-		m.damage = d.dmg
-		m.speed = d.speed
-		m.detect = d.aggro
-		m.jump = d.jump
-		switch d.behavior {
-		case .passive, .skittish: m.category = .passive
-		case .defensive: m.category = .neutral
-		case .boss: m.category = .boss
-		case .flyer: m.category = .flying
-		case .swimmer: m.category = .water
-		default: m.category = d.hostile ? .hostile : .neutral
-		}
-		m.behavior.chase = d.hostile
-		m.behavior.attackPlayer = d.hostile
-		return m
-	}
-}
-
-// MARK: - Versions, folders and dependencies
-
-/// A saved snapshot of a mod
-struct ModVersion: Codable {
-	var label: String
-	var time: Double
-	var mod: ModPack
-}
-
-/// A snapshot as the version list shows it
-struct ModVersionInfo: Identifiable {
-	var id: String { return file }
-	var file: String
-	var label: String
-	var time: Double
-	var version: String
-}
-
-extension ModStore {
-	static var versionDir: URL {
-		let u: URL = dir.appendingPathComponent("versions", isDirectory: true)
-		try? FileManager.default.createDirectory(at: u, withIntermediateDirectories: true)
-		return u
-	}
-	static let maxVersions: Int = 12
-
-	/// Keeps a copy of the mod as it is now, under a label (the oldest copies go past the limit)
-	@discardableResult
-	static func saveVersion(_ p: ModPack, label: String) -> Bool {
-		if p.id.isEmpty { return false }
-		let now: Double = Date().timeIntervalSince1970
-		let v: ModVersion = ModVersion(label: label.isEmpty ? "Saved version" : String(label.prefix(40)), time: now, mod: p)
-		guard let d = try? JSONEncoder().encode(v) else { return false }
-		let name: String = joinText(p.id, "@", String(Int(now * 1000)), ".json")
-		do {
-			try d.write(to: versionDir.appendingPathComponent(name), options: .atomic)
-		} catch {
-			return false
-		}
-		let list: [ModVersionInfo] = versions(p.id)
-		if list.count > maxVersions {
-			for old in list.suffix(list.count - maxVersions) { try? FileManager.default.removeItem(at: versionDir.appendingPathComponent(old.file)) }
-		}
-		return true
-	}
-
-	/// The saved versions of a mod, newest first
-	static func versions(_ id: String) -> [ModVersionInfo] {
-		let names: [String] = (try? FileManager.default.contentsOfDirectory(atPath: versionDir.path)) ?? []
-		var out: [ModVersionInfo] = []
-		for n in names where n.hasPrefix(id + "@") && n.hasSuffix(".json") {
-			guard let d = try? Data(contentsOf: versionDir.appendingPathComponent(n)), let v = try? JSONDecoder().decode(ModVersion.self, from: d) else { continue }
-			out.append(ModVersionInfo(file: n, label: v.label, time: v.time, version: v.mod.version))
-		}
-		out.sort { $0.time > $1.time }
-		return out
-	}
-
-	/// Puts a saved version back as the mod (keeping a copy of how it was just before)
-	static func restoreVersion(_ id: String, _ file: String) -> ModPack? {
-		guard let d = try? Data(contentsOf: versionDir.appendingPathComponent(file)), var v = try? JSONDecoder().decode(ModVersion.self, from: d) else { return nil }
-		if let cur = pack(id) { saveVersion(cur, label: "Before restoring an older version") }
-		v.mod.id = id
-		return save(v.mod) ? pack(id) : nil
-	}
-
-	static func deleteVersion(_ file: String) {
-		try? FileManager.default.removeItem(at: versionDir.appendingPathComponent(file))
-	}
-
-	/// The other mods this mod needs: those it names, and those whose content it uses
-	static func dependencies(_ p: ModPack) -> [String] {
-		var out: [String] = p.requires.filter { $0 != p.id }
-		func add(_ k: String) {
-			let m: String = splitModKey(k).0
-			if !m.isEmpty && m != p.id && !out.contains(m) { out.append(m) }
-		}
-		func addItem(_ it: Item?) {
-			if let i = it, case .custom(let k) = i { add(k) }
-		}
-		for b in p.blocks { addItem(b.drop) }
-		for i in p.items {
-			addItem(i.ammo)
-			addItem(i.baseIcon)
-		}
-		for m in p.mobs {
-			for d in m.drops { addItem(d.item) }
-			if !m.behavior.guardKey.isEmpty { add(m.behavior.guardKey) }
-		}
-		for r in p.recipes {
-			addItem(r.out)
-			for c in r.cost { addItem(c.item) }
-		}
-		for l in p.loot { for e in l.entries { addItem(e.item) } }
-		for s in p.structures { for k in s.palette where k.contains(":") { add(k) } }
-		for f in p.infusions { for it in f.items { addItem(it) } }
-		for m in p.mobs {
-			for f in m.phases where f.helper.contains(":") { add(f.helper) }
-			for sm in m.summons {
-				addItem(sm.item)
-				for k in sm.pattern.cells where k.contains(":") && !k.hasPrefix("tile:") { add(k) }
-			}
-		}
-		for o in p.ores {
-			for k in o.hosts where k.contains(":") && !k.hasPrefix("tile:") { add(k) }
-			if o.near.contains(":") && !o.near.hasPrefix("tile:") { add(o.near) }
-		}
-		for m in p.mobs { for sm in m.summons { for k in sm.dimKeys { add(k) } } }
-		for d in p.dims {
-			for k in [d.stone, d.hazard, d.gateBlock] where k.contains(":") && !k.hasPrefix("tile:") { add(k) }
-			for z in d.zones {
-				for k in [z.ground, z.filler, z.plant, z.log, z.leaves] where k.contains(":") && !k.hasPrefix("tile:") { add(k) }
-			}
-			for sp in d.spawns where sp.creature.contains(":") { add(sp.creature) }
-			addItem(d.entry.item)
-			for k in d.entry.pattern.cells where k.contains(":") && !k.hasPrefix("tile:") { add(k) }
-		}
-		for sc in p.scripts { LKeys.uses(sc, add, addItem) }
-		return out
-	}
-
-	/// Folder names in use, sorted
-	static func folders() -> [String] {
-		var out: Set<String> = []
-		for e in entries() { if let p = e.pack, !p.folder.isEmpty { out.insert(p.folder) } }
-		return out.sorted()
-	}
-}
-
-extension ModValidator {
-	/// The Mod Creator+ parts of a mod: changes to game content, the folder, needed mods and content
-	/// switched off
-	static func checkPlus(_ p: inout ModPack, _ mn: String, _ sb: Bool, _ known: [String: String], _ r: inout ModReport) {
-		if p.folder.count > 24 { p.folder = String(p.folder.prefix(24)) }
-		var req: [String] = []
-		for q in p.requires where !q.isEmpty && q != p.id && !req.contains(q) { req.append(q) }
-		if req.count > 12 { req = Array(req.prefix(12)) }
-		p.requires = req
-		if p.overrides.count > 64 {
-			r.add(1, mn, "Mod", "Only 64 changes to game content fit in one mod; the rest were left out.")
-			p.overrides = Array(p.overrides.prefix(64))
-		}
-		var used: Set<String> = Set(p.blocks.map { $0.id } + p.items.map { $0.id } + p.mobs.map { $0.id })
-		var keep: [ModOverride] = []
-		for var o in p.overrides {
-			if o.id.isEmpty || used.contains(o.id) { o.id = p.freshID("g") + String(keep.count) }
-			used.insert(o.id)
-			let place: String = joinText("Change to \u{201C}", o.targetName, "\u{201D}")
-			switch o.kind {
-			case .block:
-				guard let t = Tile(rawValue: UInt8(clampI(o.tile, 0, 255))), ModOverrideCheck.tiles().contains(t) else {
-					r.add(1, mn, place, "That block can't be changed; the change was left out.")
-					continue
-				}
-			case .item:
-				guard let it = o.item, ModOverrideCheck.itemAllowed(it) else {
-					r.add(1, mn, place, "That item can't be changed; the change was left out.")
-					continue
-				}
-			case .creature:
-				guard let k = MobKind(rawValue: o.mob), k != .custom, k != .villager else {
-					r.add(1, mn, place, "That creature can't be changed; the change was left out.")
-					continue
-				}
-			}
-			ModOverrideCheck.clamp(&o, sb)
-			keep.append(o)
-		}
-		p.overrides = keep
-		let ids: Set<String> = Set(p.blocks.map { $0.id } + p.items.map { $0.id } + p.mobs.map { $0.id } + p.recipes.map { $0.id } + p.ores.map { $0.id } + p.structures.map { $0.id } + p.overrides.map { $0.id } + p.projectiles.map { $0.id } + p.loot.map { $0.id } + p.infusions.map { $0.id } + p.dims.map { $0.id } + p.scripts.map { $0.id })
-		p.off = p.off.filter { ids.contains($0) }
-		_ = known
-		checkOrePlus(&p, mn, &r)
-		checkInfusions(&p, mn, sb, known, &r)
-		checkBosses(&p, mn, sb, known, &r)
-		checkDims(&p, mn, sb, known, &r)
-		checkScripts(&p, mn, sb, known, &r)
-		let dimIDs: Set<String> = Set(p.dims.map { $0.id })
-		for i in p.ores.indices where !p.ores[i].dimKey.isEmpty && !dimIDs.contains(p.ores[i].dimKey) { p.ores[i].dimKey = "" }
-		for i in p.structures.indices where !p.structures[i].dimKey.isEmpty && !dimIDs.contains(p.structures[i].dimKey) { p.structures[i].dimKey = "" }
-	}
-}
-
-// MARK: - Mod Creator+: ore generation
-
-extension ModOre {
-	static let placeNames: [String] = ["Inside the rock", "On cave walls", "Near the surface", "Under water"]
-	static let placeHelp: [String] = ["Anywhere in its host ground between the two depths.",
-									  "Only where the ground meets a cave (a block with open air beside it).",
-									  "Within a few blocks of the top of the ground (the depths are ignored).",
-									  "In the ground under seas and lakes (the depths are ignored)."]
-	static let shapeNames: [String] = ["Lumps", "Streaks", "Scattered"]
-}
-
-/// Where one ore is generated, worked out once per world
-extension ModOreRT {
-	/// Places this ore in one freshly made chunk. With the original settings (inside the rock, every
-	/// chunk, lumps, any host of its kind) it uses the same random numbers in the same order as before
-	/// these controls existed, so worlds made with older mods keep generating the same ore.
-	func place(_ g: WorldGen, _ ch: Chunk) {
-		let H: Int = ch.H
-		var rng = RNG(hashU(ch.cx, 0x51ED, g.seed &+ salt))
-		var extra = RNG(hashU(ch.cx, 0x7A11, g.seed &+ salt))
-		if rarity < 1.0 && extra.double() >= rarity { return }
-		var colOK: [Bool] = [Bool](repeating: true, count: chunkW)
-		if !biomes.isEmpty {
-			var any: Bool = false
-			for lx in 0..<chunkW {
-				colOK[lx] = biomes.contains(g.col(ch.x0 + lx).biome.rawValue)
-				if colOK[lx] { any = true }
-			}
-			if !any { return }
-		}
-		let whole: Int = Int(veins)
-		let n: Int = min(24, whole + (rng.double() < veins - Double(whole) ? 1 : 0))
-		let y0: Int = clampI(minY, 1, H - 2)
-		let y1: Int = clampI(maxY, y0, H - 2)
-		var v: Int = 0
-		while v < n {
-			var lx: Int = rng.int(chunkW)
-			var y: Int = y0 + rng.int(y1 - y0 + 1)
-			v += 1
-			var lo: Int = y0
-			var hi: Int = y1
-			if place == 2 || place == 3 {
-				// near the top of the ground (or the sea bed): the depths do not apply
-				y = clampI(ch.surf[lx] + extra.int(3), 1, H - 2)
-				lo = max(1, y - 3)
-				hi = min(H - 2, y + 4)
-			}
-			if let near = nearTile {
-				var found: Bool = hasNear(ch, lx, y, near)
-				var tries: Int = 0
-				while !found && tries < 10 {
-					lx = extra.int(chunkW)
-					y = lo + extra.int(max(1, hi - lo + 1))
-					found = hasNear(ch, lx, y, near)
-					tries += 1
-				}
-				if !found { continue }
-			}
-			var k: Int = 0
-			switch shape {
-			case 1:
-				// a streak: a line in one direction, wandering a little
-				let dirs: [(Int, Int)] = [(1, 0), (-1, 0), (1, 1), (-1, 1), (1, -1), (-1, -1), (0, 1), (0, -1)]
-				let d: (Int, Int) = dirs[extra.int(dirs.count)]
-				while k < size {
-					put(ch, g, lx, y, colOK)
-					lx = clampI(lx + d.0, 0, chunkW - 1)
-					y = clampI(y + d.1, lo, hi)
-					if extra.int(4) == 0 { y = clampI(y + (extra.int(2) == 0 ? -1 : 1), lo, hi) }
-					k += 1
-				}
-			case 2:
-				// scattered single blocks around the spot
-				while k < size {
-					put(ch, g, clampI(lx + extra.int(7) - 3, 0, chunkW - 1), clampI(y + extra.int(7) - 3, lo, hi), colOK)
-					k += 1
-				}
-			default:
-				// a short random walk keeps each vein in one lump, inside this chunk and the ore's depths
-				while k < size {
-					put(ch, g, lx, y, colOK)
-					switch rng.int(4) {
-					case 0: lx = min(chunkW - 1, lx + 1)
-					case 1: lx = max(0, lx - 1)
-					case 2: y = min(hi, y + 1)
-					default: y = max(lo, y - 1)
-					}
-					k += 1
-				}
-			}
-		}
-	}
-
-	/// One block of ore, if the spot is right for it
-	func put(_ ch: Chunk, _ g: WorldGen, _ lx: Int, _ y: Int, _ colOK: [Bool]) {
-		if !colOK[lx] { return }
-		let t: Tile = ch.get(lx, y)
-		if hostTiles.isEmpty {
-			if !modOreHost(t, host) { return }
-		} else if !hostTiles.contains(t.rawValue) {
-			return
-		}
-		switch place {
-		case 1:
-			// a cave wall: open air beside it
-			let open: Bool = (lx > 0 && ch.get(lx - 1, y) == .air) || (lx < chunkW - 1 && ch.get(lx + 1, y) == .air) || ch.get(lx, y - 1) == .air || ch.get(lx, y + 1) == .air
-			if !open { return }
-		case 3:
-			// under water: water just above in this column
-			var wet: Bool = false
-			for dy in 1...4 where ch.get(lx, y - dy) == .water { wet = true }
-			if !wet { return }
-		default: break
-		}
-		ch.setLocal(lx, y, tile)
-	}
-
-	/// Another ore within three blocks (in this chunk)
-	func hasNear(_ ch: Chunk, _ lx: Int, _ y: Int, _ t: Tile) -> Bool {
-		for dy in -3...3 {
-			for dx in -3...3 {
-				let x: Int = lx + dx
-				if x < 0 || x >= chunkW { continue }
-				if ch.get(x, y + dy) == t { return true }
-			}
-		}
-		return false
-	}
-}
-
-/// Picks of game ground for an ore's host and neighbour: game tiles as "tile:<number>"
-enum ModGround {
-	static let hosts: [Tile] = [.stone, .slate, .deepRock, .dirt, .sand, .mud, .snow, .sandstone, .ashStone, .grass, .ice, .obsidian]
-	static let ores: [Tile] = [.coal, .copper, .tin, .iron, .silver, .gold, .saltpeter, .amethyst, .diamond, .mythril, .emberOre, .voidOre, .crystalOre]
-
-	static func key(_ t: Tile) -> String { return joinText("tile:", String(Int(t.rawValue))) }
-
-	/// A host or neighbour key as a tile in a world (game tiles directly, mod blocks through the runtime)
-	static func resolve(_ k: String, _ rt: ModRuntime) -> Tile? {
-		if k.hasPrefix("tile:") {
-			guard let n = Int(k.dropFirst(5)), let t = Tile(rawValue: UInt8(clampI(n, 0, 255))) else { return nil }
-			return t
-		}
-		return rt.tileForKey[k]
-	}
-
-	static func name(_ k: String, _ p: ModPack) -> String {
-		if k.hasPrefix("tile:") {
-			if let n = Int(k.dropFirst(5)), let t = Tile(rawValue: UInt8(clampI(n, 0, 255))) { return t.name }
-			return "Block"
-		}
-		let s: (String, String) = splitModKey(k)
-		return p.blocks.first { $0.id == s.1 }?.name ?? k
-	}
-}
-
-/// A picture of where an ore forms: a slice of a sample world (six chunks wide, from the sky to the
-/// bottom), generated by the game's own world generator, with the ore marked
-enum ModOrePreview {
-	static let seed: UInt64 = 20_240_611
-	static let chunks: Int = 6
-
-	/// The picture (one pixel a block wide and two rows tall) and how many blocks of ore it holds
-	static func render(_ o: ModOre, _ p: ModPack) -> (PixelBuf, Int) {
-		let dim: Dimension = o.dim == 1 ? .umbral : .overworld
-		let g = WorldGen(seed: seed, infinite: true, rareChance: 0.28)
-		let marker: Tile = .amethystBlock
-		var hosts: Set<UInt8> = []
-		for k in o.hosts {
-			if k.hasPrefix("tile:"), let n = Int(k.dropFirst(5)) { hosts.insert(UInt8(clampI(n, 0, 255))) }
-		}
-		var near: Tile? = nil
-		if o.near.hasPrefix("tile:"), let n = Int(o.near.dropFirst(5)) { near = Tile(rawValue: UInt8(clampI(n, 0, 255))) }
-		let salt: UInt64 = UInt64(truncatingIfNeeded: modChecksum(Data((p.id + o.id).utf8)))
-		let rtOre = ModOreRT(tile: marker, dim: o.dim, minY: o.minY, maxY: o.maxY, veins: o.veins, size: o.size, host: o.host, salt: salt,
-							 place: o.place, biomes: Set(o.biomes), rarity: o.rarity, shape: o.shape, nearTile: near, hostTiles: hosts)
-		let H: Int = dimHeight(dim)
-		let rows: Int = (H + 1) / 2
-		var b = PixelBuf(w: chunks * chunkW, h: rows)
-		var count: Int = 0
-		let ore: UInt32 = 0xFF40FF
-		for c in 0..<chunks {
-			let ch: Chunk = generateChunk(g, dim, c - chunks / 2)
-			rtOre.place(g, ch)
-			for lx in 0..<chunkW {
-				let surf: Int = ch.surf[lx]
-				for r in 0..<rows {
-					let y0: Int = r * 2
-					var col: UInt32 = 0
-					var hit: Bool = false
-					for y in y0..<min(H, y0 + 2) {
-						let t: Tile = ch.get(lx, y)
-						if t == marker { hit = true; count += 1 }
-					}
-					let t: Tile = ch.get(lx, y0)
-					if hit {
-						col = ore
-					} else if t == .air {
-						col = y0 < surf ? (dim == .umbral ? 0x2A1A3A : 0x7AB8F0) : 0x16161C
-					} else if t == .water {
-						col = 0x2E5FD0
-					} else if t == .lava {
-						col = 0xE8601A
-					} else {
-						col = shadeRGB(t.def.colors.first ?? 0x808080, 0.8)
-					}
-					b.set(c * chunkW + lx, r, col)
-				}
-			}
-		}
-		return (b, count)
-	}
-}
-
-extension ModValidator {
-	/// The ore controls kept in range; hosts and neighbours must be real blocks
-	static func checkOrePlus(_ p: inout ModPack, _ mn: String, _ r: inout ModReport) {
-		let own: Set<String> = Set(p.blocks.map { p.key($0.id) })
-		let biomeRaws: Set<Int> = Set(ModBiomePicker.all.map { $0.rawValue })
-		func validKey(_ k: String) -> Bool {
-			if k.hasPrefix("tile:") {
-				guard let n = Int(k.dropFirst(5)), let t = Tile(rawValue: UInt8(clampI(n, 0, 255))) else { return false }
-				return !t.isMod && t != .air && t != .bedrock
-			}
-			return own.contains(k)
-		}
-		for i in p.ores.indices {
-			var o: ModOre = p.ores[i]
-			o.place = clampI(o.place, 0, 3)
-			o.shape = clampI(o.shape, 0, 2)
-			o.rarity = clampD(o.rarity.isFinite ? o.rarity : 1, 0.01, 1)
-			o.biomes = Array(Set(o.biomes.filter { biomeRaws.contains($0) })).sorted()
-			let hosts: [String] = o.hosts.filter { validKey($0) }
-			if hosts.count != o.hosts.count { r.add(1, mn, joinText("Ore \u{201C}", o.name, "\u{201D}"), "A host block no longer exists and was taken off the list.") }
-			o.hosts = Array(hosts.prefix(8))
-			if !o.near.isEmpty && !validKey(o.near) {
-				o.near = ""
-				r.add(1, mn, joinText("Ore \u{201C}", o.name, "\u{201D}"), "The ore it formed next to no longer exists: it forms anywhere now.")
-			}
-			p.ores[i] = o
-		}
-	}
-}
-
-// MARK: - Mod Creator+: sprite tools
-
-extension ModPixels {
-	/// whether the game draws this picture with a dark outline (nil: the usual for what it is)
-	func outlined(_ usual: Bool) -> Bool { return outline ?? usual }
-
-	func flippedH() -> ModPixels {
-		var o = ModPixels(w: w, h: h)
-		o.outline = outline
-		for y in 0..<h { for x in 0..<w { o.setARGB(w - 1 - x, y, argb(x, y)) } }
-		return o
-	}
-
-	func flippedV() -> ModPixels {
-		var o = ModPixels(w: w, h: h)
-		o.outline = outline
-		for y in 0..<h { for x in 0..<w { o.setARGB(x, h - 1 - y, argb(x, y)) } }
-		return o
-	}
-
-	/// moved by a pixel or more, wrapping round the edges (nothing is lost)
-	func shifted(_ dx: Int, _ dy: Int) -> ModPixels {
-		var o = ModPixels(w: w, h: h)
-		o.outline = outline
-		for y in 0..<h {
-			for x in 0..<w { o.setARGB(((x + dx) % w + w) % w, ((y + dy) % h + h) % h, argb(x, y)) }
-		}
-		return o
-	}
-
-	/// stretched or shrunk to a new size (each pixel copied from the nearest)
-	func scaled(_ nw: Int, _ nh: Int) -> ModPixels {
-		var o = ModPixels(w: nw, h: nh)
-		o.outline = outline
-		for y in 0..<o.h {
-			for x in 0..<o.w { o.setARGB(x, y, argb(x * w / max(1, o.w), y * h / max(1, o.h))) }
-		}
-		return o
-	}
-
-	/// a quarter turn clockwise (width and height swap)
-	func rotated() -> ModPixels {
-		var o = ModPixels(w: h, h: w)
-		o.outline = outline
-		for y in 0..<h { for x in 0..<w { o.setARGB(h - 1 - y, x, argb(x, y)) } }
-		return o
-	}
-
-	/// A game picture fitted into this many pixels (nearest pixel, see-through kept)
-	static func fitted(_ b: PixelBuf, _ nw: Int, _ nh: Int) -> ModPixels {
-		var o = ModPixels(w: nw, h: nh)
-		for y in 0..<o.h {
-			for x in 0..<o.w {
-				let sx: Int = min(b.w - 1, x * b.w / max(1, o.w))
-				let sy: Int = min(b.h - 1, y * b.h / max(1, o.h))
-				o.setARGB(x, y, b.px[sy * b.w + sx])
-			}
-		}
-		return o
-	}
-
-	/// A picture of any size squeezed into this many pixels by averaging (for pasted photos and
-	/// drawings): `bytes` are RGBA, top row first
-	static func fromRGBA(_ bytes: [UInt8], _ sw: Int, _ sh: Int, _ nw: Int, _ nh: Int) -> ModPixels {
-		var o = ModPixels(w: nw, h: nh)
-		if sw <= 0 || sh <= 0 || bytes.count < sw * sh * 4 { return o }
-		for y in 0..<o.h {
-			for x in 0..<o.w {
-				let x0: Int = x * sw / o.w
-				let x1: Int = max(x0 + 1, (x + 1) * sw / o.w)
-				let y0: Int = y * sh / o.h
-				let y1: Int = max(y0 + 1, (y + 1) * sh / o.h)
-				var r: Int = 0
-				var g: Int = 0
-				var b: Int = 0
-				var a: Int = 0
-				var n: Int = 0
-				for yy in y0..<min(sh, y1) {
-					for xx in x0..<min(sw, x1) {
-						let i: Int = (yy * sw + xx) * 4
-						let al: Int = Int(bytes[i + 3])
-						r += Int(bytes[i]) * al
-						g += Int(bytes[i + 1]) * al
-						b += Int(bytes[i + 2]) * al
-						a += al
-						n += 1
-					}
-				}
-				if n == 0 || a / n < 128 { continue }
-				let rr: UInt32 = UInt32(clampI(r / max(1, a), 0, 255))
-				let gg: UInt32 = UInt32(clampI(g / max(1, a), 0, 255))
-				let bb: UInt32 = UInt32(clampI(b / max(1, a), 0, 255))
-				o.setARGB(x, y, 0xFF000000 | (rr << 16) | (gg << 8) | bb)
-			}
-		}
-		return o
-	}
-
-	/// The picture as a short text code, to copy between mods, worlds and iPads
-	func spriteCode() -> String {
-		return joinText("PRSPR1:", String(w), "x", String(h), ":", (outline ?? true) ? "o" : "n", ":", rgba.base64EncodedString())
-	}
-
-	/// A picture read back from its text code (nil: not a sprite code, or damaged)
-	static func fromSpriteCode(_ code: String) -> ModPixels? {
-		let parts: [Substring] = code.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: ":", maxSplits: 3, omittingEmptySubsequences: false)
-		if parts.count != 4 || parts[0] != "PRSPR1" { return nil }
-		let wh: [Substring] = parts[1].split(separator: "x")
-		guard wh.count == 2, let w = Int(wh[0]), let h = Int(wh[1]), w >= 1, h >= 1, w <= 64, h <= 64 else { return nil }
-		guard let data = Data(base64Encoded: String(parts[3])), data.count == w * h * 4 else { return nil }
-		var p = ModPixels(w: w, h: h)
-		p.rgba = data
-		p.outline = parts[2] == "o"
-		return p.valid ? p : nil
-	}
-}
-
-/// Copying sprites in and out through the iPad's clipboard: as a text code (exact), or a picture
-/// (any image copied from Photos or a drawing app, shrunk to the sprite's size)
-enum SpriteClipboard {
-	static func copy(_ p: ModPixels) {
-		UIPasteboard.general.string = p.spriteCode()
-	}
-
-	static func pasteCode() -> ModPixels? {
-		guard let s = UIPasteboard.general.string else { return nil }
-		return ModPixels.fromSpriteCode(s)
-	}
-
-	/// The image on the clipboard shrunk to w x h pixels (nil: no image there)
-	static func pasteImage(_ w: Int, _ h: Int) -> ModPixels? {
-		guard let img = UIPasteboard.general.image, let cg = img.cgImage else { return nil }
-		return pixels(cg, w, h)
-	}
-
-	/// A picture's pixels at its own size (capped at 256 on a side), then shrunk by averaging
-	static func pixels(_ cg: CGImage, _ w: Int, _ h: Int) -> ModPixels? {
-		let sw: Int = min(256, max(1, cg.width))
-		let sh: Int = min(256, max(1, cg.height))
-		var bytes: [UInt8] = [UInt8](repeating: 0, count: sw * sh * 4)
-		let space: CGColorSpace = CGColorSpaceCreateDeviceRGB()
-		let ok: Bool = bytes.withUnsafeMutableBytes { (bp: UnsafeMutableRawBufferPointer) -> Bool in
-			guard let ctx = CGContext(data: bp.baseAddress, width: sw, height: sh, bitsPerComponent: 8, bytesPerRow: sw * 4, space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
-			ctx.interpolationQuality = .medium
-			ctx.draw(cg, in: CGRect(x: 0, y: 0, width: sw, height: sh))
-			return true
-		}
-		if !ok { return nil }
-		return ModPixels.fromRGBA(bytes, sw, sh, w, h)
-	}
-}
-
-/// A sprite saved in the sprite library: finished or not, ready to use in any mod or as a reference
-struct SpriteProject: Codable, Identifiable, Equatable {
-	var id: String = ""
-	var name: String = "Sprite"
-	var frames: [ModPixels] = [ModPixels(w: 16, h: 16)]
-	var edited: Double = 0
-
-	init() {}
-
-	init(from decoder: Decoder) throws {
-		let c = try decoder.container(keyedBy: CodingKeys.self)
-		id = c.val(.id, "")
-		name = c.val(.name, "Sprite")
-		var skip: Int = 0
-		frames = c.list(.frames, &skip)
-		if frames.isEmpty { frames = [ModPixels(w: 16, h: 16)] }
-		edited = c.val(.edited, 0)
-	}
-}
-
-/// The sprite library: sprites kept on this iPad apart from any mod
-enum SpriteLibrary {
-	static let maxSprites: Int = 120
-	static var url: URL { return ModStore.dir.appendingPathComponent("sprites.json") }
-
-	static func load() -> [SpriteProject] {
-		guard let d = try? Data(contentsOf: url) else { return [] }
-		let raw: [Lenient<SpriteProject>] = (try? JSONDecoder().decode([Lenient<SpriteProject>].self, from: d)) ?? []
-		return raw.compactMap { $0.value }.filter { !$0.frames.isEmpty && $0.frames.allSatisfy { $0.valid } }
-	}
-
-	static func saveAll(_ list: [SpriteProject]) {
-		guard let d = try? JSONEncoder().encode(Array(list.prefix(maxSprites))) else { return }
-		try? d.write(to: url, options: .atomic)
-	}
-
-	/// Adds a sprite or replaces the one with its id; returns it as saved
-	@discardableResult
-	static func put(_ p0: SpriteProject) -> SpriteProject {
-		var p: SpriteProject = p0
-		if p.id.isEmpty { p.id = joinText("s", String(Int(Date().timeIntervalSince1970 * 1000) % 1_000_000_000), String(Int.random(in: 10...99))) }
-		if p.name.trimmingCharacters(in: .whitespaces).isEmpty { p.name = "Sprite" }
-		p.name = String(p.name.prefix(32))
-		p.frames = Array(p.frames.prefix(ModLimits.maxFrames)).filter { $0.valid }
-		if p.frames.isEmpty { p.frames = [ModPixels(w: 16, h: 16)] }
-		p.edited = Date().timeIntervalSince1970
-		var list: [SpriteProject] = load()
-		if let i = list.firstIndex(where: { $0.id == p.id }) { list[i] = p } else { list.insert(p, at: 0) }
-		saveAll(list)
-		return p
-	}
-
-	static func delete(_ id: String) {
-		saveAll(load().filter { $0.id != id })
-	}
-
-	static func duplicate(_ id: String) -> SpriteProject? {
-		guard var p = load().first(where: { $0.id == id }) else { return nil }
-		p.id = ""
-		p.name = String(joinText(p.name, " (copy)").prefix(32))
-		return put(p)
-	}
-}
-
-/// The game's own pictures, to use as a reference or a starting sample: creatures (each frame),
-/// items and blocks
-enum GameSprites {
-	static func creatureFrames(_ k: MobKind) -> [PixelBuf] {
-		return creatureArt(k, 0).0
-	}
-
-	static let creatures: [MobKind] = MobKind.allCases.filter { $0 != .custom && $0 != .villager }
-
-	static func items() -> [Item] {
-		return allGameItems().filter { if case .block = $0 { return false }; if case .wall = $0 { return false }; return true }
-	}
-
-	static func tiles() -> [Tile] {
-		return Tile.allCases.filter { !$0.isMod && $0 != .air }
-	}
-}
+// ===== p32_modplus (continued from part 2) =====
 
 // MARK: - Mod Creator+: custom infusions
 
@@ -2364,6 +1286,132 @@ func dimHasSky(_ d: Dimension) -> Bool {
 	return false
 }
 
+/// The shape a tree design grows in
+enum ModTreeShape: Int, Codable, CaseIterable {
+	case round, pine, tall, umbrella, palm, willow, bush, bare, painted
+	var name: String {
+		switch self {
+		case .round: return "Round"
+		case .pine: return "Pine (a cone)"
+		case .tall: return "Tall and thin"
+		case .umbrella: return "Umbrella"
+		case .palm: return "Palm"
+		case .willow: return "Willow (hanging)"
+		case .bush: return "Bush"
+		case .bare: return "Bare (no leaves)"
+		case .painted: return "Painted (your own)"
+		}
+	}
+}
+
+/// A tree painted cell by cell: 0 empty, 1 trunk, 2 branch, 3 leaves. Its root is the middle of the
+/// bottom row, which stands on the ground.
+struct ModTreeGrid: Codable, Equatable {
+	var w: Int = 9
+	var h: Int = 12
+	var cells: [UInt8] = ModTreeGrid.sample(9, 12)
+
+	init() {}
+
+	init(from decoder: Decoder) throws {
+		let c = try decoder.container(keyedBy: CodingKeys.self)
+		w = c.val(.w, 9)
+		h = c.val(.h, 12)
+		cells = c.val(.cells, [])
+	}
+
+	var valid: Bool { return w >= 3 && h >= 3 && w <= 15 && h <= 24 && cells.count == w * h }
+
+	func at(_ x: Int, _ y: Int) -> UInt8 {
+		if x < 0 || y < 0 || x >= w || y >= h || !valid { return 0 }
+		return cells[y * w + x]
+	}
+
+	/// a small round tree to start painting from
+	static func sample(_ w: Int, _ h: Int) -> [UInt8] {
+		var out: [UInt8] = [UInt8](repeating: 0, count: w * h)
+		let mid: Int = w / 2
+		for y in (h - 5)..<h { out[y * w + mid] = 1 }
+		for y in 0..<(h - 4) {
+			for x in 0..<w {
+				let dx: Double = Double(x - mid) / 3.5
+				let dy: Double = Double(y - (h - 8)) / 3.6
+				if dx * dx + dy * dy <= 1.0 && out[y * w + x] == 0 { out[y * w + x] = 3 }
+			}
+		}
+		return out
+	}
+
+	/// another size, the tree kept standing at the bottom middle
+	func resized(_ nw: Int, _ nh: Int) -> ModTreeGrid {
+		var o = ModTreeGrid()
+		o.w = clampI(nw, 3, 15)
+		o.h = clampI(nh, 3, 24)
+		o.cells = [UInt8](repeating: 0, count: o.w * o.h)
+		let ox: Int = o.w / 2 - w / 2
+		let oy: Int = o.h - h
+		for y in 0..<h {
+			for x in 0..<w {
+				let tx: Int = x + ox
+				let ty: Int = y + oy
+				if tx >= 0 && ty >= 0 && tx < o.w && ty < o.h { o.cells[ty * o.w + tx] = at(x, y) }
+			}
+		}
+		return o
+	}
+}
+
+/// A tree design for a mod's dimensions: the blocks it is made of, its shape and size, how often it
+/// grows and on what. Like the game's trees, its trunk, branches and leaves are passed through (a solid
+/// block of a mod chosen for them gets a pass-through tree form of its own).
+struct ModTree: Codable, Identifiable, Equatable {
+	/// designs one mod may hold
+	static let maxDesigns: Int = 12
+
+	var id: String = ""
+	var name: String = "New Tree"
+	var trunk: String = ModGround.key(.log)
+	/// the branches' block (empty: the trunk's)
+	var branch: String = ""
+	var leaves: String = ModGround.key(.leaves)
+	var shape: ModTreeShape = .round
+	var minHeight: Int = 4
+	var maxHeight: Int = 7
+	/// a trunk two blocks wide
+	var thick: Bool = false
+	/// how far the leaves reach from the trunk
+	var crown: Int = 2
+	var branches: Int = 1
+	/// how full the leaves are (0.2 sparse ... 1 solid)
+	var density: Double = 0.9
+	var grid: ModTreeGrid = ModTreeGrid()
+	/// how often it grows among its region's trees
+	var weight: Double = 1
+	/// it grows only on this ground (empty: on any)
+	var ground: String = ""
+
+	init() {}
+
+	init(from decoder: Decoder) throws {
+		let c = try decoder.container(keyedBy: CodingKeys.self)
+		id = c.val(.id, "")
+		name = c.val(.name, "Tree")
+		trunk = c.val(.trunk, ModGround.key(.log))
+		branch = c.val(.branch, "")
+		leaves = c.val(.leaves, ModGround.key(.leaves))
+		shape = c.val(.shape, .round)
+		minHeight = c.val(.minHeight, 4)
+		maxHeight = c.val(.maxHeight, 7)
+		thick = c.val(.thick, false)
+		crown = c.val(.crown, 2)
+		branches = c.val(.branches, 1)
+		density = c.val(.density, 0.9)
+		grid = c.val(.grid, ModTreeGrid())
+		weight = c.val(.weight, 1)
+		ground = c.val(.ground, "")
+	}
+}
+
 /// A stretch of a custom dimension with its own ground, plants and trees: its biomes
 struct ModDimZone: Codable, Equatable {
 	var name: String = "Meadow"
@@ -2378,6 +1426,8 @@ struct ModDimZone: Codable, Equatable {
 	var trees: Int = 1
 	var log: String = ModGround.key(.log)
 	var leaves: String = ModGround.key(.leaves)
+	/// the mod's tree designs that grow here, by id (empty: the simple trees of its log and leaves)
+	var treeKinds: [String] = []
 
 	init() {}
 
@@ -2392,6 +1442,7 @@ struct ModDimZone: Codable, Equatable {
 		trees = c.val(.trees, 1)
 		log = c.val(.log, ModGround.key(.log))
 		leaves = c.val(.leaves, ModGround.key(.leaves))
+		treeKinds = c.val(.treeKinds, [])
 	}
 }
 
@@ -2418,6 +1469,75 @@ struct ModDimSpawn: Codable, Equatable {
 	}
 }
 
+/// A sun or a moon of a mod's own: its picture (blank: the game's, in its colour), how big it is, its
+/// glow, how it moves across the sky, and how much light it gives
+struct ModSkyBody: Codable, Equatable {
+	var art: ModPixels = ModPixels(w: 16, h: 16)
+	/// times the game's size
+	var size: Double = 1.0
+	/// the colour of the game's round one (a picture keeps its own colours)
+	var color: UInt32 = 0xFFD84A
+	var glow: Double = 0.35
+	var glowColor: UInt32 = 0xFFE680
+	/// 0 rises and sets with the time of day, 1 stays in one place in the sky (day and night)
+	var path: Int = 0
+	/// how high its path climbs (0.2 low ... 1.2 high)
+	var arc: Double = 1.0
+	/// where it stays: across (0 left ... 1 right) and down (0 top ... 1 the horizon)
+	var posX: Double = 0.75
+	var posY: Double = 0.2
+	/// the light it gives: a sun scales the daylight, a moon the light at night (1: the game's)
+	var bright: Double = 1.0
+	/// turning slowly (degrees a second; 0 still)
+	var spin: Double = 0
+	/// its glow swelling and fading (0 steady ... 1 strong)
+	var pulse: Double = 0
+	/// rays all round it
+	var rays: Bool = false
+
+	init() {}
+
+	init(from decoder: Decoder) throws {
+		let c = try decoder.container(keyedBy: CodingKeys.self)
+		art = c.val(.art, ModPixels(w: 16, h: 16))
+		size = c.val(.size, 1.0)
+		color = c.val(.color, 0xFFD84A)
+		glow = c.val(.glow, 0.35)
+		glowColor = c.val(.glowColor, 0xFFE680)
+		path = c.val(.path, 0)
+		arc = c.val(.arc, 1.0)
+		posX = c.val(.posX, 0.75)
+		posY = c.val(.posY, 0.2)
+		bright = c.val(.bright, 1.0)
+		spin = c.val(.spin, 0)
+		pulse = c.val(.pulse, 0)
+		rays = c.val(.rays, false)
+	}
+
+	/// a new moon: pale, faint glow
+	static func moon() -> ModSkyBody {
+		var m = ModSkyBody()
+		m.color = 0xE8ECF4
+		m.glow = 0.15
+		m.glowColor = 0xC8D0E8
+		return m
+	}
+
+	/// every number kept within what the sky can show
+	mutating func clamp() {
+		if !art.valid || art.w > 32 || art.h > 32 { art = ModPixels(w: 16, h: 16) }
+		size = clampD(size.isFinite ? size : 1, 0.3, 3.0)
+		glow = clampD(glow.isFinite ? glow : 0, 0, 1)
+		path = clampI(path, 0, 1)
+		arc = clampD(arc.isFinite ? arc : 1, 0.2, 1.2)
+		posX = clampD(posX.isFinite ? posX : 0.75, 0, 1)
+		posY = clampD(posY.isFinite ? posY : 0.2, 0, 1)
+		bright = clampD(bright.isFinite ? bright : 1, 0, 2)
+		spin = clampD(spin.isFinite ? spin : 0, -180, 180)
+		pulse = clampD(pulse.isFinite ? pulse : 0, 0, 1)
+	}
+}
+
 /// A dimension made in the Mod Creator: how its sky and light look, how its land is made, what lives
 /// there, and how a player gets in and out. Each world gives its dimensions one of three slots.
 struct ModDimension: Codable, Identifiable, Equatable {
@@ -2439,6 +1559,9 @@ struct ModDimension: Codable, Identifiable, Equatable {
 	var moon: Bool = true
 	var stars: Bool = true
 	var sunColor: UInt32 = 0xFFE8A0
+	/// its own sun and moon (nil: the game's round ones)
+	var sunBody: ModSkyBody? = nil
+	var moonBody: ModSkyBody? = nil
 	/// floating motes: 0 none, 1 embers, 2 snowflakes, 3 fireflies, 4 ash, 5 spores
 	var ambient: Int = 0
 	/// 0 none, 1 drizzle, 2 rain, 3 thunderstorms, 4 snow
@@ -2506,6 +1629,8 @@ struct ModDimension: Codable, Identifiable, Equatable {
 		moon = c.val(.moon, true)
 		stars = c.val(.stars, true)
 		sunColor = c.val(.sunColor, 0xFFE8A0)
+		sunBody = c.val(.sunBody, nil)
+		moonBody = c.val(.moonBody, nil)
 		ambient = c.val(.ambient, 0)
 		weather = c.val(.weather, 0)
 		chill = c.val(.chill, 0)
@@ -2564,10 +1689,17 @@ final class ModDimRT {
 	let zones: [ModDimZoneRT]
 	var spawnRules: [SpawnRule] = []
 	var modName: String = ""
+	/// some region grows the mod's tree designs
+	let hasDesigns: Bool
+	/// the regions' plants (trees grow over them), and their ground (where saplings take root)
+	let plantTiles: Set<UInt8>
+	let soils: Set<UInt8>
 
 	var dim: Dimension { return .custom(slot) }
 
-	init(key: String, slot: Int, def: ModDimension, resolve: (String) -> Tile?) {
+	/// `trees` are the mod's tree designs; `treeTile` gives the tile a tree is made of for a block key
+	/// (a solid block's pass-through tree form; role 1 trunk or branch, 2 leaves)
+	init(key: String, slot: Int, def: ModDimension, resolve: (String) -> Tile?, trees: [ModTree] = [], treeTile: ((String, Int) -> Tile?)? = nil) {
 		self.key = key
 		self.slot = slot
 		self.def = def
@@ -2580,14 +1712,46 @@ final class ModDimRT {
 		liquid = def.liquid == 1 ? .lava : .water
 		hazard = def.hazard.isEmpty ? nil : resolve(def.hazard)
 		gate = def.gateBlock.isEmpty ? .glowCrystal : pick(def.gateBlock, .glowCrystal)
+		func pickTree(_ k: String, _ role: Int, _ d: Tile) -> Tile {
+			if let f = treeTile, let t = f(k, role), t != .air, !t.liquid { return t }
+			return pick(k, d)
+		}
 		var zs: [ModDimZoneRT] = []
+		var plants: Set<UInt8> = []
+		var soil: Set<UInt8> = []
+		var any: Bool = false
 		for z in def.zones.prefix(4) {
 			let plant: Tile? = z.plant.isEmpty ? nil : resolve(z.plant)
-			zs.append(ModDimZoneRT(ground: pick(z.ground, .grass), filler: pick(z.filler, .dirt), plant: plant, plantChance: z.plantChance,
-								   trees: z.trees, log: pick(z.log, .log), leaves: pick(z.leaves, .leaves), biome: Biome(rawValue: z.biome) ?? .plains))
+			var zr = ModDimZoneRT(ground: pick(z.ground, .grass), filler: pick(z.filler, .dirt), plant: plant, plantChance: z.plantChance,
+								  trees: z.trees, log: pickTree(z.log, 1, .log), leaves: pickTree(z.leaves, 2, .leaves), biome: Biome(rawValue: z.biome) ?? .plains)
+			for tid in z.treeKinds {
+				guard let t = trees.first(where: { $0.id == tid }) else { continue }
+				let trunk: Tile = pickTree(t.trunk, 1, .log)
+				let br: Tile = t.branch.isEmpty ? trunk : pickTree(t.branch, 1, trunk)
+				let lv: Tile = pickTree(t.leaves, 2, .leaves)
+				let gr: Tile? = t.ground.isEmpty ? nil : resolve(t.ground)
+				zr.designs.append(ModTreeRT(def: t, trunk: trunk, branch: br, leaves: lv, ground: gr))
+			}
+			if !zr.designs.isEmpty {
+				any = true
+				// trees stand further apart the wider the widest design grows
+				var half: Int = 1
+				for t in zr.designs {
+					let w: Int = t.def.shape == .painted ? t.def.grid.w / 2 : clampI(t.def.crown, 0, 6) + (t.def.thick ? 1 : 0)
+					half = max(half, w)
+				}
+				zr.gap = clampI(half + 2, 3, 12)
+			}
+			if let p = plant { plants.insert(p.rawValue) }
+			soil.insert(zr.ground.rawValue)
+			soil.insert(zr.filler.rawValue)
+			zs.append(zr)
 		}
 		if zs.isEmpty { zs.append(ModDimZoneRT(ground: .grass, filler: .dirt, plant: nil, plantChance: 0, trees: 0, log: .log, leaves: .leaves, biome: .plains)) }
 		zones = zs
+		hasDesigns = any
+		plantTiles = plants
+		soils = soil
 	}
 
 	/// the region at column x
@@ -2645,6 +1809,10 @@ struct ModDimZoneRT {
 	var log: Tile
 	var leaves: Tile
 	var biome: Biome
+	/// the mod's tree designs that grow here (empty: the simple trees of its log and leaves)
+	var designs: [ModTreeRT] = []
+	/// how many columns apart its design trees stand at least (by the widest design's crown)
+	var gap: Int = 4
 }
 
 /// A chunk of a custom dimension: rolling ground in regions, caves, seas, floating islands, trees,
@@ -2741,7 +1909,7 @@ func fillCustomChunk(_ seed0: UInt64, _ infinite: Bool, _ width: Int, _ d: ModDi
 		if def.sea > 0 && surf >= def.sea - 1 { continue }
 		if ch.get(lx, surf - 1) != .air || ch.get(lx, surf) == .air { continue }
 		let z: ModDimZoneRT = d.zones[d.zoneIndex(x)]
-		if z.trees > 0 && lx >= 2 && lx < chunkW - 2 && customTreeAt(x, z.trees, seed) {
+		if z.trees > 0 && z.designs.isEmpty && lx >= 2 && lx < chunkW - 2 && customTreeAt(x, z.trees, seed) {
 			let h: Int = 4 + Int(hash2(x, 22, seed) * 4.0)
 			if surf - h - 3 > (def.ceiling ? ch.ceilY[lx] + 2 : 2) {
 				for k in 1...h { ch.setLocal(lx, surf - k, z.log) }
@@ -2762,6 +1930,8 @@ func fillCustomChunk(_ seed0: UInt64, _ infinite: Bool, _ width: Int, _ d: ModDi
 			ch.setLocal(lx, surf - 1, p)
 		}
 	}
+	// the mod's own tree designs, in the regions that grow them
+	plantTreeDesigns(seed0, infinite, width, d, ch)
 }
 
 /// Trees stand at least five columns apart
@@ -2770,6 +1940,389 @@ func customTreeAt(_ x: Int, _ trees: Int, _ seed: UInt64) -> Bool {
 	if hash2(x, 21, seed) >= p { return false }
 	for k in 1...4 where hash2(x - k, 21, seed) < p { return false }
 	return true
+}
+
+/// How far a tree design's cells may reach sideways from its root. The generator looks this far past
+/// each side of a chunk for trees that lean into it, so a tree across a chunk's edge is whole.
+let treeReach: Int = 9
+
+/// One cell of a tree: where it is from the root (dx across, dy rows up: 1 is the row on the ground)
+/// and what it is (1 trunk, 2 branch, 3 leaves)
+struct TreeCell: Equatable {
+	var dx: Int
+	var dy: Int
+	var part: UInt8
+}
+
+/// A tree design ready to grow in a world: its blocks as tiles (solid blocks as their pass-through
+/// tree forms), and the ground it needs
+struct ModTreeRT {
+	var def: ModTree
+	var trunk: Tile
+	var branch: Tile
+	var leaves: Tile
+	/// it grows only on this tile (nil: on any ground)
+	var ground: Tile?
+
+	func tile(_ part: UInt8) -> Tile { return part == 1 ? trunk : (part == 2 ? branch : leaves) }
+
+	/// rows from the ground to its top, about (for room under a roof and above a sapling)
+	func height(_ h: Int) -> Int {
+		if def.shape == .painted { return def.grid.h }
+		return h + clampI(def.crown, 0, 6) + 2
+	}
+}
+
+/// The shapes tree designs grow in. Everything comes from the design's numbers and one random seed,
+/// so the same seed always makes the same tree.
+enum TreeShapes {
+	static func cells(_ t: ModTree, _ h0: Int, _ seed: UInt64) -> [TreeCell] {
+		var b = TreeBuilder(t, seed)
+		let h: Int = clampI(h0, 1, 24)
+		switch t.shape {
+		case .round: b.round(h)
+		case .pine: b.pine(h)
+		case .tall: b.tall(h)
+		case .umbrella: b.umbrella(h)
+		case .palm: b.palm(h)
+		case .willow: b.willow(h)
+		case .bush: b.bush(h)
+		case .bare: b.bare(h)
+		case .painted: b.painted()
+		}
+		return b.out()
+	}
+}
+
+/// Builds one tree's cells: trunk first, then branches, then leaves, each only where nothing of higher
+/// rank is (a trunk is never covered by its own leaves)
+struct TreeBuilder {
+	var map: [Int: UInt8] = [:]
+	var order: [Int] = []
+	var rng: RNG
+	let c: Int
+	let wide: Bool
+	let cx: Double
+	let dens: Double
+	let branches: Int
+
+	init(_ t: ModTree, _ seed: UInt64) {
+		rng = RNG(seed)
+		c = clampI(t.crown, 0, 6)
+		wide = t.thick && t.shape != .painted && t.shape != .bush
+		cx = wide ? 0.5 : 0
+		dens = clampD(t.density.isFinite ? t.density : 1, 0.2, 1)
+		branches = clampI(t.branches, 0, 4)
+		grid = t.grid
+	}
+
+	let grid: ModTreeGrid
+
+	func out() -> [TreeCell] {
+		var o: [TreeCell] = []
+		o.reserveCapacity(order.count)
+		for k in order {
+			guard let p = map[k] else { continue }
+			o.append(TreeCell(dx: k / 128 - 64, dy: k % 128, part: p))
+		}
+		return o
+	}
+
+	mutating func put(_ dx: Int, _ dy: Int, _ p: UInt8) {
+		if abs(dx) > treeReach || dy < 1 || dy > 60 { return }
+		let k: Int = (dx + 64) * 128 + dy
+		if let old = map[k] {
+			if old <= p { return }
+		} else {
+			order.append(k)
+		}
+		map[k] = p
+	}
+
+	/// a leaf, kept by the design's fullness: cells at the edge of a crown go first
+	mutating func leaf(_ dx: Int, _ dy: Int, _ edge: Double) {
+		let e: Double = clampD(edge, 0, 1)
+		let keep: Double = dens + (1 - dens) * (1 - e) * (1 - e)
+		if rng.double() < keep { put(dx, dy, 3) }
+	}
+
+	/// leaves filling an oval around (ox, oy)
+	mutating func blob(_ ox: Double, _ oy: Double, _ rx0: Double, _ ry0: Double) {
+		let rx: Double = max(0.5, rx0)
+		let ry: Double = max(0.5, ry0)
+		let x0: Int = Int(floor(ox - rx))
+		let x1: Int = Int(ceil(ox + rx))
+		let y0: Int = max(1, Int(floor(oy - ry)))
+		let y1: Int = Int(ceil(oy + ry))
+		if x1 < x0 || y1 < y0 { return }
+		for dy in y0...y1 {
+			for dx in x0...x1 {
+				let a: Double = (Double(dx) - ox) / rx
+				let q: Double = (Double(dy) - oy) / ry
+				let r2: Double = a * a + q * q
+				if r2 <= 1.0 { leaf(dx, dy, sqrt(r2)) }
+			}
+		}
+	}
+
+	mutating func trunk(_ dy0: Int, _ dy1: Int) {
+		if dy1 < dy0 { return }
+		for dy in dy0...dy1 {
+			put(0, dy, 1)
+			if wide { put(1, dy, 1) }
+		}
+	}
+
+	/// a branch from the trunk at height dy to one side, rising one row a cell; a tuft of leaves at its tip
+	mutating func branch(_ dy: Int, _ side: Int, _ len: Int, _ tuft: Bool) {
+		var x: Int = side < 0 ? 0 : (wide ? 1 : 0)
+		var y: Int = dy
+		if len <= 0 { return }
+		for k in 0..<len {
+			x += side
+			if k > 0 { y += 1 }
+			put(x, y, 2)
+		}
+		if tuft { blob(Double(x), Double(y) + 0.6, 1.3, 1.0) }
+	}
+
+	/// the design's branches spread up the trunk below its crown, sides taking turns
+	mutating func sideBranches(_ h: Int, _ top: Int, _ tuft: Bool) {
+		if branches <= 0 { return }
+		let lo: Int = max(2, h / 2)
+		let hi: Int = max(lo, top)
+		let first: Int = rng.int(2) == 0 ? -1 : 1
+		for k in 0..<branches {
+			let by: Int = branches == 1 ? (lo + hi) / 2 : lo + (hi - lo) * k / (branches - 1)
+			let side: Int = k % 2 == 0 ? first : -first
+			let len: Int = 1 + rng.int(2) + c / 3
+			branch(by, side, len, tuft)
+		}
+	}
+
+	mutating func round(_ h: Int) {
+		trunk(1, h)
+		let rx: Double = Double(c) + 0.6
+		let ry: Double = Double(c) * 0.8 + 0.7
+		let oy: Double = Double(h) + Double(c) * 0.25
+		blob(cx, oy, rx, ry)
+		sideBranches(h, Int(oy - ry) - 1, true)
+	}
+
+	mutating func pine(_ h: Int) {
+		let tip: Int = h + max(1, c)
+		trunk(1, tip - 1)
+		let base: Int = max(2, h / 3)
+		if base <= tip - 1 {
+			for dy in base...(tip - 1) {
+				let f: Double = Double(tip - dy) / Double(max(1, tip - base))
+				var w: Double = (Double(c) + 0.4) * f
+				// boughs in tiers: every other row a little narrower, but never bare beside the trunk
+				if (tip - dy) % 2 == 0 { w -= 0.7 }
+				let ww: Double = max(c > 0 ? 1.0 : 0.0, w)
+				let x0: Int = Int(floor(cx - ww - 0.01))
+				let x1: Int = Int(ceil(cx + ww + 0.01))
+				for dx in x0...x1 where abs(Double(dx) - cx) <= ww + 0.5 {
+					leaf(dx, dy, abs(Double(dx) - cx) / (ww + 0.6))
+				}
+			}
+		}
+		put(0, tip, 3)
+		if wide { put(1, tip, 3) }
+	}
+
+	mutating func tall(_ h: Int) {
+		trunk(1, h)
+		let ry: Double = Double(c) + 1.2
+		let oy: Double = Double(h) - Double(c) * 0.3
+		blob(cx, oy, max(0.8, Double(c) * 0.5 + 0.3), ry)
+		sideBranches(h, Int(oy - ry) - 1, true)
+	}
+
+	mutating func umbrella(_ h: Int) {
+		trunk(1, h)
+		// two limbs fork up into the crown, then any others lower down
+		if branches > 0 {
+			branch(h - 1, -1, 2, false)
+			branch(h - 1, 1, 2, false)
+		}
+		let w0: Double = Double(c) + 1.5
+		let x0: Int = Int(floor(cx - w0))
+		let x1: Int = Int(ceil(cx + w0))
+		for dx in x0...x1 {
+			let e: Double = abs(Double(dx) - cx) / w0
+			if e <= 1 { leaf(dx, h + 1, e) }
+			if e <= 0.7 { leaf(dx, h + 2, e + 0.3) }
+		}
+		if branches > 2 {
+			for k in 2..<branches {
+				let side: Int = k % 2 == 0 ? -1 : 1
+				branch(max(2, h / 2 + k - 2), side, 1 + c / 2, true)
+			}
+		}
+	}
+
+	mutating func palm(_ h: Int) {
+		// a trunk that leans as it climbs, with fronds that droop at their ends
+		let side: Int = rng.int(2) == 0 ? -1 : 1
+		var x: Int = 0
+		for dy in 1...h {
+			if dy > h / 2 && dy % 3 == 0 { x += side }
+			put(x, dy, 1)
+			if wide { put(x + 1, dy, 1) }
+		}
+		let right: Int = x + (wide ? 1 : 0)
+		let reach: Int = max(2, c + 1)
+		// fronds along the top, a few pointing up, and their tips drooping on both sides
+		for dx in (x - reach + 1)...(right + reach - 1) {
+			let from: Int = dx < x ? x : right
+			put(dx, h + 1, abs(dx - from) <= 1 ? 3 : 3)
+		}
+		var k: Int = -reach + 2
+		while k <= reach - 2 + (wide ? 1 : 0) {
+			leaf(x + k, h + 2, 0.4)
+			k += 2
+		}
+		for s in [-1, 1] {
+			let from: Int = s < 0 ? x : right
+			leaf(from + s * reach, h, 0.3)
+			leaf(from + s * (reach + 1), h - 1, 0.5)
+			if c >= 3 { leaf(from + s * (reach + 1), h - 2, 0.8) }
+		}
+	}
+
+	mutating func willow(_ h: Int) {
+		trunk(1, h)
+		let rx: Double = Double(c) + 1.2
+		let ry: Double = max(1.0, Double(c) * 0.55 + 0.5)
+		let oy: Double = Double(h) + 0.5
+		blob(cx, oy, rx, ry)
+		sideBranches(h, h - 2, false)
+		// strands hang from under the crown, clear of the trunk
+		let x0: Int = Int(floor(cx - rx + 0.5))
+		let x1: Int = Int(ceil(cx + rx - 0.5))
+		if x1 < x0 { return }
+		for dx in x0...x1 {
+			if dx == 0 || (wide && dx == 1) { continue }
+			if rng.double() > dens + (1 - dens) * 0.4 { continue }
+			let a: Double = (Double(dx) - cx) / rx
+			let bottom: Double = oy - ry * sqrt(max(0, 1 - a * a))
+			let len: Int = 1 + rng.int(max(1, h - 1))
+			let y0: Int = Int(bottom.rounded())
+			for k in 0..<len { put(dx, y0 - k, 3) }
+		}
+	}
+
+	mutating func bush(_ h: Int) {
+		put(0, 1, 1)
+		let ry: Double = Double(clampI(h / 2, 1, c + 2)) + 0.5
+		blob(0, 0.5, Double(c) + 0.7, ry)
+	}
+
+	mutating func bare(_ h: Int) {
+		trunk(1, h)
+		let n: Int = max(2, branches + 1)
+		let first: Int = rng.int(2) == 0 ? -1 : 1
+		let step: Int = max(1, h / (n + 1))
+		for k in 0..<n {
+			let by: Int = max(2, h - 1 - k * step)
+			let side: Int = k % 2 == 0 ? first : -first
+			branch(by, side, 1 + rng.int(max(1, c + 1)), false)
+		}
+		let r: Int = wide ? 1 : 0
+		put(-1, h + 1, 2)
+		put(1 + r, h + 1, 2)
+		if c >= 2 {
+			put(-2, h + 2, 2)
+			put(2 + r, h + 2, 2)
+		}
+	}
+
+	mutating func painted() {
+		let g: ModTreeGrid = grid
+		if !g.valid { return }
+		let mid: Int = g.w / 2
+		for gy in 0..<g.h {
+			for gx in 0..<g.w {
+				let v: UInt8 = g.at(gx, gy)
+				if v == 0 || v > 3 { continue }
+				put(gx - mid, g.h - gy, v)
+			}
+		}
+	}
+}
+
+/// The mod's tree designs in one chunk of a custom dimension. Each tree that could reach into the chunk
+/// is worked out from the seed alone (where it stands, which design, how tall, its shape), so a tree
+/// across a chunk's edge is the same on both sides. Its cells go only into open air or wild plants.
+func plantTreeDesigns(_ seed0: UInt64, _ infinite: Bool, _ width: Int, _ d: ModDimRT, _ ch: Chunk) {
+	if !d.hasDesigns { return }
+	let H: Int = ch.H
+	let seed: UInt64 = seed0 &+ d.salt
+	let x0: Int = ch.x0
+	for rx in (x0 - treeReach)..<(x0 + chunkW + treeReach) {
+		guard let at = d.designTreeAt(rx, seed0, infinite, width) else { continue }
+		let tr: ModTreeRT = at.0
+		let surf: Int = at.1
+		let cells: [TreeCell] = TreeShapes.cells(tr.def, at.2, hashU(rx, 47, seed))
+		let top: Int = d.def.ceiling ? d.ceilingAt(rx, seed0) + 1 : 1
+		for c in cells {
+			let x: Int = rx + c.dx
+			let lx: Int = x - x0
+			if lx < 0 || lx >= chunkW { continue }
+			if !infinite && (x < 0 || x >= width) { continue }
+			let y: Int = surf - c.dy
+			if y <= top || y >= H - 3 { continue }
+			let old: Tile = ch.get(lx, y)
+			if old != .air && !old.isPlant && !d.plantTiles.contains(old.rawValue) { continue }
+			ch.setLocal(lx, y, tr.tile(c.part))
+		}
+	}
+}
+
+extension ModDimRT {
+	/// The design tree rooted at column x, if one grows there: its design, the ground row and its
+	/// trunk's height. It needs dry ground with no hazard, room under a roof, and a design that grows
+	/// on the region's ground.
+	func designTreeAt(_ x: Int, _ seed0: UInt64, _ infinite: Bool, _ width: Int) -> (ModTreeRT, Int, Int)? {
+		if !infinite && (x < 0 || x >= width) { return nil }
+		let z: ModDimZoneRT = zones[zoneIndex(x)]
+		if z.designs.isEmpty || z.trees <= 0 { return nil }
+		let seed: UInt64 = seed0 &+ salt
+		// one tree at most in each stretch of columns, at least `gap` from the next: a stretch a little
+		// wider than that for many trees, three times as wide for a few
+		let m: Int = max(2, z.gap)
+		let span: Int = z.trees >= 2 ? m + 3 : m * 3
+		let k: Int = floorDiv(x, span)
+		let at: Int = k * span + min(span - m, Int(hash2(k, 41, seed) * Double(span - m + 1)))
+		if x != at || hash2(k, 42, seed) >= (z.trees >= 2 ? 0.9 : 0.7) { return nil }
+		let surf: Int = surfaceAt(x, seed0)
+		if surf <= 12 || surf >= customDimH - 8 { return nil }
+		if def.sea > 0 && surf >= def.sea - 1 { return nil }
+		if hazard != nil && hash2(x, 5, seed) < clampD(def.hazardChance, 0, 0.5) { return nil }
+		guard let tr = pickDesign(z, z.ground, hash2(x, 43, seed)) else { return nil }
+		let lo: Int = clampI(tr.def.minHeight, 1, 24)
+		let hi: Int = max(lo, clampI(tr.def.maxHeight, 1, 24))
+		let h: Int = min(hi, lo + Int(hash2(x, 44, seed) * Double(hi - lo + 1)))
+		let roof: Int = def.ceiling ? ceilingAt(x, seed0) + 2 : 2
+		if surf - tr.height(h) <= roof { return nil }
+		return (tr, surf, h)
+	}
+
+	/// One of a region's designs, by their weights, among those that grow on this ground (r: 0 ..< 1)
+	func pickDesign(_ z: ModDimZoneRT, _ ground: Tile, _ r: Double) -> ModTreeRT? {
+		var total: Double = 0
+		for t in z.designs where t.ground == nil || t.ground == ground { total += max(0.1, t.def.weight) }
+		if total <= 0 { return nil }
+		var left: Double = r * total
+		var pick: ModTreeRT? = nil
+		for t in z.designs where t.ground == nil || t.ground == ground {
+			pick = t
+			left -= max(0.1, t.def.weight)
+			if left < 0 { break }
+		}
+		return pick
+	}
 }
 
 extension ModRuntime {
@@ -2806,7 +2359,9 @@ extension ModRuntime {
 					taken.insert(free)
 					dimSlotKey[slot] = k
 				}
-				let rt = ModDimRT(key: k, slot: slot, def: d, resolve: { key in ModGround.resolve(key, self) })
+				let designs: [ModTree] = p.trees.filter { !disabled.contains(p.key($0.id)) }
+				let rt = ModDimRT(key: k, slot: slot, def: d, resolve: { key in ModGround.resolve(key, self) }, trees: designs,
+								  treeTile: { (key: String, role: Int) -> Tile? in self.treeTile(key, role) })
 				rt.modName = p.name
 				rt.spawnRules = dimSpawnRules(d)
 				dimSlots[slot] = rt
@@ -3022,10 +2577,14 @@ extension WorldRenderer {
 			let bx: Double = (0.1 + 0.8 * ang) * W
 			let by: Double = H * (0.55 - 0.42 * sin(ang * Double.pi))
 			let r: Double = max(10.0, v.tp * 1.6)
-			if t < 0.5 && def.sun {
+			// a mod's own sun and moon, each in place of the round one
+			let night: UInt32 = mixRGB(def.nightTop, def.skyTop, day)
+			if def.sun, let sb = def.sunBody { drawSkyBody(&ctx, W, H, g.clock, sb, t, false, r * 2.0, true, night) }
+			if def.moon, let mb = def.moonBody { drawSkyBody(&ctx, W, H, g.clock, mb, t, true, r * 1.6, true, night) }
+			if t < 0.5 && def.sun && def.sunBody == nil {
 				ctx.fill(Path(ellipseIn: mkRect(bx - r * 1.6, by - r * 1.6, r * 3.2, r * 3.2)), with: .color(rgbColor(def.sunColor).opacity(0.18)))
 				ctx.fill(Path(ellipseIn: mkRect(bx - r, by - r, r * 2.0, r * 2.0)), with: .color(rgbColor(def.sunColor)))
-			} else if t >= 0.5 && def.moon {
+			} else if t >= 0.5 && def.moon && def.moonBody == nil {
 				ctx.fill(Path(ellipseIn: mkRect(bx - r * 0.8, by - r * 0.8, r * 1.6, r * 1.6)), with: .color(Color(hex: 0xE8ECF8)))
 				ctx.fill(Path(ellipseIn: mkRect(bx - r * 0.3, by - r * 0.9, r * 1.4, r * 1.4)), with: .color(rgbColor(mixRGB(def.nightTop, def.skyTop, day)).opacity(0.85)))
 			}
@@ -3091,7 +2650,7 @@ enum ModDimPreview {
 				return Tile(rawValue: UInt8(clampI(n, 0, 255)))
 			}
 			return proxy[k]
-		})
+		}, trees: p.trees)
 		let H: Int = customDimH
 		let rows: Int = (H + 1) / 2
 		var b = PixelBuf(w: chunks * chunkW, h: rows)
@@ -3194,6 +2753,9 @@ extension ModValidator {
 
 	/// Custom dimensions: numbers in range, blocks and creatures real, a way in and a way back
 	static func checkDims(_ p: inout ModPack, _ mn: String, _ sb: Bool, _ known: [String: String], _ r: inout ModReport) {
+		p.skySun?.clamp()
+		p.skyMoon?.clamp()
+		checkTrees(&p, mn, known, &r)
 		if p.dims.count > 3 {
 			r.add(1, mn, "Mod", "Only 3 dimensions fit in one mod; the rest were left out.")
 			p.dims = Array(p.dims.prefix(3))
@@ -3223,6 +2785,8 @@ extension ModValidator {
 			d.arriveMessage = String(d.arriveMessage.prefix(80))
 			d.light = c(d.light, 0, 1, 0.8)
 			d.fixedTime = c(d.fixedTime, 0, 1, 0.25)
+			d.sunBody?.clamp()
+			d.moonBody?.clamp()
 			d.ambient = clampI(d.ambient, 0, ModDimText.ambients.count - 1)
 			d.weather = clampI(d.weather, 0, ModDimText.weathers.count - 1)
 			d.chill = c(d.chill, 0, 1, 0)
@@ -3251,6 +2815,9 @@ extension ModValidator {
 				z.trees = clampI(z.trees, 0, 2)
 				z.log = block(z.log, ModGround.key(.log), false)
 				z.leaves = block(z.leaves, ModGround.key(.leaves), false)
+				var kinds: [String] = []
+				for tid in z.treeKinds where !kinds.contains(tid) && p.trees.contains(where: { $0.id == tid }) { kinds.append(tid) }
+				z.treeKinds = Array(kinds.prefix(ModTree.maxDesigns))
 				d.zones[k] = z
 			}
 			d.zoneWidth = clampI(d.zoneWidth, 40, 2000)
@@ -3282,6 +2849,58 @@ extension ModValidator {
 				r.add(1, mn, place, "Without an item to use again, the way back is the gate; it was switched on.")
 			}
 			p.dims[i] = d
+		}
+	}
+}
+
+extension ModValidator {
+	/// A mod's tree designs kept in range: blocks that exist (never air or a liquid), sizes the generator
+	/// can grow, a painted design of a size that fits
+	static func checkTrees(_ p: inout ModPack, _ mn: String, _ known: [String: String], _ r: inout ModReport) {
+		if p.trees.count > ModTree.maxDesigns {
+			r.add(1, mn, "Mod", joinText("Only ", String(ModTree.maxDesigns), " tree designs fit in one mod; the rest were left out."))
+			p.trees = Array(p.trees.prefix(ModTree.maxDesigns))
+		}
+		let ownBlocks: Set<String> = Set(p.blocks.map { p.key($0.id) })
+		var used: Set<String> = Set(p.blocks.map { $0.id } + p.items.map { $0.id } + p.mobs.map { $0.id } + p.infusions.map { $0.id } + p.dims.map { $0.id })
+		func block(_ k: String, _ d: String, _ allowEmpty: Bool) -> String {
+			if k.isEmpty { return allowEmpty ? "" : d }
+			if k.hasPrefix("tile:") {
+				if let n = Int(k.dropFirst(5)), n > 0 && n <= 255, let t = Tile(rawValue: UInt8(n)), !t.isMod, t != .air, !t.liquid { return k }
+				return allowEmpty ? "" : d
+			}
+			if ownBlocks.contains(k) || known[k] == "block" { return k }
+			return allowEmpty ? "" : d
+		}
+		for i in p.trees.indices {
+			var t: ModTree = p.trees[i]
+			if t.id.isEmpty || used.contains(t.id) { t.id = joinText("tree", String(i + 1), "x", String(used.count)) }
+			used.insert(t.id)
+			if t.name.trimmingCharacters(in: .whitespaces).isEmpty { t.name = "Tree" }
+			t.name = String(t.name.prefix(24))
+			let place: String = joinText("Tree \u{201C}", t.name, "\u{201D}")
+			let trunk0: String = t.trunk
+			let leaves0: String = t.leaves
+			t.trunk = block(t.trunk, ModGround.key(.log), false)
+			t.branch = block(t.branch, "", true)
+			t.leaves = block(t.leaves, ModGround.key(.leaves), false)
+			t.ground = block(t.ground, "", true)
+			if t.trunk != trunk0 || t.leaves != leaves0 { r.add(1, mn, place, "A block it was made of does not exist (or is a liquid); the game's log and leaves stand in.") }
+			t.minHeight = clampI(t.minHeight, 1, 24)
+			t.maxHeight = clampI(t.maxHeight, t.minHeight, 24)
+			t.crown = clampI(t.crown, 0, 6)
+			t.branches = clampI(t.branches, 0, 4)
+			t.density = clampD(t.density.isFinite ? t.density : 0.9, 0.2, 1)
+			t.weight = clampD(t.weight.isFinite ? t.weight : 1, 0.1, 20)
+			var g: ModTreeGrid = t.grid
+			if !g.valid {
+				g = g.cells.isEmpty ? ModTreeGrid() : g.resized(g.w, g.h)
+				if !g.valid { g = ModTreeGrid() }
+			}
+			for k in g.cells.indices where g.cells[k] > 3 { g.cells[k] = 0 }
+			t.grid = g
+			if t.shape == .painted && !g.cells.contains(where: { $0 != 0 }) { r.add(1, mn, place, "Its painted design is empty, so it grows nothing.") }
+			p.trees[i] = t
 		}
 	}
 }
@@ -4764,6 +4383,8 @@ final class Art: @unchecked Sendable {
 		}
 		icons = keep
 		modMobSets.removeAll()
+		// game creatures a mod repaints (or stops repainting) are drawn afresh
+		mobSets.removeAll()
 	}
 
 	func icon(_ it: Item) -> Image {
@@ -4807,6 +4428,10 @@ final class Art: @unchecked Sendable {
 	}
 
 	func buildMobSet(_ k: MobKind, _ v: Int) -> SpriteSet {
+		if let fr = OverrideRT.shared.creatureArt(k, v) {
+			// a mod's repainted sprite, timed like the game's own
+			return makeSpriteSet(fr, hitH: mobDef(k).h, fixedScale: creatureScale, anim: creatureArt(k, v).1)
+		}
 		return creatureSpriteSet(k, v)
 	}
 
@@ -10490,6 +10115,92 @@ enum WorldRenderer {
 
 	// MARK: sky & background
 
+	/// pictures of mods' suns and moons, by their pixels
+	static var skyBodyImages: [Int: Image] = [:]
+
+	static func skyBodyImage(_ art: ModPixels) -> Image {
+		let key: Int = art.rgba.hashValue &+ art.w &* 131 &+ art.h
+		if let im = skyBodyImages[key] { return im }
+		if skyBodyImages.count > 16 { skyBodyImages = [:] }
+		let im: Image = pixImage(art.buf())
+		skyBodyImages[key] = im
+		return im
+	}
+
+	/// A sun or a moon of a mod's own: its glow and rays, then its picture (or the game's own shape in
+	/// its colour), on its path across the sky with the time of day or where it stays. `base` is the
+	/// game's size for it in pixels, `round` draws discs (custom dimensions) rather than squares, and
+	/// `sky` is the colour behind it (for the moon's shadowed side).
+	static func drawSkyBody(_ ctx: inout GraphicsContext, _ W: Double, _ H: Double, _ clock: Double, _ b: ModSkyBody, _ t: Double, _ moon: Bool, _ base: Double, _ round: Bool, _ sky: UInt32) {
+		var bx: Double = clampD(b.posX, 0, 1) * W
+		var by: Double = clampD(b.posY, 0, 1) * H * 0.6
+		if b.path == 0 {
+			let up: Bool = moon ? t >= 0.5 : t < 0.5
+			if !up { return }
+			let ang: Double = t < 0.5 ? (t / 0.5) : ((t - 0.5) / 0.5)
+			bx = (0.1 + 0.8 * ang) * W
+			by = H * (0.55 - 0.42 * clampD(b.arc, 0.2, 1.2) * sin(ang * Double.pi))
+		}
+		let size: Double = base * clampD(b.size, 0.3, 3)
+		let pulse: Double = b.pulse > 0.001 ? 1.0 + 0.14 * b.pulse * sin(clock * 2.4) : 1.0
+		let gc: Color = rgbColor(b.glowColor & 0xFFFFFF)
+		if b.glow > 0.01 {
+			let gs: Double = size * (1.2 + 0.7 * b.glow) * pulse
+			let ga: Double = 0.1 + 0.18 * b.glow
+			if round {
+				ctx.fill(Path(ellipseIn: mkRect(bx - gs * 0.5, by - gs * 0.5, gs, gs)), with: .color(gc.opacity(ga)))
+			} else {
+				fillRect(&ctx, mkRect(bx - gs * 0.5, by - gs * 0.5, gs, gs), gc.opacity(ga))
+			}
+		}
+		var c: GraphicsContext = ctx
+		c.translateBy(x: CGFloat(bx), y: CGFloat(by))
+		if abs(b.spin) > 0.001 { c.rotate(by: Angle(degrees: (clock * b.spin).truncatingRemainder(dividingBy: 360))) }
+		if b.rays {
+			var rays: Path = Path()
+			let len: Double = size * 0.32 * pulse
+			let wd: Double = max(2.0, size * 0.08)
+			for k in 0..<8 {
+				let a: Double = Double(k) * Double.pi / 4.0
+				let r0: Double = size * 0.62
+				let x: Double = cos(a) * (r0 + len * 0.5)
+				let y: Double = sin(a) * (r0 + len * 0.5)
+				let horiz: Bool = k % 4 == 0
+				let vert: Bool = k % 4 == 2
+				let rw: Double = horiz ? len : (vert ? wd : wd * 1.2)
+				let rh: Double = horiz ? wd : (vert ? len : wd * 1.2)
+				rays.addRect(mkRect(x - rw * 0.5, y - rh * 0.5, rw, rh))
+			}
+			c.fill(rays, with: .color(gc.opacity(0.8)))
+		}
+		let col: UInt32 = b.color & 0xFFFFFF
+		if !b.art.isBlank {
+			let aw: Double = Double(b.art.w)
+			let ah: Double = Double(b.art.h)
+			let k: Double = size / max(aw, ah)
+			c.draw(skyBodyImage(b.art), in: mkRect(-aw * k * 0.5, -ah * k * 0.5, aw * k, ah * k))
+		} else if moon {
+			let r: Double = size * 0.5
+			if round {
+				c.fill(Path(ellipseIn: mkRect(-r, -r, size, size)), with: .color(rgbColor(col)))
+				c.fill(Path(ellipseIn: mkRect(-r * 0.4, -r * 1.1, size * 0.85, size * 0.85)), with: .color(rgbColor(sky).opacity(0.85)))
+			} else {
+				fillRect(&c, mkRect(-r, -r, size, size), rgbColor(col))
+				fillRect(&c, mkRect(-r * 0.36, -r * 0.55, size * 0.23, size * 0.23), rgbColor(shadeRGB(col, 0.82)))
+				fillRect(&c, mkRect(r * 0.27, r * 0.18, size * 0.18, size * 0.18), rgbColor(shadeRGB(col, 0.82)))
+			}
+		} else {
+			let r: Double = size * 0.5
+			if round {
+				c.fill(Path(ellipseIn: mkRect(-r, -r, size, size)), with: .color(rgbColor(col)))
+				c.fill(Path(ellipseIn: mkRect(-r * 0.62, -r * 0.62, size * 0.62, size * 0.62)), with: .color(rgbColor(mixRGB(col, 0xFFFFFF, 0.45))))
+			} else {
+				fillRect(&c, mkRect(-r, -r, size, size), rgbColor(col))
+				fillRect(&c, mkRect(-r * 0.64, -r * 0.64, size * 0.64, size * 0.64), rgbColor(mixRGB(col, 0xFFFFFF, 0.45)))
+			}
+		}
+	}
+
 	static func drawSky(_ ctx: inout GraphicsContext, _ W: Double, _ H: Double, _ g: Game, _ v: View2D) {
 		if let d = g.customDim {
 			drawCustomSky(&ctx, W, H, g, v, d)
@@ -10576,11 +10287,16 @@ enum WorldRenderer {
 		// cloud hides the sun and moon
 		var sc: GraphicsContext = ctx
 		sc.opacity = 1.0 - 0.9 * cover
-		if t < 0.5 {
+		let rt: ModRuntime = ModRuntime.shared
+		if let sb = rt.overSun { drawSkyBody(&sc, W, H, g.clock, sb, t, false, 56.0, false, topC) }
+		if let mb = rt.overMoon { drawSkyBody(&sc, W, H, g.clock, mb, t, true, 44.0, false, topC) }
+		// the game's own, unless a mod gave one in its place
+		let own: Bool = t < 0.5 ? rt.overSun != nil : rt.overMoon != nil
+		if !own && t < 0.5 {
 			fillRect(&sc, mkRect(bx - 36.0, by - 36.0, 72.0, 72.0), Color(hex: 0xFFE680, alpha: 0.25))
 			fillRect(&sc, mkRect(bx - 28.0, by - 28.0, 56.0, 56.0), Color(hex: 0xFFD84A))
 			fillRect(&sc, mkRect(bx - 18.0, by - 18.0, 36.0, 36.0), Color(hex: 0xFFF2A0))
-		} else {
+		} else if !own {
 			fillRect(&sc, mkRect(bx - 22.0, by - 22.0, 44.0, 44.0), Color(hex: 0xE8ECF4))
 			fillRect(&sc, mkRect(bx - 8.0, by - 12.0, 10.0, 10.0), Color(hex: 0xC0C6D0))
 			fillRect(&sc, mkRect(bx + 6.0, by + 4.0, 8.0, 8.0), Color(hex: 0xC0C6D0))
@@ -14620,5 +14336,1453 @@ struct HelpView: View {
 		.foregroundColor(Color.white)
 		.padding(18)
 		.background(PixelBox(color: Color(hex: 0x2C2C30)).opacity(0.95))
+	}
+}
+
+// ===== p33_vehicles =====
+
+// MARK: - Vehicles of every kind: blocks on vehicles, flight, weapons, damage, turning, assembling, the autopilot
+// A vehicle is a rigid body built cell by cell (p13b_vehicles, p17_vehicles_ships). This part adds what
+// makes planes, helicopters, airships, tanks and anything in between work: every cell can be any block,
+// each cell weighs what it is made of, and the air acts on each cell where it is (lift on wings, drag on
+// exposed faces, thrust along propellers, rotor lift, hot air in balloons), so a design flies, floats or
+// tumbles because of how it is built.
+
+/// Hitting the ground faster than this (blocks per second, straight into it) breaks parts
+let vehicleCrashSpeed: Double = 21.0
+
+/// The numbers of the flight model
+enum Aero {
+	/// lift per wing cell: kLift x airspeed^2 x lift coefficient (a 10-mass plane with 3 wing cells
+	/// leaves the ground at about 11 blocks a second)
+	static let kLift: Double = 0.8
+	/// drag per exposed face: kDrag x drag coefficient x airspeed^2
+	static let kDrag: Double = 0.022
+	/// how much a face tucked behind another still feels the air (skin friction)
+	static let shielded: Double = 0.06
+	/// share of the wing drag coefficient applied (the wing's own profile drag)
+	static let dragShare: Double = 1.0
+	/// lift slope per radian, the angle where a wing stalls, the post-stall lift
+	static let liftSlope: Double = 5.0
+	static let stallAngle: Double = 0.27
+	/// how far an elevator's flap turns the airflow (radians at full stick), and the elevator's size
+	/// against a wing's
+	static let flap: Double = 0.55
+	static let elevatorArea: Double = 1.0
+	/// a wing's camber: it lifts a little even meeting the air head on (radians of extra angle)
+	static let camber: Double = 0.07
+	/// static thrust of an air propeller per engine of power, and the airspeed where it fades out
+	static let propThrust: Double = 110.0
+	static let propVmax: Double = 64.0
+	/// a jet's thrust (it is its own engine)
+	static let jetThrust: Double = 165.0
+	/// rotor lift per engine of power at full blade pitch
+	static let rotorLift: Double = 265.0
+	/// a heated balloon envelope's lift (mass it can hold up at full heat), and how many envelopes one burner heats
+	static let envLift: Double = 1.3
+	static let burnerCells: Int = 12
+	/// how far the cyclic tilts a helicopter at full stick, and how firmly it holds the tilt
+	static let cyclicTilt: Double = 0.3
+	/// hands off, a helicopter tilts against its drift to hover in place (radians per block a second)
+	static let hoverHold: Double = 0.035
+	/// the turning rotor disc resists the air across it (what keeps a helicopter's speed down)
+	static let rotorDrag: Double = 0.25
+	/// up and down on the stick ask a helicopter for this climb or sink rate (blocks a second)
+	static let climbRate: Double = 9.0
+	static let cyclicP: Double = 16.0
+	static let cyclicD: Double = 7.5
+	/// how fast blade pitch follows the stick, and how fast a burner heats the balloon and venting cools it
+	static let collectiveRate: Double = 0.9
+	static let heatRate: Double = 0.14
+	static let ventRate: Double = 0.22
+	/// a balloon's canopy against the air going up or down through it (a cold balloon comes down slowly)
+	static let canopyDrag: Double = 8.0
+	/// the cyclic's trim: how fast it learns to hold the tilt against an off-centre rotor
+	static let cyclicI: Double = 6.0
+	/// the pitch control: full stick asks for this pitch rate (radians a second); the elevators are moved
+	/// to get it (as far as they can at this speed), and the trim learns what holds the nose steady
+	static let pitchRate: Double = 0.9
+	static let rateGain: Double = 1.3
+	static let trimRate: Double = 1.6
+	/// the stall guard: past this share of the stall angle the nose is eased down instead of pulled up
+	static let alphaGuard: Double = 0.75
+	/// hands off, how fast the nose comes back to level (radians a second per radian)
+	static let levelRate: Double = 0.4
+	/// seconds a turn to face the other way takes in flight
+	static let turnTime: Double = 1.4
+}
+
+/// Air thins with height: full below the hills, about half at the top of the sky
+func airDensity(_ y: Double) -> Double {
+	let top: Double = Double(WorldGen.sea) - 60.0
+	if y >= top { return 1.0 }
+	return max(0.45, 1.0 - 0.55 * (top - y) / max(1.0, top))
+}
+
+/// A wing's lift coefficient at an angle of attack (radians, folded to -pi/2...pi/2): straight up to
+/// the stall, then it falls away to a flat plate's
+func liftCoefficient(_ a: Double) -> Double {
+	let s: Double = Aero.stallAngle
+	let m: Double = abs(a)
+	let sign: Double = a >= 0 ? 1.0 : -1.0
+	if m <= s { return Aero.liftSlope * a }
+	let peak: Double = Aero.liftSlope * s
+	let flat: Double = 0.9 * sin(2.0 * m)
+	let fade: Double = clampD((m - s) / 0.16, 0, 1)
+	return sign * (peak * 0.85 * (1.0 - fade) + flat * fade)
+}
+
+/// A wing's drag coefficient: a little on its own, more as it lifts, a flat plate's beyond the stall
+func wingDrag(_ a: Double, _ cl: Double) -> Double {
+	let sa: Double = sin(a)
+	return 0.012 + 0.06 * cl * cl + 1.1 * sa * sa
+}
+
+/// How much a part catches the air (a bare block is 1)
+func partDrag(_ t: PartType) -> Double {
+	switch t {
+	case .cockpit: return 0.45
+	case .jet: return 0.3
+	case .airProp, .tailRotor, .rotor: return 0.4
+	case .envelope: return 3.0
+	case .wheel, .offroadWheel: return 0.45
+	case .headlight, .steering, .autopilot, .autoGun, .propeller, .paddle: return 0.5
+	default: return 1.0
+	}
+}
+
+/// The mass of a block built onto a vehicle: its building weight (planks 0.6, stone 2.5)
+func vehicleBlockMass(_ b: Tile, _ t: PartType) -> Double {
+	if b.isMod, t != .block, let m = ModRuntime.shared.blockDef(b), m.vehMass > 0 { return m.vehMass }
+	return max(0.05, tileWeight(b))
+}
+
+/// How much water a cell pushes aside when under (its buoyancy): a solid block a whole cell (so wood
+/// floats and stone sinks), anything else a little
+func cellDisplacement(_ v: Vehicle, _ c: PartCell, _ t: PartType) -> Double {
+	if t == .block, let b = v.blocks[c] { return b.solid ? 1.0 : 0.2 }
+	return partDisplacement(t)
+}
+
+/// How much damage a part takes before it breaks off
+func partHP(_ t: PartType) -> Double {
+	switch t {
+	case .armor: return 160
+	case .track, .jet, .drill, .diamondDrill, .voidDrill, .cannon: return 55
+	case .engine, .hull, .cargo, .frame, .offroadWheel: return 40
+	case .cockpit, .rotor, .autoGun, .burner, .fuelTank: return 30
+	case .wheel, .seat, .wing, .airProp: return 22
+	case .elevator, .propeller, .paddle, .steering, .tailRotor, .autopilot: return 14
+	case .headlight: return 10
+	case .envelope: return 7
+	case .block: return 30
+	}
+}
+
+/// How much damage one cell takes before it breaks (a block by its hardness and weight)
+func vehicleCellHP(_ v: Vehicle, _ c: PartCell, _ t: PartType) -> Double {
+	if let b = v.blocks[c] {
+		let base: Double = 8.0 + min(90.0, b.hardness * 14.0) + tileWeight(b) * 4.0
+		return t == .block ? base : max(base, partHP(t))
+	}
+	return partHP(t)
+}
+
+/// What a cell taken off a vehicle gives back: its block, or the part
+func vehicleCellItem(_ r: VCell) -> Item {
+	if let b = r.tile { return .block(b) }
+	return .part(r.type == .block ? .frame : r.type)
+}
+
+/// A block turned to face the other way (stairs rise the other way, a bed's head moves)
+func mirroredTile(_ t: Tile) -> Tile {
+	switch t {
+	case .stairWoodR: return .stairWoodL
+	case .stairWoodL: return .stairWoodR
+	case .stairStoneR: return .stairStoneL
+	case .stairStoneL: return .stairStoneR
+	case .stairBrickR: return .stairBrickL
+	case .stairBrickL: return .stairBrickR
+	case .bedL: return .bedR
+	case .bedR: return .bedL
+	default: return t
+	}
+}
+
+/// Blocks the assembler leaves in the world: the ground's own, liquids, lifts and portals
+func canAssemble(_ t: Tile) -> Bool {
+	if t == .air || t.liquid || t == .bedrock { return false }
+	switch t {
+	case .liftRail, .liftButton, .liftCar, .portalOn, .portalOff: return false
+	default: return true
+	}
+}
+
+/// Where a shot meets a vehicle: how far along its step, which vehicle, which cell
+struct VehicleHit {
+	var t: Double
+	var v: Vehicle
+	var cell: PartCell
+}
+
+extension Game {
+	// MARK: power
+
+	/// The engines' power goes where it is needed: driving wheels on a ground vehicle, every air
+	/// propeller, every rotor (a rotor takes as much as three engines' worth, a propeller one and a half).
+	/// The share for the wheels (1 for a car or a tank: they get it all)
+	func groundShare(_ v: Vehicle) -> Double {
+		let wheels: Double = v.wings == 0 && v.rotors == 0 ? 1.0 : 0.0
+		let total: Double = wheels + Double(v.airProps) * 1.5 + Double(v.rotors) * 3.0
+		return total <= 0 ? 0 : wheels / total
+	}
+
+	/// Engine power each air propeller and each rotor gets (in engines); `anyway` works it out as if
+	/// fuelled and crewed (for the checklist)
+	func airPower(_ v: Vehicle, anyway: Bool = false) -> (Double, Double) {
+		if v.engines == 0 { return (0, 0) }
+		if !anyway && (!(v.fuel > 0 || isCreative) || !(v.hasSeat && v.hasSteering)) { return (0, 0) }
+		let wheels: Double = v.wings == 0 && v.rotors == 0 ? 1.0 : 0.0
+		let total: Double = wheels + Double(v.airProps) * 1.5 + Double(v.rotors) * 3.0
+		if total <= 0 { return (0, 0) }
+		let e: Double = v.enginePower
+		return (e * 1.5 / total, e * 3.0 / total)
+	}
+
+	/// The most the rotors can lift (force) here, at full blade pitch
+	func rotorMax(_ v: Vehicle, anyway: Bool = false) -> Double {
+		let p: (Double, Double) = airPower(v, anyway: anyway)
+		return Aero.rotorLift * p.1 * Double(v.rotors) * (0.35 + 0.65 * airDensity(v.py))
+	}
+
+	/// The most the balloons can lift (force) here, at full heat
+	func balloonMax(_ v: Vehicle) -> Double {
+		if v.burners == 0 || v.envelopes == 0 { return 0 }
+		let heated: Double = Double(min(v.envelopes, v.burners * Aero.burnerCells))
+		return gravityG * Aero.envLift * heated * airDensity(v.py)
+	}
+
+	/// The wings' lift at a speed, flying level at a good angle (for the checklist and instruments)
+	func wingLiftAt(_ v: Vehicle, _ speed: Double) -> Double {
+		return Aero.kLift * speed * speed * Double(v.wings) * 1.1
+	}
+
+	/// The push the propellers and jets give at a speed, at full throttle
+	func thrustAt(_ v: Vehicle, _ speed: Double) -> Double {
+		let p: (Double, Double) = airPower(v, anyway: true)
+		let prop: Double = Aero.propThrust * p.0 * Double(v.airProps) * max(0, 1.0 - speed / Aero.propVmax)
+		let jet: Double = Aero.jetThrust * Double(v.jets) * max(0.35, 1.0 - speed / 90.0)
+		return prop + jet
+	}
+
+	// MARK: the flight model
+
+	/// Forces of the air on every part, for one physics step: drag on each part's exposed faces, lift on
+	/// wings and elevators from the real airflow over each one (its speed, the angle it meets the wing at,
+	/// the wind), thrust from propellers and jets along the vehicle's axis, rotor lift along the rotor
+	/// shaft, and the hot air in the balloons pushing straight up. Each force acts at its own part, so the
+	/// layout decides how the vehicle pitches: a tail far behind steadies it, balloons above keep it
+	/// upright, a heavy nose tips it forward.
+	func airForces(_ v: Vehicle, _ h: Double, _ throttle: Double) {
+		let c: Double = v.cosA
+		let s: Double = v.sinA
+		let rho: Double = airDensity(v.py)
+		let power: (Double, Double) = airPower(v)
+		let canFly: Bool = (v.fuel > 0 || isCreative) && v.hasSeat && v.hasSteering
+		// while turning round the throttle keeps pushing toward the nose, whichever way the stick points
+		let steer: Double = v.turnT > 0 ? abs(throttle) * Double(v.fwd) : throttle
+		let thr: Double = canFly ? steer : 0
+		// the elevators turn the nose the way the stick says (up: toward the top of the screen)
+		let noseX: Double = Double(v.fwd) * c
+		let noseSign: Double = noseX >= 0 ? 1.0 : -1.0
+		let rateErr: Double = pitchRateWanted(v) - (-v.angVel * noseSign)
+		let cmd: Double = clampD(v.trim + Aero.rateGain * rateErr, -1, 1)
+		let wantSpin: Double = -cmd * noseSign
+		let bank: Double = v.turnT > 0 ? 0.7 + 0.3 * abs(cos(Double.pi * v.turnT)) : 1.0
+		let rotorF: Double = Aero.rotorLift * power.1 * v.collective * (0.35 + 0.65 * rho)
+		let heated: Double = v.envelopes > 0 ? min(1.0, Double(v.burners * Aero.burnerCells) / Double(v.envelopes)) : 0
+		let envF: Double = gravityG * Aero.envLift * v.heat * heated * rho
+		var fx: Double = 0
+		var fy: Double = 0
+		var torque: Double = 0
+		var lift: Double = 0
+		var thrust: Double = 0
+		var stalled: Bool = false
+		var alpha: Double = 0
+		for (cell, t) in v.parts {
+			let lx: Double = Double(cell.dx) + 0.5 - v.comX
+			let ly: Double = Double(cell.dy) + 0.5 - v.comY
+			let rx: Double = lx * c - ly * s
+			let ry: Double = lx * s + ly * c
+			// the air going past this part (the wind, less the part's own motion), in the vehicle's frame
+			let ux: Double = v.windX - (v.vx - v.angVel * ry)
+			let uy: Double = -(v.vy + v.angVel * rx)
+			let bx: Double = ux * c + uy * s
+			let by: Double = -ux * s + uy * c
+			var fbx: Double = 0
+			var fby: Double = 0
+			let k: Double = v.boost[cell] ?? 1.0
+			if t == .wing || t == .elevator {
+				let f: (Double, Double, Double, Bool, Double) = wingForce(t, bx, by, lx, rho, wantSpin, t == .wing ? bank * k : k)
+				fbx = f.0
+				fby = f.1
+				if t == .wing {
+					lift += f.2
+					alpha = max(alpha, f.4)
+				}
+				if f.3 { stalled = true }
+			} else {
+				let d: (Double, Double) = faceDrag(v, cell, t, bx, by, rho)
+				fbx = d.0
+				fby = d.1
+				switch t {
+				case .airProp:
+					if power.0 > 0 && abs(thr) > 0.05 {
+						// along the vehicle's axis either way (the blades reverse at half strength)
+						let eff: Double = max(0, 1.0 - abs(bx) / Aero.propVmax)
+						let w: Double = thr > 0 ? thr : thr * 0.5
+						let f: Double = Aero.propThrust * power.0 * eff * w * k * (0.4 + 0.6 * rho)
+						fbx += f
+						thrust += abs(f)
+					}
+				case .jet:
+					if canFly && abs(thr) > 0.05 {
+						// it pushes away from its exhaust; pulled back, its reverser brakes at a third
+						let dirX: Double = -Double((v.face[cell] ?? (-1, 0)).0)
+						let along: Double = thr * dirX
+						let w: Double = along > 0 ? along : along * 0.35
+						let f: Double = Aero.jetThrust * w * k * dirX * (0.7 + 0.3 * rho) * max(0.35, 1.0 - abs(bx) / 90.0)
+						fbx += f
+						thrust += abs(f)
+					}
+				case .rotor:
+					if rotorF > 0 {
+						fby -= rotorF * k
+						lift += rotorF * k
+						// the disc drags against air going across it
+						fbx += Aero.rotorDrag * rho * bx * abs(bx) * min(1.0, v.collective * 1.5)
+					}
+				default:
+					break
+				}
+			}
+			// to the world, then onto the body at this part
+			var wfx: Double = fbx * c - fby * s
+			var wfy: Double = fbx * s + fby * c
+			if t == .envelope && envF > 0 {
+				// hot air rises: straight up, whatever the tilt (so balloons above keep it upright)
+				wfy -= envF * k
+				lift += envF * k
+			}
+			fx += wfx
+			fy += wfy
+			torque += rx * wfy - ry * wfx
+			wfx = 0
+			wfy = 0
+		}
+		let invM: Double = 1.0 / v.mass
+		v.vx += fx * invM * h
+		v.vy += fy * invM * h
+		v.angVel += torque / v.inertia * h
+		if v.rotors > 0 && rotorF > 0 { cyclic(v, thr, h) }
+		v.liftNow = lift
+		v.thrustNow = thrust
+		v.stall = stalled
+		v.alpha = alpha
+	}
+
+	/// The pitch rate the pilot asks for (nose up positive), eased off near the stall: past the guard
+	/// angle the nose is brought down a little, so holding the stick back climbs steeply without stalling
+	/// while there is speed (slow it down too far and it still sinks)
+	func pitchRateWanted(_ v: Vehicle) -> Double {
+		var want: Double = v.pitch * Aero.pitchRate
+		// hands off in flight, the nose eases back toward level (it holds a gentle climb or dive no longer)
+		if abs(v.pitch) < 0.05 && v.contacts == 0 && v.auto == 0 {
+			let noseUp: Double = -Double(v.fwd) * v.sinA
+			want = clampD(-noseUp * Aero.levelRate, -0.3, 0.3)
+		}
+		let guardA: Double = Aero.stallAngle * Aero.alphaGuard
+		// the angle the wing is heading for: now, plus where the nose is still swinging
+		let noseX: Double = Double(v.fwd) * v.cosA
+		let upRate: Double = -v.angVel * (noseX >= 0 ? 1.0 : -1.0)
+		let ahead: Double = v.alpha + max(0, upRate) * 0.3
+		if v.wings > 0 && ahead > guardA && v.airspeed > 4.0 { want = min(want, -(ahead - guardA) * 5.0) }
+		return want
+	}
+
+	/// One wing or elevator: lift across the airflow and drag along it, from the angle the air meets it
+	/// (folded so the wing works flying either way), with an elevator's flap turned by the stick.
+	/// Returns the body-frame force, the lift, and whether it has stalled.
+	func wingForce(_ t: PartType, _ bx: Double, _ by: Double, _ lx: Double, _ rho: Double, _ wantSpin: Double, _ scale: Double) -> (Double, Double, Double, Bool, Double) {
+		let sp2: Double = bx * bx + by * by
+		if sp2 < 0.09 { return (0, 0, 0, false, 0) }
+		let sp: Double = sqrt(sp2)
+		let dx: Double = bx / sp
+		let dy: Double = by / sp
+		var a: Double = atan2(-dy, -dx)
+		if a > Double.pi * 0.5 { a -= Double.pi } else if a < -Double.pi * 0.5 { a += Double.pi }
+		// the camber lifts toward the top of the wing whichever way the air comes
+		if t == .wing { a += dx < 0 ? Aero.camber : -Aero.camber }
+		var area: Double = 1.0
+		if t == .elevator {
+			// the flap, tilted the way that turns the nose as asked (behind or ahead of the centre of mass)
+			area = Aero.elevatorArea
+			let flow: Double = bx < 0 ? 1.0 : -1.0
+			let side: Double = lx >= 0 ? 1.0 : -1.0
+			a += -wantSpin * side * flow * Aero.flap
+		}
+		let cl: Double = liftCoefficient(a)
+		let cd: Double = wingDrag(a, cl)
+		let q: Double = Aero.kLift * rho * sp2 * area * scale
+		let fbx: Double = q * cl * -dy + q * Aero.dragShare * cd * dx
+		let fby: Double = q * cl * dx + q * Aero.dragShare * cd * dy
+		let stalled: Bool = t == .wing && abs(a) > Aero.stallAngle && sp > 4.0
+		return (fbx, fby, abs(q * cl), stalled, sp > 4.0 ? abs(a) : 0)
+	}
+
+	/// Drag on a part's faces that meet the air (a face tucked behind another part barely feels it)
+	func faceDrag(_ v: Vehicle, _ cell: PartCell, _ t: PartType, _ bx: Double, _ by: Double, _ rho: Double) -> (Double, Double) {
+		let cdp: Double = partDrag(t) * Aero.kDrag * rho
+		var fx: Double = 0
+		var fy: Double = 0
+		if abs(bx) > 0.01 {
+			let up: Int = bx < 0 ? 1 : -1
+			let ex: Double = v.parts[PartCell(dx: cell.dx + up, dy: cell.dy)] == nil ? 1.0 : Aero.shielded
+			fx = cdp * ex * bx * abs(bx)
+		}
+		if abs(by) > 0.01 {
+			let up: Int = by < 0 ? 1 : -1
+			let ey: Double = v.parts[PartCell(dx: cell.dx, dy: cell.dy + up)] == nil ? 1.0 : Aero.shielded
+			let canopy: Double = t == .envelope ? Aero.canopyDrag : 1.0
+			fy = cdp * ey * canopy * by * abs(by)
+		}
+		return (fx, fy)
+	}
+
+	/// The cyclic: the rotor tilts the helicopter toward the stick and holds it there (so it flies
+	/// that way). A single rotor needs a tail rotor for this; without one its torque swings the
+	/// helicopter round and it can hardly be steered. Two rotors turn opposite ways and need none.
+	func cyclic(_ v: Vehicle, _ thr: Double, _ h: Double) {
+		let steady: Bool = v.tailRotors > 0 || v.rotors >= 2
+		// the stick tilts it; hands off it leans against its drift and comes to a hover
+		var target: Double = clampD(thr, -1, 1) * Aero.cyclicTilt
+		if abs(thr) < 0.1 { target = clampD(-v.vx * Aero.hoverHold, -Aero.cyclicTilt, Aero.cyclicTilt) }
+		let a: Double = remainder(v.angle, 2.0 * Double.pi)
+		let auth: Double = (0.35 + 0.65 * v.collective) * (steady ? 1.0 : 0.2)
+		// the trim builds up against a steady pull (an off-centre rotor or load) so the tilt holds
+		if steady { v.cycI = clampD(v.cycI + (target - a) * Aero.cyclicI * h, -12, 12) }
+		v.angVel += (Aero.cyclicP * (target - a) + v.cycI - Aero.cyclicD * v.angVel) * auth * h
+		if !steady { v.angVel += sin(clock * 2.3 + Double(v.id)) * 4.0 * v.collective * h }
+	}
+
+	/// Once a frame: blade pitch and burner heat follow the stick (hands off, they hold the height), the
+	/// elevator trim settles, and the nose end is worked out from the way the vehicle moves
+	func flightControls(_ v: Vehicle, _ dt: Double) {
+		let piloted: Bool = (v.rider || v.auto == 2) && v.hasSeat && v.hasSteering
+		let airborne: Bool = v.contacts == 0 && v.submerged <= 0.02
+		let along: Double = v.vx * v.cosA + v.vy * v.sinA
+		if abs(along) > 3.0 { v.fwd = along > 0 ? 1 : -1 }
+		else if abs(v.throttle) > 0.2 && v.rider { v.fwd = v.throttle > 0 ? 1 : -1 }
+		if v.rotors > 0 {
+			if !piloted || airPower(v).1 <= 0 {
+				v.collective = max(0, v.collective - dt * 0.4)
+			} else if airborne || v.pitch > 0.05 {
+				// the stick asks for a climb or sink rate (hands off: none, a hover); the blade pitch is set
+				// for it, as far as the rotor can lift
+				let need: Double = max(0, v.mass * gravityG - balloonLiftNow(v))
+				let hover: Double = need / max(1.0, rotorMax(v))
+				let wantVy: Double = -v.pitch * Aero.climbRate
+				let want: Double = clampD(hover + (v.vy - wantVy) * 0.05, 0, 1)
+				let step: Double = Aero.collectiveRate * dt
+				v.collective += clampD((want - v.collective) * min(1.0, 4.0 * dt), -step, step)
+			} else {
+				v.collective = max(0, v.collective - dt * 0.6)
+			}
+			if !airborne { v.cycI *= (1.0 - min(1.0, 2.0 * dt)) }
+		}
+		if v.burners > 0 && v.envelopes > 0 {
+			let fuelOK: Bool = v.fuel > 0 || isCreative
+			if !piloted || !fuelOK {
+				v.heat = max(0, v.heat - dt * 0.035)
+			} else if abs(v.pitch) > 0.05 {
+				v.heat = clampD(v.heat + v.pitch * (v.pitch > 0 ? Aero.heatRate : Aero.ventRate) * dt, 0, 1)
+			} else if airborne {
+				// hands off: the burner keeps the balloon just warm enough to float (no faster than it can heat)
+				let full: Double = balloonMax(v)
+				let need: Double = max(0, v.mass * gravityG - v.liftNow + balloonLiftNow(v))
+				let eq: Double = full > 1 ? need / full : 0
+				let want: Double = clampD(eq + v.vy * 0.05, 0, 1)
+				v.heat += clampD(want - v.heat, -Aero.ventRate * dt, Aero.heatRate * dt)
+			} else {
+				v.heat = max(0, v.heat - dt * 0.05)
+			}
+		}
+		if v.elevators > 0 {
+			if airborne && v.turnT == 0 {
+				// the trim learns the elevator that gives the pitch rate asked for (hands off: none, so the
+				// nose stays where it is)
+				let noseX: Double = Double(v.fwd) * v.cosA
+				let upRate: Double = -v.angVel * (noseX >= 0 ? 1.0 : -1.0)
+				v.trim = clampD(v.trim + (pitchRateWanted(v) - upRate) * Aero.trimRate * dt, -0.9, 0.9)
+			} else if !airborne {
+				v.trim *= (1.0 - min(1.0, 0.8 * dt))
+			}
+		}
+	}
+
+	/// The balloons' lift right now (force)
+	func balloonLiftNow(_ v: Vehicle) -> Double {
+		return balloonMax(v) * v.heat
+	}
+
+	/// Fuel for what flies: rotors turning, jets, burners (driving and propellers already burn it)
+	func airFuel(_ v: Vehicle, _ dt: Double) {
+		if isCreative || v.fuel <= 0 { return }
+		var use: Double = 0
+		let thr: Double = abs(v.throttle)
+		if v.rotors > 0 && v.collective > 0.05 && thr <= 0.1 { use += Double(v.engines) * (0.4 + 0.6 * v.collective) }
+		if v.jets > 0 && thr > 0.05 && (v.rider || v.auto == 2) { use += Double(v.jets) * 2.5 * thr }
+		if v.burners > 0 && v.heat > 0.05 && (v.rider || v.auto == 2) { use += Double(v.burners) * 0.6 * v.heat }
+		v.fuel = max(0, v.fuel - use * dt)
+	}
+}
+
+extension Game {
+	// MARK: every frame
+
+	/// What a vehicle does besides moving, once a frame (even at rest): the flight controls and fuel,
+	/// the guns, the autopilot when nobody drives, a turn in progress, rotor blades striking the ground,
+	/// fuel tanks that burst
+	func vehicleExtras(_ v: Vehicle, _ dt: Double) {
+		if v.parts.isEmpty { return }
+		if v.hitT > 0 { v.hitT -= dt }
+		if v.aero {
+			v.windX = world.dim == .overworld && settings.weatherOn ? weatherAt(v.px, v.py).wind * 0.6 : 0
+			if v.auto == 2 && !v.rider { autopilotSteer(v, 0, 0, dt) }
+			flightControls(v, dt)
+			airFuel(v, dt)
+			if v.rotors > 0 { rotorBlades(v, dt) }
+			let spin: Double = v.rotors > 0 ? v.collective : min(1.0, abs(v.throttle))
+			if v.rotors + v.airProps + v.tailRotors > 0 && airPower(v).0 + airPower(v).1 > 0 { v.propRot += dt * (4.0 + 26.0 * spin) }
+			v.airspeed = sqrt((v.vx - v.windX) * (v.vx - v.windX) + v.vy * v.vy)
+		} else if v.auto == 2 && !v.rider {
+			autopilotSteer(v, 0, 0, dt)
+		}
+		if v.turnT > 0 { stepTurn(v, dt) }
+		if v.cannons + v.guns > 0 { runVehicleWeapons(v, dt) }
+	}
+
+	/// Fuel tanks that burst last frame go off now
+	func flushVehicleBlasts() {
+		if vehBlasts.isEmpty { return }
+		let list: [(Double, Double)] = vehBlasts
+		vehBlasts.removeAll()
+		for b in list { explode(b.0, b.1, radius: 2.0, power: 14, source: .environment, breakBlocks: false) }
+	}
+
+	/// Rotor blades sweep a line two cells either side of the hub; if they cut into the ground the
+	/// rotor is wrecked in a moment
+	func rotorBlades(_ v: Vehicle, _ dt: Double) {
+		if v.collective < 0.05 && v.propRot == 0 { return }
+		if !(airPower(v).1 > 0) { return }
+		var struck: PartCell? = nil
+		for (c, t) in v.parts where t == .rotor {
+			var k: Double = -2.4
+			while k <= 2.41 {
+				let p: (Double, Double) = v.toWorld(Double(c.dx) + 0.5 + k, Double(c.dy) + 0.02)
+				if world.solid(Int(floor(p.0)), Int(floor(p.1))) { struck = c; break }
+				k += 0.8
+			}
+			if struck != nil { break }
+		}
+		guard let c = struck else { v.bladeHit = 0; return }
+		v.bladeHit += dt
+		let at: (Double, Double) = v.cellCenter(c)
+		if Double.random(in: 0...1) < 0.4 { spawnParticles(at.0, at.1 - 0.5, 0xFFE080, 2, 4.0, 0.25, 8) }
+		damageVehicle(v, c, 40.0 * dt, at.0, at.1)
+	}
+
+	// MARK: damage
+
+	/// A hard landing or a crash: each part that hit the ground too fast takes damage by how much too fast
+	func crashDamage(_ v: Vehicle, _ crash: [PartCell: Double]) {
+		if !settings.vehicleDamage { return }
+		var worst: Double = 0
+		for (c, over) in crash where v.parts[c] != nil {
+			let at: (Double, Double) = v.cellCenter(c)
+			damageVehicle(v, c, over * 3.2 * (1.0 + v.mass / 30.0), at.0, at.1)
+			worst = max(worst, over)
+		}
+		if worst > 0 {
+			addShake(min(0.8, 0.2 + worst * 0.05))
+			sfx(.land, at: v.px, 0.9)
+		}
+	}
+
+	/// Damage to one cell; when it has taken all it can, it breaks off
+	func damageVehicle(_ v: Vehicle, _ c: PartCell, _ amount: Double, _ x: Double, _ y: Double) {
+		guard let t = v.parts[c], amount > 0 else { return }
+		if !settings.vehicleDamage { return }
+		let hp: Double = vehicleCellHP(v, c, t) * (v.boost[c] ?? 1.0)
+		let d: Double = (v.dmg[c] ?? 0) + amount
+		v.dmg[c] = d
+		v.hitT = 0.15
+		if d >= hp { breakVehicleCell(v, c) }
+	}
+
+	/// A cell breaks off: it flies off as debris (a block keeps flying as a falling block), whatever is no
+	/// longer joined to the driver's part becomes a wreck of its own, falling with its own physics, and a
+	/// burst fuel tank goes off
+	func breakVehicleCell(_ v: Vehicle, _ c: PartCell) {
+		guard let t = v.parts[c] else { return }
+		let at: (Double, Double) = v.cellCenter(c)
+		let pv: (Double, Double) = (v.vx - v.angVel * (at.1 - v.py), v.vy + v.angVel * (at.0 - v.px))
+		let color: UInt32 = v.blocks[c].map { $0.def.colors.first ?? 0x8A8A8A } ?? 0x8A8A94
+		spawnParticles(at.0, at.1, color, 10, 4.5, 0.6, 14)
+		spawnParticles(at.0, at.1, 0x5A5A5A, 6, 2.5, 0.9, -2)
+		sfx(v.blocks[c] != nil && toolClass(v.blocks[c]!) == .axe ? .breakWood : .breakStone, at: at.0, 0.9)
+		addShake(0.2)
+		if t == .fuelTank && (v.fuel > 4 || isCreative) { vehBlasts.append(at) }
+		if t == .envelope { spawnParticles(at.0, at.1, 0xF0E4D0, 6, 5.0, 0.4, 4) }
+		// what the stores carried spills out of every store that comes away
+		let stores: [(PartCell, (Double, Double))] = v.parts.keys.filter { vehicleStores(v, $0) }.map { ($0, v.cellCenter($0)) }
+		let seat: PartCell? = seatCell(v)
+		let wasDriver: Bool = v.rider && inVehicle === v
+		// the transform before anything changes: the wrecks keep their place in the world
+		let old: Vehicle = v
+		var off: [VCell] = old.cutAway(c, keep: seat == c ? nil : seat)
+		if let first = off.first, first.cell == c {
+			off.removeFirst()
+			if let b = first.tile, b.solid, fallingBlocks.count < 120 {
+				var fb: FallingBlock = FallingBlock(x: at.0, y: at.1 + 0.5, vy: pv.1 - 3.0, tile: b, uid: newID())
+				fb.vx = pv.0 + Double.random(in: -2...2)
+				fb.mass = max(0.2, tileWeight(b))
+				fb.spin = Double.random(in: -6...6)
+				fb.flung = true
+				fallingBlocks.append(fb)
+			} else if Double.random(in: 0...1) < 0.35 {
+				spawnDrop(Stack(item: vehicleCellItem(first), count: 1), at.0, at.1, pv.0 * 0.5, -4)
+			}
+		}
+		if !off.isEmpty { makeWrecks(old, off) }
+		for (sc, sp) in stores where v.parts[sc] == nil {
+			let k: IntPair = cargoSpot(v, sc)
+			if let p = openChest, p == k { openChest = nil }
+			for st in world.removeChest(k.x, k.y) { spawnDrop(st, sp.0, sp.1, Double.random(in: -2...2), -3.5) }
+		}
+		if v.parts.isEmpty {
+			if wasDriver { dismount() }
+			return
+		}
+		v.recompute(keepAnchor: true)
+		v.kit = -1
+		if wasDriver && (seatCell(v) == nil || !v.hasSteering) {
+			dismount()
+			say("Your seat was shot away!", 2.0)
+		}
+		bumpHUD()
+	}
+
+	/// Pieces broken off a vehicle become wrecks: vehicles of their own (no seat, so nobody drives them)
+	/// that keep the place, turn and speed they had
+	func makeWrecks(_ from: Vehicle, _ cells: [VCell]) {
+		var left: [PartCell: VCell] = [:]
+		for r in cells { left[r.cell] = r }
+		while let start = left.keys.first {
+			var group: [VCell] = []
+			var stack: [PartCell] = [start]
+			while let cur = stack.popLast() {
+				guard let r = left[cur] else { continue }
+				left[cur] = nil
+				group.append(r)
+				let n: [PartCell] = [PartCell(dx: cur.dx + 1, dy: cur.dy), PartCell(dx: cur.dx - 1, dy: cur.dy), PartCell(dx: cur.dx, dy: cur.dy + 1), PartCell(dx: cur.dx, dy: cur.dy - 1)]
+				for k in n where left[k] != nil { stack.append(k) }
+			}
+			if vehicles.count >= 40 {
+				for r in group {
+					let p: (Double, Double) = from.cellCenter(r.cell)
+					if Double.random(in: 0...1) < 0.4 { spawnDrop(Stack(item: vehicleCellItem(r), count: 1), p.0, p.1, 0, -3) }
+				}
+				continue
+			}
+			let w: Vehicle = Vehicle(id: newID(), first: .frame, x: 0, y: 0)
+			w.parts.removeAll()
+			for r in group {
+				w.parts[r.cell] = r.type
+				if let b = r.tile { w.blocks[r.cell] = b }
+			}
+			w.recompute(keepAnchor: false)
+			let p: (Double, Double) = from.toWorld(w.comX, w.comY)
+			w.px = p.0
+			w.py = p.1
+			w.angle = from.angle
+			w.vx = from.vx - from.angVel * (p.1 - from.py) + Double.random(in: -1.5...1.5)
+			w.vy = from.vy + from.angVel * (p.0 - from.px) - 2.0
+			w.angVel = from.angVel + Double.random(in: -1.5...1.5)
+			w.updateBox()
+			vehicles.append(w)
+		}
+	}
+
+	/// Blasts damage every part in reach (less further out) and shove the vehicle away
+	func blastVehicles(_ x: Double, _ y: Double, radius: Double, power: Double) {
+		let list: [Vehicle] = vehicles
+		for v in list {
+			if v.b.right < x - radius - 1 || v.b.left > x + radius + 1 || v.b.y < y - radius - 1 || v.b.top > y + radius + 1 { continue }
+			var hits: [(PartCell, Double)] = []
+			for (c, _) in v.parts {
+				let p: (Double, Double) = v.cellCenter(c)
+				let d: Double = sqrt((p.0 - x) * (p.0 - x) + (p.1 - y) * (p.1 - y))
+				if d > radius + 0.5 { continue }
+				hits.append((c, power * 1.1 * (1.0 - 0.6 * clampD(d / max(0.5, radius), 0, 1))))
+			}
+			if hits.isEmpty { continue }
+			let dx: Double = v.px - x
+			let dy: Double = v.py - y
+			let dl: Double = max(0.5, sqrt(dx * dx + dy * dy))
+			let push: Double = power * 0.9 * Double(hits.count) / Double(max(1, v.parts.count)) / max(1.0, v.mass * 0.25)
+			v.vx += dx / dl * min(14.0, push)
+			v.vy += dy / dl * min(14.0, push) - 1.0
+			v.asleep = false
+			for h in hits where v.parts[h.0] != nil {
+				let p: (Double, Double) = v.cellCenter(h.0)
+				damageVehicle(v, h.0, h.1, p.0, p.1)
+			}
+		}
+	}
+
+	/// The first vehicle cell a shot's step passes through. Shots from monsters, and from other vehicles'
+	/// guns, hit vehicles; the player's own shots pass their vehicles, and a gun never hits its own vehicle.
+	func vehicleOnPath(_ p: Projectile, _ nx: Double, _ ny: Double, maxT: Double) -> VehicleHit? {
+		let fromVehicle: Bool = p.owner >= 2_000_000
+		if p.source.kind == .player && !fromVehicle { return nil }
+		var best: VehicleHit? = nil
+		var bt: Double = min(1.0, maxT)
+		let x0: Double = min(p.x, nx)
+		let x1: Double = max(p.x, nx)
+		let y0: Double = min(p.y, ny)
+		let y1: Double = max(p.y, ny)
+		for v in vehicles {
+			if fromVehicle && p.owner == 2_000_000 + v.id { continue }
+			if x1 < v.b.left || x0 > v.b.right || y1 < v.b.top || y0 > v.b.y { continue }
+			let a: (Double, Double) = v.toLocal(p.x, p.y)
+			let b: (Double, Double) = v.toLocal(nx, ny)
+			let len: Double = sqrt((b.0 - a.0) * (b.0 - a.0) + (b.1 - a.1) * (b.1 - a.1))
+			let n: Int = max(1, Int(ceil(len / 0.2)))
+			var i: Int = 0
+			while i <= n {
+				let t: Double = Double(i) / Double(n)
+				if t > bt { break }
+				let lx: Double = a.0 + (b.0 - a.0) * t
+				let ly: Double = a.1 + (b.1 - a.1) * t
+				let c: PartCell = PartCell(dx: Int(floor(lx)), dy: Int(floor(ly)))
+				if v.parts[c] != nil {
+					bt = t
+					best = VehicleHit(t: t, v: v, cell: c)
+					break
+				}
+				i += 1
+			}
+		}
+		return best
+	}
+
+	/// A shot strikes a vehicle part
+	func shotHitsVehicle(_ p: Projectile, _ vh: VehicleHit, _ x: Double, _ y: Double) {
+		if p.kind == .shell {
+			shellBurst(p, x, y)
+			return
+		}
+		if p.mod >= 0 { modShotLanded(p, x, y, mob: nil, player: false) }
+		var amount: Double = p.dmg
+		if p.kind == .fireball { amount *= 1.3 }
+		if vh.v.parts[vh.cell] == .armor { spawnParticles(x, y, 0xFFE8A0, 4, 4.0, 0.2, 6) } else { spawnParticles(x, y, 0xC8C8C8, 3, 3.0, 0.3, 10) }
+		sfx(.arrowHit, at: x, 0.5)
+		damageVehicle(vh.v, vh.cell, amount, x, y)
+	}
+
+	/// A cannon shell bursts: a small blast that breaks and throws blocks like a bomb's
+	func shellBurst(_ p: Projectile, _ x: Double, _ y: Double) {
+		explode(x, y, radius: 2.3, power: p.dmg, source: p.source, breakBlocks: true)
+	}
+
+	// MARK: weapons
+
+	/// The guns turn toward where the driver aims (each within its own arc) and fire while the attack
+	/// stick is held. Cannons fire shells (one gunpowder each) and kick the vehicle back; machine guns
+	/// fire a stream of bullets.
+	func runVehicleWeapons(_ v: Vehicle, _ dt: Double) {
+		for (c, cd) in v.gunCD where cd > 0 { v.gunCD[c] = cd - dt }
+		let driving: Bool = v.rider && inVehicle === v
+		let firing: Bool = driving && useHeld && aimValid
+		for (c, t) in v.parts where t == .cannon || t == .autoGun {
+			let f: (Int, Int) = v.face[c] ?? (1, 0)
+			let base: Double = v.angle + atan2(Double(f.1), Double(f.0))
+			let o: (Double, Double) = v.cellCenter(c)
+			var want: Double = base
+			if driving && aimValid { want = atan2(aimY - o.1, aimX - o.0) }
+			let rel: Double = clampD(remainder(want - base, 2.0 * Double.pi), -1.4, 1.4)
+			let a: Double = base + rel
+			let cur: Double = v.aimAng[c] ?? base
+			let turn: Double = remainder(a - cur, 2.0 * Double.pi)
+			let rate: Double = (t == .cannon ? 3.0 : 6.0) * dt
+			let na: Double = cur + clampD(turn, -rate, rate)
+			v.aimAng[c] = na
+			if firing && (v.gunCD[c] ?? 0) <= 0 && abs(remainder(want - na, 2.0 * Double.pi)) < 0.35 {
+				fireVehicleGun(v, c, t, na, o)
+			}
+		}
+	}
+
+	func fireVehicleGun(_ v: Vehicle, _ c: PartCell, _ t: PartType, _ a: Double, _ o: (Double, Double)) {
+		let cannon: Bool = t == .cannon
+		if !isCreative {
+			let ammo: Item = cannon ? .mat(.gunpowder) : .ammo(.bullet)
+			if !inv.remove(ammo, 1) {
+				v.gunCD[c] = 1.0
+				if vehSayT <= clock {
+					vehSayT = clock + 3.0
+					say(cannon ? "The cannon needs gunpowder." : "The machine gun needs bullets.", 2.0)
+				}
+				return
+			}
+		}
+		let k: Double = v.boost[c] ?? 1.0
+		let mx: Double = o.0 + cos(a) * 0.9
+		let my: Double = o.1 + sin(a) * 0.9
+		let speed: Double = cannon ? 34.0 : 44.0
+		var p = Projectile(kind: cannon ? .shell : .bullet, x: mx, y: my, vx: cos(a) * speed + v.vx, vy: sin(a) * speed + v.vy, dmg: cannon ? 24 * k : 4.5 * k, fromPlayer: true, gravity: cannon ? 14 : 3)
+		p.life = cannon ? 4.0 : 1.3
+		p.w = cannon ? 0.35 : 0.15
+		p.source = .player
+		p.owner = 2_000_000 + v.id
+		p.uid = newID()
+		p.knock = cannon ? 9 : 3
+		projectiles.append(p)
+		v.gunCD[c] = cannon ? 2.0 : 0.13
+		if cannon {
+			// the recoil kicks the vehicle back, around the cannon
+			let j: Double = 10.0
+			let rx: Double = o.0 - v.px
+			let ry: Double = o.1 - v.py
+			let jx: Double = -cos(a) * j
+			let jy: Double = -sin(a) * j
+			v.vx += jx / v.mass
+			v.vy += jy / v.mass
+			v.angVel += (rx * jy - ry * jx) / v.inertia
+			v.asleep = false
+			spawnParticles(mx, my, 0xFFC050, 8, 5.0, 0.25, 2)
+			spawnParticles(mx, my, 0x8A8A8A, 6, 2.0, 0.8, -3)
+			addShake(0.25)
+			sfx(.blunderbuss, at: mx, 0.9)
+		} else {
+			if Double.random(in: 0...1) < 0.5 { spawnParticles(mx, my, 0xFFE080, 2, 3.0, 0.12, 0) }
+			sfx(.gun, at: mx, 0.3)
+		}
+	}
+
+	/// Where the guns aim with the attack stick held but not pushed: the nearest foe in range and in
+	/// sight, led a little for its speed (nil: none, the guns look ahead)
+	func vehicleAutoAim(_ v: Vehicle) -> (Double, Double)? {
+		var best: Mob? = nil
+		var bd: Double = 26.0
+		for m in mobsNear(v.px - 26, v.px + 26) where m.hp > 0 && !m.removed && !m.downed && isThreat(m) {
+			let d: Double = abs(m.b.x - v.px) + abs(m.b.cy - v.py) * 0.7
+			if d < bd && world.lineClear(v.px, v.py, m.b.x, m.b.cy) {
+				bd = d
+				best = m
+			}
+		}
+		guard let m = best else { return nil }
+		let lead: Double = bd / 40.0
+		return (m.b.x + m.b.vx * lead, m.b.cy + m.b.vy * lead)
+	}
+
+	// MARK: repairs and storage
+
+	/// Holding an iron bar, a tap on a damaged part mends it (the bar is used up)
+	func repairVehiclePart(_ v: Vehicle, _ c: PartCell) -> Bool {
+		guard let it = heldItem, it == .mat(.ironBar), let d = v.dmg[c], d > 0.5 else { return false }
+		v.dmg[c] = nil
+		if !isCreative { inv.removeAt(sel, 1) }
+		let p: (Double, Double) = v.cellCenter(c)
+		spawnParticles(p.0, p.1, 0xFFE8A0, 6, 2.5, 0.4, 4)
+		sfx(.craft, at: p.0, 0.6)
+		say("Mended.", 1.0)
+		bumpHUD()
+		return true
+	}
+
+	/// Cells that hold things: cargo crates, and chests, cabinets, wardrobes or a mod's storage built on
+	func vehicleStores(_ v: Vehicle, _ c: PartCell) -> Bool {
+		guard let t = v.parts[c] else { return false }
+		if t == .cargo { return true }
+		guard t == .block, let b = v.blocks[c] else { return false }
+		if b == .chest || b == .cabinet || b == .wardrobe { return true }
+		if b.isMod, ModRuntime.shared.blockDef(b)?.function == .storage { return true }
+		return false
+	}
+
+	/// Puts a whole stack (infusions and all) in the bag, dropping what does not fit
+	func giveStack(_ st: Stack) {
+		let left: Int = inv.add(st.item, st.count, extra: st.extra, inf: st.inf)
+		if left > 0 {
+			var rest: Stack = st
+			rest.count = left
+			spawnDrop(rest, pb.x, pb.y - 1.0, Double(facing) * 3.0, -4.0)
+		}
+		bumpHUD()
+	}
+
+	/// What the controls do in this vehicle (said when getting in)
+	func controlsHint(_ v: Vehicle) -> String {
+		if v.rotors > 0 { return "Flying. Stick up and down: climb and sink (let go to hover). Left and right: tilt and fly that way." }
+		if v.burners > 0 && v.envelopes > 0 { return "Ballooning. Stick up: heat the balloon and rise; down: let it cool and sink. Left and right: the propellers." }
+		if v.wings > 0 { return "Flying. Left and right: the throttle. Up and down: pitch the nose (gather speed on the ground, then pull up). TURN turns round." }
+		if v.tracks > 0 { return "Driving a tracked vehicle: slow, but it climbs anything. Jump to get out when stopped." }
+		return "Driving. Hold the stick to move; in the air it tilts the vehicle. Jump to get out when stopped."
+	}
+}
+
+extension Game {
+	// MARK: turning round
+
+	/// TURN is offered while driving: in flight it is a banked turn out of the screen and back; standing
+	/// still (or nearly), the vehicle simply faces the other way if it has room
+	var canTurnVehicle: Bool {
+		guard let v = inVehicle else { return false }
+		return v.turnT == 0 && (v.aero || v.speed < 2.0)
+	}
+
+	func turnVehicle() {
+		guard let v = inVehicle, v.turnT == 0 else { return }
+		let flying: Bool = v.aero && v.contacts == 0 && v.submerged <= 0.02 && v.speed > 3.0
+		if flying {
+			v.turnT = 0.001
+			v.turnVX = v.vx
+			v.turned = false
+			v.asleep = false
+			return
+		}
+		if v.speed > 2.0 {
+			say("Slow down to turn round.", 1.5)
+			return
+		}
+		if !mirrorVehicle(v, check: true) { say("No room to turn round here.", 1.8) }
+	}
+
+	/// A turn in flight: it banks round out of the screen and back (drawn narrowing to its edge and
+	/// widening again), the wings lift a little less while banked, and halfway round it faces and flies
+	/// the other way, keeping its airspeed less what the turn costs
+	func stepTurn(_ v: Vehicle, _ dt: Double) {
+		v.turnT = min(1.0, v.turnT + dt / Aero.turnTime)
+		if !v.turned && v.turnT >= 0.5 {
+			v.turned = true
+			_ = mirrorVehicle(v, check: false)
+			v.vx = -v.vx * 0.92
+		}
+		if v.turnT >= 1.0 { v.turnT = 0 }
+	}
+
+	/// Mirrors a vehicle left to right about its centre of mass (it then faces the other way). With
+	/// `check`, only if the mirrored vehicle fits where it is. Stores keep what they hold.
+	@discardableResult
+	func mirrorVehicle(_ v: Vehicle, check: Bool) -> Bool {
+		let sx: Int = v.minX + v.maxX
+		if check {
+			for (c, _) in v.parts {
+				let p: (Double, Double) = v.cellCenter(c)
+				let mx: Double = 2.0 * v.px - p.0
+				if world.boxSolid(mx - 0.4, p.1 - 0.4, mx + 0.4, p.1 + 0.4) { return false }
+			}
+		}
+		var np: [PartCell: PartType] = [:]
+		var nb: [PartCell: Tile] = [:]
+		var nd: [PartCell: Double] = [:]
+		var moved: [(IntPair, [Stack])] = []
+		for (c, t) in v.parts {
+			let m: PartCell = PartCell(dx: sx - c.dx, dy: c.dy)
+			np[m] = t
+			if let b = v.blocks[c] { nb[m] = mirroredTile(b) }
+			if let d = v.dmg[c] { nd[m] = d }
+			if vehicleStores(v, c) {
+				let k: IntPair = cargoSpot(v, c)
+				if let p = openChest, p == k { openChest = nil }
+				moved.append((cargoSpot(v, m), world.removeChest(k.x, k.y)))
+			}
+		}
+		let cx: Double = v.px
+		let cy: Double = v.py
+		v.parts = np
+		v.blocks = nb
+		v.dmg = nd
+		v.gunCD.removeAll()
+		v.aimAng.removeAll()
+		v.drillWork.removeAll()
+		v.recompute(keepAnchor: false)
+		v.angle = -v.angle
+		v.angVel = -v.angVel
+		v.px = cx
+		v.py = cy
+		v.dir = -v.dir
+		v.fwd = -v.fwd
+		v.kit = -1
+		v.asleep = false
+		v.updateBox()
+		for m in moved { world.setChestItems(m.0.x, m.0.y, m.1) }
+		return true
+	}
+
+	// MARK: building blocks onto vehicles
+
+	/// The ON VEHICLE switch shows while a block is in hand near a vehicle
+	var canBuildOnVehicle: Bool {
+		guard inVehicle == nil, !dead, let it = heldItem, case .block(let t) = it else { return false }
+		if t == .doorClosed || t == .doorOpen || t == .liftCar || t == .sapling || t.isPlant { return false }
+		return nearestVehicle(8) != nil
+	}
+
+	func toggleVehicleBuild() {
+		vehicleBuild.toggle()
+		say(vehicleBuild ? "Blocks now go onto the vehicle: tap a green square." : "Blocks go into the world again.", 2.0)
+		bumpHUD()
+	}
+
+	/// Builds the block in hand onto the vehicle at the aim point (it becomes one of its cells, with its
+	/// weight, and moves with it). A mod block made to work as a vehicle part does that part's work.
+	func attachBlockToVehicle(_ t: Tile) -> Bool {
+		guard let (v, c) = vehicleCellAtAim() else {
+			if nearestVehicle(8) == nil { return false }
+			if placeCD <= 0 { say("Tap a green square next to the vehicle.", 1.5) }
+			placeCD = 0.3
+			return true
+		}
+		var part: PartType = .block
+		if t.isMod, let d = ModRuntime.shared.blockDef(t), let p = d.vehRole.part { part = p }
+		if let problem = attachProblem(v, c, part) {
+			say(problem, 2.0)
+			placeCD = 0.3
+			return true
+		}
+		liftIfBuried(v, c)
+		v.parts[c] = part
+		v.blocks[c] = t
+		v.recompute(keepAnchor: true)
+		v.kit = -1
+		if t == .chest || t == .cabinet || t == .wardrobe { world.setChestItems(cargoSpot(v, c).x, cargoSpot(v, c).y, []) }
+		if !isCreative { inv.removeAt(sel, 1) }
+		sfx(.place, 0.6)
+		placeCD = 0.16
+		swingT = 0.14
+		bumpHUD()
+		return true
+	}
+
+	/// The free cell next to a vehicle under the aim point (the one a block or part would go in)
+	func vehicleCellAtAim() -> (Vehicle, PartCell)? {
+		for v in vehicles {
+			if aimX < v.b.left - 1.5 || aimX > v.b.right + 1.5 || aimY < v.b.top - 1.5 || aimY > v.b.y + 1.5 { continue }
+			let c: PartCell = v.cellAt(aimX, aimY)
+			if v.parts[c] == nil && v.hasNeighbor(c) { return (v, c) }
+		}
+		return nil
+	}
+
+	// MARK: the assembler
+
+	/// The Vehicle Assembler: a tap on a structure you built turns it (every built block joined to it)
+	/// into a vehicle, joined to a vehicle it touches if there is one; a tap on a parked vehicle puts its
+	/// blocks back into the world and its parts in your bag
+	func useAssembler(_ pressed: Bool) {
+		if !pressed || useCD > 0 { return }
+		useCD = 0.4
+		swingT = 0.15
+		if !inReach(aimX, aimY) {
+			say("Tap closer to you.", 1.2)
+			return
+		}
+		if let hit = vehicleAtPoint(aimX, aimY) {
+			disassembleVehicle(hit.0)
+			return
+		}
+		let tx: Int = Int(floor(aimX))
+		let ty: Int = Int(floor(aimY))
+		if !world.isBuilt(tx, ty) || !canAssemble(world.tile(tx, ty)) {
+			say("Tap a block you built: it and every built block joined to it become one vehicle.", 3.0)
+			return
+		}
+		assembleStructure(tx, ty)
+	}
+
+	/// The built blocks joined to (x, y), side by side (up to 800)
+	func builtStructure(_ x: Int, _ y: Int) -> [IntPair] {
+		var out: [IntPair] = []
+		var seen: Set<IntPair> = []
+		var stack: [IntPair] = [IntPair(x: x, y: y)]
+		while let p = stack.popLast() {
+			if seen.contains(p) { continue }
+			seen.insert(p)
+			if !world.isBuilt(p.x, p.y) || !canAssemble(world.tile(p.x, p.y)) { continue }
+			out.append(p)
+			if out.count >= 800 { break }
+			stack.append(IntPair(x: p.x + 1, y: p.y))
+			stack.append(IntPair(x: p.x - 1, y: p.y))
+			stack.append(IntPair(x: p.x, y: p.y + 1))
+			stack.append(IntPair(x: p.x, y: p.y - 1))
+		}
+		return out
+	}
+
+	func assembleStructure(_ x: Int, _ y: Int) {
+		let cells: [IntPair] = builtStructure(x, y)
+		if cells.isEmpty { return }
+		if cells.count >= 800 {
+			say("That structure is too big to move (800 blocks at most).", 2.5)
+			return
+		}
+		// a vehicle the structure touches takes it in (it must be roughly level)
+		var host: Vehicle? = nil
+		for v in vehicles where abs(remainder(v.angle, 2.0 * Double.pi)) < 0.08 && !v.rider {
+			for p in cells {
+				let c: PartCell = v.cellAt(Double(p.x) + 0.5, Double(p.y) + 0.5)
+				if v.parts[c] == nil && v.hasNeighbor(c) { host = v; break }
+			}
+			if host != nil { break }
+		}
+		var x0: Int = Int.max
+		var y1: Int = Int.min
+		for p in cells { x0 = min(x0, p.x); y1 = max(y1, p.y) }
+		let v: Vehicle = host ?? Vehicle(id: newID(), first: .frame, x: 0, y: 0)
+		if host == nil { v.parts.removeAll() }
+		var stores: [(PartCell, [Stack])] = []
+		var added: Int = 0
+		for p in cells {
+			let t: Tile = world.tile(p.x, p.y)
+			let c: PartCell = host != nil ? v.cellAt(Double(p.x) + 0.5, Double(p.y) + 0.5) : PartCell(dx: p.x - x0, dy: p.y - y1)
+			if v.parts[c] != nil {
+				// no cell free for it in the vehicle: it goes to the bag (with what it held)
+				giveItem(.block(t), 1)
+				if t == .chest || t == .cabinet || t == .wardrobe { for st in world.removeChest(p.x, p.y) { giveStack(st) } }
+				continue
+			}
+			var part: PartType = .block
+			if t.isMod, let d = ModRuntime.shared.blockDef(t), let pp = d.vehRole.part { part = pp }
+			v.parts[c] = part
+			v.blocks[c] = t
+			added += 1
+			if t == .chest || t == .cabinet || t == .wardrobe || (t.isMod && ModRuntime.shared.blockDef(t)?.function == .storage) {
+				stores.append((c, world.removeChest(p.x, p.y)))
+			}
+		}
+		for p in cells {
+			world.setBuilt(p.x, p.y, false)
+			world.set(p.x, p.y, .air)
+		}
+		if host == nil {
+			v.recompute(keepAnchor: false)
+			v.placeBox(left: Double(x0), bottom: Double(y1 + 1))
+			vehicles.append(v)
+		} else {
+			v.recompute(keepAnchor: true)
+		}
+		v.kit = -1
+		v.asleep = false
+		for s in stores { world.setChestItems(cargoSpot(v, s.0).x, cargoSpot(v, s.0).y, s.1) }
+		spawnParticles(v.b.x, v.b.y - v.b.h * 0.5, 0x30C0E0, 14, 4.0, 0.6, 2)
+		sfx(.craft, 0.8)
+		let massS: String = String(format: "%.0f", v.mass)
+		let what: String = host == nil ? "a new vehicle" : "the vehicle"
+		say(joinText("Assembled ", String(added), " blocks into ", what, " (mass ", massS, "). ", vehicleCheck(v).hint), 4.0)
+		bumpHUD()
+	}
+
+	/// Puts a parked, level vehicle's blocks back into the world, each in the cell it is over (blocks
+	/// that have no room go to the bag, as do the parts); stores keep their things as chests
+	func disassembleVehicle(_ v: Vehicle) {
+		if v.rider || v.speed > 1.0 || !v.upright {
+			say("Park it level and get out first.", 2.0)
+			return
+		}
+		var placed: Int = 0
+		var bagged: Int = 0
+		for (c, t) in v.parts {
+			let p: (Double, Double) = v.cellCenter(c)
+			let tx: Int = Int(floor(p.0))
+			let ty: Int = Int(floor(p.1))
+			var held: [Stack] = []
+			if vehicleStores(v, c) {
+				let k: IntPair = cargoSpot(v, c)
+				if let o = openChest, o == k { openChest = nil }
+				held = world.removeChest(k.x, k.y)
+			}
+			let here: Tile = world.tile(tx, ty)
+			let free: Bool = here == .air || here.liquid || here.isPlant
+			if let b = v.blocks[c], free {
+				world.set(tx, ty, b)
+				world.setBuilt(tx, ty, true)
+				if b == .chest || b == .cabinet || b == .wardrobe || (b.isMod && ModRuntime.shared.blockDef(b)?.function == .storage) {
+					world.setChestItems(tx, ty, held)
+					held = []
+				}
+				placed += 1
+			} else {
+				giveItem(vehicleCellItem(VCell(cell: c, type: t, tile: v.blocks[c])), 1)
+				bagged += 1
+			}
+			for st in held { giveStack(st) }
+		}
+		vehicles.removeAll { $0 === v }
+		spawnParticles(v.b.x, v.b.y - v.b.h * 0.5, 0x30C0E0, 14, 4.0, 0.6, 2)
+		sfx(.craft, 0.8)
+		say(joinText("Taken apart: ", String(placed), " blocks back in place, ", String(bagged), " to your bag."), 3.0)
+		bumpHUD()
+	}
+
+	// MARK: the autopilot
+
+	/// AUTO cycles the autopilot: off, cruise (it holds the speed and the height you had), route (it
+	/// drives the points you marked, round and round, even with nobody aboard)
+	func cycleAutopilot() {
+		guard let v = inVehicle, v.autopilots > 0 else { return }
+		var next: Int = (v.auto + 1) % 3
+		if next == 2 && v.route.count < 2 { next = 0 }
+		v.auto = next
+		v.holdThr = abs(v.throttle) > 0.1 ? v.throttle : (abs(v.vx) > 1.5 ? (v.vx > 0 ? 0.7 : -0.7) : 0)
+		v.holdY = v.py
+		v.holdVX = v.vx
+		if next == 2 { v.routeAt = nearestWaypoint(v) }
+		let names: [String] = ["Autopilot off.", "Autopilot: cruise. It holds your speed and height; steer any time.", "Autopilot: route. It drives your marked points round and round, even if you get out."]
+		say(names[next], 3.0)
+		bumpHUD()
+	}
+
+	/// MARK adds where the vehicle is now to its route (up to 16 points)
+	func markWaypoint() {
+		guard let v = inVehicle, v.autopilots > 0 else { return }
+		if v.route.count >= 16 { v.route.removeFirst() }
+		v.route.append(VWaypoint(x: v.px, y: v.py))
+		let n: Int = v.route.count
+		say(n < 2 ? "Point 1 marked. Drive on and mark more." : joinText("Point ", String(n), " marked. AUTO twice to drive the route."), 2.0)
+		bumpHUD()
+	}
+
+	func clearRoute() {
+		guard let v = inVehicle else { return }
+		v.route.removeAll()
+		if v.auto == 2 { v.auto = 0 }
+		say("Route cleared.", 1.5)
+		bumpHUD()
+	}
+
+	func nearestWaypoint(_ v: Vehicle) -> Int {
+		var best: Int = 0
+		var bd: Double = 1e18
+		for (i, w) in v.route.enumerated() {
+			let d: Double = (w.x - v.px) * (w.x - v.px) + (w.y - v.py) * (w.y - v.py)
+			if d < bd { bd = d; best = i }
+		}
+		return best
+	}
+
+	/// The autopilot's hands on the controls. The driver's own input wins while the stick is pushed
+	/// (and cruise then takes up the new speed or height). Cruise holds the throttle, and in the air the
+	/// height; a route steers for each point in turn.
+	func autopilotSteer(_ v: Vehicle, _ ix: Double, _ up: Double, _ dt: Double) {
+		if v.autopilots == 0 { v.auto = 0; return }
+		let touched: Bool = abs(ix) > 0.1 || abs(up) > 0.1
+		if v.auto == 1 {
+			if abs(ix) > 0.1 { v.holdThr = ix } else { v.throttle = v.holdThr }
+			if abs(up) > 0.1 { v.holdY = v.py } else if v.aero { v.pitch = holdHeight(v, v.holdY) }
+			return
+		}
+		if v.auto != 2 || v.route.count < 2 { return }
+		if touched && v.rider { return }
+		if v.routeAt >= v.route.count { v.routeAt = 0 }
+		let w: VWaypoint = v.route[v.routeAt]
+		let dx: Double = w.x - v.px
+		let dy: Double = w.y - v.py
+		let flyer: Bool = v.aero && (v.rotors > 0 || v.envelopes > 0 || v.wings > 0)
+		let arrived: Bool = abs(dx) < 2.5 && (!flyer || abs(dy) < 3.0)
+		if arrived {
+			v.routeAt = (v.routeAt + 1) % v.route.count
+			return
+		}
+		if v.wings > 0 && v.rotors == 0 && v.envelopes == 0 {
+			// a plane flies on at full throttle and turns round when the point is behind it
+			let ahead: Double = dx * Double(v.fwd) * (v.cosA >= 0 ? 1.0 : -1.0)
+			if ahead < -6.0 && v.turnT == 0 && v.contacts == 0 && v.speed > 3.0 {
+				v.turnT = 0.001
+				v.turnVX = v.vx
+				v.turned = false
+			}
+			v.throttle = Double(v.fwd)
+			v.pitch = holdHeight(v, w.y)
+			return
+		}
+		let gain: Double = flyer ? 0.15 : 0.35
+		var thr: Double = clampD(dx * gain, -1, 1)
+		if abs(thr) < 0.35 { thr = thr >= 0 ? 0.35 : -0.35 }
+		if flyer && abs(dx) < 6.0 { thr *= abs(dx) / 6.0 }
+		v.throttle = thr
+		v.pitch = flyer ? holdHeight(v, w.y) : 0
+	}
+
+	/// The up/down input that brings the vehicle to a height and holds it there
+	func holdHeight(_ v: Vehicle, _ y: Double) -> Double {
+		let err: Double = v.py - y
+		if v.wings > 0 && v.rotors == 0 && v.envelopes == 0 {
+			return clampD(err * 0.12 + v.vy * 0.12, -0.7, 0.7)
+		}
+		return clampD(err * 0.35 + v.vy * 0.3, -1, 1)
+	}
+}
+
+extension Game {
+	// MARK: what kind of vehicle, and is it ready
+
+	/// What the design is, from what it is built of (a hybrid when it is more than one thing)
+	func vehicleKindName(_ v: Vehicle) -> String {
+		var kinds: [String] = []
+		if v.rotors > 0 { kinds.append("HELICOPTER") }
+		if v.envelopes > 0 && v.burners > 0 { kinds.append("AIRSHIP") }
+		if v.wings > 0 && v.rotors == 0 { kinds.append(v.airProps + v.jets > 0 ? (v.jets > 0 ? "JET" : "PLANE") : "GLIDER") }
+		var hulls: Int = 0
+		for (_, t) in v.parts where t == .hull { hulls += 1 }
+		if hulls > 0 { kinds.append("BOAT") }
+		// on an aircraft, wheels are its landing gear
+		let flies: Bool = v.rotors > 0 || v.wings > 0 || (v.envelopes > 0 && v.burners > 0)
+		if v.wheels >= 2 {
+			if v.tracks > 0 { kinds.append(v.cannons > 0 ? "TANK" : "TRACKED") }
+			else if kinds.isEmpty { kinds.append(v.parts.count >= 14 || cargoCount(v) >= 2 ? "TRUCK" : "CAR") }
+			else if !flies { kinds.append("WHEELS") }
+		}
+		if kinds.isEmpty { return v.parts.contains { $0.value == .block } ? "STRUCTURE" : "VEHICLE" }
+		if kinds.count == 1 { return kinds[0] }
+		return joinText(kinds.prefix(2).joined(separator: " + "), " HYBRID")
+	}
+
+	func cargoCount(_ v: Vehicle) -> Int {
+		var n: Int = 0
+		for c in v.parts.keys where vehicleStores(v, c) { n += 1 }
+		return n
+	}
+
+	/// The checklist for anything that flies, fights or runs on tracks: what it needs, and whether its
+	/// design can do it (lift against weight, a tail behind the centre of mass, power for its rotors)
+	func flightCheck(_ v: Vehicle) -> VehicleCheck {
+		var lines: [String] = []
+		var oks: [Bool] = []
+		func add(_ ok: Bool, _ s: String) {
+			lines.append(s)
+			oks.append(ok)
+		}
+		let weight: Double = v.mass * gravityG
+		let massS: String = String(format: "%.1f", v.mass)
+		add(v.hasSeat && v.hasSteering, v.hasCockpit ? "Cockpit" : "Seat and steering wheel (or a cockpit)")
+		var hint: String = joinText("Mass ", massS, ". Refuel: hold coal or wood and tap it.")
+		if v.rotors > 0 {
+			let lift: Double = rotorMax(v, anyway: true) + balloonMax(v)
+			let pct: Int = Int((lift / max(1, weight) * 100).rounded())
+			add(v.engines > 0, joinText("Engines to turn the rotor (", String(v.engines), ")"))
+			add(lift > weight * 1.05, joinText("Rotor lift ", String(pct), "% of the weight"))
+			add(v.tailRotors > 0 || v.rotors >= 2, "Tail rotor (or a second main rotor)")
+			hint = lift > weight * 1.05 ? joinText("Mass ", massS, ". Stick up to lift off; let go to hover.") : "Too heavy for the rotor: add engines or take weight off."
+		} else if v.envelopes > 0 {
+			let lift: Double = balloonMax(v)
+			let pct: Int = Int((lift / max(1, weight) * 100).rounded())
+			let need: Int = (v.envelopes + Aero.burnerCells - 1) / Aero.burnerCells
+			add(v.burners >= need, joinText("Burners: ", String(v.burners), " of ", String(need), " (one heats 12 envelopes)"))
+			add(lift > weight * 1.05, joinText("Balloon lift ", String(pct), "% of the weight (full heat)"))
+			add(v.airProps > 0 && v.engines > 0, "Propeller and engine to move (optional)")
+			oks[oks.count - 1] = true
+			hint = lift > weight * 1.05 ? joinText("Mass ", massS, ". Stick up to heat the balloon and rise.") : "Not enough balloon for the weight: add envelopes (and burners)."
+		} else if v.wings > 0 {
+			let takeoff: Double = sqrt(weight / max(0.01, Aero.kLift * Double(v.wings) * 1.15))
+			let thrust: Bool = (v.airProps > 0 && v.engines > 0) || v.jets > 0
+			add(thrust, "Air propeller with an engine, or a jet")
+			add(takeoff < 20.0, joinText("Wings lift it at ", String(Int(takeoff.rounded())), " blocks/s (", String(v.wings), " wing cells)"))
+			// the push it has at that speed against its weight: under a fifth, it never gets there
+			let push: Double = thrustAt(v, takeoff) / max(1, weight)
+			add(push >= 0.2, joinText("Thrust ", String(Int((push * 100).rounded())), "% of the weight at take-off (20% needed)"))
+			let tail: (Bool, Bool) = tailCheck(v)
+			add(tail.0, "Tail elevator, well behind the centre of mass")
+			add(tail.1, "Centre of mass ahead of the wings (or it flips)")
+			if takeoff >= 20.0 { hint = "The wings are too small for its weight: add wing cells." }
+			else if push < 0.2 { hint = "Too heavy for its engines: add engines or a jet, or take weight off." }
+			else { hint = "Throttle up along the ground; at speed, stick up to lift off." }
+		}
+		if v.tracks > 0 || v.cannons + v.guns > 0 {
+			if v.rotors == 0 && v.wings == 0 && v.envelopes == 0 {
+				add(v.wheels >= 2, joinText("Tracks or wheels under the hull (", String(v.wheels), ")"))
+				add(v.engines > 0, "Engine")
+			}
+			if v.cannons + v.guns > 0 {
+				let ammo: Bool = isCreative || (v.cannons == 0 || inv.total(.mat(.gunpowder)) > 0) && (v.guns == 0 || inv.total(.ammo(.bullet)) > 0)
+				add(ammo, v.cannons > 0 ? "Gunpowder in your bag (cannon shells)" : "Bullets in your bag (machine gun)")
+				if v.rotors == 0 && v.wings == 0 && v.envelopes == 0 { hint = "Drive with the stick; aim and fire with the attack stick." }
+			}
+		}
+		if v.engines > 0 || v.jets > 0 || v.burners > 0 { add(v.fuel > 0.5 || isCreative, fuelLine(v)) }
+		var ready: Bool = true
+		for o in oks where !o { ready = false }
+		return VehicleCheck(title: vehicleKindName(v), lines: lines, oks: oks, ready: ready, hint: hint)
+	}
+
+	/// Is there a tail elevator well behind the centre of mass, and is the centre of mass ahead of the
+	/// wings' middle (so the plane noses down when slow instead of flipping onto its back)?
+	func tailCheck(_ v: Vehicle) -> (Bool, Bool) {
+		var wingX: Double = 0
+		var n: Int = 0
+		var tailX: Double = 0
+		var tn: Int = 0
+		for (c, t) in v.parts {
+			if t == .wing { wingX += Double(c.dx) + 0.5; n += 1 }
+			if t == .elevator { tailX += Double(c.dx) + 0.5; tn += 1 }
+		}
+		if n == 0 { return (tn > 0, true) }
+		wingX /= Double(n)
+		// the nose: the end the thrust is at, or failing that the end away from the tail
+		var front: Double = 1
+		if tn > 0 { tailX /= Double(tn); front = tailX < v.comX ? 1 : -1 }
+		let tailOK: Bool = tn > 0 && (tailX - v.comX) * front < -1.5
+		let balanced: Bool = (v.comX - wingX) * front > -0.6
+		return (tailOK, balanced)
+	}
+
+	/// The flight instruments shown while flying: speed, height, climb, lift against weight, the
+	/// rotor or burner, fuel, and a stall warning
+	func flightReadout(_ v: Vehicle) -> [String] {
+		var out: [String] = []
+		let alt: Int = Int((Double(WorldGen.sea) - v.b.y).rounded())
+		let climb: Double = -v.vy
+		out.append(joinText("SPD ", String(Int(v.airspeed.rounded())), "  ALT ", String(alt), "  ", climb >= 0 ? "▲" : "▼", String(format: "%.1f", abs(climb))))
+		let weight: Double = max(1, v.mass * gravityG)
+		let liftPct: Int = Int((v.liftNow / weight * 100).rounded())
+		var l2: String = joinText("LIFT ", String(liftPct), "%")
+		if v.rotors > 0 { l2 = joinText(l2, "  ROTOR ", String(Int((v.collective * 100).rounded())), "%") }
+		if v.burners > 0 && v.envelopes > 0 { l2 = joinText(l2, "  HEAT ", String(Int((v.heat * 100).rounded())), "%") }
+		if v.airProps + v.jets > 0 { l2 = joinText(l2, "  THR ", String(Int((abs(v.throttle) * 100).rounded())), "%") }
+		out.append(l2)
+		if v.engines + v.jets + v.burners > 0 && !isCreative { out.append(joinText("FUEL ", String(Int(v.fuel)), "/", String(Int(v.fuelCapacity)))) }
+		if v.stall { out.append("STALL!") }
+		return out
+	}
+
+	/// A line about the guns (reload) and the autopilot, while driving
+	func vehicleStatusLine(_ v: Vehicle) -> String? {
+		var parts: [String] = []
+		if v.cannons > 0 {
+			var cd: Double = 0
+			for (c, t) in v.parts where t == .cannon { cd = max(cd, v.gunCD[c] ?? 0) }
+			parts.append(cd > 0.05 ? joinText("CANNON ", String(format: "%.1f", cd), "s") : "CANNON READY")
+		}
+		if v.autopilots > 0 {
+			let modes: [String] = ["AUTO OFF", "AUTO CRUISE", "AUTO ROUTE"]
+			var s: String = modes[max(0, min(2, v.auto))]
+			if v.auto == 2 { s = joinText(s, " ", String(v.routeAt + 1), "/", String(v.route.count)) }
+			else if !v.route.isEmpty { s = joinText(s, " · ", String(v.route.count), " PTS") }
+			parts.append(s)
+		}
+		return parts.isEmpty ? nil : parts.joined(separator: "  ")
 	}
 }

@@ -1,7 +1,7 @@
 # PixelRealm
 
 A 2D sandbox survival game for iPad, written in SwiftUI and run in Swift Playgrounds. The game is four
-files, `PixelRealm1.swift` to `PixelRealm4.swift` (about 57,200 lines in all, indented with tabs). The
+files, `PixelRealm1.swift` to `PixelRealm4.swift` (about 59,500 lines in all, indented with tabs). The
 user pastes each into its own file of one Swift Playgrounds app. It was one file until the user asked
 for four; deliver all four, and treat them as one program (Swift doesn't care which file holds what).
 
@@ -20,7 +20,10 @@ confirmed). `tools/buildcost.sh` measures both ways:
   (95c235f, 2.13 MB, most of it in `p33_vehicles` at the start of part 4, the lightest part): 440 to
   455 MB per job, 105 s in all; as one job 95 s and 1,053 MB. The user confirmed phases 3 and 4 build
   and run on the iPad, so four parts of up to about 455 MB per job are known to work. If the iPad
-  runs the four jobs at once in one process, they could add up; that is not known.
+  runs the four jobs at once in one process, they could add up; that is not known. Step 5a (2.22 MB)
+  first measured 475 MB in part 4; moving `p33_vehicles` to the end of part 3 and the start of
+  `p32_modplus` to the end of part 2 levelled it: 457, 466, 464 and 452 MB, 106 s in all; as one job
+  95 s and 1,091 MB. Not yet confirmed on the iPad.
 - Add big features in steps the user can check on the iPad, and keep the parts about equal in
   compiled size (`tools/buildcost.sh` prints each job's peak).
 
@@ -38,7 +41,7 @@ compiles and runs headless on Linux. If `/opt/pixelrealm` is missing, run `tools
 - `tools/run-tests.sh [suite ...]`: builds and runs suites from `tools/tests`, four at a time (all
   of them take several minutes). Pass only the suites you touched while iterating, and run them all
   before committing. Full output is in `/tmp/pixelrealm-build/<suite>/out.log`.
-- `tools/shots.sh power|weather|sky|cloudsheet|stick|alchemy|modplus|building|vehicles [folder]`: PNG screenshots from the game's own renderer (`sky`: clouds by day, dusk, night and storm; `cloudsheet`: every cloud template; `stick`: the combat stick's dial; `alchemy`: mutated creatures, the worn suit, the new stations, and a sheet of the new icons and suit pictures; `modplus`: two custom dimensions and a boss in a phase; `building`: a furnished house with stairs and a lift, a blast throwing blocks, a beam under strain; `vehicles`: every new kit parked, a plane, helicopter and airship flying, a tank firing at a wrecked truck, a ship built from blocks with the assembler, a plane mid-turn).
+- `tools/shots.sh power|weather|sky|cloudsheet|stick|alchemy|modplus|building|vehicles|mod5 [folder]`: PNG screenshots from the game's own renderer (`sky`: clouds by day, dusk, night and storm; `cloudsheet`: every cloud template; `stick`: the combat stick's dial; `alchemy`: mutated creatures, the worn suit, the new stations, and a sheet of the new icons and suit pictures; `modplus`: two custom dimensions and a boss in a phase; `building`: a furnished house with stairs and a lift, a blast throwing blocks, a beam under strain; `vehicles`: every new kit parked, a plane, helicopter and airship flying, a tank firing at a wrecked truck, a ship built from blocks with the assembler, a plane mid-turn; `mod5`: every tree design shape under a mod's sun with rays, the same land at night under a pictured moon, the Overworld under a mod's sun, a lit cavern dimension, a repainted zombie).
 - `tools/bench.sh`: chunk generation, painting, lighting and tick timings (debug build; compare
   with `GAME_SRC=<old file> tools/bench.sh`).
 - `tools/buildcost.sh`: the game's size, and the time and peak memory of a debug build like the
@@ -62,7 +65,10 @@ renderer never mixes dimensions' pictures, chunks made again are the same, explo
 cycles through all four kinds of dimension, weather stays in its dimension), `world6` (generator 6
 against 5: trees, ores by depth, seas; fingerprints of generator 5; saplings; monsters kept out of
 lamplight by the real light), `build3` (blocks as walls, ladders built on by holding, furniture,
-stairs, lifts, block weight, blasts, storms carrying blocks, structural physics), `aero` (vehicles of
+stairs, lifts, block weight, blasts, storms carrying blocks, structural physics), `mod5` (step 5a:
+see-through sprite colours and the paint tools, game creatures repainted by a mod, the clock and light in
+custom dimensions, suns and moons of a mod's own, tree designs: pass-through forms, every shape, whole
+across chunk edges, saplings, checks; the climbable, sticky and decoration collision types), `aero` (vehicles of
 every kind: the plane, helicopter, airship, tank and truck kits flown and driven, designs too heavy to
 fly, turning in flight, blocks built onto vehicles, rafts that float or sink by their blocks, the
 assembler, shots, blasts and crashes, wrecks, mending, the autopilot, saves, a mod block as a part),
@@ -73,7 +79,7 @@ What the stand-ins can't tell you:
   `tools/shim/SwiftUI.swift` with the real signature (setup.sh rebuilds the shim when its source
   changes). Prefer APIs the file already uses: anything that compiles only against the shim breaks
   on the iPad. The shim's `StrokeStyle` takes no `lineCap`, its `Path` has no `isEmpty` or
-  `addRoundedRect`, and there is no `LinearGradient`. The Sprite Studio's clipboard (`UIPasteboard`,
+  `addRoundedRect`, its `Image` has no `aspectRatio`, and there is no `LinearGradient`. The Sprite Studio's clipboard (`UIPasteboard`,
   `UIImage`, `CGContext` drawing) is stood in with a nearest-neighbour copy; the real scaling is untested.
 - Only the world Canvas is rasterised. SwiftUI panels are compile-checked but never drawn.
 - Nothing has been run on a real iPad from here. Say so in reports.
@@ -130,7 +136,8 @@ What the stand-ins can't tell you:
   get cases appended (also `ModInfuseTrigger`, `ModPhaseWhen`, `ModSummonHow`, and the Logic Studio's
   `LEvent`, `LOp`, `LEOp`). References inside a mod are content keys: renamed in `ModStore.rekey` and
   counted in `ModStore.dependencies` (game tiles are `"tile:<n>"`, never renamed). A mod block can work as a
-  vehicle part (`ModBlock.vehRole`, `vehMass`, `vehPower`; `ModVehicleRole` is append-only). Tests never touch the real mod folder or saves: set `ModStore.overrideDir` and
+  vehicle part (`ModBlock.vehRole`, `vehMass`, `vehPower`; `ModVehicleRole` is append-only). `ModCollision`
+  is append-only too (`climbable`, `sticky`, `decor` were appended). Tests never touch the real mod folder or saves: set `ModStore.overrideDir` and
   use `makeSave()` with a JSON round trip.
 - **Comments** are plain-language doc comments explaining what something does in the game. Match the
   surrounding style. Each part starts with the same header and imports; keep them alike.
@@ -139,8 +146,10 @@ What the stand-ins can't tell you:
 ## Map of the parts
 
 Sections start with `// ===== <name> =====` (grep for them). They are spread over the parts in order:
-part 1 `p01_util` to `p14d_tools`; part 2 `p15a_mobai` to `p31c_blockphys`; part 3 `p32_modplus`, then
-`u01_art` to `u05_menu`; part 4 `p33_vehicles`, then `u07_mods`, `u08_alchemy`, `u09_modplus`, `u06_root`. New code goes into
+part 1 `p01_util` to `p14d_tools`; part 2 `p15a_mobai` to `p31c_blockphys`, then the start of `p32_modplus`
+(game content changes, versions, ore controls, sprite tools); part 3 the rest of `p32_modplus` (from custom
+infusions), `u01_art` to `u05_menu`, then `p33_vehicles`; part 4 `u07_mods`, `u08_alchemy`, `u09_modplus`,
+`u06_root`. New code goes into
 the section it belongs to. A `private` or `fileprivate` name can only be used in its own part, so
 anything used across parts is internal (no modifier).
 
@@ -154,8 +163,8 @@ chunks, `set`), `p11_light`, `p12_phys`, `p13a_mobdefs` (MobKind, MobDef, spawn 
 (vehicles, ships), `p18` (portal, map), `p19_save` (`SaveData`, `makeSave`, `Game.load`), `p20`–`p26`
 (helpers, walls, doors, HUD logic), `p27_power` (Sparkworks), `p28_mods` (Mod Creator: data,
 store, checks, runtime, custom creature AI, structures and capture, test tools), `p32_modplus` (Mod Creator+: changes
-to game content, ore controls, sprite tools, custom infusions, boss phases and summoning, custom dimensions, the
-Logic Studio), `p29_alchemy` (rarity, potions, effects on creatures, smoke,
+to game content, ore controls, sprite tools, custom infusions, boss phases and summoning, custom dimensions with
+their suns, moons and tree designs, the Logic Studio), `p29_alchemy` (rarity, potions, effects on creatures, smoke,
 mutation and its limits, chest extras, the recipes of all three new systems), `p30_infusion`,
 `p31_exosuit` (parts, stats, energy, modules, the worn look, the builder's pictures), `p31b_building` (block
 walls, ladders, furniture, lifts), `p31c_blockphys` (block weight, flying blocks, blasts, structural
@@ -165,7 +174,7 @@ building blocks onto vehicles, the assembler, the autopilot, the checklist and i
 Creator screens and editors, the capture and Mod Test panels), `u08_alchemy` (the HUD's effect strip and
 suit bar, the Infusion Crucible screen, the Assembly Station builder), `u09_modplus` (the Mod Creator+ screens: game
 content, ore controls, hardness reference, Sprite Studio, infusion, phase, summoning, dimension and script editors,
-the Mod Test LOGIC tab), `u06_root`.
+the Mod Test LOGIC tab, the sun and moon editor, the tree design editor), `u06_root`.
 
 ## Systems in brief
 
@@ -305,6 +314,9 @@ the Mod Test LOGIC tab), `u06_root`.
     game's own tables first (`Tile.setGameDef`, `mobDefTable`), so switching a mod off undoes it. `Item.melee`
     goes through `baseMelee`.
   - Ores keep the old placement for old settings (`ModOreRT.place`); new controls use their own random seed.
+  - Sprites: `ModPixels` keeps each pixel's real opacity (under 8 of 255 reads as clear), up to 96 pixels
+    a side; the editor's brushes, blending, shading, shapes and selections are `SpritePaint`. A game
+    creature repainted by a mod: `ModOverride.frames` → `OverrideRT.creatureArt` → `Art.buildMobSet`.
   - Custom infusions are numbered from 1000 per world (`ModWorldInfo.infusions`) and live in `Stack.inf` beside
     the game's; their compound is a mod item under the same key.
   - Phases: `stepPhases`/`enterPhase` in `updateCustomMob`; numbers on the `Mob` (`mphase`, `phaseDmg`...).
@@ -312,6 +324,22 @@ the Mod Test LOGIC tab), `u06_root`.
   - Custom dimensions take slots 2-4 (`Dimension.custom0`...); `dimCount` is 5 everywhere a list is kept per
     dimension. Their land is `fillCustomChunk`; sky `drawCustomSky`; weather `customWeather`; only their own
     creatures spawn. A world saved in a dimension whose mod is missing starts at the Overworld spawn.
+  - Light in custom dimensions: the world clock runs there when the dimension has a cycle (`updateTime`; it
+    used to stop outside the Overworld, so a dimension entered at night stayed dark); a cavern dimension's
+    least light follows its light setting (`ambientLight`). Suns and moons of a mod's own are `ModSkyBody`
+    (`ModDimension.sunBody`/`moonBody`, the Overworld's `ModPack.skySun`/`skyMoon` as `ModRuntime.overSun`/
+    `overMoon`, the last mod wins): drawn by `drawSkyBody`, their `bright` scales the light (`skyLight`:
+    a sun the daylight it adds, a moon the night's).
+  - Tree designs: `ModPack.trees` (`ModTree`: shape, blocks, sizes, a painted `ModTreeGrid`), chosen per
+    region by id (`ModDimZone.treeKinds`). `TreeShapes.cells` makes a tree's cells from one seed;
+    `plantTreeDesigns` (after the old trees in `fillCustomChunk`, only in regions with designs) works out
+    every root within `treeReach` of the chunk from the seed alone (`designTreeAt`), so trees across chunk
+    edges are whole. A solid block used for a trunk or leaves gets a pass-through tree form in a mod block
+    slot (keys `<block>#tree`, `<block>#leaf`, numbered after all blocks; `treeTile`, `slotTreeBase`), which
+    drops the block it stands for; regions' simple trees use them too. Tree forms count as logs and
+    leaves (`isLogTile`, `isLeafTile`: an axe fells them, cut crowns wither, leaves give saplings). A world
+    keeps the forms it has even when its mod stops needing them. Saplings grow designs (`growDesign`)
+    and take root in a dimension's own ground (`World.isSoil`, `ModDimRT.soils`).
   - Logic Studio: scripts are data compiled to `LInstr` and run by `runLogic` a little each frame (`LLimits`:
     300 steps a script per frame, 3000 in all, groups 8 deep, a loop that never waits is stopped after 10 s).
     Events are fired from the game with `fireLogic`; variables are saved per world (`SaveData.logicVars`).

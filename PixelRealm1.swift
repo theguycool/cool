@@ -1613,8 +1613,28 @@ enum PartType: Int, Codable, CaseIterable {
 	/// appended (saved part numbers stay valid): a heavy wheel that pulls harder, a lamp that lights the
 	/// way ahead while driving, a crate that carries 27 stacks, and a drill that bores through anything
 	case offroadWheel, headlight, cargo, voidDrill
+	/// appended (vehicles of every kind): any block built onto a vehicle (its tile is kept in
+	/// Vehicle.blocks), a cockpit (seat and controls in one), wings and a tail elevator, an air
+	/// propeller and a jet engine, a main rotor and a tail rotor, a balloon envelope and the burner that
+	/// heats it, tank tracks and armour, a cannon and a machine gun, and an autopilot
+	case block, cockpit, wing, elevator, airProp, jet, rotor, tailRotor, envelope, burner, track, armor, cannon, autoGun, autopilot
 	var name: String {
 		switch self {
+		case .block: return "Block"
+		case .cockpit: return "Cockpit"
+		case .wing: return "Wing"
+		case .elevator: return "Tail Elevator"
+		case .airProp: return "Air Propeller"
+		case .jet: return "Jet Engine"
+		case .rotor: return "Main Rotor"
+		case .tailRotor: return "Tail Rotor"
+		case .envelope: return "Balloon Envelope"
+		case .burner: return "Hot-Air Burner"
+		case .track: return "Tank Track"
+		case .armor: return "Armour Plate"
+		case .cannon: return "Cannon"
+		case .autoGun: return "Machine Gun"
+		case .autopilot: return "Autopilot"
 		case .frame: return "Vehicle Frame"
 		case .wheel: return "Wheel"
 		case .engine: return "Engine"
@@ -1649,6 +1669,21 @@ enum PartType: Int, Codable, CaseIterable {
 		case .headlight: return 0.3
 		case .cargo: return 1.0
 		case .voidDrill: return 2.0
+		case .block: return 1.0
+		case .cockpit: return 0.9
+		case .wing: return 0.4
+		case .elevator: return 0.25
+		case .airProp: return 0.5
+		case .jet: return 2.2
+		case .rotor: return 1.0
+		case .tailRotor: return 0.3
+		case .envelope: return 0.12
+		case .burner: return 1.0
+		case .track: return 1.5
+		case .armor: return 3.0
+		case .cannon: return 2.4
+		case .autoGun: return 1.0
+		case .autopilot: return 0.4
 		}
 	}
 
@@ -1660,12 +1695,28 @@ enum PartType: Int, Codable, CaseIterable {
 		case .headlight: return "Lights the way ahead while someone is driving."
 		case .cargo: return "Tap it to store up to 27 stacks; they travel with the vehicle."
 		case .drill, .diamondDrill, .voidDrill: return "Bores through blocks in front of it while the engine runs."
+		case .cockpit: return "A seat and the controls in one. Tap it to drive or fly."
+		case .wing: return "Lifts as air flows over it: the faster, the more. Tilted too far, it stalls."
+		case .elevator: return "A tail surface the pilot tilts (stick up or down) to raise or lower the nose."
+		case .airProp: return "Pushes through the air, powered by the engines. Goes on an end."
+		case .jet: return "Engine and thruster in one: strong and fast, but thirsty. Its open end is the exhaust."
+		case .rotor: return "Lifts straight up, powered by the engines. Goes on top, open above."
+		case .tailRotor: return "Keeps a single main rotor from spinning the helicopter round. Goes on an end."
+		case .envelope: return "Fills with hot air from a burner and lifts. Light, but bursts easily."
+		case .burner: return "Heats up to 12 balloon envelopes: stick up to climb, down to sink."
+		case .track: return "Grips anything and climbs steps, but is heavy and slow. Goes under the body."
+		case .armor: return "Very heavy and very tough: soaks up shots and blasts."
+		case .cannon: return "Fires explosive shells where you aim. Uses gunpowder."
+		case .autoGun: return "Fires a stream of bullets where you aim. Uses bullets."
+		case .autopilot: return "Holds speed and height, or drives a route you mark (AUTO button)."
+		case .block: return "A block built onto a vehicle."
 		default: return "Vehicle part"
 		}
 	}
 }
 
-func isWheelPart(_ p: PartType) -> Bool { return p == .wheel || p == .offroadWheel }
+/// Parts that hang under the body and roll on the ground (tracks too: they ride on wheels)
+func isWheelPart(_ p: PartType) -> Bool { return p == .wheel || p == .offroadWheel || p == .track }
 
 /// Equipment worn in the two gear slots
 enum Gear: Int, Codable, CaseIterable {
@@ -1709,6 +1760,9 @@ enum Gadget: Int, Codable, CaseIterable {
 	/// Sparkworks (appended): spools of power cable and pulse wire (two colours), snips that take wire
 	/// back up, and the probe that reads and sets up devices and networks
 	case powerCable, pulseWire, pulseWireB, wireSnips, probe
+	/// vehicles (appended): ready-made aircraft, an airship, a tank and a truck, and the assembler that
+	/// turns a structure built from blocks into a vehicle (and back)
+	case planeKit, heliKit, airshipKit, tankKit, truckKit, assembler
 
 	/// a wiring tool: taps lay or cut wire instead of using what is under them
 	var wiring: Bool { return self == .powerCable || self == .pulseWire || self == .pulseWireB || self == .wireSnips }
@@ -1733,6 +1787,12 @@ enum Gadget: Int, Codable, CaseIterable {
 		case .boatKit: return "Rowboat Kit"
 		case .motorboatKit: return "Motorboat Kit"
 		case .bomb: return "Bomb"
+		case .planeKit: return "Plane Kit"
+		case .heliKit: return "Helicopter Kit"
+		case .airshipKit: return "Airship Kit"
+		case .tankKit: return "Tank Kit"
+		case .truckKit: return "Truck Kit"
+		case .assembler: return "Vehicle Assembler"
 		}
 	}
 }
@@ -1890,6 +1950,8 @@ enum Item: Hashable, Codable {
 			if g == .pulseWire || g == .pulseWireB { return ["Carries on/off pulses from switches,", "sensors and logic to machines: drag to lay"] }
 			if g == .wireSnips { return ["Drag over wire to take it back up"] }
 			if g == .probe { return ["Tap a device to set it up, or a wire", "to see its whole network and its power"] }
+			if g == .assembler { return ["Tap a structure you built: it becomes a vehicle", "Tap a parked vehicle: its blocks go back"] }
+			if isKit(g) { return ["A ready-made vehicle: tap open ground", "to place it (boats and ships on water)"] }
 			return ["Gadget: use it from the hotbar"]
 		case .block(.sapling): return ["Plant it on grass, dirt or snow", "It grows into a tree that suits the land"]
 		case .block(let t) where furnitureBlurb(t) != nil: return [furnitureBlurb(t) ?? "", weightLine(t)]
@@ -2535,6 +2597,9 @@ func iconMisc(_ it: Item) -> PixelBuf {
 			b.rect(0, 3, 4, 6, 0x6A6A74); b.rect(0, 3, 4, 1, 0x9A9AA4)
 			b.rect(4, 3, 3, 6, bit); b.rect(7, 4, 2, 4, bit); b.rect(9, 5, 2, 2, bit); b.set(11, 5, bit)
 			b.line(5, 3, 7, 8, shadeRGB(bit, 0.7)); b.line(8, 4, 9, 7, shadeRGB(bit, 0.7))
+		default:
+			// the newer parts use their 8x8 vehicle art
+			b.blit(partBuf(p), 2, 2)
 		}
 	case .gadget(let g):
 		switch g {
@@ -2579,6 +2644,24 @@ func iconMisc(_ it: Item) -> PixelBuf {
 		case .waterFlask:
 			b.ellipse(6, 7.5, 3.6, 3.4, 0xB8E0F0); b.ellipse(6, 8.2, 2.8, 2.4, 0x3B7BE0); b.ellipse(5.4, 7.4, 1.0, 0.8, 0x8DBBFF)
 			b.rect(5, 2, 2, 2, 0xB8E0F0); b.rect(5, 1, 2, 1, 0x8A5A2A); b.set(8, 6, 0xFFFFFF)
+		case .planeKit:
+			b.rect(1, 6, 9, 2, 0xD8D8E0); b.rect(0, 4, 2, 3, 0xC84A3A); b.rect(4, 5, 4, 1, 0x9A9AA4); b.rect(3, 8, 5, 1, 0x9A9AA4)
+			b.rect(7, 5, 2, 1, 0x9AD0F0); b.rect(10, 4, 1, 5, 0x6A6A74); b.set(10, 6, 0x3A3A44); b.set(3, 9, 0x222226); b.set(8, 9, 0x222226)
+		case .heliKit:
+			b.ellipse(7, 7, 3.4, 2.6, 0x4E8A3E); b.rect(7, 6, 3, 2, 0x9AD0F0); b.rect(0, 6, 5, 1, 0x4E8A3E); b.rect(0, 4, 1, 3, 0x6A6A74)
+			b.rect(1, 2, 11, 1, 0x3A3A44); b.rect(6, 2, 1, 3, 0x5A5A64); b.rect(4, 10, 6, 1, 0x5A5A64)
+		case .airshipKit:
+			b.ellipse(6, 4.5, 5.5, 3.5, 0xD8483C); b.rect(4, 1, 1, 7, 0xF0E4D0); b.rect(8, 1, 1, 7, 0xF0E4D0)
+			b.rect(4, 9, 4, 2, 0x8F6732); b.set(4, 8, 0x6A4A22); b.set(7, 8, 0x6A4A22); b.rect(8, 9, 1, 2, 0x9A9AA4)
+		case .tankKit:
+			b.rect(1, 8, 10, 3, 0x2A2A30); b.set(3, 9, 0x6A6A74); b.set(6, 9, 0x6A6A74); b.set(9, 9, 0x6A6A74)
+			b.rect(1, 6, 10, 2, 0x5A6450); b.rect(4, 4, 4, 2, 0x4A5040); b.rect(8, 4, 4, 1, 0x2A2A30)
+		case .truckKit:
+			b.rect(7, 3, 4, 5, 0x3A6AA8); b.rect(8, 4, 2, 2, 0x9AD0F0); b.rect(0, 5, 7, 3, 0x8F6732); b.rect(0, 5, 7, 1, 0xB98A4E)
+			b.ellipse(2.5, 9, 1.6, 1.6, 0x222226); b.ellipse(9, 9, 1.6, 1.6, 0x222226)
+		case .assembler:
+			b.rect(2, 3, 8, 8, 0x5A5A64); b.rect(3, 4, 6, 6, 0x3A3F4A); b.ellipse(6, 7, 2.2, 2.2, 0x30C0E0); b.set(5, 6, 0xB0F0FF)
+			b.rect(5, 0, 2, 3, 0xC89040); b.rect(1, 2, 2, 2, 0xC89040); b.rect(9, 2, 2, 2, 0xC89040)
 		}
 	default:
 		break
@@ -2872,6 +2955,28 @@ enum RecipeBook {
 		add(.part(.headlight), 1, [(.mat(.copperBar), 1), (.block(.glass), 1), (.block(.torch), 2)], .tinker, .vehicle)
 		add(.part(.cargo), 1, [(planks, 8), (.mat(.ironBar), 2)], .tinker, .vehicle)
 		add(.part(.voidDrill), 1, [(.part(.diamondDrill), 1), (.mat(.voidBar), 4), (.mat(.emberBar), 2)], .forge, .vehicle)
+		// aircraft, airships, tanks and armed vehicles: wood and canvas at the workbench, machinery at the
+		// tinker's bench, armour and guns at the anvil, the jet at the forge
+		add(.part(.cockpit), 1, [(.mat(.ironBar), 3), (.block(.glass), 2), (.mat(.wool), 1)], .tinker, .vehicle)
+		add(.part(.wing), 1, [(planks, 3), (.mat(.ironBar), 1), (.mat(.string), 2)], .bench, .vehicle)
+		add(.part(.elevator), 1, [(planks, 2), (.mat(.ironBar), 1), (.mat(.string), 1)], .bench, .vehicle)
+		add(.part(.airProp), 1, [(planks, 2), (.mat(.ironBar), 2)], .tinker, .vehicle)
+		add(.part(.jet), 1, [(.mat(.ironBar), 8), (.mat(.copperBar), 4), (.mat(.emberBar), 2)], .forge, .vehicle)
+		add(.part(.rotor), 1, [(.mat(.ironBar), 5), (.mat(.copperBar), 2)], .tinker, .vehicle)
+		add(.part(.tailRotor), 1, [(.mat(.ironBar), 2), (.mat(.copperBar), 1)], .tinker, .vehicle)
+		add(.part(.envelope), 2, [(.mat(.wool), 3), (.mat(.string), 1)], .bench, .vehicle)
+		add(.part(.burner), 1, [(.mat(.ironBar), 3), (.mat(.copperBar), 2), (coal, 2)], .tinker, .vehicle)
+		add(.part(.track), 1, [(.mat(.ironBar), 4), (.mat(.leather), 2)], .anvil, .vehicle)
+		add(.part(.armor), 1, [(.mat(.ironBar), 6)], .anvil, .vehicle)
+		add(.part(.cannon), 1, [(.mat(.ironBar), 8), (.mat(.bronzeBar), 2), (.mat(.gunpowder), 2)], .anvil, .vehicle)
+		add(.part(.autoGun), 1, [(.mat(.ironBar), 5), (.mat(.copperBar), 2), (.mat(.gunpowder), 1)], .anvil, .vehicle)
+		add(.part(.autopilot), 1, [(.mat(.copperBar), 4), (.mat(.goldBar), 1), (.block(.glass), 1)], .tinker, .vehicle)
+		add(.gadget(.assembler), 1, [(.mat(.ironBar), 3), (.mat(.copperBar), 2), (.mat(.goldBar), 1)], .tinker, .vehicle)
+		add(.gadget(.planeKit), 1, [(planks, 10), (.mat(.ironBar), 14), (.mat(.copperBar), 3), (.mat(.string), 6), (.block(.glass), 2), (.mat(.wool), 1)], .tinker, .vehicle)
+		add(.gadget(.heliKit), 1, [(.mat(.ironBar), 24), (.mat(.copperBar), 7), (.block(.glass), 2), (.mat(.wool), 1)], .tinker, .vehicle)
+		add(.gadget(.airshipKit), 1, [(.mat(.wool), 36), (.mat(.string), 14), (planks, 14), (.mat(.ironBar), 12), (.mat(.copperBar), 4)], .tinker, .vehicle)
+		add(.gadget(.tankKit), 1, [(.mat(.ironBar), 50), (.mat(.leather), 8), (.mat(.bronzeBar), 2), (.mat(.gunpowder), 2)], .anvil, .vehicle)
+		add(.gadget(.truckKit), 1, [(planks, 18), (.mat(.ironBar), 18), (.mat(.leather), 3), (.mat(.wool), 2)], .tinker, .vehicle)
 		// Weather: reading it, warning of it, and building against it
 		add(.block(.weatherStation), 1, [(.mat(.copperBar), 3), (.block(.glass), 2), (planks, 4), (.mat(.feather), 1)], .bench, .weather)
 		add(.block(.dopplerStation), 1, [(.block(.weatherStation), 1), (.mat(.silverBar), 2), (.mat(.amethyst), 2), (.mat(.copperBar), 2)], .tinker, .weather)
@@ -5396,6 +5501,60 @@ func partBuf(_ p: PartType) -> PixelBuf {
 		b.rect(0, 1, 3, 6, 0x5A5A64); b.rect(0, 1, 3, 1, 0x8A8A94)
 		b.rect(3, 1, 2, 6, bit); b.rect(5, 2, 1, 4, bit); b.rect(6, 3, 1, 2, bit); b.set(7, 3, bit); b.set(7, 4, shadeRGB(bit, 0.7))
 		b.set(3, 2, shadeRGB(bit, 0.65)); b.set(4, 4, shadeRGB(bit, 0.65)); b.set(3, 6, shadeRGB(bit, 0.65)); b.set(5, 5, shadeRGB(bit, 0.65))
+	case .block:
+		// never drawn: a block cell shows its own tile
+		b.rect(0, 0, 8, 8, 0x8A8A8A)
+	case .cockpit:
+		// a glass canopy over a seat, on a metal tub
+		b.ellipse(4, 4.2, 3.7, 3.4, 0x9AD0F0); b.set(2, 2, 0xE0F4FF); b.set(3, 1, 0xE0F4FF)
+		b.rect(3, 2, 1, 3, 0x3A3A44); b.rect(3, 4, 3, 1, 0x3A3A44)
+		b.rect(0, 5, 8, 3, 0x5A6A7A); b.rect(0, 5, 8, 1, 0x8A9AAA); b.set(6, 6, 0xE0A040)
+	case .wing:
+		// the wing's cross-section: a thin airfoil along the cell
+		b.rect(1, 3, 6, 1, 0xE8E8EC); b.rect(0, 4, 8, 1, 0xC8C8D0); b.rect(1, 5, 5, 1, 0x8A8A94); b.set(7, 3, 0xC8C8D0)
+	case .elevator:
+		// a small tail surface with a hinged red flap
+		b.rect(0, 3, 5, 1, 0xE8E8EC); b.rect(0, 4, 5, 1, 0xA8A8B0); b.rect(5, 3, 3, 2, 0xC84A3A); b.set(5, 4, 0x8A2A22); b.rect(0, 2, 1, 1, 0xC84A3A)
+	case .airProp:
+		// drawn facing right: hub and spinner, the blade edge-on across the open side
+		b.rect(0, 3, 4, 2, 0x6A6A74); b.rect(4, 2, 2, 4, 0x8A8A94); b.set(6, 3, 0xC8C8D0); b.set(6, 4, 0xC8C8D0)
+		b.rect(7, 0, 1, 8, 0x8F6732); b.set(7, 3, 0x5A4020); b.set(7, 4, 0x5A4020)
+	case .jet:
+		// drawn with the exhaust to the right: intake ring, casing, glowing nozzle
+		b.rect(0, 1, 2, 6, 0x3A3A44); b.rect(2, 1, 4, 6, 0x9A9AA4); b.rect(2, 1, 4, 1, 0xC8C8D0); b.rect(2, 6, 4, 1, 0x6A6A74)
+		b.rect(6, 2, 2, 4, 0x5A5A64); b.rect(7, 3, 1, 2, 0xFF8A30); b.set(1, 3, 0x1A1A20); b.set(1, 4, 0x1A1A20)
+	case .rotor:
+		// the mast and hub; the blades are drawn spinning above it
+		b.rect(3, 1, 2, 7, 0x5A5A64); b.rect(1, 0, 6, 2, 0x7A7A84); b.rect(1, 0, 6, 1, 0xA8A8B0); b.rect(2, 6, 4, 2, 0x4A4A52)
+	case .tailRotor:
+		// a short boom with a small rotor at its open end (drawn facing right)
+		b.rect(0, 3, 5, 2, 0x5A6A5A); b.rect(0, 3, 5, 1, 0x7A8A7A); b.ellipse(6.2, 4, 1.5, 3.6, 0x9A9AA4); b.set(6, 4, 0x3A3A44)
+	case .envelope:
+		// balloon canvas in red and cream stripes (it tiles into one big envelope)
+		b.rect(0, 0, 4, 8, 0xD8483C); b.rect(4, 0, 4, 8, 0xF0E4D0); b.rect(3, 0, 1, 8, 0xB83A30); b.rect(7, 0, 1, 8, 0xD8CCB8)
+	case .burner:
+		// a burner frame with its gas jet and pilot flame
+		b.rect(1, 4, 6, 4, 0x6A6A74); b.rect(1, 4, 6, 1, 0x9A9AA4); b.rect(2, 6, 4, 1, 0x8A5A2A)
+		b.rect(3, 2, 2, 2, 0x4A4A52); b.set(3, 1, 0x60A0FF); b.set(4, 0, 0xFFB040); b.set(4, 1, 0xFF7020)
+	case .track:
+		// a stretch of track: rubber belt and lugs round a road wheel
+		b.rect(0, 1, 8, 6, 0x2A2A30); b.rect(0, 1, 8, 1, 0x4A4A52); b.rect(0, 6, 8, 1, 0x4A4A52)
+		b.set(1, 0, 0x3A3A42); b.set(4, 0, 0x3A3A42); b.set(7, 0, 0x3A3A42); b.set(1, 7, 0x3A3A42); b.set(4, 7, 0x3A3A42); b.set(7, 7, 0x3A3A42)
+		b.ellipse(4, 4, 2.2, 2.2, 0x6A6A74); b.set(4, 4, 0xA8A8B0)
+	case .armor:
+		// thick riveted steel plate
+		b.rect(0, 0, 8, 8, 0x5A6068); b.rect(0, 0, 8, 1, 0x7A8088); b.rect(0, 7, 8, 1, 0x3A4048); b.rect(0, 0, 1, 8, 0x6A7078)
+		b.set(1, 1, 0x9AA0A8); b.set(6, 1, 0x9AA0A8); b.set(1, 6, 0x9AA0A8); b.set(6, 6, 0x9AA0A8)
+	case .cannon:
+		// the turret ring; the barrel is drawn turning toward the aim
+		b.rect(0, 5, 8, 3, 0x4A5040); b.ellipse(4, 5.2, 3.2, 2.6, 0x5A6450); b.set(3, 4, 0x7A8470); b.rect(0, 7, 8, 1, 0x2A2E24)
+	case .autoGun:
+		// the gun mount and its ammunition box; the barrel is drawn turning toward the aim
+		b.rect(1, 5, 6, 3, 0x3A3A40); b.rect(2, 3, 4, 2, 0x4A4A52); b.rect(5, 5, 2, 2, 0x6A5A2A); b.set(3, 3, 0x6A6A74)
+	case .autopilot:
+		// a control box with a little screen
+		b.rect(0, 1, 8, 6, 0x3A3F4A); b.rect(1, 2, 6, 3, 0x1A2A2A); b.line(2, 4, 3, 3, 0x50F070); b.line(3, 3, 5, 3, 0x50F070)
+		b.set(1, 5, 0xE04040); b.set(3, 5, 0x50F070); b.set(5, 5, 0xFFC020)
 	}
 	b.outline(0x1A1410)
 	return b
@@ -10593,6 +10752,8 @@ enum ProjKind: Int, Codable {
 	case shard
 	/// the player's crossbow bolt, a blunderbuss pellet, a slung stone and a thrown fire flask
 	case quarrel, pellet, pebble, flask
+	/// a vehicle cannon's explosive shell (appended)
+	case shell
 }
 
 struct Projectile {
@@ -11128,6 +11289,16 @@ struct VPartSave: Codable {
 	var dx: Int
 	var dy: Int
 	var type: Int
+	/// the block of a block cell (or the look of a mod block working as a part); nil for plain parts
+	var tile: Int? = nil
+	/// damage the cell has taken (nil: none)
+	var dmg: Double? = nil
+}
+
+/// A point on an autopilot's route (world coordinates)
+struct VWaypoint: Codable {
+	var x: Double
+	var y: Double
 }
 
 struct VehicleSave: Codable {
@@ -11141,6 +11312,9 @@ struct VehicleSave: Codable {
 	var kit: Int?
 	/// rotation in radians; nil in saves made before vehicles could rotate
 	var rot: Double? = nil
+	/// the autopilot's mode and route (nil: off, none)
+	var auto: Int? = nil
+	var route: [VWaypoint]? = nil
 }
 
 /// Displaced volume per part (how much it floats)
@@ -11165,6 +11339,18 @@ func drillPower(_ p: PartType) -> (Int, Double) {
 }
 
 func isDrill(_ p: PartType) -> Bool { return p == .drill || p == .diamondDrill || p == .voidDrill }
+
+/// Parts that point somewhere (their open side): thrusters, the tail rotor and the guns
+func isFacingPart(_ p: PartType) -> Bool {
+	return p == .airProp || p == .jet || p == .tailRotor || p == .cannon || p == .autoGun
+}
+
+/// One cell taken off a vehicle: what it was, and its block if it was one
+struct VCell {
+	var cell: PartCell
+	var type: PartType
+	var tile: Tile?
+}
 
 /// A player-built vehicle: a rigid body made of 1x1 parts. It has a centre of mass, a rotation and
 /// an angular velocity, and every part collides, floats and drives at its rotated position, so
@@ -11223,6 +11409,71 @@ final class Vehicle {
 	var drillWork: [PartCell: (Int, Int, Double)] = [:]
 	/// the kit this vehicle came from (-1 = built part by part, or changed since)
 	var kit: Int = -1
+	/// the block in each block cell (and the look of a mod block that works as a part)
+	var blocks: [PartCell: Tile] = [:]
+	/// damage each cell has taken (see vehicleCellHP); a cell that takes its fill breaks off
+	var dmg: [PartCell: Double] = [:]
+	/// which way each thruster, gun and tail rotor points in vehicle space (its open side)
+	var face: [PartCell: (Int, Int)] = [:]
+	// parts of aircraft, airships, tanks and armed vehicles
+	var wings: Int = 0
+	var elevators: Int = 0
+	var airProps: Int = 0
+	var jets: Int = 0
+	var rotors: Int = 0
+	var tailRotors: Int = 0
+	var envelopes: Int = 0
+	var burners: Int = 0
+	var tracks: Int = 0
+	var armors: Int = 0
+	var cannons: Int = 0
+	var guns: Int = 0
+	var autopilots: Int = 0
+	var hasCockpit: Bool = false
+	/// something that works in the air (wings, thrusters, rotors, balloons): the flight model runs
+	var aero: Bool = false
+	/// the pilot's up/down input (-1...1, up is positive): elevators, rotor pitch, burner heat
+	var pitch: Double = 0
+	/// main rotor blade pitch (0...1) and the air heat in the balloon (0...1)
+	var collective: Double = 0
+	var heat: Double = 0
+	/// the end the nose is at, along the vehicle's own x axis (1 or -1)
+	var fwd: Int = 1
+	/// for the instruments: last step's lift and thrust, and whether a wing has stalled
+	var liftNow: Double = 0
+	var thrustNow: Double = 0
+	var stall: Bool = false
+	var airspeed: Double = 0
+	/// the steepest angle the air meets a wing at (radians)
+	var alpha: Double = 0
+	/// a turn to face the other way in progress (0...1; 0 = none) and the speed it started from
+	var turnT: Double = 0
+	var turnVX: Double = 0
+	var turned: Bool = false
+	/// each gun's reload and the way its barrel points (world angle)
+	var gunCD: [PartCell: Double] = [:]
+	var aimAng: [PartCell: Double] = [:]
+	/// autopilot: 0 off, 1 cruise, 2 route; what cruise holds; the marked route and the next point
+	var auto: Int = 0
+	var holdThr: Double = 0
+	var holdY: Double = 0
+	var holdVX: Double = 0
+	var route: [VWaypoint] = []
+	var routeAt: Int = 0
+	/// time the rotor blades have been striking the ground (they break)
+	var bladeHit: Double = 0
+	/// the elevator trim the flight model finds by itself (so a plane holds its attitude hands-off), and
+	/// the cyclic's (so a helicopter holds its tilt)
+	var trim: Double = 0
+	var cycI: Double = 0
+	/// the wind at the vehicle this frame (blocks per second, signed)
+	var windX: Double = 0
+	/// flashes red for a moment when hit
+	var hitT: Double = 0
+	/// how strong each mod block working as a part is at its work (1: the game part's own)
+	var boost: [PartCell: Double] = [:]
+	/// the engines' power (a mod engine can be stronger or weaker than the game's)
+	var enginePower: Double = 0
 
 	init(id: Int, first: PartType, x: Double, y: Double) {
 		self.id = id
@@ -11314,31 +11565,26 @@ final class Vehicle {
 		mass = 0
 		buoyancy = 0
 		engines = 0; wheels = 0; propellers = 0; paddles = 0; tanks = 0; drills = 0; offroadWheels = 0; headlights = 0
+		wings = 0; elevators = 0; airProps = 0; jets = 0; rotors = 0; tailRotors = 0; envelopes = 0; burners = 0
+		tracks = 0; armors = 0; cannons = 0; guns = 0; autopilots = 0
 		hasSeat = false
 		hasSteering = false
+		hasCockpit = false
+		blocks = blocks.filter { parts[$0.key] != nil }
+		dmg = dmg.filter { parts[$0.key] != nil }
 		var mx: Double = 0
 		var my: Double = 0
 		for (c, t) in parts {
 			if first { x0 = c.dx; x1 = c.dx; y0 = c.dy; y1 = c.dy; first = false }
 			x0 = min(x0, c.dx); x1 = max(x1, c.dx); y0 = min(y0, c.dy); y1 = max(y1, c.dy)
-			mass += t.mass
-			mx += t.mass * (Double(c.dx) + 0.5)
-			my += t.mass * (Double(c.dy) + 0.5)
+			let pm: Double = cellMass(c, t)
+			mass += pm
+			mx += pm * (Double(c.dx) + 0.5)
+			my += pm * (Double(c.dy) + 0.5)
 			buoyancy += partVolume(t)
-			switch t {
-			case .engine: engines += 1
-			case .wheel: wheels += 1
-			case .offroadWheel: wheels += 1; offroadWheels += 1
-			case .headlight: headlights += 1
-			case .propeller: propellers += 1
-			case .paddle: paddles += 1
-			case .fuelTank: tanks += 1
-			case .seat: hasSeat = true
-			case .steering: hasSteering = true
-			case .drill, .diamondDrill, .voidDrill: drills += 1
-			default: break
-			}
+			countPart(t)
 		}
+		aero = wings + elevators + airProps + jets + rotors + envelopes > 0
 		minX = x0; maxX = x1; minY = y0; maxY = y1
 		mass = max(0.3, mass)
 		comX = mx / mass
@@ -11348,9 +11594,16 @@ final class Vehicle {
 		for (c, t) in parts {
 			let ox: Double = Double(c.dx) + 0.5 - comX
 			let oy: Double = Double(c.dy) + 0.5 - comY
-			inert += t.mass * (ox * ox + oy * oy + 1.0 / 6.0)
+			inert += cellMass(c, t) * (ox * ox + oy * oy + 1.0 / 6.0)
 		}
 		inertia = max(0.2, inert)
+		findFacings()
+		boost.removeAll()
+		for (c, b) in blocks where b.isMod && parts[c] != .block {
+			if let d = ModRuntime.shared.blockDef(b) { boost[c] = d.vehPower }
+		}
+		enginePower = 0
+		for (c, t) in parts where t == .engine { enginePower += boost[c] ?? 1.0 }
 		// drills face the open side of their cell
 		drillDir.removeAll()
 		for (c, t) in parts where isDrill(t) {
@@ -11375,7 +11628,62 @@ final class Vehicle {
 		updateBox()
 	}
 
-	var fuelCapacity: Double { return Double(tanks) * 60.0 + (engines > 0 ? 8.0 : 0.0) }
+	/// How much one cell weighs: a part's own mass, or the weight of the block it is (stone 2.5)
+	func cellMass(_ c: PartCell, _ t: PartType) -> Double {
+		if let b = blocks[c] { return vehicleBlockMass(b, t) }
+		return t.mass
+	}
+
+	func countPart(_ t: PartType) {
+		switch t {
+		case .engine: engines += 1
+		case .wheel: wheels += 1
+		case .offroadWheel: wheels += 1; offroadWheels += 1
+		case .track: wheels += 1; tracks += 1
+		case .headlight: headlights += 1
+		case .propeller: propellers += 1
+		case .paddle: paddles += 1
+		case .fuelTank: tanks += 1
+		case .seat: hasSeat = true
+		case .steering: hasSteering = true
+		case .cockpit: hasSeat = true; hasSteering = true; hasCockpit = true
+		case .drill, .diamondDrill, .voidDrill: drills += 1
+		case .wing: wings += 1
+		case .elevator: elevators += 1
+		case .airProp: airProps += 1
+		case .jet: jets += 1
+		case .rotor: rotors += 1
+		case .tailRotor: tailRotors += 1
+		case .envelope: envelopes += 1
+		case .burner: burners += 1
+		case .armor: armors += 1
+		case .cannon: cannons += 1
+		case .autoGun: guns += 1
+		case .autopilot: autopilots += 1
+		default: break
+		}
+	}
+
+	/// Thrusters, guns and tail rotors point out of their open side: left or right for thrusters and
+	/// tail rotors (the side away from the centre when both are open), any side for guns (up first
+	/// when the top is open, so a turret on a roof looks up and round)
+	func findFacings() {
+		face.removeAll()
+		for (c, t) in parts where isFacingPart(t) {
+			let r: Bool = parts[PartCell(dx: c.dx + 1, dy: c.dy)] == nil
+			let l: Bool = parts[PartCell(dx: c.dx - 1, dy: c.dy)] == nil
+			let u: Bool = parts[PartCell(dx: c.dx, dy: c.dy - 1)] == nil
+			let d: Bool = parts[PartCell(dx: c.dx, dy: c.dy + 1)] == nil
+			let away: Int = Double(c.dx) + 0.5 >= comX ? 1 : -1
+			var f: (Int, Int) = (away, 0)
+			if r && l { f = (away, 0) } else if r { f = (1, 0) } else if l { f = (-1, 0) }
+			else if t == .cannon || t == .autoGun { f = u ? (0, -1) : (d ? (0, 1) : (away, 0)) }
+			if (t == .cannon || t == .autoGun) && u && !(r || l) { f = (0, -1) }
+			face[c] = f
+		}
+	}
+
+	var fuelCapacity: Double { return Double(tanks) * 60.0 + (engines > 0 || jets > 0 || burners > 0 ? 8.0 : 0.0) }
 	var isBoat: Bool { return buoyancy > 0 }
 	var canDriveOnLand: Bool { return wheels >= 2 && engines > 0 }
 	var canSail: Bool { return buoyancy >= mass * 0.8 && ((engines > 0 && propellers > 0) || paddles > 0) }
@@ -11404,11 +11712,24 @@ final class Vehicle {
 			for k in n { if parts[k] == .seat { ok = true } }
 			if !ok { return false }
 		}
-		if t == .propeller || t == .paddle {
+		if t == .propeller || t == .paddle || t == .airProp || t == .jet || t == .tailRotor {
 			// must sit at the edge of the vehicle
 			let side: [PartCell] = [PartCell(dx: c.dx + 1, dy: c.dy), PartCell(dx: c.dx - 1, dy: c.dy)]
 			var free: Bool = false
 			for k in side { if parts[k] == nil { free = true } }
+			if !free { return false }
+		}
+		if t == .rotor {
+			// on top, with room for the blades: nothing in the row above, two cells either side
+			for k in -2...2 where parts[PartCell(dx: c.dx + k, dy: c.dy - 1)] != nil { return false }
+		}
+		// nothing goes where a rotor's blades turn
+		for k in -2...2 where parts[PartCell(dx: c.dx + k, dy: c.dy + 1)] == .rotor { return false }
+		if t == .cannon || t == .autoGun {
+			// a gun needs one open side to fire from
+			let n: [PartCell] = [PartCell(dx: c.dx + 1, dy: c.dy), PartCell(dx: c.dx - 1, dy: c.dy), PartCell(dx: c.dx, dy: c.dy - 1), PartCell(dx: c.dx, dy: c.dy + 1)]
+			var free: Bool = false
+			for k in n { if parts[k] == nil { free = true } }
 			if !free { return false }
 		}
 		if isDrill(t) {
@@ -11423,46 +11744,81 @@ final class Vehicle {
 
 	/// Removes a part, returning every part that is no longer connected (including the removed one)
 	func removePart(_ c: PartCell) -> [PartType] {
-		var out: [PartType] = []
-		if let t = parts[c] { out.append(t) }
-		parts[c] = nil
-		if parts.isEmpty { return out }
-		// flood fill from any remaining cell
+		return cutAway(c).map { $0.type }
+	}
+
+	/// The groups of cells that hang together (side by side), largest first
+	func connectedGroups() -> [[PartCell]] {
 		var seen: Set<PartCell> = []
-		var stack: [PartCell] = [parts.keys.first!]
-		while let cur = stack.popLast() {
-			if seen.contains(cur) { continue }
-			seen.insert(cur)
-			let n: [PartCell] = [PartCell(dx: cur.dx + 1, dy: cur.dy), PartCell(dx: cur.dx - 1, dy: cur.dy), PartCell(dx: cur.dx, dy: cur.dy + 1), PartCell(dx: cur.dx, dy: cur.dy - 1)]
-			for k in n { if parts[k] != nil && !seen.contains(k) { stack.append(k) } }
-		}
-		// keep the largest connected group
-		var group: Set<PartCell> = seen
-		if seen.count * 2 < parts.count {
-			var other: Set<PartCell> = []
-			for k in parts.keys { if !seen.contains(k) { other.insert(k) } }
-			group = other
-		}
-		for k in Array(parts.keys) {
-			if !group.contains(k) {
-				if let t = parts[k] { out.append(t) }
-				parts[k] = nil
+		var out: [[PartCell]] = []
+		for start in parts.keys where !seen.contains(start) {
+			var group: [PartCell] = []
+			var stack: [PartCell] = [start]
+			while let cur = stack.popLast() {
+				if seen.contains(cur) { continue }
+				seen.insert(cur)
+				group.append(cur)
+				let n: [PartCell] = [PartCell(dx: cur.dx + 1, dy: cur.dy), PartCell(dx: cur.dx - 1, dy: cur.dy), PartCell(dx: cur.dx, dy: cur.dy + 1), PartCell(dx: cur.dx, dy: cur.dy - 1)]
+				for k in n where parts[k] != nil && !seen.contains(k) { stack.append(k) }
 			}
+			out.append(group)
+		}
+		out.sort { $0.count > $1.count }
+		return out
+	}
+
+	/// Removes a cell and everything no longer joined to the part that stays (the group holding `keep`
+	/// if it survives, otherwise the largest), returning what came off (the removed cell first)
+	func cutAway(_ c: PartCell, keep: PartCell? = nil) -> [VCell] {
+		var out: [VCell] = []
+		if let t = parts[c] { out.append(VCell(cell: c, type: t, tile: blocks[c])) }
+		parts[c] = nil
+		blocks[c] = nil
+		dmg[c] = nil
+		if parts.isEmpty { return out }
+		let groups: [[PartCell]] = connectedGroups()
+		var stay: [PartCell] = groups[0]
+		if let k = keep, parts[k] != nil {
+			for g in groups where g.contains(k) { stay = g }
+		}
+		let staySet: Set<PartCell> = Set(stay)
+		for k in Array(parts.keys) where !staySet.contains(k) {
+			if let t = parts[k] { out.append(VCell(cell: k, type: t, tile: blocks[k])) }
+			parts[k] = nil
+			blocks[k] = nil
+			dmg[k] = nil
 		}
 		return out
 	}
 
 	func save() -> VehicleSave {
 		var ps: [VPartSave] = []
-		for (c, t) in parts { ps.append(VPartSave(dx: c.dx, dy: c.dy, type: t.rawValue)) }
-		return VehicleSave(id: id, parts: ps, x: px, y: py, fuel: fuel, dir: dir, kit: kit, rot: angle)
+		for (c, t) in parts {
+			var e = VPartSave(dx: c.dx, dy: c.dy, type: t.rawValue)
+			if let b = blocks[c] { e.tile = Int(b.rawValue) }
+			if let d = dmg[c], d > 0 { e.dmg = d }
+			ps.append(e)
+		}
+		var s = VehicleSave(id: id, parts: ps, x: px, y: py, fuel: fuel, dir: dir, kit: kit, rot: angle)
+		if auto != 0 { s.auto = auto }
+		if !route.isEmpty { s.route = route }
+		return s
 	}
 
 	static func restore(_ s: VehicleSave) -> Vehicle {
 		let v = Vehicle(id: s.id, first: .frame, x: s.x, y: s.y)
 		v.parts.removeAll()
-		for p in s.parts { v.parts[PartCell(dx: p.dx, dy: p.dy)] = PartType(rawValue: p.type) ?? .frame }
+		for p in s.parts {
+			let c: PartCell = PartCell(dx: p.dx, dy: p.dy)
+			let t: PartType = PartType(rawValue: p.type) ?? .frame
+			v.parts[c] = t
+			if let tr = p.tile, tr >= 0, tr < 256, let b = Tile(rawValue: UInt8(tr)) { v.blocks[c] = b }
+			else if t == .block { v.blocks[c] = .planks }
+			if let d = p.dmg { v.dmg[c] = d }
+		}
 		if v.parts.isEmpty { v.parts[PartCell(dx: 0, dy: 0)] = .frame }
+		v.auto = s.auto ?? 0
+		v.route = s.route ?? []
 		v.recompute(keepAnchor: false)
 		if let r = s.rot {
 			v.px = s.x
@@ -11585,6 +11941,8 @@ struct Settings: Codable {
 	var showWires: Int = 0
 	/// structural physics: built blocks need support and can only carry so much (see updateStructures)
 	var structural: Bool = false
+	/// vehicles take damage (shots, blasts, crashes) and parts break off
+	var vehicleDamage: Bool = true
 
 	var shakeScale: Double { return shakeOn ? shakeIntensity : 0 }
 
@@ -11667,6 +12025,7 @@ struct Settings: Codable {
 		nightDanger = clampI((try? c.decodeIfPresent(Int.self, forKey: .nightDanger)) ?? 1, 0, 2)
 		showWires = clampI((try? c.decodeIfPresent(Int.self, forKey: .showWires)) ?? 0, 0, 2)
 		structural = (try? c.decodeIfPresent(Bool.self, forKey: .structural)) ?? false
+		vehicleDamage = (try? c.decodeIfPresent(Bool.self, forKey: .vehicleDamage)) ?? true
 	}
 }
 
@@ -12043,6 +12402,12 @@ final class Game: ObservableObject, @unchecked Sendable {
 	var fadeT: Double = 0
 	var mounted: Mob? = nil
 	var inVehicle: Vehicle? = nil
+	/// the ON VEHICLE switch: blocks in hand are built onto the nearest vehicle instead of the world
+	var vehicleBuild: Bool = false
+	/// fuel tanks that burst this frame (they go off next frame, so one blast cannot run into itself)
+	var vehBlasts: [(Double, Double)] = []
+	/// keeps vehicle warnings (out of ammunition and the like) from repeating every frame
+	var vehSayT: Double = 0
 	var vehicleStash: [[Vehicle]] = [[Vehicle]](repeating: [], count: dimCount)
 	/// where the player came from into a custom dimension (to go back there)
 	var dimReturn: DimReturn? = nil
@@ -12744,6 +13109,13 @@ extension Game {
 		}
 		for v in vehicles where v.rider && v.engines > 0 && v.fuel > 0 {
 			dyn.append((Int(floor(v.b.x + Double(v.dir) * (v.b.w * 0.5 + 1.0))), Int(floor(v.b.y - v.b.h * 0.5)), 10))
+		}
+		// lamps and torches built onto a vehicle light it up wherever it goes
+		for v in vehicles where !v.blocks.isEmpty {
+			for (cell, b) in v.blocks where b.light > 0 {
+				let p: (Double, Double) = v.cellCenter(cell)
+				dyn.append((Int(floor(p.0)), Int(floor(p.1)), b.light))
+			}
 		}
 		// headlights throw a beam ahead of a driven vehicle
 		for v in vehicles where v.rider && v.headlights > 0 {
@@ -13665,7 +14037,7 @@ func allGameItems() -> [Item] {
 	for a in AmmoType.allCases { out.append(.ammo(a)) }
 	for g in Gadget.allCases { out.append(.gadget(g)) }
 	for k in wallKinds { out.append(.wall(k)) }
-	for p in PartType.allCases { out.append(.part(p)) }
+	for p in PartType.allCases where p != .block { out.append(.part(p)) }
 	for f in Food.allCases { out.append(.food(f)) }
 	for m in Mat.allCases { out.append(.mat(m)) }
 	out.append(contentsOf: featureItems())
@@ -14197,6 +14569,8 @@ extension Game {
 			}
 			return
 		}
+		// the ON VEHICLE switch: the block is built onto the vehicle instead
+		if vehicleBuild && attachBlockToVehicle(t.placedForm) { return }
 		// the WALL switch: the block goes up as a passable wall instead
 		if wallMode && canBeWall(t.placedForm) {
 			placeBlockAsWall(t.placedForm)
@@ -14535,8 +14909,10 @@ extension Game {
 			}
 		case .portalKey:
 			if pressed { say("Use the key on the sealed portal.", 2.0) }
-		case .carKit, .boatKit, .motorboatKit:
+		case .carKit, .boatKit, .motorboatKit, .planeKit, .heliKit, .airshipKit, .tankKit, .truckKit:
 			if pressed && useCD <= 0 { placeKit(g) }
+		case .assembler:
+			useAssembler(pressed)
 		case .bomb:
 			if pressed { throwBomb() }
 		case .fireFlask:
@@ -14555,23 +14931,27 @@ extension Game {
 	/// A cargo crate's storage lives with the other chests, under a key no block can have (built from
 	/// the vehicle's saved id and the crate's cell), so it is saved and loaded like any chest
 	func cargoSpot(_ v: Vehicle, _ c: PartCell) -> IntPair {
-		return IntPair(x: -1_000_000_000 + v.id * 4096 + (c.dx + 32) * 64 + (c.dy + 32), y: -77)
+		if c.dx >= -32 && c.dx < 32 && c.dy >= -32 && c.dy < 32 {
+			return IntPair(x: -1_000_000_000 + v.id * 4096 + (c.dx + 32) * 64 + (c.dy + 32), y: -77)
+		}
+		// a cell further out on a big vehicle (an assembled ship): the cell goes in the second number
+		return IntPair(x: -1_000_000_000 + v.id, y: -100_000 - ((c.dx + 2048) * 4096 + (c.dy + 2048)))
 	}
 
-	func isCargoSpot(_ p: IntPair) -> Bool { return p.y == -77 && p.x < -900_000_000 }
+	func isCargoSpot(_ p: IntPair) -> Bool { return (p.y == -77 || p.y <= -100_000) && p.x < -900_000_000 }
 
 	func removeVehiclePart(_ v: Vehicle, _ c: PartCell) {
 		if v.rider { dismount() }
-		let crates: [PartCell] = v.parts.filter { $0.value == .cargo }.map { $0.key }
+		let crates: [PartCell] = v.parts.keys.filter { vehicleStores(v, $0) }
 		let spills: [(PartCell, (Double, Double))] = crates.map { ($0, v.cellCenter($0)) }
-		let returned: [PartType] = v.removePart(c)
+		let returned: [VCell] = v.cutAway(c)
 		// a crate that comes off tips its contents onto the ground
 		for (cell, at) in spills where v.parts[cell] == nil {
 			let k: IntPair = cargoSpot(v, cell)
 			if let p = openChest, p == k { openChest = nil }
 			for st in world.removeChest(k.x, k.y) { spawnDrop(st, at.0, at.1, Double.random(in: -2...2), -3.5) }
 		}
-		for t in returned { giveItem(.part(t), 1) }
+		for r in returned { giveItem(vehicleCellItem(r), 1) }
 		if v.parts.isEmpty {
 			vehicles.removeAll { $0.id == v.id }
 		} else {
@@ -15038,6 +15418,7 @@ extension Game {
 
 	/// What the action button does with the item in hand
 	var useLabel: String {
+		if let v = inVehicle, v.cannons + v.guns > 0 { return "FIRE" }
 		guard let it = heldItem else { return "PUNCH" }
 		if it.isWeapon { return "ATTACK" }
 		switch it {

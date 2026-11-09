@@ -1,4 +1,4 @@
-// PIXEL REALM v2, part 4 of 4: the Mod Creator screens, the potion and exosuit screens, the Mod Creator+ screens, and the app itself.
+// PIXEL REALM v2, part 4 of 4: vehicles of every kind (flight, weapons, damage, the assembler, the autopilot), the Mod Creator screens, the potion and exosuit screens, the Mod Creator+ screens, and the app itself.
 // The game is four files that go together in one Swift Playgrounds app: PixelRealm1.swift to
 // PixelRealm4.swift. Each goes in its own file in the app (delete ContentView.swift; MyApp.swift can
 // hold part 1). All art is generated in code.
@@ -8,6 +8,1454 @@ import AVFoundation
 #if canImport(UIKit)
 import UIKit
 #endif
+
+// ===== p33_vehicles =====
+
+// MARK: - Vehicles of every kind: blocks on vehicles, flight, weapons, damage, turning, assembling, the autopilot
+// A vehicle is a rigid body built cell by cell (p13b_vehicles, p17_vehicles_ships). This part adds what
+// makes planes, helicopters, airships, tanks and anything in between work: every cell can be any block,
+// each cell weighs what it is made of, and the air acts on each cell where it is (lift on wings, drag on
+// exposed faces, thrust along propellers, rotor lift, hot air in balloons), so a design flies, floats or
+// tumbles because of how it is built.
+
+/// Hitting the ground faster than this (blocks per second, straight into it) breaks parts
+let vehicleCrashSpeed: Double = 21.0
+
+/// The numbers of the flight model
+enum Aero {
+	/// lift per wing cell: kLift x airspeed^2 x lift coefficient (a 10-mass plane with 3 wing cells
+	/// leaves the ground at about 11 blocks a second)
+	static let kLift: Double = 0.8
+	/// drag per exposed face: kDrag x drag coefficient x airspeed^2
+	static let kDrag: Double = 0.022
+	/// how much a face tucked behind another still feels the air (skin friction)
+	static let shielded: Double = 0.06
+	/// share of the wing drag coefficient applied (the wing's own profile drag)
+	static let dragShare: Double = 1.0
+	/// lift slope per radian, the angle where a wing stalls, the post-stall lift
+	static let liftSlope: Double = 5.0
+	static let stallAngle: Double = 0.27
+	/// how far an elevator's flap turns the airflow (radians at full stick), and the elevator's size
+	/// against a wing's
+	static let flap: Double = 0.55
+	static let elevatorArea: Double = 1.0
+	/// a wing's camber: it lifts a little even meeting the air head on (radians of extra angle)
+	static let camber: Double = 0.07
+	/// static thrust of an air propeller per engine of power, and the airspeed where it fades out
+	static let propThrust: Double = 110.0
+	static let propVmax: Double = 64.0
+	/// a jet's thrust (it is its own engine)
+	static let jetThrust: Double = 165.0
+	/// rotor lift per engine of power at full blade pitch
+	static let rotorLift: Double = 265.0
+	/// a heated balloon envelope's lift (mass it can hold up at full heat), and how many envelopes one burner heats
+	static let envLift: Double = 1.3
+	static let burnerCells: Int = 12
+	/// how far the cyclic tilts a helicopter at full stick, and how firmly it holds the tilt
+	static let cyclicTilt: Double = 0.3
+	/// hands off, a helicopter tilts against its drift to hover in place (radians per block a second)
+	static let hoverHold: Double = 0.035
+	/// the turning rotor disc resists the air across it (what keeps a helicopter's speed down)
+	static let rotorDrag: Double = 0.25
+	/// up and down on the stick ask a helicopter for this climb or sink rate (blocks a second)
+	static let climbRate: Double = 9.0
+	static let cyclicP: Double = 16.0
+	static let cyclicD: Double = 7.5
+	/// how fast blade pitch follows the stick, and how fast a burner heats the balloon and venting cools it
+	static let collectiveRate: Double = 0.9
+	static let heatRate: Double = 0.14
+	static let ventRate: Double = 0.22
+	/// a balloon's canopy against the air going up or down through it (a cold balloon comes down slowly)
+	static let canopyDrag: Double = 8.0
+	/// the cyclic's trim: how fast it learns to hold the tilt against an off-centre rotor
+	static let cyclicI: Double = 6.0
+	/// the pitch control: full stick asks for this pitch rate (radians a second); the elevators are moved
+	/// to get it (as far as they can at this speed), and the trim learns what holds the nose steady
+	static let pitchRate: Double = 0.9
+	static let rateGain: Double = 1.3
+	static let trimRate: Double = 1.6
+	/// the stall guard: past this share of the stall angle the nose is eased down instead of pulled up
+	static let alphaGuard: Double = 0.75
+	/// hands off, how fast the nose comes back to level (radians a second per radian)
+	static let levelRate: Double = 0.4
+	/// seconds a turn to face the other way takes in flight
+	static let turnTime: Double = 1.4
+}
+
+/// Air thins with height: full below the hills, about half at the top of the sky
+func airDensity(_ y: Double) -> Double {
+	let top: Double = Double(WorldGen.sea) - 60.0
+	if y >= top { return 1.0 }
+	return max(0.45, 1.0 - 0.55 * (top - y) / max(1.0, top))
+}
+
+/// A wing's lift coefficient at an angle of attack (radians, folded to -pi/2...pi/2): straight up to
+/// the stall, then it falls away to a flat plate's
+func liftCoefficient(_ a: Double) -> Double {
+	let s: Double = Aero.stallAngle
+	let m: Double = abs(a)
+	let sign: Double = a >= 0 ? 1.0 : -1.0
+	if m <= s { return Aero.liftSlope * a }
+	let peak: Double = Aero.liftSlope * s
+	let flat: Double = 0.9 * sin(2.0 * m)
+	let fade: Double = clampD((m - s) / 0.16, 0, 1)
+	return sign * (peak * 0.85 * (1.0 - fade) + flat * fade)
+}
+
+/// A wing's drag coefficient: a little on its own, more as it lifts, a flat plate's beyond the stall
+func wingDrag(_ a: Double, _ cl: Double) -> Double {
+	let sa: Double = sin(a)
+	return 0.012 + 0.06 * cl * cl + 1.1 * sa * sa
+}
+
+/// How much a part catches the air (a bare block is 1)
+func partDrag(_ t: PartType) -> Double {
+	switch t {
+	case .cockpit: return 0.45
+	case .jet: return 0.3
+	case .airProp, .tailRotor, .rotor: return 0.4
+	case .envelope: return 3.0
+	case .wheel, .offroadWheel: return 0.45
+	case .headlight, .steering, .autopilot, .autoGun, .propeller, .paddle: return 0.5
+	default: return 1.0
+	}
+}
+
+/// The mass of a block built onto a vehicle: its building weight (planks 0.6, stone 2.5)
+func vehicleBlockMass(_ b: Tile, _ t: PartType) -> Double {
+	if b.isMod, t != .block, let m = ModRuntime.shared.blockDef(b), m.vehMass > 0 { return m.vehMass }
+	return max(0.05, tileWeight(b))
+}
+
+/// How much water a cell pushes aside when under (its buoyancy): a solid block a whole cell (so wood
+/// floats and stone sinks), anything else a little
+func cellDisplacement(_ v: Vehicle, _ c: PartCell, _ t: PartType) -> Double {
+	if t == .block, let b = v.blocks[c] { return b.solid ? 1.0 : 0.2 }
+	return partDisplacement(t)
+}
+
+/// How much damage a part takes before it breaks off
+func partHP(_ t: PartType) -> Double {
+	switch t {
+	case .armor: return 160
+	case .track, .jet, .drill, .diamondDrill, .voidDrill, .cannon: return 55
+	case .engine, .hull, .cargo, .frame, .offroadWheel: return 40
+	case .cockpit, .rotor, .autoGun, .burner, .fuelTank: return 30
+	case .wheel, .seat, .wing, .airProp: return 22
+	case .elevator, .propeller, .paddle, .steering, .tailRotor, .autopilot: return 14
+	case .headlight: return 10
+	case .envelope: return 7
+	case .block: return 30
+	}
+}
+
+/// How much damage one cell takes before it breaks (a block by its hardness and weight)
+func vehicleCellHP(_ v: Vehicle, _ c: PartCell, _ t: PartType) -> Double {
+	if let b = v.blocks[c] {
+		let base: Double = 8.0 + min(90.0, b.hardness * 14.0) + tileWeight(b) * 4.0
+		return t == .block ? base : max(base, partHP(t))
+	}
+	return partHP(t)
+}
+
+/// What a cell taken off a vehicle gives back: its block, or the part
+func vehicleCellItem(_ r: VCell) -> Item {
+	if let b = r.tile { return .block(b) }
+	return .part(r.type == .block ? .frame : r.type)
+}
+
+/// A block turned to face the other way (stairs rise the other way, a bed's head moves)
+func mirroredTile(_ t: Tile) -> Tile {
+	switch t {
+	case .stairWoodR: return .stairWoodL
+	case .stairWoodL: return .stairWoodR
+	case .stairStoneR: return .stairStoneL
+	case .stairStoneL: return .stairStoneR
+	case .stairBrickR: return .stairBrickL
+	case .stairBrickL: return .stairBrickR
+	case .bedL: return .bedR
+	case .bedR: return .bedL
+	default: return t
+	}
+}
+
+/// Blocks the assembler leaves in the world: the ground's own, liquids, lifts and portals
+func canAssemble(_ t: Tile) -> Bool {
+	if t == .air || t.liquid || t == .bedrock { return false }
+	switch t {
+	case .liftRail, .liftButton, .liftCar, .portalOn, .portalOff: return false
+	default: return true
+	}
+}
+
+/// Where a shot meets a vehicle: how far along its step, which vehicle, which cell
+struct VehicleHit {
+	var t: Double
+	var v: Vehicle
+	var cell: PartCell
+}
+
+extension Game {
+	// MARK: power
+
+	/// The engines' power goes where it is needed: driving wheels on a ground vehicle, every air
+	/// propeller, every rotor (a rotor takes as much as three engines' worth, a propeller one and a half).
+	/// The share for the wheels (1 for a car or a tank: they get it all)
+	func groundShare(_ v: Vehicle) -> Double {
+		let wheels: Double = v.wings == 0 && v.rotors == 0 ? 1.0 : 0.0
+		let total: Double = wheels + Double(v.airProps) * 1.5 + Double(v.rotors) * 3.0
+		return total <= 0 ? 0 : wheels / total
+	}
+
+	/// Engine power each air propeller and each rotor gets (in engines); `anyway` works it out as if
+	/// fuelled and crewed (for the checklist)
+	func airPower(_ v: Vehicle, anyway: Bool = false) -> (Double, Double) {
+		if v.engines == 0 { return (0, 0) }
+		if !anyway && (!(v.fuel > 0 || isCreative) || !(v.hasSeat && v.hasSteering)) { return (0, 0) }
+		let wheels: Double = v.wings == 0 && v.rotors == 0 ? 1.0 : 0.0
+		let total: Double = wheels + Double(v.airProps) * 1.5 + Double(v.rotors) * 3.0
+		if total <= 0 { return (0, 0) }
+		let e: Double = v.enginePower
+		return (e * 1.5 / total, e * 3.0 / total)
+	}
+
+	/// The most the rotors can lift (force) here, at full blade pitch
+	func rotorMax(_ v: Vehicle, anyway: Bool = false) -> Double {
+		let p: (Double, Double) = airPower(v, anyway: anyway)
+		return Aero.rotorLift * p.1 * Double(v.rotors) * (0.35 + 0.65 * airDensity(v.py))
+	}
+
+	/// The most the balloons can lift (force) here, at full heat
+	func balloonMax(_ v: Vehicle) -> Double {
+		if v.burners == 0 || v.envelopes == 0 { return 0 }
+		let heated: Double = Double(min(v.envelopes, v.burners * Aero.burnerCells))
+		return gravityG * Aero.envLift * heated * airDensity(v.py)
+	}
+
+	/// The wings' lift at a speed, flying level at a good angle (for the checklist and instruments)
+	func wingLiftAt(_ v: Vehicle, _ speed: Double) -> Double {
+		return Aero.kLift * speed * speed * Double(v.wings) * 1.1
+	}
+
+	/// The push the propellers and jets give at a speed, at full throttle
+	func thrustAt(_ v: Vehicle, _ speed: Double) -> Double {
+		let p: (Double, Double) = airPower(v, anyway: true)
+		let prop: Double = Aero.propThrust * p.0 * Double(v.airProps) * max(0, 1.0 - speed / Aero.propVmax)
+		let jet: Double = Aero.jetThrust * Double(v.jets) * max(0.35, 1.0 - speed / 90.0)
+		return prop + jet
+	}
+
+	// MARK: the flight model
+
+	/// Forces of the air on every part, for one physics step: drag on each part's exposed faces, lift on
+	/// wings and elevators from the real airflow over each one (its speed, the angle it meets the wing at,
+	/// the wind), thrust from propellers and jets along the vehicle's axis, rotor lift along the rotor
+	/// shaft, and the hot air in the balloons pushing straight up. Each force acts at its own part, so the
+	/// layout decides how the vehicle pitches: a tail far behind steadies it, balloons above keep it
+	/// upright, a heavy nose tips it forward.
+	func airForces(_ v: Vehicle, _ h: Double, _ throttle: Double) {
+		let c: Double = v.cosA
+		let s: Double = v.sinA
+		let rho: Double = airDensity(v.py)
+		let power: (Double, Double) = airPower(v)
+		let canFly: Bool = (v.fuel > 0 || isCreative) && v.hasSeat && v.hasSteering
+		// while turning round the throttle keeps pushing toward the nose, whichever way the stick points
+		let steer: Double = v.turnT > 0 ? abs(throttle) * Double(v.fwd) : throttle
+		let thr: Double = canFly ? steer : 0
+		// the elevators turn the nose the way the stick says (up: toward the top of the screen)
+		let noseX: Double = Double(v.fwd) * c
+		let noseSign: Double = noseX >= 0 ? 1.0 : -1.0
+		let rateErr: Double = pitchRateWanted(v) - (-v.angVel * noseSign)
+		let cmd: Double = clampD(v.trim + Aero.rateGain * rateErr, -1, 1)
+		let wantSpin: Double = -cmd * noseSign
+		let bank: Double = v.turnT > 0 ? 0.7 + 0.3 * abs(cos(Double.pi * v.turnT)) : 1.0
+		let rotorF: Double = Aero.rotorLift * power.1 * v.collective * (0.35 + 0.65 * rho)
+		let heated: Double = v.envelopes > 0 ? min(1.0, Double(v.burners * Aero.burnerCells) / Double(v.envelopes)) : 0
+		let envF: Double = gravityG * Aero.envLift * v.heat * heated * rho
+		var fx: Double = 0
+		var fy: Double = 0
+		var torque: Double = 0
+		var lift: Double = 0
+		var thrust: Double = 0
+		var stalled: Bool = false
+		var alpha: Double = 0
+		for (cell, t) in v.parts {
+			let lx: Double = Double(cell.dx) + 0.5 - v.comX
+			let ly: Double = Double(cell.dy) + 0.5 - v.comY
+			let rx: Double = lx * c - ly * s
+			let ry: Double = lx * s + ly * c
+			// the air going past this part (the wind, less the part's own motion), in the vehicle's frame
+			let ux: Double = v.windX - (v.vx - v.angVel * ry)
+			let uy: Double = -(v.vy + v.angVel * rx)
+			let bx: Double = ux * c + uy * s
+			let by: Double = -ux * s + uy * c
+			var fbx: Double = 0
+			var fby: Double = 0
+			let k: Double = v.boost[cell] ?? 1.0
+			if t == .wing || t == .elevator {
+				let f: (Double, Double, Double, Bool, Double) = wingForce(t, bx, by, lx, rho, wantSpin, t == .wing ? bank * k : k)
+				fbx = f.0
+				fby = f.1
+				if t == .wing {
+					lift += f.2
+					alpha = max(alpha, f.4)
+				}
+				if f.3 { stalled = true }
+			} else {
+				let d: (Double, Double) = faceDrag(v, cell, t, bx, by, rho)
+				fbx = d.0
+				fby = d.1
+				switch t {
+				case .airProp:
+					if power.0 > 0 && abs(thr) > 0.05 {
+						// along the vehicle's axis either way (the blades reverse at half strength)
+						let eff: Double = max(0, 1.0 - abs(bx) / Aero.propVmax)
+						let w: Double = thr > 0 ? thr : thr * 0.5
+						let f: Double = Aero.propThrust * power.0 * eff * w * k * (0.4 + 0.6 * rho)
+						fbx += f
+						thrust += abs(f)
+					}
+				case .jet:
+					if canFly && abs(thr) > 0.05 {
+						// it pushes away from its exhaust; pulled back, its reverser brakes at a third
+						let dirX: Double = -Double((v.face[cell] ?? (-1, 0)).0)
+						let along: Double = thr * dirX
+						let w: Double = along > 0 ? along : along * 0.35
+						let f: Double = Aero.jetThrust * w * k * dirX * (0.7 + 0.3 * rho) * max(0.35, 1.0 - abs(bx) / 90.0)
+						fbx += f
+						thrust += abs(f)
+					}
+				case .rotor:
+					if rotorF > 0 {
+						fby -= rotorF * k
+						lift += rotorF * k
+						// the disc drags against air going across it
+						fbx += Aero.rotorDrag * rho * bx * abs(bx) * min(1.0, v.collective * 1.5)
+					}
+				default:
+					break
+				}
+			}
+			// to the world, then onto the body at this part
+			var wfx: Double = fbx * c - fby * s
+			var wfy: Double = fbx * s + fby * c
+			if t == .envelope && envF > 0 {
+				// hot air rises: straight up, whatever the tilt (so balloons above keep it upright)
+				wfy -= envF * k
+				lift += envF * k
+			}
+			fx += wfx
+			fy += wfy
+			torque += rx * wfy - ry * wfx
+			wfx = 0
+			wfy = 0
+		}
+		let invM: Double = 1.0 / v.mass
+		v.vx += fx * invM * h
+		v.vy += fy * invM * h
+		v.angVel += torque / v.inertia * h
+		if v.rotors > 0 && rotorF > 0 { cyclic(v, thr, h) }
+		v.liftNow = lift
+		v.thrustNow = thrust
+		v.stall = stalled
+		v.alpha = alpha
+	}
+
+	/// The pitch rate the pilot asks for (nose up positive), eased off near the stall: past the guard
+	/// angle the nose is brought down a little, so holding the stick back climbs steeply without stalling
+	/// while there is speed (slow it down too far and it still sinks)
+	func pitchRateWanted(_ v: Vehicle) -> Double {
+		var want: Double = v.pitch * Aero.pitchRate
+		// hands off in flight, the nose eases back toward level (it holds a gentle climb or dive no longer)
+		if abs(v.pitch) < 0.05 && v.contacts == 0 && v.auto == 0 {
+			let noseUp: Double = -Double(v.fwd) * v.sinA
+			want = clampD(-noseUp * Aero.levelRate, -0.3, 0.3)
+		}
+		let guardA: Double = Aero.stallAngle * Aero.alphaGuard
+		// the angle the wing is heading for: now, plus where the nose is still swinging
+		let noseX: Double = Double(v.fwd) * v.cosA
+		let upRate: Double = -v.angVel * (noseX >= 0 ? 1.0 : -1.0)
+		let ahead: Double = v.alpha + max(0, upRate) * 0.3
+		if v.wings > 0 && ahead > guardA && v.airspeed > 4.0 { want = min(want, -(ahead - guardA) * 5.0) }
+		return want
+	}
+
+	/// One wing or elevator: lift across the airflow and drag along it, from the angle the air meets it
+	/// (folded so the wing works flying either way), with an elevator's flap turned by the stick.
+	/// Returns the body-frame force, the lift, and whether it has stalled.
+	func wingForce(_ t: PartType, _ bx: Double, _ by: Double, _ lx: Double, _ rho: Double, _ wantSpin: Double, _ scale: Double) -> (Double, Double, Double, Bool, Double) {
+		let sp2: Double = bx * bx + by * by
+		if sp2 < 0.09 { return (0, 0, 0, false, 0) }
+		let sp: Double = sqrt(sp2)
+		let dx: Double = bx / sp
+		let dy: Double = by / sp
+		var a: Double = atan2(-dy, -dx)
+		if a > Double.pi * 0.5 { a -= Double.pi } else if a < -Double.pi * 0.5 { a += Double.pi }
+		// the camber lifts toward the top of the wing whichever way the air comes
+		if t == .wing { a += dx < 0 ? Aero.camber : -Aero.camber }
+		var area: Double = 1.0
+		if t == .elevator {
+			// the flap, tilted the way that turns the nose as asked (behind or ahead of the centre of mass)
+			area = Aero.elevatorArea
+			let flow: Double = bx < 0 ? 1.0 : -1.0
+			let side: Double = lx >= 0 ? 1.0 : -1.0
+			a += -wantSpin * side * flow * Aero.flap
+		}
+		let cl: Double = liftCoefficient(a)
+		let cd: Double = wingDrag(a, cl)
+		let q: Double = Aero.kLift * rho * sp2 * area * scale
+		let fbx: Double = q * cl * -dy + q * Aero.dragShare * cd * dx
+		let fby: Double = q * cl * dx + q * Aero.dragShare * cd * dy
+		let stalled: Bool = t == .wing && abs(a) > Aero.stallAngle && sp > 4.0
+		return (fbx, fby, abs(q * cl), stalled, sp > 4.0 ? abs(a) : 0)
+	}
+
+	/// Drag on a part's faces that meet the air (a face tucked behind another part barely feels it)
+	func faceDrag(_ v: Vehicle, _ cell: PartCell, _ t: PartType, _ bx: Double, _ by: Double, _ rho: Double) -> (Double, Double) {
+		let cdp: Double = partDrag(t) * Aero.kDrag * rho
+		var fx: Double = 0
+		var fy: Double = 0
+		if abs(bx) > 0.01 {
+			let up: Int = bx < 0 ? 1 : -1
+			let ex: Double = v.parts[PartCell(dx: cell.dx + up, dy: cell.dy)] == nil ? 1.0 : Aero.shielded
+			fx = cdp * ex * bx * abs(bx)
+		}
+		if abs(by) > 0.01 {
+			let up: Int = by < 0 ? 1 : -1
+			let ey: Double = v.parts[PartCell(dx: cell.dx, dy: cell.dy + up)] == nil ? 1.0 : Aero.shielded
+			let canopy: Double = t == .envelope ? Aero.canopyDrag : 1.0
+			fy = cdp * ey * canopy * by * abs(by)
+		}
+		return (fx, fy)
+	}
+
+	/// The cyclic: the rotor tilts the helicopter toward the stick and holds it there (so it flies
+	/// that way). A single rotor needs a tail rotor for this; without one its torque swings the
+	/// helicopter round and it can hardly be steered. Two rotors turn opposite ways and need none.
+	func cyclic(_ v: Vehicle, _ thr: Double, _ h: Double) {
+		let steady: Bool = v.tailRotors > 0 || v.rotors >= 2
+		// the stick tilts it; hands off it leans against its drift and comes to a hover
+		var target: Double = clampD(thr, -1, 1) * Aero.cyclicTilt
+		if abs(thr) < 0.1 { target = clampD(-v.vx * Aero.hoverHold, -Aero.cyclicTilt, Aero.cyclicTilt) }
+		let a: Double = remainder(v.angle, 2.0 * Double.pi)
+		let auth: Double = (0.35 + 0.65 * v.collective) * (steady ? 1.0 : 0.2)
+		// the trim builds up against a steady pull (an off-centre rotor or load) so the tilt holds
+		if steady { v.cycI = clampD(v.cycI + (target - a) * Aero.cyclicI * h, -12, 12) }
+		v.angVel += (Aero.cyclicP * (target - a) + v.cycI - Aero.cyclicD * v.angVel) * auth * h
+		if !steady { v.angVel += sin(clock * 2.3 + Double(v.id)) * 4.0 * v.collective * h }
+	}
+
+	/// Once a frame: blade pitch and burner heat follow the stick (hands off, they hold the height), the
+	/// elevator trim settles, and the nose end is worked out from the way the vehicle moves
+	func flightControls(_ v: Vehicle, _ dt: Double) {
+		let piloted: Bool = (v.rider || v.auto == 2) && v.hasSeat && v.hasSteering
+		let airborne: Bool = v.contacts == 0 && v.submerged <= 0.02
+		let along: Double = v.vx * v.cosA + v.vy * v.sinA
+		if abs(along) > 3.0 { v.fwd = along > 0 ? 1 : -1 }
+		else if abs(v.throttle) > 0.2 && v.rider { v.fwd = v.throttle > 0 ? 1 : -1 }
+		if v.rotors > 0 {
+			if !piloted || airPower(v).1 <= 0 {
+				v.collective = max(0, v.collective - dt * 0.4)
+			} else if airborne || v.pitch > 0.05 {
+				// the stick asks for a climb or sink rate (hands off: none, a hover); the blade pitch is set
+				// for it, as far as the rotor can lift
+				let need: Double = max(0, v.mass * gravityG - balloonLiftNow(v))
+				let hover: Double = need / max(1.0, rotorMax(v))
+				let wantVy: Double = -v.pitch * Aero.climbRate
+				let want: Double = clampD(hover + (v.vy - wantVy) * 0.05, 0, 1)
+				let step: Double = Aero.collectiveRate * dt
+				v.collective += clampD((want - v.collective) * min(1.0, 4.0 * dt), -step, step)
+			} else {
+				v.collective = max(0, v.collective - dt * 0.6)
+			}
+			if !airborne { v.cycI *= (1.0 - min(1.0, 2.0 * dt)) }
+		}
+		if v.burners > 0 && v.envelopes > 0 {
+			let fuelOK: Bool = v.fuel > 0 || isCreative
+			if !piloted || !fuelOK {
+				v.heat = max(0, v.heat - dt * 0.035)
+			} else if abs(v.pitch) > 0.05 {
+				v.heat = clampD(v.heat + v.pitch * (v.pitch > 0 ? Aero.heatRate : Aero.ventRate) * dt, 0, 1)
+			} else if airborne {
+				// hands off: the burner keeps the balloon just warm enough to float (no faster than it can heat)
+				let full: Double = balloonMax(v)
+				let need: Double = max(0, v.mass * gravityG - v.liftNow + balloonLiftNow(v))
+				let eq: Double = full > 1 ? need / full : 0
+				let want: Double = clampD(eq + v.vy * 0.05, 0, 1)
+				v.heat += clampD(want - v.heat, -Aero.ventRate * dt, Aero.heatRate * dt)
+			} else {
+				v.heat = max(0, v.heat - dt * 0.05)
+			}
+		}
+		if v.elevators > 0 {
+			if airborne && v.turnT == 0 {
+				// the trim learns the elevator that gives the pitch rate asked for (hands off: none, so the
+				// nose stays where it is)
+				let noseX: Double = Double(v.fwd) * v.cosA
+				let upRate: Double = -v.angVel * (noseX >= 0 ? 1.0 : -1.0)
+				v.trim = clampD(v.trim + (pitchRateWanted(v) - upRate) * Aero.trimRate * dt, -0.9, 0.9)
+			} else if !airborne {
+				v.trim *= (1.0 - min(1.0, 0.8 * dt))
+			}
+		}
+	}
+
+	/// The balloons' lift right now (force)
+	func balloonLiftNow(_ v: Vehicle) -> Double {
+		return balloonMax(v) * v.heat
+	}
+
+	/// Fuel for what flies: rotors turning, jets, burners (driving and propellers already burn it)
+	func airFuel(_ v: Vehicle, _ dt: Double) {
+		if isCreative || v.fuel <= 0 { return }
+		var use: Double = 0
+		let thr: Double = abs(v.throttle)
+		if v.rotors > 0 && v.collective > 0.05 && thr <= 0.1 { use += Double(v.engines) * (0.4 + 0.6 * v.collective) }
+		if v.jets > 0 && thr > 0.05 && (v.rider || v.auto == 2) { use += Double(v.jets) * 2.5 * thr }
+		if v.burners > 0 && v.heat > 0.05 && (v.rider || v.auto == 2) { use += Double(v.burners) * 0.6 * v.heat }
+		v.fuel = max(0, v.fuel - use * dt)
+	}
+}
+
+extension Game {
+	// MARK: every frame
+
+	/// What a vehicle does besides moving, once a frame (even at rest): the flight controls and fuel,
+	/// the guns, the autopilot when nobody drives, a turn in progress, rotor blades striking the ground,
+	/// fuel tanks that burst
+	func vehicleExtras(_ v: Vehicle, _ dt: Double) {
+		if v.parts.isEmpty { return }
+		if v.hitT > 0 { v.hitT -= dt }
+		if v.aero {
+			v.windX = world.dim == .overworld && settings.weatherOn ? weatherAt(v.px, v.py).wind * 0.6 : 0
+			if v.auto == 2 && !v.rider { autopilotSteer(v, 0, 0, dt) }
+			flightControls(v, dt)
+			airFuel(v, dt)
+			if v.rotors > 0 { rotorBlades(v, dt) }
+			let spin: Double = v.rotors > 0 ? v.collective : min(1.0, abs(v.throttle))
+			if v.rotors + v.airProps + v.tailRotors > 0 && airPower(v).0 + airPower(v).1 > 0 { v.propRot += dt * (4.0 + 26.0 * spin) }
+			v.airspeed = sqrt((v.vx - v.windX) * (v.vx - v.windX) + v.vy * v.vy)
+		} else if v.auto == 2 && !v.rider {
+			autopilotSteer(v, 0, 0, dt)
+		}
+		if v.turnT > 0 { stepTurn(v, dt) }
+		if v.cannons + v.guns > 0 { runVehicleWeapons(v, dt) }
+	}
+
+	/// Fuel tanks that burst last frame go off now
+	func flushVehicleBlasts() {
+		if vehBlasts.isEmpty { return }
+		let list: [(Double, Double)] = vehBlasts
+		vehBlasts.removeAll()
+		for b in list { explode(b.0, b.1, radius: 2.0, power: 14, source: .environment, breakBlocks: false) }
+	}
+
+	/// Rotor blades sweep a line two cells either side of the hub; if they cut into the ground the
+	/// rotor is wrecked in a moment
+	func rotorBlades(_ v: Vehicle, _ dt: Double) {
+		if v.collective < 0.05 && v.propRot == 0 { return }
+		if !(airPower(v).1 > 0) { return }
+		var struck: PartCell? = nil
+		for (c, t) in v.parts where t == .rotor {
+			var k: Double = -2.4
+			while k <= 2.41 {
+				let p: (Double, Double) = v.toWorld(Double(c.dx) + 0.5 + k, Double(c.dy) + 0.02)
+				if world.solid(Int(floor(p.0)), Int(floor(p.1))) { struck = c; break }
+				k += 0.8
+			}
+			if struck != nil { break }
+		}
+		guard let c = struck else { v.bladeHit = 0; return }
+		v.bladeHit += dt
+		let at: (Double, Double) = v.cellCenter(c)
+		if Double.random(in: 0...1) < 0.4 { spawnParticles(at.0, at.1 - 0.5, 0xFFE080, 2, 4.0, 0.25, 8) }
+		damageVehicle(v, c, 40.0 * dt, at.0, at.1)
+	}
+
+	// MARK: damage
+
+	/// A hard landing or a crash: each part that hit the ground too fast takes damage by how much too fast
+	func crashDamage(_ v: Vehicle, _ crash: [PartCell: Double]) {
+		if !settings.vehicleDamage { return }
+		var worst: Double = 0
+		for (c, over) in crash where v.parts[c] != nil {
+			let at: (Double, Double) = v.cellCenter(c)
+			damageVehicle(v, c, over * 3.2 * (1.0 + v.mass / 30.0), at.0, at.1)
+			worst = max(worst, over)
+		}
+		if worst > 0 {
+			addShake(min(0.8, 0.2 + worst * 0.05))
+			sfx(.land, at: v.px, 0.9)
+		}
+	}
+
+	/// Damage to one cell; when it has taken all it can, it breaks off
+	func damageVehicle(_ v: Vehicle, _ c: PartCell, _ amount: Double, _ x: Double, _ y: Double) {
+		guard let t = v.parts[c], amount > 0 else { return }
+		if !settings.vehicleDamage { return }
+		let hp: Double = vehicleCellHP(v, c, t) * (v.boost[c] ?? 1.0)
+		let d: Double = (v.dmg[c] ?? 0) + amount
+		v.dmg[c] = d
+		v.hitT = 0.15
+		if d >= hp { breakVehicleCell(v, c) }
+	}
+
+	/// A cell breaks off: it flies off as debris (a block keeps flying as a falling block), whatever is no
+	/// longer joined to the driver's part becomes a wreck of its own, falling with its own physics, and a
+	/// burst fuel tank goes off
+	func breakVehicleCell(_ v: Vehicle, _ c: PartCell) {
+		guard let t = v.parts[c] else { return }
+		let at: (Double, Double) = v.cellCenter(c)
+		let pv: (Double, Double) = (v.vx - v.angVel * (at.1 - v.py), v.vy + v.angVel * (at.0 - v.px))
+		let color: UInt32 = v.blocks[c].map { $0.def.colors.first ?? 0x8A8A8A } ?? 0x8A8A94
+		spawnParticles(at.0, at.1, color, 10, 4.5, 0.6, 14)
+		spawnParticles(at.0, at.1, 0x5A5A5A, 6, 2.5, 0.9, -2)
+		sfx(v.blocks[c] != nil && toolClass(v.blocks[c]!) == .axe ? .breakWood : .breakStone, at: at.0, 0.9)
+		addShake(0.2)
+		if t == .fuelTank && (v.fuel > 4 || isCreative) { vehBlasts.append(at) }
+		if t == .envelope { spawnParticles(at.0, at.1, 0xF0E4D0, 6, 5.0, 0.4, 4) }
+		// what the stores carried spills out of every store that comes away
+		let stores: [(PartCell, (Double, Double))] = v.parts.keys.filter { vehicleStores(v, $0) }.map { ($0, v.cellCenter($0)) }
+		let seat: PartCell? = seatCell(v)
+		let wasDriver: Bool = v.rider && inVehicle === v
+		// the transform before anything changes: the wrecks keep their place in the world
+		let old: Vehicle = v
+		var off: [VCell] = old.cutAway(c, keep: seat == c ? nil : seat)
+		if let first = off.first, first.cell == c {
+			off.removeFirst()
+			if let b = first.tile, b.solid, fallingBlocks.count < 120 {
+				var fb: FallingBlock = FallingBlock(x: at.0, y: at.1 + 0.5, vy: pv.1 - 3.0, tile: b, uid: newID())
+				fb.vx = pv.0 + Double.random(in: -2...2)
+				fb.mass = max(0.2, tileWeight(b))
+				fb.spin = Double.random(in: -6...6)
+				fb.flung = true
+				fallingBlocks.append(fb)
+			} else if Double.random(in: 0...1) < 0.35 {
+				spawnDrop(Stack(item: vehicleCellItem(first), count: 1), at.0, at.1, pv.0 * 0.5, -4)
+			}
+		}
+		if !off.isEmpty { makeWrecks(old, off) }
+		for (sc, sp) in stores where v.parts[sc] == nil {
+			let k: IntPair = cargoSpot(v, sc)
+			if let p = openChest, p == k { openChest = nil }
+			for st in world.removeChest(k.x, k.y) { spawnDrop(st, sp.0, sp.1, Double.random(in: -2...2), -3.5) }
+		}
+		if v.parts.isEmpty {
+			if wasDriver { dismount() }
+			return
+		}
+		v.recompute(keepAnchor: true)
+		v.kit = -1
+		if wasDriver && (seatCell(v) == nil || !v.hasSteering) {
+			dismount()
+			say("Your seat was shot away!", 2.0)
+		}
+		bumpHUD()
+	}
+
+	/// Pieces broken off a vehicle become wrecks: vehicles of their own (no seat, so nobody drives them)
+	/// that keep the place, turn and speed they had
+	func makeWrecks(_ from: Vehicle, _ cells: [VCell]) {
+		var left: [PartCell: VCell] = [:]
+		for r in cells { left[r.cell] = r }
+		while let start = left.keys.first {
+			var group: [VCell] = []
+			var stack: [PartCell] = [start]
+			while let cur = stack.popLast() {
+				guard let r = left[cur] else { continue }
+				left[cur] = nil
+				group.append(r)
+				let n: [PartCell] = [PartCell(dx: cur.dx + 1, dy: cur.dy), PartCell(dx: cur.dx - 1, dy: cur.dy), PartCell(dx: cur.dx, dy: cur.dy + 1), PartCell(dx: cur.dx, dy: cur.dy - 1)]
+				for k in n where left[k] != nil { stack.append(k) }
+			}
+			if vehicles.count >= 40 {
+				for r in group {
+					let p: (Double, Double) = from.cellCenter(r.cell)
+					if Double.random(in: 0...1) < 0.4 { spawnDrop(Stack(item: vehicleCellItem(r), count: 1), p.0, p.1, 0, -3) }
+				}
+				continue
+			}
+			let w: Vehicle = Vehicle(id: newID(), first: .frame, x: 0, y: 0)
+			w.parts.removeAll()
+			for r in group {
+				w.parts[r.cell] = r.type
+				if let b = r.tile { w.blocks[r.cell] = b }
+			}
+			w.recompute(keepAnchor: false)
+			let p: (Double, Double) = from.toWorld(w.comX, w.comY)
+			w.px = p.0
+			w.py = p.1
+			w.angle = from.angle
+			w.vx = from.vx - from.angVel * (p.1 - from.py) + Double.random(in: -1.5...1.5)
+			w.vy = from.vy + from.angVel * (p.0 - from.px) - 2.0
+			w.angVel = from.angVel + Double.random(in: -1.5...1.5)
+			w.updateBox()
+			vehicles.append(w)
+		}
+	}
+
+	/// Blasts damage every part in reach (less further out) and shove the vehicle away
+	func blastVehicles(_ x: Double, _ y: Double, radius: Double, power: Double) {
+		let list: [Vehicle] = vehicles
+		for v in list {
+			if v.b.right < x - radius - 1 || v.b.left > x + radius + 1 || v.b.y < y - radius - 1 || v.b.top > y + radius + 1 { continue }
+			var hits: [(PartCell, Double)] = []
+			for (c, _) in v.parts {
+				let p: (Double, Double) = v.cellCenter(c)
+				let d: Double = sqrt((p.0 - x) * (p.0 - x) + (p.1 - y) * (p.1 - y))
+				if d > radius + 0.5 { continue }
+				hits.append((c, power * 1.1 * (1.0 - 0.6 * clampD(d / max(0.5, radius), 0, 1))))
+			}
+			if hits.isEmpty { continue }
+			let dx: Double = v.px - x
+			let dy: Double = v.py - y
+			let dl: Double = max(0.5, sqrt(dx * dx + dy * dy))
+			let push: Double = power * 0.9 * Double(hits.count) / Double(max(1, v.parts.count)) / max(1.0, v.mass * 0.25)
+			v.vx += dx / dl * min(14.0, push)
+			v.vy += dy / dl * min(14.0, push) - 1.0
+			v.asleep = false
+			for h in hits where v.parts[h.0] != nil {
+				let p: (Double, Double) = v.cellCenter(h.0)
+				damageVehicle(v, h.0, h.1, p.0, p.1)
+			}
+		}
+	}
+
+	/// The first vehicle cell a shot's step passes through. Shots from monsters, and from other vehicles'
+	/// guns, hit vehicles; the player's own shots pass their vehicles, and a gun never hits its own vehicle.
+	func vehicleOnPath(_ p: Projectile, _ nx: Double, _ ny: Double, maxT: Double) -> VehicleHit? {
+		let fromVehicle: Bool = p.owner >= 2_000_000
+		if p.source.kind == .player && !fromVehicle { return nil }
+		var best: VehicleHit? = nil
+		var bt: Double = min(1.0, maxT)
+		let x0: Double = min(p.x, nx)
+		let x1: Double = max(p.x, nx)
+		let y0: Double = min(p.y, ny)
+		let y1: Double = max(p.y, ny)
+		for v in vehicles {
+			if fromVehicle && p.owner == 2_000_000 + v.id { continue }
+			if x1 < v.b.left || x0 > v.b.right || y1 < v.b.top || y0 > v.b.y { continue }
+			let a: (Double, Double) = v.toLocal(p.x, p.y)
+			let b: (Double, Double) = v.toLocal(nx, ny)
+			let len: Double = sqrt((b.0 - a.0) * (b.0 - a.0) + (b.1 - a.1) * (b.1 - a.1))
+			let n: Int = max(1, Int(ceil(len / 0.2)))
+			var i: Int = 0
+			while i <= n {
+				let t: Double = Double(i) / Double(n)
+				if t > bt { break }
+				let lx: Double = a.0 + (b.0 - a.0) * t
+				let ly: Double = a.1 + (b.1 - a.1) * t
+				let c: PartCell = PartCell(dx: Int(floor(lx)), dy: Int(floor(ly)))
+				if v.parts[c] != nil {
+					bt = t
+					best = VehicleHit(t: t, v: v, cell: c)
+					break
+				}
+				i += 1
+			}
+		}
+		return best
+	}
+
+	/// A shot strikes a vehicle part
+	func shotHitsVehicle(_ p: Projectile, _ vh: VehicleHit, _ x: Double, _ y: Double) {
+		if p.kind == .shell {
+			shellBurst(p, x, y)
+			return
+		}
+		if p.mod >= 0 { modShotLanded(p, x, y, mob: nil, player: false) }
+		var amount: Double = p.dmg
+		if p.kind == .fireball { amount *= 1.3 }
+		if vh.v.parts[vh.cell] == .armor { spawnParticles(x, y, 0xFFE8A0, 4, 4.0, 0.2, 6) } else { spawnParticles(x, y, 0xC8C8C8, 3, 3.0, 0.3, 10) }
+		sfx(.arrowHit, at: x, 0.5)
+		damageVehicle(vh.v, vh.cell, amount, x, y)
+	}
+
+	/// A cannon shell bursts: a small blast that breaks and throws blocks like a bomb's
+	func shellBurst(_ p: Projectile, _ x: Double, _ y: Double) {
+		explode(x, y, radius: 2.3, power: p.dmg, source: p.source, breakBlocks: true)
+	}
+
+	// MARK: weapons
+
+	/// The guns turn toward where the driver aims (each within its own arc) and fire while the attack
+	/// stick is held. Cannons fire shells (one gunpowder each) and kick the vehicle back; machine guns
+	/// fire a stream of bullets.
+	func runVehicleWeapons(_ v: Vehicle, _ dt: Double) {
+		for (c, cd) in v.gunCD where cd > 0 { v.gunCD[c] = cd - dt }
+		let driving: Bool = v.rider && inVehicle === v
+		let firing: Bool = driving && useHeld && aimValid
+		for (c, t) in v.parts where t == .cannon || t == .autoGun {
+			let f: (Int, Int) = v.face[c] ?? (1, 0)
+			let base: Double = v.angle + atan2(Double(f.1), Double(f.0))
+			let o: (Double, Double) = v.cellCenter(c)
+			var want: Double = base
+			if driving && aimValid { want = atan2(aimY - o.1, aimX - o.0) }
+			let rel: Double = clampD(remainder(want - base, 2.0 * Double.pi), -1.4, 1.4)
+			let a: Double = base + rel
+			let cur: Double = v.aimAng[c] ?? base
+			let turn: Double = remainder(a - cur, 2.0 * Double.pi)
+			let rate: Double = (t == .cannon ? 3.0 : 6.0) * dt
+			let na: Double = cur + clampD(turn, -rate, rate)
+			v.aimAng[c] = na
+			if firing && (v.gunCD[c] ?? 0) <= 0 && abs(remainder(want - na, 2.0 * Double.pi)) < 0.35 {
+				fireVehicleGun(v, c, t, na, o)
+			}
+		}
+	}
+
+	func fireVehicleGun(_ v: Vehicle, _ c: PartCell, _ t: PartType, _ a: Double, _ o: (Double, Double)) {
+		let cannon: Bool = t == .cannon
+		if !isCreative {
+			let ammo: Item = cannon ? .mat(.gunpowder) : .ammo(.bullet)
+			if !inv.remove(ammo, 1) {
+				v.gunCD[c] = 1.0
+				if vehSayT <= clock {
+					vehSayT = clock + 3.0
+					say(cannon ? "The cannon needs gunpowder." : "The machine gun needs bullets.", 2.0)
+				}
+				return
+			}
+		}
+		let k: Double = v.boost[c] ?? 1.0
+		let mx: Double = o.0 + cos(a) * 0.9
+		let my: Double = o.1 + sin(a) * 0.9
+		let speed: Double = cannon ? 34.0 : 44.0
+		var p = Projectile(kind: cannon ? .shell : .bullet, x: mx, y: my, vx: cos(a) * speed + v.vx, vy: sin(a) * speed + v.vy, dmg: cannon ? 24 * k : 4.5 * k, fromPlayer: true, gravity: cannon ? 14 : 3)
+		p.life = cannon ? 4.0 : 1.3
+		p.w = cannon ? 0.35 : 0.15
+		p.source = .player
+		p.owner = 2_000_000 + v.id
+		p.uid = newID()
+		p.knock = cannon ? 9 : 3
+		projectiles.append(p)
+		v.gunCD[c] = cannon ? 2.0 : 0.13
+		if cannon {
+			// the recoil kicks the vehicle back, around the cannon
+			let j: Double = 10.0
+			let rx: Double = o.0 - v.px
+			let ry: Double = o.1 - v.py
+			let jx: Double = -cos(a) * j
+			let jy: Double = -sin(a) * j
+			v.vx += jx / v.mass
+			v.vy += jy / v.mass
+			v.angVel += (rx * jy - ry * jx) / v.inertia
+			v.asleep = false
+			spawnParticles(mx, my, 0xFFC050, 8, 5.0, 0.25, 2)
+			spawnParticles(mx, my, 0x8A8A8A, 6, 2.0, 0.8, -3)
+			addShake(0.25)
+			sfx(.blunderbuss, at: mx, 0.9)
+		} else {
+			if Double.random(in: 0...1) < 0.5 { spawnParticles(mx, my, 0xFFE080, 2, 3.0, 0.12, 0) }
+			sfx(.gun, at: mx, 0.3)
+		}
+	}
+
+	/// Where the guns aim with the attack stick held but not pushed: the nearest foe in range and in
+	/// sight, led a little for its speed (nil: none, the guns look ahead)
+	func vehicleAutoAim(_ v: Vehicle) -> (Double, Double)? {
+		var best: Mob? = nil
+		var bd: Double = 26.0
+		for m in mobsNear(v.px - 26, v.px + 26) where m.hp > 0 && !m.removed && !m.downed && isThreat(m) {
+			let d: Double = abs(m.b.x - v.px) + abs(m.b.cy - v.py) * 0.7
+			if d < bd && world.lineClear(v.px, v.py, m.b.x, m.b.cy) {
+				bd = d
+				best = m
+			}
+		}
+		guard let m = best else { return nil }
+		let lead: Double = bd / 40.0
+		return (m.b.x + m.b.vx * lead, m.b.cy + m.b.vy * lead)
+	}
+
+	// MARK: repairs and storage
+
+	/// Holding an iron bar, a tap on a damaged part mends it (the bar is used up)
+	func repairVehiclePart(_ v: Vehicle, _ c: PartCell) -> Bool {
+		guard let it = heldItem, it == .mat(.ironBar), let d = v.dmg[c], d > 0.5 else { return false }
+		v.dmg[c] = nil
+		if !isCreative { inv.removeAt(sel, 1) }
+		let p: (Double, Double) = v.cellCenter(c)
+		spawnParticles(p.0, p.1, 0xFFE8A0, 6, 2.5, 0.4, 4)
+		sfx(.craft, at: p.0, 0.6)
+		say("Mended.", 1.0)
+		bumpHUD()
+		return true
+	}
+
+	/// Cells that hold things: cargo crates, and chests, cabinets, wardrobes or a mod's storage built on
+	func vehicleStores(_ v: Vehicle, _ c: PartCell) -> Bool {
+		guard let t = v.parts[c] else { return false }
+		if t == .cargo { return true }
+		guard t == .block, let b = v.blocks[c] else { return false }
+		if b == .chest || b == .cabinet || b == .wardrobe { return true }
+		if b.isMod, ModRuntime.shared.blockDef(b)?.function == .storage { return true }
+		return false
+	}
+
+	/// Puts a whole stack (infusions and all) in the bag, dropping what does not fit
+	func giveStack(_ st: Stack) {
+		let left: Int = inv.add(st.item, st.count, extra: st.extra, inf: st.inf)
+		if left > 0 {
+			var rest: Stack = st
+			rest.count = left
+			spawnDrop(rest, pb.x, pb.y - 1.0, Double(facing) * 3.0, -4.0)
+		}
+		bumpHUD()
+	}
+
+	/// What the controls do in this vehicle (said when getting in)
+	func controlsHint(_ v: Vehicle) -> String {
+		if v.rotors > 0 { return "Flying. Stick up and down: climb and sink (let go to hover). Left and right: tilt and fly that way." }
+		if v.burners > 0 && v.envelopes > 0 { return "Ballooning. Stick up: heat the balloon and rise; down: let it cool and sink. Left and right: the propellers." }
+		if v.wings > 0 { return "Flying. Left and right: the throttle. Up and down: pitch the nose (gather speed on the ground, then pull up). TURN turns round." }
+		if v.tracks > 0 { return "Driving a tracked vehicle: slow, but it climbs anything. Jump to get out when stopped." }
+		return "Driving. Hold the stick to move; in the air it tilts the vehicle. Jump to get out when stopped."
+	}
+}
+
+extension Game {
+	// MARK: turning round
+
+	/// TURN is offered while driving: in flight it is a banked turn out of the screen and back; standing
+	/// still (or nearly), the vehicle simply faces the other way if it has room
+	var canTurnVehicle: Bool {
+		guard let v = inVehicle else { return false }
+		return v.turnT == 0 && (v.aero || v.speed < 2.0)
+	}
+
+	func turnVehicle() {
+		guard let v = inVehicle, v.turnT == 0 else { return }
+		let flying: Bool = v.aero && v.contacts == 0 && v.submerged <= 0.02 && v.speed > 3.0
+		if flying {
+			v.turnT = 0.001
+			v.turnVX = v.vx
+			v.turned = false
+			v.asleep = false
+			return
+		}
+		if v.speed > 2.0 {
+			say("Slow down to turn round.", 1.5)
+			return
+		}
+		if !mirrorVehicle(v, check: true) { say("No room to turn round here.", 1.8) }
+	}
+
+	/// A turn in flight: it banks round out of the screen and back (drawn narrowing to its edge and
+	/// widening again), the wings lift a little less while banked, and halfway round it faces and flies
+	/// the other way, keeping its airspeed less what the turn costs
+	func stepTurn(_ v: Vehicle, _ dt: Double) {
+		v.turnT = min(1.0, v.turnT + dt / Aero.turnTime)
+		if !v.turned && v.turnT >= 0.5 {
+			v.turned = true
+			_ = mirrorVehicle(v, check: false)
+			v.vx = -v.vx * 0.92
+		}
+		if v.turnT >= 1.0 { v.turnT = 0 }
+	}
+
+	/// Mirrors a vehicle left to right about its centre of mass (it then faces the other way). With
+	/// `check`, only if the mirrored vehicle fits where it is. Stores keep what they hold.
+	@discardableResult
+	func mirrorVehicle(_ v: Vehicle, check: Bool) -> Bool {
+		let sx: Int = v.minX + v.maxX
+		if check {
+			for (c, _) in v.parts {
+				let p: (Double, Double) = v.cellCenter(c)
+				let mx: Double = 2.0 * v.px - p.0
+				if world.boxSolid(mx - 0.4, p.1 - 0.4, mx + 0.4, p.1 + 0.4) { return false }
+			}
+		}
+		var np: [PartCell: PartType] = [:]
+		var nb: [PartCell: Tile] = [:]
+		var nd: [PartCell: Double] = [:]
+		var moved: [(IntPair, [Stack])] = []
+		for (c, t) in v.parts {
+			let m: PartCell = PartCell(dx: sx - c.dx, dy: c.dy)
+			np[m] = t
+			if let b = v.blocks[c] { nb[m] = mirroredTile(b) }
+			if let d = v.dmg[c] { nd[m] = d }
+			if vehicleStores(v, c) {
+				let k: IntPair = cargoSpot(v, c)
+				if let p = openChest, p == k { openChest = nil }
+				moved.append((cargoSpot(v, m), world.removeChest(k.x, k.y)))
+			}
+		}
+		let cx: Double = v.px
+		let cy: Double = v.py
+		v.parts = np
+		v.blocks = nb
+		v.dmg = nd
+		v.gunCD.removeAll()
+		v.aimAng.removeAll()
+		v.drillWork.removeAll()
+		v.recompute(keepAnchor: false)
+		v.angle = -v.angle
+		v.angVel = -v.angVel
+		v.px = cx
+		v.py = cy
+		v.dir = -v.dir
+		v.fwd = -v.fwd
+		v.kit = -1
+		v.asleep = false
+		v.updateBox()
+		for m in moved { world.setChestItems(m.0.x, m.0.y, m.1) }
+		return true
+	}
+
+	// MARK: building blocks onto vehicles
+
+	/// The ON VEHICLE switch shows while a block is in hand near a vehicle
+	var canBuildOnVehicle: Bool {
+		guard inVehicle == nil, !dead, let it = heldItem, case .block(let t) = it else { return false }
+		if t == .doorClosed || t == .doorOpen || t == .liftCar || t == .sapling || t.isPlant { return false }
+		return nearestVehicle(8) != nil
+	}
+
+	func toggleVehicleBuild() {
+		vehicleBuild.toggle()
+		say(vehicleBuild ? "Blocks now go onto the vehicle: tap a green square." : "Blocks go into the world again.", 2.0)
+		bumpHUD()
+	}
+
+	/// Builds the block in hand onto the vehicle at the aim point (it becomes one of its cells, with its
+	/// weight, and moves with it). A mod block made to work as a vehicle part does that part's work.
+	func attachBlockToVehicle(_ t: Tile) -> Bool {
+		guard let (v, c) = vehicleCellAtAim() else {
+			if nearestVehicle(8) == nil { return false }
+			if placeCD <= 0 { say("Tap a green square next to the vehicle.", 1.5) }
+			placeCD = 0.3
+			return true
+		}
+		var part: PartType = .block
+		if t.isMod, let d = ModRuntime.shared.blockDef(t), let p = d.vehRole.part { part = p }
+		if let problem = attachProblem(v, c, part) {
+			say(problem, 2.0)
+			placeCD = 0.3
+			return true
+		}
+		liftIfBuried(v, c)
+		v.parts[c] = part
+		v.blocks[c] = t
+		v.recompute(keepAnchor: true)
+		v.kit = -1
+		if t == .chest || t == .cabinet || t == .wardrobe { world.setChestItems(cargoSpot(v, c).x, cargoSpot(v, c).y, []) }
+		if !isCreative { inv.removeAt(sel, 1) }
+		sfx(.place, 0.6)
+		placeCD = 0.16
+		swingT = 0.14
+		bumpHUD()
+		return true
+	}
+
+	/// The free cell next to a vehicle under the aim point (the one a block or part would go in)
+	func vehicleCellAtAim() -> (Vehicle, PartCell)? {
+		for v in vehicles {
+			if aimX < v.b.left - 1.5 || aimX > v.b.right + 1.5 || aimY < v.b.top - 1.5 || aimY > v.b.y + 1.5 { continue }
+			let c: PartCell = v.cellAt(aimX, aimY)
+			if v.parts[c] == nil && v.hasNeighbor(c) { return (v, c) }
+		}
+		return nil
+	}
+
+	// MARK: the assembler
+
+	/// The Vehicle Assembler: a tap on a structure you built turns it (every built block joined to it)
+	/// into a vehicle, joined to a vehicle it touches if there is one; a tap on a parked vehicle puts its
+	/// blocks back into the world and its parts in your bag
+	func useAssembler(_ pressed: Bool) {
+		if !pressed || useCD > 0 { return }
+		useCD = 0.4
+		swingT = 0.15
+		if !inReach(aimX, aimY) {
+			say("Tap closer to you.", 1.2)
+			return
+		}
+		if let hit = vehicleAtPoint(aimX, aimY) {
+			disassembleVehicle(hit.0)
+			return
+		}
+		let tx: Int = Int(floor(aimX))
+		let ty: Int = Int(floor(aimY))
+		if !world.isBuilt(tx, ty) || !canAssemble(world.tile(tx, ty)) {
+			say("Tap a block you built: it and every built block joined to it become one vehicle.", 3.0)
+			return
+		}
+		assembleStructure(tx, ty)
+	}
+
+	/// The built blocks joined to (x, y), side by side (up to 800)
+	func builtStructure(_ x: Int, _ y: Int) -> [IntPair] {
+		var out: [IntPair] = []
+		var seen: Set<IntPair> = []
+		var stack: [IntPair] = [IntPair(x: x, y: y)]
+		while let p = stack.popLast() {
+			if seen.contains(p) { continue }
+			seen.insert(p)
+			if !world.isBuilt(p.x, p.y) || !canAssemble(world.tile(p.x, p.y)) { continue }
+			out.append(p)
+			if out.count >= 800 { break }
+			stack.append(IntPair(x: p.x + 1, y: p.y))
+			stack.append(IntPair(x: p.x - 1, y: p.y))
+			stack.append(IntPair(x: p.x, y: p.y + 1))
+			stack.append(IntPair(x: p.x, y: p.y - 1))
+		}
+		return out
+	}
+
+	func assembleStructure(_ x: Int, _ y: Int) {
+		let cells: [IntPair] = builtStructure(x, y)
+		if cells.isEmpty { return }
+		if cells.count >= 800 {
+			say("That structure is too big to move (800 blocks at most).", 2.5)
+			return
+		}
+		// a vehicle the structure touches takes it in (it must be roughly level)
+		var host: Vehicle? = nil
+		for v in vehicles where abs(remainder(v.angle, 2.0 * Double.pi)) < 0.08 && !v.rider {
+			for p in cells {
+				let c: PartCell = v.cellAt(Double(p.x) + 0.5, Double(p.y) + 0.5)
+				if v.parts[c] == nil && v.hasNeighbor(c) { host = v; break }
+			}
+			if host != nil { break }
+		}
+		var x0: Int = Int.max
+		var y1: Int = Int.min
+		for p in cells { x0 = min(x0, p.x); y1 = max(y1, p.y) }
+		let v: Vehicle = host ?? Vehicle(id: newID(), first: .frame, x: 0, y: 0)
+		if host == nil { v.parts.removeAll() }
+		var stores: [(PartCell, [Stack])] = []
+		var added: Int = 0
+		for p in cells {
+			let t: Tile = world.tile(p.x, p.y)
+			let c: PartCell = host != nil ? v.cellAt(Double(p.x) + 0.5, Double(p.y) + 0.5) : PartCell(dx: p.x - x0, dy: p.y - y1)
+			if v.parts[c] != nil {
+				// no cell free for it in the vehicle: it goes to the bag (with what it held)
+				giveItem(.block(t), 1)
+				if t == .chest || t == .cabinet || t == .wardrobe { for st in world.removeChest(p.x, p.y) { giveStack(st) } }
+				continue
+			}
+			var part: PartType = .block
+			if t.isMod, let d = ModRuntime.shared.blockDef(t), let pp = d.vehRole.part { part = pp }
+			v.parts[c] = part
+			v.blocks[c] = t
+			added += 1
+			if t == .chest || t == .cabinet || t == .wardrobe || (t.isMod && ModRuntime.shared.blockDef(t)?.function == .storage) {
+				stores.append((c, world.removeChest(p.x, p.y)))
+			}
+		}
+		for p in cells {
+			world.setBuilt(p.x, p.y, false)
+			world.set(p.x, p.y, .air)
+		}
+		if host == nil {
+			v.recompute(keepAnchor: false)
+			v.placeBox(left: Double(x0), bottom: Double(y1 + 1))
+			vehicles.append(v)
+		} else {
+			v.recompute(keepAnchor: true)
+		}
+		v.kit = -1
+		v.asleep = false
+		for s in stores { world.setChestItems(cargoSpot(v, s.0).x, cargoSpot(v, s.0).y, s.1) }
+		spawnParticles(v.b.x, v.b.y - v.b.h * 0.5, 0x30C0E0, 14, 4.0, 0.6, 2)
+		sfx(.craft, 0.8)
+		let massS: String = String(format: "%.0f", v.mass)
+		let what: String = host == nil ? "a new vehicle" : "the vehicle"
+		say(joinText("Assembled ", String(added), " blocks into ", what, " (mass ", massS, "). ", vehicleCheck(v).hint), 4.0)
+		bumpHUD()
+	}
+
+	/// Puts a parked, level vehicle's blocks back into the world, each in the cell it is over (blocks
+	/// that have no room go to the bag, as do the parts); stores keep their things as chests
+	func disassembleVehicle(_ v: Vehicle) {
+		if v.rider || v.speed > 1.0 || !v.upright {
+			say("Park it level and get out first.", 2.0)
+			return
+		}
+		var placed: Int = 0
+		var bagged: Int = 0
+		for (c, t) in v.parts {
+			let p: (Double, Double) = v.cellCenter(c)
+			let tx: Int = Int(floor(p.0))
+			let ty: Int = Int(floor(p.1))
+			var held: [Stack] = []
+			if vehicleStores(v, c) {
+				let k: IntPair = cargoSpot(v, c)
+				if let o = openChest, o == k { openChest = nil }
+				held = world.removeChest(k.x, k.y)
+			}
+			let here: Tile = world.tile(tx, ty)
+			let free: Bool = here == .air || here.liquid || here.isPlant
+			if let b = v.blocks[c], free {
+				world.set(tx, ty, b)
+				world.setBuilt(tx, ty, true)
+				if b == .chest || b == .cabinet || b == .wardrobe || (b.isMod && ModRuntime.shared.blockDef(b)?.function == .storage) {
+					world.setChestItems(tx, ty, held)
+					held = []
+				}
+				placed += 1
+			} else {
+				giveItem(vehicleCellItem(VCell(cell: c, type: t, tile: v.blocks[c])), 1)
+				bagged += 1
+			}
+			for st in held { giveStack(st) }
+		}
+		vehicles.removeAll { $0 === v }
+		spawnParticles(v.b.x, v.b.y - v.b.h * 0.5, 0x30C0E0, 14, 4.0, 0.6, 2)
+		sfx(.craft, 0.8)
+		say(joinText("Taken apart: ", String(placed), " blocks back in place, ", String(bagged), " to your bag."), 3.0)
+		bumpHUD()
+	}
+
+	// MARK: the autopilot
+
+	/// AUTO cycles the autopilot: off, cruise (it holds the speed and the height you had), route (it
+	/// drives the points you marked, round and round, even with nobody aboard)
+	func cycleAutopilot() {
+		guard let v = inVehicle, v.autopilots > 0 else { return }
+		var next: Int = (v.auto + 1) % 3
+		if next == 2 && v.route.count < 2 { next = 0 }
+		v.auto = next
+		v.holdThr = abs(v.throttle) > 0.1 ? v.throttle : (abs(v.vx) > 1.5 ? (v.vx > 0 ? 0.7 : -0.7) : 0)
+		v.holdY = v.py
+		v.holdVX = v.vx
+		if next == 2 { v.routeAt = nearestWaypoint(v) }
+		let names: [String] = ["Autopilot off.", "Autopilot: cruise. It holds your speed and height; steer any time.", "Autopilot: route. It drives your marked points round and round, even if you get out."]
+		say(names[next], 3.0)
+		bumpHUD()
+	}
+
+	/// MARK adds where the vehicle is now to its route (up to 16 points)
+	func markWaypoint() {
+		guard let v = inVehicle, v.autopilots > 0 else { return }
+		if v.route.count >= 16 { v.route.removeFirst() }
+		v.route.append(VWaypoint(x: v.px, y: v.py))
+		let n: Int = v.route.count
+		say(n < 2 ? "Point 1 marked. Drive on and mark more." : joinText("Point ", String(n), " marked. AUTO twice to drive the route."), 2.0)
+		bumpHUD()
+	}
+
+	func clearRoute() {
+		guard let v = inVehicle else { return }
+		v.route.removeAll()
+		if v.auto == 2 { v.auto = 0 }
+		say("Route cleared.", 1.5)
+		bumpHUD()
+	}
+
+	func nearestWaypoint(_ v: Vehicle) -> Int {
+		var best: Int = 0
+		var bd: Double = 1e18
+		for (i, w) in v.route.enumerated() {
+			let d: Double = (w.x - v.px) * (w.x - v.px) + (w.y - v.py) * (w.y - v.py)
+			if d < bd { bd = d; best = i }
+		}
+		return best
+	}
+
+	/// The autopilot's hands on the controls. The driver's own input wins while the stick is pushed
+	/// (and cruise then takes up the new speed or height). Cruise holds the throttle, and in the air the
+	/// height; a route steers for each point in turn.
+	func autopilotSteer(_ v: Vehicle, _ ix: Double, _ up: Double, _ dt: Double) {
+		if v.autopilots == 0 { v.auto = 0; return }
+		let touched: Bool = abs(ix) > 0.1 || abs(up) > 0.1
+		if v.auto == 1 {
+			if abs(ix) > 0.1 { v.holdThr = ix } else { v.throttle = v.holdThr }
+			if abs(up) > 0.1 { v.holdY = v.py } else if v.aero { v.pitch = holdHeight(v, v.holdY) }
+			return
+		}
+		if v.auto != 2 || v.route.count < 2 { return }
+		if touched && v.rider { return }
+		if v.routeAt >= v.route.count { v.routeAt = 0 }
+		let w: VWaypoint = v.route[v.routeAt]
+		let dx: Double = w.x - v.px
+		let dy: Double = w.y - v.py
+		let flyer: Bool = v.aero && (v.rotors > 0 || v.envelopes > 0 || v.wings > 0)
+		let arrived: Bool = abs(dx) < 2.5 && (!flyer || abs(dy) < 3.0)
+		if arrived {
+			v.routeAt = (v.routeAt + 1) % v.route.count
+			return
+		}
+		if v.wings > 0 && v.rotors == 0 && v.envelopes == 0 {
+			// a plane flies on at full throttle and turns round when the point is behind it
+			let ahead: Double = dx * Double(v.fwd) * (v.cosA >= 0 ? 1.0 : -1.0)
+			if ahead < -6.0 && v.turnT == 0 && v.contacts == 0 && v.speed > 3.0 {
+				v.turnT = 0.001
+				v.turnVX = v.vx
+				v.turned = false
+			}
+			v.throttle = Double(v.fwd)
+			v.pitch = holdHeight(v, w.y)
+			return
+		}
+		let gain: Double = flyer ? 0.15 : 0.35
+		var thr: Double = clampD(dx * gain, -1, 1)
+		if abs(thr) < 0.35 { thr = thr >= 0 ? 0.35 : -0.35 }
+		if flyer && abs(dx) < 6.0 { thr *= abs(dx) / 6.0 }
+		v.throttle = thr
+		v.pitch = flyer ? holdHeight(v, w.y) : 0
+	}
+
+	/// The up/down input that brings the vehicle to a height and holds it there
+	func holdHeight(_ v: Vehicle, _ y: Double) -> Double {
+		let err: Double = v.py - y
+		if v.wings > 0 && v.rotors == 0 && v.envelopes == 0 {
+			return clampD(err * 0.12 + v.vy * 0.12, -0.7, 0.7)
+		}
+		return clampD(err * 0.35 + v.vy * 0.3, -1, 1)
+	}
+}
+
+extension Game {
+	// MARK: what kind of vehicle, and is it ready
+
+	/// What the design is, from what it is built of (a hybrid when it is more than one thing)
+	func vehicleKindName(_ v: Vehicle) -> String {
+		var kinds: [String] = []
+		if v.rotors > 0 { kinds.append("HELICOPTER") }
+		if v.envelopes > 0 && v.burners > 0 { kinds.append("AIRSHIP") }
+		if v.wings > 0 && v.rotors == 0 { kinds.append(v.airProps + v.jets > 0 ? (v.jets > 0 ? "JET" : "PLANE") : "GLIDER") }
+		var hulls: Int = 0
+		for (_, t) in v.parts where t == .hull { hulls += 1 }
+		if hulls > 0 { kinds.append("BOAT") }
+		// on an aircraft, wheels are its landing gear
+		let flies: Bool = v.rotors > 0 || v.wings > 0 || (v.envelopes > 0 && v.burners > 0)
+		if v.wheels >= 2 {
+			if v.tracks > 0 { kinds.append(v.cannons > 0 ? "TANK" : "TRACKED") }
+			else if kinds.isEmpty { kinds.append(v.parts.count >= 14 || cargoCount(v) >= 2 ? "TRUCK" : "CAR") }
+			else if !flies { kinds.append("WHEELS") }
+		}
+		if kinds.isEmpty { return v.parts.contains { $0.value == .block } ? "STRUCTURE" : "VEHICLE" }
+		if kinds.count == 1 { return kinds[0] }
+		return joinText(kinds.prefix(2).joined(separator: " + "), " HYBRID")
+	}
+
+	func cargoCount(_ v: Vehicle) -> Int {
+		var n: Int = 0
+		for c in v.parts.keys where vehicleStores(v, c) { n += 1 }
+		return n
+	}
+
+	/// The checklist for anything that flies, fights or runs on tracks: what it needs, and whether its
+	/// design can do it (lift against weight, a tail behind the centre of mass, power for its rotors)
+	func flightCheck(_ v: Vehicle) -> VehicleCheck {
+		var lines: [String] = []
+		var oks: [Bool] = []
+		func add(_ ok: Bool, _ s: String) {
+			lines.append(s)
+			oks.append(ok)
+		}
+		let weight: Double = v.mass * gravityG
+		let massS: String = String(format: "%.1f", v.mass)
+		add(v.hasSeat && v.hasSteering, v.hasCockpit ? "Cockpit" : "Seat and steering wheel (or a cockpit)")
+		var hint: String = joinText("Mass ", massS, ". Refuel: hold coal or wood and tap it.")
+		if v.rotors > 0 {
+			let lift: Double = rotorMax(v, anyway: true) + balloonMax(v)
+			let pct: Int = Int((lift / max(1, weight) * 100).rounded())
+			add(v.engines > 0, joinText("Engines to turn the rotor (", String(v.engines), ")"))
+			add(lift > weight * 1.05, joinText("Rotor lift ", String(pct), "% of the weight"))
+			add(v.tailRotors > 0 || v.rotors >= 2, "Tail rotor (or a second main rotor)")
+			hint = lift > weight * 1.05 ? joinText("Mass ", massS, ". Stick up to lift off; let go to hover.") : "Too heavy for the rotor: add engines or take weight off."
+		} else if v.envelopes > 0 {
+			let lift: Double = balloonMax(v)
+			let pct: Int = Int((lift / max(1, weight) * 100).rounded())
+			let need: Int = (v.envelopes + Aero.burnerCells - 1) / Aero.burnerCells
+			add(v.burners >= need, joinText("Burners: ", String(v.burners), " of ", String(need), " (one heats 12 envelopes)"))
+			add(lift > weight * 1.05, joinText("Balloon lift ", String(pct), "% of the weight (full heat)"))
+			add(v.airProps > 0 && v.engines > 0, "Propeller and engine to move (optional)")
+			oks[oks.count - 1] = true
+			hint = lift > weight * 1.05 ? joinText("Mass ", massS, ". Stick up to heat the balloon and rise.") : "Not enough balloon for the weight: add envelopes (and burners)."
+		} else if v.wings > 0 {
+			let takeoff: Double = sqrt(weight / max(0.01, Aero.kLift * Double(v.wings) * 1.15))
+			let thrust: Bool = (v.airProps > 0 && v.engines > 0) || v.jets > 0
+			add(thrust, "Air propeller with an engine, or a jet")
+			add(takeoff < 20.0, joinText("Wings lift it at ", String(Int(takeoff.rounded())), " blocks/s (", String(v.wings), " wing cells)"))
+			// the push it has at that speed against its weight: under a fifth, it never gets there
+			let push: Double = thrustAt(v, takeoff) / max(1, weight)
+			add(push >= 0.2, joinText("Thrust ", String(Int((push * 100).rounded())), "% of the weight at take-off (20% needed)"))
+			let tail: (Bool, Bool) = tailCheck(v)
+			add(tail.0, "Tail elevator, well behind the centre of mass")
+			add(tail.1, "Centre of mass ahead of the wings (or it flips)")
+			if takeoff >= 20.0 { hint = "The wings are too small for its weight: add wing cells." }
+			else if push < 0.2 { hint = "Too heavy for its engines: add engines or a jet, or take weight off." }
+			else { hint = "Throttle up along the ground; at speed, stick up to lift off." }
+		}
+		if v.tracks > 0 || v.cannons + v.guns > 0 {
+			if v.rotors == 0 && v.wings == 0 && v.envelopes == 0 {
+				add(v.wheels >= 2, joinText("Tracks or wheels under the hull (", String(v.wheels), ")"))
+				add(v.engines > 0, "Engine")
+			}
+			if v.cannons + v.guns > 0 {
+				let ammo: Bool = isCreative || (v.cannons == 0 || inv.total(.mat(.gunpowder)) > 0) && (v.guns == 0 || inv.total(.ammo(.bullet)) > 0)
+				add(ammo, v.cannons > 0 ? "Gunpowder in your bag (cannon shells)" : "Bullets in your bag (machine gun)")
+				if v.rotors == 0 && v.wings == 0 && v.envelopes == 0 { hint = "Drive with the stick; aim and fire with the attack stick." }
+			}
+		}
+		if v.engines > 0 || v.jets > 0 || v.burners > 0 { add(v.fuel > 0.5 || isCreative, fuelLine(v)) }
+		var ready: Bool = true
+		for o in oks where !o { ready = false }
+		return VehicleCheck(title: vehicleKindName(v), lines: lines, oks: oks, ready: ready, hint: hint)
+	}
+
+	/// Is there a tail elevator well behind the centre of mass, and is the centre of mass ahead of the
+	/// wings' middle (so the plane noses down when slow instead of flipping onto its back)?
+	func tailCheck(_ v: Vehicle) -> (Bool, Bool) {
+		var wingX: Double = 0
+		var n: Int = 0
+		var tailX: Double = 0
+		var tn: Int = 0
+		for (c, t) in v.parts {
+			if t == .wing { wingX += Double(c.dx) + 0.5; n += 1 }
+			if t == .elevator { tailX += Double(c.dx) + 0.5; tn += 1 }
+		}
+		if n == 0 { return (tn > 0, true) }
+		wingX /= Double(n)
+		// the nose: the end the thrust is at, or failing that the end away from the tail
+		var front: Double = 1
+		if tn > 0 { tailX /= Double(tn); front = tailX < v.comX ? 1 : -1 }
+		let tailOK: Bool = tn > 0 && (tailX - v.comX) * front < -1.5
+		let balanced: Bool = (v.comX - wingX) * front > -0.6
+		return (tailOK, balanced)
+	}
+
+	/// The flight instruments shown while flying: speed, height, climb, lift against weight, the
+	/// rotor or burner, fuel, and a stall warning
+	func flightReadout(_ v: Vehicle) -> [String] {
+		var out: [String] = []
+		let alt: Int = Int((Double(WorldGen.sea) - v.b.y).rounded())
+		let climb: Double = -v.vy
+		out.append(joinText("SPD ", String(Int(v.airspeed.rounded())), "  ALT ", String(alt), "  ", climb >= 0 ? "▲" : "▼", String(format: "%.1f", abs(climb))))
+		let weight: Double = max(1, v.mass * gravityG)
+		let liftPct: Int = Int((v.liftNow / weight * 100).rounded())
+		var l2: String = joinText("LIFT ", String(liftPct), "%")
+		if v.rotors > 0 { l2 = joinText(l2, "  ROTOR ", String(Int((v.collective * 100).rounded())), "%") }
+		if v.burners > 0 && v.envelopes > 0 { l2 = joinText(l2, "  HEAT ", String(Int((v.heat * 100).rounded())), "%") }
+		if v.airProps + v.jets > 0 { l2 = joinText(l2, "  THR ", String(Int((abs(v.throttle) * 100).rounded())), "%") }
+		out.append(l2)
+		if v.engines + v.jets + v.burners > 0 && !isCreative { out.append(joinText("FUEL ", String(Int(v.fuel)), "/", String(Int(v.fuelCapacity)))) }
+		if v.stall { out.append("STALL!") }
+		return out
+	}
+
+	/// A line about the guns (reload) and the autopilot, while driving
+	func vehicleStatusLine(_ v: Vehicle) -> String? {
+		var parts: [String] = []
+		if v.cannons > 0 {
+			var cd: Double = 0
+			for (c, t) in v.parts where t == .cannon { cd = max(cd, v.gunCD[c] ?? 0) }
+			parts.append(cd > 0.05 ? joinText("CANNON ", String(format: "%.1f", cd), "s") : "CANNON READY")
+		}
+		if v.autopilots > 0 {
+			let modes: [String] = ["AUTO OFF", "AUTO CRUISE", "AUTO ROUTE"]
+			var s: String = modes[max(0, min(2, v.auto))]
+			if v.auto == 2 { s = joinText(s, " ", String(v.routeAt + 1), "/", String(v.route.count)) }
+			else if !v.route.isEmpty { s = joinText(s, " · ", String(v.route.count), " PTS") }
+			parts.append(s)
+		}
+		return parts.isEmpty ? nil : parts.joined(separator: "  ")
+	}
+}
 
 // ===== u07_mods =====
 
@@ -1577,6 +3025,7 @@ struct BlockEditorView: View {
 					ChoiceRow(options: ModBlockFunction.allCases.map { $0.name }, selected: functionBind, columns: 3)
 					functionSettings
 				}
+				vehicleSection
 			}
 		}
 		.modCover(s, picking ? 1 : nil) { self.dropPicker }
@@ -1637,6 +3086,24 @@ struct BlockEditorView: View {
 		default:
 			EmptyView()
 		}
+	}
+
+	/// On a vehicle: the part this block works as, its mass there and how strong it is at the work
+	var vehicleSection: some View {
+		let role: ModVehicleRole = block.vehRole
+		let help: String = role == .none ? "Built onto a vehicle (ON VEHICLE, or the Vehicle Assembler) it is just a block of its weight." : joinText("Built onto a vehicle it works as a ", role.name.lowercased(), ", with this picture.")
+		return ModSection(title: "ON A VEHICLE", help: help) {
+			ChoiceRows(options: ModVehicleRole.allCases.map { $0.name }, selected: roleBind, columns: 3)
+			if role != .none {
+				StatSlider(label: "Mass on the vehicle (0: from its hardness)", value: b(\.vehMass, 0), range: 0.0...(s.mod.sandbox ? 60.0 : 20.0), step: 0.05, format: "%.2f")
+				StatSlider(label: "Strength at its work (1 = the game's part)", value: b(\.vehPower, 1), range: 0.25...(s.mod.sandbox ? 10.0 : 4.0), step: 0.05, format: "%.2f")
+			}
+		}
+	}
+
+	var roleBind: Binding<Int> {
+		let base: Binding<ModVehicleRole> = b(\.vehRole, .none)
+		return Binding<Int>(get: { base.wrappedValue.rawValue }, set: { base.wrappedValue = ModVehicleRole(rawValue: $0) ?? .none })
 	}
 
 	var stationBind: Binding<Int> {

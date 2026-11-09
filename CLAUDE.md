@@ -1,7 +1,7 @@
 # PixelRealm
 
 A 2D sandbox survival game for iPad, written in SwiftUI and run in Swift Playgrounds. The game is four
-files, `PixelRealm1.swift` to `PixelRealm4.swift` (about 53,500 lines in all, indented with tabs). The
+files, `PixelRealm1.swift` to `PixelRealm4.swift` (about 57,200 lines in all, indented with tabs). The
 user pastes each into its own file of one Swift Playgrounds app. It was one file until the user asked
 for four; deliver all four, and treat them as one program (Swift doesn't care which file holds what).
 
@@ -17,8 +17,10 @@ confirmed). `tools/buildcost.sh` measures both ways:
   one job 71 s and 1,011 MB. This version builds and starts on the iPad (the user confirmed it), so
   four parts at these sizes are known to work. Phase 3 (2.03 MB) moved creature AI, spawning and
   combat from part 1 to part 2 to keep the parts level: 420 to 450 MB per job (not yet confirmed on
-  the iPad). If the iPad runs the four jobs at once in one process, they could add up; that is not
-  known.
+  the iPad). Phase 4, vehicles (2.13 MB, most of it in `p33_vehicles` at the start of part 4, the
+  lightest part): 440 to 455 MB per job, 105 s in all; as one job 95 s and 1,053 MB (not yet
+  confirmed on the iPad). If the iPad runs the four jobs at once in one process, they could add up;
+  that is not known.
 - Add big features in steps the user can check on the iPad, and keep the parts about equal in
   compiled size (`tools/buildcost.sh` prints each job's peak).
 
@@ -36,7 +38,7 @@ compiles and runs headless on Linux. If `/opt/pixelrealm` is missing, run `tools
 - `tools/run-tests.sh [suite ...]`: builds and runs suites from `tools/tests`, four at a time (all
   of them take several minutes). Pass only the suites you touched while iterating, and run them all
   before committing. Full output is in `/tmp/pixelrealm-build/<suite>/out.log`.
-- `tools/shots.sh power|weather|sky|cloudsheet|stick|alchemy|modplus|building [folder]`: PNG screenshots from the game's own renderer (`sky`: clouds by day, dusk, night and storm; `cloudsheet`: every cloud template; `stick`: the combat stick's dial; `alchemy`: mutated creatures, the worn suit, the new stations, and a sheet of the new icons and suit pictures; `modplus`: two custom dimensions and a boss in a phase; `building`: a furnished house with stairs and a lift, a blast throwing blocks, a beam under strain).
+- `tools/shots.sh power|weather|sky|cloudsheet|stick|alchemy|modplus|building|vehicles [folder]`: PNG screenshots from the game's own renderer (`sky`: clouds by day, dusk, night and storm; `cloudsheet`: every cloud template; `stick`: the combat stick's dial; `alchemy`: mutated creatures, the worn suit, the new stations, and a sheet of the new icons and suit pictures; `modplus`: two custom dimensions and a boss in a phase; `building`: a furnished house with stairs and a lift, a blast throwing blocks, a beam under strain; `vehicles`: every new kit parked, a plane, helicopter and airship flying, a tank firing at a wrecked truck, a ship built from blocks with the assembler, a plane mid-turn).
 - `tools/bench.sh`: chunk generation, painting, lighting and tick timings (debug build; compare
   with `GAME_SRC=<old file> tools/bench.sh`).
 - `tools/buildcost.sh`: the game's size, and the time and peak memory of a debug build like the
@@ -60,8 +62,11 @@ renderer never mixes dimensions' pictures, chunks made again are the same, explo
 cycles through all four kinds of dimension, weather stays in its dimension), `world6` (generator 6
 against 5: trees, ores by depth, seas; fingerprints of generator 5; saplings; monsters kept out of
 lamplight by the real light), `build3` (blocks as walls, ladders built on by holding, furniture,
-stairs, lifts, block weight, blasts, storms carrying blocks, structural physics), and `det` and
-`det2` (world generation fingerprints for generator versions 1 to 4).
+stairs, lifts, block weight, blasts, storms carrying blocks, structural physics), `aero` (vehicles of
+every kind: the plane, helicopter, airship, tank and truck kits flown and driven, designs too heavy to
+fly, turning in flight, blocks built onto vehicles, rafts that float or sink by their blocks, the
+assembler, shots, blasts and crashes, wrecks, mending, the autopilot, saves, a mod block as a part),
+and `det` and `det2` (world generation fingerprints for generator versions 1 to 4).
 
 What the stand-ins can't tell you:
 - They only declare the SwiftUI and AVFoundation API the game uses. If you use a new API, add it to
@@ -84,7 +89,8 @@ What the stand-ins can't tell you:
   and `AnyView` where a `switch` picks between big pages. Indent with tabs (four spaces per level made
   the game a sixth bigger).
 - **Saves.** Saved enums (`Tile: UInt8`, `MobKind`, `Mat`, `Gadget`, `RecipeCat`, `SoundID`, `Potion`,
-  `Infusion`, `ExoMat`, `ExoPart`, `ExoCore`, `ExoModule`, `ExoSlot`, `Dimension` (custom0-2 were appended)
+  `Infusion`, `ExoMat`, `ExoPart`, `ExoCore`, `ExoModule`, `ExoSlot`, `Dimension` (custom0-2 were appended),
+  `PartType` (vehicle parts: `block` and the aircraft parts were appended), `ProjKind`
   and the like) only get new cases appended at the end. Never reorder or remove cases. New `SaveData` fields are optional; new `Settings`
   fields are decoded with `decodeIfPresent` and a default.
 - **Infusions live on the stack** (`Stack.inf`). Code that moves an item between bag, chest, carried and
@@ -123,7 +129,8 @@ What the stand-ins can't tell you:
   and are decoded with `c.val(.key, default)`, and get a clamp in `ModValidator.check`. Mod enums only
   get cases appended (also `ModInfuseTrigger`, `ModPhaseWhen`, `ModSummonHow`, and the Logic Studio's
   `LEvent`, `LOp`, `LEOp`). References inside a mod are content keys: renamed in `ModStore.rekey` and
-  counted in `ModStore.dependencies` (game tiles are `"tile:<n>"`, never renamed). Tests never touch the real mod folder or saves: set `ModStore.overrideDir` and
+  counted in `ModStore.dependencies` (game tiles are `"tile:<n>"`, never renamed). A mod block can work as a
+  vehicle part (`ModBlock.vehRole`, `vehMass`, `vehPower`; `ModVehicleRole` is append-only). Tests never touch the real mod folder or saves: set `ModStore.overrideDir` and
   use `makeSave()` with a JSON round trip.
 - **Comments** are plain-language doc comments explaining what something does in the game. Match the
   surrounding style. Each part starts with the same header and imports; keep them alike.
@@ -133,7 +140,7 @@ What the stand-ins can't tell you:
 
 Sections start with `// ===== <name> =====` (grep for them). They are spread over the parts in order:
 part 1 `p01_util` to `p14d_tools`; part 2 `p15a_mobai` to `p31c_blockphys`; part 3 `p32_modplus`, then
-`u01_art` to `u05_menu`; part 4 `u07_mods`, `u08_alchemy`, `u09_modplus`, `u06_root`. New code goes into
+`u01_art` to `u05_menu`; part 4 `p33_vehicles`, then `u07_mods`, `u08_alchemy`, `u09_modplus`, `u06_root`. New code goes into
 the section it belongs to. A `private` or `fileprivate` name can only be used in its own part, so
 anything used across parts is internal (no modifier).
 
@@ -152,7 +159,8 @@ Logic Studio), `p29_alchemy` (rarity, potions, effects on creatures, smoke,
 mutation and its limits, chest extras, the recipes of all three new systems), `p30_infusion`,
 `p31_exosuit` (parts, stats, energy, modules, the worn look, the builder's pictures), `p31b_building` (block
 walls, ladders, furniture, lifts), `p31c_blockphys` (block weight, flying blocks, blasts, structural
-physics), `u01_art`, `u02_render`
+physics), `p33_vehicles` (the flight model, power sharing, damage and wrecks, weapons, turning round,
+building blocks onto vehicles, the assembler, the autopilot, the checklist and instruments), `u01_art`, `u02_render`
 (`WorldRenderer.draw` sets the draw order), `u03_hud`, `u04_panels`, `u05_menu`, `u07_mods` (Mod
 Creator screens and editors, the capture and Mod Test panels), `u08_alchemy` (the HUD's effect strip and
 suit bar, the Infusion Crucible screen, the Assembly Station builder), `u09_modplus` (the Mod Creator+ screens: game
@@ -208,6 +216,28 @@ the Mod Test LOGIC tab), `u06_root`.
   `World.set` while `structWatch`; `checkStructure` gathers the built blocks around one (up to 5000),
   finds the standing ones bottom-up, spreads reach from them, then passes loads down the support
   tree; crushed blocks break, unsupported ones fall, strained ones are drawn cracked (`stress`).
+- **Vehicles (p13b, p17, p26, p33).** A `Vehicle` is a rigid body of 1x1 cells: `parts` (a `PartType`
+  each) plus `blocks` for cells that are blocks (`.block`, or a mod block working as a part: then
+  `parts` holds the part it works as and `blocks` its look). A cell weighs its part's mass or its
+  block's `tileWeight` (`cellMass`); `recompute` counts parts, the centre of mass, inertia, facings
+  (`face`, the open side of thrusters, guns and tail rotors) and mod strengths (`boost`). Saved in
+  `VehicleSave` (`VPartSave.tile`, `.dmg`, the autopilot's `auto` and `route`). The ground and boat
+  physics are as before; `airForces` runs only when `aero` (wings, elevators, air propellers, jets,
+  rotors, envelopes): per part, drag on faces that meet the air (`faceDrag`), lift and drag on wings
+  from the real airflow (`wingForce`: camber, stall at `Aero.stallAngle`), thrust along the vehicle's
+  axis, rotor lift along its shaft, hot-air lift straight up; all numbers in `Aero`. Engines share
+  their power (`airPower`, `groundShare`). Controls: stick x is the throttle (screen-relative) or a
+  helicopter's tilt (`cyclic`, which hovers in place hands-off); stick y is a pitch-rate command
+  for elevators with a learned `trim`, a stall guard and hands-off levelling (`pitchRateWanted`), a
+  climb rate for rotors, heat for burners (`flightControls`). TURN mirrors the vehicle
+  (`mirrorVehicle`; in flight halfway through a banked turn, `stepTurn`). Damage
+  (`Settings.vehicleDamage`): `damageVehicle` per cell up to `vehicleCellHP`, `breakVehicleCell`
+  keeps the driver's group and makes the rest wrecks (`makeWrecks`); shots hit cells
+  (`vehicleOnPath`; vehicle guns have `owner` 2,000,000 + id, the player's own shots pass), blasts
+  (`blastVehicles`), crashes over `vehicleCrashSpeed`. Cargo keys: `cargoSpot` (a second form for
+  cells far out). ON VEHICLE (`vehicleBuild`) builds blocks in hand onto a vehicle; the Vehicle
+  Assembler turns built blocks into a vehicle and back. Autopilot: cruise and route
+  (`autopilotSteer`), routes run with nobody aboard.
 - **Night monsters.** `updateSpawning`:
   - monsters have their own limit (`monsterCap`, set by the Nights setting); wild predators have a
     separate one;

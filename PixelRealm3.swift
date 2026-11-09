@@ -6666,7 +6666,7 @@ func windCatch(_ k: ProjKind) -> Double {
 	case .bomb, .flask: return 0.3
 	case .fireball: return 0.12
 	case .rock, .shard: return 0.08
-	case .pellet: return 0.05
+	case .pellet, .shell: return 0.05
 	case .bullet, .shock: return 0
 	}
 }
@@ -8756,6 +8756,8 @@ struct NightSettingsSection: View {
 			Text("BUILDINGS").font(.pixel(15)).foregroundColor(Color(hex: 0xFFE066))
 			Toggle("Structural physics", isOn: $settings.structural)
 			Text("Blocks you build need support: each holds up so much weight and reaches out so far (shown in its info). Too far out or too heavy, it cracks and falls. The land itself never falls.").font(.pixel(11, .semibold))
+			Toggle("Vehicle damage", isOn: $settings.vehicleDamage)
+			Text("Shots, blasts and crashes damage vehicles: parts crack and break off. Hold an iron bar and tap a part to mend it.").font(.pixel(11, .semibold))
 		}
 	}
 }
@@ -11224,38 +11226,12 @@ enum WorldRenderer {
 	}
 
 	static func drawVehicles(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
-		let art: Art = Art.shared
-		let tp: Double = v.tp
 		for veh in g.vehicles {
 			if !v.visible(veh.b.x, veh.b.y, 10) { continue }
-			let shade: Double = openShade(g, veh.b.x, veh.b.cy)
-			for (cell, t) in veh.parts {
-				// every part is drawn at its rotated position with the vehicle's rotation, exactly
-				// where its collision samples are
-				let p: (Double, Double) = veh.cellCenter(cell)
-				var c: GraphicsContext = ctx
-				if shade < 0.98 { c.addFilter(.colorMultiply(shadeColor(shade))) }
-				c.translateBy(x: CGFloat(v.sx(p.0)), y: CGFloat(v.sy(p.1)))
-				var rot: Double = veh.angle
-				var jitter: Double = 0
-				if isWheelPart(t) { rot += veh.wheelRot }
-				if t == .propeller { rot += veh.propRot }
-				if isDrill(t), let d = veh.drillDir[cell] {
-					rot += atan2(Double(d.1), Double(d.0))
-					if veh.drilling { jitter = sin(veh.drillRot * 3.0) * tp * 0.03 }
-				}
-				c.rotate(by: Angle(radians: rot))
-				let img: Image = art.parts[t.rawValue]
-				let w: Double = tp * 1.02
-				c.draw(img, in: mkRect(-w * 0.5 + jitter, -w * 0.5, w, w))
-				if isDrill(t) && veh.drilling {
-					// spinning bit: alternating highlight bands
-					let band: Double = (veh.drillRot.truncatingRemainder(dividingBy: 1.0)) * w * 0.4
-					fillRect(&c, mkRect(w * 0.0 + band - w * 0.1, -w * 0.25, w * 0.08, w * 0.5), Color.white.opacity(0.35))
-				}
-			}
+			drawVehicle(&ctx, g, v, veh)
 		}
 		// where the held part can go (green), or where a kit would land
+		let tp: Double = v.tp
 		let ghosts: [GhostCell] = g.vehicleGhosts()
 		if !ghosts.isEmpty {
 			let pulse: Double = 0.55 + 0.25 * sin(g.clock * 6.0)
@@ -11268,6 +11244,131 @@ enum WorldRenderer {
 				fillRect(&c, r, col.opacity(0.22 * pulse + 0.08))
 				strokeRect(&c, r, col.opacity(pulse), 2)
 			}
+		}
+	}
+
+	/// One vehicle. Every cell is drawn at its rotated position with the vehicle's rotation, exactly where
+	/// its collision samples are (a block cell shows its block). While it turns round in flight it is
+	/// drawn narrowing to its edge and widening again, facing the other way.
+	static func drawVehicle(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D, _ veh: Vehicle) {
+		let art: Art = Art.shared
+		let tp: Double = v.tp
+		let shade: Double = openShade(g, veh.b.x, veh.b.cy)
+		let squash: Double = veh.turnT > 0 ? max(0.12, abs(cos(Double.pi * veh.turnT))) : 1.0
+		let cx: Double = v.sx(veh.px)
+		var cracks: Path = Path()
+		var cracked: Bool = false
+		for (cell, t) in veh.parts {
+			let p: (Double, Double) = veh.cellCenter(cell)
+			var c: GraphicsContext = ctx
+			if shade < 0.98 { c.addFilter(.colorMultiply(shadeColor(shade))) }
+			let sx: Double = cx + (v.sx(p.0) - cx) * squash
+			c.translateBy(x: CGFloat(sx), y: CGFloat(v.sy(p.1)))
+			if squash < 0.999 { c.scaleBy(x: CGFloat(squash), y: 1) }
+			var rot: Double = veh.angle
+			var jitter: Double = 0
+			var flip: Bool = false
+			if isWheelPart(t) && t != .track { rot += veh.wheelRot }
+			if t == .propeller { rot += veh.propRot }
+			if isDrill(t), let d = veh.drillDir[cell] {
+				rot += atan2(Double(d.1), Double(d.0))
+				if veh.drilling { jitter = sin(veh.drillRot * 3.0) * tp * 0.03 }
+			}
+			if (t == .airProp || t == .jet || t == .tailRotor), let f = veh.face[cell], f.0 < 0 { flip = true }
+			c.rotate(by: Angle(radians: rot))
+			if flip { c.scaleBy(x: -1, y: 1) }
+			let w: Double = tp * 1.02
+			let img: Image = veh.blocks[cell].map { art.tile($0) } ?? art.parts[t.rawValue]
+			c.draw(img, in: mkRect(-w * 0.5 + jitter, -w * 0.5, w, w))
+			if isDrill(t) && veh.drilling {
+				// spinning bit: alternating highlight bands
+				let band: Double = (veh.drillRot.truncatingRemainder(dividingBy: 1.0)) * w * 0.4
+				fillRect(&c, mkRect(w * 0.0 + band - w * 0.1, -w * 0.25, w * 0.08, w * 0.5), Color.white.opacity(0.35))
+			}
+			if t == .envelope { envelopeEdges(&c, veh, cell, w) }
+			if veh.aero || t == .burner { drawPartWorking(&c, veh, cell, t, w, g.clock) }
+			if let d = veh.dmg[cell], d > 0.5 {
+				let hp: Double = vehicleCellHP(veh, cell, t)
+				if d > hp * 0.3 {
+					crackLines(&cracks, sx - w * 0.5, v.sy(p.1) - w * 0.5, w, d > hp * 0.7)
+					cracked = true
+				}
+			}
+			if veh.hitT > 0 { fillRect(&c, mkRect(-w * 0.5, -w * 0.5, w, w), Color(hex: 0xFF3020, alpha: 0.3)) }
+		}
+		if cracked { ctx.stroke(cracks, with: .color(Color.black.opacity(0.7)), lineWidth: 1.5) }
+		if veh.cannons + veh.guns > 0 { drawBarrels(&ctx, v, veh, squash, cx) }
+	}
+
+	/// Moving parts at work: rotor blades and propeller discs spinning, a jet's flame, a burner's flame
+	static func drawPartWorking(_ c: inout GraphicsContext, _ veh: Vehicle, _ cell: PartCell, _ t: PartType, _ w: Double, _ clock: Double) {
+		switch t {
+		case .rotor:
+			// two blades seen from the side: a bar that sweeps out and back, blurred when fast
+			let spin: Double = veh.collective
+			let half: Double = w * 2.4
+			if spin > 0.05 || veh.propRot > 0 {
+				fillRect(&c, mkRect(-half, -w * 0.56, half * 2.0, w * 0.1), Color(hex: 0x30303A, alpha: 0.18 + 0.2 * spin))
+			}
+			let reach: Double = half * max(0.15, abs(cos(veh.propRot)))
+			fillRect(&c, mkRect(-reach, -w * 0.58, reach * 2.0, w * 0.12), Color(hex: 0x2A2A30))
+		case .airProp:
+			let k: Double = abs(veh.throttle)
+			if k > 0.05 {
+				let h: Double = w * 0.85 * max(0.2, abs(cos(veh.propRot)))
+				fillOval(&c, mkRect(w * 0.3, -w * 0.85, w * 0.35, w * 1.7), Color(hex: 0xC8C8D0, alpha: 0.25))
+				fillRect(&c, mkRect(w * 0.4, -h, w * 0.14, h * 2.0), Color(hex: 0x8F6732))
+			}
+		case .tailRotor:
+			if veh.collective > 0.05 {
+				fillOval(&c, mkRect(w * 0.25, -w * 0.5, w * 0.35, w), Color(hex: 0xC8C8D0, alpha: 0.3))
+			}
+		case .jet:
+			let k: Double = abs(veh.throttle)
+			if k > 0.08 && (veh.rider || veh.auto == 2) {
+				let flick: Double = 0.75 + 0.25 * sin(clock * 40.0 + Double(cell.dx))
+				let len: Double = w * (0.4 + 0.9 * k) * flick
+				fillOval(&c, mkRect(w * 0.45, -w * 0.22, len, w * 0.44), Color(hex: 0xFF8A30, alpha: 0.8))
+				fillOval(&c, mkRect(w * 0.45, -w * 0.12, len * 0.6, w * 0.24), Color(hex: 0xFFF0A0, alpha: 0.9))
+			}
+		case .burner:
+			if veh.heat > 0.05 {
+				let flick: Double = 0.7 + 0.3 * sin(clock * 30.0 + Double(cell.dx) * 2.0)
+				let hgt: Double = w * (0.3 + 0.8 * veh.heat) * flick
+				fillOval(&c, mkRect(-w * 0.18, -w * 0.5 - hgt, w * 0.36, hgt), Color(hex: 0xFF8A30, alpha: 0.85))
+				fillOval(&c, mkRect(-w * 0.09, -w * 0.5 - hgt * 0.6, w * 0.18, hgt * 0.6), Color(hex: 0x80B0FF, alpha: 0.9))
+			}
+		default:
+			break
+		}
+	}
+
+	/// A darker seam where the balloon's canvas meets the open air, so the envelope reads as one shape
+	static func envelopeEdges(_ c: inout GraphicsContext, _ veh: Vehicle, _ cell: PartCell, _ w: Double) {
+		let h: Double = w * 0.5
+		let col: Color = Color(hex: 0x7A2A20, alpha: 0.8)
+		let lw: Double = max(1.0, w / 12.0)
+		if veh.parts[PartCell(dx: cell.dx, dy: cell.dy - 1)] != .envelope { fillRect(&c, mkRect(-h, -h, w, lw), col) }
+		if veh.parts[PartCell(dx: cell.dx, dy: cell.dy + 1)] != .envelope { fillRect(&c, mkRect(-h, h - lw, w, lw), col) }
+		if veh.parts[PartCell(dx: cell.dx - 1, dy: cell.dy)] != .envelope { fillRect(&c, mkRect(-h, -h, lw, w), col) }
+		if veh.parts[PartCell(dx: cell.dx + 1, dy: cell.dy)] != .envelope { fillRect(&c, mkRect(h - lw, -h, lw, w), col) }
+	}
+
+	/// The barrels of a vehicle's guns, turned to where each one aims
+	static func drawBarrels(_ ctx: inout GraphicsContext, _ v: View2D, _ veh: Vehicle, _ squash: Double, _ cx: Double) {
+		let tp: Double = v.tp
+		for (cell, t) in veh.parts where t == .cannon || t == .autoGun {
+			let p: (Double, Double) = veh.cellCenter(cell)
+			let f: (Int, Int) = veh.face[cell] ?? (1, 0)
+			let a: Double = veh.aimAng[cell] ?? (veh.angle + atan2(Double(f.1), Double(f.0)))
+			let len: Double = t == .cannon ? 1.0 : 0.75
+			let x0: Double = cx + (v.sx(p.0) - cx) * squash
+			let y0: Double = v.sy(p.1)
+			let x1: Double = x0 + cos(a) * len * tp * squash
+			let y1: Double = y0 + sin(a) * len * tp
+			let thick: Double = (t == .cannon ? 0.24 : 0.12) * tp
+			strokeLine(&ctx, x0, y0, x1, y1, Color(hex: 0x1E1E24), thick + 2.0)
+			strokeLine(&ctx, x0, y0, x1, y1, Color(hex: t == .cannon ? 0x4A5040 : 0x3A3A42), thick)
 		}
 	}
 
@@ -11584,6 +11685,13 @@ enum WorldRenderer {
 				let dy: Double = sin(ang) * tp * 0.36
 				strokeLine(&ctx, x - dx, y - dy, x + dx, y + dy, Color(hex: 0x3AB8C0), max(3.0, tp / 6.0))
 				strokeLine(&ctx, x - dx * 0.2, y - dy * 0.2, x + dx * 0.9, y + dy * 0.9, Color(hex: 0xD8FFFA), max(1.5, tp / 14.0))
+			case .shell:
+				// a dark shell with a faint smoke trail behind it
+				let ang: Double = atan2(p.vy, p.vx)
+				let r: Double = tp * 0.2
+				strokeLine(&ctx, x - cos(ang) * tp * 0.9, y - sin(ang) * tp * 0.9, x, y, Color(hex: 0xC8C8C8, alpha: 0.35), max(2.0, tp / 8.0))
+				fillOval(&ctx, mkRect(x - r, y - r, r * 2.0, r * 2.0), Color(hex: 0x2A2A30))
+				fillOval(&ctx, mkRect(x - r * 0.5, y - r * 0.6, r * 0.6, r * 0.5), Color(hex: 0x7A7A84))
 			}
 		}
 	}
@@ -12356,8 +12464,23 @@ struct HUDView: View {
 				if game.suit.worn { SuitBar(game: game, tick: hud.tick) }
 			}
 			if !game.activeEffects().isEmpty { EffectStrip(game: game, tick: hud.tick) }
+			if let v = game.inVehicle { vehicleReadout(v) }
 			if game.mode == .hardcore { OutlinedText(text: "HARDCORE", size: 11, color: Color(hex: 0xFF6060)) }
 			if !game.testMod.isEmpty { OutlinedText(text: "MOD TEST · NOT SAVED", size: 11, color: Color(hex: 0x60E0FF)) }
+		}
+	}
+
+	/// The flight instruments while flying, and a line about the guns and the autopilot
+	@ViewBuilder
+	func vehicleReadout(_ v: Vehicle) -> some View {
+		if v.aero {
+			let lines: [String] = game.flightReadout(v)
+			ForEach(0..<lines.count, id: \.self) { (i: Int) in
+				OutlinedText(text: lines[i], size: 12, color: lines[i] == "STALL!" ? Color(hex: 0xFF5050) : Color(hex: 0xB8F0FF))
+			}
+		}
+		if let st = game.vehicleStatusLine(v) {
+			OutlinedText(text: st, size: 11, color: Color(hex: 0xFFE080))
 		}
 	}
 
@@ -12459,6 +12582,10 @@ struct HUDView: View {
 			if game.canToggleWall {
 				SmallButton(title: game.wallMode ? "AS WALL" : "AS BLOCK", color: game.wallMode ? Color(hex: 0x6A5A8A) : Color(hex: 0x4E6A3E)) { game.toggleWallMode() }
 			}
+			if game.canBuildOnVehicle {
+				SmallButton(title: game.vehicleBuild ? "ON VEHICLE" : "IN WORLD", color: game.vehicleBuild ? Color(hex: 0x2E7A8A) : Color(hex: 0x4E6A3E)) { game.toggleVehicleBuild() }
+			}
+			if game.inVehicle != nil { vehicleButtons }
 			if game.vehicleNearby != nil {
 				SmallButton(title: "DRIVE", color: Color(hex: 0x4E8A3E)) { game.driveNearby() }
 				SmallButton(title: "PACK UP", color: Color(hex: 0x6A5A2A)) { game.packUpVehicle() }
@@ -12477,6 +12604,19 @@ struct HUDView: View {
 			}
 			if game.flying || game.noclip {
 				HoldButton(label: "▼", size: 44) { down in game.downHeld = down }
+			}
+		}
+	}
+
+	/// While driving: turn round, and the autopilot's buttons when the vehicle has one
+	@ViewBuilder
+	var vehicleButtons: some View {
+		SmallButton(title: "TURN", color: Color(hex: 0x3A6AA8)) { game.turnVehicle() }
+		if let v = game.inVehicle, v.autopilots > 0 {
+			SmallButton(title: "AUTO", color: v.auto == 0 ? Color(hex: 0x5A5A64) : Color(hex: 0x2E8A5A)) { game.cycleAutopilot() }
+			SmallButton(title: "MARK", color: Color(hex: 0x6A5A2A)) { game.markWaypoint() }
+			if !v.route.isEmpty {
+				SmallButton(title: "CLEAR", color: Color(hex: 0x7A3A3A)) { game.clearRoute() }
 			}
 		}
 	}
@@ -14452,6 +14592,9 @@ struct HelpView: View {
 		"Beat Tyrannax the T-Rex and it becomes your companion. Tap it to ride.",
 		"Vehicles, the easy way: craft a Car Kit, Rowboat Kit or Motorboat Kit (Vehicles tab at a workbench) and tap the ground to place it. Stand next to it and press DRIVE. PACK UP puts it back in your bag.",
 		"Your own designs: place a Frame (car) or Hull Float (boat), then hold a part - green squares show where it fits. A checklist shows what is still missing. Coal or wood is fuel: hold it and tap the vehicle.",
+		"Planes, helicopters, airships, tanks and trucks: kits in the Vehicles tab, or build your own. Wings lift with speed (and stall when tilted too far), a tail elevator behind steers the nose, rotors need engines and a tail rotor, a balloon needs burners. Every part and block has weight: too heavy, and it will not fly.",
+		"Build anything onto a vehicle: hold a block near one and switch ON VEHICLE, then tap the green squares. Or build a whole ship from blocks in the world and tap it with the Vehicle Assembler: it becomes one vehicle (tap it parked to put it back).",
+		"Armed vehicles: cannons (gunpowder) and machine guns (bullets) aim with the attack stick. Shots, blasts and crashes break parts off; hold an iron bar and tap a part to mend it. An Autopilot holds speed and height (AUTO), or drives the points you MARK.",
 		"Zoom with + and −. The DBG button opens the debug menu. II pauses and saves.",
 		"Watch the ground in big fights: an attack's area pulses and fills up just before it lands. Step out of it.",
 		"Weather comes and goes: showers drift over the land with the wind, deserts stay dry, the cold country gets snow. A strong wind carries arrows and jumps with it and slows you walking into it.",

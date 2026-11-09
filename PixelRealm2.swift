@@ -1259,6 +1259,7 @@ extension Game {
 		if p.life <= 0 {
 			if p.mod >= 0 { modShotLanded(p, p.x, p.y, mob: nil, player: false) }
 			if p.kind == .bomb { explode(p.x, p.y, radius: 3.4, power: p.dmg, source: p.source, breakBlocks: true) }
+			if p.kind == .shell { shellBurst(p, p.x, p.y) }
 			if p.kind == .flask { burstFlaskOrPotion(p, p.x, p.y, nil) }
 			return false
 		}
@@ -1281,13 +1282,21 @@ extension Game {
 			wallT = hit.2
 			wallTile = (hit.0, hit.1)
 		}
+		// a vehicle's parts stop shots aimed at it (the player's own shots pass their vehicles)
+		var vehHit: VehicleHit? = nil
+		if !vehicles.isEmpty && p.kind != .bomb { vehHit = vehicleOnPath(p, nx, ny, maxT: wallT) }
+		let entityMax: Double = vehHit?.t ?? wallT
 		// first creature (or the player) along the path, before the wall
 		if p.kind != .bomb {
-			if let target = firstEntityOnPath(p, nx, ny, maxT: wallT) {
+			if let target = firstEntityOnPath(p, nx, ny, maxT: entityMax) {
 				let hx: Double = p.x + (nx - p.x) * target.t
 				let hy: Double = p.y + (ny - p.y) * target.t
 				if p.kind == .flask {
 					burstFlaskOrPotion(p, hx, hy, target.mob)
+					return false
+				}
+				if p.kind == .shell {
+					shellBurst(p, hx, hy)
 					return false
 				}
 				let dirx: Double = p.vx >= 0 ? 1.0 : -1.0
@@ -1336,6 +1345,10 @@ extension Game {
 				}
 			}
 		}
+		if let vh = vehHit {
+			shotHitsVehicle(p, vh, p.x + (nx - p.x) * vh.t, p.y + (ny - p.y) * vh.t)
+			return false
+		}
 		if wallT <= 1.0 {
 			let hx: Double = p.x + (nx - p.x) * wallT
 			let hy: Double = p.y + (ny - p.y) * wallT
@@ -1364,6 +1377,9 @@ extension Game {
 				return true
 			case .rock:
 				rockImpact(p, hx, hy)
+				return false
+			case .shell:
+				shellBurst(p, hx - p.vx * 0.004, hy - p.vy * 0.004)
 				return false
 			case .bomb:
 				// bounce off the face it struck, losing energy, and come to rest on top of the ground
@@ -1943,6 +1959,7 @@ extension Game {
 			}
 		}
 		if breakBlocks { blastBlocks(x, y, radius: radius, power: power) }
+		if !vehicles.isEmpty { blastVehicles(x, y, radius: radius, power: power) }
 		for s in ships where abs(s.x - x) < radius + 4.5 && abs(s.deckY(Double(WorldGen.sea)) - y) < radius + 2 {
 			s.hp -= power
 			s.hitT = 0.3
@@ -2758,6 +2775,7 @@ extension Game {
 		if let v = inVehicle {
 			v.rider = false
 			v.throttle = 0
+			v.pitch = 0
 			pb.x = v.b.x
 			pb.y = v.b.y - v.b.h - 0.1
 			pb.vx = 0
@@ -2781,6 +2799,11 @@ struct VSample {
 	var wheel: Bool
 	var ramp: Bool
 	var hull: Bool
+	/// a track (grips harder than a wheel and rolls less freely)
+	var track: Bool = false
+	/// the cell it belongs to (a hard crash damages that part)
+	var cx: Int = 0
+	var cy: Int = 0
 }
 
 /// Water a part displaces when fully under (in tiles of water). Every part floats a little; hulls a
@@ -2800,6 +2823,21 @@ func partDisplacement(_ p: PartType) -> Double {
 	case .offroadWheel: return 0.5
 	case .headlight: return 0.2
 	case .cargo: return 0.9
+	case .block: return 1.0
+	case .cockpit: return 0.6
+	case .wing: return 0.3
+	case .elevator: return 0.2
+	case .airProp: return 0.25
+	case .jet: return 0.6
+	case .rotor: return 0.3
+	case .tailRotor: return 0.2
+	case .envelope: return 0.15
+	case .burner: return 0.4
+	case .track: return 0.6
+	case .armor: return 0.5
+	case .cannon: return 0.6
+	case .autoGun: return 0.3
+	case .autopilot: return 0.2
 	}
 }
 
@@ -2814,6 +2852,8 @@ struct VStepStats {
 	var wet: Double = 0
 	var nearWater: Bool = false
 	var rammed: [(Int, Int)] = []
+	/// the hardest hit each part took (speed into the ground beyond what it shrugs off)
+	var crash: [PartCell: Double] = [:]
 }
 
 extension Game {
@@ -2821,11 +2861,15 @@ extension Game {
 		let t0: Double = perfNow()
 		for v in vehicles { stepVehicle(v, dt) }
 		separateVehicles()
+		// weapons, the autopilot, turns and damage (also for a vehicle at rest)
+		for v in vehicles { vehicleExtras(v, dt) }
+		flushVehicleBlasts()
+		if vehicles.contains(where: { $0.parts.isEmpty }) { vehicles.removeAll { $0.parts.isEmpty } }
 		Perf.shared.physMs = Perf.smooth(Perf.shared.physMs, perfNow() - t0)
 	}
 
 	func seatCell(_ v: Vehicle) -> PartCell? {
-		for (c, t) in v.parts where t == .seat { return c }
+		for (c, t) in v.parts where t == .seat || t == .cockpit { return c }
 		return nil
 	}
 
@@ -2841,9 +2885,10 @@ extension Game {
 			let y0: Double = Double(c.dy)
 			if isWheelPart(t) {
 				var k: Int = 0
+				let tr: Bool = t == .track
 				while k < 10 {
 					let a: Double = Double(k) / 10.0 * 2.0 * Double.pi
-					out.append(VSample(lx: x0 + 0.5 + cos(a) * 0.47, ly: y0 + 0.5 + sin(a) * 0.47, wheel: true, ramp: true, hull: false))
+					out.append(VSample(lx: x0 + 0.5 + cos(a) * 0.47, ly: y0 + 0.5 + sin(a) * 0.47, wheel: true, ramp: true, hull: false, track: tr, cx: c.dx, cy: c.dy))
 					k += 1
 				}
 			} else {
@@ -2858,7 +2903,7 @@ extension Game {
 					let openX: Bool = nx == 0 || v.parts[PartCell(dx: c.dx + nx, dy: c.dy)] == nil
 					let openY: Bool = ny == 0 || v.parts[PartCell(dx: c.dx, dy: c.dy + ny)] == nil
 					if openX || openY {
-						out.append(VSample(lx: x0 + p.0, ly: y0 + p.1, wheel: false, ramp: (isHull || boat) && p.1 > 0.75, hull: isHull || boat))
+						out.append(VSample(lx: x0 + p.0, ly: y0 + p.1, wheel: false, ramp: (isHull || boat) && p.1 > 0.75, hull: isHull || boat, cx: c.dx, cy: c.dy))
 					}
 				}
 			}
@@ -2936,8 +2981,9 @@ extension Game {
 
 	func stepVehicle(_ v: Vehicle, _ dt: Double) {
 		if !vehicleAreaLoaded(v) { return }
-		let throttle: Double = v.rider ? v.throttle : 0
-		if v.asleep && abs(throttle) < 0.05 && !v.drilling {
+		let throttle: Double = v.rider || v.auto == 2 ? v.throttle : 0
+		let airBusy: Bool = v.aero && (abs(v.pitch) > 0.05 || v.heat > 0.02 || v.collective > 0.02 || v.turnT > 0)
+		if v.asleep && abs(throttle) < 0.05 && !v.drilling && !airBusy {
 			// resting vehicles cost nothing until something wakes them
 			if world.boxSolid(v.b.left + 0.05, v.b.y + 0.02, v.b.right - 0.05, v.b.y + 0.2) || v.submerged > 0 { return }
 		}
@@ -2970,6 +3016,7 @@ extension Game {
 			v.contacts = stats.anyHits
 			v.submerged = stats.wet / Double(n)
 		}
+		if !stats.crash.isEmpty { crashDamage(v, stats.crash) }
 		// fuel and exhaust
 		let burning: Bool = v.engines > 0 && v.fuel > 0 && abs(throttle) > 0.1
 		if burning && !isCreative {
@@ -2990,7 +3037,7 @@ extension Game {
 		if v.drills > 0 { runDrills(v, dt) }
 		vehicleImpacts(v, dt)
 		// resting (on the ground, or floating calmly): let it sleep so it stops costing time and cannot jitter
-		let calm: Bool = v.speed < 0.08 && abs(v.angVel) < 0.03 && abs(throttle) < 0.05 && !v.drilling
+		let calm: Bool = v.speed < 0.08 && abs(v.angVel) < 0.03 && abs(throttle) < 0.05 && !v.drilling && !airBusy
 		if calm && (v.contacts > 0 || v.submerged > 0) {
 			v.sleepT += dt
 			if v.sleepT > (v.submerged > 0 ? 1.5 : 0.6) { v.asleep = true; v.vx = 0; v.vy = 0; v.angVel = 0 }
@@ -3032,7 +3079,7 @@ extension Game {
 			}
 			nearWater = true
 			wetSum += f
-			let disp: Double = partDisplacement(t)
+			let disp: Double = cellDisplacement(v, cell, t)
 			let rx: Double = wx - v.px
 			let ry: Double = wy - v.py
 			let pvx: Double = v.vx - v.angVel * ry
@@ -3076,6 +3123,8 @@ extension Game {
 			}
 			if !(abs(v.vx) > vmax && v.vx * throttle > 0) { v.vx += thrust * throttle * invM * h }
 		}
+		// lift, drag and thrust in the air, part by part (wings, rotors, balloons, propellers, jets)
+		if v.aero { airForces(v, h, throttle) }
 		// integrate
 		v.px += v.vx * h
 		v.py += v.vy * h
@@ -3115,6 +3164,13 @@ extension Game {
 				let tt: Tile = world.tile(Int(floor(wx)), Int(floor(wy)))
 				if tt.hardness <= 1.0 && tt != .doorClosed && toolClass(tt) == .axe { stats.rammed.append((Int(floor(wx)), Int(floor(wy)))) }
 			}
+			// a crash: hitting the ground far faster than any landing breaks the part that hits (wheels and
+			// tracks take a harder landing first)
+			let crashAt: Double = smp.wheel ? vehicleCrashSpeed + 5.0 : vehicleCrashSpeed
+			if vn < -crashAt {
+				let pc: PartCell = PartCell(dx: smp.cx, dy: smp.cy)
+				stats.crash[pc] = max(stats.crash[pc] ?? 0, -vn - crashAt)
+			}
 			if vn < 0 {
 				let rn: Double = rx * ny - ry * nx
 				let kn: Double = invM + rn * rn * invI
@@ -3134,8 +3190,10 @@ extension Game {
 				// eases off a beach under its own power); car bodies grip
 				var mu: Double = smp.hull ? (sub > 0 ? 0.05 : 0.22) : 0.7
 				if smp.wheel {
-					let braking: Bool = abs(throttle) < 0.1 || throttle * vt < 0
-					mu = braking ? (v.rider ? 0.9 : 0.25) : 0.06
+					// an aircraft's wheels roll free on the throttle and brake without it
+					let braking: Bool = abs(throttle) < 0.1 || (throttle * vt < 0 && !v.aero)
+					mu = braking ? (v.rider ? 0.9 : 0.25) : (v.aero ? 0.02 : 0.06)
+					if smp.track { mu = braking ? (v.rider ? 1.1 : 0.4) : 0.14 }
 				}
 				var jt: Double = -vt / kt
 				let lim: Double = mu * jn
@@ -3161,25 +3219,27 @@ extension Game {
 		}
 		// engine drive through wheels that are on the ground
 		// (only while roughly upright: a car on its nose or roof cannot push itself along)
-		if stepWheel > 0 && v.canDriveOnLand && steerOK && hasFuel && abs(throttle) > 0.1 && abs(wrapped) < 1.0 {
-			let vmax: Double = min(17.0, 6.5 + 3.0 * Double(v.engines))
+		if stepWheel > 0 && v.canDriveOnLand && steerOK && hasFuel && abs(throttle) > 0.1 && abs(wrapped) < 1.0 && v.rotors == 0 {
+			// tracks are slow but pull like nothing else
+			let trackShare: Double = Double(v.tracks) / Double(max(1, v.wheels))
+			let vmax: Double = min(17.0, 6.5 + 3.0 * Double(v.engines)) * (1.0 - 0.45 * trackShare)
 			let along: Double = v.vx * c2 + v.vy * s2
 			if !(abs(along) > vmax && along * throttle > 0) {
 				// heavier builds accelerate and climb slower; more engines help, and offroad wheels pull
 				// harder (their extra weight is the price)
-				let grip: Double = 1.0 + 0.7 * Double(v.offroadWheels) / Double(max(1, v.wheels))
-				let power: Double = Double(v.engines) * 135.0 * grip * min(1.0, Double(stepWheel) / 4.0 + 0.5)
+				let grip: Double = 1.0 + 0.7 * Double(v.offroadWheels) / Double(max(1, v.wheels)) + 1.4 * trackShare
+				let power: Double = v.enginePower * 135.0 * grip * min(1.0, Double(stepWheel) / 4.0 + 0.5) * groundShare(v)
 				v.vx += c2 * power * throttle * invM * h
 				v.vy += s2 * power * throttle * invM * h
 			}
 		}
-		if hits == 0 && sub <= 0 && v.wheels > 0 {
+		if hits == 0 && sub <= 0 && v.wheels > 0 && !v.aero {
 			// airborne wheeled vehicles slowly level out and shed spin (arcade suspension: driving off a
 			// ledge at speed no longer guarantees a nosedive)
 			if abs(wrapped) < 2.0 { v.angVel -= sin(wrapped) * 4.0 * h }
 			v.angVel *= (1.0 - min(1.0, 1.5 * h))
 		}
-		if hits == 0 && sub <= 0 && v.rider && abs(throttle) > 0.1 {
+		if hits == 0 && sub <= 0 && v.rider && abs(throttle) > 0.1 && !v.aero {
 			// in the air the driver can lean the vehicle: gentle and capped, so holding the throttle over a
 			// jump leans the car rather than spinning it (throttle leans back, reverse tips the nose down)
 			if abs(v.angVel) < 2.5 || v.angVel * throttle > 0 { v.angVel -= throttle * 2.5 * h }
@@ -3337,7 +3397,12 @@ extension Game {
 
 	func driveVehicle(_ v: Vehicle, _ ix: Double, _ jumpPressed: Bool, _ dt: Double) {
 		v.throttle = ix
-		if abs(ix) > 0.05 { v.asleep = false }
+		// up and down on the stick: the elevators, the rotor's pitch, the burner
+		var up: Double = -stickY
+		if abs(up) < 0.15 { up = 0 }
+		v.pitch = clampD(up, -1, 1)
+		if v.auto != 0 { autopilotSteer(v, ix, up, dt) }
+		if abs(v.throttle) > 0.05 || abs(v.pitch) > 0.05 { v.asleep = false }
 		if let c = seatCell(v) {
 			// sit on the seat, following the vehicle's rotation
 			let p: (Double, Double) = v.toWorld(Double(c.dx) + 0.5, Double(c.dy) + 0.95)
@@ -3397,11 +3462,12 @@ extension Game {
 				return
 			}
 		}
-		if let t = v.parts[c], t == .seat || t == .steering {
+		if repairVehiclePart(v, c) { return }
+		if let t = v.parts[c], t == .seat || t == .steering || t == .cockpit {
 			mountVehicle(v)
 			return
 		}
-		if let t = v.parts[c], t == .cargo {
+		if v.parts[c] != nil && vehicleStores(v, c) {
 			let k: IntPair = cargoSpot(v, c)
 			if world.chests[world.chestKey(k.x, k.y)] == nil { world.setChestItems(k.x, k.y, []) }
 			openChest = k
@@ -3413,6 +3479,13 @@ extension Game {
 		let fuelA: Int = Int(v.fuel)
 		let fuelB: Int = Int(v.fuelCapacity)
 		var info: String = "Vehicle: mass \(massS), fuel \(fuelA)/\(fuelB)"
+		if let d = v.dmg[c], d > 0.5, let t = v.parts[c] {
+			let hpS: Int = Int(max(0, vehicleCellHP(v, c, t) - d))
+			info = joinText(t == .block ? (v.blocks[c]?.name ?? "Block") : t.name, " damaged: ", String(hpS), " left. Hold an iron bar and tap it to mend it.")
+			say(info, 3.0)
+			return
+		}
+		if v.aero { say(joinText(info, ". ", vehicleCheck(v).hint), 3.5); return }
 		if !v.hasSeat { info += ". Needs a seat." }
 		else if !v.hasSteering { info += ". Needs a steering wheel next to the seat." }
 		else if v.buoyancy > 0 && !v.canSail && v.wheels < 2 { info += ". Add engine + propeller (or a paddle)." }
@@ -3423,15 +3496,17 @@ extension Game {
 
 	func mountVehicle(_ v: Vehicle) {
 		if !v.hasSeat || !v.hasSteering {
-			say(v.hasSeat ? "Add a steering wheel next to the seat." : "Add a seat first.", 2.5)
+			say(v.hasSeat ? "Add a steering wheel next to the seat." : "Add a seat or a cockpit first.", 2.5)
 			return
 		}
 		if mounted != nil { dismount() }
 		inVehicle = v
 		v.rider = true
 		v.asleep = false
+		v.holdY = v.py
 		let drillTip: String = v.drills > 0 ? " Drills spin while the engine runs." : ""
-		say("Driving. Hold the stick to move; in the air it tilts the vehicle. Jump to get out when stopped." + drillTip, 3.5)
+		let armed: String = v.cannons + v.guns > 0 ? " The attack stick fires the guns." : ""
+		say(joinText(controlsHint(v), drillTip, armed), 4.0)
 		bumpHUD()
 	}
 }
@@ -4417,6 +4492,22 @@ extension Game {
 		if dead { return }
 		if touchActive {
 			useHeld = true
+			return
+		}
+		// in an armed vehicle the attack stick aims and fires its guns
+		if let v = inVehicle, v.cannons + v.guns > 0 {
+			if actState.manual {
+				aimX = v.px + actState.dirX * 18.0
+				aimY = v.py + actState.dirY * 18.0
+			} else if let a = vehicleAutoAim(v) {
+				aimX = a.0
+				aimY = a.1
+			} else {
+				aimX = v.px + Double(v.dir) * 14.0
+				aimY = v.py
+			}
+			aimValid = true
+			holdAction()
 			return
 		}
 		let it: Item? = heldItem
@@ -5605,6 +5696,14 @@ extension Game {
 		var h: Hasher = Hasher()
 		// an open device panel shows live readings: it refreshes twice a second
 		if showPower { h.combine(Int(clock * 2.0)) }
+		// the flight instruments and the guns' reload: four times a second while driving
+		if let v = inVehicle {
+			h.combine(Int(clock * 4.0))
+			h.combine(v.auto)
+			h.combine(v.route.count)
+		}
+		h.combine(vehicleBuild)
+		h.combine(canBuildOnVehicle)
 		h.combine(Int(hp * 2.0))
 		h.combine(Int(maxHP))
 		h.combine(Int(hunger * 2.0))
@@ -5699,6 +5798,42 @@ func kitLayout(_ g: Gadget) -> [KitPart] {
 		// the engine sits on the hull (not out past its end, which tipped the old layout stern-down)
 		return [KitPart(dx: 1, dy: 0, p: .engine), KitPart(dx: 2, dy: 0, p: .seat), KitPart(dx: 3, dy: 0, p: .steering), KitPart(dx: 4, dy: 0, p: .fuelTank),
 				KitPart(dx: 0, dy: 1, p: .propeller), KitPart(dx: 1, dy: 1, p: .hull), KitPart(dx: 2, dy: 1, p: .hull), KitPart(dx: 3, dy: 1, p: .hull), KitPart(dx: 4, dy: 1, p: .hull)]
+	case .planeKit:
+		// a light plane, nose to the right: tail elevator, wings under the cockpit, engine and propeller in front
+		return [KitPart(dx: 0, dy: 0, p: .elevator), KitPart(dx: 4, dy: 0, p: .cockpit),
+				KitPart(dx: 0, dy: 1, p: .frame), KitPart(dx: 1, dy: 1, p: .frame), KitPart(dx: 2, dy: 1, p: .wing), KitPart(dx: 3, dy: 1, p: .wing), KitPart(dx: 4, dy: 1, p: .wing),
+				KitPart(dx: 5, dy: 1, p: .fuelTank), KitPart(dx: 6, dy: 1, p: .engine), KitPart(dx: 7, dy: 1, p: .airProp),
+				KitPart(dx: 3, dy: 2, p: .wheel), KitPart(dx: 6, dy: 2, p: .wheel)]
+	case .heliKit:
+		// two engines under one rotor, a tail rotor on the boom, skids below
+		return [KitPart(dx: 3, dy: 0, p: .rotor),
+				KitPart(dx: 0, dy: 1, p: .tailRotor), KitPart(dx: 1, dy: 1, p: .frame), KitPart(dx: 2, dy: 1, p: .frame), KitPart(dx: 3, dy: 1, p: .engine), KitPart(dx: 4, dy: 1, p: .cockpit),
+				KitPart(dx: 3, dy: 2, p: .engine), KitPart(dx: 4, dy: 2, p: .fuelTank),
+				KitPart(dx: 2, dy: 3, p: .frame), KitPart(dx: 3, dy: 3, p: .frame), KitPart(dx: 4, dy: 3, p: .frame)]
+	case .airshipKit:
+		// a balloon of 20 envelopes, two burners under it, a gondola with propellers at both ends
+		var out: [KitPart] = []
+		for x in 1...6 { out.append(KitPart(dx: x, dy: 0, p: .envelope)) }
+		for x in 0...7 { out.append(KitPart(dx: x, dy: 1, p: .envelope)) }
+		for x in 1...6 { out.append(KitPart(dx: x, dy: 2, p: .envelope)) }
+		out.append(contentsOf: [KitPart(dx: 2, dy: 3, p: .frame), KitPart(dx: 3, dy: 3, p: .burner), KitPart(dx: 4, dy: 3, p: .burner), KitPart(dx: 5, dy: 3, p: .frame),
+								KitPart(dx: 0, dy: 4, p: .airProp), KitPart(dx: 1, dy: 4, p: .frame), KitPart(dx: 2, dy: 4, p: .cockpit), KitPart(dx: 3, dy: 4, p: .engine),
+								KitPart(dx: 4, dy: 4, p: .fuelTank), KitPart(dx: 5, dy: 4, p: .frame), KitPart(dx: 6, dy: 4, p: .airProp)])
+		return out
+	case .tankKit:
+		// armour all round, a cannon on the turret, two engines, tracks the whole length
+		var out: [KitPart] = [KitPart(dx: 3, dy: 0, p: .armor), KitPart(dx: 4, dy: 0, p: .cannon),
+							  KitPart(dx: 1, dy: 1, p: .armor), KitPart(dx: 2, dy: 1, p: .seat), KitPart(dx: 3, dy: 1, p: .steering), KitPart(dx: 4, dy: 1, p: .armor),
+							  KitPart(dx: 0, dy: 2, p: .armor), KitPart(dx: 1, dy: 2, p: .engine), KitPart(dx: 2, dy: 2, p: .fuelTank), KitPart(dx: 3, dy: 2, p: .engine),
+							  KitPart(dx: 4, dy: 2, p: .frame), KitPart(dx: 5, dy: 2, p: .armor)]
+		for x in 0...5 { out.append(KitPart(dx: x, dy: 3, p: .track)) }
+		return out
+	case .truckKit:
+		// a cab with two engines and a headlight, a bed of three cargo crates, three axles
+		return [KitPart(dx: 0, dy: 0, p: .cargo), KitPart(dx: 1, dy: 0, p: .cargo), KitPart(dx: 2, dy: 0, p: .cargo), KitPart(dx: 4, dy: 0, p: .seat), KitPart(dx: 5, dy: 0, p: .steering), KitPart(dx: 6, dy: 0, p: .headlight),
+				KitPart(dx: 0, dy: 1, p: .frame), KitPart(dx: 1, dy: 1, p: .frame), KitPart(dx: 2, dy: 1, p: .frame), KitPart(dx: 3, dy: 1, p: .frame), KitPart(dx: 4, dy: 1, p: .fuelTank),
+				KitPart(dx: 5, dy: 1, p: .engine), KitPart(dx: 6, dy: 1, p: .engine),
+				KitPart(dx: 0, dy: 2, p: .wheel), KitPart(dx: 2, dy: 2, p: .wheel), KitPart(dx: 5, dy: 2, p: .wheel)]
 	default:
 		return []
 	}
@@ -5714,7 +5849,10 @@ func legacyKitLayouts(_ g: Gadget) -> [[KitPart]] {
 }
 
 func isKit(_ g: Gadget) -> Bool {
-	return g == .carKit || g == .boatKit || g == .motorboatKit
+	switch g {
+	case .carKit, .boatKit, .motorboatKit, .planeKit, .heliKit, .airshipKit, .tankKit, .truckKit: return true
+	default: return false
+	}
 }
 
 struct VehicleCheck {
@@ -5813,7 +5951,7 @@ extension Game {
 		v.placeBox(left: Double(pl.0), bottom: Double(pl.1 + 1))
 		_ = h
 		v.kit = g.rawValue
-		if v.engines > 0 { v.fuel = min(v.fuelCapacity, 40.0) }
+		if v.engines > 0 || v.jets > 0 || v.burners > 0 { v.fuel = min(v.fuelCapacity, 40.0) }
 		vehicles.append(v)
 		if !isCreative { inv.removeAt(sel, 1) }
 		useCD = 0.3
@@ -5844,7 +5982,8 @@ extension Game {
 		guard let it = heldItem else { return false }
 		switch it {
 		case .part: return true
-		case .gadget(let g): return g == .wrench || isKit(g)
+		case .gadget(let g): return g == .wrench || g == .assembler || isKit(g)
+		case .block: return vehicleBuild
 		default: return false
 		}
 	}
@@ -5873,7 +6012,10 @@ extension Game {
 			if v.parts[PartCell(dx: c.dx, dy: c.dy + 1)] != nil { return "Wheels must be on the bottom." }
 		}
 		if p == .steering && !v.canAttach(c, p) { return "The steering wheel goes right next to the seat." }
-		if (p == .propeller || p == .paddle) && !v.canAttach(c, p) { return "Propellers and paddles go on the end of the vehicle." }
+		if (p == .propeller || p == .paddle || p == .airProp || p == .jet || p == .tailRotor) && !v.canAttach(c, p) { return "That goes on an end of the vehicle (open to one side)." }
+		if p == .rotor && !v.canAttach(c, p) { return "A rotor goes on top, with nothing above it or beside its blades." }
+		if (p == .cannon || p == .autoGun) && !v.canAttach(c, p) { return "A gun needs an open side to fire from." }
+		for k in -2...2 where v.parts[PartCell(dx: c.dx + k, dy: c.dy + 1)] == .rotor { return "That is where the rotor blades turn." }
 		if !v.canAttach(c, p) { return "Can't attach that there." }
 		let wp: (Double, Double) = v.cellPos(c)
 		if world.boxSolid(wp.0 + 0.02, wp.1 + 0.02, wp.0 + 0.98, wp.1 + 0.98) {
@@ -5934,6 +6076,16 @@ extension Game {
 					out.append(GhostCell(x: wp.0, y: wp.1, ok: true, ang: v.angle))
 				}
 			}
+		case .block(let t):
+			// with ON VEHICLE: where the block can go on the nearest vehicle
+			if vehicleBuild, let v = nearestVehicle(8) {
+				var part: PartType = .block
+				if t.isMod, let d = ModRuntime.shared.blockDef(t), let pp = d.vehRole.part { part = pp }
+				for c in attachSpots(v, part) {
+					let wp: (Double, Double) = v.cellPos(c)
+					out.append(GhostCell(x: wp.0, y: wp.1, ok: true, ang: v.angle))
+				}
+			}
 		case .gadget(let g):
 			if isKit(g) && aimValid {
 				let pl: (Int, Int, Bool) = kitPlacement(g, aimX, aimY)
@@ -5954,6 +6106,7 @@ extension Game {
 	// MARK: checklist
 
 	func vehicleCheck(_ v: Vehicle) -> VehicleCheck {
+		if v.aero || v.tracks > 0 || v.cannons + v.guns > 0 || v.hasCockpit { return flightCheck(v) }
 		var lines: [String] = []
 		var oks: [Bool] = []
 		var hulls: Int = 0
@@ -5982,7 +6135,7 @@ extension Game {
 		}
 		var ready: Bool = true
 		for o in oks where !o { ready = false }
-		let title: String = isBoat ? (v.engines > 0 ? "MOTORBOAT" : "BOAT") : "CAR"
+		let title: String = isBoat ? (v.engines > 0 ? "MOTORBOAT" : "BOAT") : vehicleKindName(v)
 		return VehicleCheck(title: title, lines: lines, oks: oks, ready: ready, hint: hint)
 	}
 
@@ -6017,7 +6170,13 @@ extension Game {
 		if v.kit >= 0, let g = Gadget(rawValue: v.kit), kitMatches(v, g) {
 			back.append(.gadget(g))
 		} else {
-			for (_, t) in v.parts { back.append(.part(t)) }
+			for (c, t) in v.parts { back.append(vehicleCellItem(VCell(cell: c, type: t, tile: v.blocks[c]))) }
+		}
+		// what the vehicle carried comes back too
+		for c in v.parts.keys where vehicleStores(v, c) {
+			let k: IntPair = cargoSpot(v, c)
+			if let p = openChest, p == k { openChest = nil }
+			for st in world.removeChest(k.x, k.y) { giveStack(st) }
 		}
 		for it in back { giveItem(it, 1) }
 		vehicles.removeAll { $0.id == v.id }
@@ -8317,6 +8476,39 @@ enum ModBlockFunction: Int, Codable, CaseIterable {
 	var paired: Bool { return self == .lamp || self == .door }
 }
 
+/// What a mod block does when it is built onto a vehicle (cases are only ever appended): nothing
+/// special (it is just a block of its weight), or the work of one of the game's vehicle parts, with the
+/// block's own picture, its own weight and its own strength
+enum ModVehicleRole: Int, Codable, CaseIterable {
+	case none, wing, elevator, propeller, jet, rotor, tailRotor, balloon, burner, engine, wheel, track, armor, fuelTank, cockpit, cannon, machineGun
+	/// the game part it works as
+	var part: PartType? {
+		switch self {
+		case .none: return nil
+		case .wing: return .wing
+		case .elevator: return .elevator
+		case .propeller: return .airProp
+		case .jet: return .jet
+		case .rotor: return .rotor
+		case .tailRotor: return .tailRotor
+		case .balloon: return .envelope
+		case .burner: return .burner
+		case .engine: return .engine
+		case .wheel: return .wheel
+		case .track: return .track
+		case .armor: return .armor
+		case .fuelTank: return .fuelTank
+		case .cockpit: return .cockpit
+		case .cannon: return .cannon
+		case .machineGun: return .autoGun
+		}
+	}
+	var name: String {
+		if self == .none { return "Just a block" }
+		return part?.name ?? "Just a block"
+	}
+}
+
 struct ModBlock: Codable, Identifiable, Equatable {
 	var id: String = ""
 	var name: String = "New Block"
@@ -8347,6 +8539,11 @@ struct ModBlock: Codable, Identifiable, Equatable {
 	/// heal amount, jump pad strength or trap damage
 	var power: Double = 6
 	var text: String = ""
+	/// on a vehicle: the part it works as, its mass there (0: its block weight), and how strong it is at
+	/// that work (lift, thrust, power, toughness: 1 is the game part's own)
+	var vehRole: ModVehicleRole = .none
+	var vehMass: Double = 0
+	var vehPower: Double = 1.0
 
 	init() {}
 
@@ -8372,6 +8569,9 @@ struct ModBlock: Codable, Identifiable, Equatable {
 		station = c.val(.station, -1)
 		power = c.val(.power, 6)
 		text = c.val(.text, "")
+		vehRole = c.val(.vehRole, .none)
+		vehMass = c.val(.vehMass, 0)
+		vehPower = c.val(.vehPower, 1.0)
 	}
 }
 
@@ -9848,6 +10048,8 @@ enum ModValidator {
 			b.dropCount = clampI(b.dropCount, 1, 16)
 			b.station = clampI(b.station, -1, 9)
 			b.power = clampD(b.power.isFinite ? b.power : 0, 0, sb ? 400 : 40)
+			b.vehMass = clampD(b.vehMass.isFinite ? b.vehMass : 0, 0, sb ? 60 : 20)
+			b.vehPower = clampD(b.vehPower.isFinite ? b.vehPower : 1, 0.25, sb ? 10 : 4)
 			if b.text.count > 200 { b.text = String(b.text.prefix(200)) }
 			if let d = b.drop, !exists(d) {
 				b.drop = nil

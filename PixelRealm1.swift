@@ -1,5 +1,6 @@
 // PIXEL REALM v2, part 1 of 4: utilities, tiles, items, recipes, creature sprites, world generation, chunks, structures, the Umbral
-// Realm, the world, light, physics, creatures, vehicles, the game state, the player, input and tools.
+// Realm, the world, light, physics, creatures, vehicles, the game state, the player, input and tools, creature AI and
+// spawning.
 // The game is four files that go together in one Swift Playgrounds app: PixelRealm1.swift to
 // PixelRealm4.swift. Each goes in its own file in the app (delete ContentView.swift; MyApp.swift can
 // hold part 1). All art is generated in code.
@@ -477,458 +478,226 @@ enum Tile: UInt8, CaseIterable, Codable {
 
 	static func make(_ raw: UInt8) -> Tile { return Tile(rawValue: raw) ?? .air }
 
+	/// The game's own tiles (mods change them through OverrideRT), kept as text: a table of TileDef(...)
+	/// calls made the game's build much bigger. A line a tile (or several, split by commas): its names, what
+	/// it is called, then the settings that differ from TileDef's: hard, tier, solid, opaque, light, liquid,
+	/// platform, plant, hurt, style, colors (hex), drop (block:<tile> or mat:<material>), noDrop; a note after "//"
+	static let gameDefs: [UInt8: TileDef] = parseDefs(defText)
+
 	static func makeDef(_ t: Tile) -> TileDef {
-		let stoneCols: [UInt32] = [0x8A8A8A, 0x7A7A7A, 0x9A9A9A, 0x6A6A6A, 0x8A8A8A]
-		switch t {
-		case .air:
-			return TileDef(name: "Air", hard: 0, solid: false, opaque: false)
-		case .grass:
-			return TileDef(name: "Grass", hard: 0.5, style: .grassTop, colors: [0x5DAA3A, 0x4B9230, 0x7A5230, 0x5A3A1E, 0x8A6038], drop: .block(.dirt))
-		case .dirt:
-			return TileDef(name: "Dirt", hard: 0.4, colors: [0x7A5230, 0x6B4626, 0x8A6038, 0x5A3A1E, 0x7A5230])
-		case .stone:
-			return TileDef(name: "Stone", hard: 1.2, tier: 1, colors: stoneCols)
-		case .sand:
-			return TileDef(name: "Sand", hard: 0.4, colors: [0xE0D08A, 0xD2C078, 0xEBDDA0, 0xC4B268, 0xE0D08A])
-		case .log:
-			// tree trunks have no collision: everything walks (and flies, drives and shoots) through
-			// them, and they let skylight past like the canopy does (a trunk standing on the ground
-			// used to cast a dark shaft down through it). See logBlock for the solid building block.
-			return TileDef(name: "Log", hard: 0.9, solid: false, opaque: false, style: .log, colors: [0x6B4A2A, 0x5A3C20, 0x7C5733, 0x4A3018, 0x6B4A2A])
-		case .leaves:
-			// canopies are one-way: walk and shoot through them, land on top of them
-			return TileDef(name: "Leaves", hard: 0.2, solid: false, opaque: false, platform: true, style: .leaves, colors: [0x3E8A2E, 0x2F7324, 0x56A83F, 0x225C1A, 0x3E8A2E], noDrop: true)
-		case .water:
-			return TileDef(name: "Water", hard: 0, solid: false, opaque: false, liquid: true, style: .water, colors: [0x3B7BE0, 0x4F90F0, 0x2E64C0, 0x8DBBFF, 0x3B7BE0], noDrop: true)
-		case .coal:
-			return TileDef(name: "Coal Ore", hard: 1.6, tier: 1, style: .ore, colors: stoneCols + [0x1E1E1E, 0x333333], drop: .mat(.coal))
-		case .copper:
-			return TileDef(name: "Copper Ore", hard: 1.8, tier: 2, style: .ore, colors: stoneCols + [0xD2793A, 0xF0A060], drop: .mat(.copperOre))
-		case .iron:
-			return TileDef(name: "Iron Ore", hard: 2.2, tier: 3, style: .ore, colors: stoneCols + [0xD8A878, 0xB88858], drop: .mat(.ironOre))
-		case .gold:
-			return TileDef(name: "Gold Ore", hard: 2.6, tier: 4, light: 2, style: .ore, colors: stoneCols + [0xF5D142, 0xFFE98A], drop: .mat(.goldOre))
-		case .diamond:
-			return TileDef(name: "Diamond Ore", hard: 3.2, tier: 5, light: 4, style: .ore, colors: stoneCols + [0x4FE3E8, 0xB8FBFF], drop: .mat(.diamond))
-		case .mythril:
-			return TileDef(name: "Mythril Ore", hard: 4.0, tier: 6, light: 5, style: .ore, colors: stoneCols + [0x6A5CFF, 0xB3A8FF], drop: .mat(.mythrilOre))
-		case .planks:
-			return TileDef(name: "Planks", hard: 0.8, style: .planks, colors: [0xB98A4E, 0x8F6732, 0xC89B5E, 0x7A5628, 0xB98A4E])
-		case .glass:
-			return TileDef(name: "Glass", hard: 0.3, opaque: false, style: .glass, colors: [0xCFEFFF, 0xFFFFFF, 0x9CCBE0, 0xCFEFFF, 0xCFEFFF])
-		case .brick:
-			return TileDef(name: "Stone Brick", hard: 1.5, tier: 1, style: .bricks, colors: [0xA64B3C, 0x8A8A8A, 0xB85A48, 0x8E3B2E, 0xA64B3C])
-		case .bedrock:
-			return TileDef(name: "Bedrock", hard: 9999, tier: 99, colors: [0x3A3A3A, 0x2A2A2A, 0x4A4A4A, 0x1A1A1A, 0x3A3A3A], noDrop: true)
-		case .snow:
-			return TileDef(name: "Snow", hard: 0.3, style: .snow, colors: [0xF2F8FF, 0xDCEBFA, 0xFFFFFF, 0xC4D8EE, 0xF2F8FF])
-		case .ice:
-			return TileDef(name: "Ice", hard: 0.5, opaque: false, style: .ice, colors: [0xAEDCF5, 0x8CC8EC, 0xD6F0FF, 0x78B4DC, 0xAEDCF5])
-		case .sandstone:
-			return TileDef(name: "Sandstone", hard: 1.0, tier: 1, style: .sandstone, colors: [0xD2B574, 0xC4A562, 0xDEC488, 0xB89850, 0xD2B574])
-		case .cactus:
-			return TileDef(name: "Cactus", hard: 0.4, hurt: true, style: .cactus, colors: [0x3F8F3F, 0x2F7A2F, 0x58AE58, 0x1F5F1F, 0x3F8F3F])
-		case .jungleLeaves:
-			return TileDef(name: "Jungle Leaves", hard: 0.2, solid: false, opaque: false, platform: true, style: .leaves, colors: [0x1F8A3A, 0x146B2A, 0x32AA4E, 0x0E5420, 0x1F8A3A], noDrop: true)
-		case .mud:
-			return TileDef(name: "Mud", hard: 0.5, style: .mud, colors: [0x4E3A2A, 0x3E2E20, 0x5E4834, 0x30241A, 0x4E3A2A])
-		case .dryGrass:
-			return TileDef(name: "Dry Grass", hard: 0.5, style: .grassTop, colors: [0xBDB35A, 0xA39A48, 0x7A5230, 0x5A3A1E, 0x8A6038], drop: .block(.dirt))
-		case .jungleGrass:
-			return TileDef(name: "Jungle Grass", hard: 0.5, style: .grassTop, colors: [0x2E9E3A, 0x1F8A2C, 0x4E3A2A, 0x3E2E20, 0x5E4834], drop: .block(.mud))
-		case .mossGrass:
-			return TileDef(name: "Moss", hard: 0.5, style: .grassTop, colors: [0x6E8A3A, 0x5A7430, 0x4E3A2A, 0x3E2E20, 0x5E4834], drop: .block(.mud))
-		case .slate:
-			return TileDef(name: "Slate", hard: 1.7, tier: 1, colors: [0x5E6678, 0x4F5666, 0x6D7688, 0x40475A, 0x5E6678])
-		case .deepRock:
-			return TileDef(name: "Deep Rock", hard: 2.6, tier: 3, colors: [0x3E3846, 0x34303C, 0x4A4452, 0x2A2632, 0x3E3846])
-		case .lava:
-			return TileDef(name: "Lava", hard: 0, solid: false, opaque: false, light: 14, liquid: true, hurt: true, style: .lava, colors: [0xE8580C, 0xFF8A1E, 0xC03A06, 0xFFD060, 0xE8580C], noDrop: true)
-		case .obsidian:
-			return TileDef(name: "Obsidian", hard: 4.2, tier: 5, colors: [0x241838, 0x1A1028, 0x34244E, 0x120A1E, 0x241838])
-		case .tallGrass:
-			return TileDef(name: "Tall Grass", hard: 0, solid: false, opaque: false, plant: true, style: .custom, noDrop: true)
-		case .flowerR:
-			return TileDef(name: "Red Flower", hard: 0, solid: false, opaque: false, plant: true, style: .custom)
-		case .flowerY:
-			return TileDef(name: "Yellow Flower", hard: 0, solid: false, opaque: false, plant: true, style: .custom)
-		case .deadBush:
-			return TileDef(name: "Dead Bush", hard: 0, solid: false, opaque: false, plant: true, style: .custom, drop: .mat(.stick))
-		case .mushroom:
-			return TileDef(name: "Glow Mushroom", hard: 0, solid: false, opaque: false, light: 6, plant: true, style: .custom)
-		case .reed:
-			return TileDef(name: "Reed", hard: 0, solid: false, opaque: false, plant: true, style: .custom, drop: .mat(.stick))
-		case .workbench:
-			return TileDef(name: "Workbench", hard: 0.6, solid: false, opaque: false, style: .custom)
-		case .furnace:
-			return TileDef(name: "Furnace", hard: 1.0, tier: 1, solid: false, opaque: false, light: 7, style: .custom)
-		case .campfire:
-			return TileDef(name: "Campfire", hard: 0.5, solid: false, opaque: false, light: 13, hurt: false, style: .custom)
-		case .torch:
-			return TileDef(name: "Torch", hard: 0, solid: false, opaque: false, light: 12, plant: true, style: .custom)
-		case .lantern:
-			return TileDef(name: "Lantern", hard: 0.2, solid: false, opaque: false, light: 14, plant: true, style: .custom)
-		case .chest:
-			return TileDef(name: "Chest", hard: 0.8, solid: false, opaque: false, style: .custom, noDrop: false)
-		case .platform:
-			return TileDef(name: "Platform", hard: 0.3, solid: false, opaque: false, platform: true, style: .custom)
-		case .farmland:
-			return TileDef(name: "Farmland", hard: 0.4, style: .farmland, colors: [0x5A3A1E, 0x4A2E16, 0x6B4626, 0x3A220E, 0x5A3A1E], drop: .block(.dirt))
-		case .wheat1, .wheat2, .wheat3:
-			return TileDef(name: "Wheat", hard: 0, solid: false, opaque: false, plant: true, style: .custom, noDrop: true)
-		case .carrot1, .carrot2, .carrot3:
-			return TileDef(name: "Carrots", hard: 0, solid: false, opaque: false, plant: true, style: .custom, noDrop: true)
-		case .crackedBrick:
-			return TileDef(name: "Cracked Brick", hard: 1.0, tier: 1, style: .bricks, colors: [0x8E7A68, 0x6A5A4C, 0xA08C78, 0x5A4A3C, 0x8E7A68])
-		case .mossBrick:
-			return TileDef(name: "Mossy Brick", hard: 1.4, tier: 1, style: .bricks, colors: [0x6E8A5A, 0x4C5E3E, 0x82A06C, 0x3C4C30, 0x6E8A5A])
-		case .spikes:
-			return TileDef(name: "Spikes", hard: 0.8, tier: 1, solid: false, opaque: false, hurt: true, style: .custom)
-		case .fossil:
-			return TileDef(name: "Fossil Block", hard: 1.5, tier: 1, style: .custom, drop: .mat(.bone))
-		case .ashStone:
-			return TileDef(name: "Ashstone", hard: 2.2, tier: 4, style: .ash, colors: [0x4A3A48, 0x3C2E3A, 0x5A4858, 0x2E222C, 0x4A3A48])
-		case .emberOre:
-			return TileDef(name: "Ember Ore", hard: 3.4, tier: 7, light: 7, style: .ore, colors: [0x4A3A48, 0x3C2E3A, 0x5A4858, 0x2E222C, 0x4A3A48, 0xFF7A1E, 0xFFC050], drop: .mat(.emberOre))
-		case .voidOre:
-			return TileDef(name: "Voidium Ore", hard: 4.6, tier: 8, light: 8, style: .ore, colors: [0x4A3A48, 0x3C2E3A, 0x5A4858, 0x2E222C, 0x4A3A48, 0xB04CFF, 0xE8A8FF], drop: .mat(.voidOre))
-		case .glowCrystal:
-			return TileDef(name: "Glow Crystal", hard: 1.2, tier: 4, opaque: false, light: 11, style: .crystal, colors: [0x7A4CFF, 0xB38CFF, 0x4E2AC0, 0xE6D8FF, 0x7A4CFF])
-		case .portalFrame:
-			return TileDef(name: "Rift Anchor", hard: 99999, tier: 99, light: 4, style: .custom, colors: [0x23262E, 0x3A3F4A, 0x2E323B, 0x16181E, 0x23262E], noDrop: true)
-		case .portalOff:
-			return TileDef(name: "Dormant Rift", hard: 99999, tier: 99, solid: false, opaque: false, style: .custom, noDrop: true)
-		case .portalOn:
-			return TileDef(name: "Open Rift", hard: 99999, tier: 99, solid: false, opaque: false, light: 13, style: .custom, noDrop: true)
-		case .jungleLog:
-			return TileDef(name: "Jungle Log", hard: 1.0, solid: false, opaque: false, style: .log, colors: [0x5A4A2A, 0x4A3A20, 0x6C5C34, 0x3A2C14, 0x5A4A2A])
-		case .palmLog:
-			return TileDef(name: "Palm Log", hard: 0.8, solid: false, opaque: false, style: .log, colors: [0x9A7A4A, 0x826238, 0xB08C58, 0x6A4E2A, 0x9A7A4A])
-		case .cobweb:
-			return TileDef(name: "Cobweb", hard: 0.1, solid: false, opaque: false, plant: true, style: .custom, noDrop: true)
-		case .hay:
-			return TileDef(name: "Hay Bale", hard: 0.4, style: .noise, colors: [0xD8B83A, 0xBE9E2A, 0xE8CC52, 0xA88820, 0xD8B83A])
-		case .doorClosed:
-			return TileDef(name: "Wooden Door", hard: 0.6, solid: true, opaque: false, style: .custom, colors: [0x8F6732], drop: .block(.doorClosed))
-		case .doorOpen:
-			return TileDef(name: "Open Door", hard: 0.6, solid: false, opaque: false, style: .custom, colors: [0x8F6732], drop: .block(.doorClosed))
-		case .logBlock:
-			return TileDef(name: "Log", hard: 0.9, style: .log, colors: [0x6B4A2A, 0x5A3C20, 0x7C5733, 0x4A3018, 0x6B4A2A], drop: .block(.log))
-		case .jungleLogBlock:
-			return TileDef(name: "Jungle Log", hard: 1.0, style: .log, colors: [0x5A4A2A, 0x4A3A20, 0x6C5C34, 0x3A2C14, 0x5A4A2A], drop: .block(.jungleLog))
-		case .palmLogBlock:
-			return TileDef(name: "Palm Log", hard: 0.8, style: .log, colors: [0x9A7A4A, 0x826238, 0xB08C58, 0x6A4E2A, 0x9A7A4A], drop: .block(.palmLog))
-		case .ladder:
-			return TileDef(name: "Ladder", hard: 0.3, solid: false, opaque: false, style: .custom, colors: [0x9A6E3A])
-		case .anvil:
-			return TileDef(name: "Anvil", hard: 1.6, tier: 1, solid: false, opaque: false, style: .custom, colors: [0x5A5E68])
-		case .tinkerBench:
-			return TileDef(name: "Tinker's Bench", hard: 0.8, solid: false, opaque: false, style: .custom, colors: [0x8F6732])
-		case .riftForge:
-			return TileDef(name: "Rift Forge", hard: 3.0, tier: 5, solid: false, opaque: false, light: 9, style: .custom, colors: [0x2A1A3A])
-		case .crystalOre:
-			return TileDef(name: "Crystal Vein", hard: 2.8, tier: 4, light: 6, style: .custom, colors: [0x5E6678, 0x4F5666, 0x6D7688, 0x40475A, 0x5E6678, 0x8AF0E8, 0xD8FFFA], drop: .mat(.crystalShard))
-		case .birchLog:
-			return TileDef(name: "Birch Log", hard: 0.8, solid: false, opaque: false, style: .custom, colors: [0xE2DED2, 0xC8C4B8, 0xF4F2EA, 0x3A3632, 0xE2DED2])
-		case .birchLogBlock:
-			return TileDef(name: "Birch Log", hard: 0.8, style: .custom, colors: [0xE2DED2, 0xC8C4B8, 0xF4F2EA, 0x3A3632, 0xE2DED2], drop: .block(.birchLog))
-		case .birchLeaves:
-			return TileDef(name: "Birch Leaves", hard: 0.2, solid: false, opaque: false, platform: true, style: .leaves, colors: [0x7DB846, 0x649A34, 0x9ACC5A, 0x4E7E28, 0x7DB846], noDrop: true)
-		case .pineLeaves:
-			return TileDef(name: "Pine Needles", hard: 0.2, solid: false, opaque: false, platform: true, style: .leaves, colors: [0x2E6E52, 0x225A42, 0x3E8464, 0x18463A, 0x2E6E52], noDrop: true)
-		case .tin:
-			return TileDef(name: "Tin Ore", hard: 1.7, tier: 2, style: .custom, colors: stoneCols + [0xC8D2DA, 0xF2F6FA], drop: .mat(.tinOre))
-		case .saltpeter:
-			return TileDef(name: "Saltpeter", hard: 1.0, tier: 1, style: .custom, colors: stoneCols + [0xEDEAE0, 0xFFFFFF], drop: .mat(.saltpeter))
-		case .silver:
-			return TileDef(name: "Silver Ore", hard: 2.4, tier: 3, light: 1, style: .custom, colors: stoneCols + [0xDDE4EE, 0xFFFFFF], drop: .mat(.silverOre))
-		case .amethyst:
-			return TileDef(name: "Amethyst Geode", hard: 1.8, tier: 2, light: 4, style: .custom, colors: stoneCols + [0x9A5ADC, 0xE0C0FF], drop: .mat(.amethyst))
-		case .amethystBlock:
-			return TileDef(name: "Amethyst Block", hard: 1.4, tier: 1, light: 6, style: .crystal, colors: [0x8A4CC8, 0xB07AE8, 0x6A34A8, 0xE8D0FF, 0x8A4CC8])
-		case .rail:
-			return TileDef(name: "Rail", hard: 0.2, solid: false, opaque: false, plant: true, style: .custom, colors: [0x6A6A72])
-		case .crate:
-			return TileDef(name: "Supply Crate", hard: 0.7, style: .custom, colors: [0xA97B45])
-		case .oreCart:
-			return TileDef(name: "Ore Cart", hard: 0.8, solid: false, opaque: false, style: .custom, colors: [0x5A5E68], noDrop: true)
-		case .weatherStation:
-			return TileDef(name: "Weather Station", hard: 1.0, solid: false, opaque: false, light: 3, style: .custom, colors: [0x8F6732])
-		case .dopplerStation:
-			return TileDef(name: "Doppler Station", hard: 1.4, tier: 1, solid: false, opaque: false, light: 5, style: .custom, colors: [0x5A6470])
-		case .stormSiren:
-			return TileDef(name: "Storm Siren", hard: 1.4, tier: 1, solid: false, opaque: false, style: .custom, colors: [0x8A8E98])
-		case .lightningRod:
-			return TileDef(name: "Lightning Rod", hard: 0.8, solid: false, opaque: false, style: .custom, colors: [0xD2793A])
-		case .windTurbine:
-			return TileDef(name: "Wind Turbine", hard: 1.2, tier: 1, solid: false, opaque: false, style: .custom, colors: [0xC8CCD4])
-		case .rainBarrel:
-			return TileDef(name: "Rain Barrel", hard: 0.7, solid: false, opaque: false, style: .custom, colors: [0x8F6732])
-		case .rainCistern:
-			return TileDef(name: "Rain Cistern", hard: 1.4, tier: 1, solid: false, opaque: false, style: .custom, colors: [0x6A6E78])
-		case .weatherVane:
-			return TileDef(name: "Weather Vane", hard: 0.6, solid: false, opaque: false, style: .custom, colors: [0xD2793A])
-		case .heater:
-			return TileDef(name: "Heater", hard: 1.2, tier: 1, solid: false, opaque: false, light: 9, style: .custom, colors: [0x4A4E58])
-		case .sandbag:
-			return TileDef(name: "Sandbags", hard: 0.9, style: .custom, colors: [0xB8A070])
-		case .shutterClosed:
-			return TileDef(name: "Storm Shutter", hard: 1.0, style: .custom, colors: [0x6A7A5A], drop: .block(.shutterClosed))
-		case .shutterOpen:
-			return TileDef(name: "Open Shutter", hard: 1.0, solid: false, opaque: false, style: .custom, colors: [0x6A7A5A], drop: .block(.shutterClosed))
-		case .stormBrick:
-			return TileDef(name: "Reinforced Wall", hard: 3.0, tier: 2, style: .custom, colors: [0x6A6E78])
-		case .shingles:
-			return TileDef(name: "Storm Shingles", hard: 1.1, tier: 1, style: .custom, colors: [0x7A4A3A])
-		case .crankGen:
-			return TileDef(name: "Hand Crank Generator", hard: 1.0, solid: false, opaque: false, style: .custom, colors: [0x5A6270])
-		case .solarPanel:
-			return TileDef(name: "Solar Panel", hard: 1.0, tier: 1, solid: false, opaque: false, style: .custom, colors: [0x2A5A9A])
-		case .fuelGen:
-			return TileDef(name: "Fuel Generator", hard: 1.4, tier: 1, solid: false, opaque: false, style: .custom, colors: [0x5A6270])
-		case .waterWheel:
-			return TileDef(name: "Water Wheel", hard: 0.9, solid: false, opaque: false, style: .custom, colors: [0x8F6732])
-		case .emberDynamo:
-			return TileDef(name: "Ember Dynamo", hard: 2.4, tier: 4, solid: false, opaque: false, light: 5, style: .custom, colors: [0x2A1E2E])
-		case .battery:
-			return TileDef(name: "Copper Cell", hard: 1.0, tier: 1, solid: false, opaque: false, style: .custom, colors: [0x5A6270])
-		case .accumulator:
-			return TileDef(name: "Crystal Accumulator", hard: 1.8, tier: 2, solid: false, opaque: false, light: 3, style: .custom, colors: [0x30A0A0])
-		case .powerSwitch:
-			return TileDef(name: "Power Switch", hard: 0.6, solid: false, opaque: false, style: .custom, colors: [0x5A6270])
-		case .breaker:
-			return TileDef(name: "Circuit Breaker", hard: 0.8, solid: false, opaque: false, style: .custom, colors: [0x5A6270])
-		case .powerMeter:
-			return TileDef(name: "Power Meter", hard: 0.6, solid: false, opaque: false, style: .custom, colors: [0xE8E4D8])
-		case .lever:
-			return TileDef(name: "Lever", hard: 0.5, solid: false, opaque: false, style: .custom, colors: [0x5A6270])
-		case .pushButton:
-			return TileDef(name: "Push Button", hard: 0.5, solid: false, opaque: false, style: .custom, colors: [0x30B0C0])
-		case .pressurePlate:
-			return TileDef(name: "Pressure Plate", hard: 0.5, solid: false, opaque: false, style: .custom, colors: [0x8A94A4])
-		case .pulseTimer:
-			return TileDef(name: "Pulse Timer", hard: 0.6, solid: false, opaque: false, style: .custom, colors: [0xE8E4D8])
-		case .repeater:
-			return TileDef(name: "Pulse Relay", hard: 0.6, solid: false, opaque: false, style: .custom, colors: [0x5A6270])
-		case .inverter:
-			return TileDef(name: "Inverter", hard: 0.6, solid: false, opaque: false, style: .custom, colors: [0x6A4A7A])
-		case .logicGate:
-			return TileDef(name: "Logic Gate", hard: 0.6, solid: false, opaque: false, style: .custom, colors: [0x3A6A6A])
-		case .motionSensor:
-			return TileDef(name: "Motion Sensor", hard: 0.7, solid: false, opaque: false, style: .custom, colors: [0xC86A3A])
-		case .daySensor:
-			return TileDef(name: "Daylight Sensor", hard: 0.7, solid: false, opaque: false, style: .custom, colors: [0x5A8AC8])
-		case .weatherSensor:
-			return TileDef(name: "Weather Sensor", hard: 0.7, solid: false, opaque: false, style: .custom, colors: [0x3B7BE0])
-		case .itemSensor:
-			return TileDef(name: "Item Sensor", hard: 0.7, solid: false, opaque: false, style: .custom, colors: [0xA97B45])
-		case .proximitySensor:
-			return TileDef(name: "Proximity Sensor", hard: 0.7, solid: false, opaque: false, style: .custom, colors: [0x30E0D0])
-		case .gateClosed:
-			return TileDef(name: "Steel Gate", hard: 2.2, tier: 2, opaque: false, style: .custom, colors: [0x8A94A4], drop: .block(.gateClosed))
-		case .gateOpen:
-			return TileDef(name: "Open Steel Gate", hard: 2.2, tier: 2, solid: false, opaque: false, style: .custom, colors: [0x8A94A4], drop: .block(.gateClosed))
-		case .lampOff:
-			return TileDef(name: "Spark Lamp", hard: 0.8, opaque: false, style: .custom, colors: [0x8A9AA0], drop: .block(.lampOff))
-		case .lampOn:
-			return TileDef(name: "Lit Spark Lamp", hard: 0.8, opaque: false, light: 15, style: .custom, colors: [0xFFF4C0], drop: .block(.lampOff))
-		case .arcTrap:
-			return TileDef(name: "Arc Trap", hard: 1.8, tier: 2, style: .custom, colors: [0x5A6270])
-		case .autoDrill:
-			return TileDef(name: "Auto Drill", hard: 2.0, tier: 2, style: .custom, colors: [0xE8C020])
-		case .conveyor:
-			return TileDef(name: "Conveyor Belt", hard: 1.2, tier: 1, style: .custom, colors: [0x2A2A2E])
-		case .collector:
-			return TileDef(name: "Item Collector", hard: 1.2, tier: 1, style: .custom, colors: [0x8A94A4])
-		case .autoCrafter:
-			return TileDef(name: "Auto Crafter", hard: 1.6, tier: 2, style: .custom, colors: [0xB0A060])
-		case .sumpPump:
-			return TileDef(name: "Sump Pump", hard: 1.4, tier: 1, style: .custom, colors: [0x3B7BE0])
-		case .signalLight:
-			return TileDef(name: "Pulse Indicator", hard: 0.4, solid: false, opaque: false, style: .custom, colors: [0x30E0D0])
-		case .alchemyStill:
-			return TileDef(name: "Alchemy Still", hard: 1.0, solid: false, opaque: false, light: 4, style: .custom, colors: [0xD2793A])
-		case .infuser:
-			return TileDef(name: "Infusion Crucible", hard: 2.0, tier: 1, solid: false, opaque: false, light: 6, style: .custom, colors: [0x6A5A8A])
-		case .exoStation:
-			return TileDef(name: "Assembly Station", hard: 2.0, tier: 1, solid: false, opaque: false, style: .custom, colors: [0x5A6270])
-		case .sapling:
-			return TileDef(name: "Sapling", hard: 0, solid: false, opaque: false, plant: true, style: .custom, colors: [0x4B9A30])
-		case .chair:
-			return TileDef(name: "Chair", hard: 0.4, solid: false, opaque: false, style: .custom, colors: [0xA0703A])
-		case .table:
-			return TileDef(name: "Table", hard: 0.5, solid: false, opaque: false, platform: true, style: .custom, colors: [0xC89B5E])
-		case .bedL:
-			return TileDef(name: "Bed", hard: 0.4, solid: false, opaque: false, platform: true, style: .custom, colors: [0xC03838])
-		case .bedR:
-			return TileDef(name: "Bed", hard: 0.4, solid: false, opaque: false, platform: true, style: .custom, colors: [0xC03838], drop: .block(.bedL))
-		case .cabinet:
-			return TileDef(name: "Cabinet", hard: 0.6, solid: false, opaque: false, platform: true, style: .custom, colors: [0x9A6A38])
-		case .wardrobe:
-			return TileDef(name: "Wardrobe", hard: 0.6, solid: false, opaque: false, style: .custom, colors: [0x7A5230])
-		case .shelf:
-			return TileDef(name: "Shelf", hard: 0.3, solid: false, opaque: false, platform: true, style: .custom, colors: [0xC89B5E])
-		case .bookshelf:
-			return TileDef(name: "Bookshelf", hard: 0.6, solid: false, opaque: false, platform: true, style: .custom, colors: [0x8F6732])
-		case .floorLamp:
-			return TileDef(name: "Floor Lamp", hard: 0.3, solid: false, opaque: false, light: 13, style: .custom, colors: [0xFFE680])
-		case .sofa:
-			return TileDef(name: "Sofa", hard: 0.4, solid: false, opaque: false, style: .custom, colors: [0x3A6AA8])
-		case .stairWoodR, .stairWoodL:
-			return TileDef(name: "Wooden Stairs", hard: 0.6, solid: false, opaque: false, style: .custom, colors: [0xC89B5E], drop: .block(.stairWoodR))
-		case .stairStoneR, .stairStoneL:
-			return TileDef(name: "Stone Stairs", hard: 1.4, tier: 1, solid: false, opaque: false, style: .custom, colors: [0x8A8A8A], drop: .block(.stairStoneR))
-		case .stairBrickR, .stairBrickL:
-			return TileDef(name: "Brick Stairs", hard: 1.6, tier: 1, solid: false, opaque: false, style: .custom, colors: [0xB0503A], drop: .block(.stairBrickR))
-		case .liftRail:
-			return TileDef(name: "Lift Rail", hard: 0.5, solid: false, opaque: false, style: .custom, colors: [0x9AA4B0])
-		case .liftButton:
-			return TileDef(name: "Lift Button", hard: 0.3, solid: false, opaque: false, light: 4, style: .custom, colors: [0x5A6270])
-		case .liftCar:
-			return TileDef(name: "Lift Car", hard: 0.5, solid: false, opaque: false, style: .custom, colors: [0x7A8490])
-		default:
-			// the tiles reserved for mods, until a world's mods give them a meaning (see ModRuntime)
-			return TileDef(name: "Unused Mod Block", hard: 9999, style: .custom, colors: [0xFF00FF, 0x200020, 0xFF00FF, 0x200020, 0xFF00FF], noDrop: true)
-		}
+		if let d = gameDefs[t.rawValue] { return d }
+		// the tiles reserved for mods, until a world's mods give them a meaning (see ModRuntime)
+		return TileDef(name: "Unused Mod Block", hard: 9999, style: .custom, colors: [0xFF00FF, 0x200020, 0xFF00FF, 0x200020, 0xFF00FF], noDrop: true)
 	}
+
+	static func parseDefs(_ s: String) -> [UInt8: TileDef] {
+		var tiles: [String: Tile] = [:]
+		for t in Tile.allCases { tiles[String(describing: t)] = t }
+		var mats: [String: Mat] = [:]
+		for m in Mat.allCases { mats[String(describing: m)] = m }
+		var styles: [String: TStyle] = [:]
+		var n: Int = 0
+		while let st = TStyle(rawValue: n) {
+			styles[String(describing: st)] = st
+			n += 1
+		}
+		var out: [UInt8: TileDef] = [:]
+		for line in s.split(separator: "\n") {
+			let text: String = line.components(separatedBy: " //")[0]
+			let f: [String] = text.components(separatedBy: "|")
+			guard f.count >= 2 else { continue }
+			var d = TileDef(name: f[1])
+			for kv in f.dropFirst(2) {
+				let p: [String] = kv.components(separatedBy: "=")
+				guard p.count == 2 else { continue }
+				let v: String = p[1]
+				let on: Bool = v == "1"
+				switch p[0] {
+				case "hard": d.hard = Double(v) ?? d.hard
+				case "tier": d.tier = Int(v) ?? 0
+				case "light": d.light = Int(v) ?? 0
+				case "solid": d.solid = on
+				case "opaque": d.opaque = on
+				case "liquid": d.liquid = on
+				case "platform": d.platform = on
+				case "plant": d.plant = on
+				case "hurt": d.hurt = on
+				case "noDrop": d.noDrop = on
+				case "style": d.style = styles[v] ?? d.style
+				case "colors": d.colors = v.split(separator: ",").compactMap { UInt32($0, radix: 16) }
+				case "drop":
+					let q: [String] = v.components(separatedBy: ":")
+					if q.count == 2, q[0] == "block", let b = tiles[q[1]] { d.drop = .block(b) }
+					if q.count == 2, q[0] == "mat", let m = mats[q[1]] { d.drop = .mat(m) }
+				default: break
+				}
+			}
+			for name in f[0].split(separator: ",") {
+				if let t = tiles[String(name)] { out[t.rawValue] = d }
+			}
+		}
+		return out
+	}
+
+	static let defText: String = """
+		air|Air|hard=0|solid=0|opaque=0
+		grass|Grass|hard=0.5|style=grassTop|colors=5DAA3A,4B9230,7A5230,5A3A1E,8A6038|drop=block:dirt
+		dirt|Dirt|hard=0.4|colors=7A5230,6B4626,8A6038,5A3A1E,7A5230
+		stone|Stone|hard=1.2|tier=1|colors=8A8A8A,7A7A7A,9A9A9A,6A6A6A,8A8A8A
+		sand|Sand|hard=0.4|colors=E0D08A,D2C078,EBDDA0,C4B268,E0D08A
+		log|Log|hard=0.9|solid=0|opaque=0|style=log|colors=6B4A2A,5A3C20,7C5733,4A3018,6B4A2A // tree trunks have no collision: everything walks (and flies, drives and shoots) through them, and they let skylight past like the canopy does (a trunk standing on the ground used to cast a dark shaft down through it). See logBlock for the solid building block.
+		leaves|Leaves|hard=0.2|solid=0|opaque=0|platform=1|style=leaves|colors=3E8A2E,2F7324,56A83F,225C1A,3E8A2E|noDrop=1 // canopies are one-way: walk and shoot through them, land on top of them
+		water|Water|hard=0|solid=0|opaque=0|liquid=1|style=water|colors=3B7BE0,4F90F0,2E64C0,8DBBFF,3B7BE0|noDrop=1
+		coal|Coal Ore|hard=1.6|tier=1|style=ore|colors=8A8A8A,7A7A7A,9A9A9A,6A6A6A,8A8A8A,1E1E1E,333333|drop=mat:coal
+		copper|Copper Ore|hard=1.8|tier=2|style=ore|colors=8A8A8A,7A7A7A,9A9A9A,6A6A6A,8A8A8A,D2793A,F0A060|drop=mat:copperOre
+		iron|Iron Ore|hard=2.2|tier=3|style=ore|colors=8A8A8A,7A7A7A,9A9A9A,6A6A6A,8A8A8A,D8A878,B88858|drop=mat:ironOre
+		gold|Gold Ore|hard=2.6|tier=4|light=2|style=ore|colors=8A8A8A,7A7A7A,9A9A9A,6A6A6A,8A8A8A,F5D142,FFE98A|drop=mat:goldOre
+		diamond|Diamond Ore|hard=3.2|tier=5|light=4|style=ore|colors=8A8A8A,7A7A7A,9A9A9A,6A6A6A,8A8A8A,4FE3E8,B8FBFF|drop=mat:diamond
+		mythril|Mythril Ore|hard=4.0|tier=6|light=5|style=ore|colors=8A8A8A,7A7A7A,9A9A9A,6A6A6A,8A8A8A,6A5CFF,B3A8FF|drop=mat:mythrilOre
+		planks|Planks|hard=0.8|style=planks|colors=B98A4E,8F6732,C89B5E,7A5628,B98A4E
+		glass|Glass|hard=0.3|opaque=0|style=glass|colors=CFEFFF,FFFFFF,9CCBE0,CFEFFF,CFEFFF
+		brick|Stone Brick|hard=1.5|tier=1|style=bricks|colors=A64B3C,8A8A8A,B85A48,8E3B2E,A64B3C
+		bedrock|Bedrock|hard=9999|tier=99|colors=3A3A3A,2A2A2A,4A4A4A,1A1A1A,3A3A3A|noDrop=1
+		snow|Snow|hard=0.3|style=snow|colors=F2F8FF,DCEBFA,FFFFFF,C4D8EE,F2F8FF
+		ice|Ice|hard=0.5|opaque=0|style=ice|colors=AEDCF5,8CC8EC,D6F0FF,78B4DC,AEDCF5
+		sandstone|Sandstone|hard=1.0|tier=1|style=sandstone|colors=D2B574,C4A562,DEC488,B89850,D2B574
+		cactus|Cactus|hard=0.4|hurt=1|style=cactus|colors=3F8F3F,2F7A2F,58AE58,1F5F1F,3F8F3F
+		jungleLeaves|Jungle Leaves|hard=0.2|solid=0|opaque=0|platform=1|style=leaves|colors=1F8A3A,146B2A,32AA4E,0E5420,1F8A3A|noDrop=1
+		mud|Mud|hard=0.5|style=mud|colors=4E3A2A,3E2E20,5E4834,30241A,4E3A2A
+		dryGrass|Dry Grass|hard=0.5|style=grassTop|colors=BDB35A,A39A48,7A5230,5A3A1E,8A6038|drop=block:dirt
+		jungleGrass|Jungle Grass|hard=0.5|style=grassTop|colors=2E9E3A,1F8A2C,4E3A2A,3E2E20,5E4834|drop=block:mud
+		mossGrass|Moss|hard=0.5|style=grassTop|colors=6E8A3A,5A7430,4E3A2A,3E2E20,5E4834|drop=block:mud
+		slate|Slate|hard=1.7|tier=1|colors=5E6678,4F5666,6D7688,40475A,5E6678
+		deepRock|Deep Rock|hard=2.6|tier=3|colors=3E3846,34303C,4A4452,2A2632,3E3846
+		lava|Lava|hard=0|solid=0|opaque=0|light=14|liquid=1|hurt=1|style=lava|colors=E8580C,FF8A1E,C03A06,FFD060,E8580C|noDrop=1
+		obsidian|Obsidian|hard=4.2|tier=5|colors=241838,1A1028,34244E,120A1E,241838
+		tallGrass|Tall Grass|hard=0|solid=0|opaque=0|plant=1|style=custom|noDrop=1
+		flowerR|Red Flower|hard=0|solid=0|opaque=0|plant=1|style=custom
+		flowerY|Yellow Flower|hard=0|solid=0|opaque=0|plant=1|style=custom
+		deadBush|Dead Bush|hard=0|solid=0|opaque=0|plant=1|style=custom|drop=mat:stick
+		mushroom|Glow Mushroom|hard=0|solid=0|opaque=0|light=6|plant=1|style=custom
+		reed|Reed|hard=0|solid=0|opaque=0|plant=1|style=custom|drop=mat:stick
+		workbench|Workbench|hard=0.6|solid=0|opaque=0|style=custom
+		furnace|Furnace|hard=1.0|tier=1|solid=0|opaque=0|light=7|style=custom
+		campfire|Campfire|hard=0.5|solid=0|opaque=0|light=13|hurt=0|style=custom
+		torch|Torch|hard=0|solid=0|opaque=0|light=12|plant=1|style=custom
+		lantern|Lantern|hard=0.2|solid=0|opaque=0|light=14|plant=1|style=custom
+		chest|Chest|hard=0.8|solid=0|opaque=0|style=custom|noDrop=0
+		platform|Platform|hard=0.3|solid=0|opaque=0|platform=1|style=custom
+		farmland|Farmland|hard=0.4|style=farmland|colors=5A3A1E,4A2E16,6B4626,3A220E,5A3A1E|drop=block:dirt
+		wheat1,wheat2,wheat3|Wheat|hard=0|solid=0|opaque=0|plant=1|style=custom|noDrop=1
+		carrot1,carrot2,carrot3|Carrots|hard=0|solid=0|opaque=0|plant=1|style=custom|noDrop=1
+		crackedBrick|Cracked Brick|hard=1.0|tier=1|style=bricks|colors=8E7A68,6A5A4C,A08C78,5A4A3C,8E7A68
+		mossBrick|Mossy Brick|hard=1.4|tier=1|style=bricks|colors=6E8A5A,4C5E3E,82A06C,3C4C30,6E8A5A
+		spikes|Spikes|hard=0.8|tier=1|solid=0|opaque=0|hurt=1|style=custom
+		fossil|Fossil Block|hard=1.5|tier=1|style=custom|drop=mat:bone
+		ashStone|Ashstone|hard=2.2|tier=4|style=ash|colors=4A3A48,3C2E3A,5A4858,2E222C,4A3A48
+		emberOre|Ember Ore|hard=3.4|tier=7|light=7|style=ore|colors=4A3A48,3C2E3A,5A4858,2E222C,4A3A48,FF7A1E,FFC050|drop=mat:emberOre
+		voidOre|Voidium Ore|hard=4.6|tier=8|light=8|style=ore|colors=4A3A48,3C2E3A,5A4858,2E222C,4A3A48,B04CFF,E8A8FF|drop=mat:voidOre
+		glowCrystal|Glow Crystal|hard=1.2|tier=4|opaque=0|light=11|style=crystal|colors=7A4CFF,B38CFF,4E2AC0,E6D8FF,7A4CFF
+		portalFrame|Rift Anchor|hard=99999|tier=99|light=4|style=custom|colors=23262E,3A3F4A,2E323B,16181E,23262E|noDrop=1
+		portalOff|Dormant Rift|hard=99999|tier=99|solid=0|opaque=0|style=custom|noDrop=1
+		portalOn|Open Rift|hard=99999|tier=99|solid=0|opaque=0|light=13|style=custom|noDrop=1
+		jungleLog|Jungle Log|hard=1.0|solid=0|opaque=0|style=log|colors=5A4A2A,4A3A20,6C5C34,3A2C14,5A4A2A
+		palmLog|Palm Log|hard=0.8|solid=0|opaque=0|style=log|colors=9A7A4A,826238,B08C58,6A4E2A,9A7A4A
+		cobweb|Cobweb|hard=0.1|solid=0|opaque=0|plant=1|style=custom|noDrop=1
+		hay|Hay Bale|hard=0.4|style=noise|colors=D8B83A,BE9E2A,E8CC52,A88820,D8B83A
+		doorClosed|Wooden Door|hard=0.6|solid=1|opaque=0|style=custom|colors=8F6732|drop=block:doorClosed
+		doorOpen|Open Door|hard=0.6|solid=0|opaque=0|style=custom|colors=8F6732|drop=block:doorClosed
+		logBlock|Log|hard=0.9|style=log|colors=6B4A2A,5A3C20,7C5733,4A3018,6B4A2A|drop=block:log
+		jungleLogBlock|Jungle Log|hard=1.0|style=log|colors=5A4A2A,4A3A20,6C5C34,3A2C14,5A4A2A|drop=block:jungleLog
+		palmLogBlock|Palm Log|hard=0.8|style=log|colors=9A7A4A,826238,B08C58,6A4E2A,9A7A4A|drop=block:palmLog
+		ladder|Ladder|hard=0.3|solid=0|opaque=0|style=custom|colors=9A6E3A
+		anvil|Anvil|hard=1.6|tier=1|solid=0|opaque=0|style=custom|colors=5A5E68
+		tinkerBench|Tinker's Bench|hard=0.8|solid=0|opaque=0|style=custom|colors=8F6732
+		riftForge|Rift Forge|hard=3.0|tier=5|solid=0|opaque=0|light=9|style=custom|colors=2A1A3A
+		crystalOre|Crystal Vein|hard=2.8|tier=4|light=6|style=custom|colors=5E6678,4F5666,6D7688,40475A,5E6678,8AF0E8,D8FFFA|drop=mat:crystalShard
+		birchLog|Birch Log|hard=0.8|solid=0|opaque=0|style=custom|colors=E2DED2,C8C4B8,F4F2EA,3A3632,E2DED2
+		birchLogBlock|Birch Log|hard=0.8|style=custom|colors=E2DED2,C8C4B8,F4F2EA,3A3632,E2DED2|drop=block:birchLog
+		birchLeaves|Birch Leaves|hard=0.2|solid=0|opaque=0|platform=1|style=leaves|colors=7DB846,649A34,9ACC5A,4E7E28,7DB846|noDrop=1
+		pineLeaves|Pine Needles|hard=0.2|solid=0|opaque=0|platform=1|style=leaves|colors=2E6E52,225A42,3E8464,18463A,2E6E52|noDrop=1
+		tin|Tin Ore|hard=1.7|tier=2|style=custom|colors=8A8A8A,7A7A7A,9A9A9A,6A6A6A,8A8A8A,C8D2DA,F2F6FA|drop=mat:tinOre
+		saltpeter|Saltpeter|hard=1.0|tier=1|style=custom|colors=8A8A8A,7A7A7A,9A9A9A,6A6A6A,8A8A8A,EDEAE0,FFFFFF|drop=mat:saltpeter
+		silver|Silver Ore|hard=2.4|tier=3|light=1|style=custom|colors=8A8A8A,7A7A7A,9A9A9A,6A6A6A,8A8A8A,DDE4EE,FFFFFF|drop=mat:silverOre
+		amethyst|Amethyst Geode|hard=1.8|tier=2|light=4|style=custom|colors=8A8A8A,7A7A7A,9A9A9A,6A6A6A,8A8A8A,9A5ADC,E0C0FF|drop=mat:amethyst
+		amethystBlock|Amethyst Block|hard=1.4|tier=1|light=6|style=crystal|colors=8A4CC8,B07AE8,6A34A8,E8D0FF,8A4CC8
+		rail|Rail|hard=0.2|solid=0|opaque=0|plant=1|style=custom|colors=6A6A72
+		crate|Supply Crate|hard=0.7|style=custom|colors=A97B45
+		oreCart|Ore Cart|hard=0.8|solid=0|opaque=0|style=custom|colors=5A5E68|noDrop=1
+		weatherStation|Weather Station|hard=1.0|solid=0|opaque=0|light=3|style=custom|colors=8F6732
+		dopplerStation|Doppler Station|hard=1.4|tier=1|solid=0|opaque=0|light=5|style=custom|colors=5A6470
+		stormSiren|Storm Siren|hard=1.4|tier=1|solid=0|opaque=0|style=custom|colors=8A8E98
+		lightningRod|Lightning Rod|hard=0.8|solid=0|opaque=0|style=custom|colors=D2793A
+		windTurbine|Wind Turbine|hard=1.2|tier=1|solid=0|opaque=0|style=custom|colors=C8CCD4
+		rainBarrel|Rain Barrel|hard=0.7|solid=0|opaque=0|style=custom|colors=8F6732
+		rainCistern|Rain Cistern|hard=1.4|tier=1|solid=0|opaque=0|style=custom|colors=6A6E78
+		weatherVane|Weather Vane|hard=0.6|solid=0|opaque=0|style=custom|colors=D2793A
+		heater|Heater|hard=1.2|tier=1|solid=0|opaque=0|light=9|style=custom|colors=4A4E58
+		sandbag|Sandbags|hard=0.9|style=custom|colors=B8A070
+		shutterClosed|Storm Shutter|hard=1.0|style=custom|colors=6A7A5A|drop=block:shutterClosed
+		shutterOpen|Open Shutter|hard=1.0|solid=0|opaque=0|style=custom|colors=6A7A5A|drop=block:shutterClosed
+		stormBrick|Reinforced Wall|hard=3.0|tier=2|style=custom|colors=6A6E78
+		shingles|Storm Shingles|hard=1.1|tier=1|style=custom|colors=7A4A3A
+		crankGen|Hand Crank Generator|hard=1.0|solid=0|opaque=0|style=custom|colors=5A6270
+		solarPanel|Solar Panel|hard=1.0|tier=1|solid=0|opaque=0|style=custom|colors=2A5A9A
+		fuelGen|Fuel Generator|hard=1.4|tier=1|solid=0|opaque=0|style=custom|colors=5A6270
+		waterWheel|Water Wheel|hard=0.9|solid=0|opaque=0|style=custom|colors=8F6732
+		emberDynamo|Ember Dynamo|hard=2.4|tier=4|solid=0|opaque=0|light=5|style=custom|colors=2A1E2E
+		battery|Copper Cell|hard=1.0|tier=1|solid=0|opaque=0|style=custom|colors=5A6270
+		accumulator|Crystal Accumulator|hard=1.8|tier=2|solid=0|opaque=0|light=3|style=custom|colors=30A0A0
+		powerSwitch|Power Switch|hard=0.6|solid=0|opaque=0|style=custom|colors=5A6270
+		breaker|Circuit Breaker|hard=0.8|solid=0|opaque=0|style=custom|colors=5A6270
+		powerMeter|Power Meter|hard=0.6|solid=0|opaque=0|style=custom|colors=E8E4D8
+		lever|Lever|hard=0.5|solid=0|opaque=0|style=custom|colors=5A6270
+		pushButton|Push Button|hard=0.5|solid=0|opaque=0|style=custom|colors=30B0C0
+		pressurePlate|Pressure Plate|hard=0.5|solid=0|opaque=0|style=custom|colors=8A94A4
+		pulseTimer|Pulse Timer|hard=0.6|solid=0|opaque=0|style=custom|colors=E8E4D8
+		repeater|Pulse Relay|hard=0.6|solid=0|opaque=0|style=custom|colors=5A6270
+		inverter|Inverter|hard=0.6|solid=0|opaque=0|style=custom|colors=6A4A7A
+		logicGate|Logic Gate|hard=0.6|solid=0|opaque=0|style=custom|colors=3A6A6A
+		motionSensor|Motion Sensor|hard=0.7|solid=0|opaque=0|style=custom|colors=C86A3A
+		daySensor|Daylight Sensor|hard=0.7|solid=0|opaque=0|style=custom|colors=5A8AC8
+		weatherSensor|Weather Sensor|hard=0.7|solid=0|opaque=0|style=custom|colors=3B7BE0
+		itemSensor|Item Sensor|hard=0.7|solid=0|opaque=0|style=custom|colors=A97B45
+		proximitySensor|Proximity Sensor|hard=0.7|solid=0|opaque=0|style=custom|colors=30E0D0
+		gateClosed|Steel Gate|hard=2.2|tier=2|opaque=0|style=custom|colors=8A94A4|drop=block:gateClosed
+		gateOpen|Open Steel Gate|hard=2.2|tier=2|solid=0|opaque=0|style=custom|colors=8A94A4|drop=block:gateClosed
+		lampOff|Spark Lamp|hard=0.8|opaque=0|style=custom|colors=8A9AA0|drop=block:lampOff
+		lampOn|Lit Spark Lamp|hard=0.8|opaque=0|light=15|style=custom|colors=FFF4C0|drop=block:lampOff
+		arcTrap|Arc Trap|hard=1.8|tier=2|style=custom|colors=5A6270
+		autoDrill|Auto Drill|hard=2.0|tier=2|style=custom|colors=E8C020
+		conveyor|Conveyor Belt|hard=1.2|tier=1|style=custom|colors=2A2A2E
+		collector|Item Collector|hard=1.2|tier=1|style=custom|colors=8A94A4
+		autoCrafter|Auto Crafter|hard=1.6|tier=2|style=custom|colors=B0A060
+		sumpPump|Sump Pump|hard=1.4|tier=1|style=custom|colors=3B7BE0
+		signalLight|Pulse Indicator|hard=0.4|solid=0|opaque=0|style=custom|colors=30E0D0
+		alchemyStill|Alchemy Still|hard=1.0|solid=0|opaque=0|light=4|style=custom|colors=D2793A
+		infuser|Infusion Crucible|hard=2.0|tier=1|solid=0|opaque=0|light=6|style=custom|colors=6A5A8A
+		exoStation|Assembly Station|hard=2.0|tier=1|solid=0|opaque=0|style=custom|colors=5A6270
+		sapling|Sapling|hard=0|solid=0|opaque=0|plant=1|style=custom|colors=4B9A30
+		chair|Chair|hard=0.4|solid=0|opaque=0|style=custom|colors=A0703A
+		table|Table|hard=0.5|solid=0|opaque=0|platform=1|style=custom|colors=C89B5E
+		bedL|Bed|hard=0.4|solid=0|opaque=0|platform=1|style=custom|colors=C03838
+		bedR|Bed|hard=0.4|solid=0|opaque=0|platform=1|style=custom|colors=C03838|drop=block:bedL
+		cabinet|Cabinet|hard=0.6|solid=0|opaque=0|platform=1|style=custom|colors=9A6A38
+		wardrobe|Wardrobe|hard=0.6|solid=0|opaque=0|style=custom|colors=7A5230
+		shelf|Shelf|hard=0.3|solid=0|opaque=0|platform=1|style=custom|colors=C89B5E
+		bookshelf|Bookshelf|hard=0.6|solid=0|opaque=0|platform=1|style=custom|colors=8F6732
+		floorLamp|Floor Lamp|hard=0.3|solid=0|opaque=0|light=13|style=custom|colors=FFE680
+		sofa|Sofa|hard=0.4|solid=0|opaque=0|style=custom|colors=3A6AA8
+		stairWoodR,stairWoodL|Wooden Stairs|hard=0.6|solid=0|opaque=0|style=custom|colors=C89B5E|drop=block:stairWoodR
+		stairStoneR,stairStoneL|Stone Stairs|hard=1.4|tier=1|solid=0|opaque=0|style=custom|colors=8A8A8A|drop=block:stairStoneR
+		stairBrickR,stairBrickL|Brick Stairs|hard=1.6|tier=1|solid=0|opaque=0|style=custom|colors=B0503A|drop=block:stairBrickR
+		liftRail|Lift Rail|hard=0.5|solid=0|opaque=0|style=custom|colors=9AA4B0
+		liftButton|Lift Button|hard=0.3|solid=0|opaque=0|light=4|style=custom|colors=5A6270
+		liftCar|Lift Car|hard=0.5|solid=0|opaque=0|style=custom|colors=7A8490
+		"""
 }
 
 // MARK: - Tile art
 
 func customTileRows(_ t: Tile) -> ([String], [Character: UInt32])? {
 	switch t {
-	case .torch:
-		return ([".......", "...y...", "..yoy..", "...r...", "...b...", "...b...", "...b...", "...b..."].map { String($0) },
-				["y": 0xFFE680, "o": 0xFFA030, "r": 0xE05818, "b": 0x8A5A2A])
-	case .lantern:
-		return (["...kk...", "..kyyk..", ".kyYYyk.", ".kyYYyk.", ".kyyyyk.", "..kkkk.."],
-				["k": 0x3A3A3A, "y": 0xFFC84A, "Y": 0xFFF2B0])
-	case .campfire:
-		return (["........", "...y....", "..yoy.y.", "..oryo..", ".bbrobb.", "bbbbbbbb", "ssbbbbss", "........"],
-				["y": 0xFFE680, "o": 0xFFA030, "r": 0xE05818, "b": 0x6B4A2A, "s": 0x808080])
-	case .workbench:
-		return (["........", "........", "tttttttt", "bbbbbbbb", "b.b..b.b", "b.b..b.b", "b.b..b.b", "b.b..b.b"],
-				["t": 0xC89B5E, "b": 0x8F6732])
-	case .furnace:
-		return (["ssssssss", "sSSSSSSs", "sSkkkkSs", "sSkoOkSs", "sSkOykSs", "sSkkkkSs", "sSSSSSSs", "ssssssss"],
-				["s": 0x6A6A6A, "S": 0x8A8A8A, "k": 0x2A2020, "o": 0xE05818, "O": 0xFFA030, "y": 0xFFE680])
-	case .chest:
-		return (["........", "........", "wwwwwwww", "wddddddw", "wwwgwwww", "wddddddw", "wddddddw", "wwwwwwww"],
-				["w": 0x8F6732, "d": 0xB98A4E, "g": 0xF5D142])
-	case .platform:
-		return (["........", "........", "........", "........", "........", "........", "pppppppp", "qqqqqqqq"],
-				["p": 0xC89B5E, "q": 0x8F6732])
-	case .tallGrass:
-		return (["........", "........", "........", ".g...g..", ".g.g.g.g", "gg.g.ggg", "gggggggg", "gggggggg"],
-				["g": 0x4B9A30])
-	case .flowerR:
-		return (["........", "........", "...rr...", "..rYr...", "...rr...", "....g...", "....g...", "...ggg.."],
-				["r": 0xE63A3A, "Y": 0xFFE060, "g": 0x3E8A2E])
-	case .flowerY:
-		return (["........", "........", "..yy....", ".yOyy...", "..yy....", "...g....", "...g....", "..ggg..."],
-				["y": 0xFFE040, "O": 0xE08A20, "g": 0x3E8A2E])
-	case .deadBush:
-		return (["........", "........", ".b...b..", "..b.b...", "...b..b.", "..bbbb..", "...b....", "...b...."],
-				["b": 0x8A6A3A])
-	case .mushroom:
-		return (["........", "........", "..cccc..", ".cCcccc.", ".cccCcc.", "...ww...", "...ww...", "...ww..."],
-				["c": 0x3AC8C8, "C": 0xA8FFFF, "w": 0xD8E8F0])
-	case .reed:
-		return (["...b....", "...b..b.", "...g..b.", "...g..g.", ".g.g..g.", ".g.g.gg.", ".g.ggg..", "..gggg.."],
-				["g": 0x6E8A3A, "b": 0x6B4A2A])
-	case .wheat1:
-		return (["........", "........", "........", "........", "........", "g.g..g.g", "g.g..g.g", "gggggggg"],
-				["g": 0x7AB83A])
-	case .wheat2:
-		return (["........", "........", "........", "y.y..y.y", "g.g..g.g", "g.g..g.g", "g.g..g.g", "gggggggg"],
-				["g": 0x8AB03A, "y": 0xD8C050])
-	case .wheat3:
-		return (["y.y..y.y", "yyy..yyy", "yyy..yyy", "y.y..y.y", "g.g..g.g", "g.g..g.g", "g.g..g.g", "gggggggg"],
-				["g": 0xB0A030, "y": 0xE8C850])
-	case .carrot1:
-		return (["........", "........", "........", "........", "........", "..g..g..", ".ggggg..", "gggggggg"],
-				["g": 0x4EA83A])
-	case .carrot2:
-		return (["........", "........", "........", "..g..g..", ".ggggg..", ".gggggg.", "gggggggg", "gggggggg"],
-				["g": 0x4EB83A])
-	case .carrot3:
-		return (["........", "..g..g..", ".ggggg..", ".gggggg.", "ggoggogg", "gggggggg", "gggoggog", "gggggggg"],
-				["g": 0x4EB83A, "o": 0xF08A1E])
-	case .spikes:
-		return (["........", "........", "........", "...s....", "..sss.s.", ".sssssss", "ssssssss", "dddddddd"],
-				["s": 0xC8C8D0, "d": 0x5A5A5A])
-	case .fossil:
-		return (["ssssssss", "sbbsssss", "ssbbssss", "sssbbbbs", "ssssbssb", "sbbbssbs", "ssbssbss", "ssssssss"],
-				["s": 0x8A8A8A, "b": 0xE8E0C8])
-	case .portalOff, .portalOn:
-		// drawn as one shape by the renderer's rift pass; the tiles themselves are see-through
-		return (["........"], [:])
-	case .portalFrame:
-		// dark basalt anchor stone with an amber vein
-		return (["kkbbbbkk", "kbbBbbbk", "bbbbaBbb", "bBbaabbb", "bbaabbBb", "bbabbbbb", "kbbbBbbk", "kkbbbbkk"],
-				["k": 0x16181E, "b": 0x2A2E37, "B": 0x3C424E, "a": 0xC08040])
-	case .doorClosed:
-		return (["dDDDDDDd", "dDdddDDd", "dDdddDDd", "dDDDDDDd", "dDDDDgDd", "dDdddDDd", "dDdddDDd", "dDDDDDDd"],
-				["d": 0x6A4A22, "D": 0xA97B45, "g": 0xE8C040])
-	case .doorOpen:
-		return (["dD......", "dD......", "dD......", "dD......", "dD......", "dD......", "dD......", "dD......"],
-				["d": 0x6A4A22, "D": 0xA97B45])
-	case .cobweb:
-		return (["w.....w.", ".w...w..", "..w.w...", "...w....", "..w.w...", ".w...w..", "w.....w.", "........"],
-				["w": 0xE8E8F0])
-	case .ladder:
-		return ([".r....r.", ".rgggggr", ".r....r.", ".r....r.", ".r....r.", ".rgggggr", ".r....r.", ".r....r."].map { String($0.prefix(8)) },
-				["r": 0x7A5428, "g": 0xB98A4E])
-	case .anvil:
-		return (["........", "........", "hhhhhhh.", ".HHHHHHh", "..sss...", "..sss...", ".bbbbb..", "bbbbbbb."],
-				["h": 0x8A8E98, "H": 0x6A6E78, "s": 0x4A4E58, "b": 0x3A3E48])
-	case .tinkerBench:
-		return (["....g...", "...ggg..", "tttttttt", "bbbbbbbb", "b.c..k.b", "b.c..k.b", "b......b", "b......b"],
-				["t": 0xC89B5E, "b": 0x8F6732, "g": 0xD8A040, "c": 0xB0B4BC, "k": 0xC03A3A])
-	case .riftForge:
-		return (["..pppp..", ".pPppPp.", "oovvvvoo", "ovVvvVvo", "ovvVVvvo", "oovvvvoo", "oooooooo", "oooooooo"],
-				["o": 0x241838, "p": 0x8A4CD8, "P": 0xD8A8FF, "v": 0x4A2A7A, "V": 0xB070FF])
-	case .alchemyStill:
-		// a copper pot on a stand, its coil running to a flask
-		return (["..c.....", ".ccc..g.", "cCCCc.g.", "cCCCcgg.", "cCCCc.f.", ".ccc.fFf", "bbbbbfff", "b...b..."],
-				["c": 0xB8612A, "C": 0xF0A060, "g": 0xCFEFFF, "f": 0xB8E0F0, "F": 0x7AD040, "b": 0x5A4A3A])
-	case .infuser:
-		// a stone crucible brimming with something that glows
-		return (["..p..p..", ".PvvvvP.", "svVVVVvs", "sSvvvvSs", ".sSSSSs.", "..ssss..", ".ssssss.", "ssssssss"],
-				["p": 0xC07CFF, "P": 0x8A6AB8, "v": 0x9A5ADC, "V": 0xE0B8FF, "s": 0x5A5E68, "S": 0x7A7E88])
-	case .chair:
-		// side on, its back to the left
-		return (["b.......", "b.......", "b.......", "bsssss..", "bSSSSS..", "b....l..", "b....l..", "b....l.."],
-				["b": 0x7A5230, "s": 0xC08A50, "S": 0x9A6A38, "l": 0x7A5230])
-	case .table:
-		return (["........", "........", "tttttttt", "TTTTTTTT", ".l....l.", ".l....l.", ".l....l.", ".l....l."],
-				["t": 0xC89B5E, "T": 0x8F6732, "l": 0x7A5230])
-	case .bedL:
-		// the headboard and the pillow
-		return (["hh......", "hh......", "hh......", "hhwwwbbb", "hhWWWBBB", "hhffffff", "hh......", "h......."],
-				["h": 0x7A5230, "w": 0xF0EEE6, "W": 0xC8C4B8, "b": 0xC83A3A, "B": 0x962828, "f": 0x8F6732])
-	case .bedR:
-		// the foot of the bed
-		return (["........", "........", ".......f", "bbbbbbbf", "BBBBBBBf", "ffffffff", ".......f", ".......f"],
-				["b": 0xC83A3A, "B": 0x962828, "f": 0x7A5230])
-	case .cabinet:
-		return (["tttttttt", "cddkkddc", "cddkkddc", "cddddddc", "cddddddc", "cddddddc", "cccccccc", "c......c"],
-				["t": 0xC89B5E, "c": 0x7A5230, "d": 0xB07E48, "k": 0xE8C84A])
-	case .wardrobe:
-		return (["cccccccc", "cdddcddc", "cddkckdc", "cdddcddc", "cdddcddc", "cdddcddc", "cccccccc", "c......c"],
-				["c": 0x5E3E22, "d": 0x8F6732, "k": 0xE8C84A])
-	case .shelf:
-		return (["........", "........", "..r..g..", ".rr.ggb.", "pppppppp", "PPPPPPPP", ".k....k.", "........"],
-				["r": 0xC83A3A, "g": 0x4E9A3E, "b": 0x3A6AA8, "p": 0xC89B5E, "P": 0x8F6732, "k": 0x5A5A5A])
-	case .bookshelf:
-		return (["wwwwwwww", "wrgbywbw", "wrgbyrbw", "wwwwwwww", "wbyrgwrw", "wbyrgbrw", "wwwwwwww", "w......w"],
-				["w": 0x7A5230, "r": 0xB83A3A, "g": 0x3E8A4E, "b": 0x3A5AA8, "y": 0xD8B040])
-	case .floorLamp:
-		return (["..yyyy..", ".yYYYYy.", ".yyyyyy.", "...ss...", "...ss...", "...ss...", "..ssss..", ".ssssss."],
-				["y": 0xE8C060, "Y": 0xFFF2B0, "s": 0x4A4A52])
-	case .sofa:
-		return (["........", "bbbbbbbb", "BbbbbbbB", "aBccccBa", "aBCCCCBa", "aaaaaaaa", "l......l", "........"],
-				["b": 0x4A7AB8, "B": 0x3A6AA8, "a": 0x2E5A90, "c": 0x5A8AC8, "C": 0x4A7AB8, "l": 0x5E3E22])
 	case .stairWoodR, .stairWoodL:
 		let r: [String] = ["....tttt", "....pppp", "....pppp", "....PPPP", "tttttttt", "pppppppp", "pppppppp", "PPPPPPPP"]
 		return (t == .stairWoodR ? r : r.map { String($0.reversed()) }, ["t": 0xE0B47A, "p": 0xC89B5E, "P": 0x8F6732])
@@ -938,204 +707,143 @@ func customTileRows(_ t: Tile) -> ([String], [Character: UInt32])? {
 	case .stairBrickR, .stairBrickL:
 		let r: [String] = ["....tttt", "....bbmb", "....bbmb", "....mmmm", "tttttttt", "bbmbbbmb", "bbmbbbmb", "mmmmmmmm"]
 		return (t == .stairBrickR ? r : r.map { String($0.reversed()) }, ["t": 0xD07050, "b": 0xB0503A, "m": 0x8A8070])
-	case .liftRail:
-		return (["Mm....mM", "Mm....mM", "Mm....mM", "MmxxxxmM", "Mm....mM", "Mm....mM", "Mm....mM", "MmxxxxmM"],
-				["M": 0x5A6270, "m": 0x9AA4B0, "x": 0x7A5230])
-	case .liftButton:
-		return (["........", "..pppp..", "..pUUp..", "..pppp..", "..pDDp..", "..pppp..", "........", "........"],
-				["p": 0x4A5260, "U": 0x5AD05A, "D": 0xE05050])
-	case .liftCar:
-		return (["kkkkkkkk", "k.k..k.k", "k.k..k.k", "k.k..k.k", "k.k..k.k", "k......k", "ffffffff", "FFFFFFFF"],
-				["k": 0x5A6270, "f": 0x9AA4B0, "F": 0x4A5260])
-	case .sapling:
-		// a thin stem with a few young leaves
-		return (["........", "...gg...", "..gGgg..", ".gg.bgg.", "..g.b.g.", "....b...", "...bb...", "....b..."],
-				["g": 0x4B9A30, "G": 0x7AC84A, "b": 0x7A5230])
-	case .exoStation:
-		// a gantry with a suit hanging in its clamps
-		return (["kkkkkkkk", "k.mmmm.k", "k.mccm.k", "kmmmmmmk", "k.mmmm.k", "k.m..m.k", "ssssssss", "sysyysys"],
-				["k": 0x4A5260, "m": 0x9AA4B0, "c": 0x60E0FF, "s": 0x3A3E48, "y": 0xE8C020])
-	case .crystalOre:
-		// slate with a cluster of pale cyan shards breaking through it
-		return (["sSsdsSss", "sdsscCss", "ssscWCds", "sSccWCcs", "dscWCcss", "ssCcsdSs", "sSsssscs", "dsSdsssS"],
-				["s": 0x5E6678, "S": 0x6D7688, "d": 0x4F5666, "c": 0x3AA8B0, "C": 0x8AF0E8, "W": 0xE8FFFF])
-	case .birchLog, .birchLogBlock:
-		return (["lwwwwwws", "lwwkkwws", "lwwwwwws", "lwwwwwws", "lkwwwwks", "lwwwwwws", "lwwwkkws", "lwwwwwws"],
-				["l": 0xF4F2EA, "w": 0xE2DED2, "k": 0x3A3632, "s": 0xB8B4A8])
-	// the newer ores each get their own shape, not just a colour, so they read at a glance in a dark cave
-	case .tin:
-		// rounded pale nuggets with a bright glint
-		return (["sSsdssSs", "sttsSdss", "tWTtssds", "sTTsdttS", "ssdsTWTs", "dSsstTTs", "stTssdss", "sTWsSssd"],
-				["s": 0x8A8A8A, "S": 0x9A9A9A, "d": 0x6A6A6A, "t": 0xAEB8C2, "T": 0xC8D2DA, "W": 0xF2F6FA])
-	case .saltpeter:
-		// a white crust in feathery streaks along the bedding of the rock
-		return (["sSswwsds", "swwWwsss", "ssssdSss", "dsswwwWs", "sSwWwsss", "sssssdss", "swwwSsds", "sSdwWwws"],
-				["s": 0x8A8A8A, "S": 0x9A9A9A, "d": 0x6A6A6A, "w": 0xDCD8CC, "W": 0xFFFFFF])
-	case .silver:
-		// thin bright veins with sparkling points
-		return (["sSssdsvW", "ssdssvvs", "sSsvvsSs", "dsvvssds", "svvsSsss", "vWsssdss", "vssdsSsv", "sSdsssvW"],
-				["s": 0x7E8088, "S": 0x92949C, "d": 0x62646C, "v": 0xC4CCD8, "W": 0xFFFFFF])
-	case .amethyst:
-		// violet crystal points growing out of a hollow in the rock
-		return (["sSsdssSs", "ssdsaSss", "sSsaAads", "dsaAWAas", "saAWAAas", "aAAAaAAa", "dsSssdSs", "sSdssSsd"],
-				["s": 0x8A8A8A, "S": 0x9A9A9A, "d": 0x6A6A6A, "a": 0x7A3CBC, "A": 0xB07AE8, "W": 0xEEDCFF])
-	case .rail:
-		return (["........", "........", "........", "........", "........", "........", "rrrrrrrr", "t.t..t.t"],
-				["r": 0x9A9EA8, "t": 0x6A4A26])
-	case .crate:
-		return (["pppppppp", "pPddddPp", "pdPddPdp", "pddPPddp", "pddPPddp", "pdPddPdp", "pPddddPp", "pppppppp"],
-				["p": 0x7A5628, "P": 0xA97B45, "d": 0xC89B5E])
-	case .oreCart:
-		return (["........", "........", "..oyoc..", "mmmmmmmm", "mMMMMMMm", "mMMMMMMm", ".kk..kk.", ".kk..kk."],
-				["m": 0x4A4E58, "M": 0x6A6E78, "o": 0xD2793A, "y": 0xC8D2DA, "c": 0x2A2A2E, "k": 0x2A2A2E])
-	// weather devices: each reads at a glance (cups on a station, a dish on the Doppler, a horn and
-	// beacon on the siren); their moving parts are drawn live over the tile
-	case .weatherStation:
-		return ([".c...c..", ".ccpcc..", "...p....", "bbbbbbbb", "bkkkkkkb", "bkGgGgkb", "bbbbbbbb", "bb....bb"],
-				["c": 0xC8CCD4, "p": 0x8A8E98, "b": 0x8F6732, "k": 0x1A2A2A, "G": 0x60E0A0, "g": 0x2A8A5A])
-	case .dopplerStation:
-		return (["..dddd..", ".dDDDDd.", "...pp...", "mmmmmmmm", "mkkkkkkm", "mkRgRgkm", "mmmmmmmm", "mm....mm"],
-				["d": 0xE0E4EA, "D": 0x9AA0AC, "p": 0x6A6E78, "m": 0x5A6470, "k": 0x10181C, "R": 0xFF5050, "g": 0x60E0A0])
-	case .stormSiren:
-		return (["...rr...", "..rRRr..", "..mmmm..", "hHmmmmHh", "hHmmmmHh", "...pp...", "...pp...", "..bbbb.."],
-				["r": 0xC02020, "R": 0xFF6060, "m": 0x8A8E98, "h": 0x6A6E78, "H": 0xA8AEB8, "p": 0x5A5E68, "b": 0x3A3E48])
-	case .lightningRod:
-		return (["...yy...", "...oo...", "...oO...", "...oO...", "...oO...", "...oO...", "..bbbb..", ".bbbbbb."],
-				["y": 0xFFE8A0, "o": 0xD2793A, "O": 0xA85A28, "b": 0x5A5E68])
-	case .windTurbine:
-		return (["..nnnn..", "..nNNn..", "...pp...", "...pp...", "...pp...", "...pp...", "...pp...", "..bbbb.."],
-				["n": 0xE8ECF0, "N": 0xC8CCD4, "p": 0xD8DCE2, "b": 0x6A6E78])
-	case .rainBarrel:
-		return (["........", ".kddddk.", ".bBbbBb.", ".hhhhhh.", ".bBbbBb.", ".bBbbBb.", ".hhhhhh.", ".bBbbBb."],
-				["k": 0x5A3A1A, "d": 0x2A1A0E, "b": 0x8F6732, "B": 0xB98A4E, "h": 0x5A5E68])
-	case .rainCistern:
-		return (["mmmmmmmm", "mkkkkkkm", "mSSSSSSm", "mSsSSsSm", "mSSSSSSm", "mSsSSsSm", "mSSSSSSm", "mmmmmmmm"],
-				["m": 0x5A5E68, "k": 0x1A1A20, "S": 0x8A8A8A, "s": 0x7A7A7A])
-	case .weatherVane:
-		return (["........", "........", "...yy...", "...pp...", "..cpPc..", "...pp...", "...pp...", "..bbbb.."],
-				["y": 0xFFE8A0, "p": 0xA85A28, "P": 0xD2793A, "c": 0xD2793A, "b": 0x5A5E68])
-	case .heater:
-		return (["...pp...", "...pp...", "mmmmmmmm", "mkooookm", "mkOyOokm", "mkooookm", "mmmmmmmm", "m.m..m.m"],
-				["p": 0x4A4E58, "m": 0x5A5E68, "k": 0x2A2A2E, "o": 0xE05818, "O": 0xFFA030, "y": 0xFFE680])
-	case .sandbag:
-		return (["tTTttTTt", "tttttttt", "dttdtttd", "TTttTTtt", "tttttttt", "tdtttdtt", "tTTttTTt", "tttttttt"],
-				["t": 0xB8A070, "T": 0xD2BC8A, "d": 0x8A7448])
-	case .shutterClosed:
-		return (["ffffffff", "fsSsSsSf", "fssssssf", "fsSsSsSf", "fssssssf", "fsSsSsSf", "fssssssf", "ffffffff"],
-				["f": 0x4A4E58, "s": 0x6A7A5A, "S": 0x8A9A72])
-	case .shutterOpen:
-		return (["ff......", "fs......", "fS......", "fs......", "fS......", "fs......", "fS......", "ff......"],
-				["f": 0x4A4E58, "s": 0x6A7A5A, "S": 0x8A9A72])
-	case .stormBrick:
-		return (["iiiiiiii", "bbbkbbbk", "bbbkbbbk", "kkkkkkkk", "bkbbbkbb", "bkbbbkbb", "iiiiiiii", "bbbkbbbk"],
-				["i": 0x9AA0AC, "b": 0x6A6E78, "k": 0x4A4E58])
-	case .shingles:
-		return (["rRrrRrrR", "rrrrrrrr", "kkkkkkkk", "RrrRrrRr", "rrrrrrrr", "kkkkkkkk", "rRrrRrrR", "rrrrrrrr"],
-				["r": 0x7A4A3A, "R": 0x9A6250, "k": 0x4A2A20])
-	// Sparkworks: slate casings with copper fittings and teal or amber lights; switch handles, dials,
-	// arrows, charge bars and moving parts are drawn live over the tile
-	case .crankGen:
-		return (["......hH", "...mm.h.", "..mMMmh.", "kmmmmmmk", "kmccccmk", "kmcaacmk", "kmmmmmmk", "kk....kk"],
-				["k": 0x2E323A, "m": 0x5A6270, "M": 0x8A94A4, "c": 0xD2793A, "a": 0xFFC020, "h": 0x8A5A2A, "H": 0xC89040])
-	case .solarPanel:
-		return (["........", "bBbBbBbB", "BbBbBbBb", "bBbBbBbB", "mmmmmmmm", "...pp...", "...pp...", "..mmmm.."],
-				["b": 0x1A3A6A, "B": 0x2E62A8, "m": 0x8A94A4, "p": 0x5A6270])
-	case .fuelGen:
-		return ([".pp.....", ".pp.....", "kkkkkkkk", "kmmmmmmk", "kmrrrrmk", "kmrrrrmk", "kmmmmmmk", "kk....kk"],
-				["k": 0x2E323A, "m": 0x5A6270, "r": 0x1A1A1E, "p": 0x6A6E78])
-	case .waterWheel:
-		return (["..wwww..", ".wWwwWw.", "wWw..wWw", "ww.pp.ww", "ww.pp.ww", "wWw..wWw", ".wWwwWw.", "..wwww.."],
-				["w": 0x8F6732, "W": 0xB98A4E, "p": 0x5A5E68])
-	case .emberDynamo:
-		return (["kkkkkkkk", "kOOOOOOk", "kOeEEeOk", "kOEyyEOk", "kOEyyEOk", "kOeEEeOk", "kOOOOOOk", "kkkkkkkk"],
-				["k": 0x16121A, "O": 0x2A1E2E, "e": 0xC04010, "E": 0xFF7020, "y": 0xFFD060])
-	case .battery:
-		return (["..cccc..", ".kkkkkk.", ".kmmmmk.", ".kmmmmk.", ".kmmmmk.", ".kmmmmk.", ".kmmmmk.", ".kkkkkk."],
-				["k": 0x2E323A, "m": 0x4A515E, "c": 0xD2793A])
-	case .accumulator:
-		return (["kkkkkkkk", "kgGggGgk", "kGtttTGk", "kgtTttgk", "kgtttTgk", "kGTtttGk", "kgGggGgk", "kkkkkkkk"],
-				["k": 0x2E323A, "g": 0x5A8A90, "G": 0x8AC8C8, "t": 0x30A0A0, "T": 0x8AF0E8])
-	case .powerSwitch:
-		return (["........", ".kkkkkk.", ".kmmmmk.", ".km..mk.", ".km..mk.", ".kmmmmk.", ".kkkkkk.", "........"],
-				["k": 0x2E323A, "m": 0x6A7280])
-	case .breaker:
-		return (["kkkkkkkk", "kyykyykk", "kmmmmmmk", "kmk..kmk", "kmk..kmk", "kmkkkkmk", "kmmmmmmk", "kkkkkkkk"],
-				["k": 0x2E323A, "m": 0x5A6270, "y": 0xE8C020])
-	case .powerMeter:
-		return ([".kkkkkk.", "kwwwwwwk", "kwnwwwwk", "kwwnwwwk", "kwwwnwwk", "kkkkkkkk", "kmmmmmmk", ".kkkkkk."],
-				["k": 0x2E323A, "w": 0xE8E4D8, "n": 0x3A3A40, "m": 0x5A6270])
-	case .lever:
-		return (["........", "........", "........", "........", "........", "..kkkk..", ".kmmmmk.", "kkkkkkkk"],
-				["k": 0x2E323A, "m": 0x6A7280])
-	case .pushButton:
-		return (["........", "........", "..kkkk..", ".kmmmmk.", ".kmBBmk.", ".kmBBmk.", ".kmmmmk.", "..kkkk.."],
-				["k": 0x2E323A, "m": 0x6A7280, "B": 0x30B0C0])
-	case .pressurePlate:
-		return (["........", "........", "........", "........", "........", "........", ".mMMMMm.", "kkkkkkkk"],
-				["k": 0x2E323A, "m": 0x6A7280, "M": 0x9AA4B4])
-	case .pulseTimer:
-		return (["kkkkkkkk", "kmwwwwmk", "kwwnwwwk", "kwwnnnwk", "kwwwwwwk", "kmwwwwmk", "kmmmmmmk", "kkkkkkkk"],
-				["k": 0x2E323A, "m": 0x5A6270, "w": 0xE8E4D8, "n": 0x3A3A40])
-	case .repeater:
-		return (["........", "........", "kkkkkkkk", "kmmmmmmk", "kmmmmmmk", "kmmmmmmk", "kkkkkkkk", "........"],
-				["k": 0x2E323A, "m": 0x5A6270])
-	case .inverter:
-		return (["........", "........", "kkkkkkkk", "kiiiiiik", "kiiiiiik", "kiiiiiik", "kkkkkkkk", "........"],
-				["k": 0x2E323A, "i": 0x6A4A7A])
-	case .logicGate:
-		return (["........", "kkkkkkkk", "kqqqqqqk", "kqqqqqqk", "kqqqqqqk", "kqqqqqqk", "kkkkkkkk", "........"],
-				["k": 0x2E323A, "q": 0x3A6A6A])
-	case .motionSensor:
-		return (["..gggg..", ".gGggGg.", ".gggggg.", "kkkkkkkk", "kmmmmmmk", "kmmmmmmk", "kkkkkkkk", "........"],
-				["k": 0x2E323A, "m": 0x5A6270, "g": 0xC86A3A, "G": 0xF0A070])
-	case .daySensor:
-		return (["kkkkkkkk", "kssSSssk", "ksSyySsk", "ksSyySsk", "kssSSssk", "kmmmmmmk", "kmmmmmmk", "kkkkkkkk"],
-				["k": 0x2E323A, "m": 0x5A6270, "s": 0x3A5A8A, "S": 0xE8C040, "y": 0xFFF0A0])
-	case .weatherSensor:
-		return ([".c...c..", ".ccpcc..", "...p....", "kkkkkkkk", "kmdmmmmk", "kdddmmmk", "kmdmmmmk", "kkkkkkkk"],
-				["k": 0x2E323A, "m": 0x5A6270, "c": 0xC8CCD4, "p": 0x8A8E98, "d": 0x3B7BE0])
-	case .itemSensor:
-		return (["kkkkkkkk", "kmmmmmmk", "kmbbbbmk", "kmbBBbmk", "kmbbbbmk", "kmmmmmmk", "kmmmmmmk", "kkkkkkkk"],
-				["k": 0x2E323A, "m": 0x5A6270, "b": 0xA97B45, "B": 0xE8C060])
-	case .proximitySensor:
-		return (["..tttt..", ".t....t.", "t..tt..t", "..t..t..", "...tt...", "kkkkkkkk", "kmmmmmmk", "kkkkkkkk"],
-				["k": 0x2E323A, "m": 0x5A6270, "t": 0x30E0D0])
-	case .gateClosed:
-		return (["kkkkkkkk", "kM.M.M.k", "kM.M.M.k", "kkkkkkkk", "kM.M.M.k", "kM.M.M.k", "kM.M.M.k", "kkkkkkkk"],
-				["k": 0x4A515E, "M": 0x9AA4B4])
-	case .gateOpen:
-		return (["kk....kk", "k......k", "k......k", "k......k", "k......k", "k......k", "k......k", "kk....kk"],
-				["k": 0x4A515E])
-	case .lampOff:
-		return (["kmmmmmmk", "mgggggGm", "mggGgggm", "mgggggGm", "mgGggggm", "mgggggGm", "mggggggm", "kmmmmmmk"],
-				["k": 0x2E323A, "m": 0x6A7280, "g": 0x7A8A90, "G": 0x9AAAB0])
-	case .lampOn:
-		return (["kmmmmmmk", "myyyyyWm", "myyWyyym", "myyyyyWm", "myWyyyym", "myyyyyWm", "myyyyyym", "kmmmmmmk"],
-				["k": 0x2E323A, "m": 0x8A94A4, "y": 0xFFF0B0, "W": 0xFFFFFF])
-	case .arcTrap:
-		return (["cCcCcCcC", "kkkkkkkk", "kmmmmmmk", "kmcmcmck", "kmmmmmmk", "kmcmcmck", "kmmmmmmk", "kkkkkkkk"],
-				["k": 0x2E323A, "m": 0x5A6270, "c": 0xD2793A, "C": 0x8AF0E8])
-	case .autoDrill:
-		return (["kkkkkkkk", "kmmmmmmk", "kmyyyymk", "kmykkymk", "kmykkymk", "kmyyyymk", "kmmmmmmk", "kkkkkkkk"],
-				["k": 0x2E323A, "m": 0x5A6270, "y": 0xE8C020])
-	case .conveyor:
-		return (["bBbbBbbB", "bbbbbbbb", "kkkkkkkk", "kmRmmRmk", "kRMRRMRk", "kmRmmRmk", "kkkkkkkk", "k......k"],
-				["b": 0x2A2A2E, "B": 0x4A4A52, "k": 0x2E323A, "m": 0x5A6270, "R": 0x9AA0AC, "M": 0x6A7280])
-	case .collector:
-		return (["MMMMMMMM", ".mMMMMm.", "..mMMm..", "kkkkkkkk", "kmmmmmmk", "kmbbbbmk", "kmmmmmmk", "kkkkkkkk"],
-				["k": 0x2E323A, "m": 0x5A6270, "M": 0x9AA4B4, "b": 0x1A1A1E])
-	case .autoCrafter:
-		return (["kkkkkkkk", "kmmmmmmk", "kmGmmGmk", "kmmGGmmk", "kmmGGmmk", "kmGmmGmk", "kmmmmmmk", "kkkkkkkk"],
-				["k": 0x2E323A, "m": 0x5A6270, "G": 0xC8B060])
-	case .sumpPump:
-		return (["...pp...", "...pp...", "kkkkkkkk", "kmddddmk", "kmdDDdmk", "kmddddmk", "kmmmmmmk", "kkkkkkkk"],
-				["k": 0x2E323A, "m": 0x5A6270, "p": 0x6A6E78, "d": 0x2A5AB0, "D": 0x5A9AE8])
-	case .signalLight:
-		return (["........", "..gggg..", ".gGggGg.", ".gggggg.", "..gggg..", "..kkkk..", ".kmmmmk.", "kkkkkkkk"],
-				["k": 0x2E323A, "m": 0x5A6270, "g": 0x2A5A5A, "G": 0x4A8A8A])
 	default:
-		return nil
+		return TileArt.rows[t.rawValue]
 	}
+}
+
+/// The 8x8 art of most tiles, kept as text (a table of string literals in code made the game's
+/// build much bigger): a line a tile, its name, its rows from the top split by commas ("." is
+/// clear), then what each letter paints, and a note after "//"
+enum TileArt {
+	static let rows: [UInt8: ([String], [Character: UInt32])] = parse(text)
+
+	static func parse(_ s: String) -> [UInt8: ([String], [Character: UInt32])] {
+		var byName: [String: Tile] = [:]
+		for t in Tile.allCases { byName[String(describing: t)] = t }
+		var out: [UInt8: ([String], [Character: UInt32])] = [:]
+		for line in s.split(separator: "\n") {
+			let text: Substring = line.components(separatedBy: " //").first.map { Substring($0) } ?? line
+			let f: [Substring] = text.split(separator: " ")
+			guard f.count >= 2, let t = byName[String(f[0])] else { continue }
+			let rows: [String] = f[1].split(separator: ",").map { String($0) }
+			var pal: [Character: UInt32] = [:]
+			for e in f.dropFirst(2) {
+				guard e.count > 2, let k = e.first, let v = UInt32(e.dropFirst(2), radix: 16) else { continue }
+				pal[k] = v
+			}
+			out[t.rawValue] = (rows, pal)
+		}
+		return out
+	}
+
+	static let text: String = """
+		torch .......,...y...,..yoy..,...r...,...b...,...b...,...b...,...b... y=FFE680 o=FFA030 r=E05818 b=8A5A2A
+		lantern ...kk...,..kyyk..,.kyYYyk.,.kyYYyk.,.kyyyyk.,..kkkk.. k=3A3A3A y=FFC84A Y=FFF2B0
+		campfire ........,...y....,..yoy.y.,..oryo..,.bbrobb.,bbbbbbbb,ssbbbbss,........ y=FFE680 o=FFA030 r=E05818 b=6B4A2A s=808080
+		workbench ........,........,tttttttt,bbbbbbbb,b.b..b.b,b.b..b.b,b.b..b.b,b.b..b.b t=C89B5E b=8F6732
+		furnace ssssssss,sSSSSSSs,sSkkkkSs,sSkoOkSs,sSkOykSs,sSkkkkSs,sSSSSSSs,ssssssss s=6A6A6A S=8A8A8A k=2A2020 o=E05818 O=FFA030 y=FFE680
+		chest ........,........,wwwwwwww,wddddddw,wwwgwwww,wddddddw,wddddddw,wwwwwwww w=8F6732 d=B98A4E g=F5D142
+		platform ........,........,........,........,........,........,pppppppp,qqqqqqqq p=C89B5E q=8F6732
+		tallGrass ........,........,........,.g...g..,.g.g.g.g,gg.g.ggg,gggggggg,gggggggg g=4B9A30
+		flowerR ........,........,...rr...,..rYr...,...rr...,....g...,....g...,...ggg.. r=E63A3A Y=FFE060 g=3E8A2E
+		flowerY ........,........,..yy....,.yOyy...,..yy....,...g....,...g....,..ggg... y=FFE040 O=E08A20 g=3E8A2E
+		deadBush ........,........,.b...b..,..b.b...,...b..b.,..bbbb..,...b....,...b.... b=8A6A3A
+		mushroom ........,........,..cccc..,.cCcccc.,.cccCcc.,...ww...,...ww...,...ww... c=3AC8C8 C=A8FFFF w=D8E8F0
+		reed ...b....,...b..b.,...g..b.,...g..g.,.g.g..g.,.g.g.gg.,.g.ggg..,..gggg.. g=6E8A3A b=6B4A2A
+		wheat1 ........,........,........,........,........,g.g..g.g,g.g..g.g,gggggggg g=7AB83A
+		wheat2 ........,........,........,y.y..y.y,g.g..g.g,g.g..g.g,g.g..g.g,gggggggg g=8AB03A y=D8C050
+		wheat3 y.y..y.y,yyy..yyy,yyy..yyy,y.y..y.y,g.g..g.g,g.g..g.g,g.g..g.g,gggggggg g=B0A030 y=E8C850
+		carrot1 ........,........,........,........,........,..g..g..,.ggggg..,gggggggg g=4EA83A
+		carrot2 ........,........,........,..g..g..,.ggggg..,.gggggg.,gggggggg,gggggggg g=4EB83A
+		carrot3 ........,..g..g..,.ggggg..,.gggggg.,ggoggogg,gggggggg,gggoggog,gggggggg g=4EB83A o=F08A1E
+		spikes ........,........,........,...s....,..sss.s.,.sssssss,ssssssss,dddddddd s=C8C8D0 d=5A5A5A
+		fossil ssssssss,sbbsssss,ssbbssss,sssbbbbs,ssssbssb,sbbbssbs,ssbssbss,ssssssss s=8A8A8A b=E8E0C8
+		portalOff ........ // drawn as one shape by the renderer's rift pass; the tiles themselves are see-through
+		portalOn ........ // drawn as one shape by the renderer's rift pass; the tiles themselves are see-through
+		portalFrame kkbbbbkk,kbbBbbbk,bbbbaBbb,bBbaabbb,bbaabbBb,bbabbbbb,kbbbBbbk,kkbbbbkk k=16181E b=2A2E37 B=3C424E a=C08040 // dark basalt anchor stone with an amber vein
+		doorClosed dDDDDDDd,dDdddDDd,dDdddDDd,dDDDDDDd,dDDDDgDd,dDdddDDd,dDdddDDd,dDDDDDDd d=6A4A22 D=A97B45 g=E8C040
+		doorOpen dD......,dD......,dD......,dD......,dD......,dD......,dD......,dD...... d=6A4A22 D=A97B45
+		cobweb w.....w.,.w...w..,..w.w...,...w....,..w.w...,.w...w..,w.....w.,........ w=E8E8F0
+		ladder .r....r.,.rgggggr,.r....r.,.r....r.,.r....r.,.rgggggr,.r....r.,.r....r. r=7A5428 g=B98A4E
+		anvil ........,........,hhhhhhh.,.HHHHHHh,..sss...,..sss...,.bbbbb..,bbbbbbb. h=8A8E98 H=6A6E78 s=4A4E58 b=3A3E48
+		tinkerBench ....g...,...ggg..,tttttttt,bbbbbbbb,b.c..k.b,b.c..k.b,b......b,b......b t=C89B5E b=8F6732 g=D8A040 c=B0B4BC k=C03A3A
+		riftForge ..pppp..,.pPppPp.,oovvvvoo,ovVvvVvo,ovvVVvvo,oovvvvoo,oooooooo,oooooooo o=241838 p=8A4CD8 P=D8A8FF v=4A2A7A V=B070FF
+		alchemyStill ..c.....,.ccc..g.,cCCCc.g.,cCCCcgg.,cCCCc.f.,.ccc.fFf,bbbbbfff,b...b... c=B8612A C=F0A060 g=CFEFFF f=B8E0F0 F=7AD040 b=5A4A3A // a copper pot on a stand, its coil running to a flask
+		infuser ..p..p..,.PvvvvP.,svVVVVvs,sSvvvvSs,.sSSSSs.,..ssss..,.ssssss.,ssssssss p=C07CFF P=8A6AB8 v=9A5ADC V=E0B8FF s=5A5E68 S=7A7E88 // a stone crucible brimming with something that glows
+		chair b.......,b.......,b.......,bsssss..,bSSSSS..,b....l..,b....l..,b....l.. b=7A5230 s=C08A50 S=9A6A38 l=7A5230 // side on, its back to the left
+		table ........,........,tttttttt,TTTTTTTT,.l....l.,.l....l.,.l....l.,.l....l. t=C89B5E T=8F6732 l=7A5230
+		bedL hh......,hh......,hh......,hhwwwbbb,hhWWWBBB,hhffffff,hh......,h....... h=7A5230 w=F0EEE6 W=C8C4B8 b=C83A3A B=962828 f=8F6732 // the headboard and the pillow
+		bedR ........,........,.......f,bbbbbbbf,BBBBBBBf,ffffffff,.......f,.......f b=C83A3A B=962828 f=7A5230 // the foot of the bed
+		cabinet tttttttt,cddkkddc,cddkkddc,cddddddc,cddddddc,cddddddc,cccccccc,c......c t=C89B5E c=7A5230 d=B07E48 k=E8C84A
+		wardrobe cccccccc,cdddcddc,cddkckdc,cdddcddc,cdddcddc,cdddcddc,cccccccc,c......c c=5E3E22 d=8F6732 k=E8C84A
+		shelf ........,........,..r..g..,.rr.ggb.,pppppppp,PPPPPPPP,.k....k.,........ r=C83A3A g=4E9A3E b=3A6AA8 p=C89B5E P=8F6732 k=5A5A5A
+		bookshelf wwwwwwww,wrgbywbw,wrgbyrbw,wwwwwwww,wbyrgwrw,wbyrgbrw,wwwwwwww,w......w w=7A5230 r=B83A3A g=3E8A4E b=3A5AA8 y=D8B040
+		floorLamp ..yyyy..,.yYYYYy.,.yyyyyy.,...ss...,...ss...,...ss...,..ssss..,.ssssss. y=E8C060 Y=FFF2B0 s=4A4A52
+		sofa ........,bbbbbbbb,BbbbbbbB,aBccccBa,aBCCCCBa,aaaaaaaa,l......l,........ b=4A7AB8 B=3A6AA8 a=2E5A90 c=5A8AC8 C=4A7AB8 l=5E3E22
+		liftRail Mm....mM,Mm....mM,Mm....mM,MmxxxxmM,Mm....mM,Mm....mM,Mm....mM,MmxxxxmM M=5A6270 m=9AA4B0 x=7A5230
+		liftButton ........,..pppp..,..pUUp..,..pppp..,..pDDp..,..pppp..,........,........ p=4A5260 U=5AD05A D=E05050
+		liftCar kkkkkkkk,k.k..k.k,k.k..k.k,k.k..k.k,k.k..k.k,k......k,ffffffff,FFFFFFFF k=5A6270 f=9AA4B0 F=4A5260
+		sapling ........,...gg...,..gGgg..,.gg.bgg.,..g.b.g.,....b...,...bb...,....b... g=4B9A30 G=7AC84A b=7A5230 // a thin stem with a few young leaves
+		exoStation kkkkkkkk,k.mmmm.k,k.mccm.k,kmmmmmmk,k.mmmm.k,k.m..m.k,ssssssss,sysyysys k=4A5260 m=9AA4B0 c=60E0FF s=3A3E48 y=E8C020 // a gantry with a suit hanging in its clamps
+		crystalOre sSsdsSss,sdsscCss,ssscWCds,sSccWCcs,dscWCcss,ssCcsdSs,sSsssscs,dsSdsssS s=5E6678 S=6D7688 d=4F5666 c=3AA8B0 C=8AF0E8 W=E8FFFF // slate with a cluster of pale cyan shards breaking through it
+		birchLog lwwwwwws,lwwkkwws,lwwwwwws,lwwwwwws,lkwwwwks,lwwwwwws,lwwwkkws,lwwwwwws l=F4F2EA w=E2DED2 k=3A3632 s=B8B4A8 // the newer ores each get their own shape, not just a colour, so they read at a glance in a dark cave
+		birchLogBlock lwwwwwws,lwwkkwws,lwwwwwws,lwwwwwws,lkwwwwks,lwwwwwws,lwwwkkws,lwwwwwws l=F4F2EA w=E2DED2 k=3A3632 s=B8B4A8 // the newer ores each get their own shape, not just a colour, so they read at a glance in a dark cave
+		tin sSsdssSs,sttsSdss,tWTtssds,sTTsdttS,ssdsTWTs,dSsstTTs,stTssdss,sTWsSssd s=8A8A8A S=9A9A9A d=6A6A6A t=AEB8C2 T=C8D2DA W=F2F6FA // rounded pale nuggets with a bright glint
+		saltpeter sSswwsds,swwWwsss,ssssdSss,dsswwwWs,sSwWwsss,sssssdss,swwwSsds,sSdwWwws s=8A8A8A S=9A9A9A d=6A6A6A w=DCD8CC W=FFFFFF // a white crust in feathery streaks along the bedding of the rock
+		silver sSssdsvW,ssdssvvs,sSsvvsSs,dsvvssds,svvsSsss,vWsssdss,vssdsSsv,sSdsssvW s=7E8088 S=92949C d=62646C v=C4CCD8 W=FFFFFF // thin bright veins with sparkling points
+		amethyst sSsdssSs,ssdsaSss,sSsaAads,dsaAWAas,saAWAAas,aAAAaAAa,dsSssdSs,sSdssSsd s=8A8A8A S=9A9A9A d=6A6A6A a=7A3CBC A=B07AE8 W=EEDCFF // violet crystal points growing out of a hollow in the rock
+		rail ........,........,........,........,........,........,rrrrrrrr,t.t..t.t r=9A9EA8 t=6A4A26
+		crate pppppppp,pPddddPp,pdPddPdp,pddPPddp,pddPPddp,pdPddPdp,pPddddPp,pppppppp p=7A5628 P=A97B45 d=C89B5E
+		oreCart ........,........,..oyoc..,mmmmmmmm,mMMMMMMm,mMMMMMMm,.kk..kk.,.kk..kk. m=4A4E58 M=6A6E78 o=D2793A y=C8D2DA c=2A2A2E k=2A2A2E // weather devices: each reads at a glance (cups on a station, a dish on the Doppler, a horn and beacon on the siren); their moving parts are drawn live over the tile
+		weatherStation .c...c..,.ccpcc..,...p....,bbbbbbbb,bkkkkkkb,bkGgGgkb,bbbbbbbb,bb....bb c=C8CCD4 p=8A8E98 b=8F6732 k=1A2A2A G=60E0A0 g=2A8A5A
+		dopplerStation ..dddd..,.dDDDDd.,...pp...,mmmmmmmm,mkkkkkkm,mkRgRgkm,mmmmmmmm,mm....mm d=E0E4EA D=9AA0AC p=6A6E78 m=5A6470 k=10181C R=FF5050 g=60E0A0
+		stormSiren ...rr...,..rRRr..,..mmmm..,hHmmmmHh,hHmmmmHh,...pp...,...pp...,..bbbb.. r=C02020 R=FF6060 m=8A8E98 h=6A6E78 H=A8AEB8 p=5A5E68 b=3A3E48
+		lightningRod ...yy...,...oo...,...oO...,...oO...,...oO...,...oO...,..bbbb..,.bbbbbb. y=FFE8A0 o=D2793A O=A85A28 b=5A5E68
+		windTurbine ..nnnn..,..nNNn..,...pp...,...pp...,...pp...,...pp...,...pp...,..bbbb.. n=E8ECF0 N=C8CCD4 p=D8DCE2 b=6A6E78
+		rainBarrel ........,.kddddk.,.bBbbBb.,.hhhhhh.,.bBbbBb.,.bBbbBb.,.hhhhhh.,.bBbbBb. k=5A3A1A d=2A1A0E b=8F6732 B=B98A4E h=5A5E68
+		rainCistern mmmmmmmm,mkkkkkkm,mSSSSSSm,mSsSSsSm,mSSSSSSm,mSsSSsSm,mSSSSSSm,mmmmmmmm m=5A5E68 k=1A1A20 S=8A8A8A s=7A7A7A
+		weatherVane ........,........,...yy...,...pp...,..cpPc..,...pp...,...pp...,..bbbb.. y=FFE8A0 p=A85A28 P=D2793A c=D2793A b=5A5E68
+		heater ...pp...,...pp...,mmmmmmmm,mkooookm,mkOyOokm,mkooookm,mmmmmmmm,m.m..m.m p=4A4E58 m=5A5E68 k=2A2A2E o=E05818 O=FFA030 y=FFE680
+		sandbag tTTttTTt,tttttttt,dttdtttd,TTttTTtt,tttttttt,tdtttdtt,tTTttTTt,tttttttt t=B8A070 T=D2BC8A d=8A7448
+		shutterClosed ffffffff,fsSsSsSf,fssssssf,fsSsSsSf,fssssssf,fsSsSsSf,fssssssf,ffffffff f=4A4E58 s=6A7A5A S=8A9A72
+		shutterOpen ff......,fs......,fS......,fs......,fS......,fs......,fS......,ff...... f=4A4E58 s=6A7A5A S=8A9A72
+		stormBrick iiiiiiii,bbbkbbbk,bbbkbbbk,kkkkkkkk,bkbbbkbb,bkbbbkbb,iiiiiiii,bbbkbbbk i=9AA0AC b=6A6E78 k=4A4E58
+		shingles rRrrRrrR,rrrrrrrr,kkkkkkkk,RrrRrrRr,rrrrrrrr,kkkkkkkk,rRrrRrrR,rrrrrrrr r=7A4A3A R=9A6250 k=4A2A20 // Sparkworks: slate casings with copper fittings and teal or amber lights; switch handles, dials, arrows, charge bars and moving parts are drawn live over the tile
+		crankGen ......hH,...mm.h.,..mMMmh.,kmmmmmmk,kmccccmk,kmcaacmk,kmmmmmmk,kk....kk k=2E323A m=5A6270 M=8A94A4 c=D2793A a=FFC020 h=8A5A2A H=C89040
+		solarPanel ........,bBbBbBbB,BbBbBbBb,bBbBbBbB,mmmmmmmm,...pp...,...pp...,..mmmm.. b=1A3A6A B=2E62A8 m=8A94A4 p=5A6270
+		fuelGen .pp.....,.pp.....,kkkkkkkk,kmmmmmmk,kmrrrrmk,kmrrrrmk,kmmmmmmk,kk....kk k=2E323A m=5A6270 r=1A1A1E p=6A6E78
+		waterWheel ..wwww..,.wWwwWw.,wWw..wWw,ww.pp.ww,ww.pp.ww,wWw..wWw,.wWwwWw.,..wwww.. w=8F6732 W=B98A4E p=5A5E68
+		emberDynamo kkkkkkkk,kOOOOOOk,kOeEEeOk,kOEyyEOk,kOEyyEOk,kOeEEeOk,kOOOOOOk,kkkkkkkk k=16121A O=2A1E2E e=C04010 E=FF7020 y=FFD060
+		battery ..cccc..,.kkkkkk.,.kmmmmk.,.kmmmmk.,.kmmmmk.,.kmmmmk.,.kmmmmk.,.kkkkkk. k=2E323A m=4A515E c=D2793A
+		accumulator kkkkkkkk,kgGggGgk,kGtttTGk,kgtTttgk,kgtttTgk,kGTtttGk,kgGggGgk,kkkkkkkk k=2E323A g=5A8A90 G=8AC8C8 t=30A0A0 T=8AF0E8
+		powerSwitch ........,.kkkkkk.,.kmmmmk.,.km..mk.,.km..mk.,.kmmmmk.,.kkkkkk.,........ k=2E323A m=6A7280
+		breaker kkkkkkkk,kyykyykk,kmmmmmmk,kmk..kmk,kmk..kmk,kmkkkkmk,kmmmmmmk,kkkkkkkk k=2E323A m=5A6270 y=E8C020
+		powerMeter .kkkkkk.,kwwwwwwk,kwnwwwwk,kwwnwwwk,kwwwnwwk,kkkkkkkk,kmmmmmmk,.kkkkkk. k=2E323A w=E8E4D8 n=3A3A40 m=5A6270
+		lever ........,........,........,........,........,..kkkk..,.kmmmmk.,kkkkkkkk k=2E323A m=6A7280
+		pushButton ........,........,..kkkk..,.kmmmmk.,.kmBBmk.,.kmBBmk.,.kmmmmk.,..kkkk.. k=2E323A m=6A7280 B=30B0C0
+		pressurePlate ........,........,........,........,........,........,.mMMMMm.,kkkkkkkk k=2E323A m=6A7280 M=9AA4B4
+		pulseTimer kkkkkkkk,kmwwwwmk,kwwnwwwk,kwwnnnwk,kwwwwwwk,kmwwwwmk,kmmmmmmk,kkkkkkkk k=2E323A m=5A6270 w=E8E4D8 n=3A3A40
+		repeater ........,........,kkkkkkkk,kmmmmmmk,kmmmmmmk,kmmmmmmk,kkkkkkkk,........ k=2E323A m=5A6270
+		inverter ........,........,kkkkkkkk,kiiiiiik,kiiiiiik,kiiiiiik,kkkkkkkk,........ k=2E323A i=6A4A7A
+		logicGate ........,kkkkkkkk,kqqqqqqk,kqqqqqqk,kqqqqqqk,kqqqqqqk,kkkkkkkk,........ k=2E323A q=3A6A6A
+		motionSensor ..gggg..,.gGggGg.,.gggggg.,kkkkkkkk,kmmmmmmk,kmmmmmmk,kkkkkkkk,........ k=2E323A m=5A6270 g=C86A3A G=F0A070
+		daySensor kkkkkkkk,kssSSssk,ksSyySsk,ksSyySsk,kssSSssk,kmmmmmmk,kmmmmmmk,kkkkkkkk k=2E323A m=5A6270 s=3A5A8A S=E8C040 y=FFF0A0
+		weatherSensor .c...c..,.ccpcc..,...p....,kkkkkkkk,kmdmmmmk,kdddmmmk,kmdmmmmk,kkkkkkkk k=2E323A m=5A6270 c=C8CCD4 p=8A8E98 d=3B7BE0
+		itemSensor kkkkkkkk,kmmmmmmk,kmbbbbmk,kmbBBbmk,kmbbbbmk,kmmmmmmk,kmmmmmmk,kkkkkkkk k=2E323A m=5A6270 b=A97B45 B=E8C060
+		proximitySensor ..tttt..,.t....t.,t..tt..t,..t..t..,...tt...,kkkkkkkk,kmmmmmmk,kkkkkkkk k=2E323A m=5A6270 t=30E0D0
+		gateClosed kkkkkkkk,kM.M.M.k,kM.M.M.k,kkkkkkkk,kM.M.M.k,kM.M.M.k,kM.M.M.k,kkkkkkkk k=4A515E M=9AA4B4
+		gateOpen kk....kk,k......k,k......k,k......k,k......k,k......k,k......k,kk....kk k=4A515E
+		lampOff kmmmmmmk,mgggggGm,mggGgggm,mgggggGm,mgGggggm,mgggggGm,mggggggm,kmmmmmmk k=2E323A m=6A7280 g=7A8A90 G=9AAAB0
+		lampOn kmmmmmmk,myyyyyWm,myyWyyym,myyyyyWm,myWyyyym,myyyyyWm,myyyyyym,kmmmmmmk k=2E323A m=8A94A4 y=FFF0B0 W=FFFFFF
+		arcTrap cCcCcCcC,kkkkkkkk,kmmmmmmk,kmcmcmck,kmmmmmmk,kmcmcmck,kmmmmmmk,kkkkkkkk k=2E323A m=5A6270 c=D2793A C=8AF0E8
+		autoDrill kkkkkkkk,kmmmmmmk,kmyyyymk,kmykkymk,kmykkymk,kmyyyymk,kmmmmmmk,kkkkkkkk k=2E323A m=5A6270 y=E8C020
+		conveyor bBbbBbbB,bbbbbbbb,kkkkkkkk,kmRmmRmk,kRMRRMRk,kmRmmRmk,kkkkkkkk,k......k b=2A2A2E B=4A4A52 k=2E323A m=5A6270 R=9AA0AC M=6A7280
+		collector MMMMMMMM,.mMMMMm.,..mMMm..,kkkkkkkk,kmmmmmmk,kmbbbbmk,kmmmmmmk,kkkkkkkk k=2E323A m=5A6270 M=9AA4B4 b=1A1A1E
+		autoCrafter kkkkkkkk,kmmmmmmk,kmGmmGmk,kmmGGmmk,kmmGGmmk,kmGmmGmk,kmmmmmmk,kkkkkkkk k=2E323A m=5A6270 G=C8B060
+		sumpPump ...pp...,...pp...,kkkkkkkk,kmddddmk,kmdDDdmk,kmddddmk,kmmmmmmk,kkkkkkkk k=2E323A m=5A6270 p=6A6E78 d=2A5AB0 D=5A9AE8
+		signalLight ........,..gggg..,.gGggGg.,.gggggg.,..gggg..,..kkkk..,.kmmmmk.,kkkkkkkk k=2E323A m=5A6270 g=2A5A5A G=4A8A8A
+		"""
 }
 
 func tileBuf(_ t: Tile) -> PixelBuf {
@@ -1974,13 +1682,12 @@ enum Item: Hashable, Codable {
 		case .compound(let i):
 			let goes: [String] = i.classes.map { $0.name }
 			return ["Infusion compound: work it in at an Infusion Crucible", i.blurb, joinText("Goes on ", goes.joined(separator: " or "), " · ", i.rarity.name)]
-		case .exoPart(let p, let m):
-			return [joinText("Suit part (", m.special.lowercased(), ")"), String(format: "Defence %.1f · weight %.1f", p.baseDefense * m.protect, p.baseWeight * m.weight), p == .chestFrame ? joinText(String(m.sockets), " module sockets") : "Fit it at an Assembly Station"]
-		case .exoPlate(let m): return ["Armour plate: fits any plate place on a suit", String(format: "Guards x%.1f · weight %.1f", m.protect, 2.0 * m.weight), m.special]
-		case .exoCore(let c): return ["Suit power core", String(format: "Holds %.0f · gives %.0f a second", c.capacity, c.output), String(format: "Refills %.1f a second by itself", c.recharge)]
+		case .exoPart(_, let m):
+			return [joinText("An old suit part (", m.name.lowercased(), ")"), "Suits are built piece by piece now", "Melt it down at an Assembly Station for its metal"]
+		case .exoPlate(let m): return [joinText("An old suit plate (", m.name.lowercased(), ")"), "Suits are built piece by piece now", "Melt it down at an Assembly Station for its metal"]
+		case .exoCore(let c): return ["Suit power core: place it on a suit at an Assembly Station", String(format: "Holds %.0f · gives %.0f a second", c.capacity, c.output), String(format: "Refills %.1f a second by itself", c.recharge)]
 		case .exoModule(let m):
-			let needs: [String] = m.needs.map { $0.name.lowercased() }
-			return [m.blurb, needs.isEmpty ? "Needs only the chest frame" : joinText("Needs the ", needs.joined(separator: " and ")), String(format: "Weight %.0f · %@", m.weight, m.rarity.name)]
+			return [m.blurb, "Place it on a suit at an Assembly Station, wherever it should go", String(format: "Weight %.0f · %@", m.weight, m.rarity.name)]
 		}
 	}
 
@@ -3437,8 +3144,6 @@ struct HumanStyle {
 	var patch: Bool = false
 	var coat: Bool = false
 	var tail: Bool = false
-	/// an exosuit worn over the body (nil: none)
-	var suit: SuitLook? = nil
 }
 
 let humanW: Int = 22
@@ -3511,7 +3216,6 @@ func humanoidFrame(_ s: HumanStyle, legs: Int, pose: Int) -> PixelBuf {
 	if pose >= 2 || s.zombieArms {
 		for y in 7...9 { cv.clear(13, y); cv.clear(14, y) }
 	}
-	if let l = s.suit { paintSuit(&cv, l, legs: legs, pose: pose) }
 	if s.zombieArms {
 		// arms reach forward; raised a pixel in the attack pose
 		let lift: Int = pose == 2 ? 1 : 0
@@ -12375,6 +12079,12 @@ final class Game: ObservableObject, @unchecked Sendable {
 	var suitLoad: Double = 0
 	var suitLastLoad: Double = 0
 	var suitHover: Bool = false
+	/// the suit's guns: each one's wait before it can fire again (by piece), the lasers' beams this frame,
+	/// whether its FIRE control is held, and when it may next say a piece broke
+	var suitGunCD: [Int: Double] = [:]
+	var suitBeams: [(Double, Double, Double, Double)] = []
+	var suitFireHeld: Bool = false
+	var suitSayT: Double = 0
 	var suitSprinting: Bool = false
 	var suitLit: Bool = false
 	var suitEmptyWarned: Bool = false
@@ -15548,6 +15258,7 @@ extension Game {
 	/// mid-press, and a button that disappears never hears its finger lift, so without this an attack,
 	/// a walk or a jump could carry on by itself once the panel closes.
 	func releaseAllInput() {
+		suitFireHeld = false
 		actState.stickReleased()
 		actState.was = false
 		stick = 0
@@ -15816,5 +15527,1605 @@ extension Game {
 			if b != a { out.append(Stack(item: .mat(b), count: 1 + rng.int(3))) }
 		}
 		return out
+	}
+}
+
+// ===== p15a_mobai =====
+
+// MARK: - Mob AI
+
+extension Game {
+	func buildDecks() -> [Deck] {
+		var out: [Deck] = []
+		let sea: Double = Double(WorldGen.sea)
+		for s in ships where s.sink < 3.0 {
+			let dy: Double = s.deckY(sea)
+			out.append(Deck(x0: s.x - PirateShip.deckHalf, x1: s.x + PirateShip.deckHalf - 0.1, y: dy, vx: s.speed * Double(s.dir), id: s.id))
+		}
+		// a parked vehicle you can stand on (only while it is roughly level)
+		for v in vehicles where !v.rider && v.upright {
+			out.append(Deck(x0: v.b.x - v.b.w * 0.5, x1: v.b.x + v.b.w * 0.5, y: v.b.y - v.b.h, vx: v.vx, id: 1_000_000 + v.id))
+		}
+		// lift cars
+		for l in lifts { out.append(Deck(x0: l.x0, x1: l.x1, y: l.y, vx: 0, id: l.deckID)) }
+		return out
+	}
+
+	func allDecks() -> [Deck] { return decksCache }
+
+	func accelX(_ m: Mob, _ target: Double, _ a: Double, _ dt: Double) {
+		let d: Double = target - m.b.vx
+		let s: Double = a * dt
+		if d > s { m.b.vx += s } else if d < -s { m.b.vx -= s } else { m.b.vx = target }
+	}
+
+	func stepMob(_ m: Mob, _ dt: Double, stepUp: Double = 1.0) {
+		let d: MobDef = m.def
+		if d.flying {
+			// keep flyers from sinking; their AI sets vy directly
+		} else if m.b.inWater {
+			m.b.vy += 12.0 * dt
+			m.b.vy = clampD(m.b.vy, -5.0, 5.0)
+			if m.hp > 0 && d.behavior != .swimmer { m.b.vy -= 26.0 * dt }
+		} else {
+			m.b.vy = min(m.b.vy + gravityG * dt, terminalV)
+		}
+		if m.knock > 0 { m.knock -= dt }
+		if m.leapReq {
+			// a harder leap at a wall it is stuck against (see think)
+			m.leapReq = false
+			if m.b.onGround && !d.flying {
+				m.b.vy = -d.jump * 1.22
+				m.b.vx = (m.aimX >= m.b.x ? 1.0 : -1.0) * max(2.5, d.speed)
+				m.leapT = 1.6
+			}
+		}
+		// slowed creatures cover less ground (their AI still asks for its usual speed)
+		let sm: Double = m.speedMul
+		if sm < 0.999 {
+			m.b.vx *= sm
+			if d.flying { m.b.vy *= sm }
+		}
+		world.moveBody(&m.b, dt, stepUp: d.flying ? 0 : stepUp, dropThrough: false, decks: decksCache)
+		if sm < 0.999 {
+			m.b.vx /= sm
+			if d.flying { m.b.vy /= sm }
+		}
+		if m.b.deck >= 0 && m.b.deck < decksCache.count { m.b.x += decksCache[m.b.deck].vx * dt }
+		if m.boat >= 0 { clampToDeck(m) }
+		if m.b.onGround { m.anim += abs(m.b.vx) * dt * 0.8 } else { m.anim += dt * 0.5 }
+	}
+
+	func cliffAhead(_ m: Mob, _ dir: Int) -> Bool {
+		let fx: Int = Int(floor(m.b.x + Double(dir) * (m.b.w * 0.5 + 0.6)))
+		let fy: Int = Int(floor(m.b.y + 0.2))
+		var d: Int = 0
+		while d < 5 {
+			let t: Tile = world.tile(fx, fy + d)
+			if t.solid || t == .platform || t.liquid { return false }
+			d += 1
+		}
+		return true
+	}
+
+	func wander(_ m: Mob, _ dt: Double, _ speedK: Double) {
+		let d: MobDef = m.def
+		m.t1 -= dt
+		if m.t1 <= 0 {
+			if m.st == 0 {
+				m.st = 1
+				m.dir = Bool.random() ? 1 : -1
+				if abs(m.b.x - m.homeX) > 24 { m.dir = m.b.x > m.homeX ? -1 : 1 }
+				m.t1 = Double.random(in: 1.5...4.5)
+			} else {
+				m.st = 0
+				m.t1 = Double.random(in: 1.0...4.0)
+			}
+		}
+		if m.st == 1 {
+			if cliffAhead(m, m.dir) || (m.b.hitWall && !m.b.onGround) { m.dir = -m.dir }
+			if m.b.hitWall && m.b.onGround { m.dir = -m.dir }
+			accelX(m, Double(m.dir) * d.speed * speedK, 14, dt)
+		} else {
+			accelX(m, 0, 18, dt)
+		}
+	}
+
+	func flee(_ m: Mob, _ fromX: Double, _ dt: Double, _ speedK: Double) {
+		let dirX: Double = m.b.x >= fromX ? 1.0 : -1.0
+		m.dir = Int(dirX)
+		accelX(m, dirX * m.def.speed * speedK, 30, dt)
+		if m.b.hitWall && m.b.onGround { m.b.vy = -m.def.jump }
+	}
+
+	func chase(_ m: Mob, _ tx: Double, _ speedK: Double, _ dt: Double) {
+		let d: MobDef = m.def
+		let dirX: Double = tx >= m.b.x ? 1.0 : -1.0
+		if abs(tx - m.b.x) > 0.35 {
+			m.dir = Int(dirX)
+			accelX(m, dirX * d.speed * speedK, 26, dt)
+		} else {
+			accelX(m, 0, 30, dt)
+		}
+		if m.b.hitWall && m.b.onGround { m.b.vy = -d.jump }
+		if m.b.inWater { m.b.vy -= 18 * dt }
+	}
+
+	func contactHurt(_ m: Mob, _ dmg: Double) {
+		if m.cd > 0 || dead { return }
+		// touching: overlapping across, and up and down anything from overlapping to standing on the
+		// player's head (or the player on its back)
+		let across: Bool = pb.right > m.b.left + 0.05 && pb.left < m.b.right - 0.05
+		let upDown: Bool = pb.y > m.b.top - 0.2 && pb.top < m.b.y + 0.2
+		if across && upDown {
+			var info = DamageInfo(amount: dmg, type: .contact, source: .mob(m, faction(of: m)))
+			info.knock = 6.5
+			info.originX = m.b.x
+			if hurtPlayer(info) { m.cd = 0.9; m.atkT = Mob.atkDur }
+		}
+	}
+
+	/// A creature's swing: hits the player and any creature from another side inside the reach box
+	func mobStrike(_ m: Mob, reach: Double, height: Double, dmg: Double, knock: Double) {
+		m.atkT = Mob.atkDur
+		// a mutated creature's swing reaches as far as it has grown
+		let k: Double = max(1.0, m.mutSize)
+		let reach: Double = reach * k
+		let height: Double = height * k
+		let x0: Double = m.dir > 0 ? m.b.x - 0.3 : m.b.x - reach - 0.3
+		let x1: Double = m.dir > 0 ? m.b.x + reach + 0.3 : m.b.x + 0.3
+		var info = DamageInfo(amount: dmg, type: .melee, source: .mob(m, faction(of: m)))
+		info.dirX = Double(m.dir)
+		info.knock = knock
+		info.originX = m.b.x
+		info.key = newID()
+		damageBox(x0, m.b.y - height, x1, m.b.y + 0.1, info)
+	}
+
+	func updateMobs(_ dt: Double) {
+		let t0: Double = perfNow()
+		let px: Double = pb.x
+		let py: Double = pb.y
+		let offScreen: Double = viewTilesW * 0.5 + 6.0
+		frameNo &+= 1
+		// iterated by index because AI code may append new mobs while it runs
+		var i: Int = 0
+		while i < mobs.count {
+			let m: Mob = mobs[i]
+			i += 1
+			if m.hp <= 0 || m.removed { continue }
+			let dx: Double = abs(m.b.x - px)
+			let dy: Double = abs(m.b.y - py)
+			if !m.persistent && !m.tame && !m.isBoss && (dx > 115 || dy > 85) {
+				m.removed = true
+				continue
+			}
+			// a monster nobody is fighting that stays well off-screen wanders off after a while, making
+			// room for another; at daybreak the night's hunters out of sight go back where they came from
+			if m.def.hostile && !m.persistent && !m.tame && !m.isBoss && m.boat < 0 && m.lair == 0 {
+				if (dx > offScreen || dy > 40) && m.ai != .chase {
+					m.farT += dt
+					if m.farT > ((m.hunter && !isNight) ? 4.0 : 40.0) {
+						m.removed = true
+						continue
+					}
+				} else {
+					m.farT = 0
+				}
+			}
+			if m.hurtT > 0 { m.hurtT -= dt }
+			if m.cd > 0 { m.cd -= dt }
+			if m.flash > 0 { m.flash -= dt }
+			if m.lean != 0 { m.lean *= (1.0 - min(1.0, dt * 7.0)); if abs(m.lean) < 0.01 { m.lean = 0 } }
+			if m.atkT > 0 { m.atkT -= dt }
+			if m.turnT > 0 {
+				m.turnT -= dt
+				if m.turnT <= 0 { m.turnT = 0; m.face = m.dir }
+			} else if m.face != m.dir {
+				if m.face == 0 { m.face = m.dir } else { m.turnT = Mob.turnDur }
+			}
+			if m.regrow > 0 {
+				m.regrow -= dt
+				if m.regrow <= 0 { m.sheared = false }
+			}
+			if !world.isLoaded(Int(floor(m.b.x))) { continue }
+			if m.dazeGuard > 0 { m.dazeGuard -= dt }
+			if m.daze > 0 {
+				// reeling from a club: it stands (or hangs) where it is and does nothing else
+				m.daze -= dt
+				if m.daze <= 0 { m.daze = 0; m.dazeGuard = 1.2 }
+				m.b.vx *= max(0, 1.0 - dt * 9.0)
+				if m.def.flying { m.b.vy *= max(0, 1.0 - dt * 9.0) }
+				stepMob(m, dt)
+				mobHazards(m, dt)
+				continue
+			}
+			// creatures well off screen wait until the player comes closer (saves a lot of work)
+			if !m.isBoss && !m.tame && m.boat < 0 && (dx > 72 || dy > 56) { continue }
+			// mid-distance creatures think and move at a third of the rate, staggered by id, with the
+			// skipped time folded into their next step so they still cover the same ground
+			var step: Double = dt
+			if !m.isBoss && !m.tame && m.boat < 0 && (dx > 40 || dy > 30) {
+				m.aiAccum += dt
+				if (frameNo &+ m.id) % 3 != 0 {
+					Perf.shared.countSkip()
+					continue
+				}
+				step = min(0.1, m.aiAccum)
+			}
+			m.aiAccum = 0
+			updateMob(m, step)
+			if m.hp > 0 { mobHazards(m, step) }
+		}
+		updateDying(dt)
+		// compact once: drop removed mobs and finished death animations
+		if mobs.contains(where: { $0.removed }) { mobs.removeAll { $0.removed } }
+		Perf.shared.aiMs = Perf.smooth(Perf.shared.aiMs, perfNow() - t0)
+	}
+
+	func nearestHostileTo(_ x: Double, _ y: Double, _ r: Double) -> Mob? {
+		var best: Mob? = nil
+		var bd: Double = r * r
+		for o in mobs {
+			if o.hp <= 0 || o.tame || !o.def.hostile { continue }
+			let dx: Double = o.b.x - x
+			let dy: Double = o.b.cy - y
+			let d: Double = dx * dx + dy * dy
+			if d < bd { bd = d; best = o }
+		}
+		return best
+	}
+
+	func updateMob(_ m: Mob, _ dt: Double) {
+		if m.kind == .custom {
+			updateCustomMob(m, dt)
+			return
+		}
+		let d: MobDef = m.def
+		if m.kind == .bearBoss || m.kind == .rex {
+			updateBossMob(m, dt)
+			return
+		}
+		if m.kind == .sentinel { updateSentinel(m, dt); return }
+		if m.kind == .warden { updateWarden(m, dt); return }
+		if m.boat >= 0 && updateCrew(m, dt) { return }
+		let toPX: Double = pb.x - m.b.x
+		let dist: Double = abs(toPX)
+		let dyP: Double = (pb.y - pb.h * 0.5) - m.b.cy
+		let near: Bool = dist < d.aggro && abs(dyP) < 14 && !dead
+		let peaceful: Bool = settings.peaceful
+		if m.tame {
+			updatePet(m, dt)
+			return
+		}
+		// monsters decide for themselves whether they are after the player (see think)
+		var engaged: Bool = near && !peaceful
+		if m.kind.thinks { engaged = think(m, dt, dist, dyP) }
+		switch m.kind {
+		case .custom:
+			// run by updateCustomMob (never reaches here)
+			stepMob(m, dt)
+		case .pig, .cow, .sheep, .villager:  // (villagers are retired and never appear)
+			if m.t2 > 0 {
+				m.t2 -= dt
+				flee(m, m.tx, dt, 1.9)
+			} else if !animalLife(m, dt) {
+				wander(m, dt, 0.55)
+			}
+			stepMob(m, dt)
+		case .giraffe, .chicken, .frog, .cat:
+			if m.t2 > 0 {
+				m.t2 -= dt
+				flee(m, m.tx, dt, 1.7)
+			} else if !(dist < 6.0 && !dead && m.kind != .cat) && m.kind != .cat && animalLife(m, dt) {
+				// handled: resting, heading for water or the herd
+			} else if dist < 6.0 && !dead && m.kind != .cat {
+				flee(m, pb.x, dt, 1.4)
+			} else {
+				wander(m, dt, 0.5)
+			}
+			if m.kind == .frog && m.b.onGround && m.st == 1 && Double.random(in: 0...1) < 0.04 { m.b.vy = -9; m.b.vx = Double(m.dir) * 3.5 }
+			stepMob(m, dt)
+		case .elephant, .bear, .wolf:
+			if m.drinkT > 0 && m.kind == .wolf { m.drinkT -= dt }
+			// a wolf that turns on the player forgets its prey
+			if m.angry { m.preyID = 0 }
+			if !m.angry && m.kind == .wolf && hunt(m, dt, isNight && m.drinkT <= 0) {
+				// a wolf pack runs down prey at night
+			} else if m.angry && !dead {
+				m.t3 -= dt
+				if m.t3 <= 0 || dist > 30 { m.angry = false } else {
+					chase(m, pb.x, 1.0, dt)
+					if m.kind == .wolf && m.b.onGround && dist < 4.0 && Double.random(in: 0...1) < 0.03 { m.b.vy = -12; m.b.vx = Double(m.dir) * 7.0 }
+					if peaceful { m.angry = false }
+					else { contactHurt(m, d.dmg) }
+				}
+			} else {
+				// animals are neutral: only a blow from the player makes them fight (see hurtMob)
+				wander(m, dt, 0.5)
+			}
+			stepMob(m, dt)
+		case .grizzly, .polarBear, .tiger, .scorpion:
+			if m.drinkT > 0 { m.drinkT -= dt }
+			// wild animals hunt their prey but leave the player alone, unless the player hurts them:
+			// then they fight back for a while
+			let provoked: Bool = wildProvoked(m)
+			if !(provoked && !peaceful) && m.kind != .scorpion && hunt(m, dt, m.drinkT <= 0) {
+				// hunting, or resting after a kill
+			} else if !(provoked && !peaceful) {
+				wander(m, dt, 0.4)
+			} else if !dead {
+				chase(m, pb.x, 1.0, dt)
+				if m.kind == .tiger && m.b.onGround && dist < 6.5 && dist > 2.0 && m.cd <= 0.4 && Double.random(in: 0...1) < 0.04 {
+					m.b.vy = -11.5
+					m.b.vx = Double(m.dir) * 10.0
+					m.t3 = 0.6
+				}
+				contactHurt(m, d.dmg)
+			} else {
+				wander(m, dt, 0.5)
+			}
+			stepMob(m, dt)
+		case .zombie:
+			updateZombie(m, dt, engaged, dyP)
+		case .skeleton, .pirate, .pirateCaptain:
+			updateSwordsman(m, dt, engaged, dist, dyP)
+		case .pirateGunner, .imp:
+			updateShooter(m, dt, engaged, dist, dyP)
+		case .slime, .emberSlime:
+			updateSlime(m, dt, engaged, dyP)
+		case .crow, .bat, .cinderBat, .wraith:
+			updateFlyer(m, dt, engaged, dist, dyP)
+		case .fish:
+			updateFish(m, dt)
+		case .crawler:
+			updateCrawler(m, dt, engaged, dist, dyP)
+		case .golem:
+			updateGolem(m, dt, engaged, dist, dyP)
+		case .archer:
+			updateArcher(m, dt, engaged, dist, dyP)
+		case .mimic:
+			updateMimic(m, dt, !peaceful && !dead && dist < 20, dist, dyP)
+		case .bearBoss, .rex, .sentinel, .warden:
+			break
+		}
+	}
+
+	// MARK: hostile minds
+
+	/// How far a monster's attack reaches (across, up or down) and whether it is shot from afar
+	/// How far a creature's attack reaches: a mutated creature's blows reach as far as its size
+	func attackReach(_ m: Mob) -> (Double, Double, Bool) {
+		let r: (Double, Double, Bool) = attackReachBase(m)
+		if m.mutSize <= 1.001 || r.2 { return r }
+		return (r.0 * m.mutSize, r.1 * m.mutSize, r.2)
+	}
+
+	func attackReachBase(_ m: Mob) -> (Double, Double, Bool) {
+		switch m.kind {
+		case .zombie: return (1.5, 1.7, false)
+		case .skeleton, .pirate, .pirateCaptain: return (2.0, 1.6, false)
+		case .pirateGunner, .imp: return (17.0, 9.0, true)
+		case .archer: return (18.0, 10.0, true)
+		case .crawler: return (4.6, 2.0, false)
+		case .golem: return (3.3, 2.4, false)
+		case .custom: return ModRuntime.shared.mob(m.cslot)?.reach ?? (m.b.w * 0.5 + 0.5, 1.4, false)
+		default: return (m.b.w * 0.5 + 0.5, 1.4, false)
+		}
+	}
+
+	/// A monster's senses and its plan, the same for every kind (each has its own attacks).
+	/// It notices the player by sight (a clear line from its eyes, rechecked a few times a second),
+	/// by sound up close, or by being hit; after a beat of surprise it gives chase; when the player
+	/// slips out of sight it searches where they were last seen, then goes home. Stuck against a wall
+	/// it tries one harder leap, then backs off and comes again. Night hunters spawned on the surface
+	/// roam toward the player before they have seen them. Returns whether it is after the player;
+	/// `aimX` is where it is heading.
+	func think(_ m: Mob, _ dt: Double, _ dist: Double, _ dyP: Double) -> Bool {
+		let d: MobDef = m.def
+		m.aiT += dt
+		if m.leapT > 0 { m.leapT -= dt }
+		if m.hunter && (m.kind == .skeleton || m.kind == .archer) && inSunlight(m) { m.burn = 2.0 }
+		if dead || settings.peaceful {
+			m.why = dead ? .playerGone : .peaceful
+			if m.ai != .idle && m.ai != .back { m.ai = .back; m.aiT = 0 }
+			if m.ai == .back && (abs(m.b.x - m.homeX) < 2.0 || m.aiT > 8.0) { m.ai = .idle; m.aiT = 0 }
+			m.aimX = m.homeX
+			return false
+		}
+		m.losT -= dt
+		if m.losT <= 0 {
+			// its eyes (a golem looks over a low wall) to the player's head or chest
+			m.losT = 0.18 + Double(m.id % 7) * 0.02
+			let ey: Double = m.kind == .golem ? m.b.top - 0.5 : shotY(m)
+			m.sees = m.kind == .wraith || world.lineClear(m.b.x, ey, pb.x, pb.y - pb.h * 0.6) || world.lineClear(m.b.x, ey, pb.x, pb.top + 0.2)
+			// smoke hides the player from eyes on either side of it
+			if m.sees && !smokes.isEmpty && (inSmoke(pb.x, pb.cy) || inSmoke(m.b.x, m.b.cy)) { m.sees = false }
+		}
+		// sight reaches across most of the screen (further for the night's hunters, and for one already
+		// fighting); footsteps and scent carry through walls over a shorter distance
+		let base: Double = max(d.aggro, 16.0)
+		let sight: Double = base * (m.hunter ? 1.25 : 1.0) * (m.ai == .chase ? 1.5 : 1.0)
+		let sense: Double = base * 0.7
+		let hurt: Bool = clock - m.lastHitByPlayer < 0.6
+		let heard: Bool = dist < 3.5 && abs(dyP) < 3.0
+		let detect: Bool = hurt || heard || (dist < sight && abs(dyP) < 12.0 && m.sees)
+		let sensed: Bool = dist < sense && abs(dyP) < 10.0
+		if detect || sensed {
+			m.seenX = pb.x
+			m.seenY = pb.y
+			m.lostT = 0
+		} else {
+			m.lostT += dt
+		}
+		let hunting: Bool = m.hunter && isNight && world.dim == .overworld && dist < 80
+		switch m.ai {
+		case .idle, .back:
+			if detect {
+				m.ai = hurt ? .chase : .alert
+				m.aiT = 0
+			} else if sensed {
+				// something moving nearby, out of sight: it goes to look
+				m.ai = .search
+				m.aiT = 0
+			} else if hunting {
+				// a hunter roams toward where the player is, give or take
+				m.ai = .search
+				m.aiT = 0
+				m.seenX = pb.x + Double.random(in: -6...6)
+				m.seenY = pb.y
+			}
+		case .alert:
+			if m.aiT > 0.35 { m.ai = .chase; m.aiT = 0 }
+		case .chase:
+			if m.lostT > 2.5 { m.ai = .search; m.aiT = 0 }
+		case .search:
+			if detect {
+				m.ai = .chase
+				m.aiT = 0
+			} else if sensed {
+				m.aiT = 0
+			} else if (abs(m.b.x - m.seenX) < 1.2 && m.aiT > 2.0) || m.aiT > (hunting ? 14.0 : 8.0) {
+				if hunting {
+					m.seenX = pb.x + Double.random(in: -8...8)
+					m.seenY = pb.y
+					m.aiT = 0
+				} else {
+					m.ai = .back
+					m.aiT = 0
+				}
+			}
+		case .retreat:
+			if m.aiT > 2.5 { m.ai = detect ? .chase : .search; m.aiT = 0 }
+		}
+		switch m.ai {
+		case .alert, .chase: m.aimX = pb.x
+		case .search: m.aimX = m.seenX
+		case .retreat: m.aimX = m.b.x + (m.b.x >= m.seenX ? 6.0 : -6.0)
+		case .back: m.aimX = m.homeX
+		case .idle: m.aimX = m.b.x
+		}
+		if m.ai == .back && abs(m.b.x - m.homeX) < 2.0 { m.ai = .idle; m.aiT = 0 }
+		// getting nowhere (pressed against a wall it can't get over, or hopping at it): one harder
+		// leap, then back off and come again. One already within reach of its attack is not stuck.
+		let reach: (Double, Double, Bool) = attackReach(m)
+		let inReach: Bool = dist <= reach.0 && abs(dyP) <= reach.1 && (!reach.2 || m.sees)
+		// (states 0 and 1 are walking about; 3 and up are its attacks)
+		let pushing: Bool = (m.ai == .chase || m.ai == .search) && abs(m.aimX - m.b.x) > 1.0 && m.st <= 1 && !(m.ai == .chase && inReach)
+		if pushing {
+			if abs(m.b.x - m.progX) > 0.6 {
+				m.progX = m.b.x
+				m.blockedT = max(0, m.blockedT - 0.5)
+			} else {
+				// a cactus or spikes in the way: it gives up on that much sooner
+				let ax: Int = Int(floor(m.b.x + Double(m.dir) * (m.b.w * 0.5 + 0.3)))
+				let thorny: Bool = world.tile(ax, Int(floor(m.b.y - 0.5))).hurts
+				m.blockedT += thorny ? dt * 3.0 : dt
+			}
+			// (applied in stepMob, after the creature's own moves, so its usual hop can't cancel it)
+			if !d.flying && m.blockedT > 0.9 && m.leapT <= 0 { m.leapReq = true }
+			if m.blockedT > 3.2 {
+				m.ai = .retreat
+				m.aiT = 0
+				m.blockedT = 0
+			}
+		} else if m.st <= 1 {
+			m.progX = m.b.x
+			m.blockedT = max(0, m.blockedT - dt * 0.5)
+		}
+		// the reason it is not attacking right now (shown by the AI overlay)
+		if m.ai == .retreat || m.blockedT > 0.9 { m.why = .blocked }
+		else if m.ai != .chase && m.ai != .alert { m.why = .notSeen }
+		else if dist > reach.0 { m.why = .outOfRange }
+		else if abs(dyP) > reach.1 { m.why = .tooHigh }
+		else if reach.2 && !m.sees { m.why = .noSight }
+		else if m.cd > 0 { m.why = .cooldown }
+		else { m.why = .none }
+		return m.ai != .idle && m.ai != .back
+	}
+
+	// MARK: specific AIs
+
+	/// Out in full daylight under an open sky (the undead burn)
+	func inSunlight(_ m: Mob) -> Bool {
+		return world.dim == .overworld && dayFactor > 0.7 && precipAt(m.b.x) < 0.5 && wxHere.cloud < 0.9 && world.isSkyExposed(Int(floor(m.b.x)), Int(floor(m.b.y - 1))) && !m.b.inWater
+	}
+
+	func updateZombie(_ m: Mob, _ dt: Double, _ aggro: Bool, _ dyP: Double) {
+		let d: MobDef = m.def
+		if inSunlight(m) { m.burn = 2.0 }
+		let dist: Double = abs(pb.x - m.b.x)
+		if m.st == 3 {
+			// arms drawn back: the swipe lands a moment later, so a quick step back dodges it
+			m.t3 -= dt
+			accelX(m, 0, 40, dt)
+			if m.t3 <= 0 {
+				m.st = 4
+				m.t3 = 0.25
+				mobStrike(m, reach: 1.2, height: 1.8, dmg: d.dmg, knock: 6.5)
+			}
+		} else if m.st == 4 {
+			m.t3 -= dt
+			accelX(m, 0, 40, dt)
+			if m.t3 <= 0 {
+				m.st = 0
+				m.cd = 0.9
+			}
+		} else if aggro {
+			chase(m, m.aimX, 1.0, dt)
+			if m.ai == .chase && (m.sees || dist < 1.0) && m.cd <= 0 && dist < 1.5 && abs(dyP) < 1.7 {
+				m.st = 3
+				m.t3 = 0.32
+				m.dir = pb.x >= m.b.x ? 1 : -1
+			}
+		} else {
+			wander(m, dt, 0.45)
+		}
+		stepMob(m, dt)
+	}
+
+	/// skeleton knight (shield), pirate and captain (cutlass)
+	func updateSwordsman(_ m: Mob, _ dt: Double, _ aggro: Bool, _ dist: Double, _ dyP: Double) {
+		let d: MobDef = m.def
+		let isSkel: Bool = m.kind == .skeleton
+		if m.st == 3 {
+			// wind-up
+			m.t3 -= dt
+			accelX(m, 0, 40, dt)
+			if m.t3 <= 0 {
+				m.st = 4
+				m.t3 = 0.22
+				// strike
+				mobStrike(m, reach: 2.2, height: 1.9, dmg: d.dmg, knock: 7.0)
+			}
+		} else if m.st == 4 {
+			m.t3 -= dt
+			accelX(m, 0, 40, dt)
+			if m.t3 <= 0 {
+				m.st = 0
+				m.cd = m.kind == .pirateCaptain ? 0.9 : 1.2
+			}
+		} else if aggro {
+			let sp: Double = dist > 8 ? 1.15 : 0.95
+			if isSkel {
+				// raise the shield while approaching, drop it to attack
+				m.blocking = dist > 2.4 && dist < 11 && m.ai == .chase
+				if m.ai == .chase && m.sees && dist < 2.0 && m.cd <= 0 && abs(dyP) < 1.6 {
+					m.st = 3
+					m.t3 = 0.38
+					m.blocking = false
+					m.dir = pb.x >= m.b.x ? 1 : -1
+				}
+				chase(m, m.aimX, m.blocking ? 0.7 : sp, dt)
+			} else {
+				if m.ai == .chase && m.sees && dist < 2.0 && m.cd <= 0 && abs(dyP) < 1.6 {
+					m.st = 3
+					m.t3 = 0.3
+					m.dir = pb.x >= m.b.x ? 1 : -1
+				}
+				chase(m, m.aimX, sp, dt)
+			}
+		} else {
+			m.blocking = false
+			wander(m, dt, 0.4)
+		}
+		if m.st == 0 && !aggro { m.blocking = false }
+		stepMob(m, dt)
+	}
+
+	/// pirate gunner and imp: keep range and shoot
+	func updateShooter(_ m: Mob, _ dt: Double, _ aggro: Bool, _ dist: Double, _ dyP: Double) {
+		let isImp: Bool = m.kind == .imp
+		if m.st == 3 {
+			m.t3 -= dt
+			accelX(m, 0, 40, dt)
+			m.dir = pb.x >= m.b.x ? 1 : -1
+			if m.t3 <= 0 {
+				if clearShot(m) {
+					m.st = 6
+					m.t3 = 0.18
+					shootAtPlayer(m, isImp)
+				} else if m.t3 < -0.8 {
+					m.st = 0
+					m.cd = 0.4
+					m.blockedT += 0.6
+				}
+			}
+		} else if m.st == 6 {
+			m.t3 -= dt
+			accelX(m, 0, 40, dt)
+			if m.t3 <= 0 { m.st = 0; m.cd = isImp ? 1.9 : 2.2 }
+		} else if aggro {
+			let want: Double = isImp ? 8.0 : 9.0
+			if (m.ai != .chase && m.ai != .alert) || !m.sees || m.blockedT > 0.5 || !m.b.onGround {
+				// no clear shot (or climbing for one): move in until there is one
+				chase(m, m.aimX, 0.9, dt)
+			} else if dist < want - 3.0 {
+				flee(m, pb.x, dt, 0.8)
+			} else if dist > want + 3.0 {
+				chase(m, pb.x, 0.9, dt)
+			} else {
+				accelX(m, 0, 20, dt)
+				m.dir = pb.x >= m.b.x ? 1 : -1
+			}
+			if m.ai == .chase && m.sees && m.b.onGround && m.cd <= 0 && dist < 17 && abs(dyP) < 9 {
+				m.st = 3
+				m.t3 = 0.5
+			}
+		} else {
+			wander(m, dt, 0.4)
+		}
+		stepMob(m, dt)
+	}
+
+	func shootAtPlayer(_ m: Mob, _ fire: Bool) {
+		let ox: Double = m.b.x + Double(m.dir) * 0.6
+		let oy: Double = shotY(m)
+		var dx: Double = pb.x - ox
+		var dy: Double = shotAimY(m) - oy
+		let len: Double = max(0.001, sqrt(dx * dx + dy * dy))
+		dx /= len
+		dy /= len
+		let sp: Double = fire ? 11.0 : 20.0
+		var p = Projectile(kind: fire ? .fireball : .bullet, x: ox, y: oy, vx: dx * sp, vy: dy * sp, dmg: m.def.dmg, fromPlayer: false, gravity: 0)
+		p.life = 3.0
+		p.owner = m.id
+		p.source = .mob(m, faction(of: m))
+		p.uid = newID()
+		projectiles.append(p)
+		spawnParticles(ox, oy, fire ? 0xFF7020 : 0xFFE080, 4, 2.5, 0.18, 0)
+	}
+
+	func updateSlime(_ m: Mob, _ dt: Double, _ aggro: Bool, _ dyP: Double) {
+		let d: MobDef = m.def
+		m.t1 -= dt
+		if m.b.onGround {
+			m.b.vx *= 0.8
+			if m.t1 <= 0 {
+				if aggro {
+					let dirX: Double = m.aimX >= m.b.x ? 1.0 : -1.0
+					m.dir = Int(dirX)
+					m.b.vy = -d.jump
+					m.b.vx = dirX * d.speed * 1.6
+					m.t1 = Double.random(in: 0.7...1.3)
+				} else {
+					m.dir = Bool.random() ? 1 : -1
+					m.b.vy = -8.5
+					m.b.vx = Double(m.dir) * 2.0
+					m.t1 = Double.random(in: 1.5...3.5)
+				}
+			}
+		}
+		if aggro && !m.b.onGround {
+			// a little steering in mid-hop, so a bounce at a wall carries over it
+			accelX(m, (m.aimX >= m.b.x ? 1.0 : -1.0) * d.speed * 1.6, 5, dt)
+		}
+		if m.kind == .emberSlime && Double.random(in: 0...1) < 0.1 {
+			spawnParticles(m.b.x, m.b.y - 0.4, 0xFF8A20, 1, 1.2, 0.4, -3)
+		}
+		if aggro && m.ai == .chase { contactHurt(m, d.dmg) }
+		stepMob(m, dt)
+	}
+
+	func updateFlyer(_ m: Mob, _ dt: Double, _ aggro: Bool, _ dist: Double, _ dyP: Double) {
+		let d: MobDef = m.def
+		m.anim += dt * 8.0
+		var tx: Double = m.homeX
+		var ty: Double = m.homeY
+		var spd: Double = d.speed * 0.6
+		if m.kind == .crow {
+			// wander around home; flee when approached
+			m.t1 -= dt
+			if m.t1 <= 0 {
+				m.t1 = Double.random(in: 2...5)
+				m.tx = m.homeX + Double.random(in: -12...12)
+				let gy: Double = Double(world.surfaceY(Int(floor(m.tx))))
+				m.ty = gy - Double.random(in: 3...8)
+			}
+			tx = m.tx
+			ty = m.ty
+			if dist < 5.0 && !dead {
+				tx = m.b.x + (m.b.x - pb.x) * 3
+				ty = m.b.y - 6
+				spd = d.speed * 1.4
+			}
+		} else if aggro {
+			tx = m.aimX
+			ty = (m.ai == .chase ? pb.y : m.seenY) - 1.3 + sin(clock * 3.0 + Double(m.id)) * 1.2
+			spd = d.speed
+		} else {
+			m.t1 -= dt
+			if m.t1 <= 0 {
+				m.t1 = Double.random(in: 1.5...4)
+				m.tx = m.b.x + Double.random(in: -8...8)
+				m.ty = m.b.y + Double.random(in: -4...4)
+			}
+			tx = m.tx
+			ty = m.ty
+		}
+		var ax: Double = tx - m.b.x
+		var ay: Double = ty - m.b.y
+		let len: Double = max(0.001, sqrt(ax * ax + ay * ay))
+		ax /= len
+		ay /= len
+		m.b.vx += (ax * spd - m.b.vx) * min(1.0, dt * 4.0)
+		m.b.vy += (ay * spd - m.b.vy) * min(1.0, dt * 4.0)
+		if abs(m.b.vx) > 0.3 { m.dir = m.b.vx > 0 ? 1 : -1 }
+		if m.kind == .wraith {
+			// drifts through walls, slower inside solid tiles
+			let inside: Bool = world.solid(Int(floor(m.b.x)), Int(floor(m.b.y - 0.7)))
+			let k: Double = inside ? 0.5 : 1.0
+			m.b.x += m.b.vx * dt * k
+			m.b.y += m.b.vy * dt * k
+		} else {
+			world.moveBody(&m.b, dt, stepUp: 0, dropThrough: false, decks: [])
+			if m.b.hitWall || m.b.hitCeil || m.b.onGround { m.b.vy = -1.0; m.t1 = 0 }
+		}
+		if aggro && m.kind != .crow && m.ai == .chase { contactHurt(m, d.dmg) }
+	}
+
+	func updateFish(_ m: Mob, _ dt: Double) {
+		m.anim += dt * 6.0
+		if !m.b.inWater {
+			// flopping on land
+			m.b.vy = min(m.b.vy + gravityG * dt, terminalV)
+			world.moveBody(&m.b, dt, stepUp: 0, dropThrough: false, decks: [])
+			m.t2 += dt
+			if m.t2 > 1.0 { m.t2 = 0; hurtMob(m, 1, 0, 0, false) }
+			return
+		}
+		m.t1 -= dt
+		if m.t1 <= 0 {
+			m.t1 = Double.random(in: 1.5...4)
+			m.tx = m.b.x + Double.random(in: -8...8)
+			m.ty = m.b.y + Double.random(in: -3...3)
+		}
+		if abs(pb.x - m.b.x) < 4 && abs(pb.y - m.b.y) < 3 && pb.inWater {
+			m.tx = m.b.x + (m.b.x - pb.x) * 3
+			m.ty = m.b.y + (m.b.y - pb.y) * 2
+		}
+		var ax: Double = m.tx - m.b.x
+		var ay: Double = m.ty - m.b.y
+		let len: Double = max(0.001, sqrt(ax * ax + ay * ay))
+		ax /= len
+		ay /= len
+		let sp: Double = m.def.speed
+		m.b.vx += (ax * sp - m.b.vx) * min(1.0, dt * 3.0)
+		m.b.vy += (ay * sp * 0.6 - m.b.vy) * min(1.0, dt * 3.0)
+		if abs(m.b.vx) > 0.2 { m.dir = m.b.vx > 0 ? 1 : -1 }
+		let nx: Double = m.b.x + m.b.vx * dt
+		let ny: Double = m.b.y + m.b.vy * dt
+		let tx: Int = Int(floor(nx))
+		let ty: Int = Int(floor(ny - 0.2))
+		if world.tile(tx, ty) == .water && world.tile(tx, Int(floor(ny))) != .air {
+			m.b.x = nx
+			m.b.y = ny
+		} else {
+			m.t1 = 0
+			m.b.vx = -m.b.vx
+			m.b.vy = -m.b.vy
+		}
+		let hw: Double = m.b.w * 0.5
+		m.b.inWater = world.liquidFraction(m.b.x - hw, m.b.y - m.b.h, m.b.x + hw, m.b.y, false) > 0.3
+	}
+
+	// MARK: pets
+
+	func updatePet(_ m: Mob, _ dt: Double) {
+		let d: MobDef = m.def
+		let toP: Double = pb.x - m.b.x
+		let dist: Double = abs(toP)
+		if dist > 45 || abs(pb.y - m.b.y) > 30 {
+			m.b.x = pb.x - Double(facing) * 1.5
+			m.b.y = pb.y
+			m.b.vx = 0
+			m.b.vy = 0
+			return
+		}
+		if m.st == 7 {
+			accelX(m, 0, 20, dt)
+			stepMob(m, dt)
+			return
+		}
+		// attack nearby hostiles
+		var target: Mob? = nil
+		if m.kind == .wolf {
+			target = nearestHostileTo(pb.x, pb.y - 1, 9.0)
+		}
+		if let t = target, t.hp > 0 {
+			chase(m, t.b.x, 1.2, dt)
+			if m.cd <= 0 && abs(t.b.x - m.b.x) < 1.6 && abs(t.b.cy - m.b.cy) < 1.5 {
+				hurtMob(t, 7, Double(m.dir), 5.0, true)
+				m.cd = 0.7
+			}
+		} else if dist > 3.5 {
+			let sp: Double = dist > 12 ? 1.8 : 1.15
+			chase(m, pb.x, sp, dt)
+		} else {
+			accelX(m, 0, 20, dt)
+		}
+		_ = d
+		stepMob(m, dt)
+	}
+
+	func tryTame(_ m: Mob) -> Bool {
+		if m.tame { return false }
+		guard let it = heldItem else { return false }
+		var ok: Bool = false
+		if m.kind == .wolf, case .mat(let mm) = it, mm == .bone { ok = true }
+		if m.kind == .cat, case .food(let f) = it, f == .rawFish || f == .cookedFish { ok = true }
+		if !ok { return false }
+		if !isCreative { inv.removeAt(sel, 1) }
+		if Double.random(in: 0...1) < 0.6 {
+			m.tame = true
+			m.persistent = true
+			m.angry = false
+			m.hp = m.maxHP
+			say("You tamed the " + m.def.name.lowercased() + "!", 3.0)
+			spawnParticles(m.b.x, m.b.y - 1, 0xFF6080, 10, 3.0, 0.8, -4)
+		} else {
+			say("The " + m.def.name.lowercased() + " isn't convinced yet...", 2.0)
+		}
+		useCD = 0.5
+		bumpHUD()
+		return true
+	}
+}
+
+// ===== p15b_spawn =====
+
+// MARK: - Mob spawning
+
+extension Game {
+	/// Notes how a spawn attempt ended (the debug panel shows the tally)
+	func spawnNote(_ s: String) {
+		spawnLast = s
+		if spawnLog.count < 40 || spawnLog[s] != nil { spawnLog[s, default: 0] += 1 }
+	}
+
+	/// The most lamplight a monster may come out in (0...15). A torch (12) keeps them off the ground
+	/// about seven blocks round it in the open, less where walls or ground stand in the way.
+	static let spawnGlowMax: Int = 4
+
+	/// The light at a creature's two cells above its feet at (x, feetY), worked out by the game's own
+	/// light flood over the ground around it, on screen or not: (sky light, light of glowing blocks).
+	/// Torches, lanterns, campfires, lamps, glowing mod blocks and every other light-giving block count,
+	/// fading with distance and held back by walls and ground; a torch in the player's hand does not.
+	func lightForSpawn(_ x: Int, _ feetY: Int) -> (Int, Int) {
+		if !spawnLight.covers(x - 1, feetY - 3, x + 1, feetY) || spawnLight.stamp != world.version || spawnLight.skyUsed != skyLevel || spawnLight.dimUsed != world.dim.rawValue {
+			let r: Int = 18
+			spawnLight.compute(world, x - r, feetY - r, r * 2 + 1, r * 2 + 1, skyLevel, [], noteSeen: false)
+		}
+		let a: (Int, Int) = spawnLight.level(x, feetY - 1)
+		let b: (Int, Int) = spawnLight.level(x, feetY - 2)
+		return (max(a.0, b.0), max(a.1, b.1))
+	}
+
+	/// Ground monsters can come out on: earth, sand, snow and rock, never planks, brick, glass or other
+	/// building blocks (so not on the roof or floor of a house)
+	func naturalGround(_ t: Tile) -> Bool {
+		switch t {
+		case .grass, .dirt, .stone, .sand, .snow, .ice, .sandstone, .mud, .dryGrass, .jungleGrass, .mossGrass,
+			 .slate, .deepRock, .obsidian, .ashStone, .farmland, .coal, .copper, .iron, .tin, .saltpeter: return true
+		default: return false
+		}
+	}
+
+	/// How many monsters may be about at once (surface or underground) at this night-danger setting
+	func monsterCap(_ place: SpawnPlace) -> Int {
+		let d: Int = clampI(settings.nightDanger, 0, 2)
+		if place == .surface || place == .ocean { return [3, 6, 10][d] }
+		return [6, 9, 12][d]
+	}
+
+	func updateSpawning(_ dt: Double) {
+		if monsterSpawnCD > 0 { monsterSpawnCD -= dt }
+		spawnTimer -= dt
+		if spawnTimer > 0 { return }
+		spawnTimer = Double.random(in: 0.45...1.0)
+		if dead { return }
+		var passive: Int = 0
+		var hostile: Int = 0
+		var predators: Int = 0
+		var aquatic: Int = 0
+		for m in mobs {
+			if m.hp <= 0 || m.removed || m.tame || m.persistent { continue }
+			let dx: Double = abs(m.b.x - pb.x)
+			if dx > 100 { continue }
+			if m.kind == .fish { aquatic += 1 }
+			else if m.def.hostile {
+				// only creatures still in play hold a place: bosses, lair guards and crews have their own
+				// rules, and one standing frozen far off-screen is about to leave
+				if m.isBoss || m.boat >= 0 || m.lair != 0 || dx > 72 || abs(m.b.y - pb.y) > 56 { continue }
+				if m.kind.isPredator { predators += 1 } else { hostile += 1 }
+			}
+			else { passive += 1 }
+		}
+		let px: Int = Int(floor(pb.x))
+		var place: SpawnPlace = .surface
+		if world.dim == .umbral {
+			place = .umbral
+		} else {
+			let sh: Int = world.dim.isCustom ? customSurface(px) : gen.col(px).h
+			let open: Bool = world.isSkyExposed(px, Int(pb.y) - 1)
+			let depth: Int = Int(pb.y) - sh
+			if depth > 18 && !open { place = .cave }
+		}
+		// just past the edge of the screen, so what comes is soon in sight
+		let half: Double = viewTilesW * 0.5 + 3.0
+		let side: Double = Bool.random() ? 1.0 : -1.0
+		let sx: Double = pb.x + side * (half + Double.random(in: 1...16))
+		let ix: Int = Int(floor(sx))
+		if !world.isLoaded(ix) { spawnNote("spot not loaded"); return }
+		if !gen.infinite && (ix < 4 || ix > gen.width - 5) { return }
+		var sy: Double = 0
+		var eff: SpawnPlace = place
+		if place == .surface {
+			let h: Int = world.surfaceY(ix)
+			let ht: Tile = world.tile(ix, h)
+			if ht.liquid {
+				eff = .ocean
+				var wy: Int = h + 1
+				var dep: Int = 0
+				while world.tile(ix, wy) == .water && dep < 40 { wy += 1; dep += 1 }
+				if dep < 5 { spawnNote("shallow water"); return }
+				sy = Double(h + 2 + Int.random(in: 0..<max(1, dep - 3)))
+			} else if ht.solid {
+				if world.solid(ix, h - 1) || world.solid(ix, h - 2) || world.tile(ix, h - 1).liquid { spawnNote("no headroom"); return }
+				sy = Double(h)
+			} else { spawnNote("no ground"); return }
+		} else {
+			let startY: Int = Int(pb.y) + Int.random(in: -20...20)
+			var found: Bool = false
+			var y: Int = startY
+			var tries: Int = 0
+			while tries < 22 {
+				if !world.solid(ix, y) && !world.solid(ix, y - 1) && !world.solid(ix, y - 2) && world.solid(ix, y + 1) && !world.tile(ix, y).liquid {
+					found = true
+					break
+				}
+				y += 1
+				tries += 1
+			}
+			if !found { spawnNote("no floor"); return }
+			if place == .cave && world.isSkyExposed(ix, y) { spawnNote("open sky"); return }
+			// lamplight, or daylight reaching in from a cave mouth
+			let lit: (Int, Int) = lightForSpawn(ix, y + 1)
+			if lit.1 > Game.spawnGlowMax || lit.0 > 6 { spawnNote("too bright"); return }
+			sy = Double(y + 1)
+		}
+		let biome: Biome = biomeAt(Double(ix))
+		// under a dark storm by day, now and then the night's creatures come out too
+		let stormDark: Bool = world.dim == .overworld && settings.weatherOn && wxHere.cloud > 0.9 && wxHere.precip > 0.6 && Double.random(in: 0...1) < 0.35
+		let night: Bool = isNight || stormDark
+		// on the surface, monsters stay out of lamplight, off roofs and away from ground far above or
+		// below the player (somewhere they could never reach them from)
+		var monsterBlock: String = ""
+		if eff == .surface {
+			let gy: Int = Int(sy)
+			if lightForSpawn(ix, gy).1 > Game.spawnGlowMax { monsterBlock = "lit by a lamp" }
+			else if !naturalGround(world.tile(ix, gy)) { monsterBlock = "on a building" }
+			else if abs(sy - pb.y) > 30 { monsterBlock = "out of reach" }
+			else if monsterSpawnCD > 0 { monsterBlock = "pacing" }
+		}
+		let cap: Int = monsterCap(eff)
+		var capped: Bool = false
+		var cands: [SpawnRule] = []
+		var total: Double = 0
+		// the custom creatures of the world's mods spawn by the same rules, beside the game's own
+		let rt: ModRuntime = ModRuntime.shared
+		// a custom dimension has only its own creatures
+		let rules: [SpawnRule] = world.dim.isCustom ? (customDim?.spawnRules ?? []) : (rt.spawnRules.isEmpty ? spawnRules : spawnRules + rt.spawnRules)
+		var customN: Int = -1
+		for r in rules {
+			if r.place != eff { continue }
+			if r.when == .day && night { continue }
+			if r.when == .night && !night { continue }
+			if !r.biomes.isEmpty && !r.biomes.contains(biome) { continue }
+			if eff == .cave || eff == .umbral || r.slot >= 0 {
+				if Int(sy) < r.minY || Int(sy) > r.maxY { continue }
+			}
+			var d: MobDef = mobDef(r.kind)
+			if r.slot >= 0 {
+				guard let cr = rt.mob(r.slot) else { continue }
+				d = cr.mdef
+				if customN < 0 { customN = customMobCount() }
+				if customN >= ModLimits.maxActiveMobs || customNearby(r.slot) >= r.maxNearby { continue }
+			}
+			if d.hostile {
+				if !monstersEnabled || settings.peaceful { continue }
+				if r.kind.isPredator {
+					// wild predators have their own small number and come by day too
+					if predators >= 3 { continue }
+				} else {
+					if hostile >= cap { capped = true; continue }
+					if !monsterBlock.isEmpty { continue }
+				}
+			} else if r.kind == .fish || (r.slot >= 0 && r.place == .ocean) {
+				if aquatic >= 9 { continue }
+			} else {
+				if passive >= 9 { continue }
+			}
+			cands.append(r)
+			total += r.weight
+		}
+		if cands.isEmpty || total <= 0 {
+			if capped { spawnNote("monster limit reached") }
+			else if !monsterBlock.isEmpty && night { spawnNote(monsterBlock) }
+			else { spawnNote(night ? "nothing for this place" : "nothing for this place by day") }
+			return
+		}
+		var pick: Double = Double.random(in: 0..<total)
+		var chosen: SpawnRule = cands[0]
+		for r in cands {
+			pick -= r.weight
+			if pick <= 0 { chosen = r; break }
+		}
+		let def: MobDef = chosen.slot >= 0 ? (rt.mob(chosen.slot)?.mdef ?? mobDef(chosen.kind)) : mobDef(chosen.kind)
+		let monster: Bool = def.hostile && !chosen.kind.isPredator
+		var n: Int = 1 + Int.random(in: 0..<max(1, chosen.group))
+		if monster { n = min(n, cap - hostile) }
+		var made: Int = 0
+		for k in 0..<n {
+			let ox: Double = Double(k) * 1.1 * side + Double.random(in: -0.4...0.4)
+			let x: Double = sx + ox
+			var y: Double = sy
+			// every member finds its own footing: the ground in its own column on the surface, and
+			// nobody appears inside a wall or hanging over a drop
+			if eff == .surface && !def.flying {
+				let gyS: Int = world.surfaceY(Int(floor(x)))
+				if world.tile(Int(floor(x)), gyS).liquid || abs(gyS - Int(sy)) > 3 { continue }
+				y = Double(gyS)
+			}
+			if def.flying && eff != .ocean { y -= chosen.sky ? Double.random(in: 7...14) : Double.random(in: 1...3) }
+			// each monster of a group only comes out where it is dark enough itself
+			if monster && eff != .ocean && lightForSpawn(Int(floor(x)), Int(floor(y))).1 > Game.spawnGlowMax { continue }
+			if eff != .ocean && !spawnSpotClear(def, x, y) { continue }
+			var made1: Mob? = nil
+			if chosen.slot >= 0 { made1 = addCustomMob(chosen.slot, x, y) } else { made1 = addMob(chosen.kind, x, y) }
+			guard let m = made1 else { continue }
+			m.homeX = x
+			m.homeY = y
+			// the night's monsters on the surface come looking for the player
+			if monster && eff == .surface && night { m.hunter = true }
+			if chosen.kind == .sheep && Double.random(in: 0...1) < 0.1 { m.sheared = true }
+			made += 1
+		}
+		if made == 0 { spawnNote("no room to stand"); return }
+		spawnNote(joinText("spawned ", def.name))
+		if monster && eff == .surface {
+			let d: Int = clampI(settings.nightDanger, 0, 2)
+			monsterSpawnCD = [8.0, 4.0, 2.0][d] * Double.random(in: 0.8...1.25)
+		}
+	}
+
+	/// How many of one custom creature are about near the player
+	func customNearby(_ slot: Int) -> Int {
+		var n: Int = 0
+		for m in mobs where m.kind == .custom && m.cslot == slot && m.hp > 0 && !m.removed && abs(m.b.x - pb.x) < 100 { n += 1 }
+		return n
+	}
+
+	/// Room for a creature of this size standing at (x, y): no solid tile inside its box, and (unless it
+	/// flies) something to stand on under its feet
+	func spawnSpotClear(_ d: MobDef, _ x: Double, _ y: Double) -> Bool {
+		let hw: Double = d.w * 0.5
+		if world.boxSolid(x - hw + 0.02, y - d.h, x + hw - 0.02, y - 0.05) { return false }
+		if d.flying { return true }
+		let gy: Int = Int(floor(y + 0.05))
+		let l: Int = Int(floor(x - hw + 0.05))
+		let r: Int = Int(floor(x + hw - 0.05))
+		var footing: Int = 0
+		for tx in l...r where world.solid(tx, gy) || world.tile(tx, gy).isPlatform { footing += 1 }
+		return footing * 2 >= (r - l + 1)
+	}
+}
+
+// ===== p16a_combat =====
+
+// MARK: - Combat: damage, death, projectiles, drops, particles
+
+extension Game {
+	func hurtMob(_ m: Mob, _ dmg: Double, _ dirX: Double, _ knock: Double, _ byPlayer: Bool, heavy: Bool = false, crit: Bool = false) {
+		if m.hp <= 0 { return }
+		if m.kind == .rex && m.tame && byPlayer { return }
+		// a wild animal remembers being hurt by the player (it fights back, see wildProvoked)
+		if byPlayer { m.lastHitByPlayer = clock }
+		var d: Double = dmg
+		var kb: Double = knock
+		if m.blocking && m.kind == .skeleton && dirX != 0 && dirX * Double(m.dir) < 0 {
+			if heavy {
+				// a hammer blow knocks the shield aside and leaves the skeleton open for a moment
+				m.blocking = false
+				m.cd = max(m.cd, 0.9)
+				spawnParticles(m.b.x - Double(m.dir) * 0.5, m.b.y - 1.0, 0xFFF0C0, 8, 5.0, 0.25, 0)
+				floatText("Guard broken", m.b.x, m.b.top - 0.4, 0xFFD080)
+			} else {
+				d *= 0.1
+				kb *= 0.25
+				spawnParticles(m.b.x - Double(m.dir) * 0.5, m.b.y - 1.0, 0xE8F0FF, 5, 4.0, 0.2, 0)
+				floatText("Blocked", m.b.x, m.b.top - 0.4, 0xA0C0FF)
+			}
+		}
+		if d < 0.5 { d = 0.5 }
+		m.hp -= d
+		m.hurtT = 0.22
+		m.flash = 0.12
+		if dirX != 0 && kb > 0 { m.lean = clampD(dirX * kb / 9.0, -1, 1) }
+		var resist: Double = m.isBoss ? 0.97 : (m.def.w > 2.0 ? 0.6 : 0.0)
+		if m.kind == .golem { resist = heavy ? 0.45 : 0.88 }
+		if m.kind == .custom, let r = ModRuntime.shared.mob(m.cslot) { resist = max(resist, clampD(r.def.knockResist, 0, 1)) }
+		if dirX != 0 && kb > 0 {
+			m.b.vx = dirX * kb * (1.0 - resist)
+			if resist < 0.9 { m.b.vy = min(m.b.vy, -3.5) }
+		}
+		if crit && byPlayer {
+			floatText(String(Int(d.rounded())) + "!", m.b.x, m.b.top - 0.35, 0xFFE040)
+		} else {
+			floatText(String(Int(d.rounded())), m.b.x, m.b.top - 0.2, byPlayer ? 0xFFFFFF : 0xFFAA40)
+		}
+		spawnParticles(m.b.x, m.b.cy, m.kind == .skeleton ? 0xE8E8E0 : 0xB02828, 4, 3.0, 0.4, 14)
+		switch m.def.behavior {
+		case .passive, .skittish:
+			m.t2 = 3.5
+			m.tx = m.b.x - (dirX == 0 ? 1.0 : dirX) * 6.0
+		case .defensive:
+			// animals only hold a grudge against the player; hurt by anything else they just bolt
+			if !byPlayer { break }
+			m.angry = true
+			m.t3 = 10.0
+			if m.kind == .wolf {
+				for o in mobs where o.kind == .wolf && !o.tame && abs(o.b.x - m.b.x) < 16 {
+					o.angry = true
+					o.t3 = 12.0
+				}
+			}
+		default: break
+		}
+		if m.boat >= 0 { alertShip(m.boat) }
+		if m.kind == .custom && !logicRT.isEmpty, let r = ModRuntime.shared.mob(m.cslot) { fireLogic(.hurt, mob: m, key: r.key) }
+		if m.hp <= 0 { killMob(m, byPlayer) }
+	}
+
+	func killMob(_ m: Mob, _ byPlayer: Bool) {
+		if m.kind == .rex && m.tame {
+			downRex(m)
+			return
+		}
+		m.hp = 0
+		m.deathT = 0
+		m.burn = 0
+		// a creature the player hit recently still counts as the player's kill if lava, a fall or
+		// another creature finishes it off
+		let credit: Bool = byPlayer || clock - m.lastHitByPlayer < 6.0
+		var rng = RNG(UInt64(truncatingIfNeeded: m.id) &* 6364136223846793005 &+ UInt64(truncatingIfNeeded: Int(clock * 1000)))
+		for s in mobDrops(m.kind, &rng, m.sheared) {
+			spawnDrop(s, m.b.x, m.b.y - m.b.h * 0.5, Double.random(in: -2...2), -4.5)
+		}
+		if m.kind == .custom { dropModLoot(m, &rng) }
+		if m.kind == .custom && !logicRT.isEmpty, let r = ModRuntime.shared.mob(m.cslot) { fireLogic(.dies, mob: m, key: r.key) }
+		for s in alchemyDrops(m, &rng, credit) {
+			spawnDrop(s, m.b.x, m.b.y - m.b.h * 0.5, Double.random(in: -2...2), -4.5)
+		}
+		var col: UInt32 = 0xB02828
+		if m.kind == .skeleton { col = 0xE8E8E0 }
+		if m.kind == .slime { col = 0x60C060 }
+		if m.kind == .emberSlime { col = 0xFF8A20 }
+		spawnParticles(m.b.x, m.b.cy, col, Int(10 + m.b.w * 4), 5.0, 0.7, 14)
+		if credit { kills += 1 }
+		if m.kind == .bearBoss { onBearDefeated(m) }
+		if m.kind == .rex { onRexDefeated(m) }
+		if m.kind == .sentinel || m.kind == .warden { onGuardianDefeated(m) }
+		for s in m.loot { spawnDrop(s, m.b.x, m.b.y - m.b.h * 0.5, Double.random(in: -2.5...2.5), -5.0) }
+		m.loot = []
+		if m === activeBoss { activeBoss = nil }
+		bumpHUD()
+	}
+
+	func addMob(_ kind: MobKind, _ x: Double, _ y: Double) -> Mob {
+		let m = Mob(id: newID(), kind: kind, x: x, y: y)
+		if kind == .zombie { m.variant = Int.random(in: 0...2) }
+		if mobHealthMult != 1.0 {
+			m.maxHP *= mobHealthMult
+			m.hp = m.maxHP
+		}
+		mobs.append(m)
+		return m
+	}
+
+	// MARK: projectiles
+
+	/// Steps every projectile. Collision is swept along the whole frame's movement, so fast arrows and
+	/// bullets cannot skip over a target between frames, and the first thing along the path is hit.
+	func updateProjectiles(_ dt: Double) {
+		if projectiles.isEmpty { return }
+		let list: [Projectile] = projectiles
+		// projectiles created while stepping (none today, but explosions could) land in the fresh array
+		projectiles = []
+		var keep: [Projectile] = []
+		keep.reserveCapacity(list.count)
+		for p0 in list {
+			var p: Projectile = p0
+			if stepProjectile(&p, dt) { keep.append(p) }
+		}
+		if !projectiles.isEmpty { keep.append(contentsOf: projectiles) }
+		projectiles = keep
+	}
+
+	/// Returns false when the projectile is used up
+	func stepProjectile(_ p: inout Projectile, _ dt: Double) -> Bool {
+		p.life -= dt
+		if p.life <= 0 {
+			if p.mod >= 0 { modShotLanded(p, p.x, p.y, mob: nil, player: false) }
+			if p.kind == .bomb { explode(p.x, p.y, radius: 3.4, power: p.dmg, source: p.source, breakBlocks: true) }
+			if p.kind == .shell { shellBurst(p, p.x, p.y) }
+			if p.kind == .flask { burstFlaskOrPotion(p, p.x, p.y, nil) }
+			return false
+		}
+		if p.stuck > 0 {
+			p.stuck -= dt
+			if p.stuck <= 0 && (p.kind == .arrow || p.kind == .quarrel) && p.source.kind == .player && !isCreative && Double.random(in: 0...1) < 0.35 {
+				// some arrows and bolts survive and can be picked back up
+				spawnDrop(Stack(item: .ammo(p.kind == .arrow ? .arrow : .bolt), count: 1), p.x, p.y, 0, -1)
+			}
+			return p.stuck > 0
+		}
+		if p.kind == .shock { return stepShock(&p, dt) }
+		p.vy = min(p.vy + p.gravity * dt, 40.0)
+		let nx: Double = p.x + p.vx * dt
+		let ny: Double = p.y + p.vy * dt
+		// first solid tile along the path
+		var wallT: Double = 2.0
+		var wallTile: (Int, Int) = (0, 0)
+		if let hit = world.segmentSolidT(p.x, p.y, nx, ny) {
+			wallT = hit.2
+			wallTile = (hit.0, hit.1)
+		}
+		// a vehicle's parts stop shots aimed at it (the player's own shots pass their vehicles)
+		var vehHit: VehicleHit? = nil
+		if !vehicles.isEmpty && p.kind != .bomb { vehHit = vehicleOnPath(p, nx, ny, maxT: wallT) }
+		let entityMax: Double = vehHit?.t ?? wallT
+		// first creature (or the player) along the path, before the wall
+		if p.kind != .bomb {
+			if let target = firstEntityOnPath(p, nx, ny, maxT: entityMax) {
+				let hx: Double = p.x + (nx - p.x) * target.t
+				let hy: Double = p.y + (ny - p.y) * target.t
+				if p.kind == .flask {
+					burstFlaskOrPotion(p, hx, hy, target.mob)
+					return false
+				}
+				if p.kind == .shell {
+					shellBurst(p, hx, hy)
+					return false
+				}
+				let dirx: Double = p.vx >= 0 ? 1.0 : -1.0
+				var info = DamageInfo(amount: p.dmg, type: .projectile, source: p.source)
+				info.dirX = dirx
+				info.knock = p.knock > 0 ? p.knock : (p.kind == .bullet ? 4.0 : (p.kind == .arrow ? 3.5 : 3.0))
+				info.originX = p.x
+				info.originY = p.y
+				info.key = p.uid
+				info.cooldown = 1.0
+				if p.kind == .fireball { info.type = .fire }
+				if let m = target.mob {
+					if applyMobDamage(m, info) {
+						if p.mod >= 0 {
+							let s: ModProjectile? = p.mod < ModRuntime.shared.shots.count ? ModRuntime.shared.shots[p.mod] : nil
+							if let sh = s, sh.explode > 0 {
+								modShotLanded(p, hx, hy, mob: m, player: false)
+								return false
+							}
+							if let sh = s, sh.burn > 0 { m.burn = max(m.burn, sh.burn) }
+						}
+						if p.kind == .fireball { m.burn = max(m.burn, 2.5) }
+						if p.inf != 0 || !p.custom.isEmpty { shotInfusionHit(p, m, hx, hy) }
+						spawnParticles(hx, hy, p.kind == .fireball ? 0xFF8030 : 0xE8E0D0, 3, 2.5, 0.25, 8)
+						if p.source.kind == .player {
+							// a clear "it landed" for the player's own shots
+							sfx(.arrowHit, 0.55)
+							lockTarget = m
+							lockT = 2.0
+						}
+					}
+					p.lastHit = m.id
+				} else {
+					_ = hurtPlayer(info)
+					if p.mod >= 0 {
+						modShotLanded(p, hx, hy, mob: nil, player: true)
+						return false
+					}
+					if p.kind == .fireball { playerBurn = max(playerBurn, 1.5); spawnParticles(hx, hy, 0xFF8030, 8, 4.0, 0.4, 6) }
+				}
+				if p.pierce > 0 && target.mob != nil {
+					p.pierce -= 1
+					p.dmg *= 0.7
+				} else {
+					return false
+				}
+			}
+		}
+		if let vh = vehHit {
+			shotHitsVehicle(p, vh, p.x + (nx - p.x) * vh.t, p.y + (ny - p.y) * vh.t)
+			return false
+		}
+		if wallT <= 1.0 {
+			let hx: Double = p.x + (nx - p.x) * wallT
+			let hy: Double = p.y + (ny - p.y) * wallT
+			if p.mod >= 0 {
+				modShotLanded(p, hx, hy, mob: nil, player: false)
+				return false
+			}
+			if p.inf & 4 != 0 { volatileBurst(hx, hy) }
+			switch p.kind {
+			case .flask:
+				burstFlaskOrPotion(p, hx, hy, nil)
+				return false
+			case .pebble:
+				spawnParticles(hx, hy, 0x9A9A9A, 4, 2.5, 0.3, 14)
+				return false
+			case .arrow, .quarrel:
+				// stick into the block, nudged back out of it slightly so it reads as embedded
+				p.x = hx - p.vx * 0.004
+				p.y = hy - p.vy * 0.004
+				p.stuckAngle = atan2(p.vy, p.vx)
+				p.vx = 0
+				p.vy = 0
+				p.stuck = 4.0
+				p.gravity = 0
+				spawnParticles(hx, hy, 0xA0A0A0, 2, 1.5, 0.2, 8)
+				return true
+			case .rock:
+				rockImpact(p, hx, hy)
+				return false
+			case .shell:
+				shellBurst(p, hx - p.vx * 0.004, hy - p.vy * 0.004)
+				return false
+			case .bomb:
+				// bounce off the face it struck, losing energy, and come to rest on top of the ground
+				// (it used to work its way into the floor and go off inside the rock)
+				let tx: Double = Double(wallTile.0)
+				let ty: Double = Double(wallTile.1)
+				let onTop: Bool = abs(hy - ty) < 0.02 && p.vy > 0
+				let onBottom: Bool = abs(hy - (ty + 1.0)) < 0.02 && p.vy < 0
+				if onTop || onBottom {
+					// the ground grips it: it settles close to where it came down
+					p.vy = -p.vy * 0.35
+					p.vx *= onTop ? 0.4 : 0.7
+					p.x = hx
+					p.y = onTop ? ty - 0.02 : ty + 1.02
+					if onTop && abs(p.vy) < 1.5 { p.vy = 0; p.vx *= 0.6 }
+				} else {
+					p.vx = -p.vx * 0.45
+					p.x = p.vx < 0 ? tx - 0.02 : tx + 1.02
+					p.y = hy
+				}
+				if world.solid(Int(floor(p.x)), Int(floor(p.y))) { p.y = Double(world.groundBelow(Int(floor(p.x)), Int(floor(p.y)) - 4)) - 0.02 }
+				return true
+			default:
+				spawnParticles(hx, hy, p.kind == .fireball ? 0xFF8030 : 0xFFE080, 5, 3.0, 0.25, 6)
+				if p.kind == .fireball { igniteNear(hx, hy, p.source) }
+				return false
+			}
+		}
+		p.x = nx
+		p.y = ny
+		// player shots also damage pirate ships
+		if p.source.kind == .player {
+			for s in ships {
+				let dy: Double = s.deckY(Double(WorldGen.sea))
+				if abs(p.x - s.x) < 4.6 && p.y > dy - 3.0 && p.y < dy + 2.0 {
+					s.hp -= p.dmg * 0.5
+					s.hitT = 0.2
+					spawnParticles(p.x, p.y, 0x8A5A2E, 4, 3.0, 0.3, 12)
+					return false
+				}
+			}
+		}
+		if p.kind == .fireball && Double.random(in: 0...1) < 0.5 { spawnParticles(p.x, p.y, 0xFFB040, 1, 1.0, 0.25, -2) }
+		if p.kind == .arrow && p.source.kind == .player && p.trail < 6 { p.trail += 1 }
+		return true
+	}
+
+	struct PathHit {
+		var t: Double
+		var mob: Mob?
+	}
+
+	/// Nearest creature or player the segment passes through that this projectile is allowed to hurt
+	func firstEntityOnPath(_ p: Projectile, _ nx: Double, _ ny: Double, maxT: Double) -> PathHit? {
+		var best: PathHit? = nil
+		var bt: Double = min(1.0, maxT)
+		let pad: Double = max(0.08, p.w * 0.5)
+		if !dead && canHarm(p.source, targetFaction: .player, targetID: 0, area: false) {
+			if let t = segmentBoxT(p.x, p.y, nx, ny, pb.left - pad, pb.top - pad, pb.right + pad, pb.y + pad), t <= bt {
+				bt = t
+				best = PathHit(t: t, mob: nil)
+			}
+		}
+		let x0: Double = min(p.x, nx) - 4.0
+		let x1: Double = max(p.x, nx) + 4.0
+		for m in mobsNear(x0, x1) {
+			if m.hp <= 0 || m.id == p.lastHit || m.downed { continue }
+			if !canHarm(p.source, targetFaction: faction(of: m), targetID: m.id, area: false) { continue }
+			if let t = segmentBoxT(p.x, p.y, nx, ny, m.b.left - pad, m.b.top - pad, m.b.right + pad, m.b.y + pad), t <= bt {
+				bt = t
+				best = PathHit(t: t, mob: m)
+			}
+		}
+		return best
+	}
+
+	/// Boss shockwaves run along the ground and hurt anything standing in them
+	func stepShock(_ p: inout Projectile, _ dt: Double) -> Bool {
+		p.x += p.vx * dt
+		let gy: Int = world.groundBelow(Int(floor(p.x)), Int(floor(p.y)) - 3)
+		p.y = Double(gy) - 0.5
+		if world.solid(Int(floor(p.x)), Int(floor(p.y - 0.6))) && world.solid(Int(floor(p.x + p.vx * 0.1)), Int(floor(p.y - 0.4))) { return false }
+		var info = DamageInfo(amount: p.dmg, type: .stomp, source: p.source)
+		info.dirX = p.vx >= 0 ? 1 : -1
+		info.knock = 7.0
+		info.originX = p.x - p.vx
+		info.originY = p.y
+		info.key = p.uid
+		info.cooldown = 2.0
+		damageBox(p.x - 0.5, p.y - 0.9, p.x + 0.5, p.y + 0.5, info)
+		if Double.random(in: 0...1) < 0.5 { spawnParticles(p.x, p.y + 0.3, 0xA08860, 1, 1.5, 0.3, 6) }
+		return true
+	}
+
+	func rockImpact(_ p: Projectile, _ x: Double, _ y: Double) {
+		spawnParticles(x, y, 0x8A8A8A, 10, 5.0, 0.5, 16)
+		addShake(0.25)
+		var info = DamageInfo(amount: p.dmg, type: .impact, source: p.source)
+		info.knock = 5.0
+		info.originX = x
+		info.originY = y - 1.0
+		info.key = p.uid
+		info.cooldown = 1.0
+		damageArea(x, y - 0.8, radius: 1.8, info, falloff: false, lineOfSight: false)
+	}
+
+	/// Fireballs set fire to whatever stands where they burst
+	func igniteNear(_ x: Double, _ y: Double, _ src: DamageSource) {
+		for m in mobsNear(x - 1.5, x + 1.5) where m.hp > 0 && !heatImmune(m) {
+			if abs(m.b.cy - y) < m.b.h * 0.5 + 1.0 && canHarm(src, targetFaction: faction(of: m), targetID: m.id, area: true) {
+				m.burn = max(m.burn, 2.0)
+			}
+		}
+	}
+
+	func throwBomb() {
+		if useCD > 0 { return }
+		if !isCreative { inv.removeAt(sel, 1) }
+		facing = aimFacing()
+		let ox: Double = pb.x + Double(facing) * 0.4
+		let oy: Double = pb.y - 1.3
+		// thrown on the arc that lands it on the spot aimed at (then it may bounce a little)
+		let a: Double = lobAngle(aimX - ox, aimY - oy, throwSpeed, throwGravity)
+		var p = Projectile(kind: .bomb, x: ox, y: oy, vx: cos(a) * throwSpeed, vy: sin(a) * throwSpeed, dmg: 26, fromPlayer: true, gravity: throwGravity)
+		p.life = 1.8
+		p.w = 0.4
+		p.source = DamageSource.player
+		p.uid = newID()
+		projectiles.append(p)
+		useCD = 0.45
+		swingT = 0.18
+		swingDir = facing
+		bumpHUD()
+	}
+
+	// MARK: drops
+
+	func updateDrops(_ dt: Double) {
+		var i: Int = 0
+		while i < drops.count {
+			var d: DropItem = drops[i]
+			d.age += dt
+			if d.pickDelay > 0 { d.pickDelay -= dt }
+			if d.age > 400 {
+				drops.remove(at: i)
+				continue
+			}
+			var b = Body(x: d.x, y: d.y, w: 0.3, h: 0.3)
+			b.vx = d.vx
+			b.vy = d.vy
+			let px: Double = pb.x
+			let py: Double = pb.y - pb.h * 0.5
+			let dx: Double = px - d.x
+			let dy: Double = py - (d.y - 0.15)
+			let dist: Double = sqrt(dx * dx + dy * dy)
+			// a stack the player threw away waits until they have walked off from it
+			if d.heldBack && dist > 3.6 { d.heldBack = false }
+			var magnet: Bool = false
+			if !dead && d.pickDelay <= 0 && !d.heldBack && dist < 3.2 && inv.canFit(d.stack.item, 1) {
+				magnet = true
+				let k: Double = 16.0
+				b.vx = dx / max(dist, 0.1) * k * (1.0 + (3.2 - dist) * 0.3)
+				b.vy = dy / max(dist, 0.1) * k * (1.0 + (3.2 - dist) * 0.3)
+			} else {
+				b.vy = min(b.vy + gravityG * 0.8 * dt, 18)
+				b.vx *= (1.0 - min(1.0, dt * (d.onGround ? 6.0 : 0.6)))
+			}
+			if magnet {
+				b.x += b.vx * dt
+				b.y += b.vy * dt
+			} else {
+				world.moveBody(&b, dt, stepUp: 0, dropThrough: false, decks: decksCache)
+				if b.inWater { b.vy = min(b.vy, 1.5); b.vx *= 0.9 }
+			}
+			d.x = b.x
+			d.y = b.y
+			d.vx = b.vx
+			d.vy = b.vy
+			d.onGround = b.onGround
+			if !dead && d.pickDelay <= 0 && !d.heldBack && dist < 0.9 {
+				let left: Int = inv.add(d.stack.item, d.stack.count, extra: d.stack.extra, inf: d.stack.inf)
+				if left < d.stack.count {
+					if d.stack.item == .mat(.relicFragment) { journal.relics += d.stack.count - left }
+					sfx(.pickup, 0.5)
+					floatText("+" + String(d.stack.count - left) + " " + d.stack.item.name, px, pb.y - pb.h - 0.5, 0xFFF0A0)
+					bumpHUD()
+				}
+				if left == 0 {
+					drops.remove(at: i)
+					continue
+				} else {
+					d.stack.count = left
+				}
+			}
+			drops[i] = d
+			i += 1
+		}
+	}
+
+	// MARK: particles and floating text
+
+	func updateParticles(_ dt: Double) {
+		// compact in place: remove(at:) in a loop was O(n^2) when bursts of particles expired together
+		let n: Int = particles.count
+		var w: Int = 0
+		particles.withUnsafeMutableBufferPointer { bp in
+			var i: Int = 0
+			while i < n {
+				var p: Particle = bp[i]
+				p.life -= dt
+				if p.life > 0 {
+					p.vy += p.gravity * dt
+					p.x += p.vx * dt
+					p.y += p.vy * dt
+					bp[w] = p
+					w += 1
+				}
+				i += 1
+			}
+		}
+		if w < n { particles.removeLast(n - w) }
+		var j: Int = 0
+		while j < floats.count {
+			floats[j].life -= dt
+			floats[j].y -= dt * 1.1
+			if floats[j].life <= 0 { floats.remove(at: j); continue }
+			j += 1
+		}
 	}
 }

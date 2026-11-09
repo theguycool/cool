@@ -1,4 +1,4 @@
-// PIXEL REALM v2, part 2 of 4: creature AI, spawning, combat and damage, bosses, vehicles and ships, the portal and map, saving,
+// PIXEL REALM v2, part 2 of 4: combat and damage, bosses, vehicles and ships, the portal and map, saving,
 // helpers, walls and doors, Sparkworks (power), the Mod Creator's data, checks and runtime, potions and mutation, infusions,
 // the exosuit, building (furniture, stairs, lifts) and block physics, then the start of Mod Creator+ (game content changes,
 // versions and folders, ore controls, sprite tools).
@@ -11,1606 +11,6 @@ import AVFoundation
 #if canImport(UIKit)
 import UIKit
 #endif
-
-// ===== p15a_mobai =====
-
-// MARK: - Mob AI
-
-extension Game {
-	func buildDecks() -> [Deck] {
-		var out: [Deck] = []
-		let sea: Double = Double(WorldGen.sea)
-		for s in ships where s.sink < 3.0 {
-			let dy: Double = s.deckY(sea)
-			out.append(Deck(x0: s.x - PirateShip.deckHalf, x1: s.x + PirateShip.deckHalf - 0.1, y: dy, vx: s.speed * Double(s.dir), id: s.id))
-		}
-		// a parked vehicle you can stand on (only while it is roughly level)
-		for v in vehicles where !v.rider && v.upright {
-			out.append(Deck(x0: v.b.x - v.b.w * 0.5, x1: v.b.x + v.b.w * 0.5, y: v.b.y - v.b.h, vx: v.vx, id: 1_000_000 + v.id))
-		}
-		// lift cars
-		for l in lifts { out.append(Deck(x0: l.x0, x1: l.x1, y: l.y, vx: 0, id: l.deckID)) }
-		return out
-	}
-
-	func allDecks() -> [Deck] { return decksCache }
-
-	func accelX(_ m: Mob, _ target: Double, _ a: Double, _ dt: Double) {
-		let d: Double = target - m.b.vx
-		let s: Double = a * dt
-		if d > s { m.b.vx += s } else if d < -s { m.b.vx -= s } else { m.b.vx = target }
-	}
-
-	func stepMob(_ m: Mob, _ dt: Double, stepUp: Double = 1.0) {
-		let d: MobDef = m.def
-		if d.flying {
-			// keep flyers from sinking; their AI sets vy directly
-		} else if m.b.inWater {
-			m.b.vy += 12.0 * dt
-			m.b.vy = clampD(m.b.vy, -5.0, 5.0)
-			if m.hp > 0 && d.behavior != .swimmer { m.b.vy -= 26.0 * dt }
-		} else {
-			m.b.vy = min(m.b.vy + gravityG * dt, terminalV)
-		}
-		if m.knock > 0 { m.knock -= dt }
-		if m.leapReq {
-			// a harder leap at a wall it is stuck against (see think)
-			m.leapReq = false
-			if m.b.onGround && !d.flying {
-				m.b.vy = -d.jump * 1.22
-				m.b.vx = (m.aimX >= m.b.x ? 1.0 : -1.0) * max(2.5, d.speed)
-				m.leapT = 1.6
-			}
-		}
-		// slowed creatures cover less ground (their AI still asks for its usual speed)
-		let sm: Double = m.speedMul
-		if sm < 0.999 {
-			m.b.vx *= sm
-			if d.flying { m.b.vy *= sm }
-		}
-		world.moveBody(&m.b, dt, stepUp: d.flying ? 0 : stepUp, dropThrough: false, decks: decksCache)
-		if sm < 0.999 {
-			m.b.vx /= sm
-			if d.flying { m.b.vy /= sm }
-		}
-		if m.b.deck >= 0 && m.b.deck < decksCache.count { m.b.x += decksCache[m.b.deck].vx * dt }
-		if m.boat >= 0 { clampToDeck(m) }
-		if m.b.onGround { m.anim += abs(m.b.vx) * dt * 0.8 } else { m.anim += dt * 0.5 }
-	}
-
-	func cliffAhead(_ m: Mob, _ dir: Int) -> Bool {
-		let fx: Int = Int(floor(m.b.x + Double(dir) * (m.b.w * 0.5 + 0.6)))
-		let fy: Int = Int(floor(m.b.y + 0.2))
-		var d: Int = 0
-		while d < 5 {
-			let t: Tile = world.tile(fx, fy + d)
-			if t.solid || t == .platform || t.liquid { return false }
-			d += 1
-		}
-		return true
-	}
-
-	func wander(_ m: Mob, _ dt: Double, _ speedK: Double) {
-		let d: MobDef = m.def
-		m.t1 -= dt
-		if m.t1 <= 0 {
-			if m.st == 0 {
-				m.st = 1
-				m.dir = Bool.random() ? 1 : -1
-				if abs(m.b.x - m.homeX) > 24 { m.dir = m.b.x > m.homeX ? -1 : 1 }
-				m.t1 = Double.random(in: 1.5...4.5)
-			} else {
-				m.st = 0
-				m.t1 = Double.random(in: 1.0...4.0)
-			}
-		}
-		if m.st == 1 {
-			if cliffAhead(m, m.dir) || (m.b.hitWall && !m.b.onGround) { m.dir = -m.dir }
-			if m.b.hitWall && m.b.onGround { m.dir = -m.dir }
-			accelX(m, Double(m.dir) * d.speed * speedK, 14, dt)
-		} else {
-			accelX(m, 0, 18, dt)
-		}
-	}
-
-	func flee(_ m: Mob, _ fromX: Double, _ dt: Double, _ speedK: Double) {
-		let dirX: Double = m.b.x >= fromX ? 1.0 : -1.0
-		m.dir = Int(dirX)
-		accelX(m, dirX * m.def.speed * speedK, 30, dt)
-		if m.b.hitWall && m.b.onGround { m.b.vy = -m.def.jump }
-	}
-
-	func chase(_ m: Mob, _ tx: Double, _ speedK: Double, _ dt: Double) {
-		let d: MobDef = m.def
-		let dirX: Double = tx >= m.b.x ? 1.0 : -1.0
-		if abs(tx - m.b.x) > 0.35 {
-			m.dir = Int(dirX)
-			accelX(m, dirX * d.speed * speedK, 26, dt)
-		} else {
-			accelX(m, 0, 30, dt)
-		}
-		if m.b.hitWall && m.b.onGround { m.b.vy = -d.jump }
-		if m.b.inWater { m.b.vy -= 18 * dt }
-	}
-
-	func contactHurt(_ m: Mob, _ dmg: Double) {
-		if m.cd > 0 || dead { return }
-		// touching: overlapping across, and up and down anything from overlapping to standing on the
-		// player's head (or the player on its back)
-		let across: Bool = pb.right > m.b.left + 0.05 && pb.left < m.b.right - 0.05
-		let upDown: Bool = pb.y > m.b.top - 0.2 && pb.top < m.b.y + 0.2
-		if across && upDown {
-			var info = DamageInfo(amount: dmg, type: .contact, source: .mob(m, faction(of: m)))
-			info.knock = 6.5
-			info.originX = m.b.x
-			if hurtPlayer(info) { m.cd = 0.9; m.atkT = Mob.atkDur }
-		}
-	}
-
-	/// A creature's swing: hits the player and any creature from another side inside the reach box
-	func mobStrike(_ m: Mob, reach: Double, height: Double, dmg: Double, knock: Double) {
-		m.atkT = Mob.atkDur
-		// a mutated creature's swing reaches as far as it has grown
-		let k: Double = max(1.0, m.mutSize)
-		let reach: Double = reach * k
-		let height: Double = height * k
-		let x0: Double = m.dir > 0 ? m.b.x - 0.3 : m.b.x - reach - 0.3
-		let x1: Double = m.dir > 0 ? m.b.x + reach + 0.3 : m.b.x + 0.3
-		var info = DamageInfo(amount: dmg, type: .melee, source: .mob(m, faction(of: m)))
-		info.dirX = Double(m.dir)
-		info.knock = knock
-		info.originX = m.b.x
-		info.key = newID()
-		damageBox(x0, m.b.y - height, x1, m.b.y + 0.1, info)
-	}
-
-	func updateMobs(_ dt: Double) {
-		let t0: Double = perfNow()
-		let px: Double = pb.x
-		let py: Double = pb.y
-		let offScreen: Double = viewTilesW * 0.5 + 6.0
-		frameNo &+= 1
-		// iterated by index because AI code may append new mobs while it runs
-		var i: Int = 0
-		while i < mobs.count {
-			let m: Mob = mobs[i]
-			i += 1
-			if m.hp <= 0 || m.removed { continue }
-			let dx: Double = abs(m.b.x - px)
-			let dy: Double = abs(m.b.y - py)
-			if !m.persistent && !m.tame && !m.isBoss && (dx > 115 || dy > 85) {
-				m.removed = true
-				continue
-			}
-			// a monster nobody is fighting that stays well off-screen wanders off after a while, making
-			// room for another; at daybreak the night's hunters out of sight go back where they came from
-			if m.def.hostile && !m.persistent && !m.tame && !m.isBoss && m.boat < 0 && m.lair == 0 {
-				if (dx > offScreen || dy > 40) && m.ai != .chase {
-					m.farT += dt
-					if m.farT > ((m.hunter && !isNight) ? 4.0 : 40.0) {
-						m.removed = true
-						continue
-					}
-				} else {
-					m.farT = 0
-				}
-			}
-			if m.hurtT > 0 { m.hurtT -= dt }
-			if m.cd > 0 { m.cd -= dt }
-			if m.flash > 0 { m.flash -= dt }
-			if m.lean != 0 { m.lean *= (1.0 - min(1.0, dt * 7.0)); if abs(m.lean) < 0.01 { m.lean = 0 } }
-			if m.atkT > 0 { m.atkT -= dt }
-			if m.turnT > 0 {
-				m.turnT -= dt
-				if m.turnT <= 0 { m.turnT = 0; m.face = m.dir }
-			} else if m.face != m.dir {
-				if m.face == 0 { m.face = m.dir } else { m.turnT = Mob.turnDur }
-			}
-			if m.regrow > 0 {
-				m.regrow -= dt
-				if m.regrow <= 0 { m.sheared = false }
-			}
-			if !world.isLoaded(Int(floor(m.b.x))) { continue }
-			if m.dazeGuard > 0 { m.dazeGuard -= dt }
-			if m.daze > 0 {
-				// reeling from a club: it stands (or hangs) where it is and does nothing else
-				m.daze -= dt
-				if m.daze <= 0 { m.daze = 0; m.dazeGuard = 1.2 }
-				m.b.vx *= max(0, 1.0 - dt * 9.0)
-				if m.def.flying { m.b.vy *= max(0, 1.0 - dt * 9.0) }
-				stepMob(m, dt)
-				mobHazards(m, dt)
-				continue
-			}
-			// creatures well off screen wait until the player comes closer (saves a lot of work)
-			if !m.isBoss && !m.tame && m.boat < 0 && (dx > 72 || dy > 56) { continue }
-			// mid-distance creatures think and move at a third of the rate, staggered by id, with the
-			// skipped time folded into their next step so they still cover the same ground
-			var step: Double = dt
-			if !m.isBoss && !m.tame && m.boat < 0 && (dx > 40 || dy > 30) {
-				m.aiAccum += dt
-				if (frameNo &+ m.id) % 3 != 0 {
-					Perf.shared.countSkip()
-					continue
-				}
-				step = min(0.1, m.aiAccum)
-			}
-			m.aiAccum = 0
-			updateMob(m, step)
-			if m.hp > 0 { mobHazards(m, step) }
-		}
-		updateDying(dt)
-		// compact once: drop removed mobs and finished death animations
-		if mobs.contains(where: { $0.removed }) { mobs.removeAll { $0.removed } }
-		Perf.shared.aiMs = Perf.smooth(Perf.shared.aiMs, perfNow() - t0)
-	}
-
-	func nearestHostileTo(_ x: Double, _ y: Double, _ r: Double) -> Mob? {
-		var best: Mob? = nil
-		var bd: Double = r * r
-		for o in mobs {
-			if o.hp <= 0 || o.tame || !o.def.hostile { continue }
-			let dx: Double = o.b.x - x
-			let dy: Double = o.b.cy - y
-			let d: Double = dx * dx + dy * dy
-			if d < bd { bd = d; best = o }
-		}
-		return best
-	}
-
-	func updateMob(_ m: Mob, _ dt: Double) {
-		if m.kind == .custom {
-			updateCustomMob(m, dt)
-			return
-		}
-		let d: MobDef = m.def
-		if m.kind == .bearBoss || m.kind == .rex {
-			updateBossMob(m, dt)
-			return
-		}
-		if m.kind == .sentinel { updateSentinel(m, dt); return }
-		if m.kind == .warden { updateWarden(m, dt); return }
-		if m.boat >= 0 && updateCrew(m, dt) { return }
-		let toPX: Double = pb.x - m.b.x
-		let dist: Double = abs(toPX)
-		let dyP: Double = (pb.y - pb.h * 0.5) - m.b.cy
-		let near: Bool = dist < d.aggro && abs(dyP) < 14 && !dead
-		let peaceful: Bool = settings.peaceful
-		if m.tame {
-			updatePet(m, dt)
-			return
-		}
-		// monsters decide for themselves whether they are after the player (see think)
-		var engaged: Bool = near && !peaceful
-		if m.kind.thinks { engaged = think(m, dt, dist, dyP) }
-		switch m.kind {
-		case .custom:
-			// run by updateCustomMob (never reaches here)
-			stepMob(m, dt)
-		case .pig, .cow, .sheep, .villager:  // (villagers are retired and never appear)
-			if m.t2 > 0 {
-				m.t2 -= dt
-				flee(m, m.tx, dt, 1.9)
-			} else if !animalLife(m, dt) {
-				wander(m, dt, 0.55)
-			}
-			stepMob(m, dt)
-		case .giraffe, .chicken, .frog, .cat:
-			if m.t2 > 0 {
-				m.t2 -= dt
-				flee(m, m.tx, dt, 1.7)
-			} else if !(dist < 6.0 && !dead && m.kind != .cat) && m.kind != .cat && animalLife(m, dt) {
-				// handled: resting, heading for water or the herd
-			} else if dist < 6.0 && !dead && m.kind != .cat {
-				flee(m, pb.x, dt, 1.4)
-			} else {
-				wander(m, dt, 0.5)
-			}
-			if m.kind == .frog && m.b.onGround && m.st == 1 && Double.random(in: 0...1) < 0.04 { m.b.vy = -9; m.b.vx = Double(m.dir) * 3.5 }
-			stepMob(m, dt)
-		case .elephant, .bear, .wolf:
-			if m.drinkT > 0 && m.kind == .wolf { m.drinkT -= dt }
-			// a wolf that turns on the player forgets its prey
-			if m.angry { m.preyID = 0 }
-			if !m.angry && m.kind == .wolf && hunt(m, dt, isNight && m.drinkT <= 0) {
-				// a wolf pack runs down prey at night
-			} else if m.angry && !dead {
-				m.t3 -= dt
-				if m.t3 <= 0 || dist > 30 { m.angry = false } else {
-					chase(m, pb.x, 1.0, dt)
-					if m.kind == .wolf && m.b.onGround && dist < 4.0 && Double.random(in: 0...1) < 0.03 { m.b.vy = -12; m.b.vx = Double(m.dir) * 7.0 }
-					if peaceful { m.angry = false }
-					else { contactHurt(m, d.dmg) }
-				}
-			} else {
-				// animals are neutral: only a blow from the player makes them fight (see hurtMob)
-				wander(m, dt, 0.5)
-			}
-			stepMob(m, dt)
-		case .grizzly, .polarBear, .tiger, .scorpion:
-			if m.drinkT > 0 { m.drinkT -= dt }
-			// wild animals hunt their prey but leave the player alone, unless the player hurts them:
-			// then they fight back for a while
-			let provoked: Bool = wildProvoked(m)
-			if !(provoked && !peaceful) && m.kind != .scorpion && hunt(m, dt, m.drinkT <= 0) {
-				// hunting, or resting after a kill
-			} else if !(provoked && !peaceful) {
-				wander(m, dt, 0.4)
-			} else if !dead {
-				chase(m, pb.x, 1.0, dt)
-				if m.kind == .tiger && m.b.onGround && dist < 6.5 && dist > 2.0 && m.cd <= 0.4 && Double.random(in: 0...1) < 0.04 {
-					m.b.vy = -11.5
-					m.b.vx = Double(m.dir) * 10.0
-					m.t3 = 0.6
-				}
-				contactHurt(m, d.dmg)
-			} else {
-				wander(m, dt, 0.5)
-			}
-			stepMob(m, dt)
-		case .zombie:
-			updateZombie(m, dt, engaged, dyP)
-		case .skeleton, .pirate, .pirateCaptain:
-			updateSwordsman(m, dt, engaged, dist, dyP)
-		case .pirateGunner, .imp:
-			updateShooter(m, dt, engaged, dist, dyP)
-		case .slime, .emberSlime:
-			updateSlime(m, dt, engaged, dyP)
-		case .crow, .bat, .cinderBat, .wraith:
-			updateFlyer(m, dt, engaged, dist, dyP)
-		case .fish:
-			updateFish(m, dt)
-		case .crawler:
-			updateCrawler(m, dt, engaged, dist, dyP)
-		case .golem:
-			updateGolem(m, dt, engaged, dist, dyP)
-		case .archer:
-			updateArcher(m, dt, engaged, dist, dyP)
-		case .mimic:
-			updateMimic(m, dt, !peaceful && !dead && dist < 20, dist, dyP)
-		case .bearBoss, .rex, .sentinel, .warden:
-			break
-		}
-	}
-
-	// MARK: hostile minds
-
-	/// How far a monster's attack reaches (across, up or down) and whether it is shot from afar
-	/// How far a creature's attack reaches: a mutated creature's blows reach as far as its size
-	func attackReach(_ m: Mob) -> (Double, Double, Bool) {
-		let r: (Double, Double, Bool) = attackReachBase(m)
-		if m.mutSize <= 1.001 || r.2 { return r }
-		return (r.0 * m.mutSize, r.1 * m.mutSize, r.2)
-	}
-
-	func attackReachBase(_ m: Mob) -> (Double, Double, Bool) {
-		switch m.kind {
-		case .zombie: return (1.5, 1.7, false)
-		case .skeleton, .pirate, .pirateCaptain: return (2.0, 1.6, false)
-		case .pirateGunner, .imp: return (17.0, 9.0, true)
-		case .archer: return (18.0, 10.0, true)
-		case .crawler: return (4.6, 2.0, false)
-		case .golem: return (3.3, 2.4, false)
-		case .custom: return ModRuntime.shared.mob(m.cslot)?.reach ?? (m.b.w * 0.5 + 0.5, 1.4, false)
-		default: return (m.b.w * 0.5 + 0.5, 1.4, false)
-		}
-	}
-
-	/// A monster's senses and its plan, the same for every kind (each has its own attacks).
-	/// It notices the player by sight (a clear line from its eyes, rechecked a few times a second),
-	/// by sound up close, or by being hit; after a beat of surprise it gives chase; when the player
-	/// slips out of sight it searches where they were last seen, then goes home. Stuck against a wall
-	/// it tries one harder leap, then backs off and comes again. Night hunters spawned on the surface
-	/// roam toward the player before they have seen them. Returns whether it is after the player;
-	/// `aimX` is where it is heading.
-	func think(_ m: Mob, _ dt: Double, _ dist: Double, _ dyP: Double) -> Bool {
-		let d: MobDef = m.def
-		m.aiT += dt
-		if m.leapT > 0 { m.leapT -= dt }
-		if m.hunter && (m.kind == .skeleton || m.kind == .archer) && inSunlight(m) { m.burn = 2.0 }
-		if dead || settings.peaceful {
-			m.why = dead ? .playerGone : .peaceful
-			if m.ai != .idle && m.ai != .back { m.ai = .back; m.aiT = 0 }
-			if m.ai == .back && (abs(m.b.x - m.homeX) < 2.0 || m.aiT > 8.0) { m.ai = .idle; m.aiT = 0 }
-			m.aimX = m.homeX
-			return false
-		}
-		m.losT -= dt
-		if m.losT <= 0 {
-			// its eyes (a golem looks over a low wall) to the player's head or chest
-			m.losT = 0.18 + Double(m.id % 7) * 0.02
-			let ey: Double = m.kind == .golem ? m.b.top - 0.5 : shotY(m)
-			m.sees = m.kind == .wraith || world.lineClear(m.b.x, ey, pb.x, pb.y - pb.h * 0.6) || world.lineClear(m.b.x, ey, pb.x, pb.top + 0.2)
-			// smoke hides the player from eyes on either side of it
-			if m.sees && !smokes.isEmpty && (inSmoke(pb.x, pb.cy) || inSmoke(m.b.x, m.b.cy)) { m.sees = false }
-		}
-		// sight reaches across most of the screen (further for the night's hunters, and for one already
-		// fighting); footsteps and scent carry through walls over a shorter distance
-		let base: Double = max(d.aggro, 16.0)
-		let sight: Double = base * (m.hunter ? 1.25 : 1.0) * (m.ai == .chase ? 1.5 : 1.0)
-		let sense: Double = base * 0.7
-		let hurt: Bool = clock - m.lastHitByPlayer < 0.6
-		let heard: Bool = dist < 3.5 && abs(dyP) < 3.0
-		let detect: Bool = hurt || heard || (dist < sight && abs(dyP) < 12.0 && m.sees)
-		let sensed: Bool = dist < sense && abs(dyP) < 10.0
-		if detect || sensed {
-			m.seenX = pb.x
-			m.seenY = pb.y
-			m.lostT = 0
-		} else {
-			m.lostT += dt
-		}
-		let hunting: Bool = m.hunter && isNight && world.dim == .overworld && dist < 80
-		switch m.ai {
-		case .idle, .back:
-			if detect {
-				m.ai = hurt ? .chase : .alert
-				m.aiT = 0
-			} else if sensed {
-				// something moving nearby, out of sight: it goes to look
-				m.ai = .search
-				m.aiT = 0
-			} else if hunting {
-				// a hunter roams toward where the player is, give or take
-				m.ai = .search
-				m.aiT = 0
-				m.seenX = pb.x + Double.random(in: -6...6)
-				m.seenY = pb.y
-			}
-		case .alert:
-			if m.aiT > 0.35 { m.ai = .chase; m.aiT = 0 }
-		case .chase:
-			if m.lostT > 2.5 { m.ai = .search; m.aiT = 0 }
-		case .search:
-			if detect {
-				m.ai = .chase
-				m.aiT = 0
-			} else if sensed {
-				m.aiT = 0
-			} else if (abs(m.b.x - m.seenX) < 1.2 && m.aiT > 2.0) || m.aiT > (hunting ? 14.0 : 8.0) {
-				if hunting {
-					m.seenX = pb.x + Double.random(in: -8...8)
-					m.seenY = pb.y
-					m.aiT = 0
-				} else {
-					m.ai = .back
-					m.aiT = 0
-				}
-			}
-		case .retreat:
-			if m.aiT > 2.5 { m.ai = detect ? .chase : .search; m.aiT = 0 }
-		}
-		switch m.ai {
-		case .alert, .chase: m.aimX = pb.x
-		case .search: m.aimX = m.seenX
-		case .retreat: m.aimX = m.b.x + (m.b.x >= m.seenX ? 6.0 : -6.0)
-		case .back: m.aimX = m.homeX
-		case .idle: m.aimX = m.b.x
-		}
-		if m.ai == .back && abs(m.b.x - m.homeX) < 2.0 { m.ai = .idle; m.aiT = 0 }
-		// getting nowhere (pressed against a wall it can't get over, or hopping at it): one harder
-		// leap, then back off and come again. One already within reach of its attack is not stuck.
-		let reach: (Double, Double, Bool) = attackReach(m)
-		let inReach: Bool = dist <= reach.0 && abs(dyP) <= reach.1 && (!reach.2 || m.sees)
-		// (states 0 and 1 are walking about; 3 and up are its attacks)
-		let pushing: Bool = (m.ai == .chase || m.ai == .search) && abs(m.aimX - m.b.x) > 1.0 && m.st <= 1 && !(m.ai == .chase && inReach)
-		if pushing {
-			if abs(m.b.x - m.progX) > 0.6 {
-				m.progX = m.b.x
-				m.blockedT = max(0, m.blockedT - 0.5)
-			} else {
-				// a cactus or spikes in the way: it gives up on that much sooner
-				let ax: Int = Int(floor(m.b.x + Double(m.dir) * (m.b.w * 0.5 + 0.3)))
-				let thorny: Bool = world.tile(ax, Int(floor(m.b.y - 0.5))).hurts
-				m.blockedT += thorny ? dt * 3.0 : dt
-			}
-			// (applied in stepMob, after the creature's own moves, so its usual hop can't cancel it)
-			if !d.flying && m.blockedT > 0.9 && m.leapT <= 0 { m.leapReq = true }
-			if m.blockedT > 3.2 {
-				m.ai = .retreat
-				m.aiT = 0
-				m.blockedT = 0
-			}
-		} else if m.st <= 1 {
-			m.progX = m.b.x
-			m.blockedT = max(0, m.blockedT - dt * 0.5)
-		}
-		// the reason it is not attacking right now (shown by the AI overlay)
-		if m.ai == .retreat || m.blockedT > 0.9 { m.why = .blocked }
-		else if m.ai != .chase && m.ai != .alert { m.why = .notSeen }
-		else if dist > reach.0 { m.why = .outOfRange }
-		else if abs(dyP) > reach.1 { m.why = .tooHigh }
-		else if reach.2 && !m.sees { m.why = .noSight }
-		else if m.cd > 0 { m.why = .cooldown }
-		else { m.why = .none }
-		return m.ai != .idle && m.ai != .back
-	}
-
-	// MARK: specific AIs
-
-	/// Out in full daylight under an open sky (the undead burn)
-	func inSunlight(_ m: Mob) -> Bool {
-		return world.dim == .overworld && dayFactor > 0.7 && precipAt(m.b.x) < 0.5 && wxHere.cloud < 0.9 && world.isSkyExposed(Int(floor(m.b.x)), Int(floor(m.b.y - 1))) && !m.b.inWater
-	}
-
-	func updateZombie(_ m: Mob, _ dt: Double, _ aggro: Bool, _ dyP: Double) {
-		let d: MobDef = m.def
-		if inSunlight(m) { m.burn = 2.0 }
-		let dist: Double = abs(pb.x - m.b.x)
-		if m.st == 3 {
-			// arms drawn back: the swipe lands a moment later, so a quick step back dodges it
-			m.t3 -= dt
-			accelX(m, 0, 40, dt)
-			if m.t3 <= 0 {
-				m.st = 4
-				m.t3 = 0.25
-				mobStrike(m, reach: 1.2, height: 1.8, dmg: d.dmg, knock: 6.5)
-			}
-		} else if m.st == 4 {
-			m.t3 -= dt
-			accelX(m, 0, 40, dt)
-			if m.t3 <= 0 {
-				m.st = 0
-				m.cd = 0.9
-			}
-		} else if aggro {
-			chase(m, m.aimX, 1.0, dt)
-			if m.ai == .chase && (m.sees || dist < 1.0) && m.cd <= 0 && dist < 1.5 && abs(dyP) < 1.7 {
-				m.st = 3
-				m.t3 = 0.32
-				m.dir = pb.x >= m.b.x ? 1 : -1
-			}
-		} else {
-			wander(m, dt, 0.45)
-		}
-		stepMob(m, dt)
-	}
-
-	/// skeleton knight (shield), pirate and captain (cutlass)
-	func updateSwordsman(_ m: Mob, _ dt: Double, _ aggro: Bool, _ dist: Double, _ dyP: Double) {
-		let d: MobDef = m.def
-		let isSkel: Bool = m.kind == .skeleton
-		if m.st == 3 {
-			// wind-up
-			m.t3 -= dt
-			accelX(m, 0, 40, dt)
-			if m.t3 <= 0 {
-				m.st = 4
-				m.t3 = 0.22
-				// strike
-				mobStrike(m, reach: 2.2, height: 1.9, dmg: d.dmg, knock: 7.0)
-			}
-		} else if m.st == 4 {
-			m.t3 -= dt
-			accelX(m, 0, 40, dt)
-			if m.t3 <= 0 {
-				m.st = 0
-				m.cd = m.kind == .pirateCaptain ? 0.9 : 1.2
-			}
-		} else if aggro {
-			let sp: Double = dist > 8 ? 1.15 : 0.95
-			if isSkel {
-				// raise the shield while approaching, drop it to attack
-				m.blocking = dist > 2.4 && dist < 11 && m.ai == .chase
-				if m.ai == .chase && m.sees && dist < 2.0 && m.cd <= 0 && abs(dyP) < 1.6 {
-					m.st = 3
-					m.t3 = 0.38
-					m.blocking = false
-					m.dir = pb.x >= m.b.x ? 1 : -1
-				}
-				chase(m, m.aimX, m.blocking ? 0.7 : sp, dt)
-			} else {
-				if m.ai == .chase && m.sees && dist < 2.0 && m.cd <= 0 && abs(dyP) < 1.6 {
-					m.st = 3
-					m.t3 = 0.3
-					m.dir = pb.x >= m.b.x ? 1 : -1
-				}
-				chase(m, m.aimX, sp, dt)
-			}
-		} else {
-			m.blocking = false
-			wander(m, dt, 0.4)
-		}
-		if m.st == 0 && !aggro { m.blocking = false }
-		stepMob(m, dt)
-	}
-
-	/// pirate gunner and imp: keep range and shoot
-	func updateShooter(_ m: Mob, _ dt: Double, _ aggro: Bool, _ dist: Double, _ dyP: Double) {
-		let isImp: Bool = m.kind == .imp
-		if m.st == 3 {
-			m.t3 -= dt
-			accelX(m, 0, 40, dt)
-			m.dir = pb.x >= m.b.x ? 1 : -1
-			if m.t3 <= 0 {
-				if clearShot(m) {
-					m.st = 6
-					m.t3 = 0.18
-					shootAtPlayer(m, isImp)
-				} else if m.t3 < -0.8 {
-					m.st = 0
-					m.cd = 0.4
-					m.blockedT += 0.6
-				}
-			}
-		} else if m.st == 6 {
-			m.t3 -= dt
-			accelX(m, 0, 40, dt)
-			if m.t3 <= 0 { m.st = 0; m.cd = isImp ? 1.9 : 2.2 }
-		} else if aggro {
-			let want: Double = isImp ? 8.0 : 9.0
-			if (m.ai != .chase && m.ai != .alert) || !m.sees || m.blockedT > 0.5 || !m.b.onGround {
-				// no clear shot (or climbing for one): move in until there is one
-				chase(m, m.aimX, 0.9, dt)
-			} else if dist < want - 3.0 {
-				flee(m, pb.x, dt, 0.8)
-			} else if dist > want + 3.0 {
-				chase(m, pb.x, 0.9, dt)
-			} else {
-				accelX(m, 0, 20, dt)
-				m.dir = pb.x >= m.b.x ? 1 : -1
-			}
-			if m.ai == .chase && m.sees && m.b.onGround && m.cd <= 0 && dist < 17 && abs(dyP) < 9 {
-				m.st = 3
-				m.t3 = 0.5
-			}
-		} else {
-			wander(m, dt, 0.4)
-		}
-		stepMob(m, dt)
-	}
-
-	func shootAtPlayer(_ m: Mob, _ fire: Bool) {
-		let ox: Double = m.b.x + Double(m.dir) * 0.6
-		let oy: Double = shotY(m)
-		var dx: Double = pb.x - ox
-		var dy: Double = shotAimY(m) - oy
-		let len: Double = max(0.001, sqrt(dx * dx + dy * dy))
-		dx /= len
-		dy /= len
-		let sp: Double = fire ? 11.0 : 20.0
-		var p = Projectile(kind: fire ? .fireball : .bullet, x: ox, y: oy, vx: dx * sp, vy: dy * sp, dmg: m.def.dmg, fromPlayer: false, gravity: 0)
-		p.life = 3.0
-		p.owner = m.id
-		p.source = .mob(m, faction(of: m))
-		p.uid = newID()
-		projectiles.append(p)
-		spawnParticles(ox, oy, fire ? 0xFF7020 : 0xFFE080, 4, 2.5, 0.18, 0)
-	}
-
-	func updateSlime(_ m: Mob, _ dt: Double, _ aggro: Bool, _ dyP: Double) {
-		let d: MobDef = m.def
-		m.t1 -= dt
-		if m.b.onGround {
-			m.b.vx *= 0.8
-			if m.t1 <= 0 {
-				if aggro {
-					let dirX: Double = m.aimX >= m.b.x ? 1.0 : -1.0
-					m.dir = Int(dirX)
-					m.b.vy = -d.jump
-					m.b.vx = dirX * d.speed * 1.6
-					m.t1 = Double.random(in: 0.7...1.3)
-				} else {
-					m.dir = Bool.random() ? 1 : -1
-					m.b.vy = -8.5
-					m.b.vx = Double(m.dir) * 2.0
-					m.t1 = Double.random(in: 1.5...3.5)
-				}
-			}
-		}
-		if aggro && !m.b.onGround {
-			// a little steering in mid-hop, so a bounce at a wall carries over it
-			accelX(m, (m.aimX >= m.b.x ? 1.0 : -1.0) * d.speed * 1.6, 5, dt)
-		}
-		if m.kind == .emberSlime && Double.random(in: 0...1) < 0.1 {
-			spawnParticles(m.b.x, m.b.y - 0.4, 0xFF8A20, 1, 1.2, 0.4, -3)
-		}
-		if aggro && m.ai == .chase { contactHurt(m, d.dmg) }
-		stepMob(m, dt)
-	}
-
-	func updateFlyer(_ m: Mob, _ dt: Double, _ aggro: Bool, _ dist: Double, _ dyP: Double) {
-		let d: MobDef = m.def
-		m.anim += dt * 8.0
-		var tx: Double = m.homeX
-		var ty: Double = m.homeY
-		var spd: Double = d.speed * 0.6
-		if m.kind == .crow {
-			// wander around home; flee when approached
-			m.t1 -= dt
-			if m.t1 <= 0 {
-				m.t1 = Double.random(in: 2...5)
-				m.tx = m.homeX + Double.random(in: -12...12)
-				let gy: Double = Double(world.surfaceY(Int(floor(m.tx))))
-				m.ty = gy - Double.random(in: 3...8)
-			}
-			tx = m.tx
-			ty = m.ty
-			if dist < 5.0 && !dead {
-				tx = m.b.x + (m.b.x - pb.x) * 3
-				ty = m.b.y - 6
-				spd = d.speed * 1.4
-			}
-		} else if aggro {
-			tx = m.aimX
-			ty = (m.ai == .chase ? pb.y : m.seenY) - 1.3 + sin(clock * 3.0 + Double(m.id)) * 1.2
-			spd = d.speed
-		} else {
-			m.t1 -= dt
-			if m.t1 <= 0 {
-				m.t1 = Double.random(in: 1.5...4)
-				m.tx = m.b.x + Double.random(in: -8...8)
-				m.ty = m.b.y + Double.random(in: -4...4)
-			}
-			tx = m.tx
-			ty = m.ty
-		}
-		var ax: Double = tx - m.b.x
-		var ay: Double = ty - m.b.y
-		let len: Double = max(0.001, sqrt(ax * ax + ay * ay))
-		ax /= len
-		ay /= len
-		m.b.vx += (ax * spd - m.b.vx) * min(1.0, dt * 4.0)
-		m.b.vy += (ay * spd - m.b.vy) * min(1.0, dt * 4.0)
-		if abs(m.b.vx) > 0.3 { m.dir = m.b.vx > 0 ? 1 : -1 }
-		if m.kind == .wraith {
-			// drifts through walls, slower inside solid tiles
-			let inside: Bool = world.solid(Int(floor(m.b.x)), Int(floor(m.b.y - 0.7)))
-			let k: Double = inside ? 0.5 : 1.0
-			m.b.x += m.b.vx * dt * k
-			m.b.y += m.b.vy * dt * k
-		} else {
-			world.moveBody(&m.b, dt, stepUp: 0, dropThrough: false, decks: [])
-			if m.b.hitWall || m.b.hitCeil || m.b.onGround { m.b.vy = -1.0; m.t1 = 0 }
-		}
-		if aggro && m.kind != .crow && m.ai == .chase { contactHurt(m, d.dmg) }
-	}
-
-	func updateFish(_ m: Mob, _ dt: Double) {
-		m.anim += dt * 6.0
-		if !m.b.inWater {
-			// flopping on land
-			m.b.vy = min(m.b.vy + gravityG * dt, terminalV)
-			world.moveBody(&m.b, dt, stepUp: 0, dropThrough: false, decks: [])
-			m.t2 += dt
-			if m.t2 > 1.0 { m.t2 = 0; hurtMob(m, 1, 0, 0, false) }
-			return
-		}
-		m.t1 -= dt
-		if m.t1 <= 0 {
-			m.t1 = Double.random(in: 1.5...4)
-			m.tx = m.b.x + Double.random(in: -8...8)
-			m.ty = m.b.y + Double.random(in: -3...3)
-		}
-		if abs(pb.x - m.b.x) < 4 && abs(pb.y - m.b.y) < 3 && pb.inWater {
-			m.tx = m.b.x + (m.b.x - pb.x) * 3
-			m.ty = m.b.y + (m.b.y - pb.y) * 2
-		}
-		var ax: Double = m.tx - m.b.x
-		var ay: Double = m.ty - m.b.y
-		let len: Double = max(0.001, sqrt(ax * ax + ay * ay))
-		ax /= len
-		ay /= len
-		let sp: Double = m.def.speed
-		m.b.vx += (ax * sp - m.b.vx) * min(1.0, dt * 3.0)
-		m.b.vy += (ay * sp * 0.6 - m.b.vy) * min(1.0, dt * 3.0)
-		if abs(m.b.vx) > 0.2 { m.dir = m.b.vx > 0 ? 1 : -1 }
-		let nx: Double = m.b.x + m.b.vx * dt
-		let ny: Double = m.b.y + m.b.vy * dt
-		let tx: Int = Int(floor(nx))
-		let ty: Int = Int(floor(ny - 0.2))
-		if world.tile(tx, ty) == .water && world.tile(tx, Int(floor(ny))) != .air {
-			m.b.x = nx
-			m.b.y = ny
-		} else {
-			m.t1 = 0
-			m.b.vx = -m.b.vx
-			m.b.vy = -m.b.vy
-		}
-		let hw: Double = m.b.w * 0.5
-		m.b.inWater = world.liquidFraction(m.b.x - hw, m.b.y - m.b.h, m.b.x + hw, m.b.y, false) > 0.3
-	}
-
-	// MARK: pets
-
-	func updatePet(_ m: Mob, _ dt: Double) {
-		let d: MobDef = m.def
-		let toP: Double = pb.x - m.b.x
-		let dist: Double = abs(toP)
-		if dist > 45 || abs(pb.y - m.b.y) > 30 {
-			m.b.x = pb.x - Double(facing) * 1.5
-			m.b.y = pb.y
-			m.b.vx = 0
-			m.b.vy = 0
-			return
-		}
-		if m.st == 7 {
-			accelX(m, 0, 20, dt)
-			stepMob(m, dt)
-			return
-		}
-		// attack nearby hostiles
-		var target: Mob? = nil
-		if m.kind == .wolf {
-			target = nearestHostileTo(pb.x, pb.y - 1, 9.0)
-		}
-		if let t = target, t.hp > 0 {
-			chase(m, t.b.x, 1.2, dt)
-			if m.cd <= 0 && abs(t.b.x - m.b.x) < 1.6 && abs(t.b.cy - m.b.cy) < 1.5 {
-				hurtMob(t, 7, Double(m.dir), 5.0, true)
-				m.cd = 0.7
-			}
-		} else if dist > 3.5 {
-			let sp: Double = dist > 12 ? 1.8 : 1.15
-			chase(m, pb.x, sp, dt)
-		} else {
-			accelX(m, 0, 20, dt)
-		}
-		_ = d
-		stepMob(m, dt)
-	}
-
-	func tryTame(_ m: Mob) -> Bool {
-		if m.tame { return false }
-		guard let it = heldItem else { return false }
-		var ok: Bool = false
-		if m.kind == .wolf, case .mat(let mm) = it, mm == .bone { ok = true }
-		if m.kind == .cat, case .food(let f) = it, f == .rawFish || f == .cookedFish { ok = true }
-		if !ok { return false }
-		if !isCreative { inv.removeAt(sel, 1) }
-		if Double.random(in: 0...1) < 0.6 {
-			m.tame = true
-			m.persistent = true
-			m.angry = false
-			m.hp = m.maxHP
-			say("You tamed the " + m.def.name.lowercased() + "!", 3.0)
-			spawnParticles(m.b.x, m.b.y - 1, 0xFF6080, 10, 3.0, 0.8, -4)
-		} else {
-			say("The " + m.def.name.lowercased() + " isn't convinced yet...", 2.0)
-		}
-		useCD = 0.5
-		bumpHUD()
-		return true
-	}
-}
-
-// ===== p15b_spawn =====
-
-// MARK: - Mob spawning
-
-extension Game {
-	/// Notes how a spawn attempt ended (the debug panel shows the tally)
-	func spawnNote(_ s: String) {
-		spawnLast = s
-		if spawnLog.count < 40 || spawnLog[s] != nil { spawnLog[s, default: 0] += 1 }
-	}
-
-	/// The most lamplight a monster may come out in (0...15). A torch (12) keeps them off the ground
-	/// about seven blocks round it in the open, less where walls or ground stand in the way.
-	static let spawnGlowMax: Int = 4
-
-	/// The light at a creature's two cells above its feet at (x, feetY), worked out by the game's own
-	/// light flood over the ground around it, on screen or not: (sky light, light of glowing blocks).
-	/// Torches, lanterns, campfires, lamps, glowing mod blocks and every other light-giving block count,
-	/// fading with distance and held back by walls and ground; a torch in the player's hand does not.
-	func lightForSpawn(_ x: Int, _ feetY: Int) -> (Int, Int) {
-		if !spawnLight.covers(x - 1, feetY - 3, x + 1, feetY) || spawnLight.stamp != world.version || spawnLight.skyUsed != skyLevel || spawnLight.dimUsed != world.dim.rawValue {
-			let r: Int = 18
-			spawnLight.compute(world, x - r, feetY - r, r * 2 + 1, r * 2 + 1, skyLevel, [], noteSeen: false)
-		}
-		let a: (Int, Int) = spawnLight.level(x, feetY - 1)
-		let b: (Int, Int) = spawnLight.level(x, feetY - 2)
-		return (max(a.0, b.0), max(a.1, b.1))
-	}
-
-	/// Ground monsters can come out on: earth, sand, snow and rock, never planks, brick, glass or other
-	/// building blocks (so not on the roof or floor of a house)
-	func naturalGround(_ t: Tile) -> Bool {
-		switch t {
-		case .grass, .dirt, .stone, .sand, .snow, .ice, .sandstone, .mud, .dryGrass, .jungleGrass, .mossGrass,
-			 .slate, .deepRock, .obsidian, .ashStone, .farmland, .coal, .copper, .iron, .tin, .saltpeter: return true
-		default: return false
-		}
-	}
-
-	/// How many monsters may be about at once (surface or underground) at this night-danger setting
-	func monsterCap(_ place: SpawnPlace) -> Int {
-		let d: Int = clampI(settings.nightDanger, 0, 2)
-		if place == .surface || place == .ocean { return [3, 6, 10][d] }
-		return [6, 9, 12][d]
-	}
-
-	func updateSpawning(_ dt: Double) {
-		if monsterSpawnCD > 0 { monsterSpawnCD -= dt }
-		spawnTimer -= dt
-		if spawnTimer > 0 { return }
-		spawnTimer = Double.random(in: 0.45...1.0)
-		if dead { return }
-		var passive: Int = 0
-		var hostile: Int = 0
-		var predators: Int = 0
-		var aquatic: Int = 0
-		for m in mobs {
-			if m.hp <= 0 || m.removed || m.tame || m.persistent { continue }
-			let dx: Double = abs(m.b.x - pb.x)
-			if dx > 100 { continue }
-			if m.kind == .fish { aquatic += 1 }
-			else if m.def.hostile {
-				// only creatures still in play hold a place: bosses, lair guards and crews have their own
-				// rules, and one standing frozen far off-screen is about to leave
-				if m.isBoss || m.boat >= 0 || m.lair != 0 || dx > 72 || abs(m.b.y - pb.y) > 56 { continue }
-				if m.kind.isPredator { predators += 1 } else { hostile += 1 }
-			}
-			else { passive += 1 }
-		}
-		let px: Int = Int(floor(pb.x))
-		var place: SpawnPlace = .surface
-		if world.dim == .umbral {
-			place = .umbral
-		} else {
-			let sh: Int = world.dim.isCustom ? customSurface(px) : gen.col(px).h
-			let open: Bool = world.isSkyExposed(px, Int(pb.y) - 1)
-			let depth: Int = Int(pb.y) - sh
-			if depth > 18 && !open { place = .cave }
-		}
-		// just past the edge of the screen, so what comes is soon in sight
-		let half: Double = viewTilesW * 0.5 + 3.0
-		let side: Double = Bool.random() ? 1.0 : -1.0
-		let sx: Double = pb.x + side * (half + Double.random(in: 1...16))
-		let ix: Int = Int(floor(sx))
-		if !world.isLoaded(ix) { spawnNote("spot not loaded"); return }
-		if !gen.infinite && (ix < 4 || ix > gen.width - 5) { return }
-		var sy: Double = 0
-		var eff: SpawnPlace = place
-		if place == .surface {
-			let h: Int = world.surfaceY(ix)
-			let ht: Tile = world.tile(ix, h)
-			if ht.liquid {
-				eff = .ocean
-				var wy: Int = h + 1
-				var dep: Int = 0
-				while world.tile(ix, wy) == .water && dep < 40 { wy += 1; dep += 1 }
-				if dep < 5 { spawnNote("shallow water"); return }
-				sy = Double(h + 2 + Int.random(in: 0..<max(1, dep - 3)))
-			} else if ht.solid {
-				if world.solid(ix, h - 1) || world.solid(ix, h - 2) || world.tile(ix, h - 1).liquid { spawnNote("no headroom"); return }
-				sy = Double(h)
-			} else { spawnNote("no ground"); return }
-		} else {
-			let startY: Int = Int(pb.y) + Int.random(in: -20...20)
-			var found: Bool = false
-			var y: Int = startY
-			var tries: Int = 0
-			while tries < 22 {
-				if !world.solid(ix, y) && !world.solid(ix, y - 1) && !world.solid(ix, y - 2) && world.solid(ix, y + 1) && !world.tile(ix, y).liquid {
-					found = true
-					break
-				}
-				y += 1
-				tries += 1
-			}
-			if !found { spawnNote("no floor"); return }
-			if place == .cave && world.isSkyExposed(ix, y) { spawnNote("open sky"); return }
-			// lamplight, or daylight reaching in from a cave mouth
-			let lit: (Int, Int) = lightForSpawn(ix, y + 1)
-			if lit.1 > Game.spawnGlowMax || lit.0 > 6 { spawnNote("too bright"); return }
-			sy = Double(y + 1)
-		}
-		let biome: Biome = biomeAt(Double(ix))
-		// under a dark storm by day, now and then the night's creatures come out too
-		let stormDark: Bool = world.dim == .overworld && settings.weatherOn && wxHere.cloud > 0.9 && wxHere.precip > 0.6 && Double.random(in: 0...1) < 0.35
-		let night: Bool = isNight || stormDark
-		// on the surface, monsters stay out of lamplight, off roofs and away from ground far above or
-		// below the player (somewhere they could never reach them from)
-		var monsterBlock: String = ""
-		if eff == .surface {
-			let gy: Int = Int(sy)
-			if lightForSpawn(ix, gy).1 > Game.spawnGlowMax { monsterBlock = "lit by a lamp" }
-			else if !naturalGround(world.tile(ix, gy)) { monsterBlock = "on a building" }
-			else if abs(sy - pb.y) > 30 { monsterBlock = "out of reach" }
-			else if monsterSpawnCD > 0 { monsterBlock = "pacing" }
-		}
-		let cap: Int = monsterCap(eff)
-		var capped: Bool = false
-		var cands: [SpawnRule] = []
-		var total: Double = 0
-		// the custom creatures of the world's mods spawn by the same rules, beside the game's own
-		let rt: ModRuntime = ModRuntime.shared
-		// a custom dimension has only its own creatures
-		let rules: [SpawnRule] = world.dim.isCustom ? (customDim?.spawnRules ?? []) : (rt.spawnRules.isEmpty ? spawnRules : spawnRules + rt.spawnRules)
-		var customN: Int = -1
-		for r in rules {
-			if r.place != eff { continue }
-			if r.when == .day && night { continue }
-			if r.when == .night && !night { continue }
-			if !r.biomes.isEmpty && !r.biomes.contains(biome) { continue }
-			if eff == .cave || eff == .umbral || r.slot >= 0 {
-				if Int(sy) < r.minY || Int(sy) > r.maxY { continue }
-			}
-			var d: MobDef = mobDef(r.kind)
-			if r.slot >= 0 {
-				guard let cr = rt.mob(r.slot) else { continue }
-				d = cr.mdef
-				if customN < 0 { customN = customMobCount() }
-				if customN >= ModLimits.maxActiveMobs || customNearby(r.slot) >= r.maxNearby { continue }
-			}
-			if d.hostile {
-				if !monstersEnabled || settings.peaceful { continue }
-				if r.kind.isPredator {
-					// wild predators have their own small number and come by day too
-					if predators >= 3 { continue }
-				} else {
-					if hostile >= cap { capped = true; continue }
-					if !monsterBlock.isEmpty { continue }
-				}
-			} else if r.kind == .fish || (r.slot >= 0 && r.place == .ocean) {
-				if aquatic >= 9 { continue }
-			} else {
-				if passive >= 9 { continue }
-			}
-			cands.append(r)
-			total += r.weight
-		}
-		if cands.isEmpty || total <= 0 {
-			if capped { spawnNote("monster limit reached") }
-			else if !monsterBlock.isEmpty && night { spawnNote(monsterBlock) }
-			else { spawnNote(night ? "nothing for this place" : "nothing for this place by day") }
-			return
-		}
-		var pick: Double = Double.random(in: 0..<total)
-		var chosen: SpawnRule = cands[0]
-		for r in cands {
-			pick -= r.weight
-			if pick <= 0 { chosen = r; break }
-		}
-		let def: MobDef = chosen.slot >= 0 ? (rt.mob(chosen.slot)?.mdef ?? mobDef(chosen.kind)) : mobDef(chosen.kind)
-		let monster: Bool = def.hostile && !chosen.kind.isPredator
-		var n: Int = 1 + Int.random(in: 0..<max(1, chosen.group))
-		if monster { n = min(n, cap - hostile) }
-		var made: Int = 0
-		for k in 0..<n {
-			let ox: Double = Double(k) * 1.1 * side + Double.random(in: -0.4...0.4)
-			let x: Double = sx + ox
-			var y: Double = sy
-			// every member finds its own footing: the ground in its own column on the surface, and
-			// nobody appears inside a wall or hanging over a drop
-			if eff == .surface && !def.flying {
-				let gyS: Int = world.surfaceY(Int(floor(x)))
-				if world.tile(Int(floor(x)), gyS).liquid || abs(gyS - Int(sy)) > 3 { continue }
-				y = Double(gyS)
-			}
-			if def.flying && eff != .ocean { y -= chosen.sky ? Double.random(in: 7...14) : Double.random(in: 1...3) }
-			// each monster of a group only comes out where it is dark enough itself
-			if monster && eff != .ocean && lightForSpawn(Int(floor(x)), Int(floor(y))).1 > Game.spawnGlowMax { continue }
-			if eff != .ocean && !spawnSpotClear(def, x, y) { continue }
-			var made1: Mob? = nil
-			if chosen.slot >= 0 { made1 = addCustomMob(chosen.slot, x, y) } else { made1 = addMob(chosen.kind, x, y) }
-			guard let m = made1 else { continue }
-			m.homeX = x
-			m.homeY = y
-			// the night's monsters on the surface come looking for the player
-			if monster && eff == .surface && night { m.hunter = true }
-			if chosen.kind == .sheep && Double.random(in: 0...1) < 0.1 { m.sheared = true }
-			made += 1
-		}
-		if made == 0 { spawnNote("no room to stand"); return }
-		spawnNote(joinText("spawned ", def.name))
-		if monster && eff == .surface {
-			let d: Int = clampI(settings.nightDanger, 0, 2)
-			monsterSpawnCD = [8.0, 4.0, 2.0][d] * Double.random(in: 0.8...1.25)
-		}
-	}
-
-	/// How many of one custom creature are about near the player
-	func customNearby(_ slot: Int) -> Int {
-		var n: Int = 0
-		for m in mobs where m.kind == .custom && m.cslot == slot && m.hp > 0 && !m.removed && abs(m.b.x - pb.x) < 100 { n += 1 }
-		return n
-	}
-
-	/// Room for a creature of this size standing at (x, y): no solid tile inside its box, and (unless it
-	/// flies) something to stand on under its feet
-	func spawnSpotClear(_ d: MobDef, _ x: Double, _ y: Double) -> Bool {
-		let hw: Double = d.w * 0.5
-		if world.boxSolid(x - hw + 0.02, y - d.h, x + hw - 0.02, y - 0.05) { return false }
-		if d.flying { return true }
-		let gy: Int = Int(floor(y + 0.05))
-		let l: Int = Int(floor(x - hw + 0.05))
-		let r: Int = Int(floor(x + hw - 0.05))
-		var footing: Int = 0
-		for tx in l...r where world.solid(tx, gy) || world.tile(tx, gy).isPlatform { footing += 1 }
-		return footing * 2 >= (r - l + 1)
-	}
-}
-
-// ===== p16a_combat =====
-
-// MARK: - Combat: damage, death, projectiles, drops, particles
-
-extension Game {
-	func hurtMob(_ m: Mob, _ dmg: Double, _ dirX: Double, _ knock: Double, _ byPlayer: Bool, heavy: Bool = false, crit: Bool = false) {
-		if m.hp <= 0 { return }
-		if m.kind == .rex && m.tame && byPlayer { return }
-		// a wild animal remembers being hurt by the player (it fights back, see wildProvoked)
-		if byPlayer { m.lastHitByPlayer = clock }
-		var d: Double = dmg
-		var kb: Double = knock
-		if m.blocking && m.kind == .skeleton && dirX != 0 && dirX * Double(m.dir) < 0 {
-			if heavy {
-				// a hammer blow knocks the shield aside and leaves the skeleton open for a moment
-				m.blocking = false
-				m.cd = max(m.cd, 0.9)
-				spawnParticles(m.b.x - Double(m.dir) * 0.5, m.b.y - 1.0, 0xFFF0C0, 8, 5.0, 0.25, 0)
-				floatText("Guard broken", m.b.x, m.b.top - 0.4, 0xFFD080)
-			} else {
-				d *= 0.1
-				kb *= 0.25
-				spawnParticles(m.b.x - Double(m.dir) * 0.5, m.b.y - 1.0, 0xE8F0FF, 5, 4.0, 0.2, 0)
-				floatText("Blocked", m.b.x, m.b.top - 0.4, 0xA0C0FF)
-			}
-		}
-		if d < 0.5 { d = 0.5 }
-		m.hp -= d
-		m.hurtT = 0.22
-		m.flash = 0.12
-		if dirX != 0 && kb > 0 { m.lean = clampD(dirX * kb / 9.0, -1, 1) }
-		var resist: Double = m.isBoss ? 0.97 : (m.def.w > 2.0 ? 0.6 : 0.0)
-		if m.kind == .golem { resist = heavy ? 0.45 : 0.88 }
-		if m.kind == .custom, let r = ModRuntime.shared.mob(m.cslot) { resist = max(resist, clampD(r.def.knockResist, 0, 1)) }
-		if dirX != 0 && kb > 0 {
-			m.b.vx = dirX * kb * (1.0 - resist)
-			if resist < 0.9 { m.b.vy = min(m.b.vy, -3.5) }
-		}
-		if crit && byPlayer {
-			floatText(String(Int(d.rounded())) + "!", m.b.x, m.b.top - 0.35, 0xFFE040)
-		} else {
-			floatText(String(Int(d.rounded())), m.b.x, m.b.top - 0.2, byPlayer ? 0xFFFFFF : 0xFFAA40)
-		}
-		spawnParticles(m.b.x, m.b.cy, m.kind == .skeleton ? 0xE8E8E0 : 0xB02828, 4, 3.0, 0.4, 14)
-		switch m.def.behavior {
-		case .passive, .skittish:
-			m.t2 = 3.5
-			m.tx = m.b.x - (dirX == 0 ? 1.0 : dirX) * 6.0
-		case .defensive:
-			// animals only hold a grudge against the player; hurt by anything else they just bolt
-			if !byPlayer { break }
-			m.angry = true
-			m.t3 = 10.0
-			if m.kind == .wolf {
-				for o in mobs where o.kind == .wolf && !o.tame && abs(o.b.x - m.b.x) < 16 {
-					o.angry = true
-					o.t3 = 12.0
-				}
-			}
-		default: break
-		}
-		if m.boat >= 0 { alertShip(m.boat) }
-		if m.kind == .custom && !logicRT.isEmpty, let r = ModRuntime.shared.mob(m.cslot) { fireLogic(.hurt, mob: m, key: r.key) }
-		if m.hp <= 0 { killMob(m, byPlayer) }
-	}
-
-	func killMob(_ m: Mob, _ byPlayer: Bool) {
-		if m.kind == .rex && m.tame {
-			downRex(m)
-			return
-		}
-		m.hp = 0
-		m.deathT = 0
-		m.burn = 0
-		// a creature the player hit recently still counts as the player's kill if lava, a fall or
-		// another creature finishes it off
-		let credit: Bool = byPlayer || clock - m.lastHitByPlayer < 6.0
-		var rng = RNG(UInt64(truncatingIfNeeded: m.id) &* 6364136223846793005 &+ UInt64(truncatingIfNeeded: Int(clock * 1000)))
-		for s in mobDrops(m.kind, &rng, m.sheared) {
-			spawnDrop(s, m.b.x, m.b.y - m.b.h * 0.5, Double.random(in: -2...2), -4.5)
-		}
-		if m.kind == .custom { dropModLoot(m, &rng) }
-		if m.kind == .custom && !logicRT.isEmpty, let r = ModRuntime.shared.mob(m.cslot) { fireLogic(.dies, mob: m, key: r.key) }
-		for s in alchemyDrops(m, &rng, credit) {
-			spawnDrop(s, m.b.x, m.b.y - m.b.h * 0.5, Double.random(in: -2...2), -4.5)
-		}
-		var col: UInt32 = 0xB02828
-		if m.kind == .skeleton { col = 0xE8E8E0 }
-		if m.kind == .slime { col = 0x60C060 }
-		if m.kind == .emberSlime { col = 0xFF8A20 }
-		spawnParticles(m.b.x, m.b.cy, col, Int(10 + m.b.w * 4), 5.0, 0.7, 14)
-		if credit { kills += 1 }
-		if m.kind == .bearBoss { onBearDefeated(m) }
-		if m.kind == .rex { onRexDefeated(m) }
-		if m.kind == .sentinel || m.kind == .warden { onGuardianDefeated(m) }
-		for s in m.loot { spawnDrop(s, m.b.x, m.b.y - m.b.h * 0.5, Double.random(in: -2.5...2.5), -5.0) }
-		m.loot = []
-		if m === activeBoss { activeBoss = nil }
-		bumpHUD()
-	}
-
-	func addMob(_ kind: MobKind, _ x: Double, _ y: Double) -> Mob {
-		let m = Mob(id: newID(), kind: kind, x: x, y: y)
-		if kind == .zombie { m.variant = Int.random(in: 0...2) }
-		if mobHealthMult != 1.0 {
-			m.maxHP *= mobHealthMult
-			m.hp = m.maxHP
-		}
-		mobs.append(m)
-		return m
-	}
-
-	// MARK: projectiles
-
-	/// Steps every projectile. Collision is swept along the whole frame's movement, so fast arrows and
-	/// bullets cannot skip over a target between frames, and the first thing along the path is hit.
-	func updateProjectiles(_ dt: Double) {
-		if projectiles.isEmpty { return }
-		let list: [Projectile] = projectiles
-		// projectiles created while stepping (none today, but explosions could) land in the fresh array
-		projectiles = []
-		var keep: [Projectile] = []
-		keep.reserveCapacity(list.count)
-		for p0 in list {
-			var p: Projectile = p0
-			if stepProjectile(&p, dt) { keep.append(p) }
-		}
-		if !projectiles.isEmpty { keep.append(contentsOf: projectiles) }
-		projectiles = keep
-	}
-
-	/// Returns false when the projectile is used up
-	func stepProjectile(_ p: inout Projectile, _ dt: Double) -> Bool {
-		p.life -= dt
-		if p.life <= 0 {
-			if p.mod >= 0 { modShotLanded(p, p.x, p.y, mob: nil, player: false) }
-			if p.kind == .bomb { explode(p.x, p.y, radius: 3.4, power: p.dmg, source: p.source, breakBlocks: true) }
-			if p.kind == .shell { shellBurst(p, p.x, p.y) }
-			if p.kind == .flask { burstFlaskOrPotion(p, p.x, p.y, nil) }
-			return false
-		}
-		if p.stuck > 0 {
-			p.stuck -= dt
-			if p.stuck <= 0 && (p.kind == .arrow || p.kind == .quarrel) && p.source.kind == .player && !isCreative && Double.random(in: 0...1) < 0.35 {
-				// some arrows and bolts survive and can be picked back up
-				spawnDrop(Stack(item: .ammo(p.kind == .arrow ? .arrow : .bolt), count: 1), p.x, p.y, 0, -1)
-			}
-			return p.stuck > 0
-		}
-		if p.kind == .shock { return stepShock(&p, dt) }
-		p.vy = min(p.vy + p.gravity * dt, 40.0)
-		let nx: Double = p.x + p.vx * dt
-		let ny: Double = p.y + p.vy * dt
-		// first solid tile along the path
-		var wallT: Double = 2.0
-		var wallTile: (Int, Int) = (0, 0)
-		if let hit = world.segmentSolidT(p.x, p.y, nx, ny) {
-			wallT = hit.2
-			wallTile = (hit.0, hit.1)
-		}
-		// a vehicle's parts stop shots aimed at it (the player's own shots pass their vehicles)
-		var vehHit: VehicleHit? = nil
-		if !vehicles.isEmpty && p.kind != .bomb { vehHit = vehicleOnPath(p, nx, ny, maxT: wallT) }
-		let entityMax: Double = vehHit?.t ?? wallT
-		// first creature (or the player) along the path, before the wall
-		if p.kind != .bomb {
-			if let target = firstEntityOnPath(p, nx, ny, maxT: entityMax) {
-				let hx: Double = p.x + (nx - p.x) * target.t
-				let hy: Double = p.y + (ny - p.y) * target.t
-				if p.kind == .flask {
-					burstFlaskOrPotion(p, hx, hy, target.mob)
-					return false
-				}
-				if p.kind == .shell {
-					shellBurst(p, hx, hy)
-					return false
-				}
-				let dirx: Double = p.vx >= 0 ? 1.0 : -1.0
-				var info = DamageInfo(amount: p.dmg, type: .projectile, source: p.source)
-				info.dirX = dirx
-				info.knock = p.knock > 0 ? p.knock : (p.kind == .bullet ? 4.0 : (p.kind == .arrow ? 3.5 : 3.0))
-				info.originX = p.x
-				info.originY = p.y
-				info.key = p.uid
-				info.cooldown = 1.0
-				if p.kind == .fireball { info.type = .fire }
-				if let m = target.mob {
-					if applyMobDamage(m, info) {
-						if p.mod >= 0 {
-							let s: ModProjectile? = p.mod < ModRuntime.shared.shots.count ? ModRuntime.shared.shots[p.mod] : nil
-							if let sh = s, sh.explode > 0 {
-								modShotLanded(p, hx, hy, mob: m, player: false)
-								return false
-							}
-							if let sh = s, sh.burn > 0 { m.burn = max(m.burn, sh.burn) }
-						}
-						if p.kind == .fireball { m.burn = max(m.burn, 2.5) }
-						if p.inf != 0 || !p.custom.isEmpty { shotInfusionHit(p, m, hx, hy) }
-						spawnParticles(hx, hy, p.kind == .fireball ? 0xFF8030 : 0xE8E0D0, 3, 2.5, 0.25, 8)
-						if p.source.kind == .player {
-							// a clear "it landed" for the player's own shots
-							sfx(.arrowHit, 0.55)
-							lockTarget = m
-							lockT = 2.0
-						}
-					}
-					p.lastHit = m.id
-				} else {
-					_ = hurtPlayer(info)
-					if p.mod >= 0 {
-						modShotLanded(p, hx, hy, mob: nil, player: true)
-						return false
-					}
-					if p.kind == .fireball { playerBurn = max(playerBurn, 1.5); spawnParticles(hx, hy, 0xFF8030, 8, 4.0, 0.4, 6) }
-				}
-				if p.pierce > 0 && target.mob != nil {
-					p.pierce -= 1
-					p.dmg *= 0.7
-				} else {
-					return false
-				}
-			}
-		}
-		if let vh = vehHit {
-			shotHitsVehicle(p, vh, p.x + (nx - p.x) * vh.t, p.y + (ny - p.y) * vh.t)
-			return false
-		}
-		if wallT <= 1.0 {
-			let hx: Double = p.x + (nx - p.x) * wallT
-			let hy: Double = p.y + (ny - p.y) * wallT
-			if p.mod >= 0 {
-				modShotLanded(p, hx, hy, mob: nil, player: false)
-				return false
-			}
-			if p.inf & 4 != 0 { volatileBurst(hx, hy) }
-			switch p.kind {
-			case .flask:
-				burstFlaskOrPotion(p, hx, hy, nil)
-				return false
-			case .pebble:
-				spawnParticles(hx, hy, 0x9A9A9A, 4, 2.5, 0.3, 14)
-				return false
-			case .arrow, .quarrel:
-				// stick into the block, nudged back out of it slightly so it reads as embedded
-				p.x = hx - p.vx * 0.004
-				p.y = hy - p.vy * 0.004
-				p.stuckAngle = atan2(p.vy, p.vx)
-				p.vx = 0
-				p.vy = 0
-				p.stuck = 4.0
-				p.gravity = 0
-				spawnParticles(hx, hy, 0xA0A0A0, 2, 1.5, 0.2, 8)
-				return true
-			case .rock:
-				rockImpact(p, hx, hy)
-				return false
-			case .shell:
-				shellBurst(p, hx - p.vx * 0.004, hy - p.vy * 0.004)
-				return false
-			case .bomb:
-				// bounce off the face it struck, losing energy, and come to rest on top of the ground
-				// (it used to work its way into the floor and go off inside the rock)
-				let tx: Double = Double(wallTile.0)
-				let ty: Double = Double(wallTile.1)
-				let onTop: Bool = abs(hy - ty) < 0.02 && p.vy > 0
-				let onBottom: Bool = abs(hy - (ty + 1.0)) < 0.02 && p.vy < 0
-				if onTop || onBottom {
-					// the ground grips it: it settles close to where it came down
-					p.vy = -p.vy * 0.35
-					p.vx *= onTop ? 0.4 : 0.7
-					p.x = hx
-					p.y = onTop ? ty - 0.02 : ty + 1.02
-					if onTop && abs(p.vy) < 1.5 { p.vy = 0; p.vx *= 0.6 }
-				} else {
-					p.vx = -p.vx * 0.45
-					p.x = p.vx < 0 ? tx - 0.02 : tx + 1.02
-					p.y = hy
-				}
-				if world.solid(Int(floor(p.x)), Int(floor(p.y))) { p.y = Double(world.groundBelow(Int(floor(p.x)), Int(floor(p.y)) - 4)) - 0.02 }
-				return true
-			default:
-				spawnParticles(hx, hy, p.kind == .fireball ? 0xFF8030 : 0xFFE080, 5, 3.0, 0.25, 6)
-				if p.kind == .fireball { igniteNear(hx, hy, p.source) }
-				return false
-			}
-		}
-		p.x = nx
-		p.y = ny
-		// player shots also damage pirate ships
-		if p.source.kind == .player {
-			for s in ships {
-				let dy: Double = s.deckY(Double(WorldGen.sea))
-				if abs(p.x - s.x) < 4.6 && p.y > dy - 3.0 && p.y < dy + 2.0 {
-					s.hp -= p.dmg * 0.5
-					s.hitT = 0.2
-					spawnParticles(p.x, p.y, 0x8A5A2E, 4, 3.0, 0.3, 12)
-					return false
-				}
-			}
-		}
-		if p.kind == .fireball && Double.random(in: 0...1) < 0.5 { spawnParticles(p.x, p.y, 0xFFB040, 1, 1.0, 0.25, -2) }
-		if p.kind == .arrow && p.source.kind == .player && p.trail < 6 { p.trail += 1 }
-		return true
-	}
-
-	struct PathHit {
-		var t: Double
-		var mob: Mob?
-	}
-
-	/// Nearest creature or player the segment passes through that this projectile is allowed to hurt
-	func firstEntityOnPath(_ p: Projectile, _ nx: Double, _ ny: Double, maxT: Double) -> PathHit? {
-		var best: PathHit? = nil
-		var bt: Double = min(1.0, maxT)
-		let pad: Double = max(0.08, p.w * 0.5)
-		if !dead && canHarm(p.source, targetFaction: .player, targetID: 0, area: false) {
-			if let t = segmentBoxT(p.x, p.y, nx, ny, pb.left - pad, pb.top - pad, pb.right + pad, pb.y + pad), t <= bt {
-				bt = t
-				best = PathHit(t: t, mob: nil)
-			}
-		}
-		let x0: Double = min(p.x, nx) - 4.0
-		let x1: Double = max(p.x, nx) + 4.0
-		for m in mobsNear(x0, x1) {
-			if m.hp <= 0 || m.id == p.lastHit || m.downed { continue }
-			if !canHarm(p.source, targetFaction: faction(of: m), targetID: m.id, area: false) { continue }
-			if let t = segmentBoxT(p.x, p.y, nx, ny, m.b.left - pad, m.b.top - pad, m.b.right + pad, m.b.y + pad), t <= bt {
-				bt = t
-				best = PathHit(t: t, mob: m)
-			}
-		}
-		return best
-	}
-
-	/// Boss shockwaves run along the ground and hurt anything standing in them
-	func stepShock(_ p: inout Projectile, _ dt: Double) -> Bool {
-		p.x += p.vx * dt
-		let gy: Int = world.groundBelow(Int(floor(p.x)), Int(floor(p.y)) - 3)
-		p.y = Double(gy) - 0.5
-		if world.solid(Int(floor(p.x)), Int(floor(p.y - 0.6))) && world.solid(Int(floor(p.x + p.vx * 0.1)), Int(floor(p.y - 0.4))) { return false }
-		var info = DamageInfo(amount: p.dmg, type: .stomp, source: p.source)
-		info.dirX = p.vx >= 0 ? 1 : -1
-		info.knock = 7.0
-		info.originX = p.x - p.vx
-		info.originY = p.y
-		info.key = p.uid
-		info.cooldown = 2.0
-		damageBox(p.x - 0.5, p.y - 0.9, p.x + 0.5, p.y + 0.5, info)
-		if Double.random(in: 0...1) < 0.5 { spawnParticles(p.x, p.y + 0.3, 0xA08860, 1, 1.5, 0.3, 6) }
-		return true
-	}
-
-	func rockImpact(_ p: Projectile, _ x: Double, _ y: Double) {
-		spawnParticles(x, y, 0x8A8A8A, 10, 5.0, 0.5, 16)
-		addShake(0.25)
-		var info = DamageInfo(amount: p.dmg, type: .impact, source: p.source)
-		info.knock = 5.0
-		info.originX = x
-		info.originY = y - 1.0
-		info.key = p.uid
-		info.cooldown = 1.0
-		damageArea(x, y - 0.8, radius: 1.8, info, falloff: false, lineOfSight: false)
-	}
-
-	/// Fireballs set fire to whatever stands where they burst
-	func igniteNear(_ x: Double, _ y: Double, _ src: DamageSource) {
-		for m in mobsNear(x - 1.5, x + 1.5) where m.hp > 0 && !heatImmune(m) {
-			if abs(m.b.cy - y) < m.b.h * 0.5 + 1.0 && canHarm(src, targetFaction: faction(of: m), targetID: m.id, area: true) {
-				m.burn = max(m.burn, 2.0)
-			}
-		}
-	}
-
-	func throwBomb() {
-		if useCD > 0 { return }
-		if !isCreative { inv.removeAt(sel, 1) }
-		facing = aimFacing()
-		let ox: Double = pb.x + Double(facing) * 0.4
-		let oy: Double = pb.y - 1.3
-		// thrown on the arc that lands it on the spot aimed at (then it may bounce a little)
-		let a: Double = lobAngle(aimX - ox, aimY - oy, throwSpeed, throwGravity)
-		var p = Projectile(kind: .bomb, x: ox, y: oy, vx: cos(a) * throwSpeed, vy: sin(a) * throwSpeed, dmg: 26, fromPlayer: true, gravity: throwGravity)
-		p.life = 1.8
-		p.w = 0.4
-		p.source = DamageSource.player
-		p.uid = newID()
-		projectiles.append(p)
-		useCD = 0.45
-		swingT = 0.18
-		swingDir = facing
-		bumpHUD()
-	}
-
-	// MARK: drops
-
-	func updateDrops(_ dt: Double) {
-		var i: Int = 0
-		while i < drops.count {
-			var d: DropItem = drops[i]
-			d.age += dt
-			if d.pickDelay > 0 { d.pickDelay -= dt }
-			if d.age > 400 {
-				drops.remove(at: i)
-				continue
-			}
-			var b = Body(x: d.x, y: d.y, w: 0.3, h: 0.3)
-			b.vx = d.vx
-			b.vy = d.vy
-			let px: Double = pb.x
-			let py: Double = pb.y - pb.h * 0.5
-			let dx: Double = px - d.x
-			let dy: Double = py - (d.y - 0.15)
-			let dist: Double = sqrt(dx * dx + dy * dy)
-			// a stack the player threw away waits until they have walked off from it
-			if d.heldBack && dist > 3.6 { d.heldBack = false }
-			var magnet: Bool = false
-			if !dead && d.pickDelay <= 0 && !d.heldBack && dist < 3.2 && inv.canFit(d.stack.item, 1) {
-				magnet = true
-				let k: Double = 16.0
-				b.vx = dx / max(dist, 0.1) * k * (1.0 + (3.2 - dist) * 0.3)
-				b.vy = dy / max(dist, 0.1) * k * (1.0 + (3.2 - dist) * 0.3)
-			} else {
-				b.vy = min(b.vy + gravityG * 0.8 * dt, 18)
-				b.vx *= (1.0 - min(1.0, dt * (d.onGround ? 6.0 : 0.6)))
-			}
-			if magnet {
-				b.x += b.vx * dt
-				b.y += b.vy * dt
-			} else {
-				world.moveBody(&b, dt, stepUp: 0, dropThrough: false, decks: decksCache)
-				if b.inWater { b.vy = min(b.vy, 1.5); b.vx *= 0.9 }
-			}
-			d.x = b.x
-			d.y = b.y
-			d.vx = b.vx
-			d.vy = b.vy
-			d.onGround = b.onGround
-			if !dead && d.pickDelay <= 0 && !d.heldBack && dist < 0.9 {
-				let left: Int = inv.add(d.stack.item, d.stack.count, extra: d.stack.extra, inf: d.stack.inf)
-				if left < d.stack.count {
-					if d.stack.item == .mat(.relicFragment) { journal.relics += d.stack.count - left }
-					sfx(.pickup, 0.5)
-					floatText("+" + String(d.stack.count - left) + " " + d.stack.item.name, px, pb.y - pb.h - 0.5, 0xFFF0A0)
-					bumpHUD()
-				}
-				if left == 0 {
-					drops.remove(at: i)
-					continue
-				} else {
-					d.stack.count = left
-				}
-			}
-			drops[i] = d
-			i += 1
-		}
-	}
-
-	// MARK: particles and floating text
-
-	func updateParticles(_ dt: Double) {
-		// compact in place: remove(at:) in a loop was O(n^2) when bursts of particles expired together
-		let n: Int = particles.count
-		var w: Int = 0
-		particles.withUnsafeMutableBufferPointer { bp in
-			var i: Int = 0
-			while i < n {
-				var p: Particle = bp[i]
-				p.life -= dt
-				if p.life > 0 {
-					p.vy += p.gravity * dt
-					p.x += p.vx * dt
-					p.y += p.vy * dt
-					bp[w] = p
-					w += 1
-				}
-				i += 1
-			}
-		}
-		if w < n { particles.removeLast(n - w) }
-		var j: Int = 0
-		while j < floats.count {
-			floats[j].life -= dt
-			floats[j].y -= dt * 1.1
-			if floats[j].life <= 0 { floats.remove(at: j); continue }
-			j += 1
-		}
-	}
-}
 
 // ===== p16c_damage =====
 
@@ -5000,8 +3400,7 @@ extension Game {
 		let h: Int = a.0?.rawValue ?? 0
 		let c: Int = a.1?.rawValue ?? 0
 		let l: Int = a.2?.rawValue ?? 0
-		let suitPart: Int = suitLook()?.hashValue ?? 0
-		return (h * 100 + c * 10 + l + settings.hair * 1000 + settings.scarf * 10000) &+ suitPart
+		return (h * 100 + c * 10 + l + settings.hair * 1000 + settings.scarf * 10000) &+ suitDrawKey
 	}
 
 	/// Which humanoid frame to show for the player: 0 idle, 1/2 walk, 3 windup, 4 attack, 6 shoot
@@ -9455,6 +7854,10 @@ struct ModPack: Codable, Identifiable, Equatable {
 	var skyMoon: ModSkyBody? = nil
 	/// tree designs for its dimensions' regions
 	var trees: [ModTree] = []
+	/// suit materials, suit parts and whole suit designs
+	var suitMats: [ModSuitMat] = []
+	var suitParts: [ModSuitPart] = []
+	var suitDesigns: [ModSuitDesign] = []
 	/// entries left out because they could not be read (not saved)
 	var skipped: Int = 0
 
@@ -9463,6 +7866,7 @@ struct ModPack: Codable, Identifiable, Equatable {
 		case blocks, items, mobs, projectiles, recipes, loot, ores, structures
 		case folder, requires, off, overrides, infusions, dims, scripts, variables
 		case skySun, skyMoon, trees
+		case suitMats, suitParts, suitDesigns
 	}
 
 	init() {}
@@ -9498,6 +7902,9 @@ struct ModPack: Codable, Identifiable, Equatable {
 		skySun = c.val(.skySun, nil)
 		skyMoon = c.val(.skyMoon, nil)
 		trees = c.list(.trees, &skip)
+		suitMats = c.list(.suitMats, &skip)
+		suitParts = c.list(.suitParts, &skip)
+		suitDesigns = c.list(.suitDesigns, &skip)
 		skipped = skip
 	}
 
@@ -9505,7 +7912,10 @@ struct ModPack: Codable, Identifiable, Equatable {
 	func key(_ contentID: String) -> String { return id + ":" + contentID }
 
 	var contentCount: Int {
-		return blocks.count + items.count + mobs.count + projectiles.count + recipes.count + loot.count + ores.count + structures.count + overrides.count + infusions.count + dims.count + scripts.count + trees.count
+		let counts: [Int] = [blocks.count, items.count, mobs.count, projectiles.count, recipes.count, loot.count, ores.count, structures.count, overrides.count, infusions.count, dims.count, scripts.count, trees.count, suitMats.count, suitParts.count, suitDesigns.count]
+		var n: Int = 0
+		for c in counts { n += c }
+		return n
 	}
 
 	/// "3 creatures, 2 weapons, 5 blocks..." for the mod list
@@ -9544,6 +7954,9 @@ struct ModPack: Codable, Identifiable, Equatable {
 		for s in structures { used.insert(s.id) }
 		for o in overrides { used.insert(o.id) }
 		for t in trees { used.insert(t.id) }
+		for m in suitMats { used.insert(m.id) }
+		for sp in suitParts { used.insert(sp.id) }
+		for sd in suitDesigns { used.insert(sd.id) }
 		for f in infusions { used.insert(f.id) }
 		for d in dims { used.insert(d.id) }
 		for sc in scripts { used.insert(sc.id) }
@@ -9882,6 +8295,13 @@ enum ModStore {
 			d.entry.dimKeys = d.entry.dimKeys.map { fixRef($0) }
 			p.dims[i] = d
 		}
+		for i in p.suitMats.indices { if let it = p.suitMats[i].cost { p.suitMats[i].cost = fix(it) } }
+		for i in p.suitDesigns.indices {
+			for k in p.suitDesigns[i].design.pieces.indices {
+				p.suitDesigns[i].design.pieces[k].modMat = fixRef(p.suitDesigns[i].design.pieces[k].modMat)
+				p.suitDesigns[i].design.pieces[k].modPart = fixRef(p.suitDesigns[i].design.pieces[k].modPart)
+			}
+		}
 		for i in p.trees.indices {
 			p.trees[i].trunk = fixRef(p.trees[i].trunk)
 			p.trees[i].branch = fixRef(p.trees[i].branch)
@@ -9962,6 +8382,8 @@ struct ModCatalog {
 			for l in p.loot { c.keys[p.key(l.id)] = "loot"; c.names[p.key(l.id)] = l.name }
 			for f in p.infusions { c.keys[p.key(f.id)] = "item"; c.names[p.key(f.id)] = joinText(f.name, " Compound") }
 			for d in p.dims { c.keys[p.key(d.id)] = "dimension"; c.names[p.key(d.id)] = d.name }
+			for sp in p.suitParts { c.keys[p.key(sp.id)] = "item"; c.names[p.key(sp.id)] = sp.name }
+			for m in p.suitMats { c.keys[p.key(m.id)] = "suitmat"; c.names[p.key(m.id)] = m.name }
 		}
 		return c
 	}
@@ -11510,6 +9932,11 @@ final class ModRuntime {
 	var logic: LogicRT = LogicRT()
 	/// the world's three custom dimension slots, and the key each holds (kept for missing mods)
 	var dimSlots: [ModDimRT?] = [nil, nil, nil]
+	/// mods' suit materials and suit parts, by key
+	var suitMats: [String: SuitMatInfo] = [:]
+	var suitParts: [String: SuitPartInfo] = [:]
+	/// the mods' whole suit designs, with their names (to start from at an Assembly Station)
+	var suitDesigns: [(String, SuitDesign)] = []
 	/// the Overworld's sun and moon as the mods draw them (the last mod that sets one wins)
 	var overSun: ModSkyBody? = nil
 	var overMoon: ModSkyBody? = nil
@@ -11559,6 +9986,7 @@ final class ModRuntime {
 		rt.assignBlocks(world)
 		rt.buildShots()
 		rt.buildItems()
+		rt.buildSuits()
 		rt.buildInfusions(world)
 		rt.buildLoot()
 		rt.buildMobs()
@@ -11857,6 +10285,15 @@ final class ModRuntime {
 				let r = ModItemRT(key: k, def: it, modName: p.name)
 				if let a = it.ammo { r.ammo = resolve(a) }
 				if !it.projectile.isEmpty { r.shot = shotIndex[p.key(it.projectile)] ?? -1 }
+				r.icon = itemIconBuf(it)
+				items[k] = r
+				itemOrder.append(k)
+			}
+			// a suit part is an item too
+			for sp in p.suitParts where !disabled.contains(p.key(sp.id)) {
+				let k: String = p.key(sp.id)
+				let it: ModItem = suitPartItem(p, sp)
+				let r = ModItemRT(key: k, def: it, modName: p.name)
 				r.icon = itemIconBuf(it)
 				items[k] = r
 				itemOrder.append(k)
@@ -13679,7 +12116,7 @@ extension Game {
 		if info.type == .fire || info.type == .lava { a *= 1.0 - ai.fireCut }
 		if info.type == .shock { a *= 1.0 - ai.stormCut }
 		if a > 6 && ai.heavyCut > 0 { a *= 1.0 - ai.heavyCut }
-		return suitGuard(a, info.type)
+		return suitGuard(a, info)
 	}
 
 	/// How far the player is thrown by a blow: Bulwark armour and a heavy suit hold them steadier
@@ -13768,13 +12205,20 @@ extension Game {
 		mendCD = clampD(s.mendCD ?? 0, 0, 60)
 	}
 
-	/// A saved suit, checked: a part in a place it doesn't fit goes back into the bag
+	/// A saved suit, checked: one built the old way (a part in each place) is rebuilt piece by piece (a
+	/// part in a place it doesn't fit goes back into the bag), every piece kept within the suit's limits
 	func restoreSuit(_ s: ExoSuit) {
 		var clean: ExoSuit = ExoSuit()
 		var loose: [Stack] = []
 		for (k, st) in s.parts {
 			if let slot = ExoSlot(rawValue: k), slot.fits(st.item) { clean[slot] = st } else { loose.append(st) }
 		}
+		clean.design = s.design
+		clean.migrate()
+		var d: SuitDesign = clean.d
+		if d.pieces.count > SuitDesign.maxPieces { d.pieces = Array(d.pieces.prefix(SuitDesign.maxPieces)) }
+		for k in d.pieces.indices { d.pieces[k].clamp() }
+		clean.d = d
 		let stats: ExoStats = ExoStats.of(clean)
 		clean.energy = clampD(s.energy, 0, stats.capacity)
 		clean.worn = s.worn && stats.complete
@@ -13852,21 +12296,15 @@ extension RecipeBook {
 		comp(.fleet, [(m(.feather), 3), (m(.sunleaf), 2), (m(.leather), 1)])
 		comp(.renewal, [(m(.glowcap), 2), (m(.slimeGel), 2), (m(.crystalShard), 1), (m(.goldBar), 1)])
 		comp(.barbed, [(m(.claw), 3), (m(.ironBar), 1)])
-		// suit parts in every metal (the Umbral metals and boss relics for the best)
+		// suits are built piece by piece from bars now: the old parts melt down into their metal
 		for mt in ExoMat.allCases {
 			let b: Item = mt.bar
-			let n: Int = mt == .diamond ? 1 : 2
-			var helm: [(Item, Int)] = [(b, 2 * n), (.block(.glass), 1)]
-			var chest: [(Item, Int)] = [(b, 4 * n), (m(.copperBar), 2)]
-			if mt == .diamond { helm.append((m(.ironBar), 2)); chest.append((m(.ironBar), 4)) }
-			if mt == .ember { chest.append((.block(.obsidian), 4)) }
-			if mt == .voidium { chest.append((m(.umbralHeart), 1)) }
-			add(.exoPart(.helmet, mt), 1, helm, .assembly, .exosuit)
-			add(.exoPart(.chestFrame, mt), 1, chest, .assembly, .exosuit)
-			add(.exoPart(.arm, mt), 1, [(b, n + 1), (m(.copperBar), 1)] + (mt == .diamond ? [(m(.ironBar), 2)] : []), .assembly, .exosuit)
-			add(.exoPart(.legs, mt), 1, [(b, 2 * n + 1), (m(.copperBar), 1)] + (mt == .diamond ? [(m(.ironBar), 3)] : []), .assembly, .exosuit)
-			add(.exoPart(.boots, mt), 1, [(b, n + 1), (m(.leather), 1)] + (mt == .diamond ? [(m(.ironBar), 2)] : []), .assembly, .exosuit)
-			add(.exoPlate(mt), 1, [(b, n)] + (mt == .diamond ? [(m(.ironBar), 1)] : []), .assembly, .exosuit)
+			add(b, 2, [(.exoPart(.helmet, mt), 1)], .assembly, .exosuit)
+			add(b, 4, [(.exoPart(.chestFrame, mt), 1)], .assembly, .exosuit)
+			add(b, 2, [(.exoPart(.arm, mt), 1)], .assembly, .exosuit)
+			add(b, 3, [(.exoPart(.legs, mt), 1)], .assembly, .exosuit)
+			add(b, 2, [(.exoPart(.boots, mt), 1)], .assembly, .exosuit)
+			add(b, 1, [(.exoPlate(mt), 1)], .assembly, .exosuit)
 		}
 		// power cores
 		add(.exoCore(.sparkCell), 1, [(m(.copperBar), 4), (m(.coal), 4), (m(.ironBar), 1)], .assembly, .exosuit)
@@ -13885,6 +12323,13 @@ extension RecipeBook {
 		add(.exoModule(.cargo), 1, [(m(.leather), 6), (m(.ironBar), 2), (.block(.chest), 1)], .assembly, .exosuit)
 		add(.exoModule(.gauntlet), 1, [(m(.copperBar), 4), (m(.silverBar), 2), (m(.stormEssence), 1)], .assembly, .exosuit)
 		add(.exoModule(.barrier), 1, [(m(.crystalShard), 3), (m(.goldBar), 2), (m(.sentinelLens), 1)], .assembly, .exosuit)
+		add(.exoModule(.wing), 1, [(m(.leather), 4), (m(.feather), 6), (m(.ironBar), 2)], .assembly, .exosuit)
+		add(.exoModule(.battery), 1, [(m(.copperBar), 3), (.block(.battery), 1)], .assembly, .exosuit)
+		add(.exoModule(.solar), 1, [(.block(.glass), 2), (m(.copperBar), 2), (m(.goldBar), 1)], .assembly, .exosuit)
+		add(.exoModule(.turret), 1, [(m(.ironBar), 4), (m(.gunpowder), 2), (m(.copperBar), 2)], .assembly, .exosuit)
+		add(.exoModule(.cannon), 1, [(m(.ironBar), 6), (m(.gunpowder), 4), (m(.bronzeBar), 2)], .assembly, .exosuit)
+		add(.exoModule(.laser), 1, [(m(.crystalShard), 2), (m(.goldBar), 2), (m(.stormEssence), 1)], .assembly, .exosuit)
+		add(.exoModule(.magnet), 1, [(m(.ironBar), 3), (m(.copperBar), 2), (m(.stormEssence), 1)], .assembly, .exosuit)
 	}
 }
 
@@ -13893,10 +12338,6 @@ func featureItems() -> [Item] {
 	var out: [Item] = []
 	for p in Potion.allCases { out.append(.potion(p)) }
 	for i in Infusion.allCases { out.append(.compound(i)) }
-	for mt in ExoMat.allCases {
-		for p in ExoPart.allCases { out.append(.exoPart(p, mt)) }
-		out.append(.exoPlate(mt))
-	}
 	for c in ExoCore.allCases { out.append(.exoCore(c)) }
 	for m in ExoModule.allCases { out.append(.exoModule(m)) }
 	return out
@@ -14470,7 +12911,7 @@ extension Game {
 		var a: ArmorInf = ArmorInf()
 		for i in 0..<min(3, inv.armor.count) { if let s = inv.armor[i] { a.add(s) } }
 		if suit.worn {
-			for s in suit.parts.values { a.add(s) }
+			for s in suit.d.items.values { a.add(s) }
 		}
 		armorInfCache = a
 		armorInfKey = k
@@ -14479,9 +12920,8 @@ extension Game {
 
 	/// Everything that guards the player: armour, its Reinforced infusions and a worn suit
 	var totalDefense: Double {
-		var d: Double = inv.defense + armorInf.defense
-		if suitWorn { d += suitStats.defense }
-		return d
+		// (a suit guards by its plates where each blow lands: see suitGuard)
+		return inv.defense + armorInf.defense
 	}
 }
 
@@ -14720,60 +13160,64 @@ enum ExoCore: Int, Codable, CaseIterable {
 /// Suit modules: each does one thing, costs energy to run, and needs certain parts to hold it
 enum ExoModule: Int, Codable, CaseIterable {
 	case servo, drill, sprint, leap, hover, lamp, seal, cargo, gauntlet, barrier
+	/// appended: wings, batteries, solar panels, turrets, cannons, lasers and a magnet
+	case wing, battery, solar, turret, cannon, laser, magnet
 	var name: String {
 		switch self {
 		case .servo: return "Servo Muscles"
-		case .drill: return "Drill Arm"
-		case .sprint: return "Sprint Actuators"
-		case .leap: return "Leap Pistons"
-		case .hover: return "Hover Jets"
-		case .lamp: return "Helmet Lamp"
+		case .drill: return "Drill"
+		case .sprint: return "Booster"
+		case .leap: return "Leap Piston"
+		case .hover: return "Jet"
+		case .lamp: return "Suit Lamp"
 		case .seal: return "Environment Seal"
 		case .cargo: return "Cargo Pack"
 		case .gauntlet: return "Shock Gauntlet"
 		case .barrier: return "Barrier Projector"
+		case .wing: return "Suit Wing"
+		case .battery: return "Suit Battery"
+		case .solar: return "Solar Panel"
+		case .turret: return "Mini Turret"
+		case .cannon: return "Mini Cannon"
+		case .laser: return "Mini Laser"
+		case .magnet: return "Magnet"
 		}
 	}
 	var blurb: String {
 		switch self {
-		case .servo: return "Carries 25 more weight and hits 25% harder (a little energy each swing)"
-		case .drill: return "Mine with any hand, faster, at the right arm's metal tier (energy while mining)"
-		case .sprint: return "Run 20% faster (energy while running)"
-		case .leap: return "Jump 35% higher (energy each jump)"
-		case .hover: return "Hold jump in the air to hover and glide (a lot of energy)"
+		case .servo: return "Each carries 12 more weight and hits harder (a little energy each swing)"
+		case .drill: return "On an arm: mine with any hand, faster, at the drill's metal tier (energy while mining)"
+		case .sprint: return "Run faster: each booster adds speed (energy while running)"
+		case .leap: return "Jump higher: each piston adds height (energy each jump)"
+		case .hover: return "Hold jump in the air: jets push the way they point. Enough lift for the suit's weight and it flies (energy while firing)"
 		case .lamp: return "Lights the way in the dark (a trickle of energy)"
 		case .seal: return "Fire, lava, cold, water and lightning hurt far less (energy while it works)"
 		case .cargo: return "A chest on your back: 27 stacks that go where you go (PACK button)"
-		case .gauntlet: return "Melee blows add a 4-damage shock (energy each hit)"
-		case .barrier: return "Turns 40% of each hit into energy drain instead of harm"
-		}
-	}
-	/// the parts it needs to be mounted (besides the chest frame)
-	var needs: [ExoSlot] {
-		switch self {
-		case .drill: return [.armR]
-		case .gauntlet: return [.armL]
-		case .servo: return [.armL, .armR]
-		case .sprint: return [.legs]
-		case .leap: return [.legs, .boots]
-		case .hover: return [.legs, .boots]
-		case .lamp, .seal: return [.helmet]
-		case .cargo, .barrier: return []
+		case .gauntlet: return "Melee blows add a shock (energy each hit)"
+		case .barrier: return "Turns part of each hit into energy drain instead of harm"
+		case .wing: return "Hold jump while falling to glide; more wing, slower fall"
+		case .battery: return "Holds more energy (charged by cores, panels and stations)"
+		case .solar: return "Makes energy under the open sky by day"
+		case .turret: return "Shoots the nearest foe by itself (energy each shot)"
+		case .cannon: return "Fires a shell at your aim while SUIT FIRE is held (energy each shot)"
+		case .laser: return "A beam at your aim while SUIT FIRE is held (energy while firing)"
+		case .magnet: return "Draws dropped things to you"
 		}
 	}
 	var weight: Double {
 		switch self {
-		case .drill: return 4
-		case .hover, .cargo: return 3
+		case .drill, .cannon: return 4
+		case .hover, .cargo, .turret: return 3
+		case .solar, .magnet, .lamp: return 1
 		default: return 2
 		}
 	}
 	var rarity: Rarity {
 		switch self {
-		case .lamp, .cargo: return .basic
-		case .servo, .drill, .sprint, .leap: return .uncommon
-		case .seal, .gauntlet: return .rare
-		case .hover, .barrier: return .veryRare
+		case .lamp, .cargo, .battery, .wing: return .basic
+		case .servo, .drill, .sprint, .leap, .solar, .magnet: return .uncommon
+		case .seal, .gauntlet, .turret: return .rare
+		case .hover, .barrier, .cannon, .laser: return .veryRare
 		}
 	}
 	var color: UInt32 {
@@ -14788,6 +13232,13 @@ enum ExoModule: Int, Codable, CaseIterable {
 		case .cargo: return 0x9A6A3A
 		case .gauntlet: return 0xFFF07A
 		case .barrier: return 0xC07CFF
+		case .wing: return 0xD8D0C0
+		case .battery: return 0x6ADA5A
+		case .solar: return 0x3A5AB0
+		case .turret: return 0x8A929E
+		case .cannon: return 0x5A606A
+		case .laser: return 0xE84A6A
+		case .magnet: return 0xC8384A
 		}
 	}
 }
@@ -14858,24 +13309,34 @@ enum ExoSlot: Int, Codable, CaseIterable {
 	}
 }
 
-/// A suit: what is fitted in each place (each part keeps its own infusions), whether it is being worn
-/// and the energy in its core. The parts live in the suit, not in the bag.
+/// A suit: built piece by piece (its design: every plate and working part, each with its own damage),
+/// whether it is being worn, and the energy in it. `parts` is how a suit was built before (one part in
+/// each place): it is read from old saves and rebuilt piece by piece (see migrate).
 struct ExoSuit: Codable, Equatable {
 	var parts: [Int: Stack] = [:]
 	var worn: Bool = false
 	var energy: Double = 0
 	/// the module switches the player has turned off (by module number)
 	var off: [Int]? = nil
+	/// the suit as built piece by piece (nil only in a save from before)
+	var design: SuitDesign? = nil
 
 	init() {}
+
+	/// the design (empty when there is none yet)
+	var d: SuitDesign {
+		get { return design ?? SuitDesign() }
+		set { design = newValue }
+	}
+
+	var isEmpty: Bool { return parts.isEmpty && (design?.pieces.isEmpty ?? true) }
 
 	subscript(_ s: ExoSlot) -> Stack? {
 		get { return parts[s.rawValue] }
 		set { parts[s.rawValue] = newValue }
 	}
 
-	var isEmpty: Bool { return parts.isEmpty }
-
+	/// the metal of an old-style part
 	func material(_ s: ExoSlot) -> ExoMat? {
 		if let st = parts[s.rawValue] {
 			if case .exoPart(_, let m) = st.item { return m }
@@ -14883,31 +13344,419 @@ struct ExoSuit: Codable, Equatable {
 		}
 		return nil
 	}
+}
 
-	var core: ExoCore? {
-		if let st = parts[ExoSlot.core.rawValue], case .exoCore(let c) = st.item { return c }
+// MARK: - Suits built piece by piece
+
+/// Who a suit's cannon shell belongs to: a small blast that never breaks blocks (see shellBurst)
+let suitShellOwner: Int = 3_000_000
+
+/// Suit units to a sprite pixel: pieces sit on a grid three times finer than the sprite's
+let suitUnit: Int = 3
+/// The body's design space in suit units: the figure is 30 wide (10 pixels) and 51 tall (17 rows of
+/// its frame, feet on row 15); pieces may hang 18 units off either side (wings, a pack, a cannon)
+let suitBodyW: Double = 30
+let suitBodyH: Double = 51
+let suitMargin: Double = 18
+
+/// Where a piece is fixed: it moves with that part of the body (the legs stride, the front arm swings
+/// out to strike and shoot). Drawn back to front in `layer` order.
+enum SuitBone: Int, Codable, CaseIterable {
+	case head, torso, armBack, armFront, legBack, legFront, back
+	var name: String {
+		switch self {
+		case .head: return "Head"
+		case .torso: return "Body"
+		case .armBack: return "Back arm"
+		case .armFront: return "Front arm"
+		case .legBack: return "Back leg"
+		case .legFront: return "Front leg"
+		case .back: return "Back"
+		}
+	}
+	var layer: Int {
+		switch self {
+		case .back: return 0
+		case .armBack: return 1
+		case .legBack: return 2
+		case .torso: return 3
+		case .head: return 4
+		case .legFront: return 5
+		case .armFront: return 6
+		}
+	}
+	/// the same place on the other side (for mirrored copies)
+	var other: SuitBone {
+		switch self {
+		case .armBack: return .armFront
+		case .armFront: return .armBack
+		case .legBack: return .legFront
+		case .legFront: return .legBack
+		default: return self
+		}
+	}
+}
+
+/// The body's parts for guarding: a blow lands on one of them
+enum SuitSection: Int, CaseIterable {
+	case head, torso, arms, legs, feet
+	var name: String {
+		switch self {
+		case .head: return "Head"
+		case .torso: return "Body"
+		case .arms: return "Arms"
+		case .legs: return "Legs"
+		case .feet: return "Feet"
+		}
+	}
+}
+
+/// The outline of a piece
+enum SuitShape: Int, Codable, CaseIterable {
+	case box, rounded, round, wedge, spike
+	var name: String {
+		switch self {
+		case .box: return "Box"
+		case .rounded: return "Rounded"
+		case .round: return "Round"
+		case .wedge: return "Wedge"
+		case .spike: return "Spike"
+		}
+	}
+	/// how much of its box it fills
+	var fill: Double {
+		switch self {
+		case .box: return 1.0
+		case .rounded: return 0.92
+		case .round: return 0.785
+		case .wedge, .spike: return 0.5
+		}
+	}
+	/// whether a point of the piece's box (each from -1 to 1 across and down) is on it
+	func inside(_ u: Double, _ v: Double) -> Bool {
+		if abs(u) > 1.0 || abs(v) > 1.0 { return false }
+		switch self {
+		case .box: return true
+		case .rounded:
+			let a: Double = abs(u) - 0.55
+			let b: Double = abs(v) - 0.55
+			return a <= 0 || b <= 0 || a * a + b * b <= 0.2025
+		case .round: return u * u + v * v <= 1.0
+		case .wedge: return v >= -u
+		case .spike: return abs(u) <= (v + 1.0) * 0.5
+		}
+	}
+}
+
+/// What a piece is: an armour plate (guards), a frame piece (light, guards a little), a power core,
+/// or a working part (one of the modules, or a mod's part)
+enum SuitKind: Int, Codable, CaseIterable {
+	case plate, frame, core, module
+	var name: String {
+		switch self {
+		case .plate: return "Plate"
+		case .frame: return "Frame"
+		case .core: return "Core"
+		case .module: return "Part"
+		}
+	}
+}
+
+/// One piece of a suit: where it is (its centre, measured on the body standing still, in suit units),
+/// its size, turn, shape and thickness, what it is made of and painted, and how damaged it is
+struct SuitPiece: Codable, Hashable, Identifiable {
+	var id: Int = 0
+	var kind: SuitKind = .plate
+	/// a core's or a module's number (cores: ExoCore, modules: ExoModule)
+	var part: Int = 0
+	/// a mod's part, by key (then `part` is the module it works as)
+	var modPart: String = ""
+	var bone: SuitBone = .torso
+	var x: Double = 15
+	var y: Double = 25
+	var w: Double = 6
+	var h: Double = 6
+	/// turned clockwise, in degrees
+	var rot: Double = 0
+	var shape: SuitShape = .box
+	/// layers of material (1 to 3): thicker guards more and weighs more
+	var thick: Int = 1
+	/// the game's metal (ExoMat), or a mod's material by key
+	var mat: Int = 0
+	var modMat: String = ""
+	/// paint (0: the material's own colour)
+	var color: UInt32 = 0
+	/// how damaged (0 whole ... 1 broken off)
+	var dmg: Double = 0
+	/// the group of the item it was made from (0: made of material); see SuitDesign.items
+	var src: Int = 0
+
+	init() {}
+
+	init(from decoder: Decoder) throws {
+		let c = try decoder.container(keyedBy: CodingKeys.self)
+		id = c.val(.id, 0)
+		kind = c.val(.kind, .plate)
+		part = c.val(.part, 0)
+		modPart = c.val(.modPart, "")
+		bone = c.val(.bone, .torso)
+		x = c.val(.x, 15)
+		y = c.val(.y, 25)
+		w = c.val(.w, 6)
+		h = c.val(.h, 6)
+		rot = c.val(.rot, 0)
+		shape = c.val(.shape, .box)
+		thick = c.val(.thick, 1)
+		mat = c.val(.mat, 0)
+		modMat = c.val(.modMat, "")
+		color = c.val(.color, 0)
+		dmg = c.val(.dmg, 0)
+		src = c.val(.src, 0)
+	}
+
+	var broken: Bool { return dmg >= 0.999 }
+	var area: Double { return w * h * shape.fill }
+	var module: ExoModule? { return kind == .module ? ExoModule(rawValue: part) : nil }
+	var core: ExoCore? { return kind == .core ? ExoCore(rawValue: part) : nil }
+
+	/// whether a point (suit units, the body standing still) is on the piece
+	func covers(_ px: Double, _ py: Double) -> Bool {
+		let a: Double = -rot * Double.pi / 180.0
+		let dx: Double = px - x
+		let dy: Double = py - y
+		let lx: Double = dx * cos(a) - dy * sin(a)
+		let ly: Double = dx * sin(a) + dy * cos(a)
+		return shape.inside(lx / max(0.5, w * 0.5), ly / max(0.5, h * 0.5))
+	}
+
+	/// the same piece as it looks and is made (everything but where it is and how damaged)
+	func sameMake(_ o: SuitPiece) -> Bool {
+		return kind == o.kind && part == o.part && modPart == o.modPart && w == o.w && h == o.h && shape == o.shape && thick == o.thick && mat == o.mat && modMat == o.modMat
+	}
+
+	/// the piece kept within what the suit allows (sizes, places, thickness)
+	mutating func clamp() {
+		w = clampD(w.isFinite ? w : 6, 1, 30)
+		h = clampD(h.isFinite ? h : 6, 1, 30)
+		x = clampD(x.isFinite ? x : 15, -suitMargin, suitBodyW + suitMargin)
+		y = clampD(y.isFinite ? y : 25, 0, suitBodyH)
+		rot = rot.isFinite ? rot.truncatingRemainder(dividingBy: 360) : 0
+		thick = clampI(thick, 1, 3)
+		dmg = clampD(dmg.isFinite ? dmg : 0, 0, 1)
+		if kind == .core && ExoCore(rawValue: part) == nil { part = 0 }
+		if kind == .module && ExoModule(rawValue: part) == nil { part = 0 }
+	}
+}
+
+/// A whole suit design: its pieces (drawn and guarding in order: later pieces lie over earlier ones on
+/// the same part of the body), and the items its working parts were made from, by group (a core, a
+/// module, or a part of a suit built the old way). An item goes back to the bag when every piece of
+/// its group is taken off.
+struct SuitDesign: Codable, Hashable {
+	var pieces: [SuitPiece] = []
+	var items: [Int: Stack] = [:]
+	var nextID: Int = 1
+
+	init() {}
+
+	init(from decoder: Decoder) throws {
+		let c = try decoder.container(keyedBy: CodingKeys.self)
+		var skip: Int = 0
+		pieces = c.list(.pieces, &skip)
+		items = c.val(.items, [:])
+		nextID = c.val(.nextID, 1)
+		let top: Int = pieces.map { $0.id }.max() ?? 0
+		if nextID <= top { nextID = top + 1 }
+	}
+
+	/// most pieces a suit may have
+	static let maxPieces: Int = 160
+
+	mutating func newID() -> Int {
+		let n: Int = nextID
+		nextID += 1
+		return n
+	}
+
+	/// a new group for an item
+	mutating func newGroup() -> Int {
+		var g: Int = 1
+		while items[g] != nil { g += 1 }
+		return g
+	}
+
+	/// pieces that still work
+	var working: [SuitPiece] { return pieces.filter { !$0.broken } }
+
+	func index(_ id: Int) -> Int? { return pieces.firstIndex { $0.id == id } }
+}
+
+/// A mod's suit part, ready for play: the module it works as, its name and colour, how strong it is at
+/// that work (1 the game's own) and what it weighs
+struct SuitPartInfo {
+	var name: String = "Part"
+	var color: UInt32 = 0x8A929E
+	var works: ExoModule = .turret
+	var power: Double = 1
+	var weight: Double = 2
+}
+
+/// The numbers of a suit material: the game's metals, or a mod's
+struct SuitMatInfo {
+	var name: String = "Iron"
+	var color: UInt32 = 0xC8CCD4
+	/// how well a layer guards (iron 1)
+	var protect: Double = 1
+	/// weight for its size (iron 1)
+	var weight: Double = 1
+	/// how much it takes before it breaks (iron 1)
+	var durability: Double = 1
+	/// how well it carries energy (iron 1)
+	var conduct: Double = 1
+	/// what each piece of it takes off fire, cold and lightning
+	var fireCut: Double = 0
+	var coldCut: Double = 0
+	var stormCut: Double = 0
+	/// what it is paid with, a unit at a time
+	var cost: Item = .mat(.ironBar)
+	/// the mining tier a drill of it bores at
+	var drillTier: Int = 4
+}
+
+extension ExoMat {
+	/// how much a piece of this metal takes before it breaks (iron 1)
+	var durability: Double {
+		switch self {
+		case .iron: return 1.0
+		case .bronze: return 0.85
+		case .gold: return 0.6
+		case .diamond: return 1.4
+		case .mythril: return 1.3
+		case .ember: return 1.5
+		case .voidium: return 1.8
+		}
+	}
+
+	var info: SuitMatInfo {
+		var i = SuitMatInfo()
+		i.name = name
+		i.color = color
+		i.protect = protect
+		i.weight = weight
+		i.durability = durability
+		i.conduct = conduct
+		i.fireCut = self == .ember ? 0.05 : 0
+		i.coldCut = self == .voidium ? 0.04 : 0
+		i.stormCut = self == .voidium ? 0.04 : 0
+		i.cost = bar
+		i.drillTier = drillTier
+		return i
+	}
+}
+
+/// A piece's material numbers (a mod's, if it names one that is on)
+func suitMat(_ p: SuitPiece) -> SuitMatInfo {
+	if !p.modMat.isEmpty, let m = ModRuntime.shared.suitMats[p.modMat] { return m }
+	return (ExoMat(rawValue: p.mat) ?? .iron).info
+}
+
+/// The colour a piece shows
+func suitColor(_ p: SuitPiece) -> UInt32 {
+	if p.color != 0 { return p.color & 0xFFFFFF }
+	if p.kind == .core, let c = p.core { return c.color }
+	if p.kind == .module, !p.modPart.isEmpty, let mp = ModRuntime.shared.suitParts[p.modPart] { return mp.color }
+	if p.kind == .module, let m = p.module { return shadeRGB(m.color, 0.85) }
+	return suitMat(p).color
+}
+
+/// The body standing still, cell by cell (sprite pixels, columns from the figure's left edge), with the
+/// part of the body each cell is: what a blow can land on
+enum SuitBody {
+	/// rows: (row, first column, last column, section)
+	static let spans: [(Int, Int, Int, SuitSection)] = [
+		(1, 3, 6, .head), (2, 2, 7, .head), (3, 2, 7, .head), (4, 2, 7, .head), (5, 3, 6, .head),
+		(6, 3, 6, .torso),
+		(7, 1, 2, .arms), (7, 3, 6, .torso), (7, 7, 8, .arms),
+		(8, 1, 2, .arms), (8, 3, 6, .torso), (8, 7, 8, .arms),
+		(9, 1, 2, .arms), (9, 3, 6, .torso), (9, 7, 8, .arms),
+		(10, 2, 7, .torso), (11, 2, 7, .torso),
+		(12, 2, 3, .legs), (12, 6, 7, .legs), (13, 2, 3, .legs), (13, 6, 7, .legs), (14, 2, 3, .legs), (14, 6, 7, .legs),
+		(15, 2, 3, .feet), (15, 6, 7, .feet)
+	]
+
+	/// every body cell of a section, as (column, row)
+	static let cells: [[(Int, Int)]] = {
+		var out: [[(Int, Int)]] = [[(Int, Int)]](repeating: [], count: SuitSection.allCases.count)
+		for s in spans {
+			for x in s.1...s.2 { out[s.3.rawValue].append((x, s.0)) }
+		}
+		return out
+	}()
+
+	/// the section of a body cell (nil: not the body)
+	static func section(_ col: Int, _ row: Int) -> SuitSection? {
+		for s in spans where s.0 == row && col >= s.1 && col <= s.2 { return s.3 }
 		return nil
 	}
 
-	/// the module sockets the chest frame has
-	var sockets: Int { return material(.chest)?.sockets ?? 0 }
-
-	/// every module fitted in a socket that is open and whose parts are there, in socket order
-	var modules: [ExoModule] {
-		var out: [ExoModule] = []
-		let n: Int = sockets
-		for (k, s) in [ExoSlot.mod1, .mod2, .mod3, .mod4].enumerated() where k < n {
-			if let st = parts[s.rawValue], case .exoModule(let m) = st.item {
-				if m.needs.allSatisfy({ parts[$0.rawValue] != nil }) && !out.contains(m) { out.append(m) }
-			}
+	/// The part of the body a piece placed with its centre at (x, y) belongs to
+	static func bone(_ x: Double, _ y: Double) -> SuitBone {
+		let col: Int = Int(floor(x / Double(suitUnit)))
+		let row: Int = Int(floor(y / Double(suitUnit)))
+		if row <= 5 { return .head }
+		if row >= 12 { return col <= 4 ? .legBack : .legFront }
+		if col < 1 { return .back }
+		if row >= 6 && row <= 10 {
+			if col <= 2 { return .armBack }
+			if col >= 7 { return .armFront }
 		}
-		return out
+		return .torso
+	}
+}
+
+/// How a part of the body is moved in one of the sprite's frames (0 standing, 1-2 walking, 3 winding up,
+/// 4 striking, 5 blocking, 6 shooting): shifted, and the front arm turned out from the shoulder
+struct BoneMove {
+	var dx: Double = 0
+	var dy: Double = 0
+	var turn: Double = 0
+	var px: Double = 0
+	var py: Double = 0
+
+	static func of(_ b: SuitBone, _ frame: Int) -> BoneMove {
+		var m = BoneMove()
+		let u: Double = Double(suitUnit)
+		switch b {
+		case .legBack:
+			if frame == 1 { m.dx = -u } else if frame == 2 { m.dx = u }
+		case .legFront:
+			if frame == 1 { m.dx = u } else if frame == 2 { m.dx = -u }
+		case .armFront:
+			if frame >= 3 {
+				// the arm swings forward from the shoulder (raised a pixel while winding up)
+				m.turn = -Double.pi / 2
+				m.px = 8 * u
+				m.py = 8 * u
+				if frame == 3 { m.dy = -u }
+			}
+		default: break
+		}
+		return m
+	}
+
+	/// a point (suit units, standing still) where it is in this frame
+	func apply(_ x: Double, _ y: Double) -> (Double, Double) {
+		if turn == 0 { return (x + dx, y + dy) }
+		let c: Double = cos(turn)
+		let s: Double = sin(turn)
+		let rx: Double = x - px
+		let ry: Double = y - py
+		return (px + rx * c - ry * s + dx, py + rx * s + ry * c + dy)
 	}
 }
 
 /// What a suit adds up to: worked out once each time it changes, never every frame
 struct ExoStats {
-	var defense: Double = 0
 	var weight: Double = 0
 	var strength: Double = 20
 	var speedMul: Double = 1
@@ -14921,82 +13770,290 @@ struct ExoStats {
 	var stormCut: Double = 0
 	var knockMul: Double = 1
 	var drillTier: Int = 0
+	/// the share of a blow its plates stop, on average over the whole body (0 ... 1)
+	var guardAll: Double = 0
+	/// for each part of the body (SuitSection): the share of it covered by working plates, and the
+	/// share of a blow there they stop on average
+	var cover: [Double] = [0, 0, 0, 0, 0]
+	var guardBy: [Double] = [0, 0, 0, 0, 0]
+	/// working parts by module, and their strength (a mod's part counts as more)
+	var counts: [Int: Int] = [:]
+	var power: [Int: Double] = [:]
+	/// the jets' lift, in body weights (over 1 rises), and the wings' area
+	var thrust: Double = 0
+	var wingArea: Double = 0
+	/// energy the solar panels make a second in full sun
+	var solar: Double = 0
 	var modules: [ExoModule] = []
-	/// can be worn: a chest frame and a core
+	/// can be worn: it has some pieces
 	var complete: Bool = false
 	/// what is wrong or missing, in plain words
 	var notes: [String] = []
 	var thrift: Set<Int> = []
+	var pieces: Int = 0
+	var broken: Int = 0
 
-	func has(_ m: ExoModule) -> Bool { return modules.contains(m) }
+	func has(_ m: ExoModule) -> Bool { return (counts[m.rawValue] ?? 0) > 0 }
+	func count(_ m: ExoModule) -> Int { return counts[m.rawValue] ?? 0 }
+	func strength(_ m: ExoModule) -> Double { return power[m.rawValue] ?? 0 }
 
-	static func of(_ s: ExoSuit) -> ExoStats {
+	/// what the old defence number would have been (for the item screens): 25 points stop everything
+	var defense: Double { return guardAll * 25.0 }
+
+	static func of(_ s: ExoSuit) -> ExoStats { return of(s.d) }
+
+	static func of(_ d: SuitDesign) -> ExoStats {
 		var r: ExoStats = ExoStats()
 		var conductSum: Double = 0
 		var conductN: Double = 0
-		for slot in ExoSlot.allCases {
-			guard let st = s[slot] else { continue }
-			switch st.item {
-			case .exoPart(let p, let m):
-				r.defense += p.baseDefense * m.protect
-				r.weight += p.baseWeight * m.weight
-				conductSum += m.conduct
+		var drill: Int = 0
+		for p in d.pieces {
+			r.pieces += 1
+			if p.broken {
+				r.broken += 1
+				continue
+			}
+			let mi: SuitMatInfo = suitMat(p)
+			switch p.kind {
+			case .plate, .frame:
+				let k: Double = p.kind == .plate ? 1.0 : 0.6
+				r.weight += p.area * Double(p.thick) * mi.weight * 0.035 * k
+				conductSum += mi.conduct
 				conductN += 1
-				if m == .ember { r.fireCut = min(0.6, r.fireCut + 0.12) }
-				if m == .voidium {
-					r.coldCut = min(0.6, r.coldCut + 0.1)
-					r.stormCut = min(0.6, r.stormCut + 0.1)
-				}
-			case .exoPlate(let m):
-				if let b = slot.plateBase, s[b] == nil {
-					r.notes.append(joinText(slot.name, " has nothing to hold it (fit the ", b.name.lowercased(), ")."))
-					continue
-				}
-				r.defense += slot.plateDefense * m.protect
-				r.weight += 2.0 * m.weight
-				if m == .ember { r.fireCut = min(0.6, r.fireCut + 0.06) }
-			case .exoCore(let c):
-				r.capacity = c.capacity
-				r.output = c.output
-				r.recharge = c.recharge
+				r.fireCut = min(0.6, r.fireCut + mi.fireCut)
+				r.coldCut = min(0.6, r.coldCut + mi.coldCut)
+				r.stormCut = min(0.6, r.stormCut + mi.stormCut)
+			case .core:
+				guard let c = p.core else { continue }
+				r.capacity += c.capacity
+				r.output += c.output
+				r.recharge += c.recharge
 				r.weight += 3
-				if st.has(.thrift) { r.drainMul *= 0.75 }
-			case .exoModule(let m):
-				r.weight += m.weight
-				if st.has(.thrift) { r.thrift.insert(m.rawValue) }
-			default: break
+				if let st = d.items[p.src], st.has(.thrift) { r.drainMul *= 0.75 }
+			case .module:
+				guard let m = p.module else { continue }
+				var k: Double = 1.0
+				if !p.modPart.isEmpty, let mp = ModRuntime.shared.suitParts[p.modPart] {
+					k = mp.power
+					r.weight += mp.weight
+				} else {
+					r.weight += m.weight
+				}
+				r.counts[m.rawValue, default: 0] += 1
+				r.power[m.rawValue, default: 0] += k
+				if let st = d.items[p.src], st.has(.thrift) { r.thrift.insert(m.rawValue) }
+				switch m {
+				case .hover:
+					// a jet lifts more the bigger it is, along the way it points (straight down: all up)
+					let lift: Double = clampD(0.25 + p.area * 0.012, 0.25, 1.0) * k
+					r.thrust += lift * max(0, cos(p.rot * Double.pi / 180.0))
+				case .wing: r.wingArea += p.area * k
+				case .battery: r.capacity += clampD(60 + p.area * 1.5, 60, 160) * k
+				case .solar: r.solar += clampD(0.2 + p.area * 0.01, 0.2, 0.6) * k
+				case .drill: drill = max(drill, mi.drillTier)
+				default: break
+				}
 			}
 		}
 		if conductN > 0 { r.drainMul /= max(0.6, conductSum / conductN) }
-		r.modules = s.modules
-		// modules fitted but not working, and why
-		let open: Int = s.sockets
-		for (k, slot) in [ExoSlot.mod1, .mod2, .mod3, .mod4].enumerated() {
-			guard let st = s[slot], case .exoModule(let m) = st.item else { continue }
-			if k >= open {
-				r.notes.append(joinText(m.name, ": the chest frame has only ", String(open), " sockets."))
-			} else if let miss = m.needs.first(where: { s[$0] == nil }) {
-				r.notes.append(joinText(m.name, " needs the ", miss.name.lowercased(), "."))
-			}
-		}
-		if r.has(.servo) { r.strength += 25 }
+		r.drillTier = drill
+		var mods: [ExoModule] = []
+		for m in ExoModule.allCases where r.has(m) { mods.append(m) }
+		r.modules = mods
+		// servos: more strength and harder blows
+		r.strength += 12.0 * min(3.0, r.strength(.servo))
+		// weight against strength, the jets' lift against the suit's weight
 		let over: Double = max(0, r.weight - r.strength)
 		r.speedMul = 1.0 - min(0.35, over * 0.006)
 		r.jumpMul = 1.0 - min(0.3, over * 0.004)
 		r.knockMul = max(0.35, 1.0 - r.weight * 0.012)
-		if let m = s.material(.armR) { r.drillTier = m.drillTier }
-		r.complete = s[.chest] != nil && s[.core] != nil
-		if s[.chest] == nil { r.notes.insert("Fit a chest frame: every suit is built on one.", at: 0) }
-		if s[.core] == nil { r.notes.insert("Fit a power core: without one nothing can run.", at: 0) }
-		for st in s.parts.values { r.drainMul *= customEnergyMul(st) }
+		r.thrust /= 1.0 + r.weight / 60.0
+		// how well it guards, part of the body by part
+		let g: SuitGuardMap = SuitGuardMap.of(d)
+		r.cover = g.cover
+		r.guardBy = g.guardBy
+		r.guardAll = g.guardAll
+		r.complete = !d.pieces.isEmpty
+		if d.pieces.isEmpty { r.notes.append("Place some pieces: plates to guard, and parts that work.") }
+		if r.capacity <= 0 && !r.modules.isEmpty { r.notes.append("Fit a power core or a battery: its parts have no energy without one.") }
+		if r.capacity > 0 && r.output <= 0 && !r.modules.isEmpty { r.notes.append("Batteries hold energy but only a core can give it out quickly; fit a core.") }
+		if r.has(.hover) && r.thrust < 1.0 { r.notes.append(joinText("Its jets lift ", String(Int((r.thrust * 100).rounded())), "% of its weight: they slow a fall but can't climb.")) }
+		if r.has(.drill) && !d.pieces.contains(where: { $0.module == .drill && !$0.broken && ($0.bone == .armFront || $0.bone == .armBack) }) {
+			r.notes.append("A drill works only on an arm.")
+		}
+		if r.broken > 0 { r.notes.append(joinText(String(r.broken), r.broken == 1 ? " piece is" : " pieces are", " broken: mend them at an Assembly Station.")) }
+		for st in d.items.values { r.drainMul *= customEnergyMul(st) }
+		// a drill must be on an arm to bore
+		if !d.pieces.contains(where: { $0.module == .drill && !$0.broken && ($0.bone == .armFront || $0.bone == .armBack) }) {
+			r.counts[ExoModule.drill.rawValue] = nil
+			r.modules.removeAll { $0 == .drill }
+			r.drillTier = 0
+		}
 		return r
+	}
+}
+
+/// How well a design guards, worked out over the body cell by cell (each cell split three by three)
+struct SuitGuardMap {
+	var cover: [Double] = [0, 0, 0, 0, 0]
+	var guardBy: [Double] = [0, 0, 0, 0, 0]
+	var guardAll: Double = 0
+
+	static func of(_ d: SuitDesign) -> SuitGuardMap {
+		var g = SuitGuardMap()
+		var total: Double = 0
+		var n: Double = 0
+		let u: Int = suitUnit
+		for sec in SuitSection.allCases {
+			var covered: Double = 0
+			var stop: Double = 0
+			var cells: Double = 0
+			for (cx, cy) in SuitBody.cells[sec.rawValue] {
+				for sy in 0..<u {
+					for sx in 0..<u {
+						let px: Double = Double(cx * u + sx) + 0.5
+						let py: Double = Double(cy * u + sy) + 0.5
+						let pass: Double = suitPass(d, px, py).0
+						if pass < 0.999 { covered += 1 }
+						stop += 1.0 - pass
+						cells += 1
+					}
+				}
+			}
+			if cells > 0 {
+				g.cover[sec.rawValue] = covered / cells
+				g.guardBy[sec.rawValue] = stop / cells
+			}
+			total += stop
+			n += cells
+		}
+		g.guardAll = n > 0 ? total / n : 0
+		return g
+	}
+}
+
+/// What a piece stops of a blow that lands on it (0 ... 0.8): plates by their metal and thickness,
+/// less as they wear; frames a little; working parts hardly at all
+func suitShare(_ p: SuitPiece) -> Double {
+	if p.broken { return 0 }
+	let mi: SuitMatInfo = suitMat(p)
+	var s: Double
+	switch p.kind {
+	case .plate: s = clampD(0.2 * mi.protect * Double(p.thick), 0.05, 0.8)
+	case .frame: s = clampD(0.08 * mi.protect * Double(p.thick), 0.02, 0.4)
+	case .core, .module: s = 0.06
+	}
+	return s * (1.0 - 0.5 * clampD(p.dmg, 0, 1))
+}
+
+/// What gets through a blow at a body point (suit units, standing still), and the pieces over it
+/// outermost first (the share each one takes is its own; a blow passes through them in turn)
+func suitPass(_ d: SuitDesign, _ px: Double, _ py: Double) -> (Double, [Int]) {
+	var over: [Int] = []
+	for (i, p) in d.pieces.enumerated() where !p.broken && p.covers(px, py) { over.append(i) }
+	if over.isEmpty { return (1.0, []) }
+	over.sort { (a: Int, b: Int) -> Bool in
+		let la: Int = d.pieces[a].bone.layer
+		let lb: Int = d.pieces[b].bone.layer
+		return la != lb ? la > lb : a > b
+	}
+	var pass: Double = 1.0
+	for i in over { pass *= 1.0 - suitShare(d.pieces[i]) }
+	return (pass, over)
+}
+
+/// How much a piece can take before it breaks
+func suitPieceHP(_ p: SuitPiece) -> Double {
+	let mi: SuitMatInfo = suitMat(p)
+	switch p.kind {
+	case .plate, .frame: return 6.0 + p.area * Double(p.thick) * mi.durability * 0.35
+	case .core: return 14
+	case .module: return 10
+	}
+}
+
+/// What a piece costs to make: units of its material (plates and frames), or its item (cores and parts)
+func suitPieceCost(_ p: SuitPiece) -> (Item, Int)? {
+	if p.kind != .plate && p.kind != .frame { return nil }
+	let per: Double = p.kind == .plate ? 40.0 : 80.0
+	let n: Int = max(1, Int(ceil(p.area * Double(p.thick) / per)))
+	return (suitMat(p).cost, n)
+}
+
+/// A bill: items to pay and to give back
+struct SuitBill {
+	var pay: [Item: Int] = [:]
+	var back: [Item: Int] = [:]
+	/// item stacks to take from the bag, and to give back (cores, parts, old suit parts)
+	var take: [Stack] = []
+	var give: [Stack] = []
+
+	var isEmpty: Bool { return pay.isEmpty && back.isEmpty && take.isEmpty && give.isEmpty }
+
+	/// what is paid, in words
+	func payText() -> String {
+		var parts: [String] = []
+		for (it, n) in pay.sorted(by: { $0.key.name < $1.key.name }) { parts.append(joinText(String(n), " ", it.name)) }
+		for s in take { parts.append(s.item.name) }
+		return parts.joined(separator: ", ")
+	}
+}
+
+extension SuitDesign {
+	/// What changing this design into `plan` costs: new and changed pieces are paid for, pieces taken
+	/// off give back what is left of them (a damaged piece less), and an item comes back when the last
+	/// piece of its group goes
+	func bill(to plan: SuitDesign) -> SuitBill {
+		var b = SuitBill()
+		var old: [Int: SuitPiece] = [:]
+		for p in pieces { old[p.id] = p }
+		var keep: Set<Int> = []
+		for p in plan.pieces {
+			if let o = old[p.id], o.sameMake(p) {
+				keep.insert(p.id)
+				continue
+			}
+			if let c = suitPieceCost(p) { b.pay[c.0, default: 0] += c.1 }
+		}
+		for p in pieces where !keep.contains(p.id) {
+			if let c = suitPieceCost(p) {
+				let n: Int = Int(floor(Double(c.1) * (1.0 - p.dmg)))
+				if n > 0 { b.back[c.0, default: 0] += n }
+			}
+		}
+		// items: groups in the plan that are new, groups no longer used
+		let usedNow: Set<Int> = Set(plan.pieces.map { $0.src }.filter { $0 != 0 })
+		for (g, st) in plan.items where usedNow.contains(g) && items[g] != st { b.take.append(st) }
+		for (g, st) in items where !usedNow.contains(g) || plan.items[g] != st { b.give.append(st) }
+		// what is both paid and given back of the same item only costs the difference
+		for (it, n) in b.back {
+			if let p = b.pay[it] {
+				let m: Int = min(p, n)
+				b.pay[it] = p - m == 0 ? nil : p - m
+				b.back[it] = n - m == 0 ? nil : n - m
+			}
+		}
+		return b
+	}
+
+	/// What mending every damaged piece costs: its share of its material (cores and parts: copper)
+	func repairBill() -> [Item: Int] {
+		var out: [Item: Int] = [:]
+		for p in pieces where p.dmg > 0.001 {
+			if let c = suitPieceCost(p) {
+				out[c.0, default: 0] += max(1, Int(ceil(Double(c.1) * p.dmg)))
+			} else {
+				out[.mat(.copperBar), default: 0] += max(1, Int(ceil(2.0 * p.dmg)))
+			}
+		}
+		return out
 	}
 }
 
 extension Game {
 	// MARK: suit state
 
-	/// a suit is on and has its frame and core
+	/// a suit is on
 	var suitWorn: Bool { return suit.worn }
 
 	/// the suit's numbers, worked out again only when it changes
@@ -15032,8 +14089,8 @@ extension Game {
 		return true
 	}
 
-	/// Spends energy over time for a module that runs continuously, within what the core can give
-	/// each second; false when the core can't keep it going
+	/// Spends energy over time for a module that runs continuously, within what the cores can give
+	/// each second; false when they can't keep it going
 	func suitRun(_ m: ExoModule, _ perSec: Double, _ dt: Double) -> Bool {
 		if !suitHas(m) { return false }
 		let st: ExoStats = suitStats
@@ -15048,47 +14105,228 @@ extension Game {
 		return true
 	}
 
-	/// Once a frame while the suit is worn: the core refills a little, and the modules that run by
-	/// themselves (lamp, seal, jets, sprint) take their share of its output
+	/// A point of the suit (suit units, the body standing still) in the world, as the player stands and
+	/// faces now
+	func suitPoint(_ x: Double, _ y: Double) -> (Double, Double) {
+		let ax: Double = x / Double(suitUnit) - 5.0
+		let ay: Double = y / Double(suitUnit) - 16.0
+		return (pb.x + Double(facing) * ax * 0.125, pb.y + ay * 0.125)
+	}
+
+	/// Once a frame while the suit is worn: the cores refill a little (and the sun through solar
+	/// panels), the parts that run by themselves take their share, jets lift, wings glide, turrets shoot
 	func updateSuit(_ dt: Double) {
 		// the load counts everything run since the last frame's end (the drill runs earlier in the
-		// frame, while mining), so all modules share the core's output together
+		// frame, while mining), so all modules share the cores' output together
 		defer {
 			suitLastLoad = suitLoad
 			suitLoad = 0
 		}
 		suitHover = false
+		suitBeams.removeAll()
 		if !suit.worn { return }
 		let st: ExoStats = suitStats
 		if !st.complete {
 			suit.worn = false
 			suitChanged()
-			say("The suit can't run without its chest frame and core.", 2.0)
 			return
 		}
-		suit.energy = min(st.capacity, suit.energy + st.recharge * dt)
+		var gain: Double = st.recharge
+		if st.solar > 0 && suitInSun() { gain += st.solar * dayFactor }
+		suit.energy = min(st.capacity, suit.energy + gain * dt)
 		if dead || inVehicle != nil || mounted != nil { return }
 		// the seal works only while something it guards against is around
-		if suitStats.has(.seal) && sealNeeded() { _ = suitRun(.seal, 2.0, dt) }
-		// jets: hold jump in the air to hover
-		if suitStats.has(.hover) && jumpHeld && !pb.onGround && !pb.inWater && pb.vy > -2.0 && !flying {
-			if suitRun(.hover, 6.0, dt) {
-				suitHover = true
-				pb.vy = min(pb.vy, 0.6)
-				fallPeak = 0
-				if frameNo % 3 == 0 { spawnParticles(pb.x, pb.y + 0.05, 0xFF9A3A, 1, 1.5, 0.25, 6) }
-			}
-		}
-		if suitStats.has(.sprint) && abs(pb.vx) > 4.0 && pb.onGround { suitSprinting = suitRun(.sprint, 1.2, dt) } else { suitSprinting = false }
+		if st.has(.seal) && sealNeeded() { _ = suitRun(.seal, 2.0, dt) }
+		suitFly(st, dt)
+		if st.has(.sprint) && abs(pb.vx) > 4.0 && pb.onGround { suitSprinting = suitRun(.sprint, 1.2, dt) } else { suitSprinting = false }
 		// the lamp lights itself in the dark: at night, under ground, in the Umbral realm
-		if suitStats.has(.lamp) && suitNeedsLight() { suitLit = suitRun(.lamp, 0.25, dt) } else { suitLit = false }
-		if suitStats.has(.servo) { _ = suitRun(.servo, 0.1, dt) }
-		if suit.energy <= 0.01 && !suitEmptyWarned {
+		if st.has(.lamp) && suitNeedsLight() { suitLit = suitRun(.lamp, 0.25, dt) } else { suitLit = false }
+		if st.has(.servo) { _ = suitRun(.servo, 0.1, dt) }
+		if st.has(.magnet) && suitRun(.magnet, 0.3, dt) { suitPull(st, dt) }
+		if st.has(.turret) { suitTurrets(st, dt) }
+		if suitFireHeld && (st.has(.cannon) || st.has(.laser)) { suitFire(st, dt) }
+		if suit.energy <= 0.01 && !suitEmptyWarned && !st.modules.isEmpty {
 			suitEmptyWarned = true
-			say("Suit energy is spent: its modules are dead weight until it charges.", 2.5)
+			say("Suit energy is spent: its parts are dead weight until it charges.", 2.5)
 		} else if suit.energy > 5 {
 			suitEmptyWarned = false
 		}
+	}
+
+	/// Under the open sky (for solar panels)
+	func suitInSun() -> Bool {
+		if !dimHasSky(world.dim) { return false }
+		return world.isSkyExposed(Int(floor(pb.x)), Int(floor(pb.y - 1.6)))
+	}
+
+	/// Jets and wings, with jump held in the air: the jets push along the way they point (lifting the
+	/// suit if their lift beats its weight), and wings hold a fall to a glide
+	func suitFly(_ st: ExoStats, _ dt: Double) {
+		if !jumpHeld || pb.onGround || pb.inWater || flying { return }
+		var glide: Bool = false
+		if st.has(.hover) {
+			let rate: Double = 2.5 * max(0.3, st.strength(.hover))
+			if suitRun(.hover, rate, dt) {
+				suitHover = true
+				var push: Double = 0
+				for p in suit.d.working where p.module == .hover {
+					let lift: Double = clampD(0.25 + p.area * 0.012, 0.25, 1.0)
+					push += lift * sin(p.rot * Double.pi / 180.0)
+				}
+				pb.vy -= gravityG * st.thrust * dt
+				pb.vy = max(pb.vy, -8.0)
+				pb.vx += Double(facing) * push * gravityG * 0.5 * dt
+				fallPeak = 0
+				if frameNo % 3 == 0 {
+					for p in suit.d.working where p.module == .hover {
+						let q: (Double, Double) = suitPoint(p.x, p.y + p.h * 0.5)
+						spawnParticles(q.0, q.1, 0xFF9A3A, 1, 1.5, 0.25, 6)
+					}
+				}
+			}
+		}
+		if st.wingArea > 0 && pb.vy > 0 {
+			// the more wing, the slower the fall, and a little carry forward
+			let maxFall: Double = clampD(7.0 - st.wingArea * 0.06, 1.2, 7.0)
+			if pb.vy > maxFall {
+				pb.vy = maxFall
+				glide = true
+			}
+			if glide {
+				let carry: Double = min(3.0, st.wingArea * 0.03)
+				pb.vx += Double(facing) * carry * dt * 4.0
+				fallPeak = 0
+			}
+		}
+	}
+
+	/// The magnet draws dropped things to the player
+	func suitPull(_ st: ExoStats, _ dt: Double) {
+		let r: Double = 6.0 + 2.0 * Double(max(0, st.count(.magnet) - 1))
+		for i in drops.indices {
+			let dx: Double = pb.x - drops[i].x
+			let dy: Double = (pb.y - 0.8) - drops[i].y
+			let d: Double = sqrt(dx * dx + dy * dy)
+			if d > r || d < 0.3 || drops[i].heldBack { continue }
+			drops[i].vx += dx / d * 18.0 * dt
+			drops[i].vy += dy / d * 18.0 * dt - 6.0 * dt
+		}
+	}
+
+	/// The nearest foe in reach of a point, and in sight of it
+	func suitTarget(_ x: Double, _ y: Double, _ reach: Double) -> Mob? {
+		var best: Mob? = nil
+		var bd: Double = reach
+		for m in mobsNear(x - reach, x + reach) where m.hp > 0 && !m.removed && !m.downed && isThreat(m) {
+			let d: Double = hypot(m.b.x - x, m.b.cy - y)
+			if d < bd && world.lineClear(x, y, m.b.x, m.b.cy) {
+				bd = d
+				best = m
+			}
+		}
+		return best
+	}
+
+	/// Turrets find the nearest foe and shoot at it by themselves (energy each shot)
+	func suitTurrets(_ st: ExoStats, _ dt: Double) {
+		for p in suit.d.working where p.module == .turret {
+			let cd: Double = (suitGunCD[p.id] ?? 0) - dt
+			if cd > 0 {
+				suitGunCD[p.id] = cd
+				continue
+			}
+			let o: (Double, Double) = suitPoint(p.x, p.y)
+			guard let m = suitTarget(o.0, o.1, 12.0) else {
+				suitGunCD[p.id] = 0.25
+				continue
+			}
+			if !suitSpend(.turret, 1.2) {
+				suitGunCD[p.id] = 0.5
+				continue
+			}
+			let k: Double = suitPartPower(p)
+			let a: Double = atan2(m.b.cy - o.1, m.b.x + m.b.vx * 0.15 - o.0)
+			suitShoot(.bullet, o, a, 40.0, (3.0 + min(3.0, p.area * 0.05)) * k, 2.0)
+			suitGunCD[p.id] = 1.1
+			sfx(.gun, at: o.0, 0.25)
+		}
+	}
+
+	/// Cannons and lasers, while the suit's FIRE control is held: at the aim, or the nearest foe
+	func suitFire(_ st: ExoStats, _ dt: Double) {
+		for p in suit.d.working where p.module == .cannon || p.module == .laser {
+			let o: (Double, Double) = suitPoint(p.x, p.y)
+			var tx: Double = o.0 + Double(facing) * 10.0
+			var ty: Double = o.1
+			if aimValid {
+				tx = aimX
+				ty = aimY
+			} else if let m = suitTarget(o.0, o.1, 16.0) {
+				tx = m.b.x
+				ty = m.b.cy
+			}
+			let a: Double = atan2(ty - o.1, tx - o.0)
+			let k: Double = suitPartPower(p)
+			if p.module == .cannon {
+				let cd: Double = (suitGunCD[p.id] ?? 0) - dt
+				suitGunCD[p.id] = cd
+				if cd > 0 || !suitSpend(.cannon, 10.0) { continue }
+				suitShoot(.shell, o, a, 30.0, 14.0 * k, 9.0)
+				suitGunCD[p.id] = 2.2
+				spawnParticles(o.0, o.1, 0xFFC050, 6, 4.0, 0.25, 2)
+				pb.vx -= cos(a) * 3.0
+				addShake(0.15)
+				sfx(.blunderbuss, at: o.0, 0.7)
+			} else {
+				if !suitRun(.laser, 5.0, dt) { continue }
+				suitLaser(o, a, 10.0 * k * dt, p.id)
+			}
+		}
+	}
+
+	/// A shot from the suit: the player's own
+	func suitShoot(_ kind: ProjKind, _ o: (Double, Double), _ a: Double, _ speed: Double, _ dmg: Double, _ knock: Double) {
+		var q = Projectile(kind: kind, x: o.0 + cos(a) * 0.4, y: o.1 + sin(a) * 0.4, vx: cos(a) * speed + pb.vx * 0.5, vy: sin(a) * speed, dmg: dmg, fromPlayer: true, gravity: kind == .shell ? 14 : 2)
+		q.life = kind == .shell ? 4.0 : 1.2
+		q.w = kind == .shell ? 0.3 : 0.12
+		q.source = .player
+		q.owner = kind == .shell ? suitShellOwner : 0
+		q.uid = newID()
+		q.knock = knock
+		projectiles.append(q)
+	}
+
+	/// A laser's beam: it runs straight until a block stops it, and burns the first foe in its way
+	func suitLaser(_ o: (Double, Double), _ a: Double, _ dmg: Double, _ id: Int) {
+		let dx: Double = cos(a)
+		let dy: Double = sin(a)
+		var x: Double = o.0
+		var y: Double = o.1
+		var hitMob: Mob? = nil
+		var k: Int = 0
+		while k < 56 {
+			x += dx * 0.25
+			y += dy * 0.25
+			if world.tile(Int(floor(x)), Int(floor(y))).solid { break }
+			if let m = mobsNear(x - 1, x + 1).first(where: { $0.hp > 0 && !$0.removed && isThreat($0) && x >= $0.b.left && x <= $0.b.right && y >= $0.b.top && y <= $0.b.y }) {
+				hitMob = m
+				break
+			}
+			k += 1
+		}
+		suitBeams.append((o.0, o.1, x, y))
+		guard let m = hitMob else { return }
+		var info = DamageInfo(amount: dmg, type: .magic, source: .player)
+		info.originX = o.0
+		info.originY = o.1
+		applyMobDamage(m, info)
+		if frameNo % 4 == 0 { spawnParticles(x, y, 0xFF5A8A, 2, 2.0, 0.2, 0) }
+	}
+
+	/// How strong a working part is: a mod's part by its own number, the game's by 1
+	func suitPartPower(_ p: SuitPiece) -> Double {
+		if !p.modPart.isEmpty, let mp = ModRuntime.shared.suitParts[p.modPart] { return mp.power }
+		return 1.0
 	}
 
 	/// Dark enough for the helmet lamp
@@ -15109,11 +14347,11 @@ extension Game {
 		return false
 	}
 
-	/// The suit's speed: its weight against its strength, and the sprint actuators
+	/// The suit's speed: its weight against its strength, and the boosters
 	var suitSpeedMul: Double {
 		if !suit.worn { return 1.0 }
 		var m: Double = suitStats.speedMul
-		if suitSprinting { m *= 1.2 }
+		if suitSprinting { m *= min(1.4, 1.0 + 0.2 * suitStats.strength(.sprint)) }
 		return m
 	}
 
@@ -15121,14 +14359,14 @@ extension Game {
 	func suitJumpMul() -> Double {
 		if !suit.worn { return 1.0 }
 		var m: Double = suitStats.jumpMul
-		if suitHas(.leap) && suitSpend(.leap, 3.0) { m *= 1.35 }
+		if suitHas(.leap) && suitSpend(.leap, 3.0) { m *= min(1.6, 1.0 + 0.35 * suitStats.strength(.leap)) }
 		return m
 	}
 
-	/// A melee blow through the suit: servos hit harder (energy each swing)
+	/// A melee blow through the suit: servos hit harder
 	func suitMelee(_ p0: MeleeProfile) -> MeleeProfile {
 		var p: MeleeProfile = p0
-		if suitHas(.servo) { p.damage *= 1.25 }
+		if suitHas(.servo) { p.damage *= 1.0 + 0.25 * min(2.0, suitStats.strength(.servo)) }
 		return p
 	}
 
@@ -15136,18 +14374,20 @@ extension Game {
 	func suitMeleeHit(_ m: Mob) {
 		if m.hp <= 0 || !suitHas(.gauntlet) { return }
 		if !suitSpend(.gauntlet, 1.5) { return }
-		var info = DamageInfo(amount: 4, type: .shock, source: .player)
+		var info = DamageInfo(amount: 4 * max(1.0, suitStats.strength(.gauntlet)), type: .shock, source: .player)
 		info.originX = pb.x
 		info.key = newID()
 		applyMobDamage(m, info)
 		spawnParticles(m.b.x, m.b.cy, 0xFFF07A, 5, 3.0, 0.2, 0)
 	}
 
-	/// The share of a hit the suit takes: the seal against fire, water and lightning, the metals'
-	/// own resistances, and the barrier turning some of what is left into energy drain
-	func suitGuard(_ amount: Double, _ type: DamageType) -> Double {
+	/// The share of a blow the suit lets through: its plates where it lands (each takes the damage
+	/// itself, layer by layer), the metals and the seal against fire, water and lightning, and the
+	/// barrier turning some of what is left into energy drain
+	func suitGuard(_ amount: Double, _ info: DamageInfo) -> Double {
 		if !suit.worn { return amount }
 		let st: ExoStats = suitStats
+		let type: DamageType = info.type
 		var a: Double = amount
 		if type == .fire || type == .lava {
 			a *= 1.0 - st.fireCut
@@ -15158,14 +14398,99 @@ extension Game {
 			if suitHas(.seal) { a *= 0.5 }
 		}
 		if type == .drown && suitHas(.seal) { a = 0 }
+		if a > 0 && !type.bypassesArmor && type != .shock { a = suitTakeBlow(a, info) }
 		if a > 0 && suitHas(.barrier) && type != .starve && type != .drown {
-			let take: Double = a * 0.4
+			let take: Double = a * min(0.6, 0.4 * suitStats.strength(.barrier))
 			if suitSpend(.barrier, take * 3.0) {
 				a -= take
 				spawnParticles(pb.x, pb.cy, 0xC07CFF, 4, 2.5, 0.25, 0)
 			}
 		}
 		return a
+	}
+
+	/// How high on the body a blow lands (0 the top of the head ... 1 the feet; nil: anywhere)
+	func suitHitHeight(_ info: DamageInfo) -> Double? {
+		var oy: Double? = nil
+		if info.source.kind == .mob, let m = mobs.first(where: { $0.id == info.source.id }) { oy = m.b.cy }
+		if oy == nil && info.originY != 0 { oy = info.originY }
+		guard let y = oy else { return nil }
+		return clampD((y - pb.top) / max(0.5, pb.h), 0, 1)
+	}
+
+	/// A point on the body (suit units, standing still) a blow lands on: at about the height given,
+	/// spread a little, or anywhere on the body
+	func suitBodyPoint(_ f: Double?) -> (Double, Double) {
+		var cells: [(Int, Int)] = []
+		if let h = f {
+			let row: Int = clampI(1 + Int(((h + Double.random(in: -0.15...0.15)) * 15.0).rounded()), 1, 15)
+			for sec in SuitBody.cells {
+				for c in sec where abs(c.1 - row) <= 1 { cells.append(c) }
+			}
+		}
+		if cells.isEmpty { for sec in SuitBody.cells { cells += sec } }
+		let c: (Int, Int) = cells[Int.random(in: 0..<cells.count)]
+		let u: Double = Double(suitUnit)
+		return (Double(c.0) * u + Double.random(in: 0..<u), Double(c.1) * u + Double.random(in: 0..<u))
+	}
+
+	/// A blow on the suit: where it lands the pieces over the body take it in turn, outermost first,
+	/// each stopping its share and taking that much damage itself. A blast spreads over the body.
+	/// Returns what gets through.
+	func suitTakeBlow(_ amount: Double, _ info: DamageInfo) -> Double {
+		var d: SuitDesign = suit.d
+		if d.pieces.isEmpty { return amount }
+		var points: [(Double, Double)] = []
+		if info.type.isArea {
+			for _ in 0..<6 { points.append(suitBodyPoint(nil)) }
+		} else {
+			points.append(suitBodyPoint(suitHitHeight(info)))
+		}
+		let share: Double = 1.0 / Double(points.count)
+		var through: Double = 0
+		var broke: [String] = []
+		var look: Bool = false
+		for pt in points {
+			let over: [Int] = suitPass(d, pt.0, pt.1).1
+			var left: Double = amount * share
+			for i in over {
+				let took: Double = left * suitShare(d.pieces[i])
+				left -= took
+				let before: Int = Int(d.pieces[i].dmg * 3.0)
+				let hp: Double = suitPieceHP(d.pieces[i])
+				d.pieces[i].dmg = min(1.0, d.pieces[i].dmg + took * 1.3 / max(1.0, hp))
+				if d.pieces[i].broken {
+					broke.append(suitPieceName(d.pieces[i]))
+					let q: (Double, Double) = suitPoint(d.pieces[i].x, d.pieces[i].y)
+					spawnParticles(q.0, q.1, suitColor(d.pieces[i]), 7, 3.5, 0.5, 14)
+				} else if Int(d.pieces[i].dmg * 3.0) != before {
+					look = true
+				}
+			}
+			through += left
+		}
+		suit.d = d
+		if !broke.isEmpty {
+			sfx(.breakStone, 0.6)
+			if suitSayT <= clock {
+				suitSayT = clock + 2.0
+				say(joinText("A suit piece broke: ", broke[0], "."), 1.8)
+			}
+			suitChanged()
+		} else if look {
+			suitChanged()
+		}
+		return through
+	}
+
+	/// A piece's name, in words
+	func suitPieceName(_ p: SuitPiece) -> String {
+		if p.kind == .core, let c = p.core { return c.name }
+		if p.kind == .module {
+			if !p.modPart.isEmpty, let mp = ModRuntime.shared.suitParts[p.modPart] { return mp.name }
+			if let m = p.module { return m.name }
+		}
+		return joinText(suitMat(p).name.lowercased(), " ", p.kind == .plate ? "plate" : "frame", " on the ", p.bone.name.lowercased())
 	}
 
 	/// How much slower the cold gets in through the suit
@@ -15176,20 +14501,23 @@ extension Game {
 		return m
 	}
 
-	/// The drill arm, if it can bore right now: its tier (0: no drill)
+	/// The drill, if it can bore right now: its tier (0: no drill)
 	func suitDrillTier() -> Int {
 		if !suitHas(.drill) { return 0 }
 		return suitStats.drillTier
 	}
 
+	/// The suit covers the head (a hailstone can't reach it)
+	var suitHelmet: Bool { return suit.worn && suitStats.cover[SuitSection.head.rawValue] > 0.5 }
+
 	// MARK: putting the suit on and off
 
-	/// Puts the suit on: it needs its chest frame and core, and the armour slots for head, body and legs
-	/// must be free (armour worn there goes into the bag first). Returns what to say.
+	/// Puts the suit on: the armour slots for head, body and legs must be free (armour worn there goes
+	/// into the bag first). Returns what to say.
 	@discardableResult
 	func wearSuit() -> String {
 		let st: ExoStats = suitStats
-		if !st.complete { return st.notes.first ?? "The suit is not complete." }
+		if !st.complete { return st.notes.first ?? "The suit has no pieces yet." }
 		if suit.worn { return "You are already wearing it." }
 		for i in 0..<3 {
 			if let a = inv.armor[i] {
@@ -15230,45 +14558,78 @@ extension Game {
 		say("Your bag is full: it went on the ground.", 1.6)
 	}
 
-	/// Fits every part of a planned suit at once. A planned part comes from the suit itself if it is
-	/// already on it (moved or kept), otherwise out of the bag (the very item chosen, infusions and all);
-	/// the parts left over go back into the bag. If anything planned can't be found, nothing at all
-	/// changes. Returns what to say.
+	/// Gives items to the bag (what does not fit goes on the ground)
+	func giveItems(_ it: Item, _ n: Int) {
+		let left: Int = inv.add(it, n)
+		if left > 0 { spawnDrop(Stack(item: it, count: left), pb.x, pb.y - 1, 0, -2) }
+		bumpHUD()
+	}
+
+	/// Builds a planned design: new and changed pieces are paid for out of the bag (their metal, and the
+	/// cores and parts placed), pieces taken off give back what is left of them, and an item comes back
+	/// when the last piece of its group goes. All or nothing. Returns what to say.
 	@discardableResult
-	func applySuit(_ plan: ExoSuit) -> String {
-		for slot in ExoSlot.allCases {
-			if let n = plan[slot], !slot.fits(n.item) { return joinText(n.item.name, " doesn't fit the ", slot.name.lowercased(), ".") }
-		}
-		var pool: [Stack] = Array(suit.parts.values)
-		var bag: [Stack?] = inv.slots
-		for slot in ExoSlot.allCases {
-			guard let n = plan[slot] else { continue }
-			if let j = pool.firstIndex(of: n) {
-				pool.remove(at: j)
-			} else if let i = bag.firstIndex(where: { $0 == n }) {
-				bag[i] = nil
-			} else {
-				return joinText(n.item.name, " is no longer in your bag: nothing was changed.")
+	func applyDesign(_ plan0: SuitDesign) -> String {
+		var plan: SuitDesign = plan0
+		if plan.pieces.count > SuitDesign.maxPieces { return joinText("A suit holds at most ", String(SuitDesign.maxPieces), " pieces.") }
+		var now: [Int: SuitPiece] = [:]
+		for p in suit.d.pieces { now[p.id] = p }
+		for k in plan.pieces.indices {
+			plan.pieces[k].clamp()
+			// a piece kept as it was keeps its damage; a new or remade one is whole
+			if let o = now[plan.pieces[k].id], o.sameMake(plan.pieces[k]) { plan.pieces[k].dmg = o.dmg } else { plan.pieces[k].dmg = 0 }
+			if !isCreative && (plan.pieces[k].kind == .core || plan.pieces[k].kind == .module) && plan.items[plan.pieces[k].src] == nil {
+				return joinText(suitPieceName(plan.pieces[k]), " has to be made first (at the Assembly Station) and taken from your bag.")
 			}
 		}
-		inv.slots = bag
+		let used: Set<Int> = Set(plan.pieces.map { $0.src })
+		plan.items = plan.items.filter { used.contains($0.key) }
+		if plan.nextID <= (plan.pieces.map { $0.id }.max() ?? 0) { plan.nextID = (plan.pieces.map { $0.id }.max() ?? 0) + 1 }
+		let b: SuitBill = suit.d.bill(to: plan)
+		if !isCreative {
+			for (it, n) in b.pay where inv.total(it) < n {
+				return joinText("Not enough ", it.name, ": it takes ", String(n), " and you have ", String(inv.total(it)), ". Nothing was changed.")
+			}
+			var bag: [Stack?] = inv.slots
+			for st in b.take {
+				guard let i = bag.firstIndex(where: { $0 == st }) else { return joinText(st.item.name, " is no longer in your bag: nothing was changed.") }
+				bag[i] = nil
+			}
+			inv.slots = bag
+			for (it, n) in b.pay { _ = inv.remove(it, n) }
+			for (it, n) in b.back { giveItems(it, n) }
+			for st in b.give { addStack(st) }
+		}
 		let wasWorn: Bool = suit.worn
-		var next: ExoSuit = plan
-		next.worn = false
-		next.energy = suit.energy
-		next.off = suit.off
-		suit = next
-		// the parts taken off go back (after the new ones have left the bag, so there is room)
-		for b in pool { addStack(b) }
-		let st: ExoStats = ExoStats.of(suit)
+		suit.d = plan
+		let st: ExoStats = ExoStats.of(plan)
 		suit.energy = min(suit.energy, st.capacity)
-		if wasWorn && st.complete { suit.worn = true }
-		// a cargo pack taken off empties into the bag (nothing is left stranded in it)
 		if !st.has(.cargo) { emptyPack() }
+		if wasWorn && !st.complete { suit.worn = false }
 		suitChanged()
 		sfx(.craft, 0.7)
-		if wasWorn && !st.complete { return "Built. The suit came off: it needs a chest frame and a core to run." }
+		if wasWorn && !st.complete { return "Built. The suit came off: it has no pieces." }
 		return wasWorn ? "Built and still on." : "Built."
+	}
+
+	/// Mends every damaged and broken piece, paying its share of its metal (cores and parts: copper).
+	/// Returns what to say.
+	@discardableResult
+	func repairSuit() -> String {
+		let bill: [Item: Int] = suit.d.repairBill()
+		if bill.isEmpty { return "Nothing needs mending." }
+		if !isCreative {
+			for (it, n) in bill where inv.total(it) < n {
+				return joinText("Mending takes ", String(n), " ", it.name, " (you have ", String(inv.total(it)), ").")
+			}
+			for (it, n) in bill { _ = inv.remove(it, n) }
+		}
+		var d: SuitDesign = suit.d
+		for k in d.pieces.indices { d.pieces[k].dmg = 0 }
+		suit.d = d
+		suitChanged()
+		sfx(.craft, 0.6)
+		return "Every piece is whole again."
 	}
 
 	/// Opens the cargo pack (stored like a chest, under a key no block can have)
@@ -15346,121 +14707,426 @@ extension Game {
 		return true
 	}
 
-	/// The look the player's sprite takes from the suit (nil: not worn)
-	func suitLook() -> SuitLook? {
-		if !suit.worn { return nil }
-		var l: SuitLook = SuitLook()
-		func col(_ s: ExoSlot) -> UInt32 { return suit.material(s)?.color ?? 0 }
-		l.helmet = col(.helmet)
-		l.chest = col(.chest)
-		l.armL = col(.armL)
-		l.armR = col(.armR)
-		l.legs = col(.legs)
-		l.boots = col(.boots)
-		l.plateHead = col(.plateHead)
-		l.plateShoulders = col(.plateShoulders)
-		l.plateChest = col(.plateChest)
-		l.plateArms = col(.plateArms)
-		l.plateLegs = col(.plateLegs)
-		l.core = suit.core?.color ?? 0
-		let st: ExoStats = suitStats
-		l.drill = st.has(.drill)
-		l.lamp = st.has(.lamp)
-		l.pack = st.has(.cargo)
-		l.jets = st.has(.hover)
-		return l
+	/// What the player's sprite is drawn from: the suit's pieces and how damaged they look (0: no suit)
+	var suitDrawKey: Int {
+		if !suit.worn { return 0 }
+		var h: Hasher = Hasher()
+		for p in suit.d.pieces {
+			h.combine(p.id)
+			h.combine(p.x)
+			h.combine(p.y)
+			h.combine(p.w)
+			h.combine(p.h)
+			h.combine(p.rot)
+			h.combine(p.shape.rawValue)
+			h.combine(p.bone.rawValue)
+			h.combine(suitColor(p))
+			h.combine(Int(p.dmg * 3.0))
+		}
+		return h.finalize() | 1
 	}
 }
 
-/// How a worn suit looks on the player: a colour for each part (0: not fitted) and its modules
-struct SuitLook: Hashable {
-	var helmet: UInt32 = 0
-	var chest: UInt32 = 0
-	var armL: UInt32 = 0
-	var armR: UInt32 = 0
-	var legs: UInt32 = 0
-	var boots: UInt32 = 0
-	var plateHead: UInt32 = 0
-	var plateShoulders: UInt32 = 0
-	var plateChest: UInt32 = 0
-	var plateArms: UInt32 = 0
-	var plateLegs: UInt32 = 0
-	var core: UInt32 = 0
-	var drill: Bool = false
-	var lamp: Bool = false
-	var pack: Bool = false
-	var jets: Bool = false
+extension ExoSuit {
+	/// A suit built the old way (a part in each place) rebuilt piece by piece: each part becomes the
+	/// pieces that cover what it covered, in its metal. The parts themselves stay with the design (their
+	/// infusions still count) and come back to the bag when all their pieces are taken off.
+	mutating func migrate() {
+		if parts.isEmpty {
+			if design == nil { design = SuitDesign() }
+			return
+		}
+		var d: SuitDesign = design ?? SuitDesign()
+		for slot in ExoSlot.allCases {
+			guard let st = parts[slot.rawValue] else { continue }
+			let g: Int = d.newGroup()
+			d.items[g] = st
+			for p0 in SuitTemplates.oldPart(slot, st.item) {
+				var p: SuitPiece = p0
+				p.id = d.newID()
+				p.src = g
+				d.pieces.append(p)
+			}
+		}
+		parts = [:]
+		design = d
+	}
 }
 
-/// The suit drawn over a humanoid frame (22 x 17, the figure 10 wide from column 6): frame colours on
-/// the body, a visor across the face, plates where they are fitted, the core's glow, and the modules
-/// that show (a drill on the front arm, a lamp on the helmet, a pack on the back, jets on the boots)
-func paintSuit(_ cv: inout PixelBuf, _ l: SuitLook, legs: Int, pose: Int) {
-	let ox: Int = humanOX
-	func px(_ x: Int, _ y: Int, _ c: UInt32) { cv.ink(ox + x, y, inkS(c)) }
-	func lit(_ x: Int, _ y: Int, _ c: UInt32) { cv.ink(ox + x, y, inkF(c)) }
-	let dark: UInt32 = 0x2A2E36
-	if l.helmet != 0 {
-		// a closed helm: the face is behind a visor
-		for x in 3...6 { px(x, 1, l.helmet) }
-		for x in 2...7 { px(x, 2, l.helmet) }
-		px(2, 3, l.helmet)
-		px(3, 3, l.helmet)
-		for x in 4...7 { lit(x, 3, 0x60E0FF) }
-		for x in 2...7 { px(x, 4, shadeRGB(l.helmet, 0.85)) }
-		for x in 3...6 { px(x, 5, shadeRGB(l.helmet, 0.7)) }
-		if l.plateHead != 0 { for x in 3...6 { px(x, 1, shadeRGB(l.plateHead, 1.15)) } }
-		if l.lamp { lit(7, 2, 0xFFF4C0) }
+/// Ready-made pieces: what a part of a suit built the old way turns into, where a new working part
+/// goes first, and whole designs to start from
+enum SuitTemplates {
+	/// a piece: centre and size in sprite pixels (columns from the figure's left edge, rows from the
+	/// frame's top), made of a metal
+	static func piece(_ kind: SuitKind, _ bone: SuitBone, _ cx: Double, _ cy: Double, _ w: Double, _ h: Double, _ m: ExoMat, _ shape: SuitShape = .box) -> SuitPiece {
+		var p = SuitPiece()
+		let u: Double = Double(suitUnit)
+		p.kind = kind
+		p.bone = bone
+		p.x = cx * u
+		p.y = cy * u
+		p.w = w * u
+		p.h = h * u
+		p.mat = m.rawValue
+		p.shape = shape
+		return p
 	}
-	if l.chest != 0 {
-		for y in 7...9 { for x in 3...6 { px(x, y, l.chest) } }
-		for x in 2...7 { px(x, 10, dark) }
-		if l.plateChest != 0 {
-			for x in 3...6 { px(x, 7, shadeRGB(l.plateChest, 1.15)) }
-			for x in 3...6 { px(x, 8, l.plateChest) }
+
+	/// a working part where it first goes on the body
+	static func module(_ m: ExoModule) -> SuitPiece {
+		var p: SuitPiece
+		switch m {
+		case .drill: p = piece(.module, .armFront, 9.5, 9.5, 1.6, 1.0, .iron, .spike); p.rot = 90
+		case .gauntlet: p = piece(.module, .armBack, 1.5, 9.8, 2.0, 0.8, .iron)
+		case .servo: p = piece(.module, .torso, 5.0, 7.0, 2.6, 0.7, .iron, .rounded)
+		case .sprint: p = piece(.module, .legFront, 7.0, 13.5, 1.4, 1.2, .iron)
+		case .leap: p = piece(.module, .legBack, 3.0, 15.6, 1.8, 0.6, .iron)
+		case .hover: p = piece(.module, .back, -0.5, 10.0, 1.4, 2.4, .iron, .rounded)
+		case .lamp: p = piece(.module, .head, 7.6, 2.6, 1.0, 1.0, .iron, .round)
+		case .seal: p = piece(.module, .head, 5.0, 5.6, 4.0, 0.6, .iron)
+		case .cargo: p = piece(.module, .back, -1.0, 9.0, 2.4, 4.0, .iron, .rounded)
+		case .barrier: p = piece(.module, .torso, 5.0, 10.0, 1.4, 1.4, .iron, .round)
+		case .wing: p = piece(.module, .back, -3.0, 8.0, 5.0, 2.2, .iron, .wedge); p.rot = -20
+		case .battery: p = piece(.module, .back, 0.2, 8.4, 1.2, 2.4, .iron)
+		case .solar: p = piece(.module, .back, -1.6, 6.6, 3.0, 0.6, .iron)
+		case .turret: p = piece(.module, .torso, 5.2, 6.6, 1.6, 1.2, .iron, .rounded)
+		case .cannon: p = piece(.module, .torso, 6.8, 6.8, 3.0, 1.0, .iron)
+		case .laser: p = piece(.module, .armFront, 9.2, 8.6, 1.8, 0.8, .iron)
+		case .magnet: p = piece(.module, .torso, 4.0, 9.6, 1.2, 1.2, .iron, .round)
 		}
-		if l.core != 0 {
-			lit(4, 8, l.core)
-			lit(5, 8, shadeRGB(l.core, 1.3))
+		p.part = m.rawValue
+		return p
+	}
+
+	/// a power core over the heart
+	static func core(_ c: ExoCore) -> SuitPiece {
+		var p: SuitPiece = piece(.core, .torso, 5.0, 8.3, 1.6, 1.6, .iron, .round)
+		p.part = c.rawValue
+		return p
+	}
+
+	/// The pieces a part of a suit built the old way becomes
+	static func oldPart(_ slot: ExoSlot, _ it: Item) -> [SuitPiece] {
+		switch it {
+		case .exoCore(let c): return [core(c)]
+		case .exoModule(let m): return [module(m)]
+		case .exoPart(_, let m), .exoPlate(let m):
+			switch slot {
+			case .helmet:
+				var visor: SuitPiece = piece(.frame, .head, 6.0, 3.5, 4.0, 1.0, m)
+				visor.color = 0x60E0FF
+				return [piece(.plate, .head, 5.0, 3.5, 6.0, 5.0, m, .rounded), visor]
+			case .chest: return [piece(.plate, .torso, 5.0, 9.0, 4.0, 6.0, m)]
+			case .armL: return [piece(.plate, .armBack, 2.0, 8.5, 2.0, 3.0, m)]
+			case .armR: return [piece(.plate, .armFront, 8.0, 8.5, 2.0, 3.0, m)]
+			case .legs: return [piece(.plate, .legBack, 3.0, 13.5, 2.0, 3.0, m), piece(.plate, .legFront, 7.0, 13.5, 2.0, 3.0, m)]
+			case .boots: return [piece(.plate, .legBack, 3.0, 15.5, 2.2, 1.0, m), piece(.plate, .legFront, 7.0, 15.5, 2.2, 1.0, m)]
+			case .plateHead: return [piece(.plate, .head, 5.0, 1.5, 4.0, 1.0, m)]
+			case .plateShoulders: return [piece(.plate, .armBack, 2.0, 7.5, 2.4, 1.0, m, .rounded), piece(.plate, .armFront, 8.0, 7.5, 2.4, 1.0, m, .rounded)]
+			case .plateChest: return [piece(.plate, .torso, 5.0, 8.0, 4.0, 2.0, m)]
+			case .plateArms: return [piece(.plate, .armBack, 2.0, 9.5, 2.0, 1.0, m), piece(.plate, .armFront, 8.0, 9.5, 2.0, 1.0, m)]
+			case .plateLegs: return [piece(.plate, .legBack, 3.0, 13.5, 2.0, 1.0, m), piece(.plate, .legFront, 7.0, 13.5, 2.0, 1.0, m)]
+			default: return []
+			}
+		default: return []
 		}
 	}
-	// arms: the back arm (left column pair) and the front arm (right pair, unless a pose draws its own)
-	let frontFree: Bool = pose < 2
-	for y in 7...9 {
-		if l.armL != 0 { px(1, y, l.armL); px(2, y, shadeRGB(l.armL, 0.85)) }
-		if l.armR != 0 && frontFree { px(7, y, l.armR); px(8, y, shadeRGB(l.armR, 0.85)) }
-	}
-	if l.plateShoulders != 0 && l.chest != 0 {
-		px(1, 7, shadeRGB(l.plateShoulders, 1.2))
-		px(2, 7, l.plateShoulders)
-		if frontFree { px(7, 7, l.plateShoulders); px(8, 7, shadeRGB(l.plateShoulders, 1.2)) }
-		px(1, 6, l.plateShoulders)
-		if frontFree { px(8, 6, l.plateShoulders) }
-	}
-	if l.plateArms != 0 {
-		if l.armL != 0 { px(1, 9, l.plateArms); px(2, 9, l.plateArms) }
-		if l.armR != 0 && frontFree { px(7, 9, l.plateArms); px(8, 9, l.plateArms) }
-	}
-	if l.drill && l.armR != 0 && frontFree {
-		lit(9, 9, 0xD8D8E0)
-		lit(10, 9, 0xB0B0B8)
-		lit(11, 9, 0x8A8A94)
-	}
-	// legs and boots follow the stride of the frame
-	let legCols: [Int] = legs == 1 ? [1, 2, 7, 8] : (legs == 2 ? [3, 4, 5, 6] : [2, 3, 6, 7])
-	if l.legs != 0 {
-		for y in 11...14 { for x in legCols { px(x, y, y == 11 ? shadeRGB(l.legs, 0.9) : l.legs) } }
-		if l.plateLegs != 0 { for x in legCols { px(x, 13, shadeRGB(l.plateLegs, 1.15)) } }
-	}
-	if l.boots != 0 {
-		for x in legCols { px(x, 15, l.boots) }
-		if l.jets { lit(legCols[0], 15, 0xFF9A3A) }
-	}
-	if l.pack {
-		for y in 7...10 {
-			cv.ink(ox - 1, y, inkS(0x6A4A2A))
-			cv.ink(ox, y, inkS(0x8A6A3A))
+
+	/// Whole designs to start from: a light suit, a knight's, a heavy one, and a flyer's
+	static let names: [String] = ["Empty", "Light", "Knight", "Heavy", "Flyer"]
+
+	static func design(_ i: Int, _ m: ExoMat) -> SuitDesign {
+		var d = SuitDesign()
+		var ps: [SuitPiece] = []
+		func plate(_ b: SuitBone, _ cx: Double, _ cy: Double, _ w: Double, _ h: Double, _ s: SuitShape = .box, thick: Int = 1, rot: Double = 0) {
+			var p: SuitPiece = piece(.plate, b, cx, cy, w, h, m, s)
+			p.thick = thick
+			p.rot = rot
+			ps.append(p)
 		}
+		switch i {
+		case 1:
+			plate(.head, 5.0, 2.0, 5.0, 2.4, .rounded)
+			plate(.torso, 5.0, 8.4, 4.0, 3.4)
+			plate(.legBack, 3.0, 13.6, 2.0, 2.0)
+			plate(.legFront, 7.0, 13.6, 2.0, 2.0)
+		case 2:
+			plate(.head, 5.0, 3.0, 6.0, 4.4, .rounded)
+			var visor: SuitPiece = piece(.frame, .head, 6.2, 3.4, 3.6, 0.7, m)
+			visor.color = 0x2A2E36
+			ps.append(visor)
+			plate(.head, 5.0, 0.8, 1.0, 1.6, .spike)
+			plate(.torso, 5.0, 8.6, 4.0, 4.2)
+			plate(.torso, 5.0, 10.6, 6.0, 1.0)
+			plate(.armBack, 2.0, 7.4, 2.8, 1.4, .rounded)
+			plate(.armFront, 8.0, 7.4, 2.8, 1.4, .rounded)
+			plate(.armBack, 2.0, 9.0, 2.0, 2.0)
+			plate(.armFront, 8.0, 9.0, 2.0, 2.0)
+			plate(.legBack, 3.0, 13.4, 2.0, 3.0)
+			plate(.legFront, 7.0, 13.4, 2.0, 3.0)
+			plate(.legBack, 3.0, 15.5, 2.4, 1.0, .rounded)
+			plate(.legFront, 7.0, 15.5, 2.4, 1.0, .rounded)
+		case 3:
+			plate(.head, 5.0, 3.0, 6.4, 5.0, .rounded, thick: 2)
+			plate(.torso, 5.0, 8.8, 4.6, 5.0, thick: 2)
+			plate(.torso, 5.0, 8.4, 3.0, 2.0, thick: 1)
+			plate(.armBack, 2.0, 7.3, 3.2, 1.8, .rounded, thick: 2)
+			plate(.armFront, 8.0, 7.3, 3.2, 1.8, .rounded, thick: 2)
+			plate(.armBack, 2.0, 9.0, 2.2, 2.4, thick: 2)
+			plate(.armFront, 8.0, 9.0, 2.2, 2.4, thick: 2)
+			plate(.torso, 5.0, 11.0, 6.4, 1.6, thick: 2)
+			plate(.legBack, 3.0, 13.5, 2.4, 3.2, thick: 2)
+			plate(.legFront, 7.0, 13.5, 2.4, 3.2, thick: 2)
+			plate(.legBack, 3.0, 15.4, 2.8, 1.4, .rounded, thick: 2)
+			plate(.legFront, 7.0, 15.4, 2.8, 1.4, .rounded, thick: 2)
+		case 4:
+			plate(.head, 5.0, 2.6, 5.4, 3.6, .rounded)
+			plate(.torso, 5.0, 8.6, 4.0, 3.6)
+			plate(.legBack, 3.0, 13.6, 2.0, 2.4)
+			plate(.legFront, 7.0, 13.6, 2.0, 2.4)
+			var w: SuitPiece = module(.wing)
+			w.mat = m.rawValue
+			ps.append(w)
+			var j1: SuitPiece = module(.hover)
+			j1.mat = m.rawValue
+			ps.append(j1)
+			var j2: SuitPiece = module(.hover)
+			j2.mat = m.rawValue
+			j2.y += 6
+			ps.append(j2)
+		default: break
+		}
+		for var p in ps {
+			p.id = d.newID()
+			d.pieces.append(p)
+		}
+		return d
+	}
+}
+
+// MARK: - Suits in mods: materials, parts and whole designs
+
+/// A metal (or any material) of a mod's for suit pieces: its colour and numbers, and what it is paid with
+struct ModSuitMat: Codable, Identifiable, Equatable {
+	var id: String = ""
+	var name: String = "New Metal"
+	var color: UInt32 = 0x8AC8E8
+	var protect: Double = 1.2
+	var weight: Double = 1.0
+	var durability: Double = 1.2
+	var conduct: Double = 1.0
+	var fireCut: Double = 0
+	var coldCut: Double = 0
+	var stormCut: Double = 0
+	/// what a unit of it is paid with (nil: iron bars)
+	var cost: Item? = nil
+	var drillTier: Int = 4
+
+	init() {}
+
+	init(from decoder: Decoder) throws {
+		let c = try decoder.container(keyedBy: CodingKeys.self)
+		id = c.val(.id, "")
+		name = c.val(.name, "Metal")
+		color = c.val(.color, 0x8AC8E8)
+		protect = c.val(.protect, 1.2)
+		weight = c.val(.weight, 1.0)
+		durability = c.val(.durability, 1.2)
+		conduct = c.val(.conduct, 1.0)
+		fireCut = c.val(.fireCut, 0)
+		coldCut = c.val(.coldCut, 0)
+		stormCut = c.val(.stormCut, 0)
+		cost = c.val(.cost, nil)
+		drillTier = c.val(.drillTier, 4)
+	}
+}
+
+/// A working part of a mod's for suits: an item (made by the mod's recipes) that, placed on a suit,
+/// works as one of the game's parts at its own strength, weight and colour
+struct ModSuitPart: Codable, Identifiable, Equatable {
+	var id: String = ""
+	var name: String = "New Part"
+	var desc: String = ""
+	var works: ExoModule = .turret
+	/// how strong it is at its work (1: as the game's own part)
+	var power: Double = 1.0
+	var weight: Double = 2.0
+	var color: UInt32 = 0x8A929E
+	/// its icon (blank: the game part's, in its colour)
+	var icon: ModPixels = ModPixels(w: 12, h: 12)
+
+	init() {}
+
+	init(from decoder: Decoder) throws {
+		let c = try decoder.container(keyedBy: CodingKeys.self)
+		id = c.val(.id, "")
+		name = c.val(.name, "Part")
+		desc = c.val(.desc, "")
+		works = c.val(.works, .turret)
+		power = c.val(.power, 1.0)
+		weight = c.val(.weight, 2.0)
+		color = c.val(.color, 0x8A929E)
+		icon = c.val(.icon, ModPixels(w: 12, h: 12))
+	}
+}
+
+/// A whole suit design kept in a mod, to start from at an Assembly Station
+struct ModSuitDesign: Codable, Identifiable, Equatable {
+	var id: String = ""
+	var name: String = "New Suit"
+	var design: SuitDesign = SuitDesign()
+
+	init() {}
+
+	init(from decoder: Decoder) throws {
+		let c = try decoder.container(keyedBy: CodingKeys.self)
+		id = c.val(.id, "")
+		name = c.val(.name, "Suit")
+		design = c.val(.design, SuitDesign())
+	}
+}
+
+/// The limits on a mod's suit content
+enum ModSuitLimits {
+	static let mats: Int = 12
+	static let parts: Int = 24
+	static let designs: Int = 12
+}
+
+extension ModValidator {
+	/// A mod's suit materials, parts and designs kept in range: numbers within limits, what a metal is
+	/// paid with an item that exists, designs only of what the suit allows and of this mod's own
+	/// materials and parts
+	static func checkSuits(_ p: inout ModPack, _ mn: String, _ sb: Bool, _ known: [String: String], _ r: inout ModReport) {
+		func c(_ v: Double, _ lo: Double, _ hi: Double, _ d: Double) -> Double { return clampD(v.isFinite ? v : d, lo, hi) }
+		if p.suitMats.count > ModSuitLimits.mats {
+			r.add(1, mn, "Mod", joinText("Only ", String(ModSuitLimits.mats), " suit materials fit in one mod; the rest were left out."))
+			p.suitMats = Array(p.suitMats.prefix(ModSuitLimits.mats))
+		}
+		if p.suitParts.count > ModSuitLimits.parts {
+			r.add(1, mn, "Mod", joinText("Only ", String(ModSuitLimits.parts), " suit parts fit in one mod; the rest were left out."))
+			p.suitParts = Array(p.suitParts.prefix(ModSuitLimits.parts))
+		}
+		if p.suitDesigns.count > ModSuitLimits.designs {
+			r.add(1, mn, "Mod", joinText("Only ", String(ModSuitLimits.designs), " suit designs fit in one mod; the rest were left out."))
+			p.suitDesigns = Array(p.suitDesigns.prefix(ModSuitLimits.designs))
+		}
+		let ownItems: Set<String> = Set(p.items.map { p.key($0.id) } + p.suitParts.map { p.key($0.id) })
+		var used: Set<String> = Set(p.blocks.map { $0.id } + p.items.map { $0.id } + p.mobs.map { $0.id } + p.infusions.map { $0.id } + p.dims.map { $0.id } + p.trees.map { $0.id })
+		func fresh(_ id: String, _ pre: String, _ i: Int) -> String {
+			if !id.isEmpty && !used.contains(id) { return id }
+			return joinText(pre, String(i + 1), "x", String(used.count))
+		}
+		for i in p.suitMats.indices {
+			var m: ModSuitMat = p.suitMats[i]
+			m.id = fresh(m.id, "smat", i)
+			used.insert(m.id)
+			if m.name.trimmingCharacters(in: .whitespaces).isEmpty { m.name = "Metal" }
+			m.name = String(m.name.prefix(24))
+			m.protect = c(m.protect, 0.2, sb ? 6 : 3, 1)
+			m.weight = c(m.weight, 0.2, sb ? 6 : 3, 1)
+			m.durability = c(m.durability, 0.2, sb ? 8 : 4, 1)
+			m.conduct = c(m.conduct, 0.5, sb ? 4 : 2, 1)
+			m.fireCut = c(m.fireCut, 0, 0.1, 0)
+			m.coldCut = c(m.coldCut, 0, 0.1, 0)
+			m.stormCut = c(m.stormCut, 0, 0.1, 0)
+			m.drillTier = clampI(m.drillTier, 0, 9)
+			if let it = m.cost, case .custom(let k) = it, !ownItems.contains(k) && known[k] != "item" {
+				r.add(1, mn, joinText("Suit material \u{201C}", m.name, "\u{201D}"), "What it is paid with does not exist; iron bars stand in.")
+				m.cost = nil
+			}
+			p.suitMats[i] = m
+		}
+		for i in p.suitParts.indices {
+			var sp: ModSuitPart = p.suitParts[i]
+			sp.id = fresh(sp.id, "spart", i)
+			used.insert(sp.id)
+			if sp.name.trimmingCharacters(in: .whitespaces).isEmpty { sp.name = "Part" }
+			sp.name = String(sp.name.prefix(24))
+			sp.desc = String(sp.desc.prefix(120))
+			sp.power = c(sp.power, 0.25, sb ? 10 : 4, 1)
+			sp.weight = c(sp.weight, 0, sb ? 30 : 10, 2)
+			if !sp.icon.valid || sp.icon.w > 32 || sp.icon.h > 32 { sp.icon = ModPixels(w: 12, h: 12) }
+			p.suitParts[i] = sp
+		}
+		let mats: Set<String> = Set(p.suitMats.map { p.key($0.id) })
+		let parts: Set<String> = Set(p.suitParts.map { p.key($0.id) })
+		for i in p.suitDesigns.indices {
+			var d: ModSuitDesign = p.suitDesigns[i]
+			d.id = fresh(d.id, "suit", i)
+			used.insert(d.id)
+			if d.name.trimmingCharacters(in: .whitespaces).isEmpty { d.name = "Suit" }
+			d.name = String(d.name.prefix(24))
+			var g: SuitDesign = d.design
+			if g.pieces.count > SuitDesign.maxPieces { g.pieces = Array(g.pieces.prefix(SuitDesign.maxPieces)) }
+			var keep: [SuitPiece] = []
+			for var piece in g.pieces {
+				piece.clamp()
+				piece.dmg = 0
+				piece.src = 0
+				if !piece.modMat.isEmpty && !mats.contains(piece.modMat) && known[piece.modMat] != "suitmat" { piece.modMat = "" }
+				if !piece.modPart.isEmpty && !parts.contains(piece.modPart) && known[piece.modPart] != "item" { continue }
+				keep.append(piece)
+			}
+			g.pieces = keep
+			g.items = [:]
+			d.design = g
+			p.suitDesigns[i] = d
+		}
+	}
+}
+
+extension ModRuntime {
+	/// The mods' suit materials and parts, ready for play (each part is also an item, see buildItems)
+	func buildSuits() {
+		for p in packs {
+			for m in p.suitMats where !disabled.contains(p.key(m.id)) {
+				var i = SuitMatInfo()
+				i.name = m.name
+				i.color = m.color & 0xFFFFFF
+				i.protect = m.protect
+				i.weight = m.weight
+				i.durability = m.durability
+				i.conduct = m.conduct
+				i.fireCut = m.fireCut
+				i.coldCut = m.coldCut
+				i.stormCut = m.stormCut
+				i.cost = m.cost.map { resolve($0) } ?? .mat(.ironBar)
+				i.drillTier = m.drillTier
+				suitMats[p.key(m.id)] = i
+			}
+			for sp in p.suitParts where !disabled.contains(p.key(sp.id)) {
+				var i = SuitPartInfo()
+				i.name = sp.name
+				i.color = sp.color & 0xFFFFFF
+				i.works = sp.works
+				i.power = sp.power
+				i.weight = sp.weight
+				suitParts[p.key(sp.id)] = i
+			}
+			for d in p.suitDesigns where !disabled.contains(p.key(d.id)) {
+				suitDesigns.append((joinText(d.name, " (", p.name, ")"), d.design))
+			}
+		}
+	}
+
+	/// A suit part as an item: held, crafted by the mod's recipes, placed at an Assembly Station
+	func suitPartItem(_ p: ModPack, _ sp: ModSuitPart) -> ModItem {
+		var it = ModItem()
+		it.id = sp.id
+		it.name = sp.name
+		it.desc = sp.desc.isEmpty ? joinText("A suit part: works as a ", sp.works.name.lowercased(), ". Place it on a suit at an Assembly Station.") : sp.desc
+		it.kind = .material
+		it.stack = 1
+		it.rarity = 2
+		if sp.icon.isBlank {
+			it.baseIcon = .exoModule(sp.works)
+			it.tint = sp.color
+			it.tintAmt = 0.5
+		} else {
+			it.icon = sp.icon
+		}
+		return it
 	}
 }
 
@@ -15562,142 +15228,6 @@ func iconExo(_ it: Item) -> PixelBuf {
 	}
 	b.outline(0x1A1410)
 	return b
-}
-
-/// The suit seen from the front (view 0) or the back (view 1), 40 x 56. Fitted parts in their metal's
-/// colour; missing ones as a faint outline, so the empty places can be seen.
-func suitViewBuf(_ s: ExoSuit, _ view: Int) -> PixelBuf {
-	var b = PixelBuf(w: 40, h: 56)
-	let ghost: UInt32 = 0x46505E
-	let dark: UInt32 = 0x2A2E36
-	func part(_ slot: ExoSlot) -> UInt32? { return s.material(slot)?.color }
-	func box(_ x: Int, _ y: Int, _ w: Int, _ h: Int, _ c: UInt32?) {
-		if let col = c {
-			b.rect(x, y, w, h, col)
-			b.rect(x, y, w, 1, shadeRGB(col, 1.25))
-			b.rect(x, y + h - 1, w, 1, shadeRGB(col, 0.7))
-		} else {
-			// outline only
-			b.rect(x, y, w, 1, ghost)
-			b.rect(x, y + h - 1, w, 1, ghost)
-			b.rect(x, y, 1, h, ghost)
-			b.rect(x + w - 1, y, 1, h, ghost)
-		}
-	}
-	let back: Bool = view == 1
-	// left and right as the viewer sees them: from the back, the suit's left arm is on the left
-	let leftArm: ExoSlot = back ? .armL : .armR
-	let rightArm: ExoSlot = back ? .armR : .armL
-	// helmet
-	box(14, 2, 12, 10, part(.helmet))
-	if part(.helmet) != nil {
-		if !back { b.rect(15, 6, 10, 3, 0x60E0FF); b.rect(15, 6, 10, 1, 0xB8F4FF) } else { b.rect(16, 5, 8, 1, shadeRGB(part(.helmet) ?? 0, 0.75)) }
-		if let p = part(.plateHead) { b.rect(15, 2, 10, 2, shadeRGB(p, 1.15)) }
-		if s.modules.contains(.lamp) && !back { b.rect(25, 5, 2, 2, 0xFFF4C0) }
-	}
-	b.rect(18, 12, 4, 2, dark)
-	// chest frame
-	box(11, 14, 18, 13, part(.chest))
-	box(13, 27, 14, 3, part(.chest))
-	if let c = part(.chest) {
-		if let p = part(.plateChest), !back { b.rect(13, 16, 14, 7, shadeRGB(p, 0.9)); b.rect(14, 17, 12, 5, p); b.rect(14, 17, 12, 1, shadeRGB(p, 1.3)) }
-		if let core = s.core, !back {
-			b.ellipse(20, 20, 2.6, 2.6, shadeRGB(core.color, 0.7))
-			b.ellipse(20, 20, 1.6, 1.6, core.color)
-			b.set(19, 19, 0xFFFFFF)
-		}
-		if back {
-			b.rect(15, 16, 10, 9, shadeRGB(c, 0.8))
-			for k in 0..<3 { b.rect(16, 17 + k * 3, 8, 1, dark) }
-			if s.modules.contains(.cargo) { b.rect(13, 15, 14, 12, 0x6A4A2A); b.rect(13, 15, 14, 2, 0x8A6A3A); b.rect(19, 19, 2, 2, 0xE8C060) }
-			if s.modules.contains(.hover) { b.rect(12, 18, 3, 8, 0x9AA4B0); b.rect(25, 18, 3, 8, 0x9AA4B0); b.rect(12, 26, 3, 2, 0xFF9A3A); b.rect(25, 26, 3, 2, 0xFF9A3A) }
-		} else if s.modules.contains(.cargo) {
-			b.rect(14, 14, 1, 12, 0x6A4A2A)
-			b.rect(25, 14, 1, 12, 0x6A4A2A)
-		}
-	}
-	if let p = part(.plateShoulders), part(.chest) != nil {
-		b.rect(7, 13, 7, 4, shadeRGB(p, 0.85)); b.rect(7, 13, 7, 1, shadeRGB(p, 1.3))
-		b.rect(26, 13, 7, 4, shadeRGB(p, 0.85)); b.rect(26, 13, 7, 1, shadeRGB(p, 1.3))
-	}
-	// arms
-	box(6, 16, 5, 18, part(leftArm))
-	box(29, 16, 5, 18, part(rightArm))
-	if let p = part(.plateArms) {
-		if part(leftArm) != nil { b.rect(6, 19, 5, 4, shadeRGB(p, 1.1)) }
-		if part(rightArm) != nil { b.rect(29, 19, 5, 4, shadeRGB(p, 1.1)) }
-	}
-	if part(leftArm) != nil { b.rect(6, 34, 5, 3, dark) }
-	if part(rightArm) != nil { b.rect(29, 34, 5, 3, dark) }
-	// the drill on the right arm, the gauntlet on the left
-	let drillSide: Int = back ? 6 : 29
-	let gauntSide: Int = back ? 29 : 6
-	if s.modules.contains(.drill) { b.rect(drillSide + 1, 37, 3, 3, 0xD8D8E0); b.rect(drillSide + 2, 40, 1, 2, 0xA8A8B0) }
-	if s.modules.contains(.gauntlet) { b.rect(gauntSide, 33, 5, 3, 0xFFF07A) }
-	// legs and boots
-	b.rect(13, 30, 14, 2, dark)
-	box(13, 32, 6, 16, part(.legs))
-	box(21, 32, 6, 16, part(.legs))
-	if let p = part(.plateLegs), part(.legs) != nil { b.rect(13, 38, 6, 3, shadeRGB(p, 1.15)); b.rect(21, 38, 6, 3, shadeRGB(p, 1.15)) }
-	box(12, 48, 7, 6, part(.boots))
-	box(21, 48, 7, 6, part(.boots))
-	if s.modules.contains(.hover) && part(.boots) != nil { b.rect(14, 54, 2, 2, 0xFF9A3A); b.rect(24, 54, 2, 2, 0xFF9A3A) }
-	if s.modules.contains(.sprint) && part(.legs) != nil { b.rect(13, 44, 6, 1, 0x7AD8F8); b.rect(21, 44, 6, 1, 0x7AD8F8) }
-	b.outline(0x101418)
-	return b
-}
-
-/// Built suit pictures (redrawn only when the suit or the view changes)
-final class SuitArt: @unchecked Sendable {
-	static let shared: SuitArt = SuitArt()
-	var cache: [Int: Image] = [:]
-
-	func image(_ s: ExoSuit, _ view: Int) -> Image {
-		var h: Hasher = Hasher()
-		for k in s.parts.keys.sorted() {
-			h.combine(k)
-			h.combine(s.parts[k]?.item)
-		}
-		h.combine(view)
-		let key: Int = h.finalize()
-		if let i = cache[key] { return i }
-		var img: Image
-		if view == 2 {
-			// side on, as it is worn in the world
-			var st: HumanStyle = playerStyle(hairIdx: 0, scarfIdx: 0, head: nil, chest: nil, legs: nil)
-			st.suit = suitLookOf(s)
-			img = pixImage(humanoidFrame(st, legs: 0, pose: 0))
-		} else {
-			img = pixImage(suitViewBuf(s, view))
-		}
-		if cache.count > 64 { cache.removeAll() }
-		cache[key] = img
-		return img
-	}
-}
-
-/// How a suit would look worn (for the side view, worn or not)
-func suitLookOf(_ s: ExoSuit) -> SuitLook {
-	var l: SuitLook = SuitLook()
-	func col(_ x: ExoSlot) -> UInt32 { return s.material(x)?.color ?? 0 }
-	l.helmet = col(.helmet)
-	l.chest = col(.chest)
-	l.armL = col(.armL)
-	l.armR = col(.armR)
-	l.legs = col(.legs)
-	l.boots = col(.boots)
-	l.plateHead = col(.plateHead)
-	l.plateShoulders = col(.plateShoulders)
-	l.plateChest = col(.plateChest)
-	l.plateArms = col(.plateArms)
-	l.plateLegs = col(.plateLegs)
-	l.core = s.core?.color ?? 0
-	let mods: [ExoModule] = s.modules
-	l.drill = mods.contains(.drill)
-	l.lamp = mods.contains(.lamp)
-	l.pack = mods.contains(.cargo)
-	l.jets = mods.contains(.hover)
-	return l
 }
 
 // ===== p31b_building =====
@@ -17325,6 +16855,13 @@ extension ModStore {
 		for t in p.trees {
 			for k in [t.trunk, t.branch, t.leaves, t.ground] where k.contains(":") && !k.hasPrefix("tile:") { add(k) }
 		}
+		for m in p.suitMats { addItem(m.cost) }
+		for d in p.suitDesigns {
+			for piece in d.design.pieces {
+				if piece.modMat.contains(":") { add(piece.modMat) }
+				if piece.modPart.contains(":") { add(piece.modPart) }
+			}
+		}
 		for sc in p.scripts { LKeys.uses(sc, add, addItem) }
 		return out
 	}
@@ -17384,6 +16921,7 @@ extension ModValidator {
 		checkInfusions(&p, mn, sb, known, &r)
 		checkBosses(&p, mn, sb, known, &r)
 		checkDims(&p, mn, sb, known, &r)
+		checkSuits(&p, mn, sb, known, &r)
 		checkScripts(&p, mn, sb, known, &r)
 		let dimIDs: Set<String> = Set(p.dims.map { $0.id })
 		for i in p.ores.indices where !p.ores[i].dimKey.isEmpty && !dimIDs.contains(p.ores[i].dimKey) { p.ores[i].dimKey = "" }

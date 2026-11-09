@@ -1,7 +1,7 @@
 # PixelRealm
 
 A 2D sandbox survival game for iPad, written in SwiftUI and run in Swift Playgrounds. The game is four
-files, `PixelRealm1.swift` to `PixelRealm4.swift` (about 59,500 lines in all, indented with tabs). The
+files, `PixelRealm1.swift` to `PixelRealm4.swift` (about 61,000 lines in all, indented with tabs). The
 user pastes each into its own file of one Swift Playgrounds app. It was one file until the user asked
 for four; deliver all four, and treat them as one program (Swift doesn't care which file holds what).
 
@@ -23,7 +23,13 @@ confirmed). `tools/buildcost.sh` measures both ways:
   runs the four jobs at once in one process, they could add up; that is not known. Step 5a (2.22 MB)
   first measured 475 MB in part 4; moving `p33_vehicles` to the end of part 3 and the start of
   `p32_modplus` to the end of part 2 levelled it: 457, 466, 464 and 452 MB, 106 s in all; as one job
-  95 s and 1,091 MB. Not yet confirmed on the iPad.
+  95 s and 1,091 MB. Step 5b, suits built piece by piece (2.27 MB, 61,035 lines), first measured
+  489 MB in part 2. The tile table and the tile art became text (`Tile.defText`, `TileArt.text`) and
+  creature AI, spawning and combat moved back to the end of part 1: 466, 473, 469 and 464 MB, 89 s in
+  all; as one job 93 s and 1,194 MB. Steps 5a and 5b are not yet confirmed on the iPad.
+- A job's peak can jump by 30 MB or more after a small edit (taking the recipe lines out of one
+  function once raised part 2 from 473 to 509 MB), so a few MB either way is noise; measure again
+  after moving code.
 - Add big features in steps the user can check on the iPad, and keep the parts about equal in
   compiled size (`tools/buildcost.sh` prints each job's peak).
 
@@ -41,7 +47,7 @@ compiles and runs headless on Linux. If `/opt/pixelrealm` is missing, run `tools
 - `tools/run-tests.sh [suite ...]`: builds and runs suites from `tools/tests`, four at a time (all
   of them take several minutes). Pass only the suites you touched while iterating, and run them all
   before committing. Full output is in `/tmp/pixelrealm-build/<suite>/out.log`.
-- `tools/shots.sh power|weather|sky|cloudsheet|stick|alchemy|modplus|building|vehicles|mod5 [folder]`: PNG screenshots from the game's own renderer (`sky`: clouds by day, dusk, night and storm; `cloudsheet`: every cloud template; `stick`: the combat stick's dial; `alchemy`: mutated creatures, the worn suit, the new stations, and a sheet of the new icons and suit pictures; `modplus`: two custom dimensions and a boss in a phase; `building`: a furnished house with stairs and a lift, a blast throwing blocks, a beam under strain; `vehicles`: every new kit parked, a plane, helicopter and airship flying, a tank firing at a wrecked truck, a ship built from blocks with the assembler, a plane mid-turn; `mod5`: every tree design shape under a mod's sun with rays, the same land at night under a pictured moon, the Overworld under a mod's sun, a lit cavern dimension, a repainted zombie).
+- `tools/shots.sh power|weather|sky|cloudsheet|stick|alchemy|modplus|building|vehicles|mod5|suit5 [folder]`: PNG screenshots from the game's own renderer (`sky`: clouds by day, dusk, night and storm; `cloudsheet`: every cloud template; `stick`: the combat stick's dial; `alchemy`: mutated creatures, the worn suit, the new stations, and a sheet of the new icons and suit pictures; `modplus`: two custom dimensions and a boss in a phase; `building`: a furnished house with stairs and a lift, a blast throwing blocks, a beam under strain; `vehicles`: every new kit parked, a plane, helicopter and airship flying, a tank firing at a wrecked truck, a ship built from blocks with the assembler, a plane mid-turn; `mod5`: every tree design shape under a mod's sun with rays, the same land at night under a pictured moon, the Overworld under a mod's sun, a lit cavern dimension, a repainted zombie; `suit5`: a sheet of suit designs in their poses, a turret firing with a plate broken off, jet flight with a wing, a laser and a cannon shell).
 - `tools/bench.sh`: chunk generation, painting, lighting and tick timings (debug build; compare
   with `GAME_SRC=<old file> tools/bench.sh`).
 - `tools/buildcost.sh`: the game's size, and the time and peak memory of a debug build like the
@@ -68,7 +74,11 @@ lamplight by the real light), `build3` (blocks as walls, ladders built on by hol
 stairs, lifts, block weight, blasts, storms carrying blocks, structural physics), `mod5` (step 5a:
 see-through sprite colours and the paint tools, game creatures repainted by a mod, the clock and light in
 custom dimensions, suns and moons of a mod's own, tree designs: pass-through forms, every shape, whole
-across chunk edges, saplings, checks; the climbable, sticky and decoration collision types), `aero` (vehicles of
+across chunk edges, saplings, checks; the climbable, sticky and decoration collision types), `suit5` (the
+exosuit built piece by piece: coverage and guarding from the pieces there, hits landing by height, layers,
+pieces breaking off, bills and mending, old suits rebuilt, the finer sprite and its poses, jets that lift by
+thrust against weight, wings, turrets, cannons, lasers, boosters, batteries, solar, the magnet, suit
+materials, parts and designs in mods), `aero` (vehicles of
 every kind: the plane, helicopter, airship, tank and truck kits flown and driven, designs too heavy to
 fly, turning in flight, blocks built onto vehicles, rafts that float or sink by their blocks, the
 assembler, shots, blasts and crashes, wrecks, mending, the autopilot, saves, a mod block as a part),
@@ -94,8 +104,12 @@ What the stand-ins can't tell you:
   first, `Double` ranges written out (`0.0...1.0`, `sbRange`), rows of sliders from a table (`DSlider`),
   and `AnyView` where a `switch` picks between big pages. Indent with tabs (four spaces per level made
   the game a sixth bigger).
+- **Big tables as text.** A long table written as Swift code (a `switch` returning literals, or calls
+  with many arguments) costs far more to compile than the same data in one string literal read once
+  at start-up: see `Tile.defText` and `TileArt.text`, checked against the old code when they changed.
 - **Saves.** Saved enums (`Tile: UInt8`, `MobKind`, `Mat`, `Gadget`, `RecipeCat`, `SoundID`, `Potion`,
-  `Infusion`, `ExoMat`, `ExoPart`, `ExoCore`, `ExoModule`, `ExoSlot`, `Dimension` (custom0-2 were appended),
+  `Infusion`, `ExoMat`, `ExoPart`, `ExoCore`, `ExoModule` (wing ... magnet appended), `ExoSlot`, `SuitBone`,
+  `SuitShape`, `SuitKind`, `Dimension` (custom0-2 were appended),
   `PartType` (vehicle parts: `block` and the aircraft parts were appended), `ProjKind`
   and the like) only get new cases appended at the end. Never reorder or remove cases. New `SaveData` fields are optional; new `Settings`
   fields are decoded with `decodeIfPresent` and a default.
@@ -111,7 +125,8 @@ What the stand-ins can't tell you:
   versions 1 to 4 still generate them (`WorldGen.hasVillages`) so saved worlds keep matching, but
   nothing in the game uses villagers, trades or village goals any more (`MobKind.villager` stays only
   for saved numbering).
-- **A new tile needs:** an appended case, a `Tile.makeDef` entry, 8x8 art in `customTileRows`, and,
+- **A new tile needs:** an appended case, a line in `Tile.defText` (read by `Tile.makeDef`), 8x8 art
+  as a line in `TileArt.text` (read by `customTileRows`; the stairs are drawn in code), and,
   as relevant, `needsSupport`, `toolClass`, `isInteractive`/`interact`, and the exclusions in
   `creativeItems` for on/off variants, and a line in `blockPhysOf` (its weight, carry and reach).
   New tiles go after `liftCar` (the last one; all after the 64 mod tiles); `Tile.isMod` is a range
@@ -146,7 +161,7 @@ What the stand-ins can't tell you:
 ## Map of the parts
 
 Sections start with `// ===== <name> =====` (grep for them). They are spread over the parts in order:
-part 1 `p01_util` to `p14d_tools`; part 2 `p15a_mobai` to `p31c_blockphys`, then the start of `p32_modplus`
+part 1 `p01_util` to `p16a_combat`; part 2 `p16c_damage` to `p31c_blockphys`, then the start of `p32_modplus`
 (game content changes, versions, ore controls, sprite tools); part 3 the rest of `p32_modplus` (from custom
 infusions), `u01_art` to `u05_menu`, then `p33_vehicles`; part 4 `u07_mods`, `u08_alchemy`, `u09_modplus`,
 `u06_root`. New code goes into
@@ -166,13 +181,15 @@ store, checks, runtime, custom creature AI, structures and capture, test tools),
 to game content, ore controls, sprite tools, custom infusions, boss phases and summoning, custom dimensions with
 their suns, moons and tree designs, the Logic Studio), `p29_alchemy` (rarity, potions, effects on creatures, smoke,
 mutation and its limits, chest extras, the recipes of all three new systems), `p30_infusion`,
-`p31_exosuit` (parts, stats, energy, modules, the worn look, the builder's pictures), `p31b_building` (block
+`p31_exosuit` (suits built piece by piece: pieces, materials, the body map, stats and the guard map, hits
+and piece damage, bills and mending, old suits rebuilt, working parts, ready-made designs, suit modding), `p31b_building` (block
 walls, ladders, furniture, lifts), `p31c_blockphys` (block weight, flying blocks, blasts, structural
 physics), `p33_vehicles` (the flight model, power sharing, damage and wrecks, weapons, turning round,
 building blocks onto vehicles, the assembler, the autopilot, the checklist and instruments), `u01_art`, `u02_render`
 (`WorldRenderer.draw` sets the draw order), `u03_hud`, `u04_panels`, `u05_menu`, `u07_mods` (Mod
 Creator screens and editors, the capture and Mod Test panels), `u08_alchemy` (the HUD's effect strip and
-suit bar, the Infusion Crucible screen, the Assembly Station builder), `u09_modplus` (the Mod Creator+ screens: game
+suit bar and its SUIT FIRE control, the Infusion Crucible screen, the Assembly Station's suit designer, the
+Mod Creator's SUITS tab), `u09_modplus` (the Mod Creator+ screens: game
 content, ore controls, hardness reference, Sprite Studio, infusion, phase, summoning, dimension and script editors,
 the Mod Test LOGIC tab, the sun and moon editor, the tree design editor), `u06_root`.
 
@@ -302,12 +319,25 @@ the Mod Test LOGIC tab, the sun and moon editor, the tree design editor), `u06_r
   every time; `infuseProblem` says why not). Slots by tier (`infusionSlots`). Melee goes through
   `infusedMelee`, shots through `infuseShot`, mining through `mineBoost`/`minedDrops`, armour through the
   cached `armorInf`.
-- **Exosuit.** `Game.suit` (`ExoSuit`: a `Stack` per `ExoSlot`, worn, energy) with `suitStats` cached
-  by `suitRev` (call `suitChanged()` after any change). The builder edits a plan and `applySuit` fits it
-  all at once (parts come from the suit or the bag, the rest go back; all or nothing). Modules spend
-  energy through `suitRun` (within the core's output) and `suitSpend`; the Assembly Station is a
-  Sparkworks machine that charges a worn suit nearby (`runSuitDock`). The sprite draws the suit
-  (`HumanStyle.suit`, `paintSuit`).
+- **Exosuit (built piece by piece).** `Game.suit` (`ExoSuit`: worn, energy, and its `design`, a
+  `SuitDesign` of `SuitPiece`s: kind plate/frame/core/module, the body part it is fixed to (`SuitBone`),
+  centre and size in suit units (3 to a sprite pixel), turn, shape, thickness, metal (`ExoMat` or a mod's
+  `modMat`), paint, damage `dmg`, and `src`: the group of the item it was made from in `design.items`).
+  `suitStats` (`ExoStats.of`) is cached by `suitRev` (call `suitChanged()` after any change): weight,
+  energy, working parts by module (`counts`, `power`), jets' `thrust` against weight, and the guard map
+  (`SuitGuardMap`: coverage and guard per `SuitSection`, sampled over `SuitBody`'s cells). A blow
+  (`suitGuard` → `suitTakeBlow`) lands on a body point at the attacker's height; the pieces over it,
+  outermost first, each stop their share (`suitShare`) and take that damage themselves; broken pieces stop
+  nothing and are not drawn. `applyDesign` builds a plan, paying the bill (`SuitDesign.bill`: bars of each
+  piece's metal by size, cores and parts from the bag; what comes off is given back) all or nothing;
+  `repairSuit` mends. Old slot-built suits (`parts`) are rebuilt on load (`ExoSuit.migrate`, keeping the
+  old parts with their infusions as item groups). The player's sprite with a suit is drawn three times
+  finer (`suitFrames`, `paintSuitPieces`; `BoneMove` moves pieces with the legs and the striking arm).
+  Working parts: jets, wings, turrets, cannons and lasers (SUIT FIRE on the HUD, `suitFireHeld`), boosters,
+  pistons, batteries, solar panels, the magnet, and the old modules. Modules spend energy through
+  `suitRun` (within the cores' output) and `suitSpend`; the Assembly Station charges a worn suit nearby
+  (`runSuitDock`). Mods add `suitMats`, `suitParts` (each also an item) and `suitDesigns` (the SUITS tab;
+  a design is saved from a TEST world's Assembly Station).
 
 - **Mod Creator+.**
   - Changes to game content (`ModOverride`) are built into `OverrideRT` at activation; it restores the

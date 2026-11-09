@@ -4261,6 +4261,185 @@ func makeSpriteSet(_ frames: [PixelBuf], hitH: Double, fixedScale: Double? = nil
 	return SpriteSet(right: r, left: l, hurtR: hr, hurtL: hl, w: f0.w, h: f0.h, footRow: foot, centerCol: cc, scale: sc, anim: anim)
 }
 
+// MARK: - Suits drawn piece by piece
+
+/// A picture three times finer, every pixel a 3 x 3 block
+func upscale3(_ b: PixelBuf) -> PixelBuf {
+	let u: Int = suitUnit
+	var o = PixelBuf(w: b.w * u, h: b.h * u)
+	for y in 0..<b.h {
+		for x in 0..<b.w {
+			let c: UInt32 = b.px[y * b.w + x]
+			if c == 0 { continue }
+			for yy in 0..<u {
+				let row: Int = (y * u + yy) * o.w + x * u
+				for xx in 0..<u { o.px[row + xx] = c }
+			}
+		}
+	}
+	return o
+}
+
+/// Lays a suit's working pieces over one frame of the figure drawn three times finer (`frame`: 0
+/// standing, 1-2 walking, 3 winding up, 4 striking, 5 blocking, 6 shooting). Each piece moves with its
+/// part of the body, shows its colour with lit and shaded edges and its part's marks, and cracks as it
+/// wears; broken pieces are gone. `pick` (a piece id) is drawn brighter. A dark line is drawn round
+/// what sticks out past the body.
+func paintSuitPieces(_ cv: inout PixelBuf, _ d: SuitDesign, frame: Int, pick: Int = -1) {
+	let ox: Double = Double(humanOX * suitUnit)
+	var mine: [Bool] = [Bool](repeating: false, count: cv.w * cv.h)
+	let order: [Int] = d.pieces.indices.sorted { (a: Int, b: Int) -> Bool in
+		let la: Int = d.pieces[a].bone.layer
+		let lb: Int = d.pieces[b].bone.layer
+		return la != lb ? la < lb : a < b
+	}
+	for i in order {
+		let p: SuitPiece = d.pieces[i]
+		if p.broken { continue }
+		let mv: BoneMove = BoneMove.of(p.bone, frame)
+		// the piece's box in the frame, roomy enough for any turn
+		let c: (Double, Double) = mv.apply(p.x, p.y)
+		let r: Double = sqrt(p.w * p.w + p.h * p.h) * 0.5 + 1.0
+		let x0: Int = max(0, Int(floor(c.0 + ox - r)))
+		let x1: Int = min(cv.w - 1, Int(ceil(c.0 + ox + r)))
+		let y0: Int = max(0, Int(floor(c.1 - r)))
+		let y1: Int = min(cv.h - 1, Int(ceil(c.1 + r)))
+		if x1 < x0 || y1 < y0 { continue }
+		let ww: Int = x1 - x0 + 1
+		let hh: Int = y1 - y0 + 1
+		// which pixels it covers (tested back on the body standing still)
+		var on: [Bool] = [Bool](repeating: false, count: ww * hh)
+		let back: BoneMove = BoneMove(dx: -mv.dx, dy: -mv.dy, turn: 0, px: 0, py: 0)
+		for yy in 0..<hh {
+			for xx in 0..<ww {
+				var bx: Double = Double(x0 + xx) + 0.5 - ox
+				var by: Double = Double(y0 + yy) + 0.5
+				let s: (Double, Double) = back.apply(bx, by)
+				bx = s.0
+				by = s.1
+				if mv.turn != 0 {
+					let cs: Double = cos(-mv.turn)
+					let sn: Double = sin(-mv.turn)
+					let rx: Double = bx - mv.px
+					let ry: Double = by - mv.py
+					bx = mv.px + rx * cs - ry * sn
+					by = mv.py + rx * sn + ry * cs
+				}
+				if p.covers(bx, by) { on[yy * ww + xx] = true }
+			}
+		}
+		var base: UInt32 = suitColor(p)
+		if p.id == pick { base = mixRGB(base, 0xFFFFFF, 0.35) }
+		let accent: UInt32 = suitAccent(p)
+		for yy in 0..<hh {
+			for xx in 0..<ww where on[yy * ww + xx] {
+				let up: Bool = yy > 0 && on[(yy - 1) * ww + xx]
+				let down: Bool = yy < hh - 1 && on[(yy + 1) * ww + xx]
+				let left: Bool = xx > 0 && on[yy * ww + xx - 1]
+				let right: Bool = xx < ww - 1 && on[yy * ww + xx + 1]
+				var col: UInt32 = base
+				if !up || !left { col = shadeRGB(base, 1.22) }
+				if !down || !right { col = shadeRGB(base, 0.68) }
+				let gx: Int = x0 + xx
+				let gy: Int = y0 + yy
+				// cracks as it wears
+				if p.dmg > 0.3 {
+					let hsh: Double = hash2(gx * 7 + p.id, gy * 13, 9091)
+					if hsh < (p.dmg - 0.25) * 0.5 { col = shadeRGB(col, 0.45) }
+				}
+				cv.px[gy * cv.w + gx] = 0xFF000000 | col
+				mine[gy * cv.w + gx] = true
+			}
+		}
+		// its marks: a core glows at its heart, a working part shows its colour at its working end
+		if accent != 0 {
+			let a: Double = (p.rot + mv.turn * 180.0 / Double.pi) * Double.pi / 180.0
+			let tip: (Double, Double)
+			if p.kind == .core {
+				tip = (c.0, c.1)
+			} else {
+				tip = (c.0 + cos(a) * p.w * 0.32, c.1 + sin(a) * p.w * 0.32)
+			}
+			let tx: Int = Int(floor(tip.0 + ox))
+			let ty: Int = Int(floor(tip.1))
+			for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+				let px: Int = tx + dx - 1
+				let py: Int = ty + dy - 1
+				if px < 0 || py < 0 || px >= cv.w || py >= cv.h { continue }
+				if mine[py * cv.w + px] { cv.px[py * cv.w + px] = 0xFF000000 | accent }
+			}
+		}
+	}
+	// a dark edge round the pieces where they stand against nothing
+	var edge: [Int] = []
+	for y in 0..<cv.h {
+		for x in 0..<cv.w where cv.px[y * cv.w + x] == 0 {
+			var near: Bool = false
+			for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+				let nx: Int = x + dx
+				let ny: Int = y + dy
+				if nx >= 0 && ny >= 0 && nx < cv.w && ny < cv.h && mine[ny * cv.w + nx] { near = true }
+			}
+			if near { edge.append(y * cv.w + x) }
+		}
+	}
+	for k in edge { cv.px[k] = 0xFF1A1410 }
+}
+
+/// The mark a working part shows (0: none): a core's glow, a jet's flame, a lamp, a lens
+func suitAccent(_ p: SuitPiece) -> UInt32 {
+	if p.kind == .core, let c = p.core { return shadeRGB(c.color, 1.4) }
+	guard p.kind == .module, let m = p.module else { return 0 }
+	switch m {
+	case .hover: return 0xFF9A3A
+	case .lamp: return 0xFFF4C0
+	case .laser: return 0xFF4A6A
+	case .turret, .cannon: return 0x1E2028
+	case .solar: return 0x2A4A8A
+	case .magnet: return 0xD83A3A
+	case .battery: return 0x8AE85A
+	case .barrier: return 0xC07CFF
+	case .gauntlet: return 0xFFF07A
+	default: return shadeRGB(m.color, 1.3)
+	}
+}
+
+/// The player's frames with a suit on: the figure drawn three times finer with the suit's pieces over
+/// it, frame by frame
+func suitFrames(_ plain: [PixelBuf], _ d: SuitDesign, pick: Int = -1) -> [PixelBuf] {
+	var out: [PixelBuf] = []
+	for (f, b) in plain.enumerated() {
+		var cv: PixelBuf = upscale3(b)
+		paintSuitPieces(&cv, d, frame: f, pick: pick)
+		out.append(cv)
+	}
+	return out
+}
+
+/// Pictures of suit designs for the Assembly Station (drawn again only when the design changes)
+final class SuitPictures: @unchecked Sendable {
+	static let shared: SuitPictures = SuitPictures()
+	var cache: [Int: Image] = [:]
+	let plain: [PixelBuf] = humanoidFrames(playerStyle(hairIdx: 0, scarfIdx: 0, head: nil, chest: nil, legs: nil))
+
+	/// the design worn by a plain figure, in one frame, with a piece shown picked
+	func image(_ d: SuitDesign, _ frame: Int, _ pick: Int) -> Image {
+		var h: Hasher = Hasher()
+		h.combine(d)
+		h.combine(frame)
+		h.combine(pick)
+		let key: Int = h.finalize()
+		if let i = cache[key] { return i }
+		let f: Int = clampI(frame, 0, plain.count - 1)
+		var cv: PixelBuf = upscale3(plain[f])
+		paintSuitPieces(&cv, d, frame: f, pick: pick)
+		let img: Image = pixImage(cv)
+		if cache.count > 48 { cache.removeAll() }
+		cache[key] = img
+		return img
+	}
+}
+
 func heartBuf(_ full: Bool) -> PixelBuf {
 	let rows: [String] = [".rr.rr..", "rRrrrrr.", "rRrrrrr.", "rrrrrrr.", ".rrrrr..", "..rrr...", "...r....", "........"]
 	let col: UInt32 = full ? 0xE02828 : 0x3A2A2A
@@ -4398,9 +4577,19 @@ final class Art: @unchecked Sendable {
 		let key: Int = g.armorKey
 		if let s = playerSets[key] { return s }
 		let a = g.armorPieces()
-		var st: HumanStyle = playerStyle(hairIdx: g.settings.hair, scarfIdx: g.settings.scarf, head: a.0, chest: a.1, legs: a.2)
-		st.suit = g.suitLook()
-		let s: SpriteSet = makeSpriteSet(humanoidFrames(st), hitH: 1.8, fixedScale: 0.125)
+		let st: HumanStyle = playerStyle(hairIdx: g.settings.hair, scarfIdx: g.settings.scarf, head: a.0, chest: a.1, legs: a.2)
+		let plain: [PixelBuf] = humanoidFrames(st)
+		var s: SpriteSet
+		if g.suit.worn && !g.suit.d.pieces.isEmpty {
+			// a suit is drawn three times finer: the figure stands where it always does
+			s = makeSpriteSet(suitFrames(plain, g.suit.d), hitH: 1.8, fixedScale: 0.125 / Double(suitUnit))
+			let bb: (Int, Int, Int, Int) = opaqueBounds(plain[0])
+			s.footRow = bb.3 * suitUnit
+			s.centerCol = Double(bb.0 + bb.2 + 1) * 0.5 * Double(suitUnit)
+		} else {
+			s = makeSpriteSet(plain, hitH: 1.8, fixedScale: 0.125)
+		}
+		if playerSets.count > 24 { playerSets.removeAll() }
 		playerSets[key] = s
 		return s
 	}
@@ -6624,7 +6813,7 @@ extension Game {
 		if weather.bigHail && h > 0.3 {
 			if settings.weatherHurtsPlayer && !dead && rainReaches(pb.x, pb.y, pb.h) {
 				// a helmet turns most of the stones
-				let helmet: Bool = inv.armor[0] != nil || (suit.worn && suit[.helmet] != nil)
+				let helmet: Bool = inv.armor[0] != nil || suitHelmet
 				if !helmet || Double.random(in: 0...1) < 0.35 {
 					var info = DamageInfo(amount: 1.0 * I * (1.0 - armorInf.stormCut) * (suitHas(.seal) ? 0.5 : 1.0), type: .impact, source: .environment)
 					info.originX = pb.x
@@ -10068,6 +10257,7 @@ enum WorldRenderer {
 		drawPlayer(&ctx, g, v)
 		drawProjectiles(&ctx, g, v)
 		drawCombatFX(&ctx, g, v)
+		drawSuitBeams(&ctx, g, v)
 		drawParticles(&ctx, g, v)
 		if !g.smokes.isEmpty || !g.rings.isEmpty { drawPotionFX(&ctx, g, v) }
 		drawWeatherDevices(&ctx, g, v)
@@ -15103,6 +15293,11 @@ extension Game {
 
 	/// A cannon shell bursts: a small blast that breaks and throws blocks like a bomb's
 	func shellBurst(_ p: Projectile, _ x: Double, _ y: Double) {
+		// a suit's mini cannon: a small blast that leaves the ground alone
+		if p.owner == suitShellOwner {
+			explode(x, y, radius: 1.4, power: p.dmg, source: p.source, breakBlocks: false)
+			return
+		}
 		explode(x, y, radius: 2.3, power: p.dmg, source: p.source, breakBlocks: true)
 	}
 

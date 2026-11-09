@@ -792,9 +792,10 @@ struct ModPackagesScreen: View {
 // MARK: - Mod Creator: editing a mod
 
 enum ModTab: Int, CaseIterable {
-	case info, blocks, items, mobs, shots, recipes, loot, ores, structures, infusions, dims, logic, game, reference, check
+	case info, blocks, items, mobs, shots, recipes, loot, ores, structures, infusions, suits, dims, logic, game, reference, check
 	var name: String {
 		switch self {
+		case .suits: return "SUITS"
 		case .logic: return "LOGIC STUDIO"
 
 		case .dims: return "DIMENSIONS"
@@ -833,6 +834,9 @@ enum ModEditTarget: Equatable {
 	case infusion(String)
 	case dimension(String)
 	case script(String)
+	case suitMat(String)
+	case suitPart(String)
+	case suitDesign(String)
 }
 
 struct ModEditorView: View {
@@ -930,6 +934,9 @@ struct ModEditorView: View {
 		case .infusion(let id): InfusionEditorView(s: session, id: id, openRecipe: { rid in target = .recipe(rid) })
 		case .dimension(let id): DimensionEditorView(s: session, id: id)
 		case .script(let id): ScriptEditorView(s: session, id: id)
+		case .suitMat(let id): SuitMatEditorView(s: session, id: id)
+		case .suitPart(let id): SuitPartEditorView(s: session, id: id)
+		case .suitDesign(let id): SuitDesignEditorView(s: session, id: id)
 		}
 	}
 
@@ -948,6 +955,7 @@ struct ModEditorView: View {
 		case .game: GameContentList(s: session, open: { id in target = .override(id) })
 		case .reference: HardnessReferenceView(s: session)
 		case .infusions: InfusionListView(s: session, open: { id in target = .infusion(id) })
+		case .suits: SuitListView(s: session, openMat: { (id: String) in target = .suitMat(id) }, openPart: { (id: String) in target = .suitPart(id) }, openDesign: { (id: String) in target = .suitDesign(id) })
 		case .dims: DimensionListView(s: session, open: { id in target = .dimension(id) })
 		case .logic: LogicStudioView(s: session, open: { id in target = .script(id) })
 		case .check: ModIssueList(report: session.report)
@@ -3247,8 +3255,12 @@ struct SuitBar: View {
 			}
 			.overlay(Rectangle().stroke(Color.white.opacity(0.4), lineWidth: 1))
 			OutlinedText(text: joinText(String(Int(game.suit.energy)), "/", String(Int(cap))), size: 10)
+			if st.broken > 0 { OutlinedText(text: joinText(String(st.broken), " BROKEN"), size: 10, color: Color(hex: 0xFF8A40)) }
 			if st.has(.cargo) {
 				SmallButton(title: "PACK", color: Color(hex: 0x7A5A2A)) { game.openPack() }
+			}
+			if st.has(.cannon) || st.has(.laser) {
+				HoldButton(label: "SUIT FIRE", size: 58, color: Color(hex: 0x8A3A3A)) { (on: Bool) in game.suitFireHeld = on }
 			}
 		}
 	}
@@ -3537,525 +3549,1012 @@ extension Game {
 	}
 }
 
-// MARK: - Assembly Station: the visual suit builder
+// MARK: - Assembly Station: the suit designer
 
-/// Where each place on the suit and the parts tray sit on screen, so a drag can find its target
-final class ExoFrames: @unchecked Sendable {
-	var slots: [Int: CGRect] = [:]
-	var tray: CGRect = .zero
-
-	func slot(at p: CGPoint) -> ExoSlot? {
-		for (k, r) in slots where r.contains(p) { return ExoSlot(rawValue: k) }
-		return nil
-	}
+/// A material a piece can be made of: one of the game's metals, or a mod's (by key)
+struct SuitMatChoice {
+	var mat: Int
+	var key: String
+	var name: String
+	var color: UInt32
 }
 
-/// A part that can be fitted: one from the bag, or one taken off the suit in this plan (it goes back
-/// to the bag when the plan is applied, unless it is fitted again)
-struct TrayPart: Identifiable {
-	var id: Int
-	var stack: Stack
-	var fromSuit: Bool
-}
-
-/// The Assembly Station: the suit drawn large with its places marked on it. Drag parts from the tray
-/// onto the suit (or tap a part, then a place), drag them off again, swap metals, add plates and
-/// modules, and watch the numbers change before anything is fitted. APPLY fits it all at once.
+/// The Assembly Station: the suit designer. The body is drawn large; tap with a placing tool to put
+/// down a plate or a frame piece, tap a piece to pick it and drag to move it, and set its size, turn,
+/// shape, thickness, metal and paint. Working parts (cores, jets, turrets...) come from the bag. The
+/// bill shows what the changes cost before BUILD makes them; nothing changes until then.
 struct ExoAssemblyPanel: View {
 	@ObservedObject var game: Game
 	@ObservedObject var hud: HUDSignal
-	@State var plan: ExoSuit = ExoSuit()
+	@State var plan: SuitDesign = SuitDesign()
 	@State var started: Bool = false
-	@State var view: Int = 0
-	@State var sel: Int = -1
-	@State var trayPick: Int = -1
-	@State var dragging: TrayPart? = nil
-	@State var dragSlot: Int = -1
-	@State var dragPoint: CGPoint = .zero
-	@State var hover: Int = -1
+	@State var pick: Int = -1
+	/// 0 pick and move, 1 place plates, 2 place frame pieces
+	@State var tool: Int = 0
+	@State var matPick: Int = 0
+	@State var shapePick: Int = 0
+	@State var page: Int = 0
+	@State var pose: Int = 0
+	@State var undo: [SuitDesign] = []
 	@State var note: String = ""
-	@State var frames: ExoFrames = ExoFrames()
+	@State var grabbing: Bool = false
+	@State var grabStart: CGPoint = .zero
+	@State var grabFrom: CGPoint = .zero
+	@State var colorOn: Bool = false
+	@State var paint: UInt32 = 0xC8CCD4
+	@State var templateMat: Int = 0
+
+	/// screen points to a suit unit on the canvas, and the strip of the frame it shows (suit units)
+	static let k: CGFloat = 6.5
+	static let cropX: Double = 6
+	static let cropW: Double = 54
+	static let tools: [String] = ["PICK / MOVE", "PLACE PLATES", "PLACE FRAMES"]
+	static let pages: [String] = ["PIECE", "PARTS", "SUIT"]
+	static let poses: [String] = ["STAND", "WALK", "STRIDE", "WIND UP", "STRIKE", "BLOCK", "SHOOT"]
+	static let thick: [String] = ["THIN", "DOUBLE", "TRIPLE"]
 
 	var body: some View {
-		ZStack(alignment: .topLeading) {
-			VStack(spacing: 8) {
-				header
-				HStack(alignment: .top, spacing: 10) {
-					builder
-					VStack(spacing: 8) {
-						statsBox
-						detailBox
-					}
-					.frame(width: 270)
-					trayColumn.frame(width: 250)
+		VStack(spacing: 8) {
+			header
+			ScrollView {
+				HStack(alignment: .top, spacing: 12) {
+					leftColumn
+					rightColumn.frame(width: 380)
 				}
-				if !note.isEmpty {
-					Text(verbatim: note).font(.pixel(12, .semibold)).foregroundColor(Color(hex: 0xFFE070))
-				}
-			}
-			.foregroundColor(Color.white)
-			.padding(12)
-			.background(PixelBox(color: Color(hex: 0x262A32)).opacity(0.97))
-			if let d = dragging {
-				SlotView(stack: d.stack, size: 46)
-					.opacity(0.9)
-					.position(x: dragPoint.x, y: dragPoint.y)
-					.allowsHitTesting(false)
-			} else if dragSlot >= 0, let s = plan[ExoSlot(rawValue: dragSlot) ?? .helmet] {
-				SlotView(stack: s, size: 46)
-					.opacity(0.9)
-					.position(x: dragPoint.x, y: dragPoint.y)
-					.allowsHitTesting(false)
+				.padding(.bottom, 12)
 			}
 		}
-		.coordinateSpace(name: "exo")
+		.foregroundColor(Color.white)
+		.padding(12)
+		.background(PixelBox(color: Color(hex: 0x262A32)).opacity(0.97))
 		.frame(maxWidth: 1000)
 		.padding(8)
-		.onAppear {
-			if started { return }
-			started = true
-			plan = game.suit
-		}
+		.onAppear { self.begin() }
 	}
 
-	var changed: Bool { return plan.parts != game.suit.parts }
+	func begin() {
+		if started { return }
+		started = true
+		plan = game.suit.d
+	}
+
+	var changed: Bool { return plan != game.suit.d }
 
 	var header: some View {
-		HStack(spacing: 8) {
+		let st: ExoStats = ExoStats.of(plan)
+		let line: String = joinText(String(plan.pieces.count), " pieces · weight ", String(Int(st.weight.rounded())), " / ", String(Int(st.strength)), " · guards ", String(Int((st.guardAll * 100).rounded())), "%")
+		return HStack(spacing: 8) {
 			Text("ASSEMBLY STATION").font(.pixel(20)).foregroundColor(Color(hex: 0x60E0FF))
+			Text(verbatim: line).font(.pixel(11, .semibold)).foregroundColor(Color.white.opacity(0.75))
 			Spacer()
-			ForEach(0..<3, id: \.self) { v in
-				SmallButton(title: ["FRONT", "BACK", "SIDE"][v], color: view == v ? Color(hex: 0x2E6A8A) : Color(hex: 0x3A3E48)) { view = v }
-			}
-			SmallButton(title: "MAKE PARTS", color: Color(hex: 0x4A5A3A)) { game.openCrafting(.assembly) }
-			SmallButton(title: "CLOSE", color: Color(hex: 0xA03030)) { close() }
+			SmallButton(title: "MAKE PARTS", color: Color(hex: 0x4A5A3A)) { self.game.openCrafting(.assembly) }
+			SmallButton(title: "CLOSE", color: Color(hex: 0xA03030)) { self.close() }
 		}
 	}
 
 	func close() {
-		if changed { note = "" }
 		game.showExo = false
 		game.bumpHUD()
 	}
 
-	// MARK: the suit and its places
+	// MARK: the body and its pieces
 
-	var builder: some View {
-		HStack(alignment: .top, spacing: 6) {
-			VStack(spacing: 5) {
-				Text("PLATES").font(.pixel(10)).foregroundColor(Color.white.opacity(0.6))
-				ForEach([ExoSlot.plateHead, .plateShoulders, .plateChest, .plateArms, .plateLegs], id: \.self) { s in socket(s) }
-			}
-			figure
-			VStack(spacing: 5) {
-				Text("CORE").font(.pixel(10)).foregroundColor(Color.white.opacity(0.6))
-				socket(.core)
-				Text("MODULES").font(.pixel(10)).foregroundColor(Color.white.opacity(0.6))
-				ForEach([ExoSlot.mod1, .mod2, .mod3, .mod4], id: \.self) { s in socket(s) }
-			}
+	var leftColumn: some View {
+		VStack(alignment: .leading, spacing: 8) {
+			ChoiceRows(options: ExoAssemblyPanel.tools, selected: $tool, columns: 3)
+			canvas
+			ChoiceRows(options: ExoAssemblyPanel.poses, selected: $pose, columns: 4)
+			billBox
+			buildRow
+			if !note.isEmpty { Text(verbatim: note).font(.pixel(12, .semibold)).foregroundColor(Color(hex: 0xFFE070)) }
 		}
 	}
 
-	/// The suit picture with its frame places laid over it (front and back), or the suit as worn (side)
-	var figure: some View {
-		let img: Image = SuitArt.shared.image(plan, view)
-		let w: CGFloat = 240
-		let h: CGFloat = 336
+	/// The figure in its suit, large; touches place, pick and move pieces (on the body standing still)
+	var canvas: some View {
+		let k: CGFloat = ExoAssemblyPanel.k
+		let w: CGFloat = CGFloat(ExoAssemblyPanel.cropW) * k
+		let h: CGFloat = CGFloat(suitBodyH) * k
+		let img: Image = SuitPictures.shared.image(plan, pose == 0 ? 0 : clampI(pose, 0, 6), pick)
+		let fullW: CGFloat = CGFloat(humanW * suitUnit) * k
+		let off: CGFloat = -CGFloat(ExoAssemblyPanel.cropX) * k
 		return ZStack(alignment: .topLeading) {
-			Rectangle().fill(Color.black.opacity(0.35)).frame(width: w, height: h)
-			if view == 2 {
-				img.resizable().interpolation(.none).frame(width: w * 22.0 / 22.0, height: w * 17.0 / 22.0)
-					.offset(x: 0, y: (h - w * 17.0 / 22.0) * 0.5)
-				VStack {
-					Spacer()
-					Text("As it looks when worn").font(.pixel(10, .semibold)).foregroundColor(Color.white.opacity(0.6))
-				}
-				.frame(width: w, height: h - 8)
-				ForEach([ExoSlot.helmet, .chest, .armL, .armR, .legs, .boots], id: \.self) { s in hiddenTarget(s) }
+			Rectangle().fill(Color.black.opacity(0.35))
+			grid(w, h)
+			img.resizable().interpolation(.none).frame(width: fullW, height: h).offset(x: off, y: 0)
+		}
+		.frame(width: w, height: h)
+		.clipped()
+		.overlay(Rectangle().stroke(Color.white.opacity(0.25), lineWidth: 1))
+		.gesture(DragGesture(minimumDistance: 0).onChanged { (v: DragGesture.Value) in self.touchMoved(v.startLocation, v.location) }.onEnded { (v: DragGesture.Value) in self.touchEnded(v.startLocation, v.location) })
+	}
+
+	/// faint lines every sprite pixel, so pieces can be lined up
+	func grid(_ w: CGFloat, _ h: CGFloat) -> some View {
+		let k: CGFloat = ExoAssemblyPanel.k
+		let step: CGFloat = k * CGFloat(suitUnit)
+		return Canvas { ctx, size in
+			var p: Path = Path()
+			var x: CGFloat = 0
+			while x <= w {
+				p.addRect(CGRect(x: x, y: 0, width: 1, height: h))
+				x += step
+			}
+			var y: CGFloat = 0
+			while y <= h {
+				p.addRect(CGRect(x: 0, y: y, width: w, height: 1))
+				y += step
+			}
+			ctx.fill(p, with: .color(Color.white.opacity(0.06)))
+		}
+	}
+
+	/// a point on the canvas as a point on the body (suit units from the figure's left edge)
+	func bodyPoint(_ p: CGPoint) -> (Double, Double) {
+		let k: Double = Double(ExoAssemblyPanel.k)
+		let fx: Double = Double(p.x) / k + ExoAssemblyPanel.cropX
+		let fy: Double = Double(p.y) / k
+		return (fx - Double(humanOX * suitUnit), fy)
+	}
+
+	/// the outermost piece under a body point
+	func pieceAt(_ x: Double, _ y: Double) -> Int? {
+		var best: Int? = nil
+		var bestKey: Int = -1
+		for (i, p) in plan.pieces.enumerated() where p.covers(x, y) {
+			let key: Int = p.bone.layer * 1000 + i
+			if key > bestKey {
+				bestKey = key
+				best = i
+			}
+		}
+		return best
+	}
+
+	func touchMoved(_ start: CGPoint, _ now: CGPoint) {
+		if tool != 0 || pose != 0 { return }
+		if !grabbing {
+			grabbing = true
+			let b: (Double, Double) = bodyPoint(start)
+			if let i = pieceAt(b.0, b.1) {
+				pick = plan.pieces[i].id
+				remember()
+				grabStart = start
+				grabFrom = CGPoint(x: plan.pieces[i].x, y: plan.pieces[i].y)
 			} else {
-				img.resizable().interpolation(.none).frame(width: w, height: h)
-				ForEach([ExoSlot.helmet, .chest, .armL, .armR, .legs, .boots], id: \.self) { s in partTarget(s, w / 40.0) }
+				pick = -1
+				grabStart = .zero
 			}
-		}
-		.frame(width: w, height: h)
-	}
-
-	/// where each frame part sits on the 40 x 56 picture (front; the back swaps the arms)
-	func partRect(_ s: ExoSlot) -> (Double, Double, Double, Double) {
-		let back: Bool = view == 1
-		switch s {
-		case .helmet: return (13, 1, 14, 12)
-		case .chest: return (10, 13, 20, 18)
-		case .armR: return back ? (29, 15, 7, 23) : (4, 15, 7, 23)
-		case .armL: return back ? (4, 15, 7, 23) : (29, 15, 7, 23)
-		case .legs: return (12, 32, 16, 16)
-		case .boots: return (11, 48, 18, 8)
-		default: return (0, 0, 0, 0)
-		}
-	}
-
-	func partTarget(_ s: ExoSlot, _ k: CGFloat) -> some View {
-		let r: (Double, Double, Double, Double) = partRect(s)
-		let x: CGFloat = CGFloat(r.0) * k
-		let y: CGFloat = CGFloat(r.1) * k
-		let w: CGFloat = CGFloat(r.2) * k
-		let h: CGFloat = CGFloat(r.3) * k
-		return target(s, w, h, showIcon: false)
-			.offset(x: x, y: y)
-	}
-
-	/// in the side view the frame places are still there, stacked at the edge, so drops still work
-	func hiddenTarget(_ s: ExoSlot) -> some View {
-		let i: Int = [ExoSlot.helmet, .chest, .armL, .armR, .legs, .boots].firstIndex(of: s) ?? 0
-		return target(s, 74, 44, showIcon: true)
-			.offset(x: i % 2 == 0 ? 4 : 162, y: CGFloat(8 + (i / 2) * 50))
-	}
-
-	/// a module, plate or core place beside the picture
-	func socket(_ s: ExoSlot) -> some View {
-		return target(s, 64, 50, showIcon: true)
-	}
-
-	/// One place on the suit: shows what is fitted (or that it is empty), lights up when what is being
-	/// dragged or picked would fit, and takes drops and taps
-	func target(_ s: ExoSlot, _ w: CGFloat, _ h: CGFloat, showIcon: Bool) -> some View {
-		let box: ExoFrames = frames
-		let fitted: Stack? = plan[s]
-		let cand: Stack? = candidateStack
-		let fits: Bool = cand.map { s.fits($0.item) } ?? false
-		let locked: Bool = s.isModule && (s.rawValue - ExoSlot.mod1.rawValue) >= plan.sockets
-		let isSel: Bool = sel == s.rawValue
-		let isHover: Bool = hover == s.rawValue
-		var edge: Color = Color.white.opacity(0.25)
-		if fits { edge = Color(hex: 0x60E0FF) }
-		if isHover && fits { edge = Color(hex: 0x7AF08A) }
-		if isSel { edge = Color.white }
-		let g: Game = game
-		return ZStack {
-			Rectangle().fill(fits ? Color(hex: 0x1E4A5A).opacity(0.55) : Color.black.opacity(showIcon ? 0.35 : 0.01))
-			if showIcon {
-				VStack(spacing: 1) {
-					if let f = fitted {
-						Art.shared.icon(f.item).resizable().interpolation(.none).frame(width: 26, height: 26)
-					}
-					Text(verbatim: locked ? "locked" : (fitted == nil ? s.name : shortName(fitted!))).font(.pixel(8, .semibold))
-						.foregroundColor(Color.white.opacity(fitted == nil ? 0.55 : 0.9)).lineLimit(1).minimumScaleFactor(0.6)
-				}
-			}
-		}
-		.frame(width: w, height: h)
-		.overlay(Rectangle().stroke(edge, lineWidth: isSel || fits ? 2 : 1))
-		.background(GeometryReader { gp -> Color in
-			box.slots[s.rawValue] = gp.frame(in: .named("exo"))
-			return Color.clear
-		})
-		.contentShape(Rectangle())
-		.onTapGesture { tapSlot(s) }
-		.gesture(DragGesture(minimumDistance: 8, coordinateSpace: .named("exo"))
-			.onChanged { v in
-				if dragSlot < 0 && dragging == nil {
-					if plan[s] == nil { return }
-					dragSlot = s.rawValue
-					sel = s.rawValue
-				}
-				dragPoint = v.location
-				hover = box.slot(at: v.location)?.rawValue ?? -1
-			}
-			.onEnded { v in
-				if dragSlot >= 0, let from = ExoSlot(rawValue: dragSlot) {
-					if let to = box.slot(at: v.location) {
-						moveSlot(from, to)
-					} else if box.tray.contains(v.location) {
-						unfit(from)
-					}
-				}
-				dragSlot = -1
-				hover = -1
-				_ = g
-			})
-	}
-
-	func shortName(_ s: Stack) -> String {
-		switch s.item {
-		case .exoPart(_, let m), .exoPlate(let m): return m.name
-		case .exoCore(let c): return c.name
-		case .exoModule(let m): return m.name
-		default: return s.item.name
-		}
-	}
-
-	/// what is being dragged or has been picked from the tray
-	var candidateStack: Stack? {
-		if let d = dragging { return d.stack }
-		if dragSlot >= 0 { return plan[ExoSlot(rawValue: dragSlot) ?? .helmet] }
-		if trayPick >= 0, let t = tray.first(where: { $0.id == trayPick }) { return t.stack }
-		return nil
-	}
-
-	// MARK: changing the plan
-
-	func tapSlot(_ s: ExoSlot) {
-		if trayPick >= 0, let t = tray.first(where: { $0.id == trayPick }) {
-			fit(t.stack, s)
-			trayPick = -1
 			return
 		}
-		sel = sel == s.rawValue ? -1 : s.rawValue
+		guard grabStart != .zero, let i = plan.index(pick) else { return }
+		let k: Double = Double(ExoAssemblyPanel.k)
+		var p: SuitPiece = plan.pieces[i]
+		// moves snap to whole suit units
+		p.x = (Double(grabFrom.x) + Double(now.x - grabStart.x) / k).rounded()
+		p.y = (Double(grabFrom.y) + Double(now.y - grabStart.y) / k).rounded()
+		p.clamp()
+		plan.pieces[i] = p
+	}
+
+	func touchEnded(_ start: CGPoint, _ end: CGPoint) {
+		defer {
+			grabbing = false
+			grabStart = .zero
+		}
+		if pose != 0 {
+			note = "Pick STAND to change the suit (the other poses show how it moves)."
+			return
+		}
+		if tool == 0 { return }
+		let b: (Double, Double) = bodyPoint(end)
+		if plan.pieces.count >= SuitDesign.maxPieces {
+			note = joinText("A suit holds at most ", String(SuitDesign.maxPieces), " pieces.")
+			return
+		}
+		remember()
+		var p = SuitPiece()
+		p.kind = tool == 1 ? .plate : .frame
+		p.x = b.0.rounded()
+		p.y = b.1.rounded()
+		p.w = tool == 1 ? 6 : 4
+		p.h = tool == 1 ? 6 : 2
+		p.shape = SuitShape(rawValue: shapePick) ?? .box
+		applyMaterial(&p, matPick)
+		p.bone = SuitBody.bone(p.x, p.y)
+		p.id = plan.newID()
+		p.clamp()
+		plan.pieces.append(p)
+		pick = p.id
 		note = ""
 	}
 
-	func fit(_ st: Stack, _ s: ExoSlot) {
-		if !s.fits(st.item) {
-			note = joinText(st.item.name, " doesn't go in the ", s.name.lowercased(), ".")
-			return
-		}
-		if s.isModule && (s.rawValue - ExoSlot.mod1.rawValue) >= plan.sockets {
-			note = plan.sockets == 0 ? "Fit a chest frame first: module sockets are in it." : joinText("This chest frame has ", String(plan.sockets), " module sockets: a better metal has more.")
-			return
-		}
-		if case .exoModule(let m) = st.item, plan.modules.contains(m) {
-			note = joinText("The suit already has ", m.name, ".")
-			return
-		}
-		plan[s] = st
-		sel = s.rawValue
-		note = joinText("Planned: ", st.item.name, " in the ", s.name.lowercased(), ". APPLY to fit it.")
+	func remember() {
+		undo.append(plan)
+		if undo.count > 60 { undo.removeFirst() }
 	}
 
-	func unfit(_ s: ExoSlot) {
-		guard let st = plan[s] else { return }
-		plan[s] = nil
-		note = joinText(st.item.name, " comes off (back to your bag on APPLY).")
-	}
+	// MARK: materials
 
-	func moveSlot(_ a: ExoSlot, _ b: ExoSlot) {
-		if a == b { return }
-		guard let st = plan[a] else { return }
-		if !b.fits(st.item) {
-			note = joinText(st.item.name, " doesn't go in the ", b.name.lowercased(), ".")
-			return
-		}
-		let other: Stack? = plan[b]
-		plan[b] = st
-		plan[a] = (other != nil && a.fits(other!.item)) ? other : nil
-		sel = b.rawValue
-	}
-
-	// MARK: the parts tray
-
-	/// The parts that can go on: suit parts in the bag (less those the plan already uses), and parts the
-	/// plan has taken off the suit
-	var tray: [TrayPart] {
-		var pool: [Stack] = Array(game.suit.parts.values)
-		var fromBag: [Stack] = []
-		for s in ExoSlot.allCases {
-			guard let st = plan[s] else { continue }
-			if let j = pool.firstIndex(of: st) { pool.remove(at: j) } else { fromBag.append(st) }
-		}
-		var out: [TrayPart] = []
-		for (k, st) in pool.enumerated() { out.append(TrayPart(id: 1000 + k, stack: st, fromSuit: true)) }
-		for i in 0..<game.inv.slots.count {
-			guard let st = game.inv.slots[i] else { continue }
-			if !isExoItem(st.item) { continue }
-			if let j = fromBag.firstIndex(of: st) {
-				fromBag.remove(at: j)
-				continue
-			}
-			out.append(TrayPart(id: i, stack: st, fromSuit: false))
+	var materials: [SuitMatChoice] {
+		var out: [SuitMatChoice] = []
+		for m in ExoMat.allCases { out.append(SuitMatChoice(mat: m.rawValue, key: "", name: m.name, color: m.color)) }
+		for k in ModRuntime.shared.suitMats.keys.sorted() {
+			if let i = ModRuntime.shared.suitMats[k] { out.append(SuitMatChoice(mat: 0, key: k, name: i.name, color: i.color)) }
 		}
 		return out
 	}
 
-	func isExoItem(_ it: Item) -> Bool {
-		switch it {
-		case .exoPart, .exoPlate, .exoCore, .exoModule: return true
-		default: return false
+	func applyMaterial(_ p: inout SuitPiece, _ i: Int) {
+		let list: [SuitMatChoice] = materials
+		let c: SuitMatChoice = list[clampI(i, 0, list.count - 1)]
+		p.mat = c.mat
+		p.modMat = c.key
+	}
+
+	func materialIndex(_ p: SuitPiece) -> Int {
+		let list: [SuitMatChoice] = materials
+		if !p.modMat.isEmpty { return list.firstIndex { $0.key == p.modMat } ?? 0 }
+		return list.firstIndex { $0.key.isEmpty && $0.mat == p.mat } ?? 0
+	}
+
+	// MARK: the right column
+
+	var rightColumn: some View {
+		VStack(alignment: .leading, spacing: 8) {
+			ChoiceRows(options: ExoAssemblyPanel.pages, selected: $page, columns: 3)
+			pageView
 		}
 	}
 
-	var trayColumn: some View {
-		let list: [TrayPart] = tray
-		let box: ExoFrames = frames
-		let cols: [GridItem] = [GridItem(.adaptive(minimum: 50), spacing: 4)]
+	@ViewBuilder
+	var pageView: some View {
+		switch page {
+		case 1: partsPage
+		case 2: suitPage
+		default: piecePage
+		}
+	}
+
+	var piecePage: some View {
+		VStack(alignment: .leading, spacing: 8) {
+			newPieceBox
+			if let i = plan.index(pick) { pieceBox(i) } else {
+				Text("Tap a piece to pick it, or choose PLACE PLATES and tap the body.").font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+			}
+		}
+	}
+
+	/// what a placing tap puts down
+	var newPieceBox: some View {
+		let names: [String] = materials.map { $0.name }
 		return VStack(alignment: .leading, spacing: 6) {
-			Text("PARTS").font(.pixel(13)).foregroundColor(Color(hex: 0x9AD8F0))
-			Text("Drag onto the suit, or tap one and then a place. Drag a fitted part here to take it off.")
-				.font(.pixel(9, .semibold)).foregroundColor(Color.white.opacity(0.6))
-			ScrollView {
-				LazyVGrid(columns: cols, spacing: 4) {
-					ForEach(list) { t in trayItem(t) }
-				}
-				if list.isEmpty {
-					Text("No suit parts in your bag. MAKE PARTS shows what can be made here.")
-						.font(.pixel(10, .semibold)).foregroundColor(Color.white.opacity(0.55))
-				}
-			}
-			.frame(height: 230)
-			.background(Color.black.opacity(dragSlot >= 0 ? 0.45 : 0.2))
-			.overlay(Rectangle().stroke(dragSlot >= 0 ? Color(hex: 0xFFB060) : Color.clear, lineWidth: 2))
-			.background(GeometryReader { gp -> Color in
-				box.tray = gp.frame(in: .named("exo"))
-				return Color.clear
-			})
-			actions
+			Text("NEW PIECES").font(.pixel(12)).foregroundColor(ModUI.gold)
+			ChoiceRows(options: names, selected: $matPick, columns: 4)
+			ChoiceRows(options: SuitShape.allCases.map { $0.name }, selected: $shapePick, columns: 5)
+		}
+		.padding(8)
+		.background(PixelBox(color: ModUI.card))
+	}
+
+	func pb<T>(_ i: Int, _ kp: WritableKeyPath<SuitPiece, T>) -> Binding<T> {
+		let id: Int = plan.pieces[i].id
+		return Binding<T>(get: {
+			guard let j = self.plan.index(id) else { return self.plan.pieces[0][keyPath: kp] }
+			return self.plan.pieces[j][keyPath: kp]
+		}, set: { v in
+			guard let j = self.plan.index(id) else { return }
+			var p: SuitPiece = self.plan.pieces[j]
+			p[keyPath: kp] = v
+			p.clamp()
+			self.plan.pieces[j] = p
+		})
+	}
+
+	func pieceBox(_ i: Int) -> some View {
+		let p: SuitPiece = plan.pieces[i]
+		let title: String = game.suitPieceName(p).uppercased()
+		let wear: String = p.dmg > 0.001 ? joinText(" · worn ", String(Int((p.dmg * 100).rounded())), "%") : ""
+		let made: String = p.kind == .plate || p.kind == .frame ? joinText(suitMat(p).name, " ", p.kind.name.lowercased()) : p.kind.name
+		return VStack(alignment: .leading, spacing: 6) {
+			Text(verbatim: title).font(.pixel(13)).foregroundColor(ModUI.gold)
+			Text(verbatim: joinText(made, " on the ", p.bone.name.lowercased(), wear)).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+			sizeControls(i)
+			if p.kind == .plate || p.kind == .frame { makeControls(i) }
+			nudgeRow(i)
+			actionRow(i)
+		}
+		.padding(8)
+		.background(PixelBox(color: ModUI.card))
+	}
+
+	func sizeControls(_ i: Int) -> some View {
+		VStack(alignment: .leading, spacing: 4) {
+			StatSlider(label: "Width", value: pb(i, \.w), range: 1.0...30.0, step: 1, format: "%.0f")
+			StatSlider(label: "Height", value: pb(i, \.h), range: 1.0...30.0, step: 1, format: "%.0f")
+			StatSlider(label: "Turn", value: pb(i, \.rot), range: -180.0...180.0, step: 5, format: "%.0f°")
+			ChoiceRows(options: SuitShape.allCases.map { $0.name }, selected: shapeBind(i), columns: 5)
+			ChoiceRows(options: SuitBone.allCases.map { $0.name }, selected: boneBind(i), columns: 4)
 		}
 	}
 
-	func trayItem(_ t: TrayPart) -> some View {
-		let box: ExoFrames = frames
-		return SlotView(stack: t.stack, selected: trayPick == t.id, size: 46)
-			.overlay(Rectangle().stroke(t.fromSuit ? Color(hex: 0xFFB060) : Color.clear, lineWidth: 2))
-			.opacity(dragging?.id == t.id ? 0.35 : 1.0)
-			.onTapGesture {
-				trayPick = trayPick == t.id ? -1 : t.id
-				sel = -1
-				note = t.fromSuit ? joinText(t.stack.item.name, " (taken off in this plan)") : t.stack.item.name
-			}
-			.gesture(DragGesture(minimumDistance: 6, coordinateSpace: .named("exo"))
-				.onChanged { v in
-					if dragging == nil { dragging = t }
-					dragPoint = v.location
-					hover = box.slot(at: v.location)?.rawValue ?? -1
-				}
-				.onEnded { v in
-					if let d = dragging, let s = box.slot(at: v.location) { fit(d.stack, s) }
-					dragging = nil
-					hover = -1
-				})
-	}
-
-	var actions: some View {
-		let st: ExoStats = ExoStats.of(plan)
-		let wornNow: Bool = game.suit.worn
-		return VStack(spacing: 6) {
-			PixelButton(title: changed ? "APPLY" : "NOTHING TO APPLY", color: changed ? Color(hex: 0x2E8A5A) : Color(hex: 0x444444)) {
-				if !changed { return }
-				note = game.applySuit(plan)
-				plan = game.suit
-				sel = -1
-				trayPick = -1
-			}
-			HStack(spacing: 6) {
-				SmallButton(title: "UNDO PLAN", color: Color(hex: 0x5A4A3A)) {
-					plan = game.suit
-					note = "Back to the suit as it is."
-				}
-				SmallButton(title: wornNow ? "TAKE OFF" : "WEAR", color: wornNow ? Color(hex: 0x8A5A2A) : Color(hex: 0x2E6A8A)) {
-					if changed {
-						note = "APPLY or undo your plan first."
-						return
-					}
-					note = wornNow ? game.takeOffSuit() : game.wearSuit()
-				}
-			}
-			if !st.complete {
-				Text("To wear it: a chest frame and a power core.").font(.pixel(9, .semibold)).foregroundColor(Color(hex: 0xFFB060))
-			}
-		}
-	}
-
-	// MARK: numbers
-
-	/// the plan with the dragged or picked part dropped where it is hovering (or where it would go)
-	var previewSuit: ExoSuit? {
-		guard let c = candidateStack else { return nil }
-		var target: ExoSlot? = hover >= 0 ? ExoSlot(rawValue: hover) : nil
-		if target == nil {
-			target = ExoSlot.allCases.first { s in s.fits(c.item) && plan[s] == nil && !(s.isModule && (s.rawValue - ExoSlot.mod1.rawValue) >= plan.sockets) }
-		}
-		guard let t = target, t.fits(c.item) else { return nil }
-		var p: ExoSuit = plan
-		p[t] = c
-		return p
-	}
-
-	var statsBox: some View {
-		let now: ExoStats = ExoStats.of(game.suit)
-		let pl: ExoStats = ExoStats.of(plan)
-		let pv: ExoStats? = previewSuit.map { ExoStats.of($0) }
-		let rows: [(String, Double, Double, Double?, Bool)] = [
-			("Defence", now.defense, pl.defense, pv?.defense, true),
-			("Weight", now.weight, pl.weight, pv?.weight, false),
-			("Strength", now.strength, pl.strength, pv?.strength, true),
-			("Speed %", now.speedMul * 100, pl.speedMul * 100, pv.map { $0.speedMul * 100 }, true),
-			("Jump %", now.jumpMul * 100, pl.jumpMul * 100, pv.map { $0.jumpMul * 100 }, true),
-			("Energy", now.capacity, pl.capacity, pv?.capacity, true),
-			("Output /s", now.output, pl.output, pv?.output, true),
-			("Recharge /s", now.recharge, pl.recharge, pv?.recharge, true),
-			("Energy use %", now.drainMul * 100, pl.drainMul * 100, pv.map { $0.drainMul * 100 }, false)
-		]
-		return VStack(alignment: .leading, spacing: 3) {
-			HStack {
-				Text("SUIT").font(.pixel(13)).foregroundColor(Color(hex: 0x9AD8F0))
-				Spacer()
-				Text(verbatim: changed ? "now → plan" : "now").font(.pixel(9, .semibold)).foregroundColor(Color.white.opacity(0.6))
-			}
-			ForEach(0..<rows.count, id: \.self) { i in statRow(rows[i]) }
-			let mods: [ExoModule] = (pv ?? pl).modules
-			Text(verbatim: mods.isEmpty ? "No working modules" : joinText("Modules: ", mods.map { $0.name }.joined(separator: ", ")))
-				.font(.pixel(9, .semibold)).foregroundColor(Color.white.opacity(0.8)).lineLimit(3)
-			if pl.fireCut > 0 || pl.coldCut > 0 || pl.stormCut > 0 {
-				Text(verbatim: joinText("Resists: fire ", String(Int(pl.fireCut * 100)), "%, cold ", String(Int(pl.coldCut * 100)), "%, lightning ", String(Int(pl.stormCut * 100)), "%"))
-					.font(.pixel(9, .semibold)).foregroundColor(Color(hex: 0xFFC890))
-			}
-			ForEach(0..<min(3, pl.notes.count), id: \.self) { i in
-				Text(verbatim: pl.notes[i]).font(.pixel(9, .semibold)).foregroundColor(Color(hex: 0xFFB060)).lineLimit(2)
-			}
-		}
-		.padding(6)
-		.background(Color.black.opacity(0.25))
-	}
-
-	func statRow(_ r: (String, Double, Double, Double?, Bool)) -> some View {
-		let shown: Double = r.3 ?? r.2
-		let diff: Double = shown - r.1
-		let better: Bool = r.4 ? diff > 0 : diff < 0
-		let col: Color = abs(diff) < 0.05 ? Color.white : (better ? Color(hex: 0x7AF08A) : Color(hex: 0xFF8A7A))
-		return HStack(spacing: 4) {
-			Text(verbatim: r.0).font(.pixel(10, .semibold)).foregroundColor(Color.white.opacity(0.75))
-			Spacer(minLength: 2)
-			Text(verbatim: String(format: "%.1f", r.1)).font(.pixel(10)).foregroundColor(Color.white.opacity(0.6))
-			if abs(diff) >= 0.05 {
-				Text(verbatim: joinText("→ ", String(format: "%.1f", shown))).font(.pixel(10)).foregroundColor(col)
-			}
-		}
-	}
-
-	/// what the selected place holds, with a button to take it off
-	var detailBox: some View {
-		let s: ExoSlot? = sel >= 0 ? ExoSlot(rawValue: sel) : nil
+	func makeControls(_ i: Int) -> some View {
+		let names: [String] = materials.map { $0.name }
+		let painted: Bool = plan.pieces[i].color != 0
 		return VStack(alignment: .leading, spacing: 4) {
-			if let slot = s {
-				Text(verbatim: slot.name.uppercased()).font(.pixel(12)).foregroundColor(Color(hex: 0x9AD8F0))
-				if let st = plan[slot] {
-					Text(verbatim: st.item.name).font(.pixel(11))
-					ForEach(0..<st.item.infoLines.count, id: \.self) { k in
-						Text(verbatim: st.item.infoLines[k]).font(.pixel(9, .semibold)).foregroundColor(Color.white.opacity(0.75)).lineLimit(2)
-					}
-					if !st.infusionNames.isEmpty {
-						Text(verbatim: joinText("Infused: ", st.infusionNames.joined(separator: ", "))).font(.pixel(9, .semibold)).foregroundColor(Color(hex: 0xC07CFF))
-					}
-					SmallButton(title: "TAKE OFF", color: Color(hex: 0x8A4A3A)) { unfit(slot) }
-				} else {
-					Text(verbatim: slotHelp(slot)).font(.pixel(9, .semibold)).foregroundColor(Color.white.opacity(0.7))
-				}
-			} else {
-				Text("Tap a place on the suit to see what is in it.").font(.pixel(9, .semibold)).foregroundColor(Color.white.opacity(0.6))
-			}
+			ChoiceRows(options: ExoAssemblyPanel.thick, selected: thickBind(i), columns: 3)
+			ChoiceRows(options: names, selected: matBind(i), columns: 4)
+			ModToggle(label: "Painted", help: "Off: the metal's own colour", isOn: paintedBind(i))
+			if painted { ModColorRow(label: "Paint", color: pb(i, \.color)) }
 		}
-		.frame(maxWidth: .infinity, alignment: .leading)
-		.padding(6)
-		.background(Color.black.opacity(0.25))
 	}
 
-	func slotHelp(_ s: ExoSlot) -> String {
-		if s.isPlate { return joinText("Takes an armour plate of any metal. Needs the ", (s.plateBase ?? .chest).name.lowercased(), ".") }
-		if s.isModule {
-			let k: Int = s.rawValue - ExoSlot.mod1.rawValue
-			return k < plan.sockets ? "Takes a module. Each needs certain parts (see its notes)." : "Locked: the chest frame's metal decides how many module sockets there are."
+	func nudgeRow(_ i: Int) -> some View {
+		HStack(spacing: 6) {
+			SmallButton(title: "\u{2190}") { self.nudge(i, -1, 0) }
+			SmallButton(title: "\u{2192}") { self.nudge(i, 1, 0) }
+			SmallButton(title: "\u{2191}") { self.nudge(i, 0, -1) }
+			SmallButton(title: "\u{2193}") { self.nudge(i, 0, 1) }
+			SmallButton(title: "TO FRONT") { self.layer(i, 1) }
+			SmallButton(title: "TO BACK") { self.layer(i, -1) }
 		}
-		if s == .core { return "Takes a power core: it holds the energy every module runs on." }
-		return "Takes a suit part made at this station."
+	}
+
+	func actionRow(_ i: Int) -> some View {
+		HStack(spacing: 6) {
+			SmallButton(title: "COPY", color: ModUI.blue) { self.duplicate(i, false) }
+			SmallButton(title: "MIRROR", color: ModUI.blue) { self.duplicate(i, true) }
+			SmallButton(title: "REMOVE", color: ModUI.red) { self.removePiece(i) }
+		}
+	}
+
+	func shapeBind(_ i: Int) -> Binding<Int> {
+		let b: Binding<SuitShape> = pb(i, \.shape)
+		return Binding<Int>(get: { b.wrappedValue.rawValue }, set: { b.wrappedValue = SuitShape(rawValue: $0) ?? .box })
+	}
+
+	func boneBind(_ i: Int) -> Binding<Int> {
+		let b: Binding<SuitBone> = pb(i, \.bone)
+		return Binding<Int>(get: { b.wrappedValue.rawValue }, set: { b.wrappedValue = SuitBone(rawValue: $0) ?? .torso })
+	}
+
+	func thickBind(_ i: Int) -> Binding<Int> {
+		let b: Binding<Int> = pb(i, \.thick)
+		return Binding<Int>(get: { b.wrappedValue - 1 }, set: { b.wrappedValue = $0 + 1 })
+	}
+
+	func matBind(_ i: Int) -> Binding<Int> {
+		let id: Int = plan.pieces[i].id
+		return Binding<Int>(get: {
+			guard let j = self.plan.index(id) else { return 0 }
+			return self.materialIndex(self.plan.pieces[j])
+		}, set: { v in
+			guard let j = self.plan.index(id) else { return }
+			var p: SuitPiece = self.plan.pieces[j]
+			self.applyMaterial(&p, v)
+			self.plan.pieces[j] = p
+		})
+	}
+
+	func paintedBind(_ i: Int) -> Binding<Bool> {
+		let b: Binding<UInt32> = pb(i, \.color)
+		let base: UInt32 = suitMat(plan.pieces[i]).color
+		return Binding<Bool>(get: { b.wrappedValue != 0 }, set: { on in b.wrappedValue = on ? base : 0 })
+	}
+
+	func nudge(_ i: Int, _ dx: Double, _ dy: Double) {
+		remember()
+		var p: SuitPiece = plan.pieces[i]
+		p.x += dx
+		p.y += dy
+		p.clamp()
+		plan.pieces[i] = p
+	}
+
+	/// moves a piece over (or under) the others on its part of the body
+	func layer(_ i: Int, _ dir: Int) {
+		remember()
+		let p: SuitPiece = plan.pieces.remove(at: i)
+		if dir > 0 { plan.pieces.append(p) } else { plan.pieces.insert(p, at: 0) }
+	}
+
+	/// a copy beside it, or mirrored to the other side of the body (the other arm or leg)
+	func duplicate(_ i: Int, _ mirror: Bool) {
+		if plan.pieces.count >= SuitDesign.maxPieces { return }
+		var p: SuitPiece = plan.pieces[i]
+		if p.kind == .core || p.kind == .module {
+			note = "Working parts come from the bag: add another from PARTS."
+			return
+		}
+		remember()
+		if mirror {
+			p.x = suitBodyW - p.x
+			p.rot = -p.rot
+			p.bone = p.bone.other
+		} else {
+			p.x += 3
+			p.y += 3
+		}
+		p.id = plan.newID()
+		p.dmg = 0
+		p.src = 0
+		p.clamp()
+		plan.pieces.append(p)
+		pick = p.id
+	}
+
+	func removePiece(_ i: Int) {
+		remember()
+		plan.pieces.remove(at: i)
+		pick = -1
+	}
+
+	// MARK: working parts from the bag
+
+	/// cores and working parts that can go on: those in the bag (all of them in creative)
+	var partChoices: [Stack] {
+		var out: [Stack] = []
+		if game.isCreative {
+			for c in ExoCore.allCases { out.append(Stack(item: .exoCore(c), count: 1)) }
+			for m in ExoModule.allCases { out.append(Stack(item: .exoModule(m), count: 1)) }
+			return out
+		}
+		let inPlan: [Stack] = Array(plan.items.values)
+		var used: [Stack] = inPlan
+		for s in game.inv.slots {
+			guard let st = s else { continue }
+			switch st.item {
+			case .exoCore, .exoModule:
+				if let j = used.firstIndex(of: st) { used.remove(at: j) } else { out.append(st) }
+			case .custom(let k):
+				if ModRuntime.shared.suitParts[k] != nil {
+					if let j = used.firstIndex(of: st) { used.remove(at: j) } else { out.append(st) }
+				}
+			default: break
+			}
+		}
+		return out
+	}
+
+	var partsPage: some View {
+		let list: [Stack] = partChoices
+		return VStack(alignment: .leading, spacing: 6) {
+			Text("Cores give energy; parts work: jets lift, wings glide, turrets shoot by themselves, cannons and lasers fire with SUIT FIRE. Each goes on where you put it.").font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+			if list.isEmpty { Text("No cores or suit parts in your bag. MAKE PARTS shows what can be made here.").font(.pixel(11, .semibold)).foregroundColor(Color(hex: 0xFF9060)) }
+			ForEach(0..<list.count, id: \.self) { (i: Int) in self.partRow(list[i]) }
+		}
+	}
+
+	func partRow(_ st: Stack) -> some View {
+		let info: String = partBlurb(st.item)
+		return HStack(spacing: 8) {
+			SlotView(stack: st, size: 38)
+			VStack(alignment: .leading, spacing: 2) {
+				Text(verbatim: st.item.name).font(.pixel(12)).foregroundColor(Color.white)
+				Text(verbatim: info).font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
+			}
+			Spacer(minLength: 0)
+			SmallButton(title: "ADD", color: ModUI.accent) { self.addPart(st) }
+		}
+		.padding(6)
+		.background(PixelBox(color: ModUI.card))
+	}
+
+	func partBlurb(_ it: Item) -> String {
+		switch it {
+		case .exoCore(let c): return joinText("Holds ", String(Int(c.capacity)), ", gives ", String(Int(c.output)), " a second")
+		case .exoModule(let m): return m.blurb
+		case .custom(let k): return ModRuntime.shared.suitParts[k].map { joinText("Works as: ", $0.works.name) } ?? ""
+		default: return ""
+		}
+	}
+
+	func addPart(_ st: Stack) {
+		if plan.pieces.count >= SuitDesign.maxPieces { return }
+		var p: SuitPiece
+		switch st.item {
+		case .exoCore(let c): p = SuitTemplates.core(c)
+		case .exoModule(let m): p = SuitTemplates.module(m)
+		case .custom(let k):
+			guard let mp = ModRuntime.shared.suitParts[k] else { return }
+			p = SuitTemplates.module(mp.works)
+			p.modPart = k
+		default: return
+		}
+		remember()
+		if !game.isCreative {
+			let g: Int = plan.newGroup()
+			plan.items[g] = st
+			p.src = g
+		}
+		p.id = plan.newID()
+		plan.pieces.append(p)
+		pick = p.id
+		page = 0
+	}
+
+	// MARK: the whole suit
+
+	var suitPage: some View {
+		let st: ExoStats = ExoStats.of(plan)
+		return VStack(alignment: .leading, spacing: 8) {
+			statsBox(st)
+			templateBox
+			modDesignBox
+			repairBox
+			wearRow
+		}
+	}
+
+	func statsBox(_ st: ExoStats) -> some View {
+		let energy: String = joinText("Energy ", String(Int(st.capacity)), " · gives ", String(Int(st.output)), "/s · refills ", String(format: "%.1f", st.recharge), "/s")
+		let move: String = joinText("Speed ", String(Int((st.speedMul * 100).rounded())), "% · jump ", String(Int((st.jumpMul * 100).rounded())), "%", st.has(.hover) ? joinText(" · jets lift ", String(Int((st.thrust * 100).rounded())), "%") : "")
+		let parts: String = st.modules.isEmpty ? "No working parts" : st.modules.map { $0.name }.joined(separator: ", ")
+		return VStack(alignment: .leading, spacing: 4) {
+			Text("HOW IT GUARDS").font(.pixel(12)).foregroundColor(ModUI.gold)
+			ForEach(SuitSection.allCases, id: \.self) { (s: SuitSection) in self.coverRow(s, st) }
+			Text(verbatim: energy).font(.pixel(11, .semibold)).foregroundColor(Color.white)
+			Text(verbatim: move).font(.pixel(11, .semibold)).foregroundColor(Color.white)
+			Text(verbatim: parts).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+			ForEach(0..<st.notes.count, id: \.self) { (k: Int) in
+				Text(verbatim: st.notes[k]).font(.pixel(10, .semibold)).foregroundColor(Color(hex: 0xFF9060))
+			}
+		}
+		.padding(8)
+		.background(PixelBox(color: ModUI.card))
+	}
+
+	func coverRow(_ s: SuitSection, _ st: ExoStats) -> some View {
+		let cov: Double = st.cover[s.rawValue]
+		let g: Double = st.guardBy[s.rawValue]
+		let label: String = joinText(s.name, ": covered ", String(Int((cov * 100).rounded())), "%, stops ", String(Int((g * 100).rounded())), "%")
+		return VStack(alignment: .leading, spacing: 1) {
+			Text(verbatim: label).font(.pixel(10, .semibold)).foregroundColor(Color.white)
+			ZStack(alignment: .leading) {
+				Rectangle().fill(Color.black.opacity(0.5)).frame(width: 300, height: 6)
+				Rectangle().fill(Color(hex: 0x60E0FF)).frame(width: CGFloat(300.0 * clampD(g, 0, 1)), height: 6)
+			}
+		}
+	}
+
+	var templateBox: some View {
+		let mats: [String] = ExoMat.allCases.map { $0.name }
+		return VStack(alignment: .leading, spacing: 6) {
+			Text("START FROM").font(.pixel(12)).foregroundColor(ModUI.gold)
+			ChoiceRows(options: mats, selected: $templateMat, columns: 4)
+			PlainGrid(count: SuitTemplates.names.count, per: 5) { (i: Int) in
+				SmallButton(title: SuitTemplates.names[i].uppercased(), color: ModUI.blue) { self.loadTemplate(i) }
+			}
+			Text("Plates of the chosen metal; parts it needs come from your bag.").font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
+		}
+		.padding(8)
+		.background(PixelBox(color: ModUI.card))
+	}
+
+	/// Replaces the plan with a ready-made design (its working parts only where the bag has them)
+	func loadTemplate(_ i: Int) {
+		remember()
+		let m: ExoMat = ExoMat(rawValue: clampI(templateMat, 0, ExoMat.allCases.count - 1)) ?? .iron
+		var t: SuitDesign = SuitTemplates.design(i, m)
+		var keep: [SuitPiece] = []
+		var items: [Int: Stack] = [:]
+		var bag: [Stack] = partChoices
+		var missing: [String] = []
+		for var p in t.pieces {
+			if p.kind == .core || p.kind == .module {
+				if !game.isCreative {
+					let want: Item = p.kind == .core ? .exoCore(ExoCore(rawValue: p.part) ?? .sparkCell) : .exoModule(ExoModule(rawValue: p.part) ?? .hover)
+					guard let j = bag.firstIndex(where: { $0.item == want }) else {
+						missing.append(want.name)
+						continue
+					}
+					var g: Int = 1
+					while items[g] != nil { g += 1 }
+					items[g] = bag.remove(at: j)
+					p.src = g
+				}
+			}
+			keep.append(p)
+		}
+		t.pieces = keep
+		t.items = items
+		// the parts already on the suit stay on (they are not lost by starting over)
+		for p in plan.pieces where p.kind == .core || p.kind == .module {
+			var q: SuitPiece = p
+			q.id = t.newID()
+			if p.src != 0, let st = plan.items[p.src] {
+				let g: Int = t.newGroup()
+				t.items[g] = st
+				q.src = g
+			}
+			t.pieces.append(q)
+		}
+		plan = t
+		pick = -1
+		note = missing.isEmpty ? "" : joinText("Not in your bag (left off): ", missing.joined(separator: ", "), ".")
+	}
+
+	var repairBox: some View {
+		let bill: [Item: Int] = game.suit.d.repairBill()
+		let text: String = bill.isEmpty ? "Every piece is whole." : bill.map { joinText(String($0.value), " ", $0.key.name) }.sorted().joined(separator: ", ")
+		let can: Bool = !bill.isEmpty
+		return VStack(alignment: .leading, spacing: 6) {
+			Text("MEND").font(.pixel(12)).foregroundColor(ModUI.gold)
+			Text(verbatim: text).font(.pixel(11, .semibold)).foregroundColor(Color.white)
+			if can { SmallButton(title: "MEND EVERY PIECE", color: ModUI.accent) { self.mend() } }
+		}
+		.padding(8)
+		.background(PixelBox(color: ModUI.card))
+	}
+
+	func mend() {
+		note = game.repairSuit()
+		// the plan keeps up with the mended suit (pieces it still has as they are)
+		var p: SuitDesign = plan
+		for k in p.pieces.indices { p.pieces[k].dmg = 0 }
+		plan = p
+	}
+
+	var wearRow: some View {
+		let worn: Bool = game.suit.worn
+		return HStack(spacing: 8) {
+			SmallButton(title: worn ? "TAKE OFF" : "PUT ON", color: worn ? Color(hex: 0x6A4A3A) : ModUI.accent) { self.wear() }
+		}
+	}
+
+	func wear() {
+		if game.suit.worn {
+			note = game.takeOffSuit()
+		} else {
+			if changed {
+				note = "BUILD the changes first."
+				return
+			}
+			note = game.wearSuit()
+		}
+	}
+
+	// MARK: the bill and building
+
+	var billBox: some View {
+		let b: SuitBill = game.suit.d.bill(to: plan)
+		let pay: String = b.payText()
+		var back: [String] = []
+		for (it, n) in b.back.sorted(by: { $0.key.name < $1.key.name }) { back.append(joinText(String(n), " ", it.name)) }
+		for st in b.give { back.append(st.item.name) }
+		let free: Bool = game.isCreative
+		return VStack(alignment: .leading, spacing: 3) {
+			Text(verbatim: pay.isEmpty ? "Costs nothing" : joinText("Costs: ", pay, free ? " (free in creative)" : "")).font(.pixel(11, .semibold)).foregroundColor(Color.white)
+			if !back.isEmpty { Text(verbatim: joinText("Gives back: ", back.joined(separator: ", "))).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim) }
+		}
+	}
+
+	var buildRow: some View {
+		let can: Bool = changed
+		return HStack(spacing: 8) {
+			SmallButton(title: "BUILD", color: can ? ModUI.accent : Color(hex: 0x3A3E48)) { self.build() }
+			SmallButton(title: "UNDO", color: undo.isEmpty ? Color(hex: 0x3A3E48) : Color(hex: 0x5A6270)) { self.undoLast() }
+			SmallButton(title: "START AGAIN", color: Color(hex: 0x5A6270)) { self.reset() }
+		}
+	}
+
+	func build() {
+		if !changed {
+			note = "Nothing has changed."
+			return
+		}
+		note = game.applyDesign(plan)
+		plan = game.suit.d
+		if plan.index(pick) == nil { pick = -1 }
+	}
+
+	func undoLast() {
+		guard let u = undo.popLast() else { return }
+		plan = u
+		if plan.index(pick) == nil { pick = -1 }
+	}
+
+	func reset() {
+		remember()
+		plan = game.suit.d
+		pick = -1
+		note = ""
+	}
+}
+
+// MARK: - Mod Creator: suits (materials, parts, designs)
+
+/// The SUITS tab: a mod's suit materials, its working parts (items placed on suits) and whole suit
+/// designs to start from
+struct SuitListView: View {
+	@ObservedObject var s: ModSession
+	var openMat: (String) -> Void
+	var openPart: (String) -> Void
+	var openDesign: (String) -> Void
+
+	var body: some View {
+		VStack(alignment: .leading, spacing: 8) {
+			Text("Suits are built piece by piece at an Assembly Station. A mod can add metals to build them from, working parts to put on them (each an item your recipes make), and whole designs to start from.")
+				.font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+			matSection
+			partSection
+			designSection
+		}
+	}
+
+	var matSection: some View {
+		let can: Bool = s.mod.suitMats.count < ModSuitLimits.mats
+		return ModSection(title: "MATERIALS") {
+			if can { SmallButton(title: "+ NEW MATERIAL", color: ModUI.accent) { self.addMat() } }
+			ForEach(s.mod.suitMats) { (m: ModSuitMat) in self.matRow(m) }
+		}
+	}
+
+	func matRow(_ m: ModSuitMat) -> some View {
+		let line: String = String(format: "Guards x%.1f · weight x%.1f · lasts x%.1f", m.protect, m.weight, m.durability)
+		return HStack(spacing: 8) {
+			Rectangle().fill(Color(hex: m.color & 0xFFFFFF)).frame(width: 28, height: 28).overlay(Rectangle().stroke(Color.black, lineWidth: 1))
+			VStack(alignment: .leading, spacing: 2) {
+				Text(verbatim: m.name).font(.pixel(13)).foregroundColor(Color.white)
+				Text(verbatim: line).font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
+			}
+			Spacer(minLength: 0)
+			SmallButton(title: "EDIT", color: ModUI.blue) { self.openMat(m.id) }
+			SmallButton(title: "\u{2715}", color: ModUI.red) { self.s.mod.suitMats.removeAll { $0.id == m.id }; self.s.touch() }
+		}
+	}
+
+	var partSection: some View {
+		let can: Bool = s.mod.suitParts.count < ModSuitLimits.parts
+		return ModSection(title: "WORKING PARTS", help: "Each is an item: give it a recipe on the RECIPES tab, then place it on a suit.") {
+			if can { SmallButton(title: "+ NEW PART", color: ModUI.accent) { self.addPart() } }
+			ForEach(s.mod.suitParts) { (p: ModSuitPart) in self.partRow(p) }
+		}
+	}
+
+	func partRow(_ p: ModSuitPart) -> some View {
+		let line: String = joinText("Works as a ", p.works.name.lowercased(), String(format: " · strength x%.1f · weight %.0f", p.power, p.weight))
+		return HStack(spacing: 8) {
+			Rectangle().fill(Color(hex: p.color & 0xFFFFFF)).frame(width: 28, height: 28).overlay(Rectangle().stroke(Color.black, lineWidth: 1))
+			VStack(alignment: .leading, spacing: 2) {
+				Text(verbatim: p.name).font(.pixel(13)).foregroundColor(Color.white)
+				Text(verbatim: line).font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
+			}
+			Spacer(minLength: 0)
+			SmallButton(title: "EDIT", color: ModUI.blue) { self.openPart(p.id) }
+			SmallButton(title: "\u{2715}", color: ModUI.red) { self.s.mod.suitParts.removeAll { $0.id == p.id }; self.s.touch() }
+		}
+	}
+
+	var designSection: some View {
+		ModSection(title: "DESIGNS", help: "Build a suit at an Assembly Station in a TEST world, then SAVE TO THIS MOD there. Players start from it at their own station.") {
+			if s.mod.suitDesigns.isEmpty { Text("No designs yet.").font(.pixel(11, .semibold)).foregroundColor(ModUI.dim) }
+			ForEach(s.mod.suitDesigns) { (d: ModSuitDesign) in self.designRow(d) }
+		}
+	}
+
+	func designRow(_ d: ModSuitDesign) -> some View {
+		let pic: Image = SuitPictures.shared.image(d.design, 0, -1)
+		return HStack(spacing: 8) {
+			pic.resizable().interpolation(.none).frame(width: 66, height: 51)
+			VStack(alignment: .leading, spacing: 2) {
+				Text(verbatim: d.name).font(.pixel(13)).foregroundColor(Color.white)
+				Text(verbatim: joinText(String(d.design.pieces.count), " pieces")).font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
+			}
+			Spacer(minLength: 0)
+			SmallButton(title: "EDIT", color: ModUI.blue) { self.openDesign(d.id) }
+			SmallButton(title: "\u{2715}", color: ModUI.red) { self.s.mod.suitDesigns.removeAll { $0.id == d.id }; self.s.touch() }
+		}
+	}
+
+	func addMat() {
+		var m = ModSuitMat()
+		m.id = s.mod.freshID("smat")
+		m.name = joinText("Metal ", String(s.mod.suitMats.count + 1))
+		s.mod.suitMats.append(m)
+		s.touch()
+		openMat(m.id)
+	}
+
+	func addPart() {
+		var p = ModSuitPart()
+		p.id = s.mod.freshID("spart")
+		p.name = joinText("Part ", String(s.mod.suitParts.count + 1))
+		s.mod.suitParts.append(p)
+		s.touch()
+		openPart(p.id)
+	}
+}
+
+/// Editing a mod's suit material: name, colour, its numbers, and what it is paid with
+struct SuitMatEditorView: View {
+	@ObservedObject var s: ModSession
+	let id: String
+	@State var picking: Bool = false
+
+	func b<T>(_ kp: WritableKeyPath<ModSuitMat, T>, _ d: T) -> Binding<T> { return s.bind(\ModPack.suitMats, id, kp, d) }
+	var mat: ModSuitMat { return s.mod.suitMats.first { $0.id == id } ?? ModSuitMat() }
+
+	static let numbers: [DSlider<ModSuitMat>] = [
+		DSlider(label: "Guards (iron 1)", kp: \.protect, lo: 0.2, hi: 3, sbHi: 6, step: 0.05, format: "%.2f"),
+		DSlider(label: "Weight (iron 1)", kp: \.weight, lo: 0.2, hi: 3, sbHi: 6, step: 0.05, format: "%.2f"),
+		DSlider(label: "Lasts (iron 1)", kp: \.durability, lo: 0.2, hi: 4, sbHi: 8, step: 0.05, format: "%.2f"),
+		DSlider(label: "Carries energy (iron 1)", kp: \.conduct, lo: 0.5, hi: 2, sbHi: 4, step: 0.05, format: "%.2f"),
+		DSlider(label: "Less fire, each piece", kp: \.fireCut, lo: 0, hi: 0.1, sbHi: 0.1, step: 0.01, format: "%.2f"),
+		DSlider(label: "Less cold, each piece", kp: \.coldCut, lo: 0, hi: 0.1, sbHi: 0.1, step: 0.01, format: "%.2f"),
+		DSlider(label: "Less lightning, each piece", kp: \.stormCut, lo: 0, hi: 0.1, sbHi: 0.1, step: 0.01, format: "%.2f")
+	]
+
+	var body: some View {
+		let m: ModSuitMat = mat
+		let costName: String = m.cost.map { ModPreview.name($0, s.catalog) } ?? "Iron Bar"
+		return VStack(spacing: 10) {
+			ModSection(title: m.name.uppercased()) {
+				ModTextField(label: "Name", text: b(\.name, ""), placeholder: "Starsteel")
+				ModColorRow(label: "Colour", color: b(\.color, 0x8AC8E8))
+			}
+			ModSection(title: "NUMBERS", help: "A plate's guard is 20% a layer times this; heavier suits are slower unless strong; lasting longer means more blows before a piece breaks.") {
+				sliders
+				IntSlider(label: "Drill tier (a drill of it bores up to)", value: b(\.drillTier, 4), range: 0...9)
+			}
+			ModSection(title: "PAID WITH", help: "Pieces cost units of this, by their size.") {
+				HStack(spacing: 8) {
+					Text(verbatim: costName).font(.pixel(13)).foregroundColor(Color.white)
+					Spacer(minLength: 0)
+					SmallButton(title: "CHOOSE...", color: ModUI.blue) { self.picking = true }
+					SmallButton(title: "IRON BARS") { self.b(\.cost, nil).wrappedValue = nil }
+				}
+			}
+		}
+		.modCover(s, picking ? 1 : nil) { self.picker }
+	}
+
+	var sliders: some View {
+		let sb: Bool = s.mod.sandbox
+		return VStack(alignment: .leading, spacing: 8) {
+			ForEach(0..<SuitMatEditorView.numbers.count, id: \.self) { (i: Int) in self.slider(SuitMatEditorView.numbers[i], sb) }
+		}
+	}
+
+	func slider(_ d: DSlider<ModSuitMat>, _ sb: Bool) -> StatSlider {
+		let r: ClosedRange<Double> = d.lo...(sb ? d.sbHi : d.hi)
+		return StatSlider(label: d.label, value: b(d.kp, 0), range: r, step: d.step, format: d.format)
+	}
+
+	var picker: some View {
+		ItemPickerView(catalog: s.catalog, title: "PAID WITH...", pick: { (it: Item) in
+			self.b(\.cost, nil).wrappedValue = it
+			self.picking = false
+		}, cancel: { self.picking = false })
+	}
+}
+
+/// Editing a mod's suit part: name and words, what it works as and how strongly, its weight, colour
+/// and icon
+struct SuitPartEditorView: View {
+	@ObservedObject var s: ModSession
+	let id: String
+
+	func b<T>(_ kp: WritableKeyPath<ModSuitPart, T>, _ d: T) -> Binding<T> { return s.bind(\ModPack.suitParts, id, kp, d) }
+	var part: ModSuitPart { return s.mod.suitParts.first { $0.id == id } ?? ModSuitPart() }
+
+	static let works: [String] = ExoModule.allCases.map { $0.name }
+
+	var body: some View {
+		let p: ModSuitPart = part
+		let top: Double = s.mod.sandbox ? 10 : 4
+		return VStack(spacing: 10) {
+			ModSection(title: p.name.uppercased()) {
+				ModTextField(label: "Name", text: b(\.name, ""), placeholder: "Plasma Lance")
+				ModTextField(label: "Description", text: b(\.desc, ""), placeholder: "Optional")
+			}
+			ModSection(title: "WORKS AS", help: p.works.blurb) {
+				ChoiceRows(options: SuitPartEditorView.works, selected: worksBind, columns: 4)
+				StatSlider(label: "Strength (the game's part is 1)", value: b(\.power, 1), range: 0.25...top, step: 0.05, format: "%.2f")
+				StatSlider(label: "Weight", value: b(\.weight, 2), range: 0.0...10.0, step: 0.5, format: "%.1f")
+			}
+			ModSection(title: "LOOK", help: "Its colour on the suit, and its icon (blank: the game part's icon in this colour).") {
+				ModColorRow(label: "Colour", color: b(\.color, 0x8A929E))
+				PixelEditorView(pixels: b(\.icon, ModPixels(w: 12, h: 12)), maxSide: 220, outlineDefault: true)
+			}
+		}
+	}
+
+	var worksBind: Binding<Int> {
+		let base: Binding<ExoModule> = b(\.works, .turret)
+		return Binding<Int>(get: { base.wrappedValue.rawValue }, set: { base.wrappedValue = ExoModule(rawValue: $0) ?? .turret })
+	}
+}
+
+/// A mod's saved suit design: its name and picture (designs are built at an Assembly Station)
+struct SuitDesignEditorView: View {
+	@ObservedObject var s: ModSession
+	let id: String
+
+	func b<T>(_ kp: WritableKeyPath<ModSuitDesign, T>, _ d: T) -> Binding<T> { return s.bind(\ModPack.suitDesigns, id, kp, d) }
+	var design: ModSuitDesign { return s.mod.suitDesigns.first { $0.id == id } ?? ModSuitDesign() }
+
+	var body: some View {
+		let d: ModSuitDesign = design
+		let st: ExoStats = ExoStats.of(d.design)
+		let line: String = joinText(String(d.design.pieces.count), " pieces · weight ", String(Int(st.weight.rounded())), " · guards ", String(Int((st.guardAll * 100).rounded())), "% on average")
+		let pic: Image = SuitPictures.shared.image(d.design, 0, -1)
+		return ModSection(title: d.name.uppercased(), help: "To change its pieces, build it again at an Assembly Station in a TEST world and save it over this one.") {
+			ModTextField(label: "Name", text: b(\.name, ""), placeholder: "Knight of the Deep")
+			pic.resizable().interpolation(.none).frame(width: 264, height: 204)
+			Text(verbatim: line).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+		}
+	}
+}
+
+extension ExoAssemblyPanel {
+	/// the mods' designs to start from
+	var modDesignBox: some View {
+		let list: [(String, SuitDesign)] = ModRuntime.shared.suitDesigns
+		let testing: Bool = !game.testMod.isEmpty
+		return VStack(alignment: .leading, spacing: 6) {
+			if !list.isEmpty {
+				Text("FROM MODS").font(.pixel(12)).foregroundColor(ModUI.gold)
+				ForEach(0..<list.count, id: \.self) { (i: Int) in
+					SmallButton(title: list[i].0.uppercased(), color: ModUI.blue) { self.loadDesign(list[i].1) }
+				}
+			}
+			if testing {
+				Text("This is a TEST world: keep this design in the mod.").font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
+				SmallButton(title: "SAVE TO THE MOD AS A DESIGN", color: ModUI.accent) { self.saveToMod() }
+			}
+		}
+	}
+
+	/// Starts from a mod's design (its working parts only where the bag has them)
+	func loadDesign(_ d0: SuitDesign) {
+		remember()
+		var t: SuitDesign = SuitDesign()
+		var bag: [Stack] = partChoices
+		var missing: [String] = []
+		for p0 in d0.pieces {
+			var p: SuitPiece = p0
+			p.dmg = 0
+			p.src = 0
+			if (p.kind == .core || p.kind == .module) && !game.isCreative {
+				let want: Item
+				if !p.modPart.isEmpty { want = .custom(p.modPart) } else if p.kind == .core { want = .exoCore(ExoCore(rawValue: p.part) ?? .sparkCell) } else { want = .exoModule(ExoModule(rawValue: p.part) ?? .hover) }
+				guard let j = bag.firstIndex(where: { $0.item == want }) else {
+					missing.append(want.name)
+					continue
+				}
+				let g: Int = t.newGroup()
+				t.items[g] = bag.remove(at: j)
+				p.src = g
+			}
+			p.id = t.newID()
+			t.pieces.append(p)
+		}
+		plan = t
+		pick = -1
+		note = missing.isEmpty ? "" : joinText("Not in your bag (left off): ", missing.joined(separator: ", "), ".")
+	}
+
+	/// Keeps the planned design in the mod being tested
+	func saveToMod() {
+		let mid: String = game.testMod
+		guard !mid.isEmpty, var p = ModStore.pack(mid) else { return }
+		if p.suitDesigns.count >= ModSuitLimits.designs {
+			note = joinText(p.name, " already holds the most suit designs a mod can.")
+			return
+		}
+		var d = ModSuitDesign()
+		d.id = p.freshID("suit")
+		d.name = joinText("Suit ", String(p.suitDesigns.count + 1))
+		var g: SuitDesign = plan
+		g.items = [:]
+		for k in g.pieces.indices {
+			g.pieces[k].src = 0
+			g.pieces[k].dmg = 0
+		}
+		d.design = g
+		p.suitDesigns.append(d)
+		note = ModStore.save(p) ? joinText("Saved as \u{201C}", d.name, "\u{201D} in ", p.name, ": rename it in the Mod Creator.") : "The mod could not be saved."
 	}
 }
 
@@ -4079,6 +4578,18 @@ extension SlotView {
 }
 
 extension WorldRenderer {
+	/// The suit's laser beams this frame: a bright core in a soft glow
+	static func drawSuitBeams(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
+		if g.suitBeams.isEmpty { return }
+		for b in g.suitBeams {
+			var p: Path = Path()
+			p.move(to: CGPoint(x: v.sx(b.0), y: v.sy(b.1)))
+			p.addLine(to: CGPoint(x: v.sx(b.2), y: v.sy(b.3)))
+			ctx.stroke(p, with: .color(Color(hex: 0xFF4A6A, alpha: 0.35)), lineWidth: CGFloat(max(3.0, v.tp * 0.2)))
+			ctx.stroke(p, with: .color(Color(hex: 0xFFD0DA, alpha: 0.95)), lineWidth: CGFloat(max(1.0, v.tp * 0.06)))
+		}
+	}
+
 	/// What a potion is doing to a creature, kept faint: a blue film while slowed, rising green bubbles
 	/// while poisoned, a grey shade while weakened, pink motes while it regenerates
 	static func drawMobStatus(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D, _ m: Mob) {

@@ -701,130 +701,123 @@ do {
     check(k0 > 0 && b.armorInf.thorns == 0, "taking the armour off takes its infusions with it")
 }
 
-// ---------------------------------------------------------------- stage 6-8: the exosuit
+// ---------------------------------------------------------------- stage 6-8: the exosuit (built piece by piece)
+/// A suit of `metal` plates (the knight's design) with a core and working parts from the bag, built and worn
+@discardableResult
+func suitUp(_ g: Game, _ mods: [ExoModule], core: ExoCore? = .heart, metal: ExoMat = .iron, wear: Bool = true) -> String {
+    var plan: SuitDesign = SuitTemplates.design(2, metal)
+    var parts: [SuitPiece] = []
+    if let c = core { parts.append(SuitTemplates.core(c)) }
+    for m in mods { parts.append(SuitTemplates.module(m)) }
+    for var p in parts {
+        let it: Item = p.kind == .core ? .exoCore(ExoCore(rawValue: p.part)!) : .exoModule(ExoModule(rawValue: p.part)!)
+        g.giveItem(it, 1)
+        let g0: Int = plan.newGroup()
+        plan.items[g0] = Stack(item: it, count: 1)
+        p.src = g0
+        p.id = plan.newID()
+        plan.pieces.append(p)
+    }
+    for (it, n) in SuitDesign().bill(to: plan).pay { g.giveItem(it, n) }
+    let msg: String = g.applyDesign(plan)
+    if wear {
+        _ = g.wearSuit()
+        g.suit.energy = g.suitStats.capacity
+    }
+    return msg
+}
+
 print("== building a suit")
 do {
     let g = arena()
-    // every part has a recipe at the assembly station
+    // every core and working part has a recipe at the assembly station, and old parts melt down
     var missing: [String] = []
     for it in featureItems() {
         switch it {
-        case .exoPart, .exoPlate, .exoCore, .exoModule:
+        case .exoCore, .exoModule:
             if !RecipeBook.all.contains(where: { $0.out == it && $0.station == .assembly }) { missing.append(it.name) }
         default: break
         }
     }
-    check(missing.isEmpty, "every suit part, plate, core and module is made at the Assembly Station \(missing)")
-    // crafting one at a station
+    check(missing.isEmpty, "every suit core and part is made at the Assembly Station \(missing)")
+    check(RecipeBook.all.contains { $0.out == .mat(.ironBar) && $0.cost.first?.item == .exoPart(.helmet, .iron) && $0.station == .assembly }, "an old suit part melts down into its metal there")
     g.world.set(Int(g.pb.x) + 2, 99, .exoStation)
     check(g.stationAvailable(.assembly), "an Assembly Station nearby counts as the station")
-    let r: Recipe = RecipeBook.all.first { $0.out == .exoPart(.helmet, .iron) }!
+    let r: Recipe = RecipeBook.all.first { $0.out == .exoModule(.lamp) }!
     for c in r.cost { g.giveItem(c.item, c.n) }
     g.craft(r)
-    check(g.inv.total(.exoPart(.helmet, .iron)) == 1, "an Iron Suit Helmet can be made there")
-    // fitting
-    let parts: [Item] = [.exoPart(.chestFrame, .iron), .exoCore(.sparkCell), .exoPart(.arm, .iron), .exoPart(.arm, .diamond), .exoPart(.legs, .iron), .exoPart(.boots, .iron), .exoPlate(.iron), .exoModule(.sprint)]
-    for p in parts { g.giveItem(p, 1) }
-    var plan: ExoSuit = g.suit
-    plan[.helmet] = Stack(item: .exoPart(.helmet, .iron), count: 1)
-    plan[.chest] = Stack(item: .exoPart(.chestFrame, .iron), count: 1)
-    plan[.core] = Stack(item: .exoCore(.sparkCell), count: 1)
-    plan[.armL] = Stack(item: .exoPart(.arm, .iron), count: 1)
-    plan[.armR] = Stack(item: .exoPart(.arm, .diamond), count: 1)
-    plan[.legs] = Stack(item: .exoPart(.legs, .iron), count: 1)
-    plan[.boots] = Stack(item: .exoPart(.boots, .iron), count: 1)
-    plan[.plateChest] = Stack(item: .exoPlate(.iron), count: 1)
-    plan[.mod1] = Stack(item: .exoModule(.sprint), count: 1)
-    let before: Int = g.inv.slots.compactMap { $0 }.count
-    let msg: String = g.applySuit(plan)
-    check(g.suit[.chest] != nil && g.suit[.mod1] != nil && g.inv.total(.exoPart(.chestFrame, .iron)) == 0 && g.inv.slots.compactMap { $0 }.count == before - 9, "APPLY fits every planned part and takes them out of the bag (\(msg))")
+    check(g.inv.total(.exoModule(.lamp)) == 1, "a Suit Lamp can be made there")
+    // building: plates paid for in bars, parts taken from the bag
+    var plan: SuitDesign = SuitTemplates.design(2, .iron)
+    var core: SuitPiece = SuitTemplates.core(.sparkCell)
+    g.giveItem(.exoCore(.sparkCell), 1)
+    let gc: Int = plan.newGroup()
+    plan.items[gc] = Stack(item: .exoCore(.sparkCell), count: 1)
+    core.src = gc
+    core.id = plan.newID()
+    plan.pieces.append(core)
+    let need: Int = SuitDesign().bill(to: plan).pay[.mat(.ironBar)] ?? 0
+    g.giveItem(.mat(.ironBar), need - 1)
+    let refused: String = g.applyDesign(plan)
+    check(g.suit.d.pieces.isEmpty && g.inv.total(.exoCore(.sparkCell)) == 1, "one bar short and nothing changes, nothing is lost (\(refused))")
+    g.giveItem(.mat(.ironBar), 1)
+    let msg: String = g.applyDesign(plan)
+    check(g.suit.d.pieces.count == plan.pieces.count && g.inv.total(.mat(.ironBar)) == 0 && g.inv.total(.exoCore(.sparkCell)) == 0, "BUILD pays \(need) iron bars for the plates and takes the core from the bag (\(msg))")
     let st: ExoStats = g.suitStats
-    let wantDef: Double = 0.9 + 1.6 + 0.5 + 0.5 * 1.6 + 1.1 + 0.6 + 0.9
-    check(near(st.defense, wantDef, 0.01), "defence adds up part by part and by metal (\(st.defense))")
-    check(st.complete && near(st.capacity, 120) && st.has(.sprint), "with a chest frame and a core it is complete; the core sets its energy; the module works")
-    check(st.drillTier == ExoMat.diamond.drillTier, "the right arm's metal would set a drill's tier")
-    // swapping arms needs no bag item: the parts are already on the suit
-    var swap: ExoSuit = g.suit
-    swap[.armL] = g.suit[.armR]
-    swap[.armR] = g.suit[.armL]
-    let msgSwap: String = g.applySuit(swap)
-    check(g.suit.material(.armL) == .diamond && g.suit.material(.armR) == .iron, "parts can be swapped between places (\(msgSwap))")
-    // taking a part off returns it, infusions and all
-    var off: ExoSuit = g.suit
-    off[.plateChest] = nil
-    _ = g.applySuit(off)
-    check(g.suit[.plateChest] == nil && g.inv.total(.exoPlate(.iron)) == 1, "a part taken off goes back to the bag")
-    // a planned part that is not in the bag: nothing at all changes
-    var bad: ExoSuit = g.suit
-    bad[.plateHead] = Stack(item: .exoPlate(.voidium), count: 1)
-    bad[.plateArms] = Stack(item: .exoPlate(.iron), count: 1)
-    let suitBefore: ExoSuit = g.suit
-    let invBefore: [Stack?] = g.inv.slots
-    let refused: String = g.applySuit(bad)
-    check(g.suit == suitBefore && g.inv.slots == invBefore, "if any planned part is missing, nothing changes and nothing is lost (\(refused))")
+    check(st.complete && near(st.capacity, 120) && st.guardAll > 0.1, "the core sets its energy; the plates guard (\(Int(st.guardAll * 100))% on average)")
+    // taking pieces off gives back what they are made of
+    var less: SuitDesign = g.suit.d
+    let helm: SuitPiece = less.pieces.first { $0.bone == .head && $0.kind == .plate }!
+    less.pieces.removeAll { $0.id == helm.id }
+    let refund: Int = suitPieceCost(helm)!.1
+    _ = g.applyDesign(less)
+    check(g.inv.total(.mat(.ironBar)) == refund, "a plate taken off gives back its bars (\(refund))")
+    var noCore: SuitDesign = g.suit.d
+    noCore.pieces.removeAll { $0.kind == .core }
+    _ = g.applyDesign(noCore)
+    check(g.inv.total(.exoCore(.sparkCell)) == 1, "the core taken off goes back to the bag")
     // metals matter
-    var a: ExoSuit = ExoSuit()
-    a[.chest] = Stack(item: .exoPart(.chestFrame, .iron), count: 1)
-    var dmd: ExoSuit = ExoSuit()
-    dmd[.chest] = Stack(item: .exoPart(.chestFrame, .diamond), count: 1)
-    var myth: ExoSuit = ExoSuit()
-    myth[.chest] = Stack(item: .exoPart(.chestFrame, .mythril), count: 1)
-    var vd: ExoSuit = ExoSuit()
-    vd[.chest] = Stack(item: .exoPart(.chestFrame, .voidium), count: 1)
-    let sa: ExoStats = ExoStats.of(a)
-    let sd: ExoStats = ExoStats.of(dmd)
-    let sm: ExoStats = ExoStats.of(myth)
-    check(sd.defense > sa.defense && sd.weight > sa.weight, "diamond guards better than iron but weighs more")
-    check(sm.defense > sa.defense && sm.weight < sa.weight, "mythril guards better and weighs less (rare)")
-    check(a.sockets == 2 && dmd.sockets == 3 && vd.sockets == 4, "the chest frame's metal sets the module sockets (iron 2, diamond 3, voidium 4)")
-    // a module needs its parts and a socket
-    var noArm: ExoSuit = ExoSuit()
-    noArm[.chest] = Stack(item: .exoPart(.chestFrame, .iron), count: 1)
-    noArm[.mod1] = Stack(item: .exoModule(.drill), count: 1)
-    noArm[.mod3] = Stack(item: .exoModule(.lamp), count: 1)
-    let sn: ExoStats = ExoStats.of(noArm)
-    check(!sn.has(.drill) && !sn.has(.lamp) && sn.notes.count >= 2, "a drill without its right arm, or a module beyond the sockets, does not work, and the screen says why")
-    check(ExoSlot.armL.fits(.exoPart(.arm, .iron)) && !ExoSlot.helmet.fits(.exoPart(.arm, .iron)) && ExoSlot.mod2.fits(.exoModule(.lamp)) && !ExoSlot.core.fits(.exoPlate(.iron)),
-          "each place takes only its own kind of part")
+    let ir: ExoStats = ExoStats.of(SuitTemplates.design(2, .iron))
+    let dm: ExoStats = ExoStats.of(SuitTemplates.design(2, .diamond))
+    let my: ExoStats = ExoStats.of(SuitTemplates.design(2, .mythril))
+    check(dm.guardAll > ir.guardAll && dm.weight > ir.weight, "diamond guards better than iron but weighs more")
+    check(my.guardAll > ir.guardAll && my.weight < ir.weight, "mythril guards better and weighs less (rare)")
+    // a drill works only on an arm
+    var torsoDrill: SuitDesign = SuitDesign()
+    var dr: SuitPiece = SuitTemplates.module(.drill)
+    dr.bone = .torso
+    dr.id = torsoDrill.newID()
+    torsoDrill.pieces.append(dr)
+    let sn: ExoStats = ExoStats.of(torsoDrill)
+    check(!sn.has(.drill) && sn.notes.contains { $0.contains("arm") }, "a drill on the body does not work, and the screen says why")
 }
 
 print("== wearing and power")
 do {
     let g = arena()
     g.inv.armor[0] = Stack(item: .armor(.head, .iron), count: 1)
-    var plan: ExoSuit = ExoSuit()
-    let kit: [(ExoSlot, Item)] = [(.helmet, .exoPart(.helmet, .iron)), (.chest, .exoPart(.chestFrame, .iron)), (.core, .exoCore(.dynamo)),
-                                 (.armL, .exoPart(.arm, .iron)), (.armR, .exoPart(.arm, .iron)), (.legs, .exoPart(.legs, .iron)), (.boots, .exoPart(.boots, .iron)),
-                                 (.mod1, .exoModule(.drill)), (.mod2, .exoModule(.lamp))]
-    for (s, it) in kit {
-        g.giveItem(it, 1)
-        plan[s] = Stack(item: it, count: 1)
-    }
-    _ = g.applySuit(plan)
+    suitUp(g, [.drill, .lamp], core: .dynamo, wear: false)
     let worn: String = g.wearSuit()
     check(g.suit.worn && g.inv.armor[0] == nil && g.inv.total(.armor(.head, .iron)) == 1, "wearing the suit moves armour into the bag (\(worn))")
     check(!g.fitsArmorSlot(.armor(.head, .iron), 0), "armour can't be put on over the suit")
-    check(g.totalDefense > 5, "the suit guards the wearer (defence \(g.totalDefense))")
     // the look follows the suit
     let k1: Int = g.armorKey
-    var st: HumanStyle = playerStyle(hairIdx: 0, scarfIdx: 0, head: nil, chest: nil, legs: nil)
-    let plainFrame: PixelBuf = humanoidFrame(st, legs: 0, pose: 0)
-    st.suit = g.suitLook()
-    let suitFrame: PixelBuf = humanoidFrame(st, legs: 0, pose: 0)
-    check(plainFrame.px != suitFrame.px, "the player's sprite shows the suit")
-    var swap: ExoSuit = g.suit
-    g.giveItem(.exoPart(.helmet, .voidium), 1)
-    swap[.helmet] = Stack(item: .exoPart(.helmet, .voidium), count: 1)
-    _ = g.applySuit(swap)
-    check(g.suit.worn && g.armorKey != k1, "changing a part changes the look (a new sprite is made)")
+    let set1: SpriteSet = Art.shared.playerSet(g)
+    check(set1.w == humanW * suitUnit && set1.h == humanH * suitUnit, "the player's sprite shows the suit, drawn three times finer")
+    var swap: SuitDesign = g.suit.d
+    let hi: Int = swap.pieces.firstIndex { $0.bone == .head && $0.kind == .plate }!
+    swap.pieces[hi].mat = ExoMat.voidium.rawValue
+    g.giveItem(.mat(.voidBar), 20)
+    _ = g.applyDesign(swap)
+    check(g.suit.worn && g.armorKey != k1, "changing a piece changes the look (a new sprite is made)")
     // energy
     g.suit.energy = 0
     frames(g, 60 * 5)
     check(near(g.suit.energy, 5.0, 0.6), "the core refills by itself in daylight (dynamo: 1 a second, \(String(format: "%.1f", g.suit.energy)) after 5 s; the lamp stays off by day)")
     g.suit.energy = 10_000
     frame(g)
-    check(g.suit.energy <= g.suitStats.capacity, "energy never goes above the core's capacity")
-    // the drill: bare hands bore iron ore at the arm's tier, spending energy
+    check(g.suit.energy <= g.suitStats.capacity, "energy never goes above the suit's capacity")
+    // the drill: bare hands bore iron ore at the drill's tier, spending energy
     g.suit.energy = 100
     let tx: Int = Int(g.pb.x) + 1
     g.world.set(tx, 99, .iron)
@@ -833,7 +826,7 @@ do {
     aimAt(g, Double(tx) + 0.5, 99.5)
     var n: Int = 0
     while g.world.tile(tx, 99) == .iron && n < 900 { g.mineStep(tx, 99, nil, nil, 1.0 / 60.0); n += 1 }
-    check(g.world.tile(tx, 99) != .iron, "the drill arm lets bare hands bore iron ore (\(n) frames)")
+    check(g.world.tile(tx, 99) != .iron, "the drill lets bare hands bore iron ore (\(n) frames)")
     check(g.suit.energy < 100, "the drill spends energy while it works (\(String(format: "%.1f", g.suit.energy)) left)")
     g.suit.energy = 0
     g.world.set(tx, 99, .iron)
@@ -843,43 +836,27 @@ do {
     // lamp in the dark
     g.suit.energy = 50
     frame(g)
-    check(!g.suitLit, "the helmet lamp stays off in daylight")
+    check(!g.suitLit, "the lamp stays off in daylight")
     g.timeOfDay = 0.75
     frame(g)
-    check(g.suitLit, "at night the helmet lamp lights itself (while there is energy)")
+    check(g.suitLit, "at night the lamp lights itself (while there is energy)")
     g.timeOfDay = 0.25
-    // taking it off
     let offMsg: String = g.takeOffSuit()
     check(!g.suit.worn && g.fitsArmorSlot(.armor(.head, .iron), 0), "taking it off frees the armour slots (\(offMsg))")
-    // a suit without a core can't be worn
+    // a suit with no pieces can't be worn
     let h = arena()
-    var noCore: ExoSuit = ExoSuit()
-    h.giveItem(.exoPart(.chestFrame, .iron), 1)
-    noCore[.chest] = Stack(item: .exoPart(.chestFrame, .iron), count: 1)
-    _ = h.applySuit(noCore)
     let why: String = h.wearSuit()
-    check(!h.suit.worn, "a suit without a core can't be worn (\(why))")
+    check(!h.suit.worn, "a suit with no pieces can't be worn (\(why))")
 }
 
 print("== modules")
 do {
-    func suited(_ mods: [ExoModule], core: ExoCore = .heart, chest: ExoMat = .voidium) -> Game {
+    func suited(_ mods: [ExoModule], core: ExoCore = .heart, metal: ExoMat = .mythril) -> Game {
         let g = arena()
-        var plan: ExoSuit = ExoSuit()
-        var kit: [(ExoSlot, Item)] = [(.helmet, .exoPart(.helmet, .iron)), (.chest, .exoPart(.chestFrame, chest)), (.core, .exoCore(core)),
-                                     (.armL, .exoPart(.arm, .iron)), (.armR, .exoPart(.arm, .iron)), (.legs, .exoPart(.legs, .mythril)), (.boots, .exoPart(.boots, .mythril))]
-        let sockets: [ExoSlot] = [.mod1, .mod2, .mod3, .mod4]
-        for (i, m) in mods.enumerated() where i < 4 { kit.append((sockets[i], .exoModule(m))) }
-        for (s, it) in kit {
-            g.giveItem(it, 1)
-            plan[s] = Stack(item: it, count: 1)
-        }
-        _ = g.applySuit(plan)
-        _ = g.wearSuit()
-        g.suit.energy = g.suitStats.capacity
+        suitUp(g, mods, core: core, metal: metal)
         return g
     }
-    // sprint
+    // boosters
     let a = suited([])
     a.keyR = true
     let ax: Double = a.pb.x
@@ -890,7 +867,7 @@ do {
     let bx: Double = b.pb.x
     let e0: Double = b.suit.energy
     frames(b, 90)
-    check(b.pb.x - bx > plainRun * 1.1 && b.suit.energy < e0, "sprint actuators: faster running that costs energy (\(String(format: "%.1f", plainRun)) -> \(String(format: "%.1f", b.pb.x - bx)))")
+    check(b.pb.x - bx > plainRun * 1.1 && b.suit.energy < e0, "boosters: faster running that costs energy (\(String(format: "%.1f", plainRun)) -> \(String(format: "%.1f", b.pb.x - bx)))")
     // leap
     let c = suited([.leap])
     frames(c, 10)
@@ -902,19 +879,19 @@ do {
     c2.jumpHeld = true
     frame(c2)
     check(vyLeap < c2.pb.vy * 1.2, "leap pistons: a higher jump (launch \(String(format: "%.1f", c2.pb.vy)) -> \(String(format: "%.1f", vyLeap)))")
-    // hover
+    // a jet
     let d = suited([.hover])
     d.pb.y = 70
     d.pb.onGround = false
     d.jumpHeld = true
     frames(d, 60)
-    let fallHover: Double = d.pb.y - 70
+    let fallJet: Double = d.pb.y - 70
     let d2 = suited([])
     d2.pb.y = 70
     d2.pb.onGround = false
     d2.jumpHeld = true
     frames(d2, 60)
-    check(fallHover < (d2.pb.y - 70) * 0.5 && d.suit.energy < d.suitStats.capacity, "hover jets: holding jump in the air slows the fall to a glide (\(String(format: "%.1f", fallHover)) vs \(String(format: "%.1f", d2.pb.y - 70)) blocks) and drains energy")
+    check(fallJet < (d2.pb.y - 70) * 0.7 && d.suit.energy < d.suitStats.capacity, "a jet: holding jump in the air slows the fall (\(String(format: "%.1f", fallJet)) vs \(String(format: "%.1f", d2.pb.y - 70)) blocks) and drains energy")
     // seal: breathing and fire
     let e = suited([.seal])
     for x in (Int(e.pb.x) - 3)...(Int(e.pb.x) + 3) { for y in 95..<100 { e.world.set(x, y, .water) } }
@@ -929,12 +906,12 @@ do {
     _ = f.hurtPlayer(fire)
     check(20 - f.hp <= 4, "environment seal: fire hurts far less (\(20 - f.hp) of 10)")
     // barrier
-    let gb = suited([.barrier])
+    let gb = suited([.barrier], metal: .gold)
     gb.invuln = 0
     let e1: Double = gb.suit.energy
-    var hit = DamageInfo(amount: 10, type: .melee, source: .environment)
+    var hit = DamageInfo(amount: 10, type: .poison, source: .environment)
     hit.originX = gb.pb.x
-    let gb2 = suited([])
+    let gb2 = suited([], metal: .gold)
     gb2.invuln = 0
     _ = gb.hurtPlayer(hit)
     _ = gb2.hurtPlayer(hit)
@@ -958,16 +935,16 @@ do {
     cg.world.setChestItems(cg.packSpot.x, cg.packSpot.y, [Stack(item: .mat(.coal), count: 9)])
     cg.showInventory = false
     cg.openChest = nil
-    var noPack: ExoSuit = cg.suit
-    noPack[.mod1] = nil
-    _ = cg.applySuit(noPack)
-    check(cg.inv.total(.mat(.coal)) == 9, "taking the cargo pack off empties it into the bag: nothing is stranded")
+    var noPack: SuitDesign = cg.suit.d
+    noPack.pieces.removeAll { $0.module == .cargo }
+    _ = cg.applyDesign(noPack)
+    check(cg.inv.total(.mat(.coal)) == 9 && cg.inv.total(.exoModule(.cargo)) == 1, "taking the cargo pack off empties it into the bag, and the pack comes back too")
     // no energy, no modules
     let z = suited([.sprint])
     z.suit.energy = 0
-    check(!z.suitHas(.sprint), "with no energy the modules stop")
+    check(!z.suitHas(.sprint), "with no energy the parts stop")
     // output limit: a weak core can't run everything at once
-    let w = suited([.hover, .sprint, .lamp, .seal], core: .sparkCell, chest: .voidium)
+    let w = suited([.hover, .sprint, .lamp, .seal], core: .sparkCell)
     w.pb.y = 70
     w.pb.onGround = false
     w.jumpHeld = true
@@ -979,15 +956,8 @@ do {
 print("== charging from Sparkworks")
 do {
     let g = arena()
-    var plan: ExoSuit = ExoSuit()
-    for (s, it) in [(ExoSlot.chest, Item.exoPart(.chestFrame, .iron)), (.core, .exoCore(.crystal))] {
-        g.giveItem(it, 1)
-        plan[s] = Stack(item: it, count: 1)
-    }
-    _ = g.applySuit(plan)
-    _ = g.wearSuit()
+    suitUp(g, [], core: .crystal)
     g.suit.energy = 0
-    // a battery tapped while wearing the suit
     let bx: Int = Int(g.pb.x) + 2
     g.world.set(bx, 99, .battery)
     frames(g, 2)
@@ -998,15 +968,8 @@ do {
     } else {
         check(false, "the battery is a power device")
     }
-    // the station on a powered line charges it
     let h = arena()
-    var plan2: ExoSuit = ExoSuit()
-    for (s, it) in [(ExoSlot.chest, Item.exoPart(.chestFrame, .iron)), (.core, .exoCore(.crystal))] {
-        h.giveItem(it, 1)
-        plan2[s] = Stack(item: it, count: 1)
-    }
-    _ = h.applySuit(plan2)
-    _ = h.wearSuit()
+    suitUp(h, [], core: .crystal)
     h.suit.energy = 0
     let sx: Int = Int(h.pb.x) + 2
     h.world.set(sx, 99, .exoStation)
@@ -1028,25 +991,37 @@ do {
 print("== saving a suit")
 do {
     let g = arena()
-    var plan: ExoSuit = ExoSuit()
-    let kit: [(ExoSlot, Stack)] = [(.chest, Stack(item: .exoPart(.chestFrame, .gold), count: 1)), (.core, Stack(item: .exoCore(.dynamo), count: 1, extra: 0, inf: [Infusion.thrift.rawValue])),
-                                  (.plateChest, Stack(item: .exoPlate(.diamond), count: 1, extra: 0, inf: [Infusion.reinforced.rawValue])), (.mod1, Stack(item: .exoModule(.lamp), count: 1))]
-    for (s, st) in kit {
-        g.addStack(st)
-        plan[s] = st
-    }
-    _ = g.applySuit(plan)
+    var plan: SuitDesign = SuitTemplates.design(2, .gold)
+    var c: SuitPiece = SuitTemplates.core(.dynamo)
+    let cst: Stack = Stack(item: .exoCore(.dynamo), count: 1, extra: 0, inf: [Infusion.thrift.rawValue])
+    g.addStack(cst)
+    let gc: Int = plan.newGroup()
+    plan.items[gc] = cst
+    c.src = gc
+    c.id = plan.newID()
+    plan.pieces.append(c)
+    var l: SuitPiece = SuitTemplates.module(.lamp)
+    g.giveItem(.exoModule(.lamp), 1)
+    let gl: Int = plan.newGroup()
+    plan.items[gl] = Stack(item: .exoModule(.lamp), count: 1)
+    l.src = gl
+    l.id = plan.newID()
+    plan.pieces.append(l)
+    for (it, n) in SuitDesign().bill(to: plan).pay { g.giveItem(it, n) }
+    _ = g.applyDesign(plan)
     _ = g.wearSuit()
     g.suit.energy = 77
+    var dd: SuitDesign = g.suit.d
+    dd.pieces[0].dmg = 0.4
+    g.suit.d = dd
     g.effects.add(.speed, 30, 50)
     g.mendCD = 4
     let back: SaveData = try! JSONDecoder().decode(SaveData.self, from: try! JSONEncoder().encode(g.makeSave()))
     let h = Game.load(back, settings: Settings())
-    check(h.suit.parts == g.suit.parts && h.suit.worn && near(h.suit.energy, 77), "the suit comes back with every part, still worn, with its energy")
-    check(h.suit[.core]?.has(.thrift) == true && h.suit[.plateChest]?.has(.reinforced) == true, "suit parts keep their infusions")
-    check(h.suitStats.drainMul < 0.8, "a Thrift core and gilded frame cut energy use (x\(String(format: "%.2f", h.suitStats.drainMul)))")
+    check(h.suit.d == g.suit.d && h.suit.worn && near(h.suit.energy, 77), "the suit comes back piece by piece, damage and all, still worn, with its energy")
+    check(h.suit.d.items.values.contains { $0.has(.thrift) }, "its parts keep their infusions")
+    check(h.suitStats.drainMul < 0.8, "a Thrift core and gilded plates cut energy use (x\(String(format: "%.2f", h.suitStats.drainMul)))")
     check(near(h.effects.value(.speed), 30) && near(h.effects.time[ModEffectKind.speed.rawValue], 50, 0.5) && near(h.mendCD, 4, 0.1), "potion effects and the mending rest are saved")
-    // an old save without any of this loads with nothing
     var old: SaveData = back
     old.suit = nil
     old.effects = nil
@@ -1085,11 +1060,10 @@ do {
     check(customTileRows(.alchemyStill) != nil && customTileRows(.infuser) != nil && customTileRows(.exoStation) != nil, "the stations have their own art")
     check(allGameItems().contains(.potion(.mutagen)) && allGameItems().contains(.exoModule(.hover)) && allGameItems().contains(.block(.infuser)), "everything new is in the creative palette")
     // the suit pictures
-    var s = ExoSuit()
-    s[.chest] = Stack(item: .exoPart(.chestFrame, .ember), count: 1)
-    let front: PixelBuf = suitViewBuf(s, 0)
-    let empty: PixelBuf = suitViewBuf(ExoSuit(), 0)
-    check(front.px != empty.px && front.px.contains { $0 & 0xFFFFFF == ExoMat.ember.color }, "the builder's picture shows each fitted part in its metal's colour")
+    let plainFig: PixelBuf = upscale3(humanoidFrames(playerStyle(hairIdx: 0, scarfIdx: 0, head: nil, chest: nil, legs: nil))[0])
+    var suited: PixelBuf = plainFig
+    paintSuitPieces(&suited, SuitTemplates.design(2, .ember), frame: 0)
+    check(suited.px != plainFig.px && suited.px.contains { $0 & 0xFFFFFF == ExoMat.ember.color }, "the builder's picture shows each piece in its metal's colour")
     // sounds stay short
     var longest: Double = 0
     for id in [SoundID.drink, .potionBreak, .infuse, .suitUp] { longest = max(longest, Double(SoundBank.effect(id, 0).count) / Synth.rate) }

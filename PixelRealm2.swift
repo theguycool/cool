@@ -1,7 +1,7 @@
-// PIXEL REALM v2, part 2 of 4: combat and damage, bosses, vehicles and ships, the portal and map, saving,
-// helpers, walls and doors, Sparkworks (power), the Mod Creator's data, checks and runtime, potions and mutation, infusions,
-// the exosuit, building (furniture, stairs, lifts) and block physics, then the start of Mod Creator+ (game content changes,
-// versions and folders, ore controls, sprite tools).
+// PIXEL REALM v2, part 2 of 4: bosses, vehicles and ships, the portal and map, saving, helpers, walls and doors,
+// Sparkworks (power), the Mod Creator's data, checks and runtime, potions and mutation, infusions, the exosuit, building
+// (furniture, stairs, lifts) and block physics, then the start of Mod Creator+ (game content changes, versions and
+// folders, ore controls, sprite tools, custom infusions).
 // The game is four files that go together in one Swift Playgrounds app: PixelRealm1.swift to
 // PixelRealm4.swift. Each goes in its own file in the app (delete ContentView.swift; MyApp.swift can
 // hold part 1). All art is generated in code.
@@ -11,617 +11,6 @@ import AVFoundation
 #if canImport(UIKit)
 import UIKit
 #endif
-
-// ===== p16c_damage =====
-
-// MARK: - Unified damage system
-// Every source of harm (swings, projectiles, boss stomps, explosions, falling blocks, vehicles, lava,
-// fire, spikes) builds a DamageInfo and goes through the same few functions. They decide who can be
-// hurt (factions), stop one attack from hitting the same target every frame (per-attack cooldown
-// keys), apply armor and resistances, push targets back, and remember who to credit for a kill.
-
-enum DamageType: Int {
-	case melee, projectile, explosion, fire, lava, impact, stomp, contact, fall, drown, starve, hazard, crush
-	/// lightning from the storm rod
-	case shock
-	/// potions (appended): poison over time, and the searing splash's burn
-	case poison, magic
-
-	/// Armor does not help against these
-	var bypassesArmor: Bool {
-		switch self {
-		case .fire, .lava, .fall, .drown, .starve, .poison: return true
-		default: return false
-		}
-	}
-
-	/// Area attacks hit everything in range (except their owner), including members of the attacker's
-	/// own side. Aimed attacks never hurt the attacker's own side.
-	var isArea: Bool {
-		switch self {
-		case .explosion, .stomp, .impact, .crush, .fire, .lava, .hazard: return true
-		default: return false
-		}
-	}
-}
-
-enum Faction: Int {
-	case player, ally, wild, hostile, pirate, umbral, boss, environment
-}
-
-enum SourceKind: Int {
-	case player, mob, environment
-}
-
-struct DamageSource {
-	var kind: SourceKind
-	var id: Int
-	var faction: Faction
-	/// how hard a creature's blows land (mutation doubles it, weakness softens it): fixed when the blow starts
-	var mult: Double = 1
-
-	static let player: DamageSource = DamageSource(kind: .player, id: 0, faction: .player)
-	static let environment: DamageSource = DamageSource(kind: .environment, id: -1, faction: .environment)
-	static func mob(_ m: Mob, _ f: Faction) -> DamageSource { return DamageSource(kind: .mob, id: m.id, faction: f, mult: m.dmgMul) }
-}
-
-struct DamageInfo {
-	var amount: Double
-	var type: DamageType
-	var source: DamageSource
-	/// knockback direction (-1 / 1); 0 = push away from the origin
-	var dirX: Double = 0
-	var knock: Double = 0
-	var originX: Double = 0
-	var originY: Double = 0
-	/// attack instance id: the same key never hits the same target twice within `cooldown` seconds
-	var key: Int = 0
-	var cooldown: Double = 0.5
-	/// a crushing blow (war hammer): breaks a raised guard and cracks stone hides
-	var heavy: Bool = false
-	/// a critical blow (shown bigger and brighter)
-	var crit: Bool = false
-
-	init(amount: Double, type: DamageType, source: DamageSource) {
-		self.amount = amount
-		self.type = type
-		self.source = source
-	}
-}
-
-/// Bucketed mob positions, rebuilt once per frame, so area attacks and projectiles only look at
-/// creatures near them instead of every mob in the world.
-final class MobGrid {
-	static let cell: Int = 8
-	var buckets: [Int: [Mob]] = [:]
-
-	func rebuild(_ mobs: [Mob]) {
-		for k in buckets.keys { buckets[k]?.removeAll(keepingCapacity: true) }
-		for m in mobs where m.hp > 0 && !m.removed {
-			let k: Int = floorDiv(Int(floor(m.b.x)), MobGrid.cell)
-			if buckets[k] == nil { buckets[k] = [] }
-			buckets[k]?.append(m)
-		}
-		if buckets.count > 256 { buckets = buckets.filter { !$0.value.isEmpty } }
-	}
-}
-
-func isHeatImmune(_ k: MobKind) -> Bool {
-	switch k {
-	case .imp, .emberSlime, .cinderBat, .warden: return true
-	default: return false
-	}
-}
-
-/// Fraction of damage a creature takes from a damage type (1 = full)
-func damageResist(_ k: MobKind, _ t: DamageType) -> Double {
-	switch (k, t) {
-	case (.imp, .fire), (.emberSlime, .fire), (.cinderBat, .fire), (.imp, .lava), (.emberSlime, .lava), (.cinderBat, .lava): return 0
-	case (.wraith, .fall), (.bat, .fall), (.cinderBat, .fall), (.crow, .fall): return 0
-	case (.skeleton, .projectile): return 0.75
-	case (.bearBoss, .lava), (.rex, .lava): return 0.5
-	case (.bearBoss, .explosion), (.rex, .explosion): return 0.6
-	case (.slime, .fall), (.emberSlime, .fall), (.cat, .fall), (.frog, .fall): return 0.2
-	// the golem's stone hide shrugs off blades and arrows (a hammer's crushing blow gets through)
-	case (.golem, .melee), (.golem, .contact): return 0.55
-	case (.golem, .projectile): return 0.35
-	case (.golem, .fire), (.golem, .fall): return 0.2
-	case (.golem, .explosion): return 1.25
-	case (.sentinel, .fall), (.warden, .fall), (.warden, .lava), (.mimic, .fall): return 0
-	case (.sentinel, .projectile): return 0.8
-	case (.warden, .explosion): return 0.7
-	// lightning: stone and crystal carry it poorly
-	case (.golem, .shock): return 0.6
-	case (.sentinel, .shock): return 0.5
-	// poison does not take hold in the dead, in stone or crystal, or in slimes
-	case (.zombie, .poison), (.skeleton, .poison), (.wraith, .poison), (.golem, .poison), (.sentinel, .poison), (.warden, .poison), (.slime, .poison), (.emberSlime, .poison): return 0
-	case (.warden, .shock): return 0.75
-	default: return 1
-	}
-}
-
-/// Segment/box intersection (slab method). Returns the entry fraction along the segment, or nil.
-func segmentBoxT(_ x0: Double, _ y0: Double, _ x1: Double, _ y1: Double, _ bx0: Double, _ by0: Double, _ bx1: Double, _ by1: Double) -> Double? {
-	let dx: Double = x1 - x0
-	let dy: Double = y1 - y0
-	var tmin: Double = 0
-	var tmax: Double = 1
-	if abs(dx) < 1e-9 {
-		if x0 < bx0 || x0 > bx1 { return nil }
-	} else {
-		var ta: Double = (bx0 - x0) / dx
-		var tb: Double = (bx1 - x0) / dx
-		if ta > tb { let s: Double = ta; ta = tb; tb = s }
-		tmin = max(tmin, ta)
-		tmax = min(tmax, tb)
-		if tmin > tmax { return nil }
-	}
-	if abs(dy) < 1e-9 {
-		if y0 < by0 || y0 > by1 { return nil }
-	} else {
-		var ta: Double = (by0 - y0) / dy
-		var tb: Double = (by1 - y0) / dy
-		if ta > tb { let s: Double = ta; ta = tb; tb = s }
-		tmin = max(tmin, ta)
-		tmax = min(tmax, tb)
-		if tmin > tmax { return nil }
-	}
-	return tmin
-}
-
-extension World {
-	/// First solid tile along a segment: (tile x, tile y, fraction along the segment)
-	func segmentSolidT(_ x0: Double, _ y0: Double, _ x1: Double, _ y1: Double) -> (Int, Int, Double)? {
-		let dx: Double = x1 - x0
-		let dy: Double = y1 - y0
-		let dist: Double = sqrt(dx * dx + dy * dy)
-		let n: Int = max(1, Int(ceil(dist / 0.2)))
-		var i: Int = 1
-		while i <= n {
-			let t: Double = Double(i) / Double(n)
-			let tx: Int = Int(floor(x0 + dx * t))
-			let ty: Int = Int(floor(y0 + dy * t))
-			if tile(tx, ty).solid {
-				// refine the entry point against the tile box
-				let et: Double = segmentBoxT(x0, y0, x1, y1, Double(tx), Double(ty), Double(tx + 1), Double(ty + 1)) ?? t
-				return (tx, ty, et)
-			}
-			i += 1
-		}
-		return nil
-	}
-
-	/// True when nothing solid blocks the straight line between two points
-	func lineClear(_ x0: Double, _ y0: Double, _ x1: Double, _ y1: Double) -> Bool {
-		return segmentSolidT(x0, y0, x1, y1) == nil
-	}
-}
-
-extension Game {
-	// MARK: sides
-
-	func faction(of m: Mob) -> Faction {
-		if m.tame { return .ally }
-		switch m.kind {
-		case .pirate, .pirateGunner, .pirateCaptain: return .pirate
-		case .imp, .emberSlime, .cinderBat: return .umbral
-		case .bearBoss, .rex, .sentinel, .warden: return .boss
-		case .custom: return ModRuntime.shared.mob(m.cslot)?.faction ?? .wild
-		default: return m.def.hostile ? .hostile : .wild
-		}
-	}
-
-	/// May `src` hurt a target of `targetFaction`?
-	func canHarm(_ src: DamageSource, targetFaction tf: Faction, targetID: Int, area: Bool) -> Bool {
-		// nothing hurts itself (the player's own bombs are the exception, handled in explode())
-		if src.kind == .mob && src.id == targetID { return false }
-		if src.kind == .player && tf == .player { return false }
-		switch src.faction {
-		case .environment, .boss: return true
-		case .player: return tf != .ally
-		case .ally: return tf != .player && tf != .ally
-		default:
-			if area { return true }
-			return tf != src.faction
-		}
-	}
-
-	// MARK: queries
-
-	func mobsNear(_ x0: Double, _ x1: Double) -> [Mob] {
-		Perf.shared.countDamage()
-		let c0: Int = floorDiv(Int(floor(x0)), MobGrid.cell)
-		let c1: Int = floorDiv(Int(floor(x1)), MobGrid.cell)
-		if c1 - c0 > 64 { return mobs }
-		var out: [Mob] = []
-		var c: Int = c0
-		while c <= c1 {
-			if let b = mobGrid.buckets[c] { out.append(contentsOf: b) }
-			c += 1
-		}
-		return out
-	}
-
-	// MARK: applying damage
-
-	/// Damages a creature. Returns true if the hit landed.
-	@discardableResult
-	func applyMobDamage(_ m: Mob, _ info: DamageInfo) -> Bool {
-		if m.hp <= 0 || m.removed { return false }
-		if !canHarm(info.source, targetFaction: faction(of: m), targetID: m.id, area: info.type.isArea) { return false }
-		if info.key != 0 {
-			if let last = m.hitStamps[info.key], clock - last < info.cooldown { return false }
-			m.hitStamps[info.key] = clock
-			if m.hitStamps.count > 24 { m.hitStamps = m.hitStamps.filter { clock - $0.value < 4.0 } }
-		}
-		var amount: Double = info.amount * damageResist(m.kind, info.type) * (info.source.kind == .mob ? info.source.mult : 1.0)
-		if m.kind == .custom, let r = ModRuntime.shared.mob(m.cslot) {
-			amount *= r.resist(info.type) * (1.0 - m.phaseDef)
-			// changing phase: blows glance off
-			if m.phaseShield > 0 {
-				if info.source.kind == .player { spawnParticles(m.b.x, m.b.cy, 0xE0E8FF, 3, 2.5, 0.25, 6) }
-				return false
-			}
-		}
-		if info.heavy && m.kind == .golem { amount *= 1.9 }
-		if info.source.kind == .player {
-			amount *= dmgOutMult * (1.0 + effects.value(.strength) / 100.0)
-			if wearing(.wardenSigil) { amount *= 1.2 }
-			if isUndead(m.kind) && wearing(.silverCharm) { amount *= 1.25 }
-		}
-		if amount <= 0 { return false }
-		let byPlayer: Bool = info.source.kind == .player
-		if byPlayer { m.lastHitByPlayer = clock }
-		m.lastAttacker = info.source.id
-		var dir: Double = info.dirX
-		if dir == 0 && info.knock > 0 { dir = m.b.x >= info.originX ? 1.0 : -1.0 }
-		hurtMob(m, amount, dir, info.knock, byPlayer, heavy: info.heavy, crit: info.crit)
-		return true
-	}
-
-	/// Damages the player. Returns true if the hit landed.
-	@discardableResult
-	func hurtPlayer(_ info: DamageInfo) -> Bool {
-		if dead { return false }
-		if !canHarm(info.source, targetFaction: .player, targetID: 0, area: info.type.isArea) && info.source.kind != .player { return false }
-		if info.key != 0 {
-			if let last = playerHitStamps[info.key], clock - last < info.cooldown { return false }
-			playerHitStamps[info.key] = clock
-			if playerHitStamps.count > 24 { playerHitStamps = playerHitStamps.filter { clock - $0.value < 4.0 } }
-		}
-		if effects.value(.fireproof) > 0 && (info.type == .fire || info.type == .lava) { return false }
-		let before: Double = hp
-		var ward: Double = wearing(.wardenSigil) ? 0.85 : 1.0
-		ward *= 1.0 - clampD(effects.value(.resistance), 0, 90) / 100.0
-		if info.source.kind == .mob && wearing(.silverCharm), let src = mobs.first(where: { $0.id == info.source.id }), isUndead(src.kind) { ward *= 0.75 }
-		// armour infusions and the suit take their share first
-		let amount: Double = guardedAmount(info)
-		if amount <= 0.001 { return false }
-		damagePlayer(amount * dmgInMult * ward, from: info.originX, knock: info.knock * knockTaken, ignoreArmor: info.type.bypassesArmor)
-		if hp < before { thornsBack(info, amount) }
-		if hp < before { customHurtTriggers() }
-		if hp < before && !logicRT.isEmpty { fireLogic(.playerHurt) }
-		return hp < before
-	}
-
-	/// Hits everything (player and creatures) inside a box
-	func damageBox(_ x0: Double, _ y0: Double, _ x1: Double, _ y1: Double, _ info: DamageInfo) {
-		if !dead && pb.right > x0 && pb.left < x1 && pb.y > y0 && pb.top < y1 { _ = hurtPlayer(info) }
-		for m in mobsNear(x0 - 4, x1 + 4) {
-			if m.hp <= 0 { continue }
-			if m.b.right > x0 && m.b.left < x1 && m.b.y > y0 && m.b.top < y1 { applyMobDamage(m, info) }
-		}
-	}
-
-	/// Hits everything within `radius` of a point. With falloff, damage drops to 35% at the edge;
-	/// with lineOfSight, targets behind solid blocks are spared.
-	func damageArea(_ cx: Double, _ cy: Double, radius: Double, _ info: DamageInfo, falloff: Bool, lineOfSight: Bool) {
-		func scaled(_ d: Double) -> DamageInfo {
-			var i: DamageInfo = info
-			if falloff { i.amount = info.amount * (1.0 - 0.65 * clampD(d / radius, 0, 1)) }
-			i.knock = info.knock * (falloff ? (1.0 - 0.5 * clampD(d / radius, 0, 1)) : 1.0)
-			i.originX = cx
-			i.originY = cy
-			return i
-		}
-		if !dead {
-			let d: Double = boxDistance(cx, cy, pb.left, pb.top, pb.right, pb.y)
-			if d <= radius && (!lineOfSight || world.lineClear(cx, cy, pb.x, pb.cy)) { _ = hurtPlayer(scaled(d)) }
-		}
-		for m in mobsNear(cx - radius - 4, cx + radius + 4) {
-			if m.hp <= 0 { continue }
-			let d: Double = boxDistance(cx, cy, m.b.left, m.b.top, m.b.right, m.b.y)
-			if d > radius { continue }
-			if lineOfSight && !world.lineClear(cx, cy, m.b.x, m.b.cy) { continue }
-			applyMobDamage(m, scaled(d))
-		}
-	}
-
-	func boxDistance(_ px: Double, _ py: Double, _ x0: Double, _ y0: Double, _ x1: Double, _ y1: Double) -> Double {
-		let dx: Double = max(0, max(x0 - px, px - x1))
-		let dy: Double = max(0, max(y0 - py, py - y1))
-		return sqrt(dx * dx + dy * dy)
-	}
-
-	// MARK: explosions
-
-	func explode(_ x: Double, _ y: Double, radius: Double, power: Double, source: DamageSource, breakBlocks: Bool) {
-		sfx(.explosion, at: x, 1.0)
-		var info = DamageInfo(amount: power, type: .explosion, source: source)
-		info.knock = 11.0
-		info.key = newID()
-		info.cooldown = 1.0
-		damageArea(x, y, radius: radius, info, falloff: true, lineOfSight: true)
-		// the thrower is not immune to their own bomb, but takes less
-		if source.kind == .player && !dead {
-			let d: Double = boxDistance(x, y, pb.left, pb.top, pb.right, pb.y)
-			if d <= radius && world.lineClear(x, y, pb.x, pb.cy) {
-				damagePlayer(power * 0.45 * (1.0 - 0.65 * clampD(d / radius, 0, 1)), from: x, knock: 9.0)
-			}
-		}
-		if breakBlocks { blastBlocks(x, y, radius: radius, power: power) }
-		if !vehicles.isEmpty { blastVehicles(x, y, radius: radius, power: power) }
-		for s in ships where abs(s.x - x) < radius + 4.5 && abs(s.deckY(Double(WorldGen.sea)) - y) < radius + 2 {
-			s.hp -= power
-			s.hitT = 0.3
-		}
-		spawnParticles(x, y, 0xFFC050, 18, 8.0, 0.5, 2)
-		spawnParticles(x, y, 0x606060, 12, 4.0, 1.0, -3)
-		addShake(0.6)
-		// the blast lights up its surroundings for a moment (the light map floods it through open space,
-		// so walls still cast shadows), fading out over the same time as the fire particles
-		addLightFlash(x, y, peak: 15, dur: 0.75, radius: radius + 2.5)
-	}
-
-	// MARK: hazards for creatures
-
-	/// Lava, fire, spikes, cactus and fall damage for every creature, through the same damage path
-	/// as everything else. Hazards are timed (not per frame) and resistances apply.
-	func mobHazards(_ m: Mob, _ dt: Double) {
-		if m.removed || m.downed { return }
-		if m.hasStatus { mobStatus(m, dt) }
-		if m.hazardT > 0 { m.hazardT -= dt }
-		let b: Body = m.b
-		let def: MobDef = m.def
-		let hw: Double = b.w * 0.5
-		let x0: Double = b.x - hw
-		let x1: Double = b.x + hw
-		let immune: Bool = heatImmune(m)
-		let fx: Int = Int(floor(b.x))
-		// lava: physics already worked out whether the body is in lava; also catch feet just touching it
-		let inLava: Bool = b.inLava || world.tile(fx, Int(floor(b.y - 0.1))) == .lava
-		if inLava && !immune {
-			m.burn = max(m.burn, 3.0)
-			if m.hazardT <= 0 {
-				m.hazardT = 0.35
-				var info = DamageInfo(amount: m.isBoss ? 14 : 6, type: .lava, source: .environment)
-				info.originX = m.b.x
-				applyMobDamage(m, info)
-				if m.hp > 0 && !m.def.flying { m.b.vy = min(m.b.vy, -7.0) }
-			}
-		}
-		// burning
-		if m.burn > 0 {
-			if immune || m.b.inWater {
-				m.burn = 0
-			} else {
-				m.burn -= dt
-				m.burnTick += dt
-				if m.burnTick >= 0.5 {
-					m.burnTick = 0
-					var info = DamageInfo(amount: m.isBoss ? 3 : 2, type: .fire, source: .environment)
-					info.originX = m.b.x
-					applyMobDamage(m, info)
-					spawnParticles(m.b.x, m.b.y - m.b.h * 0.7, 0xFF8030, 2, 1.5, 0.4, -4)
-				}
-			}
-		}
-		// spikes, cactus, campfires (checked every 4th frame per creature, staggered; these only
-		// apply damage on a 0.6 s timer anyway)
-		if !def.flying && m.hazardT <= 0 && (frameNo &+ m.id) & 3 == 0 {
-			if let t = world.boxHurts(x0 + 0.05, m.b.y - 0.6, x1 - 0.05, m.b.y + 0.05) ?? world.boxHurts(x0 - 0.02, m.b.top + 0.1, x1 + 0.02, m.b.y - 0.1) {
-				if t == .spikes || t == .cactus || t.isMod {
-					m.hazardT = 0.6
-					let dmg: Double = t.isMod ? (ModRuntime.shared.blockDef(t)?.power ?? 4) : (t == .spikes ? 5 : 2)
-					var info = DamageInfo(amount: dmg, type: .hazard, source: .environment)
-					info.originX = m.b.x - Double(m.dir)
-					info.knock = 3.0
-					applyMobDamage(m, info)
-				}
-			}
-			let fy: Int = Int(floor(b.y - 0.5))
-			if world.tile(fx, fy) == .campfire && !immune { m.burn = max(m.burn, 2.0) }
-		}
-		// falling (knockback off a ledge counts too)
-		if !def.flying && m.kind != .fish {
-			if !m.b.onGround && m.b.vy > 0 && !m.b.inWater { m.fallPeak = max(m.fallPeak, m.b.vy) }
-			if m.b.onGround || m.b.inWater {
-				if m.fallPeak > 23.0 && !m.b.inWater && !m.isBoss {
-					var info = DamageInfo(amount: (m.fallPeak - 21.0) * 1.5, type: .fall, source: .environment)
-					info.originX = m.b.x
-					applyMobDamage(m, info)
-				}
-				m.fallPeak = 0
-			}
-		}
-	}
-
-	/// Dead creatures topple, fall and fade out for a moment before they are removed
-	func updateDying(_ dt: Double) {
-		for m in mobs where m.hp <= 0 && !m.removed {
-			if m.deathT < 0 { m.deathT = 0 }
-			m.deathT += dt
-			if !m.def.flying || m.deathT > 0.1 {
-				m.b.vy = min(m.b.vy + gravityG * dt, terminalV)
-				m.b.vx *= (1.0 - min(1.0, dt * 4.0))
-				if m.deathT < 0.8 { world.moveBody(&m.b, dt, stepUp: 0, dropThrough: false, decks: []) }
-			}
-			if m.deathT > 0.7 { m.removed = true }
-		}
-	}
-
-	// MARK: player fire
-
-	func updatePlayerBurn(_ dt: Double) {
-		if playerBurn <= 0 { return }
-		if pb.inWater || mode == .creative { playerBurn = 0; return }
-		// the ember charm makes flames die out twice as fast
-		playerBurn -= dt * (wearing(.emberCharm) ? 2.0 : 1.0)
-		playerBurnTick += dt
-		if playerBurnTick >= 0.6 {
-			playerBurnTick = 0
-			var info = DamageInfo(amount: 1, type: .fire, source: .environment)
-			info.originX = pb.x
-			_ = hurtPlayer(info)
-			spawnParticles(pb.x, pb.y - 1.2, 0xFF8030, 2, 1.5, 0.4, -4)
-		}
-	}
-
-	// MARK: falling blocks
-
-	// MARK: light flashes
-
-	func addLightFlash(_ x: Double, _ y: Double, peak: Int, dur: Double, radius: Double, color: UInt32 = 0xFF8A30) {
-		// a cap keeps a chain of explosions from piling up work; the oldest gives way
-		if flashes.count >= 12 { flashes.removeFirst() }
-		flashes.append(LightFlash(x: x, y: y, peak: clampI(peak, 0, 15), dur: dur, radius: radius, color: color))
-	}
-
-	func updateFlashes(_ dt: Double) {
-		if flashes.isEmpty { return }
-		var keep: [LightFlash] = []
-		for f0 in flashes {
-			var f: LightFlash = f0
-			f.age += dt
-			if f.age < f.dur { keep.append(f) }
-		}
-		flashes = keep
-	}
-
-	/// Sand with nothing under it falls; it hurts whatever it lands on
-	func checkFalling(_ x: Int, _ y: Int) {
-		var yy: Int = y
-		var n: Int = 0
-		while n < 16 && world.tile(x, yy) == .sand {
-			let below: Tile = world.tile(x, yy + 1)
-			if below.supportsThings || below.isPlatform { break }
-			world.set(x, yy, .air)
-			fallingBlocks.append(FallingBlock(x: Double(x) + 0.5, y: Double(yy) + 1.0, vy: 0, tile: .sand, uid: newID()))
-			yy -= 1
-			n += 1
-		}
-	}
-
-	/// Moves the blocks on the move. Sand drops straight down; a thrown block also flies sideways,
-	/// turns, is carried by a storm's wind (less the heavier it is), bounces off walls and slides along
-	/// the ground until it is slow, then settles back into a block (settleBlock). Anything still in the
-	/// air after 14 s settles where it is. A heavy, fast block hurts what it hits.
-	func updateFallingBlocks(_ dt: Double) {
-		if fallingBlocks.isEmpty { return }
-		var keep: [FallingBlock] = []
-		for fb0 in fallingBlocks {
-			var fb: FallingBlock = fb0
-			fb.age += dt
-			fb.vy = min(fb.vy + gravityG * dt, terminalV)
-			if fb.flung {
-				windOnBlock(&fb, dt)
-				fb.vx *= exp(-dt * 0.35)
-				fb.ang += fb.spin * dt
-				let nx: Double = fb.x + fb.vx * dt
-				let side: Double = nx + (fb.vx >= 0 ? 0.45 : -0.45)
-				if world.solid(Int(floor(side)), Int(floor(fb.y - 0.5))) {
-					fb.vx = -fb.vx * 0.3
-					fb.spin *= -0.5
-				} else {
-					fb.x = nx
-				}
-			}
-			let ny: Double = fb.y + fb.vy * dt
-			// crush whatever is in the way while moving fast enough (heavier blocks hit harder)
-			let speed: Double = max(fb.vy, abs(fb.vx))
-			if speed > 4.0 {
-				var info = DamageInfo(amount: (2.0 + speed * 0.4) * clampD(0.5 + fb.mass * 0.3, 0.5, 2.5), type: .crush, source: .environment)
-				info.originX = fb.x
-				info.originY = fb.y - 1.0
-				info.key = fb.uid
-				info.cooldown = 5.0
-				damageBox(fb.x - 0.45, fb.y - 1.0, fb.x + 0.45, max(ny, fb.y), info)
-			}
-			let tx: Int = Int(floor(fb.x))
-			if fb.vy < 0 {
-				// rising: a ceiling stops it
-				if world.solid(tx, Int(floor(ny - 1.0))) { fb.vy = 0 } else { fb.y = ny }
-				keep.append(fb)
-				continue
-			}
-			let landRow: Int = Int(floor(ny))
-			if world.tile(tx, landRow).supportsThings || world.tile(tx, landRow).isPlatform || landRow >= world.H - 2 {
-				if fb.flung && abs(fb.vx) > 2.5 && fb.age < 10 {
-					// still going: a little bounce, and it slides on
-					fb.y = Double(landRow)
-					fb.vy = -min(4.0, fb.vy * 0.25)
-					fb.vx *= 0.55
-					fb.spin *= 0.6
-					keep.append(fb)
-					continue
-				}
-				settleBlock(fb, landRow - 1)
-				spawnParticles(fb.x, Double(landRow), fb.tile.def.colors.first ?? 0xE0D08A, 4, 2.0, 0.3, 10)
-				continue
-			}
-			fb.y = ny
-			if fb.age > 14.0 || fb.y > Double(world.H - 2) {
-				settleBlock(fb, Int(floor(fb.y - 0.5)))
-				continue
-			}
-			keep.append(fb)
-		}
-		fallingBlocks = keep
-	}
-}
-
-/// A burst of light at a fixed spot in the world that fades out (explosions)
-struct LightFlash {
-	var x: Double
-	var y: Double
-	/// light level at the moment it starts (0...15)
-	var peak: Int
-	var age: Double = 0
-	var dur: Double
-	/// glow radius in blocks for the drawn flash
-	var radius: Double
-	/// tint of the drawn glow (explosions are amber, lightning pale blue)
-	var color: UInt32 = 0xFF8A30
-
-	/// 1 at the start, easing smoothly to 0 at the end
-	var strength: Double {
-		let t: Double = clampD(age / max(0.01, dur), 0, 1)
-		let u: Double = 1.0 - t
-		return u * u * (3.0 - 2.0 * u)
-	}
-	/// current light level for the light map
-	var level: Int { return Int((Double(peak) * strength).rounded()) }
-}
-
-/// A block on the move: sand with nothing under it, or a block knocked loose by a blast, a storm or
-/// a structure giving way. x is its centre, y its bottom edge.
-struct FallingBlock {
-	var x: Double
-	var y: Double
-	var vy: Double
-	var tile: Tile
-	var uid: Int
-	var vx: Double = 0
-	/// how it is turned (drawn), and how fast it turns
-	var ang: Double = 0
-	var spin: Double = 0
-	var mass: Double = 1.6
-	var age: Double = 0
-	/// thrown (it slides and bounces before it settles, and the wind carries it)
-	var flung: Bool = false
-	/// it was part of something built (it counts as built again once it settles)
-	var built: Bool = false
-}
 
 // ===== p16b_bosses =====
 
@@ -2691,6 +2080,7 @@ extension Game {
 		g.timeOfDay = s.timeOfDay
 		g.hp = s.hp
 		g.maxHP = s.maxHP
+		g.applyHealthRule(newWorld: false)
 		g.hunger = s.hunger
 		g.kills = s.kills
 		g.spawnX = s.spawnX
@@ -4634,7 +4024,7 @@ func powerRole(_ t: Tile) -> PowerRole {
 	case .motionSensor, .daySensor, .weatherSensor, .itemSensor, .proximitySensor: return .sensor
 	case .gateClosed, .gateOpen, .lampOff, .lampOn, .arcTrap, .autoDrill, .conveyor, .collector, .autoCrafter, .sumpPump, .exoStation: return .machine
 	case .signalLight: return .indicator
-	default: return .none
+	default: return t.isMod ? ModRuntime.shared.powerRoleOf(t).role : .none
 	}
 }
 
@@ -4643,7 +4033,10 @@ func powerFamily(_ t: Tile) -> Tile {
 	switch t {
 	case .lampOn: return .lampOff
 	case .gateOpen: return .gateClosed
-	default: return t
+	default:
+		// a mod lamp lit is the same device as unlit
+		if t.isMod && ModRuntime.shared.isAlt(t), let p = ModRuntime.shared.partner(t) { return p }
+		return t
 	}
 }
 
@@ -4817,15 +4210,20 @@ enum PowerSpec {
 		case .battery: return 600
 		case .accumulator: return 5000
 		case .crankGen: return 60
-		default: return 0
+		default: return modBattery(t) * 150
 		}
 	}
 	static func rate(_ t: Tile) -> Double {
 		switch t {
 		case .battery: return 15
 		case .accumulator: return 60
-		default: return 0
+		default: return modBattery(t) * 2.5
 		}
+	}
+	/// a mod battery's strength (0 for anything else)
+	static func modBattery(_ t: Tile) -> Double {
+		if !t.isMod || ModRuntime.shared.powerRoleOf(t) != .battery { return 0 }
+		return ModRuntime.shared.blockDef(t)?.powerAmt ?? 0
 	}
 	/// sparks per second while running
 	static func draw(_ t: Tile) -> Double {
@@ -4840,7 +4238,9 @@ enum PowerSpec {
 		case .sumpPump: return 4
 		case .exoStation: return 10
 		case .motionSensor, .daySensor, .weatherSensor, .itemSensor, .proximitySensor: return 0.5
-		default: return 0
+		default:
+			if t.isMod && ModRuntime.shared.powerRoleOf(t) == .lamp { return ModRuntime.shared.blockDef(t)?.powerAmt ?? 0 }
+			return 0
 		}
 	}
 	static let breakerLimits: [Double] = [10, 25, 50, 100, 250]
@@ -5231,8 +4631,39 @@ extension Game {
 			}
 			return min(6.0, r)
 		default:
-			return 0
+			return modGeneratorRate(d)
 		}
+	}
+
+	/// Sparks a second a mod's generator makes: steadily, or by daylight under the open sky
+	func modGeneratorRate(_ d: PowerDev) -> Double {
+		if !d.tile.isMod { return 0 }
+		let role: ModPowerRole = ModRuntime.shared.powerRoleOf(d.tile)
+		let amt: Double = ModRuntime.shared.blockDef(d.tile)?.powerAmt ?? 0
+		if role == .generator { return amt }
+		if role != .solar { return 0 }
+		// open sky above it (the block itself may be the highest thing in its column)
+		if d.y > world.skyTop(d.x) { return 0 }
+		let cloud: Double = settings.weatherOn && world.dim == .overworld ? weatherAt(Double(d.x) + 0.5, Double(d.y)).cloud : 0
+		return amt * dayFactor * (1.0 - 0.75 * clampD(cloud, 0, 1))
+	}
+
+	/// A mod's powered lamp or signal light: its lit form while it has power (and its pulse wire is on,
+	/// if it has one), or while its pulse wire is on. False for anything else.
+	func modPowerLamp(_ d: PowerDev, _ pulse: Bool?) -> Bool {
+		if !d.tile.isMod { return false }
+		let role: ModPowerRole = ModRuntime.shared.powerRoleOf(d.tile)
+		if role != .lamp && role != .signal { return false }
+		d.enabled = pulse ?? true
+		let lit: Bool = role == .lamp ? (d.enabled && d.powered) : (pulse ?? false)
+		let rt: ModRuntime = ModRuntime.shared
+		guard let other = rt.partner(d.tile) else { return true }
+		if lit != rt.isAlt(d.tile) && clock - d.lastSwap > 0.12 && power.swaps > 0 {
+			power.swaps -= 1
+			d.lastSwap = clock
+			world.set(d.x, d.y, other)
+		}
+		return true
 	}
 
 	/// A machine just gained or lost power
@@ -5545,6 +4976,7 @@ extension Game {
 				sfx(.door, at: Double(d.x), 0.4)
 			}
 		default:
+			if modPowerLamp(d, pulse) { return }
 			// a machine runs while its pulse wire is on (or always, with none); a sensor's own cell carries
 			// its own output, so sensors are never switched by it
 			if d.role == .machine || d.role == .indicator { d.enabled = pulse ?? true }
@@ -5590,7 +5022,7 @@ extension Game {
 		let sim: PowerSim = power
 		for d in sim.machines {
 			// a lamp or gate that was held back by the limit on tile changes catches up
-			if d.tile == .lampOff || d.tile == .lampOn || d.tile == .gateClosed || d.tile == .gateOpen { applyMachine(d) }
+			if d.tile == .lampOff || d.tile == .lampOn || d.tile == .gateClosed || d.tile == .gateOpen || d.tile.isMod { applyMachine(d) }
 			let running: Bool = d.enabled && d.powered
 			if !running {
 				d.work = 0
@@ -6866,6 +6298,8 @@ enum ModCollision: Int, Codable, CaseIterable {
 /// other state (open, lit).
 enum ModBlockFunction: Int, Codable, CaseIterable {
 	case none, storage, station, lamp, door, healer, bounce, trap, sign
+	/// furniture (appended): a seat to sit on, a bed to sleep in
+	case seat, bed
 	var name: String {
 		switch self {
 		case .none: return "Nothing"
@@ -6877,6 +6311,8 @@ enum ModBlockFunction: Int, Codable, CaseIterable {
 		case .bounce: return "Jump pad"
 		case .trap: return "Damage trap"
 		case .sign: return "Sign"
+		case .seat: return "Seat"
+		case .bed: return "Bed"
 		}
 	}
 	var help: String {
@@ -6890,6 +6326,8 @@ enum ModBlockFunction: Int, Codable, CaseIterable {
 		case .bounce: return "Throws you up when you land on it."
 		case .trap: return "Hurts anything that touches it."
 		case .sign: return "Tap it to read its text."
+		case .seat: return "Tap it to sit down, like a chair (walk or jump to get up)."
+		case .bed: return "Tap it at night to sleep until morning; it becomes where you wake up."
 		}
 	}
 	/// functions that need a second tile number for the other state
@@ -6964,6 +6402,14 @@ struct ModBlock: Codable, Identifiable, Equatable {
 	var vehRole: ModVehicleRole = .none
 	var vehMass: Double = 0
 	var vehPower: Double = 1.0
+	/// as building material: its weight and what it holds up (0: worked out from its hardness), and
+	/// whether it falls like sand with nothing under it
+	var weight: Double = 0
+	var carry: Double = 0
+	var falls: Bool = false
+	/// on Sparkworks power lines: what it does, and how strong it is at it
+	var powerRole: ModPowerRole = .none
+	var powerAmt: Double = 4
 
 	init() {}
 
@@ -6992,6 +6438,11 @@ struct ModBlock: Codable, Identifiable, Equatable {
 		vehRole = c.val(.vehRole, .none)
 		vehMass = c.val(.vehMass, 0)
 		vehPower = c.val(.vehPower, 1.0)
+		weight = c.val(.weight, 0)
+		carry = c.val(.carry, 0)
+		falls = c.val(.falls, false)
+		powerRole = c.val(.powerRole, .none)
+		powerAmt = c.val(.powerAmt, 4)
 	}
 }
 
@@ -7858,6 +7309,16 @@ struct ModPack: Codable, Identifiable, Equatable {
 	var suitMats: [ModSuitMat] = []
 	var suitParts: [ModSuitPart] = []
 	var suitDesigns: [ModSuitDesign] = []
+	/// rules of the game in the worlds it is in, by rule id (GameRule; a rule left out is the game's own)
+	var rules: [String: Double] = [:]
+	/// what a new world (not in creative) starts with in the bag
+	var startItems: [ModCost] = []
+	/// the Overworld's weather as this mod has it (nil: the game's)
+	var weather: ModWeather? = nil
+	/// whole vehicles, each also an item that builds it
+	var vehicles: [ModVehicle] = []
+	/// how the game's screens look (nil: the game's own)
+	var theme: ModTheme? = nil
 	/// entries left out because they could not be read (not saved)
 	var skipped: Int = 0
 
@@ -7867,6 +7328,7 @@ struct ModPack: Codable, Identifiable, Equatable {
 		case folder, requires, off, overrides, infusions, dims, scripts, variables
 		case skySun, skyMoon, trees
 		case suitMats, suitParts, suitDesigns
+		case rules, startItems, weather, vehicles, theme
 	}
 
 	init() {}
@@ -7905,6 +7367,11 @@ struct ModPack: Codable, Identifiable, Equatable {
 		suitMats = c.list(.suitMats, &skip)
 		suitParts = c.list(.suitParts, &skip)
 		suitDesigns = c.list(.suitDesigns, &skip)
+		rules = c.val(.rules, [:])
+		startItems = c.list(.startItems, &skip)
+		weather = c.val(.weather, nil)
+		vehicles = c.list(.vehicles, &skip)
+		theme = c.val(.theme, nil)
 		skipped = skip
 	}
 
@@ -7912,7 +7379,7 @@ struct ModPack: Codable, Identifiable, Equatable {
 	func key(_ contentID: String) -> String { return id + ":" + contentID }
 
 	var contentCount: Int {
-		let counts: [Int] = [blocks.count, items.count, mobs.count, projectiles.count, recipes.count, loot.count, ores.count, structures.count, overrides.count, infusions.count, dims.count, scripts.count, trees.count, suitMats.count, suitParts.count, suitDesigns.count]
+		let counts: [Int] = [blocks.count, items.count, mobs.count, projectiles.count, recipes.count, loot.count, ores.count, structures.count, overrides.count, infusions.count, dims.count, scripts.count, trees.count, suitMats.count, suitParts.count, suitDesigns.count, vehicles.count, rules.isEmpty && startItems.isEmpty ? 0 : 1, weather == nil ? 0 : 1, theme == nil ? 0 : 1]
 		var n: Int = 0
 		for c in counts { n += c }
 		return n
@@ -7957,6 +7424,7 @@ struct ModPack: Codable, Identifiable, Equatable {
 		for m in suitMats { used.insert(m.id) }
 		for sp in suitParts { used.insert(sp.id) }
 		for sd in suitDesigns { used.insert(sd.id) }
+		for v in vehicles { used.insert(v.id) }
 		for f in infusions { used.insert(f.id) }
 		for d in dims { used.insert(d.id) }
 		for sc in scripts { used.insert(sc.id) }
@@ -8302,6 +7770,10 @@ enum ModStore {
 				p.suitDesigns[i].design.pieces[k].modPart = fixRef(p.suitDesigns[i].design.pieces[k].modPart)
 			}
 		}
+		for i in p.startItems.indices { p.startItems[i].item = fix(p.startItems[i].item) }
+		for i in p.vehicles.indices {
+			for k in p.vehicles[i].cells.indices { p.vehicles[i].cells[k].block = fixRef(p.vehicles[i].cells[k].block) }
+		}
 		for i in p.trees.indices {
 			p.trees[i].trunk = fixRef(p.trees[i].trunk)
 			p.trees[i].branch = fixRef(p.trees[i].branch)
@@ -8384,6 +7856,7 @@ struct ModCatalog {
 			for d in p.dims { c.keys[p.key(d.id)] = "dimension"; c.names[p.key(d.id)] = d.name }
 			for sp in p.suitParts { c.keys[p.key(sp.id)] = "item"; c.names[p.key(sp.id)] = sp.name }
 			for m in p.suitMats { c.keys[p.key(m.id)] = "suitmat"; c.names[p.key(m.id)] = m.name }
+			for v in p.vehicles { c.keys[p.key(v.id)] = "item"; c.names[p.key(v.id)] = v.name }
 		}
 		return c
 	}
@@ -8509,6 +7982,9 @@ enum ModValidator {
 			b.power = clampD(b.power.isFinite ? b.power : 0, 0, sb ? 400 : 40)
 			b.vehMass = clampD(b.vehMass.isFinite ? b.vehMass : 0, 0, sb ? 60 : 20)
 			b.vehPower = clampD(b.vehPower.isFinite ? b.vehPower : 1, 0.25, sb ? 10 : 4)
+			b.weight = clampD(b.weight.isFinite ? b.weight : 0, 0, sb ? 40 : 12)
+			b.carry = clampD(b.carry.isFinite ? b.carry : 0, 0, sb ? 4000 : 400)
+			b.powerAmt = clampD(b.powerAmt.isFinite ? b.powerAmt : 4, 0.1, sb ? 200 : 40)
 			if b.text.count > 200 { b.text = String(b.text.prefix(200)) }
 			if let d = b.drop, !exists(d) {
 				b.drop = nil
@@ -9941,6 +9417,19 @@ final class ModRuntime {
 	var overSun: ModSkyBody? = nil
 	var overMoon: ModSkyBody? = nil
 	var dimSlotKey: [String?] = [nil, nil, nil]
+	/// the rules of the game as the mods set them (by GameRule number), what a new world starts with,
+	/// the Overworld's weather and the screens' look as the last mod that sets them has them
+	var rules: [Double] = GameRule.specs.map { $0.def }
+	var startItems: [Stack] = []
+	var weather: ModWeather? = nil
+	var theme: ModTheme? = nil
+	/// the mods' vehicles by key
+	var vehicles: [String: ModVehicle] = [:]
+	/// mod blocks that fall like sand, seats, beds, and those on power lines
+	var fallTiles: Set<UInt8> = []
+	var seatTiles: Set<UInt8> = []
+	var bedTiles: Set<UInt8> = []
+	var powerTiles: [UInt8: ModPowerRole] = [:]
 
 	var active: Bool { return !packs.isEmpty || !missing.isEmpty }
 	var hasWorldGen: Bool { return !ores.isEmpty || !structures.isEmpty }
@@ -9992,6 +9481,7 @@ final class ModRuntime {
 		rt.buildMobs()
 		rt.buildSummons()
 		rt.buildDims(world)
+		rt.buildWorldRules()
 		for p in rt.packs {
 			if let b = p.skySun { rt.overSun = b }
 			if let b = p.skyMoon { rt.overMoon = b }
@@ -10293,6 +9783,15 @@ final class ModRuntime {
 			for sp in p.suitParts where !disabled.contains(p.key(sp.id)) {
 				let k: String = p.key(sp.id)
 				let it: ModItem = suitPartItem(p, sp)
+				let r = ModItemRT(key: k, def: it, modName: p.name)
+				r.icon = itemIconBuf(it)
+				items[k] = r
+				itemOrder.append(k)
+			}
+			// a vehicle's kit is an item too
+			for v in p.vehicles where !disabled.contains(p.key(v.id)) {
+				let k: String = p.key(v.id)
+				let it: ModItem = vehicleItem(p, v)
 				let r = ModItemRT(key: k, def: it, modName: p.name)
 				r.icon = itemIconBuf(it)
 				items[k] = r
@@ -10843,6 +10342,11 @@ extension Game {
 		}
 		let d: ModItem = r.def
 		if pressed && !logicRT.isEmpty { fireLogic(.itemUsed, key: k) }
+		// a vehicle's kit builds the vehicle
+		if ModRuntime.shared.vehicles[k] != nil {
+			if pressed && useCD <= 0 { placeModVehicle(k) }
+			return
+		}
 		switch d.kind {
 		case .tool: useModTool(r, dt, pressed)
 		case .melee: useMeleeWeapon(.custom(k), pressed)
@@ -11109,6 +10613,10 @@ extension Game {
 			}
 		case .sign:
 			say(b.text.isEmpty ? b.name : b.text, 4.0)
+		case .seat:
+			sitOn(tx, ty)
+		case .bed:
+			sleepIn(tx, ty)
 		default:
 			return false
 		}
@@ -15383,6 +14891,8 @@ extension Game {
 	func finishPlace(_ placed: Tile, _ tx: Int, _ ty: Int) {
 		world.set(tx, ty, placed)
 		world.setBuilt(tx, ty, true)
+		// a mod block that falls like sand drops at once when put up in the air
+		if placed.isMod && fallsLikeSand(placed) { checkFalling(tx, ty) }
 		if !isCreative { inv.removeAt(sel, 1) }
 		sfx(.place, 0.6)
 		placeCD = 0.11
@@ -15427,9 +14937,10 @@ extension Game {
 	/// at any time it becomes where they wake after dying
 	func sleepIn(_ tx: Int, _ ty: Int) {
 		let t: Tile = world.tile(tx, ty)
-		if t != .bedL && t != .bedR { return }
+		let modBed: Bool = t.isMod && ModRuntime.shared.bedTiles.contains(t.rawValue)
+		if t != .bedL && t != .bedR && !modBed { return }
 		let hx: Int = t == .bedR ? tx - 1 : tx
-		spawnX = Double(hx) + 1.0
+		spawnX = Double(hx) + (modBed ? 0.5 : 1.0)
 		spawnY = Double(ty) + 1.0
 		if world.dim != .overworld {
 			say("This bed is now where you wake up. (Nights only pass in the Overworld.)", 3.0)
@@ -15822,7 +15333,14 @@ func blockPhysFrom(_ d: TileDef) -> BlockPhys {
 
 /// A block's material numbers
 func blockPhys(_ t: Tile) -> BlockPhys {
-	if t.isMod { return blockPhysFrom(t.def) }
+	if t.isMod {
+		var p: BlockPhys = blockPhysFrom(t.def)
+		if let b = ModRuntime.shared.blockDef(t) {
+			if b.weight > 0 { p.weight = b.weight }
+			if b.carry > 0 { p.carry = b.carry }
+		}
+		return p
+	}
 	let i: Int = Int(t.rawValue)
 	return i < BlockPhysTable.table.count ? BlockPhysTable.table[i] : BlockPhys(weight: 1, carry: 20, span: 2)
 }
@@ -16862,6 +16380,10 @@ extension ModStore {
 				if piece.modPart.contains(":") { add(piece.modPart) }
 			}
 		}
+		for s in p.startItems { addItem(s.item) }
+		for v in p.vehicles {
+			for c in v.cells where c.block.contains(":") && !c.block.hasPrefix("tile:") { add(c.block) }
+		}
 		for sc in p.scripts { LKeys.uses(sc, add, addItem) }
 		return out
 	}
@@ -16922,6 +16444,7 @@ extension ModValidator {
 		checkBosses(&p, mn, sb, known, &r)
 		checkDims(&p, mn, sb, known, &r)
 		checkSuits(&p, mn, sb, known, &r)
+		checkWorldRules(&p, mn, sb, known, &r)
 		checkScripts(&p, mn, sb, known, &r)
 		let dimIDs: Set<String> = Set(p.dims.map { $0.id })
 		for i in p.ores.indices where !p.ores[i].dimKey.isEmpty && !dimIDs.contains(p.ores[i].dimKey) { p.ores[i].dimKey = "" }
@@ -17405,5 +16928,492 @@ enum GameSprites {
 
 	static func tiles() -> [Tile] {
 		return Tile.allCases.filter { !$0.isMod && $0 != .air }
+	}
+}
+
+// MARK: - Mod Creator+: custom infusions
+
+/// When a custom infusion's effect is given to the player
+enum ModInfuseTrigger: Int, Codable, CaseIterable {
+	case none, onHit, onKill, whenHurt, lowHealth
+	var name: String {
+		switch self {
+		case .none: return "Never"
+		case .onHit: return "When it hits"
+		case .onKill: return "When it fells a foe"
+		case .whenHurt: return "When you are hurt"
+		case .lowHealth: return "When your health is low"
+		}
+	}
+}
+
+/// An infusion made in the Mod Creator: what it goes on, the numbers it changes (added to, or
+/// multiplied with, the others), what it does when it strikes or is struck, how it looks, and how
+/// many times one item may hold it. Its compound is an item of the mod with the same key.
+struct ModInfusion: Codable, Identifiable, Equatable {
+	var id: String = ""
+	var name: String = "New Infusion"
+	var desc: String = ""
+	/// its compound's icon (blank: a phial in its colour)
+	var icon: ModPixels = ModPixels(w: 12, h: 12)
+	var color: UInt32 = 0x60E0FF
+	/// Rarity number (basic to boss relic)
+	var rarity: Int = 1
+	/// the kinds of equipment it goes on (InfuseClass numbers)
+	var classes: [Int] = [InfuseClass.melee.rawValue]
+	/// only these items (empty: anything of those kinds)
+	var items: [Item] = []
+	/// percentages multiply with the others (off: they add)
+	var multiply: Bool = false
+	var damagePct: Double = 0
+	var damageFlat: Double = 0
+	var attackSpeedPct: Double = 0
+	var reach: Double = 0
+	var critPct: Double = 0
+	var knockPct: Double = 0
+	var miningPct: Double = 0
+	var defense: Double = 0
+	var moveSpeedPct: Double = 0
+	var fireCut: Double = 0
+	var coldCut: Double = 0
+	var stormCut: Double = 0
+	/// health a minute while worn
+	var regen: Double = 0
+	/// less energy used by suit parts (percent)
+	var energyPct: Double = 0
+	/// on a hit: seconds of fire, seconds of slowing, seconds of poison
+	var burn: Double = 0
+	var slow: Double = 0
+	var poison: Double = 0
+	/// on a hit: the chance of a spark leaping to two more foes
+	var sparkChance: Double = 0
+	/// on a hit: a little blast of this much damage around what was hit
+	var blast: Double = 0
+	/// worn: the share of a melee blow returned to the attacker (percent)
+	var thorns: Double = 0
+	/// on a hit: the share of the damage healed back (percent)
+	var lifeSteal: Double = 0
+	var trigger: ModInfuseTrigger = .none
+	var effect: ModEffect = ModEffect(.speed, 20, 8)
+	var effectCooldown: Double = 10
+	/// sparks of its colour when it does something
+	var particles: Bool = true
+	/// times one item may hold it
+	var stack: Int = 1
+
+	init() {}
+
+	init(from decoder: Decoder) throws {
+		let c = try decoder.container(keyedBy: CodingKeys.self)
+		id = c.val(.id, "")
+		name = c.val(.name, "Infusion")
+		desc = c.val(.desc, "")
+		icon = c.val(.icon, ModPixels(w: 12, h: 12))
+		color = c.val(.color, 0x60E0FF)
+		rarity = c.val(.rarity, 1)
+		classes = c.val(.classes, [0])
+		items = c.val(.items, [])
+		multiply = c.val(.multiply, false)
+		damagePct = c.val(.damagePct, 0)
+		damageFlat = c.val(.damageFlat, 0)
+		attackSpeedPct = c.val(.attackSpeedPct, 0)
+		reach = c.val(.reach, 0)
+		critPct = c.val(.critPct, 0)
+		knockPct = c.val(.knockPct, 0)
+		miningPct = c.val(.miningPct, 0)
+		defense = c.val(.defense, 0)
+		moveSpeedPct = c.val(.moveSpeedPct, 0)
+		fireCut = c.val(.fireCut, 0)
+		coldCut = c.val(.coldCut, 0)
+		stormCut = c.val(.stormCut, 0)
+		regen = c.val(.regen, 0)
+		energyPct = c.val(.energyPct, 0)
+		burn = c.val(.burn, 0)
+		slow = c.val(.slow, 0)
+		poison = c.val(.poison, 0)
+		sparkChance = c.val(.sparkChance, 0)
+		blast = c.val(.blast, 0)
+		thorns = c.val(.thorns, 0)
+		lifeSteal = c.val(.lifeSteal, 0)
+		trigger = c.val(.trigger, .none)
+		effect = c.val(.effect, ModEffect(.speed, 20, 8))
+		effectCooldown = c.val(.effectCooldown, 10)
+		particles = c.val(.particles, true)
+		stack = c.val(.stack, 1)
+	}
+
+	/// what it does, in a line (for tooltips and the crucible)
+	var blurb: String {
+		var parts: [String] = []
+		func pct(_ v: Double, _ what: String) { if abs(v) > 0.01 { parts.append(joinText(v > 0 ? "+" : "", String(Int(v.rounded())), "% ", what)) } }
+		pct(damagePct, "damage")
+		if abs(damageFlat) > 0.01 { parts.append(joinText("+", String(format: "%.1f", damageFlat), " damage")) }
+		pct(attackSpeedPct, "attack speed")
+		if reach > 0.01 { parts.append(joinText("+", String(format: "%.1f", reach), " reach")) }
+		pct(critPct, "critical chance")
+		pct(knockPct, "knockback")
+		pct(miningPct, "mining speed")
+		if defense > 0.01 { parts.append(joinText("+", String(format: "%.1f", defense), " defence")) }
+		pct(moveSpeedPct, "run speed")
+		pct(fireCut, "less fire harm")
+		pct(coldCut, "less cold")
+		pct(stormCut, "less storm harm")
+		if regen > 0.01 { parts.append(joinText("heals ", String(format: "%.1f", regen), " a minute")) }
+		pct(energyPct, "less suit energy")
+		if burn > 0.01 { parts.append("sets alight") }
+		if slow > 0.01 { parts.append("slows") }
+		if poison > 0.01 { parts.append("poisons") }
+		if sparkChance > 0.01 { parts.append("sparks") }
+		if blast > 0.01 { parts.append("bursts") }
+		pct(thorns, "of blows returned")
+		pct(lifeSteal, "of damage healed")
+		if trigger != .none { parts.append(joinText(effect.kind.short.lowercased(), " ", trigger.name.lowercased())) }
+		return parts.isEmpty ? "No effect yet" : parts.joined(separator: ", ")
+	}
+}
+
+extension ModInfusion {
+	/// Its numbers on a melee profile (percentages of the profile it is given, added or multiplied)
+	func apply(_ p0: MeleeProfile) -> MeleeProfile {
+		var p: MeleeProfile = p0
+		if multiply {
+			p.damage *= 1.0 + damagePct / 100.0
+			p.cooldown /= max(0.2, 1.0 + attackSpeedPct / 100.0)
+			p.knock *= 1.0 + knockPct / 100.0
+			p.critChance *= 1.0 + critPct / 100.0
+		} else {
+			p.damage += p0.damage * damagePct / 100.0
+			p.cooldown = max(0.08, p.cooldown - p0.cooldown * attackSpeedPct / 100.0)
+			p.knock += p0.knock * knockPct / 100.0
+			p.critChance += critPct / 100.0
+		}
+		p.damage += damageFlat
+		p.reach += reach
+		p.critChance = clampD(p.critChance, 0, 1)
+		if burn > 0 { p.burn = max(p.burn, burn) }
+		return p
+	}
+}
+
+/// A custom infusion in a world: its number on items, its key, and what it goes on
+final class ModInfusionRT {
+	let key: String
+	let number: Int
+	let def: ModInfusion
+	let classes: Set<Int>
+	let items: Set<Item>
+
+	init(key: String, number: Int, def: ModInfusion) {
+		self.key = key
+		self.number = number
+		self.def = def
+		self.classes = Set(def.classes)
+		self.items = Set(def.items)
+	}
+
+	/// the share a percentage adds (or the factor it multiplies by)
+	func factor(_ pct: Double) -> Double { return 1.0 + pct / 100.0 }
+}
+
+/// Custom infusions are numbered from here on items (the game's own use 0 to 999)
+let customInfusionBase: Int = 1000
+let maxCustomInfusions: Int = 256
+
+extension ModRuntime {
+	/// Gives each custom infusion its number (the world's own numbers first, so items keep theirs) and
+	/// makes its compound an item of the mod
+	func buildInfusions(_ world: ModWorldInfo?) {
+		var taken: Set<Int> = []
+		if let w = world {
+			for (k, n) in w.infusions where n >= customInfusionBase && n < customInfusionBase + maxCustomInfusions {
+				infusionNumber[k] = n
+				taken.insert(n)
+			}
+		}
+		var next: Int = customInfusionBase
+		for p in packs {
+			for f in p.infusions where !disabled.contains(p.key(f.id)) {
+				let k: String = p.key(f.id)
+				var n: Int = infusionNumber[k] ?? -1
+				if n < 0 {
+					while taken.contains(next) { next += 1 }
+					if next >= customInfusionBase + maxCustomInfusions { continue }
+					n = next
+					taken.insert(n)
+					infusionNumber[k] = n
+				}
+				infusionDefs[n] = ModInfusionRT(key: k, number: n, def: f)
+				// its compound: an item of the mod under the same key
+				var it = ModItem()
+				it.id = f.id
+				it.name = joinText(f.name, " Compound")
+				it.desc = joinText("Work it into equipment at an Infusion Crucible: ", f.blurb)
+				it.kind = .material
+				it.stack = 10
+				it.rarity = clampI(f.rarity, 0, 4)
+				let r = ModItemRT(key: k, def: it, modName: p.name)
+				r.icon = compoundIcon(f)
+				items[k] = r
+				itemOrder.append(k)
+			}
+		}
+	}
+
+	func infusion(_ n: Int) -> ModInfusionRT? { return infusionDefs[n] }
+
+	/// The compound's icon: its own picture, or a phial in its colour
+	func compoundIcon(_ f: ModInfusion) -> PixelBuf {
+		if !f.icon.isBlank {
+			var b: PixelBuf = padBuf(f.icon.buf())
+			if f.icon.outlined(true) { b.outline(0x1A1410) }
+			return b
+		}
+		var b = PixelBuf(w: 12, h: 12)
+		let c: UInt32 = f.color & 0xFFFFFF
+		let ring: UInt32 = (Rarity(rawValue: clampI(f.rarity, 0, 4)) ?? .uncommon).color
+		b.rect(5, 0, 2, 2, 0x6A6E78)
+		b.rect(4, 2, 4, 1, ring)
+		b.rect(3, 3, 6, 7, 0x2A2A34)
+		b.rect(4, 4, 4, 5, c)
+		b.set(4, 4, shadeRGB(c, 1.4))
+		b.set(6, 6, shadeRGB(c, 0.6))
+		b.rect(3, 10, 6, 1, ring)
+		b.outline(0x1A1410)
+		return b
+	}
+}
+
+/// The name and colour of any infusion number (the game's own or a custom one)
+func infusionName(_ n: Int) -> String {
+	if let i = Infusion(rawValue: n) { return i.name }
+	return ModRuntime.shared.infusion(n)?.def.name ?? "Missing infusion"
+}
+
+func infusionColor(_ n: Int) -> UInt32 {
+	if let i = Infusion(rawValue: n) { return i.color }
+	return ModRuntime.shared.infusion(n)?.def.color ?? 0xFF00FF
+}
+
+extension Stack {
+	/// names of everything worked into it, custom infusions too
+	var infusionNames: [String] { return (inf ?? []).map { infusionName($0) } }
+
+	/// Why a custom infusion can't go on this item (nil: it can)
+	func customProblem(_ r: ModInfusionRT) -> String? {
+		let slots: Int = infusionSlots(item)
+		if slots <= 0 { return "This can't be infused." }
+		if item.maxStack > 1 { return "Only single items can be infused." }
+		if !r.items.isEmpty {
+			if !r.items.contains(item) { return joinText(r.def.name, " only goes on certain items.") }
+		} else {
+			let cls: [InfuseClass] = infuseClasses(item)
+			if !cls.contains(where: { r.classes.contains($0.rawValue) }) { return joinText(r.def.name, " doesn't go on this kind of equipment.") }
+		}
+		let held: Int = (inf ?? []).filter { $0 == r.number }.count
+		if held >= max(1, r.def.stack) { return r.def.stack > 1 ? joinText("It already holds ", r.def.name, " as many times as it can.") : joinText("It already has ", r.def.name, ".") }
+		if (inf?.count ?? 0) >= slots { return joinText("All ", String(slots), " of its slots are taken.") }
+		return nil
+	}
+}
+
+extension Game {
+	/// Works a custom infusion's compound into the item in a bag slot (checked again here, the item
+	/// never leaves its slot)
+	@discardableResult
+	func infuseCustom(slot i: Int, _ number: Int) -> String {
+		guard let r = ModRuntime.shared.infusion(number) else { return "That infusion's mod is not on." }
+		guard i >= 0 && i < inv.slots.count, var s = inv.slots[i] else { return "That item is gone." }
+		if let why = s.customProblem(r) { return why }
+		let compound: Item = .custom(r.key)
+		if !isCreative && inv.total(compound) < 1 { return joinText("You need a ", r.def.name, " compound.") }
+		if !isCreative { _ = inv.remove(compound, 1) }
+		var list: [Int] = s.inf ?? []
+		list.append(number)
+		s.inf = list
+		inv.slots[i] = s
+		sfx(.infuse, 0.8)
+		spawnParticles(pb.x, pb.y - 1.2, r.def.color, 12, 3.0, 0.7, -4)
+		bumpHUD()
+		return joinText(s.item.name, " now holds ", r.def.name, ".")
+	}
+
+	/// Takes one custom infusion back out of an item (the compound is spent; the item is unharmed)
+	@discardableResult
+	func removeCustomInfusion(slot i: Int, _ number: Int) -> String {
+		guard i >= 0 && i < inv.slots.count, var s = inv.slots[i], var list = s.inf, let k = list.firstIndex(of: number) else { return "Nothing to remove." }
+		list.remove(at: k)
+		s.inf = list.isEmpty ? nil : list
+		inv.slots[i] = s
+		sfx(.tap, 0.6)
+		bumpHUD()
+		return joinText(infusionName(number), " was drawn out of ", s.item.name, ".")
+	}
+
+	/// A custom infusion's numbers on a melee profile
+	static func customProfile(_ p0: MeleeProfile, _ n: Int) -> MeleeProfile {
+		guard let r = ModRuntime.shared.infusion(n) else { return p0 }
+		return r.def.apply(p0)
+	}
+
+	/// What a custom infusion does when a blow or a shot lands on a creature
+	func customHit(_ m: Mob, _ n: Int, _ dmg: Double, _ x: Double, _ y: Double) {
+		guard let r = ModRuntime.shared.infusion(n) else { return }
+		let d: ModInfusion = r.def
+		if m.hp > 0 {
+			if d.burn > 0 && !heatImmune(m) { m.burn = max(m.burn, d.burn) }
+			if d.slow > 0 {
+				m.slowT = max(m.slowT, m.isBoss ? d.slow * 0.5 : d.slow)
+				m.slowAmt = max(m.slowAmt, m.isBoss ? 0.2 : 0.4)
+			}
+			if d.poison > 0 && !poisonImmune(m) {
+				m.poisonT = max(m.poisonT, m.isBoss ? d.poison * 0.5 : d.poison)
+				m.poisonDps = max(m.poisonDps, 1.0)
+				m.poisonByPlayer = true
+			}
+			if d.sparkChance > 0 && Double.random(in: 0...1) < d.sparkChance { stormSpark(m) }
+		}
+		if d.blast > 0 { customBlast(x, y, d.blast, d.color) }
+		if d.lifeSteal > 0 && !dead { heal(dmg * d.lifeSteal / 100.0) }
+		if d.particles { spawnParticles(m.b.x, m.b.cy, d.color, 3, 2.0, 0.3, 4) }
+		if d.trigger == .onHit || (d.trigger == .onKill && m.hp <= 0) { customTrigger(r) }
+	}
+
+	/// A custom infusion's little blast (hurts creatures close by, breaks nothing)
+	func customBlast(_ x: Double, _ y: Double, _ dmg: Double, _ color: UInt32) {
+		var info = DamageInfo(amount: dmg, type: .explosion, source: .player)
+		info.knock = 4
+		info.key = newID()
+		info.cooldown = 0.5
+		for m in mobsNear(x - 2.5, x + 2.5) where m.hp > 0 && !m.removed && !m.tame {
+			if boxDistance(x, y, m.b.left, m.b.top, m.b.right, m.b.y) <= 1.3 {
+				var i2: DamageInfo = info
+				i2.originX = x
+				i2.originY = y
+				applyMobDamage(m, i2)
+			}
+		}
+		spawnParticles(x, y, color, 8, 4.0, 0.3, 4)
+	}
+
+	/// Gives a custom infusion's effect to the player, no more often than its rest allows
+	func customTrigger(_ r: ModInfusionRT) {
+		let d: ModInfusion = r.def
+		if d.trigger == .none { return }
+		if let t = infTriggerCD[r.number], clock - t < d.effectCooldown { return }
+		infTriggerCD[r.number] = clock
+		applyEffects([d.effect])
+		floatText(d.effect.kind.short, pb.x, pb.y - pb.h - 0.4, d.color)
+	}
+
+	/// After the player is hurt: worn custom infusions that answer being hurt (or low health)
+	func customHurtTriggers() {
+		for i in 0..<min(3, inv.armor.count) {
+			guard let s = inv.armor[i], let l = s.inf else { continue }
+			for n in l where n >= customInfusionBase {
+				guard let r = ModRuntime.shared.infusion(n) else { continue }
+				if r.def.trigger == .whenHurt || (r.def.trigger == .lowHealth && hp > 0 && hp < maxHP * 0.3) { customTrigger(r) }
+			}
+		}
+	}
+
+	/// A shot's custom infusions (worked out when it is fired)
+	func customShot(_ p: inout Projectile, _ l: [Int]) {
+		for n in l where n >= customInfusionBase {
+			guard let r = ModRuntime.shared.infusion(n) else { continue }
+			let d: ModInfusion = r.def
+			p.dmg = d.multiply ? p.dmg * r.factor(d.damagePct) : p.dmg + p.dmg * d.damagePct / 100.0
+			p.dmg += d.damageFlat
+			if d.reach > 0 { p.life *= 1.0 + d.reach * 0.1 }
+			p.custom.append(n)
+		}
+	}
+
+	/// The held tool's custom mining infusions
+	func customMining(_ s: Stack) -> Double {
+		var m: Double = 1.0
+		for n in s.inf ?? [] where n >= customInfusionBase {
+			guard let r = ModRuntime.shared.infusion(n) else { continue }
+			m *= r.factor(r.def.miningPct)
+		}
+		return m
+	}
+}
+
+extension ArmorInf {
+	/// A worn custom infusion's numbers
+	mutating func addCustom(_ n: Int) {
+		guard let r = ModRuntime.shared.infusion(n) else { return }
+		let d: ModInfusion = r.def
+		defense += d.defense
+		fireCut = min(0.8, fireCut + d.fireCut / 100.0)
+		coldCut = min(0.9, coldCut + d.coldCut / 100.0)
+		stormCut = min(0.8, stormCut + d.stormCut / 100.0)
+		speed = min(0.4, speed + d.moveSpeedPct / 100.0)
+		regen = min(1.0, regen + d.regen / 60.0)
+		thorns = min(0.6, thorns + d.thorns / 100.0)
+	}
+}
+
+/// Less energy for suit parts holding custom infusions that save it
+func customEnergyMul(_ s: Stack) -> Double {
+	var m: Double = 1.0
+	for n in s.inf ?? [] where n >= customInfusionBase {
+		if let r = ModRuntime.shared.infusion(n) { m *= max(0.3, 1.0 - r.def.energyPct / 100.0) }
+	}
+	return m
+}
+
+extension ModValidator {
+	/// Custom infusions: numbers in range, kinds and items real, ids not shared with items
+	static func checkInfusions(_ p: inout ModPack, _ mn: String, _ sb: Bool, _ known: [String: String], _ r: inout ModReport) {
+		if p.infusions.count > 24 {
+			r.add(1, mn, "Mod", "Only 24 infusions fit in one mod; the rest were left out.")
+			p.infusions = Array(p.infusions.prefix(24))
+		}
+		var used: Set<String> = Set(p.blocks.map { $0.id } + p.items.map { $0.id } + p.mobs.map { $0.id } + p.projectiles.map { $0.id } + p.loot.map { $0.id })
+		let mx: Double = sb ? 400 : 100
+		for i in p.infusions.indices {
+			var f: ModInfusion = p.infusions[i]
+			if f.id.isEmpty || used.contains(f.id) { f.id = joinText("inf", String(i + 1), "x", String(used.count)) }
+			used.insert(f.id)
+			if f.name.trimmingCharacters(in: .whitespaces).isEmpty { f.name = "Infusion" }
+			f.name = String(f.name.prefix(32))
+			f.desc = String(f.desc.prefix(200))
+			if !f.icon.valid { f.icon = ModPixels(w: 12, h: 12) }
+			f.rarity = clampI(f.rarity, 0, 4)
+			f.classes = Array(Set(f.classes.filter { $0 >= 0 && $0 <= 4 })).sorted()
+			if f.classes.isEmpty && f.items.isEmpty { f.classes = [0] }
+			f.items = Array(f.items.filter { it in
+				if case .custom(let k) = it { return known[k] != nil || p.items.contains { p.key($0.id) == k } }
+				return infusionSlots(it) > 0
+			}.prefix(12))
+			func c(_ v: Double, _ lo: Double, _ hi: Double) -> Double { return clampD(v.isFinite ? v : 0, lo, hi) }
+			f.damagePct = c(f.damagePct, -50, mx)
+			f.damageFlat = c(f.damageFlat, 0, sb ? 100 : 20)
+			f.attackSpeedPct = c(f.attackSpeedPct, -50, 60)
+			f.reach = c(f.reach, 0, sb ? 4 : 1.5)
+			f.critPct = c(f.critPct, 0, sb ? 100 : 40)
+			f.knockPct = c(f.knockPct, -80, mx)
+			f.miningPct = c(f.miningPct, 0, mx)
+			f.defense = c(f.defense, 0, sb ? 20 : 4)
+			f.moveSpeedPct = c(f.moveSpeedPct, 0, sb ? 50 : 15)
+			f.fireCut = c(f.fireCut, 0, 60)
+			f.coldCut = c(f.coldCut, 0, 75)
+			f.stormCut = c(f.stormCut, 0, 60)
+			f.regen = c(f.regen, 0, sb ? 60 : 12)
+			f.energyPct = c(f.energyPct, 0, 50)
+			f.burn = c(f.burn, 0, 8)
+			f.slow = c(f.slow, 0, 8)
+			f.poison = c(f.poison, 0, 10)
+			f.sparkChance = c(f.sparkChance, 0, sb ? 1 : 0.4)
+			f.blast = c(f.blast, 0, sb ? 40 : 8)
+			f.thorns = c(f.thorns, 0, 40)
+			f.lifeSteal = c(f.lifeSteal, 0, sb ? 50 : 15)
+			f.effect.amount = f.effect.kind.amountRange.clamp(f.effect.amount, sb)
+			f.effect.seconds = ModRange.seconds.clamp(f.effect.seconds, sb)
+			f.effectCooldown = c(f.effectCooldown, 2, 300)
+			f.stack = clampI(f.stack, 1, 3)
+			p.infusions[i] = f
+		}
 	}
 }

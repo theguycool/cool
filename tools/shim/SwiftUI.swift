@@ -175,11 +175,12 @@ public struct StrokeStyle { let lw: CGFloat; public init(lineWidth: CGFloat = 1,
 public struct Angle { let v: Double; public init(radians: Double) { v = radians }; public init(degrees: Double) { v = degrees * Double.pi / 180 }; public static func degrees(_ d: Double) -> Angle { Angle(degrees: d) }; public static func radians(_ r: Double) -> Angle { Angle(radians: r) } }
 public struct Font: Hashable {
     public enum Weight: Hashable { case regular, medium, semibold, bold, heavy, black }
-    public enum Design: Hashable { case `default`, monospaced, rounded }
+    public enum Design: Hashable { case `default`, monospaced, rounded, serif }
     public static func system(size: CGFloat, weight: Weight = .regular, design: Design = .default) -> Font { Font() }
     public static let caption = Font(), body = Font(), headline = Font()
 }
 public enum TextAlignment { case leading, center, trailing }
+public struct UnitPoint { public var x: CGFloat; public var y: CGFloat; public init(x: CGFloat, y: CGFloat) { self.x = x; self.y = y }; public static let center = UnitPoint(x: 0.5, y: 0.5), top = UnitPoint(x: 0.5, y: 0), bottom = UnitPoint(x: 0.5, y: 1), leading = UnitPoint(x: 0, y: 0.5), trailing = UnitPoint(x: 1, y: 0.5), bottomLeading = UnitPoint(x: 0, y: 1), bottomTrailing = UnitPoint(x: 1, y: 1), topLeading = UnitPoint(x: 0, y: 0), topTrailing = UnitPoint(x: 1, y: 0) }
 public struct Alignment { public static let leading = Alignment(), trailing = Alignment(), center = Alignment(), top = Alignment(), bottom = Alignment(), bottomTrailing = Alignment(), topLeading = Alignment(), topTrailing = Alignment(), bottomLeading = Alignment() }
 public enum HorizontalAlignment { case leading, center, trailing }
 public enum VerticalAlignment { case top, center, bottom }
@@ -505,7 +506,7 @@ extension View {
     public func multilineTextAlignment(_ a: TextAlignment) -> Mod<Self> { Mod(self) }
     public func minimumScaleFactor(_ f: CGFloat) -> Mod<Self> { Mod(self) }
     public func rotationEffect(_ a: Angle) -> Mod<Self> { Mod(self) }
-    public func scaleEffect(_ s: CGFloat) -> Mod<Self> { Mod(self) }
+    public func scaleEffect(_ s: CGFloat, anchor: UnitPoint = .center) -> Mod<Self> { Mod(self) }
     public func preferredColorScheme(_ c: ColorScheme?) -> Mod<Self> { Mod(self) }
     public func focusable(_ b: Bool = true) -> Mod<Self> { Mod(self) }
     public func focused(_ b: FocusState<Bool>.Binding) -> Mod<Self> { Mod(self) }

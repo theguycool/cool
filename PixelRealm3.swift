@@ -1,6 +1,7 @@
-// PIXEL REALM v2, part 3 of 4: the rest of Mod Creator+ (custom infusions, boss phases and summoning, custom dimensions with
-// their suns, moons and trees, the Logic Studio), art, sound, drawing the world, the HUD, panels and menus, then vehicles of
-// every kind (flight, weapons, damage, the assembler, the autopilot).
+// PIXEL REALM v2, part 3 of 4: the rest of Mod Creator+ (boss phases and summoning, custom dimensions with their suns,
+// moons and trees, the Logic Studio, rules, weather, machines, vehicles and themes in mods), art, sound, drawing the world,
+// the HUD, panels and menus, vehicles of every kind (flight, weapons, damage, the assembler, the autopilot), then the
+// first of the Mod Creator's screen pieces.
 // The game is four files that go together in one Swift Playgrounds app: PixelRealm1.swift to
 // PixelRealm4.swift. Each goes in its own file in the app (delete ContentView.swift; MyApp.swift can
 // hold part 1). All art is generated in code.
@@ -12,493 +13,6 @@ import UIKit
 #endif
 
 // ===== p32_modplus (continued from part 2) =====
-
-// MARK: - Mod Creator+: custom infusions
-
-/// When a custom infusion's effect is given to the player
-enum ModInfuseTrigger: Int, Codable, CaseIterable {
-	case none, onHit, onKill, whenHurt, lowHealth
-	var name: String {
-		switch self {
-		case .none: return "Never"
-		case .onHit: return "When it hits"
-		case .onKill: return "When it fells a foe"
-		case .whenHurt: return "When you are hurt"
-		case .lowHealth: return "When your health is low"
-		}
-	}
-}
-
-/// An infusion made in the Mod Creator: what it goes on, the numbers it changes (added to, or
-/// multiplied with, the others), what it does when it strikes or is struck, how it looks, and how
-/// many times one item may hold it. Its compound is an item of the mod with the same key.
-struct ModInfusion: Codable, Identifiable, Equatable {
-	var id: String = ""
-	var name: String = "New Infusion"
-	var desc: String = ""
-	/// its compound's icon (blank: a phial in its colour)
-	var icon: ModPixels = ModPixels(w: 12, h: 12)
-	var color: UInt32 = 0x60E0FF
-	/// Rarity number (basic to boss relic)
-	var rarity: Int = 1
-	/// the kinds of equipment it goes on (InfuseClass numbers)
-	var classes: [Int] = [InfuseClass.melee.rawValue]
-	/// only these items (empty: anything of those kinds)
-	var items: [Item] = []
-	/// percentages multiply with the others (off: they add)
-	var multiply: Bool = false
-	var damagePct: Double = 0
-	var damageFlat: Double = 0
-	var attackSpeedPct: Double = 0
-	var reach: Double = 0
-	var critPct: Double = 0
-	var knockPct: Double = 0
-	var miningPct: Double = 0
-	var defense: Double = 0
-	var moveSpeedPct: Double = 0
-	var fireCut: Double = 0
-	var coldCut: Double = 0
-	var stormCut: Double = 0
-	/// health a minute while worn
-	var regen: Double = 0
-	/// less energy used by suit parts (percent)
-	var energyPct: Double = 0
-	/// on a hit: seconds of fire, seconds of slowing, seconds of poison
-	var burn: Double = 0
-	var slow: Double = 0
-	var poison: Double = 0
-	/// on a hit: the chance of a spark leaping to two more foes
-	var sparkChance: Double = 0
-	/// on a hit: a little blast of this much damage around what was hit
-	var blast: Double = 0
-	/// worn: the share of a melee blow returned to the attacker (percent)
-	var thorns: Double = 0
-	/// on a hit: the share of the damage healed back (percent)
-	var lifeSteal: Double = 0
-	var trigger: ModInfuseTrigger = .none
-	var effect: ModEffect = ModEffect(.speed, 20, 8)
-	var effectCooldown: Double = 10
-	/// sparks of its colour when it does something
-	var particles: Bool = true
-	/// times one item may hold it
-	var stack: Int = 1
-
-	init() {}
-
-	init(from decoder: Decoder) throws {
-		let c = try decoder.container(keyedBy: CodingKeys.self)
-		id = c.val(.id, "")
-		name = c.val(.name, "Infusion")
-		desc = c.val(.desc, "")
-		icon = c.val(.icon, ModPixels(w: 12, h: 12))
-		color = c.val(.color, 0x60E0FF)
-		rarity = c.val(.rarity, 1)
-		classes = c.val(.classes, [0])
-		items = c.val(.items, [])
-		multiply = c.val(.multiply, false)
-		damagePct = c.val(.damagePct, 0)
-		damageFlat = c.val(.damageFlat, 0)
-		attackSpeedPct = c.val(.attackSpeedPct, 0)
-		reach = c.val(.reach, 0)
-		critPct = c.val(.critPct, 0)
-		knockPct = c.val(.knockPct, 0)
-		miningPct = c.val(.miningPct, 0)
-		defense = c.val(.defense, 0)
-		moveSpeedPct = c.val(.moveSpeedPct, 0)
-		fireCut = c.val(.fireCut, 0)
-		coldCut = c.val(.coldCut, 0)
-		stormCut = c.val(.stormCut, 0)
-		regen = c.val(.regen, 0)
-		energyPct = c.val(.energyPct, 0)
-		burn = c.val(.burn, 0)
-		slow = c.val(.slow, 0)
-		poison = c.val(.poison, 0)
-		sparkChance = c.val(.sparkChance, 0)
-		blast = c.val(.blast, 0)
-		thorns = c.val(.thorns, 0)
-		lifeSteal = c.val(.lifeSteal, 0)
-		trigger = c.val(.trigger, .none)
-		effect = c.val(.effect, ModEffect(.speed, 20, 8))
-		effectCooldown = c.val(.effectCooldown, 10)
-		particles = c.val(.particles, true)
-		stack = c.val(.stack, 1)
-	}
-
-	/// what it does, in a line (for tooltips and the crucible)
-	var blurb: String {
-		var parts: [String] = []
-		func pct(_ v: Double, _ what: String) { if abs(v) > 0.01 { parts.append(joinText(v > 0 ? "+" : "", String(Int(v.rounded())), "% ", what)) } }
-		pct(damagePct, "damage")
-		if abs(damageFlat) > 0.01 { parts.append(joinText("+", String(format: "%.1f", damageFlat), " damage")) }
-		pct(attackSpeedPct, "attack speed")
-		if reach > 0.01 { parts.append(joinText("+", String(format: "%.1f", reach), " reach")) }
-		pct(critPct, "critical chance")
-		pct(knockPct, "knockback")
-		pct(miningPct, "mining speed")
-		if defense > 0.01 { parts.append(joinText("+", String(format: "%.1f", defense), " defence")) }
-		pct(moveSpeedPct, "run speed")
-		pct(fireCut, "less fire harm")
-		pct(coldCut, "less cold")
-		pct(stormCut, "less storm harm")
-		if regen > 0.01 { parts.append(joinText("heals ", String(format: "%.1f", regen), " a minute")) }
-		pct(energyPct, "less suit energy")
-		if burn > 0.01 { parts.append("sets alight") }
-		if slow > 0.01 { parts.append("slows") }
-		if poison > 0.01 { parts.append("poisons") }
-		if sparkChance > 0.01 { parts.append("sparks") }
-		if blast > 0.01 { parts.append("bursts") }
-		pct(thorns, "of blows returned")
-		pct(lifeSteal, "of damage healed")
-		if trigger != .none { parts.append(joinText(effect.kind.short.lowercased(), " ", trigger.name.lowercased())) }
-		return parts.isEmpty ? "No effect yet" : parts.joined(separator: ", ")
-	}
-}
-
-extension ModInfusion {
-	/// Its numbers on a melee profile (percentages of the profile it is given, added or multiplied)
-	func apply(_ p0: MeleeProfile) -> MeleeProfile {
-		var p: MeleeProfile = p0
-		if multiply {
-			p.damage *= 1.0 + damagePct / 100.0
-			p.cooldown /= max(0.2, 1.0 + attackSpeedPct / 100.0)
-			p.knock *= 1.0 + knockPct / 100.0
-			p.critChance *= 1.0 + critPct / 100.0
-		} else {
-			p.damage += p0.damage * damagePct / 100.0
-			p.cooldown = max(0.08, p.cooldown - p0.cooldown * attackSpeedPct / 100.0)
-			p.knock += p0.knock * knockPct / 100.0
-			p.critChance += critPct / 100.0
-		}
-		p.damage += damageFlat
-		p.reach += reach
-		p.critChance = clampD(p.critChance, 0, 1)
-		if burn > 0 { p.burn = max(p.burn, burn) }
-		return p
-	}
-}
-
-/// A custom infusion in a world: its number on items, its key, and what it goes on
-final class ModInfusionRT {
-	let key: String
-	let number: Int
-	let def: ModInfusion
-	let classes: Set<Int>
-	let items: Set<Item>
-
-	init(key: String, number: Int, def: ModInfusion) {
-		self.key = key
-		self.number = number
-		self.def = def
-		self.classes = Set(def.classes)
-		self.items = Set(def.items)
-	}
-
-	/// the share a percentage adds (or the factor it multiplies by)
-	func factor(_ pct: Double) -> Double { return 1.0 + pct / 100.0 }
-}
-
-/// Custom infusions are numbered from here on items (the game's own use 0 to 999)
-let customInfusionBase: Int = 1000
-let maxCustomInfusions: Int = 256
-
-extension ModRuntime {
-	/// Gives each custom infusion its number (the world's own numbers first, so items keep theirs) and
-	/// makes its compound an item of the mod
-	func buildInfusions(_ world: ModWorldInfo?) {
-		var taken: Set<Int> = []
-		if let w = world {
-			for (k, n) in w.infusions where n >= customInfusionBase && n < customInfusionBase + maxCustomInfusions {
-				infusionNumber[k] = n
-				taken.insert(n)
-			}
-		}
-		var next: Int = customInfusionBase
-		for p in packs {
-			for f in p.infusions where !disabled.contains(p.key(f.id)) {
-				let k: String = p.key(f.id)
-				var n: Int = infusionNumber[k] ?? -1
-				if n < 0 {
-					while taken.contains(next) { next += 1 }
-					if next >= customInfusionBase + maxCustomInfusions { continue }
-					n = next
-					taken.insert(n)
-					infusionNumber[k] = n
-				}
-				infusionDefs[n] = ModInfusionRT(key: k, number: n, def: f)
-				// its compound: an item of the mod under the same key
-				var it = ModItem()
-				it.id = f.id
-				it.name = joinText(f.name, " Compound")
-				it.desc = joinText("Work it into equipment at an Infusion Crucible: ", f.blurb)
-				it.kind = .material
-				it.stack = 10
-				it.rarity = clampI(f.rarity, 0, 4)
-				let r = ModItemRT(key: k, def: it, modName: p.name)
-				r.icon = compoundIcon(f)
-				items[k] = r
-				itemOrder.append(k)
-			}
-		}
-	}
-
-	func infusion(_ n: Int) -> ModInfusionRT? { return infusionDefs[n] }
-
-	/// The compound's icon: its own picture, or a phial in its colour
-	func compoundIcon(_ f: ModInfusion) -> PixelBuf {
-		if !f.icon.isBlank {
-			var b: PixelBuf = padBuf(f.icon.buf())
-			if f.icon.outlined(true) { b.outline(0x1A1410) }
-			return b
-		}
-		var b = PixelBuf(w: 12, h: 12)
-		let c: UInt32 = f.color & 0xFFFFFF
-		let ring: UInt32 = (Rarity(rawValue: clampI(f.rarity, 0, 4)) ?? .uncommon).color
-		b.rect(5, 0, 2, 2, 0x6A6E78)
-		b.rect(4, 2, 4, 1, ring)
-		b.rect(3, 3, 6, 7, 0x2A2A34)
-		b.rect(4, 4, 4, 5, c)
-		b.set(4, 4, shadeRGB(c, 1.4))
-		b.set(6, 6, shadeRGB(c, 0.6))
-		b.rect(3, 10, 6, 1, ring)
-		b.outline(0x1A1410)
-		return b
-	}
-}
-
-/// The name and colour of any infusion number (the game's own or a custom one)
-func infusionName(_ n: Int) -> String {
-	if let i = Infusion(rawValue: n) { return i.name }
-	return ModRuntime.shared.infusion(n)?.def.name ?? "Missing infusion"
-}
-
-func infusionColor(_ n: Int) -> UInt32 {
-	if let i = Infusion(rawValue: n) { return i.color }
-	return ModRuntime.shared.infusion(n)?.def.color ?? 0xFF00FF
-}
-
-extension Stack {
-	/// names of everything worked into it, custom infusions too
-	var infusionNames: [String] { return (inf ?? []).map { infusionName($0) } }
-
-	/// Why a custom infusion can't go on this item (nil: it can)
-	func customProblem(_ r: ModInfusionRT) -> String? {
-		let slots: Int = infusionSlots(item)
-		if slots <= 0 { return "This can't be infused." }
-		if item.maxStack > 1 { return "Only single items can be infused." }
-		if !r.items.isEmpty {
-			if !r.items.contains(item) { return joinText(r.def.name, " only goes on certain items.") }
-		} else {
-			let cls: [InfuseClass] = infuseClasses(item)
-			if !cls.contains(where: { r.classes.contains($0.rawValue) }) { return joinText(r.def.name, " doesn't go on this kind of equipment.") }
-		}
-		let held: Int = (inf ?? []).filter { $0 == r.number }.count
-		if held >= max(1, r.def.stack) { return r.def.stack > 1 ? joinText("It already holds ", r.def.name, " as many times as it can.") : joinText("It already has ", r.def.name, ".") }
-		if (inf?.count ?? 0) >= slots { return joinText("All ", String(slots), " of its slots are taken.") }
-		return nil
-	}
-}
-
-extension Game {
-	/// Works a custom infusion's compound into the item in a bag slot (checked again here, the item
-	/// never leaves its slot)
-	@discardableResult
-	func infuseCustom(slot i: Int, _ number: Int) -> String {
-		guard let r = ModRuntime.shared.infusion(number) else { return "That infusion's mod is not on." }
-		guard i >= 0 && i < inv.slots.count, var s = inv.slots[i] else { return "That item is gone." }
-		if let why = s.customProblem(r) { return why }
-		let compound: Item = .custom(r.key)
-		if !isCreative && inv.total(compound) < 1 { return joinText("You need a ", r.def.name, " compound.") }
-		if !isCreative { _ = inv.remove(compound, 1) }
-		var list: [Int] = s.inf ?? []
-		list.append(number)
-		s.inf = list
-		inv.slots[i] = s
-		sfx(.infuse, 0.8)
-		spawnParticles(pb.x, pb.y - 1.2, r.def.color, 12, 3.0, 0.7, -4)
-		bumpHUD()
-		return joinText(s.item.name, " now holds ", r.def.name, ".")
-	}
-
-	/// Takes one custom infusion back out of an item (the compound is spent; the item is unharmed)
-	@discardableResult
-	func removeCustomInfusion(slot i: Int, _ number: Int) -> String {
-		guard i >= 0 && i < inv.slots.count, var s = inv.slots[i], var list = s.inf, let k = list.firstIndex(of: number) else { return "Nothing to remove." }
-		list.remove(at: k)
-		s.inf = list.isEmpty ? nil : list
-		inv.slots[i] = s
-		sfx(.tap, 0.6)
-		bumpHUD()
-		return joinText(infusionName(number), " was drawn out of ", s.item.name, ".")
-	}
-
-	/// A custom infusion's numbers on a melee profile
-	static func customProfile(_ p0: MeleeProfile, _ n: Int) -> MeleeProfile {
-		guard let r = ModRuntime.shared.infusion(n) else { return p0 }
-		return r.def.apply(p0)
-	}
-
-	/// What a custom infusion does when a blow or a shot lands on a creature
-	func customHit(_ m: Mob, _ n: Int, _ dmg: Double, _ x: Double, _ y: Double) {
-		guard let r = ModRuntime.shared.infusion(n) else { return }
-		let d: ModInfusion = r.def
-		if m.hp > 0 {
-			if d.burn > 0 && !heatImmune(m) { m.burn = max(m.burn, d.burn) }
-			if d.slow > 0 {
-				m.slowT = max(m.slowT, m.isBoss ? d.slow * 0.5 : d.slow)
-				m.slowAmt = max(m.slowAmt, m.isBoss ? 0.2 : 0.4)
-			}
-			if d.poison > 0 && !poisonImmune(m) {
-				m.poisonT = max(m.poisonT, m.isBoss ? d.poison * 0.5 : d.poison)
-				m.poisonDps = max(m.poisonDps, 1.0)
-				m.poisonByPlayer = true
-			}
-			if d.sparkChance > 0 && Double.random(in: 0...1) < d.sparkChance { stormSpark(m) }
-		}
-		if d.blast > 0 { customBlast(x, y, d.blast, d.color) }
-		if d.lifeSteal > 0 && !dead { heal(dmg * d.lifeSteal / 100.0) }
-		if d.particles { spawnParticles(m.b.x, m.b.cy, d.color, 3, 2.0, 0.3, 4) }
-		if d.trigger == .onHit || (d.trigger == .onKill && m.hp <= 0) { customTrigger(r) }
-	}
-
-	/// A custom infusion's little blast (hurts creatures close by, breaks nothing)
-	func customBlast(_ x: Double, _ y: Double, _ dmg: Double, _ color: UInt32) {
-		var info = DamageInfo(amount: dmg, type: .explosion, source: .player)
-		info.knock = 4
-		info.key = newID()
-		info.cooldown = 0.5
-		for m in mobsNear(x - 2.5, x + 2.5) where m.hp > 0 && !m.removed && !m.tame {
-			if boxDistance(x, y, m.b.left, m.b.top, m.b.right, m.b.y) <= 1.3 {
-				var i2: DamageInfo = info
-				i2.originX = x
-				i2.originY = y
-				applyMobDamage(m, i2)
-			}
-		}
-		spawnParticles(x, y, color, 8, 4.0, 0.3, 4)
-	}
-
-	/// Gives a custom infusion's effect to the player, no more often than its rest allows
-	func customTrigger(_ r: ModInfusionRT) {
-		let d: ModInfusion = r.def
-		if d.trigger == .none { return }
-		if let t = infTriggerCD[r.number], clock - t < d.effectCooldown { return }
-		infTriggerCD[r.number] = clock
-		applyEffects([d.effect])
-		floatText(d.effect.kind.short, pb.x, pb.y - pb.h - 0.4, d.color)
-	}
-
-	/// After the player is hurt: worn custom infusions that answer being hurt (or low health)
-	func customHurtTriggers() {
-		for i in 0..<min(3, inv.armor.count) {
-			guard let s = inv.armor[i], let l = s.inf else { continue }
-			for n in l where n >= customInfusionBase {
-				guard let r = ModRuntime.shared.infusion(n) else { continue }
-				if r.def.trigger == .whenHurt || (r.def.trigger == .lowHealth && hp > 0 && hp < maxHP * 0.3) { customTrigger(r) }
-			}
-		}
-	}
-
-	/// A shot's custom infusions (worked out when it is fired)
-	func customShot(_ p: inout Projectile, _ l: [Int]) {
-		for n in l where n >= customInfusionBase {
-			guard let r = ModRuntime.shared.infusion(n) else { continue }
-			let d: ModInfusion = r.def
-			p.dmg = d.multiply ? p.dmg * r.factor(d.damagePct) : p.dmg + p.dmg * d.damagePct / 100.0
-			p.dmg += d.damageFlat
-			if d.reach > 0 { p.life *= 1.0 + d.reach * 0.1 }
-			p.custom.append(n)
-		}
-	}
-
-	/// The held tool's custom mining infusions
-	func customMining(_ s: Stack) -> Double {
-		var m: Double = 1.0
-		for n in s.inf ?? [] where n >= customInfusionBase {
-			guard let r = ModRuntime.shared.infusion(n) else { continue }
-			m *= r.factor(r.def.miningPct)
-		}
-		return m
-	}
-}
-
-extension ArmorInf {
-	/// A worn custom infusion's numbers
-	mutating func addCustom(_ n: Int) {
-		guard let r = ModRuntime.shared.infusion(n) else { return }
-		let d: ModInfusion = r.def
-		defense += d.defense
-		fireCut = min(0.8, fireCut + d.fireCut / 100.0)
-		coldCut = min(0.9, coldCut + d.coldCut / 100.0)
-		stormCut = min(0.8, stormCut + d.stormCut / 100.0)
-		speed = min(0.4, speed + d.moveSpeedPct / 100.0)
-		regen = min(1.0, regen + d.regen / 60.0)
-		thorns = min(0.6, thorns + d.thorns / 100.0)
-	}
-}
-
-/// Less energy for suit parts holding custom infusions that save it
-func customEnergyMul(_ s: Stack) -> Double {
-	var m: Double = 1.0
-	for n in s.inf ?? [] where n >= customInfusionBase {
-		if let r = ModRuntime.shared.infusion(n) { m *= max(0.3, 1.0 - r.def.energyPct / 100.0) }
-	}
-	return m
-}
-
-extension ModValidator {
-	/// Custom infusions: numbers in range, kinds and items real, ids not shared with items
-	static func checkInfusions(_ p: inout ModPack, _ mn: String, _ sb: Bool, _ known: [String: String], _ r: inout ModReport) {
-		if p.infusions.count > 24 {
-			r.add(1, mn, "Mod", "Only 24 infusions fit in one mod; the rest were left out.")
-			p.infusions = Array(p.infusions.prefix(24))
-		}
-		var used: Set<String> = Set(p.blocks.map { $0.id } + p.items.map { $0.id } + p.mobs.map { $0.id } + p.projectiles.map { $0.id } + p.loot.map { $0.id })
-		let mx: Double = sb ? 400 : 100
-		for i in p.infusions.indices {
-			var f: ModInfusion = p.infusions[i]
-			if f.id.isEmpty || used.contains(f.id) { f.id = joinText("inf", String(i + 1), "x", String(used.count)) }
-			used.insert(f.id)
-			if f.name.trimmingCharacters(in: .whitespaces).isEmpty { f.name = "Infusion" }
-			f.name = String(f.name.prefix(32))
-			f.desc = String(f.desc.prefix(200))
-			if !f.icon.valid { f.icon = ModPixels(w: 12, h: 12) }
-			f.rarity = clampI(f.rarity, 0, 4)
-			f.classes = Array(Set(f.classes.filter { $0 >= 0 && $0 <= 4 })).sorted()
-			if f.classes.isEmpty && f.items.isEmpty { f.classes = [0] }
-			f.items = Array(f.items.filter { it in
-				if case .custom(let k) = it { return known[k] != nil || p.items.contains { p.key($0.id) == k } }
-				return infusionSlots(it) > 0
-			}.prefix(12))
-			func c(_ v: Double, _ lo: Double, _ hi: Double) -> Double { return clampD(v.isFinite ? v : 0, lo, hi) }
-			f.damagePct = c(f.damagePct, -50, mx)
-			f.damageFlat = c(f.damageFlat, 0, sb ? 100 : 20)
-			f.attackSpeedPct = c(f.attackSpeedPct, -50, 60)
-			f.reach = c(f.reach, 0, sb ? 4 : 1.5)
-			f.critPct = c(f.critPct, 0, sb ? 100 : 40)
-			f.knockPct = c(f.knockPct, -80, mx)
-			f.miningPct = c(f.miningPct, 0, mx)
-			f.defense = c(f.defense, 0, sb ? 20 : 4)
-			f.moveSpeedPct = c(f.moveSpeedPct, 0, sb ? 50 : 15)
-			f.fireCut = c(f.fireCut, 0, 60)
-			f.coldCut = c(f.coldCut, 0, 75)
-			f.stormCut = c(f.stormCut, 0, 60)
-			f.regen = c(f.regen, 0, sb ? 60 : 12)
-			f.energyPct = c(f.energyPct, 0, 50)
-			f.burn = c(f.burn, 0, 8)
-			f.slow = c(f.slow, 0, 8)
-			f.poison = c(f.poison, 0, 10)
-			f.sparkChance = c(f.sparkChance, 0, sb ? 1 : 0.4)
-			f.blast = c(f.blast, 0, sb ? 40 : 8)
-			f.thorns = c(f.thorns, 0, 40)
-			f.lifeSteal = c(f.lifeSteal, 0, sb ? 50 : 15)
-			f.effect.amount = f.effect.kind.amountRange.clamp(f.effect.amount, sb)
-			f.effect.seconds = ModRange.seconds.clamp(f.effect.seconds, sb)
-			f.effectCooldown = c(f.effectCooldown, 2, 300)
-			f.stack = clampI(f.stack, 1, 3)
-			p.infusions[i] = f
-		}
-	}
-}
 
 // MARK: - Mod Creator+: boss phases and summoning
 
@@ -1662,7 +1176,7 @@ struct ModDimension: Codable, Identifiable, Equatable {
 /// Words for the dimension settings
 enum ModDimText {
 	static let ambients: [String] = ["None", "Embers", "Snowflakes", "Fireflies", "Ash", "Spores"]
-	static let weathers: [String] = ["None", "Drizzle", "Rain", "Thunderstorms", "Snow"]
+	static let weathers: [String] = ["None", "Drizzle", "Rain", "Thunderstorms", "Snow", "Strong wind", "Windstorms", "Hailstorms", "Blizzards"]
 	static let liquids: [String] = ["Water", "Lava"]
 	static let trees: [String] = ["None", "A few", "Many"]
 	static let places: [String] = ["Surface", "Caves", "Anywhere"]
@@ -2526,6 +2040,25 @@ extension Game {
 			L.cloud = 0.85
 			L.snow = true
 			L.chill = max(L.chill, 0.55)
+		case 5:
+			L.cloud = 0.4
+			L.wind = 8.0 * (0.8 + 0.4 * sin(clock * 0.5 + x * 0.02))
+		case 6:
+			L.cloud = 0.75
+			L.precip = 0.15
+			L.wind = 14.0 * (0.75 + 0.5 * sin(clock * 0.4 + x * 0.015))
+		case 7:
+			L.cloud = 0.95
+			L.precip = 0.55
+			L.hail = 1.0
+			L.thunder = 2.0
+			L.wind = 5.0 * sin(clock * 0.3)
+		case 8:
+			L.cloud = 1.0
+			L.precip = 1.0
+			L.snow = true
+			L.chill = 1.0
+			L.wind = 13.0 * (0.8 + 0.3 * sin(clock * 0.5))
 		default: break
 		}
 		if L.chill >= 0.5 && L.precip > 0 { L.snow = true }
@@ -4153,6 +3686,617 @@ extension Game {
 		if !logicRT.listeners(.blockTapped).contains(where: { $0.def.target == k }) { return false }
 		fireLogic(.blockTapped, x: tx, y: ty, block: true, key: k)
 		return true
+	}
+}
+
+// MARK: - Rules, weather, machines, vehicles and looks in mods
+
+/// A rule of the game a mod can change. A mod keeps it as a number under the rule's id (ModPack.rules);
+/// a rule it leaves out stays the game's own. When the world's mods set the same rule, the one lowest
+/// in the load order wins (ModRuntime.rules). The name, range and help of each are text (specText), in
+/// the order of the cases.
+enum GameRule: Int, CaseIterable {
+	case day, gravity, health, hunger, healing, hurt, hit, mining, monsters, animals, falls, walk, jump, nights, deathDrop
+
+	struct Spec {
+		var id: String
+		var name: String
+		var unit: String
+		var lo: Double
+		var hi: Double
+		var def: Double
+		var step: Double
+		var help: String
+	}
+
+	static let specs: [Spec] = parseSpecs(specText)
+	var spec: Spec { return rawValue < GameRule.specs.count ? GameRule.specs[rawValue] : Spec(id: "", name: "", unit: "", lo: 0, hi: 1, def: 1, step: 0.1, help: "") }
+
+	static func byID(_ id: String) -> GameRule? {
+		for r in GameRule.allCases where r.spec.id == id { return r }
+		return nil
+	}
+
+	static func parseSpecs(_ s: String) -> [Spec] {
+		var out: [Spec] = []
+		for line in s.split(separator: "\n") {
+			let f: [String] = line.components(separatedBy: "|")
+			if f.count < 8 { continue }
+			out.append(Spec(id: f[0], name: f[1], unit: f[2], lo: Double(f[3]) ?? 0, hi: Double(f[4]) ?? 1, def: Double(f[5]) ?? 1, step: Double(f[6]) ?? 0.1, help: f[7]))
+		}
+		return out
+	}
+
+	/// id|name|unit|lowest|highest|the game's|step|what it does
+	static let specText: String = """
+		day|Day length|min|2|120|12|1|How many minutes a whole day and night take.
+		gravity|Gravity|x|0.2|3|1|0.1|How hard everything falls: the player, creatures, loose blocks and vehicles (low gravity: higher jumps, gentler falls).
+		health|Player health|pts|4|200|20|2|The player's full health (still shown as ten hearts).
+		hunger|Hunger|x|0|5|1|0.1|How fast the player gets hungry (0: never).
+		healing|Healing|x|0|5|1|0.1|How fast health comes back on a full stomach (0: only food and potions heal).
+		hurt|Damage taken|x|0|5|1|0.1|How hard everything hits the player (0: nothing can hurt them).
+		hit|Damage dealt|x|0.1|10|1|0.1|How hard the player hits creatures.
+		mining|Mining speed|x|0.1|10|1|0.1|How fast blocks break under the player's tools and hands.
+		monsters|Monsters|x|0|5|1|0.1|How many night monsters may be about at once (0: none come).
+		animals|Animals|x|0|5|1|0.1|How many animals and fish may be about at once.
+		falls|Fall damage|x|0|5|1|0.1|How much a hard landing hurts (0: falls never hurt).
+		walk|Walking speed|x|0.3|3|1|0.1|How fast the player walks and runs.
+		jump|Jump height|x|0.3|3|1|0.1|How high the player jumps.
+		nights|Night light|x|0|2.5|1|0.1|How bright nights are (0: pitch dark under the stars; 2.5: as light as day).
+		deathDrop|Drop items on death|on|0|1|0|1|On: everything in the bag falls where the player dies and waits there. Off: the player keeps it (the game's way).
+		"""
+}
+
+/// The Overworld's weather as a mod has it: how often each kind comes (1: as the game, 0: never), how
+/// strong rain, snow and wind are, how long spells last, and the colour of the rain
+struct ModWeather: Codable, Equatable {
+	var chance: [Double] = [Double](repeating: 1, count: WeatherKind.allCases.count)
+	var rain: Double = 1
+	var wind: Double = 1
+	var length: Double = 1
+	/// 0: the game's
+	var rainColor: UInt32 = 0
+
+	init() {}
+
+	init(from decoder: Decoder) throws {
+		let c = try decoder.container(keyedBy: CodingKeys.self)
+		chance = c.val(.chance, [Double](repeating: 1, count: WeatherKind.allCases.count))
+		rain = c.val(.rain, 1)
+		wind = c.val(.wind, 1)
+		length = c.val(.length, 1)
+		rainColor = c.val(.rainColor, 0)
+	}
+
+	mutating func clamp() {
+		var ch: [Double] = []
+		for k in WeatherKind.allCases {
+			let v: Double = k.rawValue < chance.count ? chance[k.rawValue] : 1
+			ch.append(clampD(v.isFinite ? v : 1, 0, 10))
+		}
+		chance = ch
+		rain = clampD(rain.isFinite ? rain : 1, 0, 3)
+		wind = clampD(wind.isFinite ? wind : 1, 0, 3)
+		length = clampD(length.isFinite ? length : 1, 0.25, 6)
+		rainColor &= 0xFFFFFF
+	}
+
+	func chanceOf(_ k: WeatherKind) -> Double { return k.rawValue < chance.count ? chance[k.rawValue] : 1 }
+}
+
+/// What a mod block does on Sparkworks power lines (cases are only ever appended)
+enum ModPowerRole: Int, Codable, CaseIterable {
+	case none, generator, solar, battery, lamp, signal
+	var name: String {
+		switch self {
+		case .none: return "No power"
+		case .generator: return "Generator"
+		case .solar: return "Solar generator"
+		case .battery: return "Battery"
+		case .lamp: return "Powered lamp"
+		case .signal: return "Signal light"
+		}
+	}
+	var help: String {
+		switch self {
+		case .none: return "It has nothing to do with power."
+		case .generator: return "Makes its strength in sparks a second, day and night (a fuel generator makes 12)."
+		case .solar: return "Makes up to its strength in sparks a second under the open sky by day, less under cloud (a solar panel makes 4)."
+		case .battery: return "Stores 150 times its strength in sparks and passes 2.5 times its strength a second (a battery: strength 4)."
+		case .lamp: return "Lights up while it has power (and its pulse wire is on, if it has one), using its strength in sparks a second. Give it a lit picture: set its function to Light switch."
+		case .signal: return "Lights up while the pulse wire on it is on. Give it a lit picture: set its function to Light switch."
+		}
+	}
+	/// the game's role it plays on the networks
+	var role: PowerRole {
+		switch self {
+		case .none: return .none
+		case .generator, .solar: return .generator
+		case .battery: return .storage
+		case .lamp: return .machine
+		case .signal: return .indicator
+		}
+	}
+}
+
+/// One cell of a vehicle kept in a mod: where it is (x right, y down) and what it is: a game part, or
+/// a block (a game block "tile:<n>" or one of a mod's blocks by key)
+struct ModVehicleCell: Codable, Equatable {
+	var x: Int = 0
+	var y: Int = 0
+	var part: Int = PartType.frame.rawValue
+	var block: String = ""
+
+	init() {}
+	init(_ x: Int, _ y: Int, _ p: PartType, _ b: String = "") {
+		self.x = x
+		self.y = y
+		part = p.rawValue
+		block = b
+	}
+
+	init(from decoder: Decoder) throws {
+		let c = try decoder.container(keyedBy: CodingKeys.self)
+		x = c.val(.x, 0)
+		y = c.val(.y, 0)
+		part = c.val(.part, PartType.frame.rawValue)
+		block = c.val(.block, "")
+	}
+
+	var partType: PartType { return PartType(rawValue: part) ?? .frame }
+}
+
+/// A whole vehicle kept in a mod: its cells, and the item that builds it (made by the mod's recipes;
+/// used on open ground, or on water for a boat, it puts the vehicle there)
+struct ModVehicle: Codable, Identifiable, Equatable {
+	var id: String = ""
+	var name: String = "New Vehicle"
+	var desc: String = ""
+	var cells: [ModVehicleCell] = []
+	/// its item's icon (blank: drawn from its cells)
+	var icon: ModPixels = ModPixels(w: 12, h: 12)
+	/// put on water, like a boat
+	var water: Bool = false
+	/// fuel it comes with
+	var fuel: Double = 40
+
+	init() {}
+
+	init(from decoder: Decoder) throws {
+		let c = try decoder.container(keyedBy: CodingKeys.self)
+		var skip: Int = 0
+		id = c.val(.id, "")
+		name = c.val(.name, "Vehicle")
+		desc = c.val(.desc, "")
+		cells = c.list(.cells, &skip)
+		icon = c.val(.icon, ModPixels(w: 12, h: 12))
+		water = c.val(.water, false)
+		fuel = c.val(.fuel, 40)
+	}
+
+	static let maxCells: Int = 160
+	static let maxSize: Int = 24
+}
+
+enum ModWorldLimits {
+	static let startItems: Int = 12
+	static let vehicles: Int = 12
+}
+
+extension ModValidator {
+	/// A mod's rules, start items, weather and vehicles kept in range: rules the game knows held to
+	/// their ranges, items that exist, vehicles of parts and blocks that exist and fit a 24 x 24 grid
+	static func checkWorldRules(_ p: inout ModPack, _ mn: String, _ sb: Bool, _ known: [String: String], _ r: inout ModReport) {
+		var kept: [String: Double] = [:]
+		for (k, v) in p.rules {
+			guard let g = GameRule.byID(k) else {
+				r.add(1, mn, "Rules", joinText("The game has no rule \u{201C}", k, "\u{201D}; it was left out."))
+				continue
+			}
+			let s: GameRule.Spec = g.spec
+			kept[k] = clampD(v.isFinite ? v : s.def, s.lo, s.hi)
+		}
+		p.rules = kept
+		let ownItems: Set<String> = Set(p.items.map { p.key($0.id) } + p.suitParts.map { p.key($0.id) } + p.vehicles.map { p.key($0.id) })
+		func real(_ it: Item) -> Bool {
+			if case .custom(let k) = it { return ownItems.contains(k) || known[k] == "item" }
+			return true
+		}
+		if p.startItems.count > ModWorldLimits.startItems { p.startItems = Array(p.startItems.prefix(ModWorldLimits.startItems)) }
+		var items: [ModCost] = []
+		for var s in p.startItems {
+			if !real(s.item) {
+				r.add(1, mn, "Start items", "One of them does not exist; it was left out.")
+				continue
+			}
+			s.n = clampI(s.n, 1, 999)
+			items.append(s)
+		}
+		p.startItems = items
+		if var w = p.weather {
+			w.clamp()
+			p.weather = w
+		}
+		if var t = p.theme {
+			t.clamp()
+			p.theme = t
+		}
+		if p.vehicles.count > ModWorldLimits.vehicles {
+			r.add(1, mn, "Mod", joinText("Only ", String(ModWorldLimits.vehicles), " vehicles fit in one mod; the rest were left out."))
+			p.vehicles = Array(p.vehicles.prefix(ModWorldLimits.vehicles))
+		}
+		let blocks: Set<String> = Set(p.blocks.map { p.key($0.id) })
+		var used: Set<String> = Set(p.blocks.map { $0.id } + p.items.map { $0.id } + p.mobs.map { $0.id } + p.dims.map { $0.id } + p.suitParts.map { $0.id })
+		for i in p.vehicles.indices {
+			var v: ModVehicle = p.vehicles[i]
+			if v.id.isEmpty || used.contains(v.id) { v.id = joinText("veh", String(i + 1), "x", String(used.count)) }
+			used.insert(v.id)
+			let place: String = joinText("Vehicle \u{201C}", v.name, "\u{201D}")
+			if v.name.trimmingCharacters(in: .whitespaces).isEmpty { v.name = "Vehicle" }
+			v.name = String(v.name.prefix(24))
+			v.desc = String(v.desc.prefix(120))
+			v.fuel = clampD(v.fuel.isFinite ? v.fuel : 40, 0, 400)
+			if !v.icon.valid || v.icon.w > 32 || v.icon.h > 32 { v.icon = ModPixels(w: 12, h: 12) }
+			var seen: Set<Int> = []
+			var cells: [ModVehicleCell] = []
+			for var c in v.cells.prefix(ModVehicle.maxCells) {
+				c.x = clampI(c.x, 0, ModVehicle.maxSize - 1)
+				c.y = clampI(c.y, 0, ModVehicle.maxSize - 1)
+				if PartType(rawValue: c.part) == nil { c.part = PartType.frame.rawValue }
+				if !c.block.isEmpty && !c.block.hasPrefix("tile:") && !blocks.contains(c.block) && known[c.block] != "block" {
+					c.block = ""
+					c.part = PartType.frame.rawValue
+				}
+				if c.block.hasPrefix("tile:") {
+					let n: Int = Int(c.block.dropFirst(5)) ?? -1
+					if n <= 0 || n > 255 || Tile(rawValue: UInt8(n)) == nil || Tile(rawValue: UInt8(n))?.isMod == true { c.block = "tile:" + String(Tile.planks.rawValue) }
+				}
+				let key: Int = c.y * 100 + c.x
+				if seen.contains(key) { continue }
+				seen.insert(key)
+				cells.append(c)
+			}
+			v.cells = cells
+			if v.cells.isEmpty { r.add(0, mn, place, "It has no cells yet.") }
+			p.vehicles[i] = v
+		}
+	}
+}
+
+extension ModRuntime {
+	/// A rule as the world's mods set it (the game's own when none does)
+	func rule(_ g: GameRule) -> Double {
+		return g.rawValue < rules.count ? rules[g.rawValue] : g.spec.def
+	}
+
+	/// The mods' rules, start items, weather, block physics and power, and vehicles, ready for play
+	func buildWorldRules() {
+		rules = GameRule.specs.map { $0.def }
+		for p in packs {
+			for (k, v) in p.rules {
+				if let g = GameRule.byID(k), g.rawValue < rules.count { rules[g.rawValue] = v }
+			}
+			for s in p.startItems { startItems.append(Stack(item: resolve(s.item), count: s.n)) }
+			if let w = p.weather { weather = w }
+			if let t = p.theme { theme = t }
+			for v in p.vehicles where !disabled.contains(p.key(v.id)) {
+				var mv: ModVehicle = v
+				for i in mv.cells.indices where !mv.cells[i].block.isEmpty && !mv.cells[i].block.hasPrefix("tile:") {
+					// a mod block that is not in this world becomes a frame
+					if tileForKey[mv.cells[i].block] == nil {
+						mv.cells[i].block = ""
+						mv.cells[i].part = PartType.frame.rawValue
+					}
+				}
+				vehicles[p.key(v.id)] = mv
+			}
+		}
+		// mod blocks that fall, seat, put to bed or work on power lines
+		for i in 0..<ModLimits.blockSlots {
+			guard let b = slotDef[i] else { continue }
+			let t: UInt8 = UInt8(Int(Tile.mod00.rawValue) + i)
+			if slotTreeBase[i] != nil { continue }
+			if b.falls { fallTiles.insert(t) }
+			if b.function == .seat { seatTiles.insert(t) }
+			if b.function == .bed { bedTiles.insert(t) }
+			if b.powerRole != .none { powerTiles[t] = b.powerRole }
+		}
+	}
+
+	/// The power role of a mod block (none for anything else)
+	func powerRoleOf(_ t: Tile) -> ModPowerRole {
+		if !t.isMod { return .none }
+		return powerTiles[t.rawValue] ?? .none
+	}
+
+	/// A mod vehicle's item: held and used, it builds the vehicle
+	func vehicleItem(_ p: ModPack, _ v: ModVehicle) -> ModItem {
+		var it = ModItem()
+		it.id = v.id
+		it.name = v.name
+		it.desc = v.desc.isEmpty ? "A vehicle kit: use it on open ground (a boat: on water) to build the vehicle." : v.desc
+		it.kind = .special
+		it.stack = 1
+		it.rarity = 2
+		if !v.icon.isBlank { it.icon = v.icon } else { it.icon = ModPixels(buf: vehicleIconBuf(v)) }
+		return it
+	}
+
+	/// A small picture of a vehicle from its cells
+	func vehicleIconBuf(_ v: ModVehicle) -> PixelBuf {
+		var buf = PixelBuf(w: 12, h: 12)
+		if v.cells.isEmpty { return buf }
+		var w: Int = 1
+		var h: Int = 1
+		for c in v.cells {
+			w = max(w, c.x + 1)
+			h = max(h, c.y + 1)
+		}
+		let s: Int = max(1, min(12 / w, 12 / h))
+		let ox: Int = (12 - w * s) / 2
+		let oy: Int = 12 - h * s
+		for c in v.cells {
+			let col: UInt32 = vehicleCellColor(c)
+			for yy in 0..<s {
+				for xx in 0..<s {
+					let px: Int = ox + c.x * s + xx
+					let py: Int = oy + c.y * s + yy
+					if px >= 0 && py >= 0 && px < 12 && py < 12 { buf.px[py * 12 + px] = 0xFF000000 | col }
+				}
+			}
+		}
+		return buf
+	}
+
+	func vehicleCellColor(_ c: ModVehicleCell) -> UInt32 {
+		if c.block.hasPrefix("tile:"), let n = Int(c.block.dropFirst(5)), let t = Tile(rawValue: UInt8(clampI(n, 0, 255))) {
+			return t.def.colors.first ?? 0x8A8A8A
+		}
+		if !c.block.isEmpty, let t = tileForKey[c.block] { return t.def.colors.first ?? 0x8A8A8A }
+		return partSwatch(c.partType)
+	}
+}
+
+/// A colour that stands for a vehicle part in small pictures and the vehicle editor
+func partSwatch(_ p: PartType) -> UInt32 {
+	switch p {
+	case .wheel, .track: return 0x2A2A2E
+	case .engine, .jet: return 0x8A5A3A
+	case .seat, .cockpit, .steering: return 0x3A6AA8
+	case .wing, .elevator: return 0xC8C8D0
+	case .rotor, .tailRotor, .airProp, .propeller, .paddle: return 0xE8D8A0
+	case .envelope: return 0xE8E0D0
+	case .hull: return 0x8F6732
+	case .armor, .cannon, .autoGun: return 0x5A6270
+	case .fuelTank: return 0xC03A3A
+	default: return 0x9AA4B0
+	}
+}
+
+extension Game {
+	/// The player's full health as the world's mods have it (the game's 20 without them)
+	func applyHealthRule(newWorld: Bool) {
+		let h: Double = ModRuntime.shared.rule(.health)
+		if maxHP != h || newWorld {
+			maxHP = h
+			hp = newWorld ? h : min(max(hp, 1), h)
+		}
+	}
+
+	/// What the world's mods give a new world (not in creative)
+	func giveStartItems() {
+		if mode == .creative { return }
+		for s in ModRuntime.shared.startItems { _ = inv.add(s.item, s.count) }
+	}
+
+	/// With the mods' "drop items on death" rule: the bag (and the carried stack) falls where the
+	/// player died, held back until they come for it
+	func dropBagOnDeath() {
+		if mode == .creative || ModRuntime.shared.rule(.deathDrop) < 0.5 { return }
+		var spilled: [Stack] = []
+		if let c = carry { spilled.append(c) }
+		carry = nil
+		for i in inv.slots.indices {
+			if let s = inv.slots[i] { spilled.append(s) }
+			inv.slots[i] = nil
+		}
+		for (k, s) in spilled.enumerated() {
+			let a: Double = Double(k) * 0.7
+			spawnDrop(s, pb.x, pb.y - 0.8, cos(a) * 2.0, -3.0 - Double(k % 3), heldBack: true)
+		}
+	}
+
+	/// Puts a mod's vehicle down at the aim from its kit item
+	func placeModVehicle(_ key: String) {
+		guard let mv = ModRuntime.shared.vehicles[key], !mv.cells.isEmpty else {
+			say("This vehicle's mod is not installed.", 1.5)
+			return
+		}
+		if !inReach(aimX, aimY) {
+			say("Tap closer to you to place it.", 1.5)
+			return
+		}
+		var w: Int = 1
+		var h: Int = 1
+		for c in mv.cells {
+			w = max(w, c.x + 1)
+			h = max(h, c.y + 1)
+		}
+		guard let spot = vehicleSpot(w, h, mv.water) else {
+			say(mv.water ? "Not enough room here. Find open water." : "Not enough room here. Find open, flat ground.", 2.5)
+			return
+		}
+		let first: PartType = mv.cells[0].partType
+		let v: Vehicle = Vehicle(id: newID(), first: first, x: 0, y: 0)
+		v.parts.removeAll()
+		for c in mv.cells {
+			let cell: PartCell = PartCell(dx: c.x, dy: c.y)
+			if c.block.isEmpty {
+				v.parts[cell] = c.partType
+				continue
+			}
+			var t: Tile = .planks
+			if c.block.hasPrefix("tile:") {
+				t = Tile(rawValue: UInt8(clampI(Int(c.block.dropFirst(5)) ?? 0, 0, 255))) ?? .planks
+			} else if let mt = ModRuntime.shared.tileForKey[c.block] {
+				t = mt
+			}
+			// a mod block working as a part keeps its part; anything else is a plain block
+			if let role = ModRuntime.shared.blockDef(t)?.vehRole.part { v.parts[cell] = role } else { v.parts[cell] = .block }
+			v.blocks[cell] = t
+		}
+		v.recompute(keepAnchor: false)
+		v.placeBox(left: Double(spot.0), bottom: Double(spot.1 + 1))
+		if v.engines > 0 || v.jets > 0 || v.burners > 0 { v.fuel = min(v.fuelCapacity, mv.fuel) }
+		vehicles.append(v)
+		if !isCreative { inv.removeAt(sel, 1) }
+		useCD = 0.3
+		swingT = 0.15
+		spawnParticles(v.b.x, v.b.y - v.b.h * 0.5, 0xFFF0A0, 10, 3.0, 0.5, 6)
+		say(joinText(mv.name, " placed! Walk up to it and press DRIVE."), 3.0)
+		bumpHUD()
+	}
+
+	/// A place for a w x h vehicle near the aim: open air for its box, and under it solid ground (or
+	/// water, for a boat); the left column and the row of its bottom
+	func vehicleSpot(_ w: Int, _ h: Int, _ water: Bool) -> (Int, Int)? {
+		let ax: Int = Int(floor(aimX))
+		let ay: Int = Int(floor(aimY))
+		for off in [0, -1, 1, -2, 2, -3, 3] {
+			let left: Int = ax - w / 2 + off
+			for dy in -3...6 {
+				let bottom: Int = ay + dy
+				var ok: Bool = true
+				for x in left..<(left + w) {
+					// open air for its box (a boat sits on the water, not in it)
+					for y in (bottom - h + 1)...bottom where world.solid(x, y) || world.tile(x, y).liquid {
+						ok = false
+						break
+					}
+					if !ok { break }
+					let under: Tile = world.tile(x, bottom + 1)
+					if water ? under != .water : !(under.solid || under.isPlatform) {
+						if x == left || x == left + w - 1 { ok = false }
+					}
+				}
+				if ok { return (left, bottom) }
+			}
+		}
+		return nil
+	}
+
+	/// Makes a mod vehicle design from a vehicle in the world (for saving it to a mod from a test world)
+	func vehicleDesign(_ v: Vehicle) -> ModVehicle {
+		var mv = ModVehicle()
+		mv.name = "My Vehicle"
+		var minX: Int = Int.max
+		var minY: Int = Int.max
+		for c in v.parts.keys {
+			minX = min(minX, c.dx)
+			minY = min(minY, c.dy)
+		}
+		let keys: [PartCell] = v.parts.keys.sorted { $0.dy != $1.dy ? $0.dy < $1.dy : $0.dx < $1.dx }
+		for c in keys {
+			guard let p = v.parts[c] else { continue }
+			var cell = ModVehicleCell(c.dx - minX, c.dy - minY, p)
+			if let t = v.blocks[c] {
+				if t.isMod { cell.block = ModRuntime.shared.slotKey[Int(t.rawValue) - Int(Tile.mod00.rawValue)] ?? "" } else { cell.block = "tile:" + String(t.rawValue) }
+				if cell.block.isEmpty { cell.part = PartType.frame.rawValue }
+			}
+			mv.cells.append(cell)
+		}
+		mv.water = v.parts.values.contains(.hull)
+		mv.fuel = min(400, v.fuel)
+		return mv
+	}
+}
+
+/// The parts of the game's screens a theme colours (cases are only ever appended)
+enum ThemeRole: Int, Codable, CaseIterable {
+	case buttons, panels, accept, danger, info, titles, tint
+	var name: String {
+		switch self {
+		case .buttons: return "Buttons"
+		case .panels: return "Panels and cards"
+		case .accept: return "Go and accept buttons"
+		case .danger: return "Danger and close buttons"
+		case .info: return "Information buttons"
+		case .titles: return "Titles"
+		case .tint: return "Everything else (tint)"
+		}
+	}
+	/// the game's own colours this role replaces
+	var gameColors: [UInt32] {
+		switch self {
+		case .buttons: return [0x555555, 0x6B6B6B, 0x4A4A50, 0x444444, 0x3A3A3A]
+		case .panels: return [0x2C2C30, 0x2E2E2E, 0x3A3A40]
+		case .accept: return [0x4E8A3E, 0x2A6A2A, 0x4E6A3E]
+		case .danger: return [0xA03030, 0xC02020, 0x8A3A3A]
+		case .info: return [0x3E6FAA, 0x5A7A9A, 0x4E6A8A, 0x2E8A8A]
+		case .titles: return [0xFFE066, 0xFFE070, 0xFFE080]
+		case .tint: return []
+		}
+	}
+	/// what the role shows in the editor before it is changed
+	var gameColor: UInt32 { return gameColors.first ?? 0x8A8A8A }
+}
+
+/// How the game's screens look with a mod: colours by role (0: the game's), the style of the letters,
+/// how round buttons and panels are, the title screen's words and picture, and the HUD's size, how
+/// see-through it is and which side the controls are on
+struct ModTheme: Codable, Equatable {
+	var colors: [UInt32] = [UInt32](repeating: 0, count: ThemeRole.allCases.count)
+	/// how strongly every other colour leans to the tint colour (0...1)
+	var tintAmt: Double = 0
+	/// letters: 0 blocky (the game's), 1 rounded, 2 serif, 3 plain
+	var font: Int = 0
+	/// 0: square pixel boxes (the game's) ... 16
+	var corner: Double = 0
+	/// the outline of buttons and panels (0: black)
+	var outline: UInt32 = 0
+	var title: String = ""
+	var subtitle: String = ""
+	/// the title screen's background (blank: the game's sky)
+	var background: ModPixels = ModPixels(w: 1, h: 1)
+	var hudScale: Double = 1
+	var hudAlpha: Double = 1
+	/// the attack stick and action buttons on the left, the walking stick on the right
+	var swapSides: Bool = false
+
+	init() {}
+
+	init(from decoder: Decoder) throws {
+		let c = try decoder.container(keyedBy: CodingKeys.self)
+		colors = c.val(.colors, [UInt32](repeating: 0, count: ThemeRole.allCases.count))
+		tintAmt = c.val(.tintAmt, 0)
+		font = c.val(.font, 0)
+		corner = c.val(.corner, 0)
+		outline = c.val(.outline, 0)
+		title = c.val(.title, "")
+		subtitle = c.val(.subtitle, "")
+		background = c.val(.background, ModPixels(w: 1, h: 1))
+		hudScale = c.val(.hudScale, 1)
+		hudAlpha = c.val(.hudAlpha, 1)
+		swapSides = c.val(.swapSides, false)
+	}
+
+	static let fonts: [String] = ["Blocky", "Rounded", "Serif", "Plain"]
+
+	func color(_ r: ThemeRole) -> UInt32 { return r.rawValue < colors.count ? colors[r.rawValue] : 0 }
+
+	mutating func clamp() {
+		var cs: [UInt32] = []
+		for r in ThemeRole.allCases { cs.append(color(r) & 0xFFFFFF) }
+		colors = cs
+		tintAmt = clampD(tintAmt.isFinite ? tintAmt : 0, 0, 1)
+		font = clampI(font, 0, ModTheme.fonts.count - 1)
+		corner = clampD(corner.isFinite ? corner : 0, 0, 16)
+		outline &= 0xFFFFFF
+		title = String(title.prefix(32))
+		subtitle = String(subtitle.prefix(60))
+		if !background.valid || background.w > 96 || background.h > 96 { background = ModPixels(w: 1, h: 1) }
+		hudScale = clampD(hudScale.isFinite ? hudScale : 1, 0.6, 1.5)
+		hudAlpha = clampD(hudAlpha.isFinite ? hudAlpha : 1, 0.3, 1)
 	}
 }
 
@@ -5825,8 +5969,9 @@ extension Game {
 		if !s.allowThunder { p.thunder = 0 }
 		if !s.allowHail { p.hail = 0 }
 		let I: Double = weatherIntensity
-		p.precip = min(1.0, p.precip * I)
-		p.wind *= I
+		let mw: ModWeather? = ModRuntime.shared.weather
+		p.precip = min(1.0, p.precip * I * (mw?.rain ?? 1))
+		p.wind *= I * (mw?.wind ?? 1)
 		p.thunder *= I
 		p.hail = min(1.0, p.hail * I)
 		return p
@@ -5898,8 +6043,10 @@ extension Game {
 		let fw: Double = severeWeight()
 		let sev: Double = cur.T >= cur.calm ? fw : 0
 		var opts: [(WeatherKind, Double)] = []
+		let modWx: ModWeather? = ModRuntime.shared.weather
 		func add(_ k: WeatherKind, _ w: Double) {
-			if w > 0 && weatherAllowed(k) { opts.append((k, w)) }
+			let m: Double = modWx?.chanceOf(k) ?? 1
+			if w > 0 && m > 0 && weatherAllowed(k) { opts.append((k, w * m)) }
 		}
 		let rain: WeatherKind = ctx.cold ? .snowfall : .lightRain
 		let heavy: WeatherKind = ctx.cold ? .snowfall : .heavyRain
@@ -5963,6 +6110,10 @@ extension Game {
 			add(.lightRain, 1.0)
 			add(.overcast, s.allowRain ? 0.3 : 3.0)
 		}
+		if opts.isEmpty, let mw = modWx {
+			// a mod that rules out every usual next spell: any kind it allows comes straight in
+			for k in WeatherKind.allCases where mw.chanceOf(k) > 0 && weatherAllowed(k) && (!k.severe || sev > 0) { opts.append((k, mw.chanceOf(k))) }
+		}
 		if opts.isEmpty { opts.append((.partlyCloudy, 1.0)) }
 		var total: Double = 0
 		for o in opts { total += o.1 }
@@ -5975,7 +6126,7 @@ extension Game {
 			}
 			r -= o.1
 		}
-		let dur: Double = weather.pick(k.spell)
+		let dur: Double = weather.pick(k.spell) * (modWx?.length ?? 1)
 		return WeatherStep(kind: k, dur: dur)
 	}
 
@@ -7744,8 +7895,10 @@ extension WorldRenderer {
 					}
 				}
 			}
-			ctx.stroke(rain, with: .color(Color(hex: 0xA8C8F0, alpha: 0.45)), lineWidth: 1.5)
-			ctx.stroke(heavy, with: .color(Color(hex: 0x9CBCE4, alpha: 0.55)), lineWidth: 2.0)
+			// a mod's rain colour (the Overworld's), else the game's
+			let rc: UInt32 = g.world.dim == .overworld ? (ModRuntime.shared.weather?.rainColor ?? 0) : 0
+			ctx.stroke(rain, with: .color(Color(hex: rc != 0 ? rc : 0xA8C8F0, alpha: 0.45)), lineWidth: 1.5)
+			ctx.stroke(heavy, with: .color(Color(hex: rc != 0 ? shadeRGB(rc, 0.9) : 0x9CBCE4, alpha: 0.55)), lineWidth: 2.0)
 			ctx.fill(snow, with: .color(Color.white.opacity(0.85)))
 			ctx.stroke(streak, with: .color(Color.white.opacity(0.7)), lineWidth: 2.0)
 			drawSplashes(&ctx, g, v, amt, cold)
@@ -11855,7 +12008,76 @@ enum WorldRenderer {
 
 extension Font {
 	static func pixel(_ size: CGFloat, _ weight: Font.Weight = .heavy) -> Font {
-		return Font.system(size: size, weight: weight, design: .monospaced)
+		return Font.system(size: size, weight: weight, design: ThemeRT.design)
+	}
+}
+
+/// How the game's screens look: the theme of the enabled mods (the last of them that has one). Its
+/// colours by role take the place of the game's own (other shades of a role keep their lightness),
+/// everything else leans to its tint; it sets the letters, the corners and outlines of buttons and
+/// panels, the title screen and the HUD.
+enum ThemeRT {
+	static var current: ModTheme? = nil
+	static var map: [UInt32: UInt32] = [:]
+	static var design: Font.Design = .monospaced
+
+	static func set(_ t: ModTheme?) {
+		current = t
+		var m: [UInt32: UInt32] = [:]
+		if let th = t {
+			for r in ThemeRole.allCases where r != .tint {
+				let c: UInt32 = th.color(r)
+				if c == 0 { continue }
+				let base: Double = max(1, rgbLight(r.gameColor))
+				for g in r.gameColors { m[g] = shadeRGB(c, clampD(rgbLight(g) / base, 0.3, 2.0)) }
+			}
+		}
+		map = m
+		switch t?.font ?? 0 {
+		case 1: design = .rounded
+		case 2: design = .serif
+		case 3: design = .default
+		default: design = .monospaced
+		}
+	}
+
+	/// The theme of the enabled mods, read again (at the title screen, and after the Mod Creator)
+	static func refresh() {
+		var t: ModTheme? = nil
+		for e in ModStore.entries() where e.enabled {
+			if let th = e.pack?.theme { t = th }
+		}
+		set(t)
+	}
+
+	/// A colour of the game's screens as the theme has it
+	static func color(_ hex: UInt32) -> UInt32 {
+		guard let t = current else { return hex }
+		if let m = map[hex] { return m }
+		let tint: UInt32 = t.color(.tint)
+		if tint != 0 && t.tintAmt > 0 { return mixRGB(hex, tint, t.tintAmt) }
+		return hex
+	}
+
+	static var corner: CGFloat { return CGFloat(current?.corner ?? 0) }
+	static var outline: Color { return Color(hex: current?.outline ?? 0) }
+	static var hudScale: CGFloat { return CGFloat(current?.hudScale ?? 1) }
+	static var hudAlpha: Double { return current?.hudAlpha ?? 1 }
+	static var swapSides: Bool { return current?.swapSides ?? false }
+}
+
+/// How light a colour looks (0...255)
+func rgbLight(_ c: UInt32) -> Double {
+	let r: Double = Double((c >> 16) & 255)
+	let g: Double = Double((c >> 8) & 255)
+	let b: Double = Double(c & 255)
+	return r * 0.3 + g * 0.59 + b * 0.11
+}
+
+extension Color {
+	/// A colour of the game's screens (not of the world), as the enabled mods' theme has it
+	init(ui hex: UInt32, alpha: Double = 1.0) {
+		self.init(hex: ThemeRT.color(hex), alpha: alpha)
 	}
 }
 
@@ -11865,15 +12087,20 @@ func joinText(_ parts: String...) -> String {
 }
 
 func pick(_ on: Bool, _ a: UInt32, _ b: UInt32) -> Color {
-	if on { return Color(hex: a) }
-	return Color(hex: b)
+	if on { return Color(ui: a) }
+	return Color(ui: b)
 }
 
 struct PixelBox: View {
-	var color: Color = Color(hex: 0x6B6B6B)
+	var color: Color = Color(ui: 0x6B6B6B)
+	@ViewBuilder
 	var body: some View {
+		if ThemeRT.corner > 0 { rounded } else { square }
+	}
+
+	var square: some View {
 		ZStack {
-			Rectangle().fill(Color.black)
+			Rectangle().fill(ThemeRT.outline)
 			Rectangle().fill(color).padding(3)
 			VStack(spacing: 0) {
 				Rectangle().fill(Color.white.opacity(0.3)).frame(height: 3)
@@ -11883,11 +12110,20 @@ struct PixelBox: View {
 			.padding(3)
 		}
 	}
+
+	/// a theme's rounded box: its outline, then the colour
+	var rounded: some View {
+		let r: CGFloat = ThemeRT.corner
+		return ZStack {
+			RoundedRectangle(cornerRadius: r).fill(ThemeRT.outline)
+			RoundedRectangle(cornerRadius: max(1, r - 2)).fill(color).padding(3)
+		}
+	}
 }
 
 struct PixelButton: View {
 	let title: String
-	var color: Color = Color(hex: 0x6B6B6B)
+	var color: Color = Color(ui: 0x6B6B6B)
 	var action: () -> Void
 	var body: some View {
 		Button(action: action) {
@@ -11905,7 +12141,7 @@ struct PixelButton: View {
 
 struct SmallButton: View {
 	let title: String
-	var color: Color = Color(hex: 0x6B6B6B)
+	var color: Color = Color(ui: 0x6B6B6B)
 	var action: () -> Void
 	var body: some View {
 		Button(action: action) {
@@ -11924,11 +12160,11 @@ struct SmallButton: View {
 struct HoldButton: View {
 	let label: String
 	var size: CGFloat = 70
-	var color: Color = Color(hex: 0x6B6B6B)
+	var color: Color = Color(ui: 0x6B6B6B)
 	var onChange: (Bool) -> Void
 	@State var pressed: Bool = false
 	var fontSize: CGFloat { return size * (label.count > 4 ? 0.2 : 0.3) }
-	var fill: Color { return pressed ? Color(hex: 0x3A3A3A) : color }
+	var fill: Color { return pressed ? Color(ui: 0x3A3A3A) : color }
 	var body: some View {
 		Text(label)
 			.font(.pixel(fontSize))
@@ -11976,7 +12212,7 @@ struct WeaponSwapButton: View {
 					.padding(3)
 			}
 			.frame(width: 56, height: 56)
-			.background(PixelBox(color: Color(hex: 0x5A4A7A)).opacity(0.85))
+			.background(PixelBox(color: Color(ui: 0x5A4A7A)).opacity(0.85))
 		}
 		.buttonStyle(.plain)
 	}
@@ -12018,7 +12254,7 @@ struct SlotView: View {
 				if case .gun(let gt) = s.item {
 					Text(ammoText(s, gt))
 						.font(.pixel(ammoFont))
-						.foregroundColor(Color(hex: 0xFFE080))
+						.foregroundColor(Color(ui: 0xFFE080))
 						.shadow(color: Color.black, radius: 0, x: 1, y: 1)
 						.padding(2)
 				}
@@ -12195,7 +12431,7 @@ struct CombatStickView: View {
 	static func paint(_ ctx: inout GraphicsContext, _ size: CGSize, _ r: Double, _ tx: Double, _ ty: Double, _ down: Bool, _ manual: Bool) {
 		let cx: Double = Double(size.width) * 0.5
 		let cy: Double = Double(size.height) * 0.5
-		let ring: Color = down ? Color(hex: 0xFFC850, alpha: 0.75) : Color(hex: 0xE0B060, alpha: 0.45)
+		let ring: Color = down ? Color(ui: 0xFFC850, alpha: 0.75) : Color(ui: 0xE0B060, alpha: 0.45)
 		fillOval(&ctx, mkRect(cx - r, cy - r, r * 2.0, r * 2.0), Color(hex: 0x2A1A0C, alpha: 0.30))
 		ctx.stroke(Path(ellipseIn: mkRect(cx - r, cy - r, r * 2.0, r * 2.0)), with: .color(ring), lineWidth: 3)
 		let dz: Double = r * ActState.deadIn
@@ -12211,7 +12447,7 @@ struct CombatStickView: View {
 			if len > 1.0 {
 				let ux: Double = tx / len
 				let uy: Double = ty / len
-				let arrow: Color = Color(hex: 0xFFE080, alpha: 0.9)
+				let arrow: Color = Color(ui: 0xFFE080, alpha: 0.9)
 				strokeLine(&ctx, cx + ux * dz, cy + uy * dz, cx + ux * r * 0.78, cy + uy * r * 0.78, arrow, 4)
 				var head: Path = Path()
 				let bx: Double = cx + ux * r * 0.78
@@ -12224,7 +12460,7 @@ struct CombatStickView: View {
 			}
 		}
 		let tr: Double = 29.0
-		let tc: Color = down ? Color(hex: 0xFFC850, alpha: 0.85) : Color.white.opacity(0.5)
+		let tc: Color = down ? Color(ui: 0xFFC850, alpha: 0.85) : Color.white.opacity(0.5)
 		fillOval(&ctx, mkRect(cx + tx - tr, cy + ty - tr, tr * 2.0, tr * 2.0), tc)
 		ctx.stroke(Path(ellipseIn: mkRect(cx + tx - tr, cy + ty - tr, tr * 2.0, tr * 2.0)), with: .color(Color.black.opacity(0.35)), lineWidth: 2)
 	}
@@ -12249,7 +12485,7 @@ struct VehicleHelpBox: View {
 				.foregroundColor(Color.white.opacity(0.75))
 		}
 		.padding(8)
-		.background(PixelBox(color: Color(hex: 0x2A2A2E)).opacity(0.88))
+		.background(PixelBox(color: Color(ui: 0x2A2A2E)).opacity(0.88))
 		.frame(maxWidth: 320, alignment: .leading)
 	}
 
@@ -12279,7 +12515,7 @@ struct HUDView: View {
 					.foregroundColor(Color.white)
 					.multilineTextAlignment(.center)
 					.padding(8)
-					.background(PixelBox(color: Color(hex: 0x2E2E2E)).opacity(0.9))
+					.background(PixelBox(color: Color(ui: 0x2E2E2E)).opacity(0.9))
 					.padding(.top, 6)
 					.frame(maxWidth: 560)
 			}
@@ -12305,7 +12541,7 @@ struct HUDView: View {
 					.font(.pixel(11, .bold))
 					.foregroundColor(Color.white)
 					.padding(8)
-					.background(PixelBox(color: Color(hex: 0x2E2E2E)).opacity(0.85))
+					.background(PixelBox(color: Color(ui: 0x2E2E2E)).opacity(0.85))
 					.frame(maxWidth: 300, alignment: .leading)
 				Spacer(minLength: 0)
 			}
@@ -12336,11 +12572,11 @@ struct HUDView: View {
 					SmallButton(title: "−") { zoom(-8) }
 					SmallButton(title: "+") { zoom(8) }
 					if game.gotMap || game.inv.total(.gadget(.treasureMap)) > 0 {
-						SmallButton(title: "MAP", color: Color(hex: 0x9A7A3A)) { game.showMap = true }
+						SmallButton(title: "MAP", color: Color(ui: 0x9A7A3A)) { game.showMap = true }
 					}
-					SmallButton(title: "LOG", color: Color(hex: 0x7A5A2A)) { game.showJournal = true }
+					SmallButton(title: "LOG", color: Color(ui: 0x7A5A2A)) { game.showJournal = true }
 					if !game.testMod.isEmpty {
-						SmallButton(title: "TEST", color: Color(hex: 0x2E8A8A)) { game.showModTest = true }
+						SmallButton(title: "TEST", color: Color(ui: 0x2E8A8A)) { game.showModTest = true }
 					}
 					SmallButton(title: "DBG") { game.showDebug.toggle() }
 					SmallButton(title: "II") { game.paused = true }
@@ -12371,8 +12607,8 @@ struct HUDView: View {
 			}
 			if !game.activeEffects().isEmpty { EffectStrip(game: game, tick: hud.tick) }
 			if let v = game.inVehicle { vehicleReadout(v) }
-			if game.mode == .hardcore { OutlinedText(text: "HARDCORE", size: 11, color: Color(hex: 0xFF6060)) }
-			if !game.testMod.isEmpty { OutlinedText(text: "MOD TEST · NOT SAVED", size: 11, color: Color(hex: 0x60E0FF)) }
+			if game.mode == .hardcore { OutlinedText(text: "HARDCORE", size: 11, color: Color(ui: 0xFF6060)) }
+			if !game.testMod.isEmpty { OutlinedText(text: "MOD TEST · NOT SAVED", size: 11, color: Color(ui: 0x60E0FF)) }
 		}
 	}
 
@@ -12382,11 +12618,11 @@ struct HUDView: View {
 		if v.aero {
 			let lines: [String] = game.flightReadout(v)
 			ForEach(0..<lines.count, id: \.self) { (i: Int) in
-				OutlinedText(text: lines[i], size: 12, color: lines[i] == "STALL!" ? Color(hex: 0xFF5050) : Color(hex: 0xB8F0FF))
+				OutlinedText(text: lines[i], size: 12, color: lines[i] == "STALL!" ? Color(ui: 0xFF5050) : Color(ui: 0xB8F0FF))
 			}
 		}
 		if let st = game.vehicleStatusLine(v) {
-			OutlinedText(text: st, size: 11, color: Color(hex: 0xFFE080))
+			OutlinedText(text: st, size: 11, color: Color(ui: 0xFFE080))
 		}
 	}
 
@@ -12405,7 +12641,7 @@ struct HUDView: View {
 			OutlinedText(text: dayText, size: 11)
 			weatherLine
 			if let hint = game.wiringHint {
-				OutlinedText(text: hint, size: 11, color: Color(hex: 0x9AF0E0))
+				OutlinedText(text: hint, size: 11, color: Color(ui: 0x9AF0E0))
 			}
 		}
 	}
@@ -12420,7 +12656,7 @@ struct HUDView: View {
 				OutlinedText(text: weatherText, size: 11)
 			}
 			if case .gadget(.barometer)? = game.heldItem {
-				OutlinedText(text: game.barometerReading(), size: 11, color: Color(hex: 0xE8D090))
+				OutlinedText(text: game.barometerReading(), size: 11, color: Color(ui: 0xE8D090))
 			}
 		}
 	}
@@ -12440,7 +12676,7 @@ struct HUDView: View {
 			.multilineTextAlignment(.center)
 			.padding(.horizontal, 10)
 			.padding(.vertical, 5)
-			.background(PixelBox(color: warn ? Color(hex: 0xA02020) : Color(hex: 0x8A6A1A)).opacity(0.92))
+			.background(PixelBox(color: warn ? Color(ui: 0xA02020) : Color(ui: 0x8A6A1A)).opacity(0.92))
 			.frame(maxWidth: 620)
 	}
 
@@ -12448,7 +12684,7 @@ struct HUDView: View {
 		let fracD: Double = game.bossBarFrac * 356.0
 		let barW: CGFloat = CGFloat(fracD)
 		return VStack(spacing: 2) {
-			OutlinedText(text: game.bossBarName, size: 14, color: Color(hex: 0xFFD060))
+			OutlinedText(text: game.bossBarName, size: 14, color: Color(ui: 0xFFD060))
 			ZStack(alignment: .leading) {
 				Rectangle().fill(Color.black.opacity(0.75)).frame(width: 360, height: 14)
 				Rectangle().fill(Color(hex: 0xC02828)).frame(width: barW, height: 10).padding(.leading, 2)
@@ -12458,10 +12694,9 @@ struct HUDView: View {
 	}
 
 	var bottomArea: some View {
-		HStack(alignment: .bottom, spacing: 8) {
-			if game.settings.touchControls {
-				StickView(game: game)
-			}
+		let swap: Bool = ThemeRT.swapSides
+		return HStack(alignment: .bottom, spacing: 8) {
+			if swap { actionSide } else { moveSide }
 			Spacer(minLength: 0)
 			VStack(spacing: 6) {
 				contextButtons
@@ -12469,16 +12704,30 @@ struct HUDView: View {
 				hotbar
 			}
 			Spacer(minLength: 0)
-			if game.settings.touchControls {
-				HStack(alignment: .bottom, spacing: 6) {
-					VStack(alignment: .trailing, spacing: 8) {
-						if let next = game.nextWeaponSlot(), let st = game.inv.slots[next] {
-							WeaponSwapButton(stack: st) { game.cycleWeapon() }
-						}
-						HoldButton(label: "JUMP", size: 82, color: Color(hex: 0x4E8A3E)) { down in game.jumpHeld = down }
+			if swap { moveSide } else { actionSide }
+		}
+		.scaleEffect(ThemeRT.hudScale, anchor: .bottom)
+		.opacity(ThemeRT.hudAlpha)
+	}
+
+	/// the walking stick
+	@ViewBuilder
+	var moveSide: some View {
+		if game.settings.touchControls { StickView(game: game) }
+	}
+
+	/// JUMP, the weapon swap and the attack stick
+	@ViewBuilder
+	var actionSide: some View {
+		if game.settings.touchControls {
+			HStack(alignment: .bottom, spacing: 6) {
+				VStack(alignment: .trailing, spacing: 8) {
+					if let next = game.nextWeaponSlot(), let st = game.inv.slots[next] {
+						WeaponSwapButton(stack: st) { game.cycleWeapon() }
 					}
-					CombatStickView(label: game.useLabel)
+					HoldButton(label: "JUMP", size: 82, color: Color(ui: 0x4E8A3E)) { down in game.jumpHeld = down }
 				}
+				CombatStickView(label: game.useLabel)
 			}
 		}
 	}
@@ -12486,26 +12735,26 @@ struct HUDView: View {
 	var contextButtons: some View {
 		HStack(spacing: 6) {
 			if game.canToggleWall {
-				SmallButton(title: game.wallMode ? "AS WALL" : "AS BLOCK", color: game.wallMode ? Color(hex: 0x6A5A8A) : Color(hex: 0x4E6A3E)) { game.toggleWallMode() }
+				SmallButton(title: game.wallMode ? "AS WALL" : "AS BLOCK", color: game.wallMode ? Color(ui: 0x6A5A8A) : Color(ui: 0x4E6A3E)) { game.toggleWallMode() }
 			}
 			if game.canBuildOnVehicle {
-				SmallButton(title: game.vehicleBuild ? "ON VEHICLE" : "IN WORLD", color: game.vehicleBuild ? Color(hex: 0x2E7A8A) : Color(hex: 0x4E6A3E)) { game.toggleVehicleBuild() }
+				SmallButton(title: game.vehicleBuild ? "ON VEHICLE" : "IN WORLD", color: game.vehicleBuild ? Color(ui: 0x2E7A8A) : Color(ui: 0x4E6A3E)) { game.toggleVehicleBuild() }
 			}
 			if game.inVehicle != nil { vehicleButtons }
 			if game.vehicleNearby != nil {
-				SmallButton(title: "DRIVE", color: Color(hex: 0x4E8A3E)) { game.driveNearby() }
-				SmallButton(title: "PACK UP", color: Color(hex: 0x6A5A2A)) { game.packUpVehicle() }
+				SmallButton(title: "DRIVE", color: Color(ui: 0x4E8A3E)) { game.driveNearby() }
+				SmallButton(title: "PACK UP", color: Color(ui: 0x6A5A2A)) { game.packUpVehicle() }
 			}
 			if game.mounted != nil || game.inVehicle != nil {
-				SmallButton(title: "DISMOUNT", color: Color(hex: 0xA03030)) { game.dismount() }
+				SmallButton(title: "DISMOUNT", color: Color(ui: 0xA03030)) { game.dismount() }
 			}
 			if let s = game.heldStack, case .gun(let gt) = s.item {
 				if game.reloadT > 0 {
-					OutlinedText(text: gt.isBoltThrower && gt.magazine == 1 ? "COCKING" : "RELOADING", size: 12, color: Color(hex: 0xFFE080))
+					OutlinedText(text: gt.isBoltThrower && gt.magazine == 1 ? "COCKING" : "RELOADING", size: 12, color: Color(ui: 0xFFE080))
 				} else if gt == .stormRod {
-					if s.extra < gt.magazine { OutlinedText(text: "CHARGING", size: 12, color: Color(hex: 0xB8E0FF)) }
+					if s.extra < gt.magazine { OutlinedText(text: "CHARGING", size: 12, color: Color(ui: 0xB8E0FF)) }
 				} else if s.extra < gt.magazine {
-					SmallButton(title: "RELOAD", color: Color(hex: 0x6A5A2A)) { game.startReload() }
+					SmallButton(title: "RELOAD", color: Color(ui: 0x6A5A2A)) { game.startReload() }
 				}
 			}
 			if game.flying || game.noclip {
@@ -12517,12 +12766,12 @@ struct HUDView: View {
 	/// While driving: turn round, and the autopilot's buttons when the vehicle has one
 	@ViewBuilder
 	var vehicleButtons: some View {
-		SmallButton(title: "TURN", color: Color(hex: 0x3A6AA8)) { game.turnVehicle() }
+		SmallButton(title: "TURN", color: Color(ui: 0x3A6AA8)) { game.turnVehicle() }
 		if let v = game.inVehicle, v.autopilots > 0 {
-			SmallButton(title: "AUTO", color: v.auto == 0 ? Color(hex: 0x5A5A64) : Color(hex: 0x2E8A5A)) { game.cycleAutopilot() }
-			SmallButton(title: "MARK", color: Color(hex: 0x6A5A2A)) { game.markWaypoint() }
+			SmallButton(title: "AUTO", color: v.auto == 0 ? Color(ui: 0x5A5A64) : Color(ui: 0x2E8A5A)) { game.cycleAutopilot() }
+			SmallButton(title: "MARK", color: Color(ui: 0x6A5A2A)) { game.markWaypoint() }
 			if !v.route.isEmpty {
-				SmallButton(title: "CLEAR", color: Color(hex: 0x7A3A3A)) { game.clearRoute() }
+				SmallButton(title: "CLEAR", color: Color(ui: 0x7A3A3A)) { game.clearRoute() }
 			}
 		}
 	}
@@ -12622,7 +12871,7 @@ struct ItemBrowser: View {
 
 	func groupButton(_ i: Int) -> some View {
 		let on: Bool = group == i
-		let col: Color = on ? Color(hex: 0x4E8A3E) : Color(hex: 0x555555)
+		let col: Color = on ? Color(ui: 0x4E8A3E) : Color(ui: 0x555555)
 		return SmallButton(title: ItemBrowser.groups[i], color: col) { self.group = i }
 	}
 
@@ -12675,7 +12924,7 @@ struct InventoryPanel: View {
 			}
 			.foregroundColor(Color.white)
 			.padding(14)
-			.background(PixelBox(color: Color(hex: 0x2C2C30)).opacity(0.97))
+			.background(PixelBox(color: Color(ui: 0x2C2C30)).opacity(0.97))
 			// the stack being dragged follows the finger
 			if let f = dragFrom, let s = game.stackAt(f) {
 				SlotView(stack: s, size: 44)
@@ -12738,7 +12987,7 @@ struct InventoryPanel: View {
 			.font(.pixel(11))
 			.foregroundColor(Color.white.opacity(active ? 1.0 : 0.6))
 			.frame(width: 84, height: 36)
-			.background(Color(hex: active ? 0x7A3A2A : 0x3A2E2A).opacity(0.9))
+			.background(Color(ui: active ? 0x7A3A2A : 0x3A2E2A).opacity(0.9))
 			.overlay(Rectangle().stroke(Color(hex: 0xA06A2A), lineWidth: active ? 2 : 1))
 			.background(GeometryReader { gp -> Color in
 				box.map[.drop] = gp.frame(in: .named("inv"))
@@ -12757,7 +13006,7 @@ struct InventoryPanel: View {
 				Text(verbatim: st.count > 1 ? joinText(st.item.name, "  x", String(st.count)) : st.item.name).font(.pixel(12))
 				Text(verbatim: st.item.infoLines.joined(separator: " · ")).font(.pixel(10, .semibold)).foregroundColor(Color.white.opacity(0.75))
 				if !st.infusionNames.isEmpty {
-					Text(verbatim: joinText("Infused: ", st.infusionNames.joined(separator: ", "))).font(.pixel(10, .semibold)).foregroundColor(Color(hex: 0xC07CFF))
+					Text(verbatim: joinText("Infused: ", st.infusionNames.joined(separator: ", "))).font(.pixel(10, .semibold)).foregroundColor(Color(ui: 0xC07CFF))
 				}
 			} else {
 				Text("Tap or hover an item to see what it does.").font(.pixel(10, .semibold)).foregroundColor(Color.white.opacity(0.55))
@@ -12780,7 +13029,7 @@ struct InventoryPanel: View {
 				SmallButton(title: "OK") { self.infoItem = nil; self.infoRecipe = -1 }
 			}
 			if !lines.isEmpty { Text(verbatim: lines).font(.pixel(10, .semibold)).foregroundColor(Color.white.opacity(0.75)) }
-			if !need.isEmpty { Text(verbatim: need).font(.pixel(10, .semibold)).foregroundColor(Color(hex: 0xFFE070)) }
+			if !need.isEmpty { Text(verbatim: need).font(.pixel(10, .semibold)).foregroundColor(Color(ui: 0xFFE070)) }
 		}
 	}
 
@@ -12807,14 +13056,14 @@ struct InventoryPanel: View {
 			Text(verbatim: titleText).font(.pixel(18))
 			Spacer()
 			if game.isCreative && game.openChest == nil {
-				SmallButton(title: creativeTab ? "CRAFTING" : "ALL ITEMS", color: Color(hex: 0x3E6FAA)) { creativeTab.toggle() }
+				SmallButton(title: creativeTab ? "CRAFTING" : "ALL ITEMS", color: Color(ui: 0x3E6FAA)) { creativeTab.toggle() }
 			}
-			SmallButton(title: "SORT", color: Color(hex: 0x4E6A8A)) { game.sortBag() }
-			SmallButton(title: "STACK", color: Color(hex: 0x4E6A8A)) { game.stackAll() }
+			SmallButton(title: "SORT", color: Color(ui: 0x4E6A8A)) { game.sortBag() }
+			SmallButton(title: "STACK", color: Color(ui: 0x4E6A8A)) { game.stackAll() }
 			if game.openChest != nil {
-				SmallButton(title: "QUICK STACK", color: Color(hex: 0x4E8A3E)) { game.quickStack() }
+				SmallButton(title: "QUICK STACK", color: Color(ui: 0x4E8A3E)) { game.quickStack() }
 			}
-			SmallButton(title: "CLOSE", color: Color(hex: 0xA03030)) { close() }
+			SmallButton(title: "CLOSE", color: Color(ui: 0xA03030)) { close() }
 		}
 	}
 
@@ -12858,7 +13107,7 @@ struct InventoryPanel: View {
 
 	func filterChip(_ i: Int) -> some View {
 		let on: Bool = bagGroup == i
-		let col: Color = on ? Color(hex: 0x4E8A3E) : Color(hex: 0x4A4A50)
+		let col: Color = on ? Color(ui: 0x4E8A3E) : Color(ui: 0x4A4A50)
 		return Button(action: { self.bagGroup = i }) {
 			Text(verbatim: ItemBrowser.groups[i]).font(.pixel(9, .bold)).foregroundColor(Color.white)
 				.padding(.horizontal, 5).padding(.vertical, 5)
@@ -12881,7 +13130,7 @@ struct InventoryPanel: View {
 	func invSlot(_ i: Int) -> some View {
 		let isHot: Bool = i < Inventory.hotbarCount
 		let selected: Bool = isHot && game.sel == i
-		let ring: Color = isHot ? Color(hex: 0xFFE070, alpha: 0.35) : Color.clear
+		let ring: Color = isHot ? Color(ui: 0xFFE070, alpha: 0.35) : Color.clear
 		let dimmed: Bool = filteredOut(game.inv.slots[i])
 		return dragSlot(.inv(i), game.inv.slots[i], size: 40, selected: selected, tap: { game.tapSlot(i) }, hold: { longPress(i) })
 			.overlay(Rectangle().stroke(ring, lineWidth: 1))
@@ -12957,7 +13206,7 @@ struct InventoryPanel: View {
 			.font(.pixel(11))
 			.foregroundColor(Color.white.opacity(active ? 1.0 : 0.6))
 			.frame(width: 96, height: 36)
-			.background(Color(hex: active ? 0x2A4A7A : 0x2A344A).opacity(0.9))
+			.background(Color(ui: active ? 0x2A4A7A : 0x2A344A).opacity(0.9))
 			.overlay(Rectangle().stroke(Color(hex: 0x5A8AD0), lineWidth: active ? 2 : 1))
 			.background(GeometryReader { gp -> Color in
 				box.map[.trash] = gp.frame(in: .named("inv"))
@@ -12984,8 +13233,8 @@ struct InventoryPanel: View {
 				Text("ALL ITEMS").font(.pixel(15))
 				Spacer()
 				if let it = infoItem {
-					SmallButton(title: "TAKE 1", color: Color(hex: 0x4E8A3E)) { game.giveItem(it, 1, extra: game.gunLoad(it)) }
-					SmallButton(title: "TAKE STACK", color: Color(hex: 0x4E8A3E)) { game.creativeGive(it) }
+					SmallButton(title: "TAKE 1", color: Color(ui: 0x4E8A3E)) { game.giveItem(it, 1, extra: game.gunLoad(it)) }
+					SmallButton(title: "TAKE STACK", color: Color(ui: 0x4E8A3E)) { game.creativeGive(it) }
 				}
 			}
 			Text("Tap an item to read about it, tap it again to take a stack. Put things back with RETURN.").font(.pixel(10, .semibold)).foregroundColor(Color.white.opacity(0.7))
@@ -13097,7 +13346,7 @@ struct RecipeRow: View {
 					}
 				}
 				if !stationOK {
-					Text(verbatim: joinText("Needs ", game.recipeStationName(recipe))).font(.pixel(9, .bold)).foregroundColor(Color(hex: 0xFF8A60))
+					Text(verbatim: joinText("Needs ", game.recipeStationName(recipe))).font(.pixel(9, .bold)).foregroundColor(Color(ui: 0xFF8A60))
 				}
 			}
 			Spacer(minLength: 2)
@@ -13132,7 +13381,7 @@ extension InventoryPanel {
 			HStack {
 				Text("CHEST").font(.pixel(15))
 				Spacer()
-				SmallButton(title: "TAKE ALL", color: Color(hex: 0x4E8A3E)) { takeAll(cx, cy) }
+				SmallButton(title: "TAKE ALL", color: Color(ui: 0x4E8A3E)) { takeAll(cx, cy) }
 			}
 			VStack(spacing: 3) {
 				ForEach(0..<3, id: \.self) { r in
@@ -13179,16 +13428,16 @@ struct JournalPanel: View {
 	@ObservedObject var hud: HUDSignal
 	@State var tab: Int = 0
 	var body: some View {
-		let ink: Color = Color(hex: parchmentInk)
+		let ink: Color = Color(ui: parchmentInk)
 		return VStack(alignment: .leading, spacing: 10) {
 			HStack(spacing: 6) {
-				Text("JOURNAL").font(.pixel(18)).foregroundColor(Color(hex: 0x4A2A10))
+				Text("JOURNAL").font(.pixel(18)).foregroundColor(Color(ui: 0x4A2A10))
 				Spacer()
 				tabButton(0, "GOALS")
 				tabButton(1, "PLACES")
 				tabButton(2, "LORE")
 				tabButton(3, "WEATHER")
-				SmallButton(title: "CLOSE", color: Color(hex: 0xA03030)) { game.showJournal = false }
+				SmallButton(title: "CLOSE", color: Color(ui: 0xA03030)) { game.showJournal = false }
 			}
 			ScrollView {
 				VStack(alignment: .leading, spacing: 8) {
@@ -13204,14 +13453,14 @@ struct JournalPanel: View {
 			.frame(maxHeight: 380)
 		}
 		.padding(16)
-		.background(Color(hex: parchment))
+		.background(Color(ui: parchment))
 		.overlay(Rectangle().stroke(Color(hex: 0x5A3A1A), lineWidth: 4))
 		.frame(maxWidth: 820)
 		.padding(16)
 	}
 
 	func tabButton(_ i: Int, _ title: String) -> some View {
-		SmallButton(title: title, color: i == tab ? Color(hex: 0x7A5A2A) : Color(hex: 0xA8906C)) { tab = i }
+		SmallButton(title: title, color: i == tab ? Color(ui: 0x7A5A2A) : Color(ui: 0xA8906C)) { tab = i }
 	}
 
 	func aims(_ ink: Color) -> some View {
@@ -13219,11 +13468,11 @@ struct JournalPanel: View {
 		return VStack(alignment: .leading, spacing: 7) {
 			ForEach(0..<list.count, id: \.self) { i in
 				HStack(alignment: .top, spacing: 8) {
-					Text(list[i].done ? "✓" : "○").font(.pixel(14)).foregroundColor(list[i].done ? Color(hex: 0x2A6A2A) : ink)
+					Text(list[i].done ? "✓" : "○").font(.pixel(14)).foregroundColor(list[i].done ? Color(ui: 0x2A6A2A) : ink)
 					VStack(alignment: .leading, spacing: 1) {
-						Text(verbatim: list[i].title).font(.pixel(13)).foregroundColor(list[i].done ? Color(hex: 0x6A5A40) : ink)
+						Text(verbatim: list[i].title).font(.pixel(13)).foregroundColor(list[i].done ? Color(ui: 0x6A5A40) : ink)
 						if !list[i].done {
-							Text(verbatim: list[i].hint).font(.pixel(11, .semibold)).foregroundColor(Color(hex: 0x6A4A2A))
+							Text(verbatim: list[i].hint).font(.pixel(11, .semibold)).foregroundColor(Color(ui: 0x6A4A2A))
 						}
 					}
 				}
@@ -13241,7 +13490,7 @@ struct JournalPanel: View {
 				HStack {
 					Text(verbatim: ps[i].name).font(.pixel(13)).foregroundColor(ink)
 					Spacer()
-					Text(verbatim: placeWhere(ps[i])).font(.pixel(11, .semibold)).foregroundColor(Color(hex: 0x6A4A2A))
+					Text(verbatim: placeWhere(ps[i])).font(.pixel(11, .semibold)).foregroundColor(Color(ui: 0x6A4A2A))
 				}
 			}
 		}
@@ -13263,7 +13512,7 @@ struct JournalPanel: View {
 			ForEach(0..<keys.count, id: \.self) { i in
 				VStack(alignment: .leading, spacing: 2) {
 					Text(verbatim: loreEntry(keys[i]).0).font(.pixel(13)).foregroundColor(ink)
-					Text(verbatim: loreEntry(keys[i]).1).font(.pixel(11, .semibold)).foregroundColor(Color(hex: 0x5A3A1A))
+					Text(verbatim: loreEntry(keys[i]).1).font(.pixel(11, .semibold)).foregroundColor(Color(ui: 0x5A3A1A))
 				}
 			}
 		}
@@ -13277,9 +13526,9 @@ struct MapPanel: View {
 		let map: TreasureMap = game.treasureMap()
 		return VStack(spacing: 8) {
 			HStack {
-				Text("TREASURE MAP").font(.pixel(18)).foregroundColor(Color(hex: 0x4A2A10))
+				Text("TREASURE MAP").font(.pixel(18)).foregroundColor(Color(ui: 0x4A2A10))
 				Spacer()
-				SmallButton(title: "CLOSE", color: Color(hex: 0xA03030)) { game.showMap = false }
+				SmallButton(title: "CLOSE", color: Color(ui: 0xA03030)) { game.showMap = false }
 			}
 			Canvas { ctx, size in
 				MapDrawer.draw(&ctx, size, map, game)
@@ -13288,20 +13537,20 @@ struct MapPanel: View {
 			.overlay(Rectangle().stroke(Color(hex: 0x7A5A2A), lineWidth: 3))
 			VStack(alignment: .leading, spacing: 4) {
 				ForEach(0..<map.clues.count, id: \.self) { i in
-					Text(verbatim: joinText("• ", map.clues[i])).font(.pixel(12, .bold)).foregroundColor(Color(hex: 0x3A2410))
+					Text(verbatim: joinText("• ", map.clues[i])).font(.pixel(12, .bold)).foregroundColor(Color(ui: 0x3A2410))
 				}
 				if game.inv.total(.gadget(.portalKey)) > 0 && game.world.dim == .overworld {
 					Text(verbatim: joinText("Key: ", game.portalHintText(game.portalHintLevel())))
-						.font(.pixel(12, .heavy)).foregroundColor(Color(hex: 0x6A2AB0))
+						.font(.pixel(12, .heavy)).foregroundColor(Color(ui: 0x6A2AB0))
 				}
 				if game.portalOpened {
-					Text("The gate has been opened.").font(.pixel(12, .heavy)).foregroundColor(Color(hex: 0x2A6A2A))
+					Text("The gate has been opened.").font(.pixel(12, .heavy)).foregroundColor(Color(ui: 0x2A6A2A))
 				}
 			}
 			.frame(maxWidth: .infinity, alignment: .leading)
 		}
 		.padding(16)
-		.background(Color(hex: 0xE8D4A0))
+		.background(Color(ui: 0xE8D4A0))
 		.overlay(Rectangle().stroke(Color(hex: 0x5A3A1A), lineWidth: 4))
 		.frame(maxWidth: 820)
 		.padding(16)
@@ -13332,10 +13581,10 @@ enum MapDrawer {
 		let colW: Double = max(1.0, W / nD + 1.0)
 		let seaY: Double = my(Double(WorldGen.sea))
 		let deepY: Double = my(330.0)
-		let water: Color = Color(hex: 0x7AA4C8)
-		let soil: Color = Color(hex: 0xB89868)
-		let rock: Color = Color(hex: 0xA8906C)
-		let deep: Color = Color(hex: 0x988060)
+		let water: Color = Color(ui: 0x7AA4C8)
+		let soil: Color = Color(ui: 0xB89868)
+		let rock: Color = Color(ui: 0xA8906C)
+		let deep: Color = Color(ui: 0x988060)
 		for i in 0..<n {
 			let x: Double = Double(i) / nD * W
 			let hD: Double = Double(m.heights[i])
@@ -13354,7 +13603,7 @@ enum MapDrawer {
 		}
 		// depth lines
 		let dash: StrokeStyle = StrokeStyle(lineWidth: 1, dash: [3, 5])
-		let lineCol: Color = Color(hex: 0x7A5A3A, alpha: 0.35)
+		let lineCol: Color = Color(ui: 0x7A5A3A, alpha: 0.35)
 		for d in [200.0, 330.0, 450.0] {
 			let y: Double = my(d)
 			var p: Path = Path()
@@ -13371,7 +13620,7 @@ enum MapDrawer {
 			let idx: Int = clampI(idxRaw, 0, n - 1)
 			let y: Double = my(Double(m.heights[idx])) - 10.0
 			var sym: String = "●"
-			var col: Color = Color(hex: 0x3A2410)
+			var col: Color = Color(ui: 0x3A2410)
 			switch mk.kind {
 			case 0:
 				sym = "⌂"
@@ -13435,23 +13684,23 @@ struct PauseView: View {
 				Text("PAUSED").font(.pixel(30)).foregroundColor(Color.white)
 				Text(verbatim: worldLine)
 					.font(.pixel(12, .bold)).foregroundColor(Color.white.opacity(0.8))
-				PixelButton(title: "RESUME", color: Color(hex: 0x4E8A3E)) {
+				PixelButton(title: "RESUME", color: Color(ui: 0x4E8A3E)) {
 					// settings changed here are kept on the device straight away
 					SettingsStore.save(game.settings)
 					game.paused = false
 				}
 				if game.testMod.isEmpty {
-					PixelButton(title: "SAVE GAME", color: Color(hex: 0x3E6FAA)) {
+					PixelButton(title: "SAVE GAME", color: Color(ui: 0x3E6FAA)) {
 						savedNote = game.saveNow() ? "Saved!" : "Could not save."
 					}
 				} else {
-					Text("A mod test world: nothing is saved.").font(.pixel(12, .bold)).foregroundColor(Color(hex: 0x60E0FF))
-					PixelButton(title: "TEST TOOLS", color: Color(hex: 0x2E8A8A)) {
+					Text("A mod test world: nothing is saved.").font(.pixel(12, .bold)).foregroundColor(Color(ui: 0x60E0FF))
+					PixelButton(title: "TEST TOOLS", color: Color(ui: 0x2E8A8A)) {
 						game.paused = false
 						game.showModTest = true
 					}
 				}
-				PixelButton(title: "CAPTURE STRUCTURE", color: Color(hex: 0x2E8A8A)) {
+				PixelButton(title: "CAPTURE STRUCTURE", color: Color(ui: 0x2E8A8A)) {
 					game.paused = false
 					game.startCapture()
 				}
@@ -13459,7 +13708,7 @@ struct PauseView: View {
 				CameraSettingsSection(settings: settingsBinding, onChange: { game.tilePx = game.settings.tilePx })
 				WeatherSettingsSection(settings: settingsBinding, onChange: { game.bumpHUD() })
 				NightSettingsSection(settings: settingsBinding)
-				PixelButton(title: game.testMod.isEmpty ? "SAVE & QUIT" : "EXIT TEST", color: Color(hex: 0xA03030)) { quit() }
+				PixelButton(title: game.testMod.isEmpty ? "SAVE & QUIT" : "EXIT TEST", color: Color(ui: 0xA03030)) { quit() }
 				if !savedNote.isEmpty { Text(savedNote).font(.pixel(12)).foregroundColor(Color.white) }
 			}
 			.frame(maxWidth: 340)
@@ -13509,7 +13758,7 @@ struct DeathView: View {
 	}
 	var body: some View {
 		ZStack {
-			Color(hex: 0x700000, alpha: 0.45).ignoresSafeArea()
+			Color(ui: 0x700000, alpha: 0.45).ignoresSafeArea()
 			VStack(spacing: 12) {
 				Text(verbatim: deathTitle).font(.pixel(34)).foregroundColor(Color.white)
 					.shadow(color: Color.black, radius: 0, x: 3, y: 3)
@@ -13517,9 +13766,9 @@ struct DeathView: View {
 				if game.mode == .hardcore {
 					Text("This hardcore world has been deleted.").font(.pixel(12, .bold)).foregroundColor(Color.white)
 				} else {
-					PixelButton(title: "RESPAWN", color: Color(hex: 0x4E8A3E)) { game.respawn() }
+					PixelButton(title: "RESPAWN", color: Color(ui: 0x4E8A3E)) { game.respawn() }
 				}
-				PixelButton(title: "MAIN MENU", color: Color(hex: 0xA03030)) { quit() }
+				PixelButton(title: "MAIN MENU", color: Color(ui: 0xA03030)) { quit() }
 			}
 			.frame(maxWidth: 320)
 			.padding()
@@ -13548,9 +13797,9 @@ struct DebugPanel: View {
 		ScrollView {
 			VStack(alignment: .leading, spacing: 8) {
 				HStack {
-					Text("DEBUG").font(.pixel(16)).foregroundColor(Color(hex: 0xFFE066))
+					Text("DEBUG").font(.pixel(16)).foregroundColor(Color(ui: 0xFFE066))
 					Spacer()
-					SmallButton(title: "X", color: Color(hex: 0xA03030)) { game.showDebug = false }
+					SmallButton(title: "X", color: Color(ui: 0xA03030)) { game.showDebug = false }
 				}
 				stats
 				toggles
@@ -13579,7 +13828,7 @@ struct DebugPanel: View {
 			.foregroundColor(Color.white)
 			.padding(12)
 		}
-		.background(PixelBox(color: Color(hex: 0x1E1E1E)).opacity(0.94))
+		.background(PixelBox(color: Color(ui: 0x1E1E1E)).opacity(0.94))
 	}
 
 	static let giveCounts: [Int] = [1, 10, 64, 100, 500]
@@ -13594,7 +13843,7 @@ struct DebugPanel: View {
 			HStack(spacing: 4) {
 				ForEach(0..<DebugPanel.giveCounts.count, id: \.self) { (i: Int) in self.countButton(DebugPanel.giveCounts[i]) }
 			}
-			SmallButton(title: title, color: Color(hex: 0x4E8A3E)) {
+			SmallButton(title: title, color: Color(ui: 0x4E8A3E)) {
 				if let it = self.giveItem { self.game.debugGive(it, self.giveCount) }
 			}
 		}
@@ -13602,7 +13851,7 @@ struct DebugPanel: View {
 
 	func countButton(_ n: Int) -> some View {
 		let on: Bool = giveCount == n
-		return SmallButton(title: joinText("x", String(n)), color: on ? Color(hex: 0x4E8A3E) : Color(hex: 0x555555)) { self.giveCount = n }
+		return SmallButton(title: joinText("x", String(n)), color: on ? Color(ui: 0x4E8A3E) : Color(ui: 0x555555)) { self.giveCount = n }
 	}
 
 	var actions: some View {
@@ -13630,7 +13879,7 @@ struct DebugPanel: View {
 				HStack(spacing: 6) {
 					SmallButton(title: "Bear den") { game.debugToLair(.bear) }
 					SmallButton(title: "Rex nest") { game.debugToLair(.rex) }
-					SmallButton(title: "Other realm", color: Color(hex: 0x6A3AA0)) { game.debugSwitchDimension() }
+					SmallButton(title: "Other realm", color: Color(ui: 0x6A3AA0)) { game.debugSwitchDimension() }
 				}
 				HStack(spacing: 6) {
 					SmallButton(title: "Up 20") { game.pb.y -= 20; game.pb.vy = 0; game.fallPeak = 0 }
@@ -13664,12 +13913,12 @@ struct DebugPanel: View {
 			HStack(spacing: 6) {
 				SmallButton(title: "Select at cursor") { game.debugSelectAtCursor() }
 				if game.debugSelected != nil {
-					SmallButton(title: "Remove", color: Color(hex: 0xA03030)) { game.debugRemoveSelected() }
+					SmallButton(title: "Remove", color: Color(ui: 0xA03030)) { game.debugRemoveSelected() }
 				}
 			}
 			if let m = game.debugSelected {
 				Text(verbatim: joinText(m.def.name, " #", String(m.id), String(format: "  HP %.0f/%.0f  ", m.hp, m.maxHP), String(format: "x %.1f y %.1f", m.b.x, m.b.y)))
-					.font(.pixel(10, .semibold)).foregroundColor(Color(hex: 0xA0E0FF))
+					.font(.pixel(10, .semibold)).foregroundColor(Color(ui: 0xA0E0FF))
 				HStack(spacing: 6) {
 					SmallButton(title: "Heal") { m.hp = m.maxHP; game.bumpHUD() }
 					SmallButton(title: "HP x2") { m.maxHP *= 2; m.hp = m.maxHP; game.bumpHUD() }
@@ -13679,14 +13928,14 @@ struct DebugPanel: View {
 			Toggle("Include vehicles", isOn: $includeVehicles).font(.pixel(11, .bold))
 			if confirmDelete {
 				HStack(spacing: 6) {
-					SmallButton(title: "CONFIRM DELETE ALL", color: Color(hex: 0xC02020)) {
+					SmallButton(title: "CONFIRM DELETE ALL", color: Color(ui: 0xC02020)) {
 						game.debugDeleteAllEntities(includeVehicles: includeVehicles)
 						confirmDelete = false
 					}
 					SmallButton(title: "Cancel") { confirmDelete = false }
 				}
 			} else {
-				SmallButton(title: "Delete all entities", color: Color(hex: 0xA03030)) { confirmDelete = true }
+				SmallButton(title: "Delete all entities", color: Color(ui: 0xA03030)) { confirmDelete = true }
 			}
 		}
 	}
@@ -13771,7 +14020,7 @@ struct DebugPanel: View {
 	}
 
 	func section(_ s: String) -> some View {
-		return Text(s).font(.pixel(11)).foregroundColor(Color(hex: 0xFFE066)).padding(.top, 4)
+		return Text(s).font(.pixel(11)).foregroundColor(Color(ui: 0xFFE066)).padding(.top, 4)
 	}
 
 	var statLines: [String] {
@@ -13907,8 +14156,8 @@ extension DebugPanel {
 				SmallButton(title: "Blizzard") { game.debugForceWeather(.blizzard) }
 			}
 			HStack(spacing: 6) {
-				SmallButton(title: "Tornado", color: Color(hex: 0x8A3A3A)) { game.debugForceWeather(.tornado) }
-				SmallButton(title: "Hurricane", color: Color(hex: 0x8A3A3A)) { game.debugForceWeather(.hurricane) }
+				SmallButton(title: "Tornado", color: Color(ui: 0x8A3A3A)) { game.debugForceWeather(.tornado) }
+				SmallButton(title: "Hurricane", color: Color(ui: 0x8A3A3A)) { game.debugForceWeather(.hurricane) }
 				SmallButton(title: "Strike") { game.debugStrikeNearby() }
 			}
 		}
@@ -14078,7 +14327,10 @@ struct MenuView: View {
 	var body: some View {
 		ZStack {
 			if screen == .mods {
-				ModCreatorView(test: { p in start(ModTest.makeWorld(p, settings: settings)) }, done: { screen = .main })
+				ModCreatorView(test: { p in start(ModTest.makeWorld(p, settings: settings)) }, done: {
+					ThemeRT.refresh()
+					screen = .main
+				})
 			} else {
 				menuBody
 			}
@@ -14091,7 +14343,7 @@ struct MenuView: View {
 
 	var menuBody: some View {
 		ZStack {
-			MenuBackground(hair: settings.hair, scarf: settings.scarf)
+			menuBackdrop
 			ScrollView {
 				VStack(spacing: 14) {
 					Spacer(minLength: 24)
@@ -14107,23 +14359,44 @@ struct MenuView: View {
 			}
 		}
 		.onAppear {
+			ThemeRT.refresh()
 			splash = splashes.randomElement() ?? ""
 			refreshSaves()
 		}
 	}
 
+	/// the game's sky and character, or a theme's own picture
+	@ViewBuilder
+	var menuBackdrop: some View {
+		if let bg = ThemeRT.current?.background, bg.valid, !bg.isBlank {
+			pixImage(bg.buf()).resizable().interpolation(.none).ignoresSafeArea()
+		} else {
+			MenuBackground(hair: settings.hair, scarf: settings.scarf)
+		}
+	}
+
+	var titleText: String {
+		let t: String = ThemeRT.current?.title ?? ""
+		return t.trimmingCharacters(in: .whitespaces).isEmpty ? "PIXEL REALM" : t
+	}
+
+	var subtitleText: String {
+		let t: String = ThemeRT.current?.subtitle ?? ""
+		return t.trimmingCharacters(in: .whitespaces).isEmpty ? splash : t
+	}
+
 	var title: some View {
 		VStack(spacing: 0) {
-			Text("PIXEL REALM")
-				.font(.system(size: 52, weight: .black, design: .monospaced))
-				.foregroundColor(Color(hex: 0xFFE066))
-				.shadow(color: Color(hex: 0x7A4A00), radius: 0, x: 4, y: 4)
+			Text(verbatim: titleText)
+				.font(.system(size: 52, weight: .black, design: ThemeRT.design))
+				.foregroundColor(Color(ui: 0xFFE066))
+				.shadow(color: Color(ui: 0x7A4A00), radius: 0, x: 4, y: 4)
 				.shadow(color: Color.black, radius: 0, x: 6, y: 6)
 				.minimumScaleFactor(0.5)
 				.lineLimit(1)
-			Text(splash)
+			Text(verbatim: subtitleText)
 				.font(.pixel(15))
-				.foregroundColor(Color(hex: 0xFFF58A))
+				.foregroundColor(Color(ui: 0xFFF58A))
 				.shadow(color: Color.black, radius: 0, x: 2, y: 2)
 				.rotationEffect(.degrees(-3))
 				.padding(.top, 6)
@@ -14157,19 +14430,19 @@ struct MenuView: View {
 	var mainButtons: some View {
 		VStack(spacing: 10) {
 			if let m = metas.first {
-				PixelButton(title: continueTitle, color: Color(hex: 0x4E8A3E)) { load(m.slot) }
+				PixelButton(title: continueTitle, color: Color(ui: 0x4E8A3E)) { load(m.slot) }
 			}
-			PixelButton(title: "NEW WORLD", color: Color(hex: 0x3E6FAA)) { screen = .newWorld }
+			PixelButton(title: "NEW WORLD", color: Color(ui: 0x3E6FAA)) { screen = .newWorld }
 			if !metas.isEmpty {
 				PixelButton(title: "LOAD WORLD") { refreshSaves(); screen = .load }
 			}
 			HStack(spacing: 10) {
-				PixelButton(title: "CHARACTER", color: Color(hex: 0x8A5A2E)) { screen = .character }
+				PixelButton(title: "CHARACTER", color: Color(ui: 0x8A5A2E)) { screen = .character }
 				PixelButton(title: "SETTINGS") { screen = .settings }
 			}
 			HStack(spacing: 10) {
 				PixelButton(title: "HOW TO PLAY") { screen = .help }
-				PixelButton(title: "MOD CREATOR", color: Color(hex: 0x6A3AA0)) { screen = .mods }
+				PixelButton(title: "MOD CREATOR", color: Color(ui: 0x6A3AA0)) { screen = .mods }
 			}
 		}
 	}
@@ -14235,7 +14508,7 @@ struct MenuView: View {
 				.padding(10)
 				.background(Color.black.opacity(0.75))
 				.foregroundColor(Color.white)
-			PixelButton(title: "CREATE", color: Color(hex: 0x4E8A3E)) { create() }
+			PixelButton(title: "CREATE", color: Color(ui: 0x4E8A3E)) { create() }
 			PixelButton(title: "BACK") { screen = .main }
 		}
 	}
@@ -14269,14 +14542,14 @@ struct MenuView: View {
 				Text(detail).font(.pixel(10, .bold)).foregroundColor(Color.white.opacity(0.8))
 			}
 			Spacer()
-			SmallButton(title: "PLAY", color: Color(hex: 0x4E8A3E)) { load(m.slot) }
-			SmallButton(title: "DEL", color: Color(hex: 0xA03030)) {
+			SmallButton(title: "PLAY", color: Color(ui: 0x4E8A3E)) { load(m.slot) }
+			SmallButton(title: "DEL", color: Color(ui: 0xA03030)) {
 				SaveStore.delete(m.slot)
 				refreshSaves()
 			}
 		}
 		.padding(8)
-		.background(PixelBox(color: Color(hex: 0x3A3A3A)).opacity(0.92))
+		.background(PixelBox(color: Color(ui: 0x3A3A3A)).opacity(0.92))
 	}
 
 	func refreshSaves() {
@@ -14356,13 +14629,13 @@ struct CharacterView: View {
 			Art.shared.previewPlayer(hair: settings.hair, scarf: settings.scarf)
 				.resizable()
 				.frame(width: 160, height: 128)
-				.background(PixelBox(color: Color(hex: 0x5A7A9A)).opacity(0.9))
+				.background(PixelBox(color: Color(ui: 0x5A7A9A)).opacity(0.9))
 			Text("Brown shirt adventurer. Pick a hair and scarf colour.").font(.pixel(11, .bold)).foregroundColor(Color.white)
 				.shadow(color: Color.black, radius: 0, x: 1, y: 1)
 				.multilineTextAlignment(.center)
 			colorRow("HAIR", hairChoices, settings.hair) { settings.hair = $0 }
 			colorRow("SCARF", scarfChoices, settings.scarf) { settings.scarf = $0 }
-			PixelButton(title: "DONE", color: Color(hex: 0x4E8A3E)) { done() }
+			PixelButton(title: "DONE", color: Color(ui: 0x4E8A3E)) { done() }
 		}
 	}
 
@@ -14417,12 +14690,12 @@ struct SettingsView: View {
 			CameraSettingsSection(settings: $settings)
 			WeatherSettingsSection(settings: $settings)
 			NightSettingsSection(settings: $settings)
-			PixelButton(title: "DONE", color: Color(hex: 0x4E8A3E)) { done() }
+			PixelButton(title: "DONE", color: Color(ui: 0x4E8A3E)) { done() }
 		}
 		.font(.pixel(14, .bold))
 		.foregroundColor(Color.white)
 		.padding(18)
-		.background(PixelBox(color: Color(hex: 0x2C2C30)).opacity(0.95))
+		.background(PixelBox(color: Color(ui: 0x2C2C30)).opacity(0.95))
 	}
 }
 
@@ -14437,7 +14710,7 @@ struct CameraSettingsSection: View {
 
 	var body: some View {
 		VStack(alignment: .leading, spacing: 6) {
-			Text("CAMERA & COMFORT").font(.pixel(15)).foregroundColor(Color(hex: 0xFFE066))
+			Text("CAMERA & COMFORT").font(.pixel(15)).foregroundColor(Color(ui: 0xFFE066))
 			Toggle("Smooth camera", isOn: $settings.camSmoothOn)
 			if settings.camSmoothOn {
 				label("Follow tightness", settings.camFollow)
@@ -14456,7 +14729,7 @@ struct CameraSettingsSection: View {
 				Slider(value: $settings.shakeIntensity, in: 0.0...1.0, step: 0.05)
 			}
 			Toggle("Bow trajectory preview", isOn: $settings.showTrajectory)
-			Text("SOUND").font(.pixel(15)).foregroundColor(Color(hex: 0xFFE066))
+			Text("SOUND").font(.pixel(15)).foregroundColor(Color(ui: 0xFFE066))
 			Toggle("Sound", isOn: $settings.soundOn)
 			if settings.soundOn {
 				label("Effects volume", settings.sfxVolume)
@@ -14521,11 +14794,11 @@ struct HelpView: View {
 			ForEach(0..<lines.count, id: \.self) { i in
 				Text(verbatim: joinText("• ", lines[i])).font(.pixel(12, .semibold))
 			}
-			PixelButton(title: "GOT IT", color: Color(hex: 0x4E8A3E)) { done() }
+			PixelButton(title: "GOT IT", color: Color(ui: 0x4E8A3E)) { done() }
 		}
 		.foregroundColor(Color.white)
 		.padding(18)
-		.background(PixelBox(color: Color(hex: 0x2C2C30)).opacity(0.95))
+		.background(PixelBox(color: Color(ui: 0x2C2C30)).opacity(0.95))
 	}
 }
 
@@ -15979,5 +16252,148 @@ extension Game {
 			parts.append(s)
 		}
 		return parts.isEmpty ? nil : parts.joined(separator: "  ")
+	}
+}
+
+// ===== u07_mods (begins here, continued in part 4) =====
+
+// MARK: - Mod Creator: shared pieces
+
+/// The Mod Creator's working copy of one mod. Every edit marks it changed; it is written to disk
+/// when you leave the editor, press SAVE, or test it.
+final class ModSession: ObservableObject, @unchecked Sendable {
+	@Published var mod: ModPack
+	@Published var dirty: Bool = false
+	@Published var report: ModReport = ModReport()
+	/// bumped on every edit (previews key their caches on it)
+	@Published var rev: Int = 0
+	/// a picker shown over the whole editor, above the page that scrolls (see `modCover`)
+	@Published var cover: AnyView? = nil
+
+	init(_ p: ModPack) {
+		mod = p
+		recheck()
+	}
+
+	func touch() {
+		dirty = true
+		rev &+= 1
+	}
+
+	@discardableResult
+	func save() -> Bool {
+		let ok: Bool = ModStore.save(mod)
+		if ok {
+			if let p = ModStore.pack(mod.id) { mod = p }
+			dirty = false
+		}
+		recheck()
+		return ok
+	}
+
+	func recheck() {
+		var p: ModPack = mod
+		report = ModValidator.check(&p, known: ModCatalog.installed().keys)
+	}
+
+	/// A binding to one field of one piece of content (looked up by id each time, so lists can change)
+	func bind<C: Identifiable, T>(_ list: WritableKeyPath<ModPack, [C]>, _ id: String, _ kp: WritableKeyPath<C, T>, _ fallback: T) -> Binding<T> where C.ID == String {
+		return Binding<T>(get: {
+			guard let i = self.mod[keyPath: list].firstIndex(where: { $0.id == id }) else { return fallback }
+			return self.mod[keyPath: list][i][keyPath: kp]
+		}, set: { v in
+			guard let i = self.mod[keyPath: list].firstIndex(where: { $0.id == id }) else { return }
+			self.mod[keyPath: list][i][keyPath: kp] = v
+			self.touch()
+		})
+	}
+
+	/// A binding to a field of the mod itself
+	func modBind<T>(_ kp: WritableKeyPath<ModPack, T>) -> Binding<T> {
+		return Binding<T>(get: { self.mod[keyPath: kp] }, set: { v in
+			self.mod[keyPath: kp] = v
+			self.touch()
+		})
+	}
+
+	var catalog: ModCatalog {
+		var ps: [ModPack] = [mod]
+		for e in ModStore.entries() where e.id != mod.id { if let p = e.pack { ps.append(p) } }
+		return ModCatalog.build(ps)
+	}
+}
+
+/// Colours and sizes shared by the Mod Creator screens
+enum ModUI {
+	static var panel: Color { return Color(ui: 0x2C2C30) }
+	static var card: Color { return Color(ui: 0x3A3A40) }
+	static var accent: Color { return Color(ui: 0x4E8A3E) }
+	static var blue: Color { return Color(ui: 0x3E6FAA) }
+	static var red: Color { return Color(ui: 0xA03030) }
+	static var gold: Color { return Color(ui: 0xFFE066) }
+	static let dim: Color = Color.white.opacity(0.7)
+	static let rarityColors: [UInt32] = [0xE8E8E8, 0x6AD86A, 0x5AA8FF, 0xC070FF, 0xFFB030]
+	static let rarityNames: [String] = ["Common", "Uncommon", "Rare", "Epic", "Legendary"]
+}
+
+/// A titled block of controls
+struct ModSection<C: View>: View {
+	let title: String
+	var help: String = ""
+	@ViewBuilder var content: () -> C
+	var body: some View {
+		VStack(alignment: .leading, spacing: 8) {
+			Text(verbatim: title).font(.pixel(15)).foregroundColor(ModUI.gold)
+			if !help.isEmpty {
+				Text(verbatim: help).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+			}
+			content()
+		}
+		.padding(12)
+		.frame(maxWidth: .infinity, alignment: .leading)
+		.background(PixelBox(color: ModUI.card).opacity(0.95))
+	}
+}
+
+/// A number with a big slider: its name, its value, and the range it may take
+struct StatSlider: View {
+	let label: String
+	@Binding var value: Double
+	let range: ClosedRange<Double>
+	var step: Double = 0
+	var format: String = "%.1f"
+	var unit: String = ""
+	var body: some View {
+		VStack(alignment: .leading, spacing: 2) {
+			HStack {
+				Text(verbatim: label).font(.pixel(13, .bold)).foregroundColor(Color.white)
+				Spacer()
+				Text(verbatim: String(format: format, value) + unit).font(.pixel(13)).foregroundColor(ModUI.gold)
+			}
+			Slider(value: clamped, in: range, step: step)
+				.frame(minHeight: 34)
+		}
+	}
+
+	var clamped: Binding<Double> {
+		let r: ClosedRange<Double> = range
+		let b: Binding<Double> = $value
+		return Binding<Double>(get: { clampD(b.wrappedValue, r.lowerBound, r.upperBound) }, set: { b.wrappedValue = $0 })
+	}
+}
+
+/// A whole number on a slider
+struct IntSlider: View {
+	let label: String
+	@Binding var value: Int
+	let range: ClosedRange<Int>
+	var unit: String = ""
+	var body: some View {
+		StatSlider(label: label, value: asDouble, range: Double(range.lowerBound)...Double(range.upperBound), step: 1, format: "%.0f", unit: unit)
+	}
+
+	var asDouble: Binding<Double> {
+		let b: Binding<Int> = $value
+		return Binding<Double>(get: { Double(b.wrappedValue) }, set: { b.wrappedValue = Int($0.rounded()) })
 	}
 }

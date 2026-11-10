@@ -1,7 +1,7 @@
 # PixelRealm
 
 A 2D sandbox survival game for iPad, written in SwiftUI and run in Swift Playgrounds. The game is four
-files, `PixelRealm1.swift` to `PixelRealm4.swift` (about 61,000 lines in all, indented with tabs). The
+files, `PixelRealm1.swift` to `PixelRealm4.swift` (about 62,500 lines in all, indented with tabs). The
 user pastes each into its own file of one Swift Playgrounds app. It was one file until the user asked
 for four; deliver all four, and treat them as one program (Swift doesn't care which file holds what).
 
@@ -26,7 +26,10 @@ confirmed). `tools/buildcost.sh` measures both ways:
   95 s and 1,091 MB. Step 5b, suits built piece by piece (2.27 MB, 61,035 lines), first measured
   489 MB in part 2. The tile table and the tile art became text (`Tile.defText`, `TileArt.text`) and
   creature AI, spawning and combat moved back to the end of part 1: 466, 473, 469 and 464 MB, 89 s in
-  all; as one job 93 s and 1,194 MB. Steps 5a and 5b are not yet confirmed on the iPad.
+  all; as one job 93 s and 1,194 MB. Step 5c, rules, weather, machines, vehicles and looks in mods
+  (2.33 MB, 62,502 lines), first measured 471, 481, 486 and 487 MB; damage moved to part 1, custom
+  infusions to part 2 and the Mod Creator's first screen pieces to part 3: 478, 482, 482 and 479 MB,
+  113 s in all; as one job 92 s and 1,228 MB. Steps 5a, 5b and 5c are not yet confirmed on the iPad.
 - A job's peak can jump by 30 MB or more after a small edit (taking the recipe lines out of one
   function once raised part 2 from 473 to 509 MB), so a few MB either way is noise; measure again
   after moving code.
@@ -47,7 +50,7 @@ compiles and runs headless on Linux. If `/opt/pixelrealm` is missing, run `tools
 - `tools/run-tests.sh [suite ...]`: builds and runs suites from `tools/tests`, four at a time (all
   of them take several minutes). Pass only the suites you touched while iterating, and run them all
   before committing. Full output is in `/tmp/pixelrealm-build/<suite>/out.log`.
-- `tools/shots.sh power|weather|sky|cloudsheet|stick|alchemy|modplus|building|vehicles|mod5|suit5 [folder]`: PNG screenshots from the game's own renderer (`sky`: clouds by day, dusk, night and storm; `cloudsheet`: every cloud template; `stick`: the combat stick's dial; `alchemy`: mutated creatures, the worn suit, the new stations, and a sheet of the new icons and suit pictures; `modplus`: two custom dimensions and a boss in a phase; `building`: a furnished house with stairs and a lift, a blast throwing blocks, a beam under strain; `vehicles`: every new kit parked, a plane, helicopter and airship flying, a tank firing at a wrecked truck, a ship built from blocks with the assembler, a plane mid-turn; `mod5`: every tree design shape under a mod's sun with rays, the same land at night under a pictured moon, the Overworld under a mod's sun, a lit cavern dimension, a repainted zombie; `suit5`: a sheet of suit designs in their poses, a turret firing with a plate broken off, jet flight with a wing, a laser and a cannon shell).
+- `tools/shots.sh power|weather|sky|cloudsheet|stick|alchemy|modplus|building|vehicles|mod5|suit5|mod5c [folder]`: PNG screenshots from the game's own renderer (`sky`: clouds by day, dusk, night and storm; `cloudsheet`: every cloud template; `stick`: the combat stick's dial; `alchemy`: mutated creatures, the worn suit, the new stations, and a sheet of the new icons and suit pictures; `modplus`: two custom dimensions and a boss in a phase; `building`: a furnished house with stairs and a lift, a blast throwing blocks, a beam under strain; `vehicles`: every new kit parked, a plane, helicopter and airship flying, a tank firing at a wrecked truck, a ship built from blocks with the assembler, a plane mid-turn; `mod5`: every tree design shape under a mod's sun with rays, the same land at night under a pictured moon, the Overworld under a mod's sun, a lit cavern dimension, a repainted zombie; `suit5`: a sheet of suit designs in their poses, a turret firing with a plate broken off, jet flight with a wing, a laser and a cannon shell; `mod5c`: a mod's vehicle built from its kit, mod blocks on a power line and falling, rain in a mod's colour, a custom dimension's blizzard).
 - `tools/bench.sh`: chunk generation, painting, lighting and tick timings (debug build; compare
   with `GAME_SRC=<old file> tools/bench.sh`).
 - `tools/buildcost.sh`: the game's size, and the time and peak memory of a debug build like the
@@ -78,7 +81,10 @@ across chunk edges, saplings, checks; the climbable, sticky and decoration colli
 exosuit built piece by piece: coverage and guarding from the pieces there, hits landing by height, layers,
 pieces breaking off, bills and mending, old suits rebuilt, the finer sprite and its poses, jets that lift by
 thrust against weight, wings, turrets, cannons, lasers, boosters, batteries, solar, the magnet, suit
-materials, parts and designs in mods), `aero` (vehicles of
+materials, parts and designs in mods), `mod5c` (step 5c: a mod's rules of the game and each rule at play,
+start items, the Overworld's weather from a mod, more dimension weather, mod blocks' weight, falling,
+seats, beds and power roles, vehicles in mods and their kits, themes and which mod's theme is used, all
+of it saved in the mod and read from older mods), `aero` (vehicles of
 every kind: the plane, helicopter, airship, tank and truck kits flown and driven, designs too heavy to
 fly, turning in flight, blocks built onto vehicles, rafts that float or sink by their blocks, the
 assembler, shots, blasts and crashes, wrecks, mending, the autopilot, saves, a mod block as a part),
@@ -106,10 +112,14 @@ What the stand-ins can't tell you:
   the game a sixth bigger).
 - **Big tables as text.** A long table written as Swift code (a `switch` returning literals, or calls
   with many arguments) costs far more to compile than the same data in one string literal read once
-  at start-up: see `Tile.defText` and `TileArt.text`, checked against the old code when they changed.
+  at start-up: see `Tile.defText`, `TileArt.text` and `GameRule.specText`, checked against the old code
+  when they changed.
+- **Screen colours.** Buttons, panels and text on the game's screens use `Color(ui:)` (a mod's theme
+  recolours them, `ThemeRT`); the world, pixel art, previews and colour swatches use `Color(hex:)`.
 - **Saves.** Saved enums (`Tile: UInt8`, `MobKind`, `Mat`, `Gadget`, `RecipeCat`, `SoundID`, `Potion`,
   `Infusion`, `ExoMat`, `ExoPart`, `ExoCore`, `ExoModule` (wing ... magnet appended), `ExoSlot`, `SuitBone`,
-  `SuitShape`, `SuitKind`, `Dimension` (custom0-2 were appended),
+  `SuitShape`, `SuitKind`, `ModPowerRole`, `ThemeRole`, `ModBlockFunction` (seat, bed appended), `GameRule`
+  (its lines in `GameRule.specText` follow the cases), `Dimension` (custom0-2 were appended),
   `PartType` (vehicle parts: `block` and the aircraft parts were appended), `ProjKind`
   and the like) only get new cases appended at the end. Never reorder or remove cases. New `SaveData` fields are optional; new `Settings`
   fields are decoded with `decodeIfPresent` and a default.
@@ -161,10 +171,11 @@ What the stand-ins can't tell you:
 ## Map of the parts
 
 Sections start with `// ===== <name> =====` (grep for them). They are spread over the parts in order:
-part 1 `p01_util` to `p16a_combat`; part 2 `p16c_damage` to `p31c_blockphys`, then the start of `p32_modplus`
-(game content changes, versions, ore controls, sprite tools); part 3 the rest of `p32_modplus` (from custom
-infusions), `u01_art` to `u05_menu`, then `p33_vehicles`; part 4 `u07_mods`, `u08_alchemy`, `u09_modplus`,
-`u06_root`. New code goes into
+part 1 `p01_util` to `p16c_damage`; part 2 `p16b_bosses` to `p31c_blockphys`, then the start of `p32_modplus`
+(game content changes, versions, ore controls, sprite tools, custom infusions); part 3 the rest of
+`p32_modplus` (from boss phases, with the rules, weather, machines, vehicles and themes of step 5c at its
+end), `u01_art` to `u05_menu`, `p33_vehicles`, then the start of `u07_mods` (`ModSession`, `ModUI` and the
+first shared editor pieces); part 4 the rest of `u07_mods`, `u08_alchemy`, `u09_modplus`, `u06_root`. New code goes into
 the section it belongs to. A `private` or `fileprivate` name can only be used in its own part, so
 anything used across parts is internal (no modifier).
 
@@ -338,6 +349,27 @@ the Mod Test LOGIC tab, the sun and moon editor, the tree design editor), `u06_r
   `suitRun` (within the cores' output) and `suitSpend`; the Assembly Station charges a worn suit nearby
   (`runSuitDock`). Mods add `suitMats`, `suitParts` (each also an item) and `suitDesigns` (the SUITS tab;
   a design is saved from a TEST world's Assembly Station).
+- **Rules, weather, machines, vehicles and looks in mods (step 5c).** `ModPack.rules` holds numbers by
+  rule id (`GameRule`; names, ranges and help in `GameRule.specText`); `ModRuntime.rules` is what the
+  world's mods set (the lowest in the load order wins each rule) and `rule(_:)` reads it: `gravityG` and
+  `dayLength` are computed from it, and the hooks are in `updateSurvival` (hunger, healing),
+  `damagePlayer` (damage taken), `hurtMob` (dealt), `mineStep`, `monsterCap`/`animalCap`, the landing
+  (falls), `runMax` (walk), the jump, `skyLight` (night light), `die` → `dropBagOnDeath`, and
+  `applyHealthRule` (new worlds and `Game.load`). `ModPack.startItems` are given in `setupStartingKit`.
+  `ModPack.weather` (`ModWeather`: chance per `WeatherKind`, rain, wind, spell length, rain colour) is
+  used in `planStep`, `allowedProfile` and `drawPrecip`; custom dimensions have presets 0-8
+  (`customWeather`). Mod blocks: `weight`/`carry` (`blockPhys`), `falls` (`fallsLikeSand`,
+  `checkFalling`), the `seat` and `bed` functions, and `powerRole` (`ModPowerRole`: generator, solar,
+  battery, powered lamp, signal light) with `powerAmt`, through `powerRole`, `Tile.isPower` (the static
+  `powerTable` holds only game tiles), `PowerSpec`, `modGeneratorRate` and `modPowerLamp` (a lamp swaps
+  to its lit `#alt` tile). `ModPack.vehicles` (`ModVehicle` of `ModVehicleCell`s: a part, or a block
+  `tile:<n>` or a mod block key) are items too (their kit, `vehicleItem`); `useModItem` →
+  `placeModVehicle`; a TEST world keeps a vehicle with SAVE VEHICLE (`vehicleDesign`). `ModPack.theme`
+  (`ModTheme`): `ThemeRT` takes it from the enabled mods (the last one with a theme; `refresh` at the
+  title screen and after the Mod Creator) and maps the game's screen colours by `ThemeRole`, sets the
+  letters (`Font.pixel`), `PixelBox` corners and outline, the title screen and the HUD's size, solidity
+  and sides. Editors: the Mod Creator's WORLD & RULES, VEHICLES and LOOK tabs, and the block editor's
+  BUILDING MATERIAL and POWER sections.
 
 - **Mod Creator+.**
   - Changes to game content (`ModOverride`) are built into `OverrideRT` at activation; it restores the

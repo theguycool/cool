@@ -1,6 +1,6 @@
 // PIXEL REALM v2, part 1 of 4: utilities, tiles, items, recipes, creature sprites, world generation, chunks, structures, the Umbral
-// Realm, the world, light, physics, creatures, vehicles, the game state, the player, input and tools, creature AI and
-// spawning.
+// Realm, the world, light, physics, creatures, vehicles, the game state, the player, input and tools, creature AI,
+// spawning, combat and damage.
 // The game is four files that go together in one Swift Playgrounds app: PixelRealm1.swift to
 // PixelRealm4.swift. Each goes in its own file in the app (delete ContentView.swift; MyApp.swift can
 // hold part 1). All art is generated in code.
@@ -411,7 +411,8 @@ enum Tile: UInt8, CaseIterable, Codable {
 	/// stairs by raw value: 1 rising to the right, 2 rising to the left, 0 not a stair (see World.stairHit)
 	static let stairTable: [UInt8] = Tile.allCases.map { stairSide($0) }
 	static let deviceTable: [Bool] = Tile.allCases.map { isWeatherDevice($0) }
-	static let powerTable: [Bool] = Tile.allCases.map { powerRole($0) != .none }
+	/// the game's own devices (a mod block's power role is per world: see isPower)
+	static let powerTable: [Bool] = Tile.allCases.map { !$0.isMod && powerRole($0) != .none }
 	/// the tool that mines each reserved mod tile at full speed
 	static var modToolTable: [ToolType] = [ToolType](repeating: .pickaxe, count: ModLimits.blockSlots)
 	/// the first tile number reserved for mods
@@ -452,7 +453,7 @@ enum Tile: UInt8, CaseIterable, Codable {
 	var hardness: Double { return Tile.hardTable[i8(rawValue)] }
 	var supportsThings: Bool { return Tile.supportTable[i8(rawValue)] }
 	/// a Sparkworks device (or the wind turbine, which feeds power cable too)
-	var isPower: Bool { return Tile.powerTable[i8(rawValue)] }
+	var isPower: Bool { return Tile.powerTable[i8(rawValue)] || (isMod && ModRuntime.shared.powerTiles[rawValue] != nil) }
 
 	/// The tile a held block becomes when placed: a log item builds a solid log block, not a tree trunk
 	var placedForm: Tile {
@@ -9301,7 +9302,7 @@ final class World {
 			if before != after { c.bumpRows(min(before, after) - 1, max(before, after) + 13) }
 		}
 		noteEdit(x, y)
-		if Tile.powerTable[i8(old.rawValue)] || Tile.powerTable[i8(t.rawValue)] { powerTileChanged(x, y, old, t) }
+		if old.isPower || t.isPower { powerTileChanged(x, y, old, t) }
 		return old
 	}
 
@@ -10114,7 +10115,8 @@ struct Body {
 	var cy: Double { return y - h * 0.5 }
 }
 
-let gravityG: Double = 34.0
+/// How hard things fall (a mod's gravity rule scales it)
+var gravityG: Double { return 34.0 * ModRuntime.shared.rule(.gravity) }
 let terminalV: Double = 26.0
 
 extension World {
@@ -11795,7 +11797,8 @@ final class Game: ObservableObject, @unchecked Sendable {
 
 	// time
 	var timeOfDay: Double = 0.06
-	let dayLength: Double = 720
+	/// seconds of a whole day (12 minutes, or a mod's day length rule)
+	var dayLength: Double { return 60.0 * ModRuntime.shared.rule(.day) }
 	var dayCount: Int = 1
 	var clock: Double = 0
 	var playSeconds: Double = 0
@@ -12178,11 +12181,13 @@ final class Game: ObservableObject, @unchecked Sendable {
 	}
 
 	func setupStartingKit() {
+		applyHealthRule(newWorld: true)
 		if mode == .creative {
 			flying = false
 			return
 		}
 		_ = inv.add(.block(.torch), 4)
+		giveStartItems()
 	}
 
 	var gen: WorldGen { return world.gen }
@@ -12240,7 +12245,8 @@ final class Game: ObservableObject, @unchecked Sendable {
 	/// Open sky's light (15 at noon, 6 at midnight with the game's sun and moon): a sun's brightness
 	/// scales the daylight it adds, a moon's the light of the night (never the day's)
 	func skyLight(_ sun: Double, _ moon: Double) -> Double {
-		let night: Double = 6.0 * (dayFactor + (1.0 - dayFactor) * moon)
+		let nights: Double = ModRuntime.shared.rule(.nights)
+		let night: Double = 6.0 * (dayFactor + (1.0 - dayFactor) * moon * nights)
 		return night + 9.0 * dayFactor * sun
 	}
 
@@ -12424,7 +12430,7 @@ extension Game {
 			lastVy = 0
 			return
 		}
-		var runMax: Double = 7.4 * speedMult * (wearing(.swiftBoots) ? 1.18 : 1.0) * wxSlow * (1.0 + effects.value(.speed) / 100.0) * (1.0 + armorInf.speed) * suitSpeedMul
+		var runMax: Double = 7.4 * speedMult * ModRuntime.shared.rule(.walk) * (wearing(.swiftBoots) ? 1.18 : 1.0) * wxSlow * (1.0 + effects.value(.speed) / 100.0) * (1.0 + armorInf.speed) * suitSpeedMul
 		// heavy weapons commit you to the blow: slower on your feet while it lasts
 		if swingT > 0 || strikeT > 0, let it = heldItem, it.isMeleeWeapon { runMax *= it.melee.moveScale }
 		// a mod's sticky block holds the player back
@@ -12512,7 +12518,7 @@ extension Game {
 		if jumpPressed { jumpBuf = 0.13 } else { jumpBuf -= dt }
 		if jumpBuf > 0 && coyote > 0 && !swimming {
 			// a jump boost raises the jump's height by its percentage
-			pb.vy = -15.9 * sqrt(1.0 + effects.value(.jump) / 100.0) * suitJumpMul()
+			pb.vy = -15.9 * sqrt((1.0 + effects.value(.jump) / 100.0) * ModRuntime.shared.rule(.jump)) * suitJumpMul()
 			coyote = 0
 			jumpBuf = 0
 			pb.onGround = false
@@ -12546,7 +12552,7 @@ extension Game {
 		if !pb.onGround && pb.vy > 0 { fallPeak = max(fallPeak, pb.vy) }
 		if pb.onGround && wasAir {
 			if fallPeak > 20.0 && !swimming && mode != .creative && !godMode {
-				var dmg: Double = (fallPeak - 20.0) * 1.15
+				var dmg: Double = (fallPeak - 20.0) * 1.15 * ModRuntime.shared.rule(.falls)
 				// thrown by a tornado: a hard landing, but one that can be lived through
 				if flingT > 0 { dmg = settings.weatherHurtsPlayer ? min(dmg, 3.0) : 0 }
 				if dmg > 0 { damagePlayer(dmg, from: pb.x, knock: 0, ignoreArmor: true) }
@@ -12673,7 +12679,7 @@ extension Game {
 		}
 		// hunger
 		let rate: Double = (ix != 0 ? 0.030 : 0.016) * (pb.inWater ? 1.3 : 1.0)
-		hunger = max(0, hunger - rate * dt)
+		hunger = max(0, hunger - rate * ModRuntime.shared.rule(.hunger) * dt)
 		if hunger <= 0 {
 			starveT += dt
 			if starveT >= 3.0 {
@@ -12684,9 +12690,10 @@ extension Game {
 			starveT = 0
 		}
 		// a frozen body does not heal until it has warmed up
-		if hunger >= 14 && hp < maxHP && bodyCold < 0.9 {
+		let healRule: Double = ModRuntime.shared.rule(.healing)
+		if hunger >= 14 && hp < maxHP && bodyCold < 0.9 && healRule > 0 {
 			regenT += dt
-			let period: Double = hunger >= 18 ? 0.9 : 1.6
+			let period: Double = (hunger >= 18 ? 0.9 : 1.6) / healRule
 			if regenT >= period {
 				regenT = 0
 				hp = min(maxHP, hp + 1)
@@ -12701,7 +12708,9 @@ extension Game {
 	func damagePlayer(_ dmg: Double, from sx: Double, knock: Double = 6, ignoreArmor: Bool = false) {
 		if dead || godMode || mode == .creative { return }
 		if invuln > 0 && !ignoreArmor { return }
-		var d: Double = dmg
+		let hurtRule: Double = ModRuntime.shared.rule(.hurt)
+		if hurtRule <= 0 { return }
+		var d: Double = dmg * hurtRule
 		if !ignoreArmor { d *= 1.0 - armorShare(totalDefense) }
 		d = max(1.0, d.rounded())
 		hp -= d
@@ -12731,6 +12740,7 @@ extension Game {
 
 	func die() {
 		if dead { return }
+		dropBagOnDeath()
 		dead = true
 		hp = 0
 		deathT = 0
@@ -13918,7 +13928,10 @@ func stairMirror(_ t: Tile) -> Tile {
 func isStorageFurniture(_ t: Tile) -> Bool { return t == .cabinet || t == .wardrobe }
 
 /// Furniture the player can sit on
-func isSeat(_ t: Tile) -> Bool { return t == .chair || t == .sofa }
+func isSeat(_ t: Tile) -> Bool { return t == .chair || t == .sofa || (t.isMod && ModRuntime.shared.seatTiles.contains(t.rawValue)) }
+
+/// Sand, and the mod blocks that fall like it
+func fallsLikeSand(_ t: Tile) -> Bool { return t == .sand || (t.isMod && ModRuntime.shared.fallTiles.contains(t.rawValue)) }
 
 struct DecayZone {
 	var x: Int
@@ -14200,7 +14213,7 @@ extension Game {
 		}
 		if isCreative { speed = 1000 }
 		mineNeed = max(0.05, def.hard * 1.5)
-		mineP += dt * speed * mineBoost(kind)
+		mineP += dt * speed * mineBoost(kind) * ModRuntime.shared.rule(.mining)
 		if useCD <= 0 {
 			swingT = 0.22
 			swingDir = aimFacing()
@@ -14309,7 +14322,7 @@ extension Game {
 			if a2 == .wheat1 || a2 == .wheat2 || a2 == .wheat3 || a2 == .carrot1 || a2 == .carrot2 || a2 == .carrot3 { breakTile(x, y - 1, byPlayer) }
 		}
 		// unsupported sand above falls
-		if world.tile(x, y - 1) == .sand { checkFalling(x, y - 1) }
+		if fallsLikeSand(world.tile(x, y - 1)) { checkFalling(x, y - 1) }
 		bumpHUD()
 	}
 
@@ -16434,9 +16447,12 @@ extension Game {
 	/// How many monsters may be about at once (surface or underground) at this night-danger setting
 	func monsterCap(_ place: SpawnPlace) -> Int {
 		let d: Int = clampI(settings.nightDanger, 0, 2)
-		if place == .surface || place == .ocean { return [3, 6, 10][d] }
-		return [6, 9, 12][d]
+		let base: Int = (place == .surface || place == .ocean) ? [3, 6, 10][d] : [6, 9, 12][d]
+		return Int((Double(base) * ModRuntime.shared.rule(.monsters)).rounded())
 	}
+
+	/// How many animals (and fish) may be about at once (9, or as a mod's rule has it)
+	var animalCap: Int { return Int((9.0 * ModRuntime.shared.rule(.animals)).rounded()) }
 
 	func updateSpawning(_ dt: Double) {
 		if monsterSpawnCD > 0 { monsterSpawnCD -= dt }
@@ -16556,15 +16572,15 @@ extension Game {
 				if !monstersEnabled || settings.peaceful { continue }
 				if r.kind.isPredator {
 					// wild predators have their own small number and come by day too
-					if predators >= 3 { continue }
+					if predators >= min(3, cap) { continue }
 				} else {
 					if hostile >= cap { capped = true; continue }
 					if !monsterBlock.isEmpty { continue }
 				}
 			} else if r.kind == .fish || (r.slot >= 0 && r.place == .ocean) {
-				if aquatic >= 9 { continue }
+				if aquatic >= animalCap { continue }
 			} else {
-				if passive >= 9 { continue }
+				if passive >= animalCap { continue }
 			}
 			cands.append(r)
 			total += r.weight
@@ -16651,7 +16667,7 @@ extension Game {
 		if m.kind == .rex && m.tame && byPlayer { return }
 		// a wild animal remembers being hurt by the player (it fights back, see wildProvoked)
 		if byPlayer { m.lastHitByPlayer = clock }
-		var d: Double = dmg
+		var d: Double = byPlayer ? dmg * ModRuntime.shared.rule(.hit) : dmg
 		var kb: Double = knock
 		if m.blocking && m.kind == .skeleton && dirX != 0 && dirX * Double(m.dir) < 0 {
 			if heavy {
@@ -17128,4 +17144,616 @@ extension Game {
 			j += 1
 		}
 	}
+}
+
+// ===== p16c_damage =====
+
+// MARK: - Unified damage system
+// Every source of harm (swings, projectiles, boss stomps, explosions, falling blocks, vehicles, lava,
+// fire, spikes) builds a DamageInfo and goes through the same few functions. They decide who can be
+// hurt (factions), stop one attack from hitting the same target every frame (per-attack cooldown
+// keys), apply armor and resistances, push targets back, and remember who to credit for a kill.
+
+enum DamageType: Int {
+	case melee, projectile, explosion, fire, lava, impact, stomp, contact, fall, drown, starve, hazard, crush
+	/// lightning from the storm rod
+	case shock
+	/// potions (appended): poison over time, and the searing splash's burn
+	case poison, magic
+
+	/// Armor does not help against these
+	var bypassesArmor: Bool {
+		switch self {
+		case .fire, .lava, .fall, .drown, .starve, .poison: return true
+		default: return false
+		}
+	}
+
+	/// Area attacks hit everything in range (except their owner), including members of the attacker's
+	/// own side. Aimed attacks never hurt the attacker's own side.
+	var isArea: Bool {
+		switch self {
+		case .explosion, .stomp, .impact, .crush, .fire, .lava, .hazard: return true
+		default: return false
+		}
+	}
+}
+
+enum Faction: Int {
+	case player, ally, wild, hostile, pirate, umbral, boss, environment
+}
+
+enum SourceKind: Int {
+	case player, mob, environment
+}
+
+struct DamageSource {
+	var kind: SourceKind
+	var id: Int
+	var faction: Faction
+	/// how hard a creature's blows land (mutation doubles it, weakness softens it): fixed when the blow starts
+	var mult: Double = 1
+
+	static let player: DamageSource = DamageSource(kind: .player, id: 0, faction: .player)
+	static let environment: DamageSource = DamageSource(kind: .environment, id: -1, faction: .environment)
+	static func mob(_ m: Mob, _ f: Faction) -> DamageSource { return DamageSource(kind: .mob, id: m.id, faction: f, mult: m.dmgMul) }
+}
+
+struct DamageInfo {
+	var amount: Double
+	var type: DamageType
+	var source: DamageSource
+	/// knockback direction (-1 / 1); 0 = push away from the origin
+	var dirX: Double = 0
+	var knock: Double = 0
+	var originX: Double = 0
+	var originY: Double = 0
+	/// attack instance id: the same key never hits the same target twice within `cooldown` seconds
+	var key: Int = 0
+	var cooldown: Double = 0.5
+	/// a crushing blow (war hammer): breaks a raised guard and cracks stone hides
+	var heavy: Bool = false
+	/// a critical blow (shown bigger and brighter)
+	var crit: Bool = false
+
+	init(amount: Double, type: DamageType, source: DamageSource) {
+		self.amount = amount
+		self.type = type
+		self.source = source
+	}
+}
+
+/// Bucketed mob positions, rebuilt once per frame, so area attacks and projectiles only look at
+/// creatures near them instead of every mob in the world.
+final class MobGrid {
+	static let cell: Int = 8
+	var buckets: [Int: [Mob]] = [:]
+
+	func rebuild(_ mobs: [Mob]) {
+		for k in buckets.keys { buckets[k]?.removeAll(keepingCapacity: true) }
+		for m in mobs where m.hp > 0 && !m.removed {
+			let k: Int = floorDiv(Int(floor(m.b.x)), MobGrid.cell)
+			if buckets[k] == nil { buckets[k] = [] }
+			buckets[k]?.append(m)
+		}
+		if buckets.count > 256 { buckets = buckets.filter { !$0.value.isEmpty } }
+	}
+}
+
+func isHeatImmune(_ k: MobKind) -> Bool {
+	switch k {
+	case .imp, .emberSlime, .cinderBat, .warden: return true
+	default: return false
+	}
+}
+
+/// Fraction of damage a creature takes from a damage type (1 = full)
+func damageResist(_ k: MobKind, _ t: DamageType) -> Double {
+	switch (k, t) {
+	case (.imp, .fire), (.emberSlime, .fire), (.cinderBat, .fire), (.imp, .lava), (.emberSlime, .lava), (.cinderBat, .lava): return 0
+	case (.wraith, .fall), (.bat, .fall), (.cinderBat, .fall), (.crow, .fall): return 0
+	case (.skeleton, .projectile): return 0.75
+	case (.bearBoss, .lava), (.rex, .lava): return 0.5
+	case (.bearBoss, .explosion), (.rex, .explosion): return 0.6
+	case (.slime, .fall), (.emberSlime, .fall), (.cat, .fall), (.frog, .fall): return 0.2
+	// the golem's stone hide shrugs off blades and arrows (a hammer's crushing blow gets through)
+	case (.golem, .melee), (.golem, .contact): return 0.55
+	case (.golem, .projectile): return 0.35
+	case (.golem, .fire), (.golem, .fall): return 0.2
+	case (.golem, .explosion): return 1.25
+	case (.sentinel, .fall), (.warden, .fall), (.warden, .lava), (.mimic, .fall): return 0
+	case (.sentinel, .projectile): return 0.8
+	case (.warden, .explosion): return 0.7
+	// lightning: stone and crystal carry it poorly
+	case (.golem, .shock): return 0.6
+	case (.sentinel, .shock): return 0.5
+	// poison does not take hold in the dead, in stone or crystal, or in slimes
+	case (.zombie, .poison), (.skeleton, .poison), (.wraith, .poison), (.golem, .poison), (.sentinel, .poison), (.warden, .poison), (.slime, .poison), (.emberSlime, .poison): return 0
+	case (.warden, .shock): return 0.75
+	default: return 1
+	}
+}
+
+/// Segment/box intersection (slab method). Returns the entry fraction along the segment, or nil.
+func segmentBoxT(_ x0: Double, _ y0: Double, _ x1: Double, _ y1: Double, _ bx0: Double, _ by0: Double, _ bx1: Double, _ by1: Double) -> Double? {
+	let dx: Double = x1 - x0
+	let dy: Double = y1 - y0
+	var tmin: Double = 0
+	var tmax: Double = 1
+	if abs(dx) < 1e-9 {
+		if x0 < bx0 || x0 > bx1 { return nil }
+	} else {
+		var ta: Double = (bx0 - x0) / dx
+		var tb: Double = (bx1 - x0) / dx
+		if ta > tb { let s: Double = ta; ta = tb; tb = s }
+		tmin = max(tmin, ta)
+		tmax = min(tmax, tb)
+		if tmin > tmax { return nil }
+	}
+	if abs(dy) < 1e-9 {
+		if y0 < by0 || y0 > by1 { return nil }
+	} else {
+		var ta: Double = (by0 - y0) / dy
+		var tb: Double = (by1 - y0) / dy
+		if ta > tb { let s: Double = ta; ta = tb; tb = s }
+		tmin = max(tmin, ta)
+		tmax = min(tmax, tb)
+		if tmin > tmax { return nil }
+	}
+	return tmin
+}
+
+extension World {
+	/// First solid tile along a segment: (tile x, tile y, fraction along the segment)
+	func segmentSolidT(_ x0: Double, _ y0: Double, _ x1: Double, _ y1: Double) -> (Int, Int, Double)? {
+		let dx: Double = x1 - x0
+		let dy: Double = y1 - y0
+		let dist: Double = sqrt(dx * dx + dy * dy)
+		let n: Int = max(1, Int(ceil(dist / 0.2)))
+		var i: Int = 1
+		while i <= n {
+			let t: Double = Double(i) / Double(n)
+			let tx: Int = Int(floor(x0 + dx * t))
+			let ty: Int = Int(floor(y0 + dy * t))
+			if tile(tx, ty).solid {
+				// refine the entry point against the tile box
+				let et: Double = segmentBoxT(x0, y0, x1, y1, Double(tx), Double(ty), Double(tx + 1), Double(ty + 1)) ?? t
+				return (tx, ty, et)
+			}
+			i += 1
+		}
+		return nil
+	}
+
+	/// True when nothing solid blocks the straight line between two points
+	func lineClear(_ x0: Double, _ y0: Double, _ x1: Double, _ y1: Double) -> Bool {
+		return segmentSolidT(x0, y0, x1, y1) == nil
+	}
+}
+
+extension Game {
+	// MARK: sides
+
+	func faction(of m: Mob) -> Faction {
+		if m.tame { return .ally }
+		switch m.kind {
+		case .pirate, .pirateGunner, .pirateCaptain: return .pirate
+		case .imp, .emberSlime, .cinderBat: return .umbral
+		case .bearBoss, .rex, .sentinel, .warden: return .boss
+		case .custom: return ModRuntime.shared.mob(m.cslot)?.faction ?? .wild
+		default: return m.def.hostile ? .hostile : .wild
+		}
+	}
+
+	/// May `src` hurt a target of `targetFaction`?
+	func canHarm(_ src: DamageSource, targetFaction tf: Faction, targetID: Int, area: Bool) -> Bool {
+		// nothing hurts itself (the player's own bombs are the exception, handled in explode())
+		if src.kind == .mob && src.id == targetID { return false }
+		if src.kind == .player && tf == .player { return false }
+		switch src.faction {
+		case .environment, .boss: return true
+		case .player: return tf != .ally
+		case .ally: return tf != .player && tf != .ally
+		default:
+			if area { return true }
+			return tf != src.faction
+		}
+	}
+
+	// MARK: queries
+
+	func mobsNear(_ x0: Double, _ x1: Double) -> [Mob] {
+		Perf.shared.countDamage()
+		let c0: Int = floorDiv(Int(floor(x0)), MobGrid.cell)
+		let c1: Int = floorDiv(Int(floor(x1)), MobGrid.cell)
+		if c1 - c0 > 64 { return mobs }
+		var out: [Mob] = []
+		var c: Int = c0
+		while c <= c1 {
+			if let b = mobGrid.buckets[c] { out.append(contentsOf: b) }
+			c += 1
+		}
+		return out
+	}
+
+	// MARK: applying damage
+
+	/// Damages a creature. Returns true if the hit landed.
+	@discardableResult
+	func applyMobDamage(_ m: Mob, _ info: DamageInfo) -> Bool {
+		if m.hp <= 0 || m.removed { return false }
+		if !canHarm(info.source, targetFaction: faction(of: m), targetID: m.id, area: info.type.isArea) { return false }
+		if info.key != 0 {
+			if let last = m.hitStamps[info.key], clock - last < info.cooldown { return false }
+			m.hitStamps[info.key] = clock
+			if m.hitStamps.count > 24 { m.hitStamps = m.hitStamps.filter { clock - $0.value < 4.0 } }
+		}
+		var amount: Double = info.amount * damageResist(m.kind, info.type) * (info.source.kind == .mob ? info.source.mult : 1.0)
+		if m.kind == .custom, let r = ModRuntime.shared.mob(m.cslot) {
+			amount *= r.resist(info.type) * (1.0 - m.phaseDef)
+			// changing phase: blows glance off
+			if m.phaseShield > 0 {
+				if info.source.kind == .player { spawnParticles(m.b.x, m.b.cy, 0xE0E8FF, 3, 2.5, 0.25, 6) }
+				return false
+			}
+		}
+		if info.heavy && m.kind == .golem { amount *= 1.9 }
+		if info.source.kind == .player {
+			amount *= dmgOutMult * (1.0 + effects.value(.strength) / 100.0)
+			if wearing(.wardenSigil) { amount *= 1.2 }
+			if isUndead(m.kind) && wearing(.silverCharm) { amount *= 1.25 }
+		}
+		if amount <= 0 { return false }
+		let byPlayer: Bool = info.source.kind == .player
+		if byPlayer { m.lastHitByPlayer = clock }
+		m.lastAttacker = info.source.id
+		var dir: Double = info.dirX
+		if dir == 0 && info.knock > 0 { dir = m.b.x >= info.originX ? 1.0 : -1.0 }
+		hurtMob(m, amount, dir, info.knock, byPlayer, heavy: info.heavy, crit: info.crit)
+		return true
+	}
+
+	/// Damages the player. Returns true if the hit landed.
+	@discardableResult
+	func hurtPlayer(_ info: DamageInfo) -> Bool {
+		if dead { return false }
+		if !canHarm(info.source, targetFaction: .player, targetID: 0, area: info.type.isArea) && info.source.kind != .player { return false }
+		if info.key != 0 {
+			if let last = playerHitStamps[info.key], clock - last < info.cooldown { return false }
+			playerHitStamps[info.key] = clock
+			if playerHitStamps.count > 24 { playerHitStamps = playerHitStamps.filter { clock - $0.value < 4.0 } }
+		}
+		if effects.value(.fireproof) > 0 && (info.type == .fire || info.type == .lava) { return false }
+		let before: Double = hp
+		var ward: Double = wearing(.wardenSigil) ? 0.85 : 1.0
+		ward *= 1.0 - clampD(effects.value(.resistance), 0, 90) / 100.0
+		if info.source.kind == .mob && wearing(.silverCharm), let src = mobs.first(where: { $0.id == info.source.id }), isUndead(src.kind) { ward *= 0.75 }
+		// armour infusions and the suit take their share first
+		let amount: Double = guardedAmount(info)
+		if amount <= 0.001 { return false }
+		damagePlayer(amount * dmgInMult * ward, from: info.originX, knock: info.knock * knockTaken, ignoreArmor: info.type.bypassesArmor)
+		if hp < before { thornsBack(info, amount) }
+		if hp < before { customHurtTriggers() }
+		if hp < before && !logicRT.isEmpty { fireLogic(.playerHurt) }
+		return hp < before
+	}
+
+	/// Hits everything (player and creatures) inside a box
+	func damageBox(_ x0: Double, _ y0: Double, _ x1: Double, _ y1: Double, _ info: DamageInfo) {
+		if !dead && pb.right > x0 && pb.left < x1 && pb.y > y0 && pb.top < y1 { _ = hurtPlayer(info) }
+		for m in mobsNear(x0 - 4, x1 + 4) {
+			if m.hp <= 0 { continue }
+			if m.b.right > x0 && m.b.left < x1 && m.b.y > y0 && m.b.top < y1 { applyMobDamage(m, info) }
+		}
+	}
+
+	/// Hits everything within `radius` of a point. With falloff, damage drops to 35% at the edge;
+	/// with lineOfSight, targets behind solid blocks are spared.
+	func damageArea(_ cx: Double, _ cy: Double, radius: Double, _ info: DamageInfo, falloff: Bool, lineOfSight: Bool) {
+		func scaled(_ d: Double) -> DamageInfo {
+			var i: DamageInfo = info
+			if falloff { i.amount = info.amount * (1.0 - 0.65 * clampD(d / radius, 0, 1)) }
+			i.knock = info.knock * (falloff ? (1.0 - 0.5 * clampD(d / radius, 0, 1)) : 1.0)
+			i.originX = cx
+			i.originY = cy
+			return i
+		}
+		if !dead {
+			let d: Double = boxDistance(cx, cy, pb.left, pb.top, pb.right, pb.y)
+			if d <= radius && (!lineOfSight || world.lineClear(cx, cy, pb.x, pb.cy)) { _ = hurtPlayer(scaled(d)) }
+		}
+		for m in mobsNear(cx - radius - 4, cx + radius + 4) {
+			if m.hp <= 0 { continue }
+			let d: Double = boxDistance(cx, cy, m.b.left, m.b.top, m.b.right, m.b.y)
+			if d > radius { continue }
+			if lineOfSight && !world.lineClear(cx, cy, m.b.x, m.b.cy) { continue }
+			applyMobDamage(m, scaled(d))
+		}
+	}
+
+	func boxDistance(_ px: Double, _ py: Double, _ x0: Double, _ y0: Double, _ x1: Double, _ y1: Double) -> Double {
+		let dx: Double = max(0, max(x0 - px, px - x1))
+		let dy: Double = max(0, max(y0 - py, py - y1))
+		return sqrt(dx * dx + dy * dy)
+	}
+
+	// MARK: explosions
+
+	func explode(_ x: Double, _ y: Double, radius: Double, power: Double, source: DamageSource, breakBlocks: Bool) {
+		sfx(.explosion, at: x, 1.0)
+		var info = DamageInfo(amount: power, type: .explosion, source: source)
+		info.knock = 11.0
+		info.key = newID()
+		info.cooldown = 1.0
+		damageArea(x, y, radius: radius, info, falloff: true, lineOfSight: true)
+		// the thrower is not immune to their own bomb, but takes less
+		if source.kind == .player && !dead {
+			let d: Double = boxDistance(x, y, pb.left, pb.top, pb.right, pb.y)
+			if d <= radius && world.lineClear(x, y, pb.x, pb.cy) {
+				damagePlayer(power * 0.45 * (1.0 - 0.65 * clampD(d / radius, 0, 1)), from: x, knock: 9.0)
+			}
+		}
+		if breakBlocks { blastBlocks(x, y, radius: radius, power: power) }
+		if !vehicles.isEmpty { blastVehicles(x, y, radius: radius, power: power) }
+		for s in ships where abs(s.x - x) < radius + 4.5 && abs(s.deckY(Double(WorldGen.sea)) - y) < radius + 2 {
+			s.hp -= power
+			s.hitT = 0.3
+		}
+		spawnParticles(x, y, 0xFFC050, 18, 8.0, 0.5, 2)
+		spawnParticles(x, y, 0x606060, 12, 4.0, 1.0, -3)
+		addShake(0.6)
+		// the blast lights up its surroundings for a moment (the light map floods it through open space,
+		// so walls still cast shadows), fading out over the same time as the fire particles
+		addLightFlash(x, y, peak: 15, dur: 0.75, radius: radius + 2.5)
+	}
+
+	// MARK: hazards for creatures
+
+	/// Lava, fire, spikes, cactus and fall damage for every creature, through the same damage path
+	/// as everything else. Hazards are timed (not per frame) and resistances apply.
+	func mobHazards(_ m: Mob, _ dt: Double) {
+		if m.removed || m.downed { return }
+		if m.hasStatus { mobStatus(m, dt) }
+		if m.hazardT > 0 { m.hazardT -= dt }
+		let b: Body = m.b
+		let def: MobDef = m.def
+		let hw: Double = b.w * 0.5
+		let x0: Double = b.x - hw
+		let x1: Double = b.x + hw
+		let immune: Bool = heatImmune(m)
+		let fx: Int = Int(floor(b.x))
+		// lava: physics already worked out whether the body is in lava; also catch feet just touching it
+		let inLava: Bool = b.inLava || world.tile(fx, Int(floor(b.y - 0.1))) == .lava
+		if inLava && !immune {
+			m.burn = max(m.burn, 3.0)
+			if m.hazardT <= 0 {
+				m.hazardT = 0.35
+				var info = DamageInfo(amount: m.isBoss ? 14 : 6, type: .lava, source: .environment)
+				info.originX = m.b.x
+				applyMobDamage(m, info)
+				if m.hp > 0 && !m.def.flying { m.b.vy = min(m.b.vy, -7.0) }
+			}
+		}
+		// burning
+		if m.burn > 0 {
+			if immune || m.b.inWater {
+				m.burn = 0
+			} else {
+				m.burn -= dt
+				m.burnTick += dt
+				if m.burnTick >= 0.5 {
+					m.burnTick = 0
+					var info = DamageInfo(amount: m.isBoss ? 3 : 2, type: .fire, source: .environment)
+					info.originX = m.b.x
+					applyMobDamage(m, info)
+					spawnParticles(m.b.x, m.b.y - m.b.h * 0.7, 0xFF8030, 2, 1.5, 0.4, -4)
+				}
+			}
+		}
+		// spikes, cactus, campfires (checked every 4th frame per creature, staggered; these only
+		// apply damage on a 0.6 s timer anyway)
+		if !def.flying && m.hazardT <= 0 && (frameNo &+ m.id) & 3 == 0 {
+			if let t = world.boxHurts(x0 + 0.05, m.b.y - 0.6, x1 - 0.05, m.b.y + 0.05) ?? world.boxHurts(x0 - 0.02, m.b.top + 0.1, x1 + 0.02, m.b.y - 0.1) {
+				if t == .spikes || t == .cactus || t.isMod {
+					m.hazardT = 0.6
+					let dmg: Double = t.isMod ? (ModRuntime.shared.blockDef(t)?.power ?? 4) : (t == .spikes ? 5 : 2)
+					var info = DamageInfo(amount: dmg, type: .hazard, source: .environment)
+					info.originX = m.b.x - Double(m.dir)
+					info.knock = 3.0
+					applyMobDamage(m, info)
+				}
+			}
+			let fy: Int = Int(floor(b.y - 0.5))
+			if world.tile(fx, fy) == .campfire && !immune { m.burn = max(m.burn, 2.0) }
+		}
+		// falling (knockback off a ledge counts too)
+		if !def.flying && m.kind != .fish {
+			if !m.b.onGround && m.b.vy > 0 && !m.b.inWater { m.fallPeak = max(m.fallPeak, m.b.vy) }
+			if m.b.onGround || m.b.inWater {
+				if m.fallPeak > 23.0 && !m.b.inWater && !m.isBoss {
+					var info = DamageInfo(amount: (m.fallPeak - 21.0) * 1.5, type: .fall, source: .environment)
+					info.originX = m.b.x
+					applyMobDamage(m, info)
+				}
+				m.fallPeak = 0
+			}
+		}
+	}
+
+	/// Dead creatures topple, fall and fade out for a moment before they are removed
+	func updateDying(_ dt: Double) {
+		for m in mobs where m.hp <= 0 && !m.removed {
+			if m.deathT < 0 { m.deathT = 0 }
+			m.deathT += dt
+			if !m.def.flying || m.deathT > 0.1 {
+				m.b.vy = min(m.b.vy + gravityG * dt, terminalV)
+				m.b.vx *= (1.0 - min(1.0, dt * 4.0))
+				if m.deathT < 0.8 { world.moveBody(&m.b, dt, stepUp: 0, dropThrough: false, decks: []) }
+			}
+			if m.deathT > 0.7 { m.removed = true }
+		}
+	}
+
+	// MARK: player fire
+
+	func updatePlayerBurn(_ dt: Double) {
+		if playerBurn <= 0 { return }
+		if pb.inWater || mode == .creative { playerBurn = 0; return }
+		// the ember charm makes flames die out twice as fast
+		playerBurn -= dt * (wearing(.emberCharm) ? 2.0 : 1.0)
+		playerBurnTick += dt
+		if playerBurnTick >= 0.6 {
+			playerBurnTick = 0
+			var info = DamageInfo(amount: 1, type: .fire, source: .environment)
+			info.originX = pb.x
+			_ = hurtPlayer(info)
+			spawnParticles(pb.x, pb.y - 1.2, 0xFF8030, 2, 1.5, 0.4, -4)
+		}
+	}
+
+	// MARK: falling blocks
+
+	// MARK: light flashes
+
+	func addLightFlash(_ x: Double, _ y: Double, peak: Int, dur: Double, radius: Double, color: UInt32 = 0xFF8A30) {
+		// a cap keeps a chain of explosions from piling up work; the oldest gives way
+		if flashes.count >= 12 { flashes.removeFirst() }
+		flashes.append(LightFlash(x: x, y: y, peak: clampI(peak, 0, 15), dur: dur, radius: radius, color: color))
+	}
+
+	func updateFlashes(_ dt: Double) {
+		if flashes.isEmpty { return }
+		var keep: [LightFlash] = []
+		for f0 in flashes {
+			var f: LightFlash = f0
+			f.age += dt
+			if f.age < f.dur { keep.append(f) }
+		}
+		flashes = keep
+	}
+
+	/// Sand (and a mod's blocks that fall) with nothing under it falls; it hurts whatever it lands on
+	func checkFalling(_ x: Int, _ y: Int) {
+		var yy: Int = y
+		var n: Int = 0
+		while n < 16 && fallsLikeSand(world.tile(x, yy)) {
+			let below: Tile = world.tile(x, yy + 1)
+			if below.supportsThings || below.isPlatform { break }
+			let t: Tile = world.tile(x, yy)
+			world.set(x, yy, .air)
+			fallingBlocks.append(FallingBlock(x: Double(x) + 0.5, y: Double(yy) + 1.0, vy: 0, tile: t, uid: newID()))
+			yy -= 1
+			n += 1
+		}
+	}
+
+	/// Moves the blocks on the move. Sand drops straight down; a thrown block also flies sideways,
+	/// turns, is carried by a storm's wind (less the heavier it is), bounces off walls and slides along
+	/// the ground until it is slow, then settles back into a block (settleBlock). Anything still in the
+	/// air after 14 s settles where it is. A heavy, fast block hurts what it hits.
+	func updateFallingBlocks(_ dt: Double) {
+		if fallingBlocks.isEmpty { return }
+		var keep: [FallingBlock] = []
+		for fb0 in fallingBlocks {
+			var fb: FallingBlock = fb0
+			fb.age += dt
+			fb.vy = min(fb.vy + gravityG * dt, terminalV)
+			if fb.flung {
+				windOnBlock(&fb, dt)
+				fb.vx *= exp(-dt * 0.35)
+				fb.ang += fb.spin * dt
+				let nx: Double = fb.x + fb.vx * dt
+				let side: Double = nx + (fb.vx >= 0 ? 0.45 : -0.45)
+				if world.solid(Int(floor(side)), Int(floor(fb.y - 0.5))) {
+					fb.vx = -fb.vx * 0.3
+					fb.spin *= -0.5
+				} else {
+					fb.x = nx
+				}
+			}
+			let ny: Double = fb.y + fb.vy * dt
+			// crush whatever is in the way while moving fast enough (heavier blocks hit harder)
+			let speed: Double = max(fb.vy, abs(fb.vx))
+			if speed > 4.0 {
+				var info = DamageInfo(amount: (2.0 + speed * 0.4) * clampD(0.5 + fb.mass * 0.3, 0.5, 2.5), type: .crush, source: .environment)
+				info.originX = fb.x
+				info.originY = fb.y - 1.0
+				info.key = fb.uid
+				info.cooldown = 5.0
+				damageBox(fb.x - 0.45, fb.y - 1.0, fb.x + 0.45, max(ny, fb.y), info)
+			}
+			let tx: Int = Int(floor(fb.x))
+			if fb.vy < 0 {
+				// rising: a ceiling stops it
+				if world.solid(tx, Int(floor(ny - 1.0))) { fb.vy = 0 } else { fb.y = ny }
+				keep.append(fb)
+				continue
+			}
+			let landRow: Int = Int(floor(ny))
+			if world.tile(tx, landRow).supportsThings || world.tile(tx, landRow).isPlatform || landRow >= world.H - 2 {
+				if fb.flung && abs(fb.vx) > 2.5 && fb.age < 10 {
+					// still going: a little bounce, and it slides on
+					fb.y = Double(landRow)
+					fb.vy = -min(4.0, fb.vy * 0.25)
+					fb.vx *= 0.55
+					fb.spin *= 0.6
+					keep.append(fb)
+					continue
+				}
+				settleBlock(fb, landRow - 1)
+				spawnParticles(fb.x, Double(landRow), fb.tile.def.colors.first ?? 0xE0D08A, 4, 2.0, 0.3, 10)
+				continue
+			}
+			fb.y = ny
+			if fb.age > 14.0 || fb.y > Double(world.H - 2) {
+				settleBlock(fb, Int(floor(fb.y - 0.5)))
+				continue
+			}
+			keep.append(fb)
+		}
+		fallingBlocks = keep
+	}
+}
+
+/// A burst of light at a fixed spot in the world that fades out (explosions)
+struct LightFlash {
+	var x: Double
+	var y: Double
+	/// light level at the moment it starts (0...15)
+	var peak: Int
+	var age: Double = 0
+	var dur: Double
+	/// glow radius in blocks for the drawn flash
+	var radius: Double
+	/// tint of the drawn glow (explosions are amber, lightning pale blue)
+	var color: UInt32 = 0xFF8A30
+
+	/// 1 at the start, easing smoothly to 0 at the end
+	var strength: Double {
+		let t: Double = clampD(age / max(0.01, dur), 0, 1)
+		let u: Double = 1.0 - t
+		return u * u * (3.0 - 2.0 * u)
+	}
+	/// current light level for the light map
+	var level: Int { return Int((Double(peak) * strength).rounded()) }
+}
+
+/// A block on the move: sand with nothing under it, or a block knocked loose by a blast, a storm or
+/// a structure giving way. x is its centre, y its bottom edge.
+struct FallingBlock {
+	var x: Double
+	var y: Double
+	var vy: Double
+	var tile: Tile
+	var uid: Int
+	var vx: Double = 0
+	/// how it is turned (drawn), and how fast it turns
+	var ang: Double = 0
+	var spin: Double = 0
+	var mass: Double = 1.6
+	var age: Double = 0
+	/// thrown (it slides and bounces before it settles, and the wind carries it)
+	var flung: Bool = false
+	/// it was part of something built (it counts as built again once it settles)
+	var built: Bool = false
 }

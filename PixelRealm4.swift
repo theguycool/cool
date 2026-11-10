@@ -12,146 +12,7 @@ import UIKit
 
 // ===== u07_mods =====
 
-// MARK: - Mod Creator: shared pieces
-
-/// The Mod Creator's working copy of one mod. Every edit marks it changed; it is written to disk
-/// when you leave the editor, press SAVE, or test it.
-final class ModSession: ObservableObject, @unchecked Sendable {
-	@Published var mod: ModPack
-	@Published var dirty: Bool = false
-	@Published var report: ModReport = ModReport()
-	/// bumped on every edit (previews key their caches on it)
-	@Published var rev: Int = 0
-	/// a picker shown over the whole editor, above the page that scrolls (see `modCover`)
-	@Published var cover: AnyView? = nil
-
-	init(_ p: ModPack) {
-		mod = p
-		recheck()
-	}
-
-	func touch() {
-		dirty = true
-		rev &+= 1
-	}
-
-	@discardableResult
-	func save() -> Bool {
-		let ok: Bool = ModStore.save(mod)
-		if ok {
-			if let p = ModStore.pack(mod.id) { mod = p }
-			dirty = false
-		}
-		recheck()
-		return ok
-	}
-
-	func recheck() {
-		var p: ModPack = mod
-		report = ModValidator.check(&p, known: ModCatalog.installed().keys)
-	}
-
-	/// A binding to one field of one piece of content (looked up by id each time, so lists can change)
-	func bind<C: Identifiable, T>(_ list: WritableKeyPath<ModPack, [C]>, _ id: String, _ kp: WritableKeyPath<C, T>, _ fallback: T) -> Binding<T> where C.ID == String {
-		return Binding<T>(get: {
-			guard let i = self.mod[keyPath: list].firstIndex(where: { $0.id == id }) else { return fallback }
-			return self.mod[keyPath: list][i][keyPath: kp]
-		}, set: { v in
-			guard let i = self.mod[keyPath: list].firstIndex(where: { $0.id == id }) else { return }
-			self.mod[keyPath: list][i][keyPath: kp] = v
-			self.touch()
-		})
-	}
-
-	/// A binding to a field of the mod itself
-	func modBind<T>(_ kp: WritableKeyPath<ModPack, T>) -> Binding<T> {
-		return Binding<T>(get: { self.mod[keyPath: kp] }, set: { v in
-			self.mod[keyPath: kp] = v
-			self.touch()
-		})
-	}
-
-	var catalog: ModCatalog {
-		var ps: [ModPack] = [mod]
-		for e in ModStore.entries() where e.id != mod.id { if let p = e.pack { ps.append(p) } }
-		return ModCatalog.build(ps)
-	}
-}
-
-/// Colours and sizes shared by the Mod Creator screens
-enum ModUI {
-	static let panel: Color = Color(hex: 0x2C2C30)
-	static let card: Color = Color(hex: 0x3A3A40)
-	static let accent: Color = Color(hex: 0x4E8A3E)
-	static let blue: Color = Color(hex: 0x3E6FAA)
-	static let red: Color = Color(hex: 0xA03030)
-	static let gold: Color = Color(hex: 0xFFE066)
-	static let dim: Color = Color.white.opacity(0.7)
-	static let rarityColors: [UInt32] = [0xE8E8E8, 0x6AD86A, 0x5AA8FF, 0xC070FF, 0xFFB030]
-	static let rarityNames: [String] = ["Common", "Uncommon", "Rare", "Epic", "Legendary"]
-}
-
-/// A titled block of controls
-struct ModSection<C: View>: View {
-	let title: String
-	var help: String = ""
-	@ViewBuilder var content: () -> C
-	var body: some View {
-		VStack(alignment: .leading, spacing: 8) {
-			Text(verbatim: title).font(.pixel(15)).foregroundColor(ModUI.gold)
-			if !help.isEmpty {
-				Text(verbatim: help).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-			}
-			content()
-		}
-		.padding(12)
-		.frame(maxWidth: .infinity, alignment: .leading)
-		.background(PixelBox(color: ModUI.card).opacity(0.95))
-	}
-}
-
-/// A number with a big slider: its name, its value, and the range it may take
-struct StatSlider: View {
-	let label: String
-	@Binding var value: Double
-	let range: ClosedRange<Double>
-	var step: Double = 0
-	var format: String = "%.1f"
-	var unit: String = ""
-	var body: some View {
-		VStack(alignment: .leading, spacing: 2) {
-			HStack {
-				Text(verbatim: label).font(.pixel(13, .bold)).foregroundColor(Color.white)
-				Spacer()
-				Text(verbatim: String(format: format, value) + unit).font(.pixel(13)).foregroundColor(ModUI.gold)
-			}
-			Slider(value: clamped, in: range, step: step)
-				.frame(minHeight: 34)
-		}
-	}
-
-	var clamped: Binding<Double> {
-		let r: ClosedRange<Double> = range
-		let b: Binding<Double> = $value
-		return Binding<Double>(get: { clampD(b.wrappedValue, r.lowerBound, r.upperBound) }, set: { b.wrappedValue = $0 })
-	}
-}
-
-/// A whole number on a slider
-struct IntSlider: View {
-	let label: String
-	@Binding var value: Int
-	let range: ClosedRange<Int>
-	var unit: String = ""
-	var body: some View {
-		StatSlider(label: label, value: asDouble, range: Double(range.lowerBound)...Double(range.upperBound), step: 1, format: "%.0f", unit: unit)
-	}
-
-	var asDouble: Binding<Double> {
-		let b: Binding<Int> = $value
-		return Binding<Double>(get: { Double(b.wrappedValue) }, set: { b.wrappedValue = Int($0.rounded()) })
-	}
-}
+// MARK: - Mod Creator: shared pieces (continued; the session and the first pieces are at the end of part 3)
 
 /// A row of large choices (one is picked)
 struct ChoiceRow: View {
@@ -169,7 +30,7 @@ struct ChoiceRow: View {
 
 	func chip(_ i: Int) -> some View {
 		let on: Bool = selected == i
-		let col: Color = on ? ModUI.accent : Color(hex: 0x555555)
+		let col: Color = on ? ModUI.accent : Color(ui: 0x555555)
 		return Button {
 			selected = i
 		} label: {
@@ -225,7 +86,7 @@ struct ChoiceRows: View {
 
 	func chip(_ i: Int) -> some View {
 		let on: Bool = selected == i
-		let col: Color = on ? ModUI.accent : Color(hex: 0x555555)
+		let col: Color = on ? ModUI.accent : Color(ui: 0x555555)
 		return Button {
 			selected = i
 		} label: {
@@ -255,7 +116,7 @@ struct ModToggle: View {
 					.font(.pixel(12))
 					.foregroundColor(Color.white)
 					.frame(width: 50, height: 32)
-					.background(PixelBox(color: isOn ? ModUI.accent : Color(hex: 0x555555)))
+					.background(PixelBox(color: isOn ? ModUI.accent : Color(ui: 0x555555)))
 				VStack(alignment: .leading, spacing: 1) {
 					Text(verbatim: label).font(.pixel(13, .bold)).foregroundColor(Color.white)
 					if !help.isEmpty { Text(verbatim: help).font(.pixel(10, .semibold)).foregroundColor(ModUI.dim) }
@@ -374,7 +235,7 @@ struct ModMissingView: View {
 		ZStack {
 			Color.black.opacity(0.75).ignoresSafeArea()
 			VStack(alignment: .leading, spacing: 10) {
-				Text("MODS MISSING").font(.pixel(22)).foregroundColor(Color(hex: 0xFF9060))
+				Text("MODS MISSING").font(.pixel(22)).foregroundColor(Color(ui: 0xFF9060))
 				Text(verbatim: "\u{201C}" + check.save.meta.name + "\u{201D} was made with mods that are not on this iPad:").font(.pixel(13, .semibold)).foregroundColor(Color.white)
 				if check.missing.count > 6 {
 					ScrollView { missingList }.frame(height: 200)
@@ -385,7 +246,7 @@ struct ModMissingView: View {
 					.font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
 				HStack(spacing: 10) {
 					PixelButton(title: "BACK") { cancel() }
-					PixelButton(title: "LOAD ANYWAY", color: Color(hex: 0x8A5A2E)) { load() }
+					PixelButton(title: "LOAD ANYWAY", color: Color(ui: 0x8A5A2E)) { load() }
 				}
 			}
 			.padding(18)
@@ -427,7 +288,7 @@ struct ModCreatorView: View {
 
 	var body: some View {
 		ZStack {
-			Color(hex: 0x1C1C22).ignoresSafeArea()
+			Color(ui: 0x1C1C22).ignoresSafeArea()
 			content
 			if let id = confirmDelete {
 				ModConfirm(title: "DELETE MOD?", text: "This removes the mod from this iPad. Worlds that use it will warn that it is missing.", yes: "DELETE",
@@ -578,14 +439,14 @@ struct ModCard: View {
 				Text(verbatim: p.summary).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
 				buttons
 			} else {
-				Text(verbatim: "Damaged mod: " + entry.id).font(.pixel(14)).foregroundColor(Color(hex: 0xFF8060))
+				Text(verbatim: "Damaged mod: " + entry.id).font(.pixel(14)).foregroundColor(Color(ui: 0xFF8060))
 				Text(verbatim: entry.error).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
 				SmallButton(title: "DELETE", color: ModUI.red) { actions.delete() }
 			}
 		}
 		.padding(12)
 		.frame(maxWidth: .infinity, alignment: .leading)
-		.background(PixelBox(color: entry.enabled ? Color(hex: 0x34503A) : ModUI.card))
+		.background(PixelBox(color: entry.enabled ? Color(ui: 0x34503A) : ModUI.card))
 	}
 
 	func header(_ p: ModPack) -> some View {
@@ -595,7 +456,7 @@ struct ModCard: View {
 					.font(.pixel(13))
 					.foregroundColor(Color.white)
 					.frame(width: 58, height: 44)
-					.background(PixelBox(color: entry.enabled ? ModUI.accent : Color(hex: 0x555555)))
+					.background(PixelBox(color: entry.enabled ? ModUI.accent : Color(ui: 0x555555)))
 			}
 			.buttonStyle(.plain)
 			VStack(alignment: .leading, spacing: 2) {
@@ -644,7 +505,7 @@ struct ModInfoScreen: View {
 				if let p = e.pack {
 					ModInfoBody(pack: p)
 				} else {
-					Text(verbatim: e.error).font(.pixel(13)).foregroundColor(Color(hex: 0xFF8060))
+					Text(verbatim: e.error).font(.pixel(13)).foregroundColor(Color(ui: 0xFF8060))
 				}
 			}
 		}
@@ -707,7 +568,7 @@ struct ModIssueList: View {
 				HStack(alignment: .top, spacing: 8) {
 					Text(verbatim: i.level >= 2 ? "✕" : (i.level == 1 ? "!" : "i"))
 						.font(.pixel(14))
-						.foregroundColor(Color(hex: i.level >= 2 ? 0xFF6060 : (i.level == 1 ? 0xFFC040 : 0x90C0FF)))
+						.foregroundColor(Color(ui: i.level >= 2 ? 0xFF6060 : (i.level == 1 ? 0xFFC040 : 0x90C0FF)))
 						.frame(width: 18)
 					VStack(alignment: .leading, spacing: 1) {
 						Text(verbatim: i.place).font(.pixel(12, .bold)).foregroundColor(Color.white)
@@ -792,10 +653,13 @@ struct ModPackagesScreen: View {
 // MARK: - Mod Creator: editing a mod
 
 enum ModTab: Int, CaseIterable {
-	case info, blocks, items, mobs, shots, recipes, loot, ores, structures, infusions, suits, dims, logic, game, reference, check
+	case info, blocks, items, mobs, shots, recipes, loot, ores, structures, infusions, suits, vehicles, dims, world, theme, logic, game, reference, check
 	var name: String {
 		switch self {
 		case .suits: return "SUITS"
+		case .vehicles: return "VEHICLES"
+		case .world: return "WORLD & RULES"
+		case .theme: return "LOOK"
 		case .logic: return "LOGIC STUDIO"
 
 		case .dims: return "DIMENSIONS"
@@ -837,6 +701,7 @@ enum ModEditTarget: Equatable {
 	case suitMat(String)
 	case suitPart(String)
 	case suitDesign(String)
+	case vehicle(String)
 }
 
 struct ModEditorView: View {
@@ -913,7 +778,7 @@ struct ModEditorView: View {
 				.foregroundColor(Color.white)
 				.padding(.horizontal, 12)
 				.frame(minHeight: 40)
-				.background(PixelBox(color: on ? ModUI.accent : Color(hex: 0x4A4A50)))
+				.background(PixelBox(color: on ? ModUI.accent : Color(ui: 0x4A4A50)))
 		}
 		.buttonStyle(.plain)
 	}
@@ -937,6 +802,7 @@ struct ModEditorView: View {
 		case .suitMat(let id): SuitMatEditorView(s: session, id: id)
 		case .suitPart(let id): SuitPartEditorView(s: session, id: id)
 		case .suitDesign(let id): SuitDesignEditorView(s: session, id: id)
+		case .vehicle(let id): VehicleEditorView(s: session, id: id)
 		}
 	}
 
@@ -956,6 +822,9 @@ struct ModEditorView: View {
 		case .reference: HardnessReferenceView(s: session)
 		case .infusions: InfusionListView(s: session, open: { id in target = .infusion(id) })
 		case .suits: SuitListView(s: session, openMat: { (id: String) in target = .suitMat(id) }, openPart: { (id: String) in target = .suitPart(id) }, openDesign: { (id: String) in target = .suitDesign(id) })
+		case .vehicles: VehicleListView(s: session, open: { (id: String) in target = .vehicle(id) })
+		case .world: WorldRulesView(s: session)
+		case .theme: ThemeEditorView(s: session)
 		case .dims: DimensionListView(s: session, open: { id in target = .dimension(id) })
 		case .logic: LogicStudioView(s: session, open: { id in target = .script(id) })
 		case .check: ModIssueList(report: session.report)
@@ -1194,7 +1063,7 @@ struct ModRow: View {
 				.contentShape(Rectangle())
 			}
 			.buttonStyle(.plain)
-			if let t = toggle { SmallButton(title: off ? "OFF" : "ON", color: off ? Color(hex: 0x555555) : ModUI.accent) { t() } }
+			if let t = toggle { SmallButton(title: off ? "OFF" : "ON", color: off ? Color(ui: 0x555555) : ModUI.accent) { t() } }
 			if let c = copy { SmallButton(title: "COPY") { c() } }
 			SmallButton(title: "EDIT", color: ModUI.blue) { open() }
 			SmallButton(title: "✕", color: ModUI.red) { delete() }
@@ -1587,6 +1456,7 @@ struct BlockEditorView: View {
 					functionSettings
 				}
 				vehicleSection
+				buildSection
 			}
 		}
 		.modCover(s, picking ? 1 : nil) { self.dropPicker }
@@ -1725,7 +1595,7 @@ struct ModColorRow: View {
 
 	var body: some View {
 		let rows: Int = (modPalette.count + ModColorRow.perRow - 1) / ModColorRow.perRow
-		let now: Color = Color(hex: color & 0xFFFFFF)
+		let now: Color = Color(ui: color & 0xFFFFFF)
 		return VStack(alignment: .leading, spacing: 4) {
 			HStack(spacing: 8) {
 				Text(verbatim: label).font(.pixel(12, .bold)).foregroundColor(ModUI.dim)
@@ -2101,7 +1971,7 @@ struct MobEditorView: View {
 		return HStack(spacing: 14) {
 			img.resizable().interpolation(.none).frame(width: CGFloat(set.w) * 2.0, height: CGFloat(set.h) * 2.0)
 				.frame(width: 140, height: 140)
-				.background(Color(hex: 0x5A7A9A).opacity(0.6))
+				.background(Color(ui: 0x5A7A9A).opacity(0.6))
 			VStack(alignment: .leading, spacing: 4) {
 				Text(verbatim: mob.name).font(.pixel(20)).foregroundColor(Color.white)
 				Text(verbatim: mob.category.name).font(.pixel(12)).foregroundColor(ModUI.gold)
@@ -2257,7 +2127,7 @@ struct MobEditorView: View {
 		return VStack(alignment: .leading, spacing: 8) {
 			HStack(spacing: 6) {
 				ForEach(0..<n, id: \.self) { i in
-					SmallButton(title: ["STAND", "WALK 1", "WALK 2", "ATTACK"][min(i, 3)], color: frame == i ? ModUI.accent : Color(hex: 0x555555)) { frame = i }
+					SmallButton(title: ["STAND", "WALK 1", "WALK 2", "ATTACK"][min(i, 3)], color: frame == i ? ModUI.accent : Color(ui: 0x555555)) { frame = i }
 				}
 				if n < ModLimits.maxFrames {
 					SmallButton(title: "+ FRAME", color: ModUI.blue) {
@@ -2568,7 +2438,7 @@ struct ModBiomePicker: View {
 			if on { biomes.removeAll { $0 == bi.rawValue } } else { biomes.append(bi.rawValue) }
 		} label: {
 			Text(verbatim: bi.name).font(.pixel(11)).foregroundColor(Color.white).frame(maxWidth: .infinity, minHeight: 36)
-				.background(PixelBox(color: on ? ModUI.accent : Color(hex: 0x555555)))
+				.background(PixelBox(color: on ? ModUI.accent : Color(ui: 0x555555)))
 		}
 		.buttonStyle(.plain)
 	}
@@ -2652,7 +2522,7 @@ struct RecipeEditorView: View {
 		let sel: Binding<Int> = Binding<Int>(get: { ids.firstIndex(of: base.wrappedValue) ?? 0 }, set: { v in if !ids.isEmpty { base.wrappedValue = ids[clampI(v, 0, ids.count - 1)] } })
 		return VStack(alignment: .leading, spacing: 4) {
 			if blocks.isEmpty {
-				Text("Make a block whose 'When tapped' is Crafting station first.").font(.pixel(11, .semibold)).foregroundColor(Color(hex: 0xFF9060))
+				Text("Make a block whose 'When tapped' is Crafting station first.").font(.pixel(11, .semibold)).foregroundColor(Color(ui: 0xFF9060))
 			} else {
 				ChoiceRow(options: blocks.map { $0.name }, selected: sel, columns: 3)
 			}
@@ -2744,7 +2614,7 @@ struct LootEditorView: View {
 				ModPreview.icon(e.item, cat).resizable().interpolation(.none).frame(width: 30, height: 30)
 				VStack(alignment: .leading, spacing: 1) {
 					Text(verbatim: ModPreview.name(e.item, cat)).font(.pixel(13)).foregroundColor(Color.white)
-					Text(verbatim: ModLootEntry.rarityNames[clampI(e.rarity, 0, 3)] + String(format: " · %.1f%% per roll", pct)).font(.pixel(11)).foregroundColor(Color(hex: col))
+					Text(verbatim: ModLootEntry.rarityNames[clampI(e.rarity, 0, 3)] + String(format: " · %.1f%% per roll", pct)).font(.pixel(11)).foregroundColor(Color(ui: col))
 				}
 				Spacer()
 				SmallButton(title: "CHANGE", color: ModUI.blue) { picking = i }
@@ -2780,7 +2650,7 @@ struct OreEditorView: View {
 			ModSection(title: "ORE") {
 				ModTextField(label: "Name", text: b(\.name, ""), placeholder: "Ruby veins")
 				if blocks.isEmpty {
-					Text("Make the ore's block in the BLOCKS tab first.").font(.pixel(12)).foregroundColor(Color(hex: 0xFF9060))
+					Text("Make the ore's block in the BLOCKS tab first.").font(.pixel(12)).foregroundColor(Color(ui: 0xFF9060))
 				} else {
 					Text("Made of").font(.pixel(12, .bold)).foregroundColor(ModUI.dim)
 					ChoiceRow(options: blocks.map { $0.name }, selected: bsel, columns: 3)
@@ -2872,7 +2742,7 @@ struct CaptureBar: View {
 		let step: String = game.capA == nil ? "Tap the first corner of what you built" : "Now tap the opposite corner"
 		return VStack {
 			HStack(spacing: 10) {
-				Text("CAPTURE").font(.pixel(14)).foregroundColor(Color(hex: 0x60E0FF))
+				Text("CAPTURE").font(.pixel(14)).foregroundColor(Color(ui: 0x60E0FF))
 				Text(verbatim: step).font(.pixel(12, .semibold)).foregroundColor(Color.white)
 				SmallButton(title: "CANCEL", color: ModUI.red) { game.cancelCapture() }
 			}
@@ -2914,7 +2784,7 @@ struct CapturePanel: View {
 				Text("Where it appears").font(.pixel(12, .bold)).foregroundColor(ModUI.dim).frame(maxWidth: .infinity, alignment: .leading)
 				ChoiceRow(options: ModPlacement.allCases.map { $0.name }, selected: $placement, columns: 3)
 				ModToggle(label: "Empty space clears the ground", help: "Off: only its blocks are placed and the ground around them stays", isOn: $clearAir)
-				if !note.isEmpty { Text(verbatim: note).font(.pixel(12, .semibold)).foregroundColor(Color(hex: 0xFFB060)) }
+				if !note.isEmpty { Text(verbatim: note).font(.pixel(12, .semibold)).foregroundColor(Color(ui: 0xFFB060)) }
 				HStack(spacing: 10) {
 					PixelButton(title: "SAVE", color: ModUI.accent) {
 						let id: String = target > 0 && target - 1 < entries.count ? entries[target - 1].id : ""
@@ -2960,7 +2830,7 @@ struct ModTestPanel: View {
 		let title: String = rt.packs.first { $0.id == game.testMod }?.name ?? "Mod"
 		return VStack(spacing: 10) {
 			HStack {
-				Text("MOD TEST").font(.pixel(20)).foregroundColor(Color(hex: 0x60E0FF))
+				Text("MOD TEST").font(.pixel(20)).foregroundColor(Color(ui: 0x60E0FF))
 				Text(verbatim: title).font(.pixel(14)).foregroundColor(Color.white).lineLimit(1)
 				Spacer()
 				SmallButton(title: "CLOSE", color: ModUI.accent) { game.showModTest = false }
@@ -2980,7 +2850,7 @@ struct ModTestPanel: View {
 			}
 			.frame(maxHeight: 420)
 			if !note.isEmpty {
-				Text(verbatim: note).font(.pixel(12, .semibold)).foregroundColor(Color(hex: 0xFFE070))
+				Text(verbatim: note).font(.pixel(12, .semibold)).foregroundColor(Color(ui: 0xFFE070))
 			}
 		}
 		.padding(16)
@@ -3066,7 +2936,7 @@ struct ModTestPanel: View {
 					RecipeRow.live(game, r)
 					VStack(spacing: 4) {
 						SmallButton(title: "INGREDIENTS", color: ModUI.blue) { note = game.testIngredients(r) }
-						SmallButton(title: "CRAFT", color: game.canCraft(r) ? ModUI.accent : Color(hex: 0x555555)) {
+						SmallButton(title: "CRAFT", color: game.canCraft(r) ? ModUI.accent : Color(ui: 0x555555)) {
 							let before: Int = game.inv.total(r.out)
 							game.craft(r)
 							note = game.inv.total(r.out) > before ? joinText("Made ", r.out.name, ".") : "Not yet: something is missing."
@@ -3093,7 +2963,7 @@ struct ModTestPanel: View {
 				Text("Dimensions").font(.pixel(12, .bold)).foregroundColor(ModUI.dim)
 				ForEach(0..<3, id: \.self) { i in
 					if let d = ModRuntime.shared.dimSlots[i] {
-						SmallButton(title: game.world.dim == d.dim ? joinText("LEAVE ", d.def.name.uppercased()) : joinText("VISIT ", d.def.name.uppercased()), color: Color(hex: 0x6A4AAA)) {
+						SmallButton(title: game.world.dim == d.dim ? joinText("LEAVE ", d.def.name.uppercased()) : joinText("VISIT ", d.def.name.uppercased()), color: Color(ui: 0x6A4AAA)) {
 							note = game.testVisitDim(i)
 						}
 					}
@@ -3102,14 +2972,15 @@ struct ModTestPanel: View {
 			ModToggle(label: "God mode", help: "Nothing can hurt you", isOn: god)
 			ModToggle(label: "Survival rules", help: "Hunger, damage, stations and using things up, as in a real game", isOn: surv)
 			ModToggle(label: "Creatures spawn by themselves", help: "Off: only what you spawn here appears", isOn: spawns)
+			SmallButton(title: "SAVE VEHICLE TO THE MOD", color: ModUI.accent) { note = saveVehicle() }
 			HStack(spacing: 8) {
 				PixelButton(title: "CLEAR CREATURES", color: ModUI.red) {
 					game.clearCreatures()
 					note = "Every creature is gone."
 				}
-				PixelButton(title: "RESET WORLD", color: Color(hex: 0x8A5A2E)) { reset() }
+				PixelButton(title: "RESET WORLD", color: Color(ui: 0x8A5A2E)) { reset() }
 			}
-			PixelButton(title: "EXIT TEST", color: Color(hex: 0x6A3A8A)) { exit() }
+			PixelButton(title: "EXIT TEST", color: Color(ui: 0x6A3A8A)) { exit() }
 		}
 	}
 
@@ -3229,7 +3100,7 @@ struct EffectChip: View {
 		return HStack(spacing: 2) {
 			Rectangle().fill(Color(hex: kind.color)).frame(width: 9, height: 9)
 				.overlay(Rectangle().stroke(Color.black, lineWidth: 1))
-			OutlinedText(text: label, size: 10, color: secs < 6 ? Color(hex: 0xFFB060) : Color.white)
+			OutlinedText(text: label, size: 10, color: secs < 6 ? Color(ui: 0xFFB060) : Color.white)
 		}
 		.padding(.horizontal, 3)
 		.padding(.vertical, 2)
@@ -3246,21 +3117,21 @@ struct SuitBar: View {
 		let st: ExoStats = game.suitStats
 		let cap: Double = max(1, st.capacity)
 		let f: Double = clampD(game.suit.energy / cap, 0, 1)
-		let col: Color = f > 0.25 ? Color(hex: 0x60E0FF) : Color(hex: 0xFF8A40)
+		let col: Color = f > 0.25 ? Color(ui: 0x60E0FF) : Color(ui: 0xFF8A40)
 		return HStack(spacing: 6) {
-			OutlinedText(text: "SUIT", size: 10, color: Color(hex: 0x9AD8F0))
+			OutlinedText(text: "SUIT", size: 10, color: Color(ui: 0x9AD8F0))
 			ZStack(alignment: .leading) {
 				Rectangle().fill(Color.black.opacity(0.6)).frame(width: 110, height: 9)
 				Rectangle().fill(col).frame(width: CGFloat(110.0 * f), height: 9)
 			}
 			.overlay(Rectangle().stroke(Color.white.opacity(0.4), lineWidth: 1))
 			OutlinedText(text: joinText(String(Int(game.suit.energy)), "/", String(Int(cap))), size: 10)
-			if st.broken > 0 { OutlinedText(text: joinText(String(st.broken), " BROKEN"), size: 10, color: Color(hex: 0xFF8A40)) }
+			if st.broken > 0 { OutlinedText(text: joinText(String(st.broken), " BROKEN"), size: 10, color: Color(ui: 0xFF8A40)) }
 			if st.has(.cargo) {
-				SmallButton(title: "PACK", color: Color(hex: 0x7A5A2A)) { game.openPack() }
+				SmallButton(title: "PACK", color: Color(ui: 0x7A5A2A)) { game.openPack() }
 			}
 			if st.has(.cannon) || st.has(.laser) {
-				HoldButton(label: "SUIT FIRE", size: 58, color: Color(hex: 0x8A3A3A)) { (on: Bool) in game.suitFireHeld = on }
+				HoldButton(label: "SUIT FIRE", size: 58, color: Color(ui: 0x8A3A3A)) { (on: Bool) in game.suitFireHeld = on }
 			}
 		}
 	}
@@ -3282,10 +3153,10 @@ struct InfusionPanel: View {
 	var body: some View {
 		VStack(spacing: 10) {
 			HStack {
-				Text("INFUSION CRUCIBLE").font(.pixel(20)).foregroundColor(Color(hex: 0xC07CFF))
+				Text("INFUSION CRUCIBLE").font(.pixel(20)).foregroundColor(Color(ui: 0xC07CFF))
 				Spacer()
-				SmallButton(title: "MAKE COMPOUNDS", color: Color(hex: 0x5A4A8A)) { game.openCrafting(.infuser) }
-				SmallButton(title: "CLOSE", color: Color(hex: 0xA03030)) { close() }
+				SmallButton(title: "MAKE COMPOUNDS", color: Color(ui: 0x5A4A8A)) { game.openCrafting(.infuser) }
+				SmallButton(title: "CLOSE", color: Color(ui: 0xA03030)) { close() }
 			}
 			Text("1 Choose equipment  ·  2 Choose an infusion  ·  3 Check what changes, then confirm")
 				.font(.pixel(11, .semibold)).foregroundColor(Color.white.opacity(0.7))
@@ -3296,12 +3167,12 @@ struct InfusionPanel: View {
 				previewColumn.frame(width: 300)
 			}
 			if !note.isEmpty {
-				Text(verbatim: note).font(.pixel(12, .semibold)).foregroundColor(Color(hex: 0xFFE070))
+				Text(verbatim: note).font(.pixel(12, .semibold)).foregroundColor(Color(ui: 0xFFE070))
 			}
 		}
 		.foregroundColor(Color.white)
 		.padding(14)
-		.background(PixelBox(color: Color(hex: 0x2C2834)).opacity(0.97))
+		.background(PixelBox(color: Color(ui: 0x2C2834)).opacity(0.97))
 		.frame(maxWidth: 940)
 		.padding(10)
 	}
@@ -3324,7 +3195,7 @@ struct InfusionPanel: View {
 		let list: [Int] = candidates
 		let cols: [GridItem] = [GridItem(.adaptive(minimum: 46), spacing: 4)]
 		return VStack(alignment: .leading, spacing: 6) {
-			Text("EQUIPMENT").font(.pixel(13)).foregroundColor(Color(hex: 0xB8A8D8))
+			Text("EQUIPMENT").font(.pixel(13)).foregroundColor(Color(ui: 0xB8A8D8))
 			if list.isEmpty {
 				Text("Nothing in your bag can take an infusion yet: weapons, tools, armour and suit parts can (take worn armour off first).")
 					.font(.pixel(11, .semibold)).foregroundColor(Color.white.opacity(0.6))
@@ -3365,15 +3236,15 @@ struct InfusionPanel: View {
 					Rectangle().fill(Color(hex: infusionColor(n))).frame(width: 10, height: 10)
 					Text(verbatim: infusionName(n)).font(.pixel(11)).foregroundColor(Color.white)
 					Spacer(minLength: 0)
-					SmallButton(title: "REMOVE", color: Color(hex: 0x5A4A4A)) { note = game.removeCustomInfusion(slot: pick, n) }
+					SmallButton(title: "REMOVE", color: Color(ui: 0x5A4A4A)) { note = game.removeCustomInfusion(slot: pick, n) }
 				}
 			}
 			ForEach(0..<have.count, id: \.self) { k in
 				HStack(spacing: 6) {
 					Rectangle().fill(Color(hex: have[k].color)).frame(width: 10, height: 10)
-					Text(verbatim: have[k].name).font(.pixel(11)).foregroundColor(Color(hex: have[k].rarity.color))
+					Text(verbatim: have[k].name).font(.pixel(11)).foregroundColor(Color(ui: have[k].rarity.color))
 					Spacer(minLength: 0)
-					SmallButton(title: removing == have[k].rawValue ? "SURE?" : "REMOVE", color: Color(hex: removing == have[k].rawValue ? 0xC04030 : 0x5A4A4A)) {
+					SmallButton(title: removing == have[k].rawValue ? "SURE?" : "REMOVE", color: Color(ui: removing == have[k].rawValue ? 0xC04030 : 0x5A4A4A)) {
 						if removing == have[k].rawValue {
 							note = game.removeInfusion(slot: pick, have[k])
 							removing = -1
@@ -3392,7 +3263,7 @@ struct InfusionPanel: View {
 	var infusionColumn: some View {
 		let all: [Infusion] = Infusion.allCases
 		return VStack(alignment: .leading, spacing: 6) {
-			Text("INFUSIONS").font(.pixel(13)).foregroundColor(Color(hex: 0xB8A8D8))
+			Text("INFUSIONS").font(.pixel(13)).foregroundColor(Color(ui: 0xB8A8D8))
 			ScrollView {
 				VStack(spacing: 4) {
 					ForEach(all, id: \.self) { inf in infusionRow(inf) }
@@ -3417,7 +3288,7 @@ struct InfusionPanel: View {
 				SlotView(stack: Stack(item: .compound(inf), count: max(1, owned)), selected: chosen, size: 34, dim: owned == 0)
 				VStack(alignment: .leading, spacing: 1) {
 					HStack(spacing: 4) {
-						Text(verbatim: inf.name).font(.pixel(12)).foregroundColor(Color(hex: inf.rarity.color))
+						Text(verbatim: inf.name).font(.pixel(12)).foregroundColor(Color(ui: inf.rarity.color))
 						Text(verbatim: inf.rarity.name).font(.pixel(9, .semibold)).foregroundColor(Color.white.opacity(0.5))
 					}
 					Text(verbatim: inf.blurb).font(.pixel(10, .semibold)).foregroundColor(Color.white.opacity(usable ? 0.85 : 0.5)).lineLimit(2)
@@ -3426,7 +3297,7 @@ struct InfusionPanel: View {
 				Text(verbatim: owned > 0 ? joinText("x", String(owned)) : "none").font(.pixel(10)).foregroundColor(Color.white.opacity(0.6))
 			}
 			.padding(4)
-			.background(chosen ? Color(hex: 0x4A3A6A) : Color.black.opacity(0.2))
+			.background(chosen ? Color(ui: 0x4A3A6A) : Color.black.opacity(0.2))
 		}
 		.buttonStyle(.plain)
 	}
@@ -3434,7 +3305,7 @@ struct InfusionPanel: View {
 	var previewColumn: some View {
 		let inf: Infusion? = Infusion(rawValue: choice)
 		return VStack(alignment: .leading, spacing: 6) {
-			Text("WHAT CHANGES").font(.pixel(13)).foregroundColor(Color(hex: 0xB8A8D8))
+			Text("WHAT CHANGES").font(.pixel(13)).foregroundColor(Color(ui: 0xB8A8D8))
 			if let s = picked, customChoice >= 0, let r = ModRuntime.shared.infusion(customChoice) {
 				customPreview(s, r)
 			} else if let s = picked, let i = inf {
@@ -3462,15 +3333,15 @@ struct InfusionPanel: View {
 					Spacer(minLength: 4)
 					Text(verbatim: rows[k].1).font(.pixel(11)).foregroundColor(Color.white.opacity(0.6))
 					Text("→").font(.pixel(11)).foregroundColor(Color.white.opacity(0.6))
-					Text(verbatim: rows[k].2).font(.pixel(11)).foregroundColor(rows[k].1 == rows[k].2 ? Color.white : Color(hex: 0x7AF08A))
+					Text(verbatim: rows[k].2).font(.pixel(11)).foregroundColor(rows[k].1 == rows[k].2 ? Color.white : Color(ui: 0x7AF08A))
 				}
 			}
 			if let p = problem {
-				Text(verbatim: p).font(.pixel(11, .semibold)).foregroundColor(Color(hex: 0xFF9A7A))
+				Text(verbatim: p).font(.pixel(11, .semibold)).foregroundColor(Color(ui: 0xFF9A7A))
 			} else if owned == 0 && !game.isCreative {
-				Text(verbatim: joinText("You have no ", i.name, " compound: make one with MAKE COMPOUNDS.")).font(.pixel(11, .semibold)).foregroundColor(Color(hex: 0xFF9A7A))
+				Text(verbatim: joinText("You have no ", i.name, " compound: make one with MAKE COMPOUNDS.")).font(.pixel(11, .semibold)).foregroundColor(Color(ui: 0xFF9A7A))
 			}
-			PixelButton(title: ok ? "CONFIRM INFUSION" : "CAN'T INFUSE", color: ok ? Color(hex: 0x6A4AA8) : Color(hex: 0x444444)) {
+			PixelButton(title: ok ? "CONFIRM INFUSION" : "CAN'T INFUSE", color: ok ? Color(ui: 0x6A4AA8) : Color(ui: 0x444444)) {
 				if !ok { return }
 				note = game.infuse(slot: pick, i)
 				choice = -1
@@ -3606,7 +3477,7 @@ struct ExoAssemblyPanel: View {
 		}
 		.foregroundColor(Color.white)
 		.padding(12)
-		.background(PixelBox(color: Color(hex: 0x262A32)).opacity(0.97))
+		.background(PixelBox(color: Color(ui: 0x262A32)).opacity(0.97))
 		.frame(maxWidth: 1000)
 		.padding(8)
 		.onAppear { self.begin() }
@@ -3624,11 +3495,11 @@ struct ExoAssemblyPanel: View {
 		let st: ExoStats = ExoStats.of(plan)
 		let line: String = joinText(String(plan.pieces.count), " pieces · weight ", String(Int(st.weight.rounded())), " / ", String(Int(st.strength)), " · guards ", String(Int((st.guardAll * 100).rounded())), "%")
 		return HStack(spacing: 8) {
-			Text("ASSEMBLY STATION").font(.pixel(20)).foregroundColor(Color(hex: 0x60E0FF))
+			Text("ASSEMBLY STATION").font(.pixel(20)).foregroundColor(Color(ui: 0x60E0FF))
 			Text(verbatim: line).font(.pixel(11, .semibold)).foregroundColor(Color.white.opacity(0.75))
 			Spacer()
-			SmallButton(title: "MAKE PARTS", color: Color(hex: 0x4A5A3A)) { self.game.openCrafting(.assembly) }
-			SmallButton(title: "CLOSE", color: Color(hex: 0xA03030)) { self.close() }
+			SmallButton(title: "MAKE PARTS", color: Color(ui: 0x4A5A3A)) { self.game.openCrafting(.assembly) }
+			SmallButton(title: "CLOSE", color: Color(ui: 0xA03030)) { self.close() }
 		}
 	}
 
@@ -3646,7 +3517,7 @@ struct ExoAssemblyPanel: View {
 			ChoiceRows(options: ExoAssemblyPanel.poses, selected: $pose, columns: 4)
 			billBox
 			buildRow
-			if !note.isEmpty { Text(verbatim: note).font(.pixel(12, .semibold)).foregroundColor(Color(hex: 0xFFE070)) }
+			if !note.isEmpty { Text(verbatim: note).font(.pixel(12, .semibold)).foregroundColor(Color(ui: 0xFFE070)) }
 		}
 	}
 
@@ -4020,7 +3891,7 @@ struct ExoAssemblyPanel: View {
 		let list: [Stack] = partChoices
 		return VStack(alignment: .leading, spacing: 6) {
 			Text("Cores give energy; parts work: jets lift, wings glide, turrets shoot by themselves, cannons and lasers fire with SUIT FIRE. Each goes on where you put it.").font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-			if list.isEmpty { Text("No cores or suit parts in your bag. MAKE PARTS shows what can be made here.").font(.pixel(11, .semibold)).foregroundColor(Color(hex: 0xFF9060)) }
+			if list.isEmpty { Text("No cores or suit parts in your bag. MAKE PARTS shows what can be made here.").font(.pixel(11, .semibold)).foregroundColor(Color(ui: 0xFF9060)) }
 			ForEach(0..<list.count, id: \.self) { (i: Int) in self.partRow(list[i]) }
 		}
 	}
@@ -4097,7 +3968,7 @@ struct ExoAssemblyPanel: View {
 			Text(verbatim: move).font(.pixel(11, .semibold)).foregroundColor(Color.white)
 			Text(verbatim: parts).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
 			ForEach(0..<st.notes.count, id: \.self) { (k: Int) in
-				Text(verbatim: st.notes[k]).font(.pixel(10, .semibold)).foregroundColor(Color(hex: 0xFF9060))
+				Text(verbatim: st.notes[k]).font(.pixel(10, .semibold)).foregroundColor(Color(ui: 0xFF9060))
 			}
 		}
 		.padding(8)
@@ -4198,7 +4069,7 @@ struct ExoAssemblyPanel: View {
 	var wearRow: some View {
 		let worn: Bool = game.suit.worn
 		return HStack(spacing: 8) {
-			SmallButton(title: worn ? "TAKE OFF" : "PUT ON", color: worn ? Color(hex: 0x6A4A3A) : ModUI.accent) { self.wear() }
+			SmallButton(title: worn ? "TAKE OFF" : "PUT ON", color: worn ? Color(ui: 0x6A4A3A) : ModUI.accent) { self.wear() }
 		}
 	}
 
@@ -4232,9 +4103,9 @@ struct ExoAssemblyPanel: View {
 	var buildRow: some View {
 		let can: Bool = changed
 		return HStack(spacing: 8) {
-			SmallButton(title: "BUILD", color: can ? ModUI.accent : Color(hex: 0x3A3E48)) { self.build() }
-			SmallButton(title: "UNDO", color: undo.isEmpty ? Color(hex: 0x3A3E48) : Color(hex: 0x5A6270)) { self.undoLast() }
-			SmallButton(title: "START AGAIN", color: Color(hex: 0x5A6270)) { self.reset() }
+			SmallButton(title: "BUILD", color: can ? ModUI.accent : Color(ui: 0x3A3E48)) { self.build() }
+			SmallButton(title: "UNDO", color: undo.isEmpty ? Color(ui: 0x3A3E48) : Color(ui: 0x5A6270)) { self.undoLast() }
+			SmallButton(title: "START AGAIN", color: Color(ui: 0x5A6270)) { self.reset() }
 		}
 	}
 
@@ -4767,7 +4638,7 @@ struct GameContentList: View {
 				Text(verbatim: joinText(o.kind.name, " · ", String(o.changedCount), o.changedCount == 1 ? " change" : " changes")).font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
 			}
 			Spacer()
-			SmallButton(title: o.enabled ? "ON" : "OFF", color: o.enabled ? ModUI.accent : Color(hex: 0x555555)) { on.wrappedValue.toggle() }
+			SmallButton(title: o.enabled ? "ON" : "OFF", color: o.enabled ? ModUI.accent : Color(ui: 0x555555)) { on.wrappedValue.toggle() }
 			SmallButton(title: "EDIT", color: ModUI.blue) { open(o.id) }
 			SmallButton(title: "✕", color: ModUI.red) {
 				s.mod.overrides.removeAll { $0.id == o.id }
@@ -4805,7 +4676,7 @@ struct OverrideField: View {
 				Spacer()
 				Text(verbatim: joinText("game: ", String(format: format, original))).font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
 				if changed {
-					SmallButton(title: "RESTORE", color: Color(hex: 0x6A5A3A)) { value = nil }
+					SmallButton(title: "RESTORE", color: Color(ui: 0x6A5A3A)) { value = nil }
 				} else {
 					SmallButton(title: "CHANGE", color: ModUI.blue) { value = original }
 				}
@@ -4866,7 +4737,7 @@ struct CreatureSpriteEditor: View {
 	func frameRow(_ n: Int) -> some View {
 		HStack(spacing: 6) {
 			ForEach(0..<n, id: \.self) { (i: Int) in
-				SmallButton(title: joinText("FRAME ", String(i + 1)), color: self.frame == i ? ModUI.accent : Color(hex: 0x555555)) { self.frame = i }
+				SmallButton(title: joinText("FRAME ", String(i + 1)), color: self.frame == i ? ModUI.accent : Color(ui: 0x555555)) { self.frame = i }
 			}
 			if n < 12 { SmallButton(title: "+ FRAME", color: ModUI.blue) { self.copyFrame() } }
 			if n > 1 { SmallButton(title: "DELETE FRAME", color: ModUI.red) { self.deleteFrame() } }
@@ -4981,7 +4852,7 @@ struct OverrideEditorView: View {
 				Text(verbatim: o.kind.name).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
 			}
 			Spacer()
-			SmallButton(title: "RESTORE ALL", color: Color(hex: 0x6A5A3A)) { self.restoreAll() }
+			SmallButton(title: "RESTORE ALL", color: Color(ui: 0x6A5A3A)) { self.restoreAll() }
 		}
 	}
 
@@ -5237,7 +5108,7 @@ struct ModOrganizeSection: View {
 	}
 
 	func folderButton(_ f: String) -> some View {
-		let col: Color = s.mod.folder == f ? ModUI.accent : Color(hex: 0x4A4A50)
+		let col: Color = s.mod.folder == f ? ModUI.accent : Color(ui: 0x4A4A50)
 		return SmallButton(title: f, color: col) {
 			self.s.mod.folder = f
 			self.s.touch()
@@ -5264,7 +5135,7 @@ struct ModOrganizeSection: View {
 		let name: String = e?.pack?.name ?? joinText("Missing mod (", d, ")")
 		var state: String = "not installed"
 		if let x = e { state = x.enabled ? "on" : "off" }
-		let col: Color = e == nil ? Color(hex: 0xFF9A7A) : Color.white
+		let col: Color = e == nil ? Color(ui: 0xFF9A7A) : Color.white
 		let mine: Bool = s.mod.requires.contains(d)
 		return HStack {
 			Text(verbatim: name).font(.pixel(12)).foregroundColor(col)
@@ -5312,7 +5183,7 @@ struct ModOrganizeSection: View {
 	func versionRow(_ v: ModVersionInfo) -> some View {
 		let sure: Bool = confirmFile == v.file
 		let when: String = joinText("v", v.version, " \u{00B7} ", shortDate(v.time))
-		let col: Color = Color(hex: sure ? 0xC04030 : 0x6A5A3A)
+		let col: Color = Color(ui: sure ? 0xC04030 : 0x6A5A3A)
 		return HStack {
 			VStack(alignment: .leading, spacing: 1) {
 				Text(verbatim: v.label).font(.pixel(12)).foregroundColor(Color.white)
@@ -5356,9 +5227,9 @@ extension ModCreatorView {
 			if !names.isEmpty {
 				ScrollView(.horizontal, showsIndicators: false) {
 					HStack(spacing: 6) {
-						SmallButton(title: "ALL MODS", color: folder.isEmpty ? ModUI.accent : Color(hex: 0x4A4A50)) { folder = "" }
+						SmallButton(title: "ALL MODS", color: folder.isEmpty ? ModUI.accent : Color(ui: 0x4A4A50)) { folder = "" }
 						ForEach(names, id: \.self) { f in
-							SmallButton(title: f.uppercased(), color: folder == f ? ModUI.accent : Color(hex: 0x4A4A50)) { folder = f }
+							SmallButton(title: f.uppercased(), color: folder == f ? ModUI.accent : Color(ui: 0x4A4A50)) { folder = f }
 						}
 					}
 				}
@@ -5553,7 +5424,7 @@ struct BlockMiningTimes: View {
 		HStack {
 			Text(verbatim: name).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
 			Spacer()
-			Text(verbatim: secondsText(t)).font(.pixel(11)).foregroundColor(t == nil ? Color(hex: 0xFF9A7A) : Color.white)
+			Text(verbatim: secondsText(t)).font(.pixel(11)).foregroundColor(t == nil ? Color(ui: 0xFF9A7A) : Color.white)
 		}
 	}
 }
@@ -5623,7 +5494,7 @@ struct HardnessReferenceView: View {
 		HStack {
 			Text(verbatim: name).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
 			Spacer()
-			Text(verbatim: secondsText(v)).font(.pixel(11)).foregroundColor(v == nil ? Color(hex: 0xFF9A7A) : Color.white)
+			Text(verbatim: secondsText(v)).font(.pixel(11)).foregroundColor(v == nil ? Color(ui: 0xFF9A7A) : Color.white)
 		}
 	}
 }
@@ -6380,9 +6251,9 @@ struct PixelEditorView: View {
 			Text(verbatim: joinText(String(Int(cell)), " px")).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
 			SmallButton(title: "+") { setZoom(cell + (cell >= 16 ? 8 : 2)) }
 			SmallButton(title: "FIT") { zoom = 0; panX = 0; panY = 0 }
-			SmallButton(title: showGrid ? "GRID ON" : "GRID OFF", color: showGrid ? ModUI.accent : Color(hex: 0x555555)) { showGrid.toggle() }
+			SmallButton(title: showGrid ? "GRID ON" : "GRID OFF", color: showGrid ? ModUI.accent : Color(ui: 0x555555)) { showGrid.toggle() }
 			if frameIndex > 0 {
-				SmallButton(title: onion ? "ONION ON" : "ONION OFF", color: onion ? ModUI.accent : Color(hex: 0x555555)) { onion.toggle() }
+				SmallButton(title: onion ? "ONION ON" : "ONION OFF", color: onion ? ModUI.accent : Color(ui: 0x555555)) { onion.toggle() }
 			}
 		}
 	}
@@ -6400,10 +6271,10 @@ struct PixelEditorView: View {
 
 	func toolButton(_ i: Int) -> some View {
 		if i >= SpriteTool.allCases.count {
-			return SmallButton(title: mirror ? "MIRROR ON" : "MIRROR", color: mirror ? ModUI.accent : Color(hex: 0x555555)) { mirror.toggle() }
+			return SmallButton(title: mirror ? "MIRROR ON" : "MIRROR", color: mirror ? ModUI.accent : Color(ui: 0x555555)) { mirror.toggle() }
 		}
 		let name: String = SpriteTool.allCases[i].name
-		return SmallButton(title: name, color: tool == i ? ModUI.accent : Color(hex: 0x555555)) { selectTool(i) }
+		return SmallButton(title: name, color: tool == i ? ModUI.accent : Color(ui: 0x555555)) { selectTool(i) }
 	}
 
 	func selectTool(_ i: Int) {
@@ -6424,15 +6295,15 @@ struct PixelEditorView: View {
 					SmallButton(title: brushRound ? "ROUND" : "SQUARE") { brushRound.toggle() }
 				}
 				if t == .pen && brushSize == 1 {
-					SmallButton(title: perfect ? "PIXEL-PERFECT ON" : "PIXEL-PERFECT OFF", color: perfect ? ModUI.accent : Color(hex: 0x555555)) { perfect.toggle() }
+					SmallButton(title: perfect ? "PIXEL-PERFECT ON" : "PIXEL-PERFECT OFF", color: perfect ? ModUI.accent : Color(ui: 0x555555)) { perfect.toggle() }
 				}
 				if t == .shade {
-					SmallButton(title: darken ? "DARKER" : "LIGHTER", color: darken ? Color(hex: 0x3A3A5A) : Color(hex: 0x8A8A5A)) { darken.toggle() }
+					SmallButton(title: darken ? "DARKER" : "LIGHTER", color: darken ? Color(ui: 0x3A3A5A) : Color(ui: 0x8A8A5A)) { darken.toggle() }
 				}
 			}
 		} else if t == .box || t == .circle {
 			HStack(spacing: 6) {
-				SmallButton(title: filled ? "FILLED" : "OUTLINE", color: filled ? ModUI.accent : Color(hex: 0x555555)) { filled.toggle() }
+				SmallButton(title: filled ? "FILLED" : "OUTLINE", color: filled ? ModUI.accent : Color(ui: 0x555555)) { filled.toggle() }
 			}
 		} else if t == .select && sel == nil {
 			Text("Drag to choose pixels; drag inside the choice to move them.").font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
@@ -6442,8 +6313,8 @@ struct PixelEditorView: View {
 	var editButtons: some View {
 		VStack(alignment: .leading, spacing: 4) {
 			HStack(spacing: 4) {
-				SmallButton(title: "UNDO", color: undo.isEmpty ? Color(hex: 0x444444) : Color(hex: 0x5A5A70)) { undoStep() }
-				SmallButton(title: "REDO", color: redo.isEmpty ? Color(hex: 0x444444) : Color(hex: 0x5A5A70)) { redoStep() }
+				SmallButton(title: "UNDO", color: undo.isEmpty ? Color(ui: 0x444444) : Color(ui: 0x5A5A70)) { undoStep() }
+				SmallButton(title: "REDO", color: redo.isEmpty ? Color(ui: 0x444444) : Color(ui: 0x5A5A70)) { redoStep() }
 				SmallButton(title: "CLEAR", color: ModUI.red) {
 					remember()
 					var e = ModPixels(w: pixels.w, h: pixels.h)
@@ -6468,7 +6339,7 @@ struct PixelEditorView: View {
 
 	var outlineButton: some View {
 		let on: Bool = pixels.outlined(outlineDefault)
-		return SmallButton(title: on ? "OUTLINE ON" : "OUTLINE OFF", color: on ? ModUI.accent : Color(hex: 0x555555)) {
+		return SmallButton(title: on ? "OUTLINE ON" : "OUTLINE OFF", color: on ? ModUI.accent : Color(ui: 0x555555)) {
 			var p: ModPixels = pixels
 			p.outline = !on
 			pixels = p
@@ -6509,7 +6380,7 @@ struct PixelEditorView: View {
 			Text("IN THE GAME").font(.pixel(10)).foregroundColor(ModUI.dim)
 			HStack(alignment: .bottom, spacing: 8) {
 				pixImage(b).resizable().interpolation(.none).frame(width: CGFloat(b.w) * scale, height: CGFloat(b.h) * scale)
-					.background(Color(hex: 0x6AA0D8).opacity(0.5))
+					.background(Color(ui: 0x6AA0D8).opacity(0.5))
 				if frames.count > 1 { animation }
 			}
 			currentSwatch
@@ -6583,7 +6454,7 @@ struct PixelEditorView: View {
 				SmallButton(title: showMixer ? "HIDE COLOUR MIXER" : "MIX A COLOUR...") { showMixer.toggle() }
 				SmallButton(title: "SAVE COLOUR", color: ModUI.blue) { saveColour() }
 				if paletteIx >= SpritePalettes.sets.count && !mine.isEmpty {
-					SmallButton(title: removing ? "TAP ONE TO REMOVE" : "REMOVE...", color: removing ? ModUI.red : Color(hex: 0x555555)) { removing.toggle() }
+					SmallButton(title: removing ? "TAP ONE TO REMOVE" : "REMOVE...", color: removing ? ModUI.red : Color(ui: 0x555555)) { removing.toggle() }
 				}
 			}
 		}
@@ -6591,7 +6462,7 @@ struct PixelEditorView: View {
 
 	func paletteChip(_ i: Int) -> some View {
 		let on: Bool = paletteIx == i
-		return SmallButton(title: SpritePalettes.names[i], color: on ? ModUI.blue : Color(hex: 0x4A4A50)) {
+		return SmallButton(title: SpritePalettes.names[i], color: on ? ModUI.blue : Color(ui: 0x4A4A50)) {
 			paletteIx = i
 			removing = false
 		}
@@ -6603,7 +6474,7 @@ struct PixelEditorView: View {
 		let a: Double = Double(c >> 24) / 255.0
 		return Rectangle().fill(Color(hex: c & 0xFFFFFF).opacity(a))
 			.frame(width: 30, height: 30)
-			.background(Color(hex: 0x8A8A8A))
+			.background(Color(ui: 0x8A8A8A))
 			.overlay(Rectangle().stroke(on ? Color.white : Color.black, lineWidth: on ? 3 : 1))
 			.onTapGesture { self.tapSwatch(c) }
 	}
@@ -6652,7 +6523,7 @@ struct PixelEditorView: View {
 			StatSlider(label: "Blue", value: mixBind(2), range: 0...255, step: 1, format: "%.0f")
 			StatSlider(label: "Opacity (pen)", value: $opacity, range: 0.05...1.0, step: 0.05, format: "%.2f")
 			HStack(spacing: 6) {
-				SmallButton(title: blend ? "BLEND ON" : "BLEND OFF", color: blend ? ModUI.accent : Color(hex: 0x555555)) { blend.toggle() }
+				SmallButton(title: blend ? "BLEND ON" : "BLEND OFF", color: blend ? ModUI.accent : Color(ui: 0x555555)) { blend.toggle() }
 				Text(verbatim: blend ? "See-through paint mixes with what is under it." : "See-through paint makes see-through pixels.").font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
 			}
 		}
@@ -6677,7 +6548,7 @@ struct PixelEditorView: View {
 	var panelTabs: some View {
 		HStack(spacing: 6) {
 			ForEach(0..<4, id: \.self) { i in
-				SmallButton(title: ["REFERENCE", "SIZE", "COPY & PASTE", "SPRITE LIBRARY"][i], color: panel == i + 1 ? ModUI.blue : Color(hex: 0x4A4A50)) {
+				SmallButton(title: ["REFERENCE", "SIZE", "COPY & PASTE", "SPRITE LIBRARY"][i], color: panel == i + 1 ? ModUI.blue : Color(ui: 0x4A4A50)) {
 					panel = panel == i + 1 ? 0 : i + 1
 					if panel == 4 { library = SpriteLibrary.load() }
 				}
@@ -6702,9 +6573,9 @@ struct PixelEditorView: View {
 				.font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
 			if ref != nil {
 				HStack(spacing: 6) {
-					SmallButton(title: "BESIDE", color: refMode == 1 ? ModUI.accent : Color(hex: 0x555555)) { refMode = 1 }
-					SmallButton(title: "UNDER", color: refMode == 2 ? ModUI.accent : Color(hex: 0x555555)) { refMode = 2 }
-					SmallButton(title: "HIDE", color: refMode == 0 ? ModUI.accent : Color(hex: 0x555555)) { refMode = 0 }
+					SmallButton(title: "BESIDE", color: refMode == 1 ? ModUI.accent : Color(ui: 0x555555)) { refMode = 1 }
+					SmallButton(title: "UNDER", color: refMode == 2 ? ModUI.accent : Color(ui: 0x555555)) { refMode = 2 }
+					SmallButton(title: "HIDE", color: refMode == 0 ? ModUI.accent : Color(ui: 0x555555)) { refMode = 0 }
 					SmallButton(title: "USE AS SAMPLE", color: ModUI.blue) { useSample() }
 					SmallButton(title: "REMOVE", color: ModUI.red) { ref = nil; refName = "" }
 				}
@@ -6873,7 +6744,7 @@ struct SpriteRefPicker: View {
 	}
 
 	func tabButton(_ i: Int) -> some View {
-		let col: Color = tab == i ? ModUI.accent : Color(hex: 0x555555)
+		let col: Color = tab == i ? ModUI.accent : Color(ui: 0x555555)
 		return SmallButton(title: SpriteRefPicker.tabNames[i], color: col) {
 			self.tab = i
 			self.creature = -1
@@ -7107,7 +6978,7 @@ struct SpriteLibraryScreen: View {
 	}
 
 	func frameButton(_ i: Int) -> some View {
-		let col: Color = frame == i ? ModUI.accent : Color(hex: 0x555555)
+		let col: Color = frame == i ? ModUI.accent : Color(ui: 0x555555)
 		return SmallButton(title: joinText("FRAME ", String(i + 1)), color: col) { self.frame = i }
 	}
 
@@ -7217,7 +7088,7 @@ struct PreviewRow: View {
 	let after: String
 	var body: some View {
 		let changed: Bool = before != after
-		let col: Color = changed ? Color(hex: 0x7AF08A) : Color.white
+		let col: Color = changed ? Color(ui: 0x7AF08A) : Color.white
 		return HStack {
 			Text(verbatim: name).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
 			Spacer()
@@ -7406,7 +7277,7 @@ struct InfusionEditorView: View {
 		return LazyVGrid(columns: cols, spacing: 6) {
 			ForEach(0..<names.count, id: \.self) { i in
 				let on: Bool = cls.wrappedValue.contains(i)
-				SmallButton(title: names[i], color: on ? ModUI.accent : Color(hex: 0x555555)) {
+				SmallButton(title: names[i], color: on ? ModUI.accent : Color(ui: 0x555555)) {
 					if on { cls.wrappedValue.removeAll { $0 == i } } else { cls.wrappedValue.append(i) }
 				}
 			}
@@ -7471,7 +7342,7 @@ extension InfusionPanel {
 		let list: [ModInfusionRT] = ModRuntime.shared.infusionDefs.values.sorted { $0.number < $1.number }
 		return VStack(spacing: 4) {
 			if !list.isEmpty {
-				Text("FROM MODS").font(.pixel(11)).foregroundColor(Color(hex: 0xB8A8D8)).frame(maxWidth: .infinity, alignment: .leading)
+				Text("FROM MODS").font(.pixel(11)).foregroundColor(Color(ui: 0xB8A8D8)).frame(maxWidth: .infinity, alignment: .leading)
 			}
 			ForEach(list, id: \.number) { r in customRow(r) }
 		}
@@ -7489,14 +7360,14 @@ extension InfusionPanel {
 			HStack(spacing: 6) {
 				SlotView(stack: Stack(item: compound, count: max(1, owned)), selected: chosen, size: 34, dim: owned == 0)
 				VStack(alignment: .leading, spacing: 1) {
-					Text(verbatim: r.def.name).font(.pixel(12)).foregroundColor(Color(hex: (Rarity(rawValue: r.def.rarity) ?? .uncommon).color))
+					Text(verbatim: r.def.name).font(.pixel(12)).foregroundColor(Color(ui: (Rarity(rawValue: r.def.rarity) ?? .uncommon).color))
 					Text(verbatim: r.def.blurb).font(.pixel(10, .semibold)).foregroundColor(Color.white.opacity(0.8)).lineLimit(2)
 				}
 				Spacer(minLength: 0)
 				Text(verbatim: owned > 0 ? joinText("x", String(owned)) : "none").font(.pixel(10)).foregroundColor(Color.white.opacity(0.6))
 			}
 			.padding(4)
-			.background(chosen ? Color(hex: 0x4A3A6A) : Color.black.opacity(0.2))
+			.background(chosen ? Color(ui: 0x4A3A6A) : Color.black.opacity(0.2))
 		}
 		.buttonStyle(.plain)
 	}
@@ -7513,8 +7384,8 @@ extension InfusionPanel {
 			if infuseClasses(s.item).contains(.melee) {
 				Text(verbatim: joinText("Damage ", String(format: "%.1f", p0.damage), " → ", String(format: "%.1f", p1.damage))).font(.pixel(11)).foregroundColor(Color.white)
 			}
-			if let p = problem { Text(verbatim: p).font(.pixel(11, .semibold)).foregroundColor(Color(hex: 0xFF9A7A)) }
-			PixelButton(title: ok ? "CONFIRM INFUSION" : "CAN'T INFUSE", color: ok ? Color(hex: 0x6A4AA8) : Color(hex: 0x444444)) {
+			if let p = problem { Text(verbatim: p).font(.pixel(11, .semibold)).foregroundColor(Color(ui: 0xFF9A7A)) }
+			PixelButton(title: ok ? "CONFIRM INFUSION" : "CAN'T INFUSE", color: ok ? Color(ui: 0x6A4AA8) : Color(ui: 0x444444)) {
 				if !ok { return }
 				note = game.infuseCustom(slot: pick, r.number)
 				customChoice = -1
@@ -7581,7 +7452,7 @@ struct BossPhasesPage: View {
 
 	static func segmentView(_ seg: (Double, UInt32, String)) -> some View {
 		let w: CGFloat = CGFloat(max(10.0, seg.0 * 420.0))
-		let col: Color = Color(hex: seg.1)
+		let col: Color = Color(ui: seg.1)
 		return VStack(spacing: 2) {
 			Rectangle().fill(col).frame(width: w, height: 16)
 			Text(verbatim: seg.2).font(.pixel(9, .semibold)).foregroundColor(Color.white).lineLimit(1).frame(width: w)
@@ -7705,7 +7576,7 @@ struct BossPhasesPage: View {
 		let img: Image = tinted(p)
 		return ModSection(title: "LOOK") {
 			HStack(spacing: 12) {
-				img.resizable().interpolation(.none).frame(width: 72, height: 72).background(Color(hex: 0x5A7A9A).opacity(0.6))
+				img.resizable().interpolation(.none).frame(width: 72, height: 72).background(Color(ui: 0x5A7A9A).opacity(0.6))
 				VStack(alignment: .leading, spacing: 6) {
 					StatSlider(label: "Colour strength", value: pb(i, \.tintAmt, 0.25), range: 0.0...1.0, step: 0.05, format: "%.2f")
 					ModToggle(label: "Roars as it begins", isOn: pb(i, \.roar, true))
@@ -7854,7 +7725,7 @@ struct PatternGrid: View {
 			}
 		}
 		.padding(6)
-		.background(Color(hex: 0x6A8AAA).opacity(0.5))
+		.background(Color(ui: 0x6A8AAA).opacity(0.5))
 	}
 
 	/// The picture of a cell: a block, a cross for "empty", or a faint dot for "anything"
@@ -8607,7 +8478,7 @@ struct DimensionEditorView: View {
 	var header: some View {
 		let d: ModDimension = dim
 		let way: String = d.entry.enabled ? joinText("Way in: ", d.entry.how.name.lowercased()) : "No way in yet (visit it from the Mod Test tools)"
-		let col: Color = d.entry.enabled ? ModUI.gold : Color(hex: 0xFF9060)
+		let col: Color = d.entry.enabled ? ModUI.gold : Color(ui: 0xFF9060)
 		return HStack(spacing: 12) {
 			SkySwatch(top: d.skyTop, bottom: d.skyBottom).frame(width: 64, height: 64)
 			VStack(alignment: .leading, spacing: 4) {
@@ -8642,7 +8513,7 @@ struct DimensionEditorView: View {
 		let pick: Int = clampI(bodyPick, 0, 1)
 		let roof: Bool = d.ceiling
 		return ModSection(title: "SUN AND MOON", help: "Give the dimension a sun and a moon of its own: a picture or a round one in your colour, its size and glow, how it crosses the sky, and how much light it gives (it lights the land as the game's do).") {
-			if roof { Text("This is a cavern world: it has no sky, so they are never seen.").font(.pixel(11, .semibold)).foregroundColor(Color(hex: 0xFF9060)) }
+			if roof { Text("This is a cavern world: it has no sky, so they are never seen.").font(.pixel(11, .semibold)).foregroundColor(Color(ui: 0xFF9060)) }
 			ChoiceRows(options: DimensionEditorView.bodyNames, selected: $bodyPick, columns: 2)
 			if pick == 0 {
 				SkyBodyEditor(sky: b(\.sunBody, nil), moon: false, skyTop: d.skyTop, skyBottom: d.skyBottom)
@@ -8741,7 +8612,7 @@ struct DimensionEditorView: View {
 	/// The day sky, the night sky and the sun, as they are now
 	var skyPictures: some View {
 		let d: ModDimension = dim
-		let sun: Color = Color(hex: d.sunColor & 0xFFFFFF)
+		let sun: Color = Color(ui: d.sunColor & 0xFFFFFF)
 		return HStack(alignment: .bottom, spacing: 12) {
 			skyPicture("DAY", d.skyTop, d.skyBottom)
 			skyPicture("NIGHT", d.nightTop, d.nightBottom)
@@ -9136,7 +9007,7 @@ struct DimensionEditorView: View {
 					.frame(width: CGFloat(p.w) * 1.5, height: CGFloat(p.h) * 1.5)
 					.background(Color.black)
 				if previewOf != dim {
-					Text("Changed since this preview was made.").font(.pixel(11, .semibold)).foregroundColor(Color(hex: 0xFF9060))
+					Text("Changed since this preview was made.").font(.pixel(11, .semibold)).foregroundColor(Color(ui: 0xFF9060))
 				}
 			}
 		}
@@ -9306,13 +9177,13 @@ struct LogicStudioView: View {
 		return HStack(spacing: 8) {
 			if room {
 				PixelButton(title: "+ NEW SCRIPT", color: ModUI.accent) { self.add(.worldStart) }
-				PixelButton(title: "+ NEW GROUP", color: Color(hex: 0x8A6A2A)) { self.add(.group) }
+				PixelButton(title: "+ NEW GROUP", color: Color(ui: 0x8A6A2A)) { self.add(.group) }
 			}
 		}
 	}
 
 	func scriptRow(_ sc: ModScript) -> some View {
-		let bar: Color = Color(hex: sc.event == .group ? 0xC08A3A : 0xE8C040)
+		let bar: Color = Color(ui: sc.event == .group ? 0xC08A3A : 0xE8C040)
 		let nameCol: Color = sc.enabled ? Color.white : ModUI.dim
 		let blocks: String = String(LogicStudioView.count(sc.blocks))
 		let line: String = joinText(sc.event.name, " \u{00B7} ", blocks, " blocks", sc.enabled ? "" : " \u{00B7} off")
@@ -9454,7 +9325,7 @@ struct ScriptEditorView: View {
 	var hat: some View {
 		let sc: ModScript = script
 		let group: Bool = sc.event == .group
-		let bg: Color = Color(hex: group ? 0xC08A3A : 0xE8C040)
+		let bg: Color = Color(ui: group ? 0xC08A3A : 0xE8C040)
 		return VStack(alignment: .leading, spacing: 8) {
 			HStack(spacing: 8) {
 				ModTextField(label: "Name", text: b(\.name, ""), placeholder: "Boss rage")
@@ -9557,7 +9428,7 @@ struct ScriptEditorView: View {
 		return VStack(alignment: .leading, spacing: 4) {
 			Text(verbatim: label).font(.pixel(11, .bold)).foregroundColor(Color.black)
 			if opts.isEmpty {
-				Text("Make one in this mod first.").font(.pixel(11, .semibold)).foregroundColor(Color(hex: 0x7A1A1A))
+				Text("Make one in this mod first.").font(.pixel(11, .semibold)).foregroundColor(Color(ui: 0x7A1A1A))
 			} else {
 				ChoiceRow(options: opts.map { $0.0 }, selected: sel, columns: 3)
 			}
@@ -9573,7 +9444,7 @@ struct ScriptEditorView: View {
 		let c: LCat = cats[clampI(cat, 0, cats.count - 1)]
 		let specs: [LSpec] = LSpec.all.filter { $0.cat == c }
 		let cols: [GridItem] = [GridItem(.adaptive(minimum: 150), spacing: 6)]
-		let col: Color = Color(hex: c.color)
+		let col: Color = Color(ui: c.color)
 		return VStack(alignment: .leading, spacing: 6) {
 			ChoiceRow(options: ScriptEditorView.catNames, selected: $cat, columns: 4)
 			LazyVGrid(columns: cols, spacing: 6) {
@@ -9614,7 +9485,7 @@ struct ScriptEditorView: View {
 
 	func blockRow(_ n: LNode, _ path: [Int]) -> AnyView {
 		let sp: LSpec = LSpec.of(n.op)
-		let col: Color = Color(hex: sp.cat.color)
+		let col: Color = Color(ui: sp.cat.color)
 		return AnyView(VStack(alignment: .leading, spacing: 6) {
 			rowHeader(sp, path)
 			fields(n, path, sp)
@@ -9880,7 +9751,7 @@ struct ScriptEditorView: View {
 			Text(verbatim: LReporters.name(op)).font(.pixel(11, .bold)).foregroundColor(Color.black)
 				.padding(.horizontal, 8)
 				.frame(minHeight: 34)
-				.background(Color(hex: 0x9AE070))
+				.background(Color(ui: 0x9AE070))
 				.cornerRadius(10)
 		}
 		.buttonStyle(.plain)
@@ -9946,7 +9817,7 @@ struct ScriptEditorView: View {
 			if !mine.isEmpty {
 				Text("CHECKS").font(.pixel(12, .bold)).foregroundColor(ModUI.gold)
 				ForEach(mine) { i in
-					Text(verbatim: joinText("\u{2022} ", i.text)).font(.pixel(11, .semibold)).foregroundColor(Color(hex: 0xFFB070))
+					Text(verbatim: joinText("\u{2022} ", i.text)).font(.pixel(11, .semibold)).foregroundColor(Color(ui: 0xFFB070))
 				}
 			}
 		}
@@ -10040,7 +9911,7 @@ struct ReporterPicker: View {
 		Button(action: { self.pick(ReporterPicker.make(op)) }) {
 			Text(verbatim: LReporters.name(op)).font(.pixel(11, .bold)).foregroundColor(Color.black)
 				.frame(maxWidth: .infinity, minHeight: 44)
-				.background(Color(hex: 0x9AE070))
+				.background(Color(ui: 0x9AE070))
 				.cornerRadius(10)
 		}
 		.buttonStyle(.plain)
@@ -10085,12 +9956,12 @@ struct LogicDebugView: View {
 		let vm: LogicVM = game.logic
 		let paused: Bool = vm.paused
 		let runTitle: String = paused ? "RUN" : "PAUSE"
-		let runCol: Color = paused ? ModUI.accent : Color(hex: 0x8A6A2A)
+		let runCol: Color = paused ? ModUI.accent : Color(ui: 0x8A6A2A)
 		return HStack(spacing: 8) {
 			SmallButton(title: runTitle, color: runCol) { self.pause() }
 			if paused { SmallButton(title: "STEP", color: ModUI.blue) { self.step() } }
 			SmallButton(title: "WORLD START AGAIN", color: ModUI.blue) { self.restart() }
-			SmallButton(title: "REFRESH", color: Color(hex: 0x555555)) { self.rev += 1 }
+			SmallButton(title: "REFRESH", color: Color(ui: 0x555555)) { self.rev += 1 }
 		}
 	}
 
@@ -10159,7 +10030,7 @@ struct LogicDebugView: View {
 
 	func messageButton(_ m: String) -> some View {
 		let title: String = m.isEmpty ? "(unnamed)" : m
-		return SmallButton(title: title, color: Color(hex: 0x8A6A2A)) {
+		return SmallButton(title: title, color: Color(ui: 0x8A6A2A)) {
 			self.game.fireLogic(.custom, text: m)
 			self.rev += 1
 		}
@@ -10173,6 +10044,548 @@ struct LogicDebugView: View {
 				Text(verbatim: log[i]).font(.pixel(10, .semibold)).foregroundColor(Color.white.opacity(0.85))
 			}
 		}
+	}
+}
+
+// MARK: - Mod Creator: rules, weather, vehicles and the look of the screens
+
+/// The WORLD tab: the rules of the game, what a new world starts with, and the Overworld's weather
+struct WorldRulesView: View {
+	@ObservedObject var s: ModSession
+	@State var picking: Bool = false
+
+	var body: some View {
+		VStack(alignment: .leading, spacing: 10) {
+			Text("Change how the game plays in the worlds this mod is in. Each rule stays the game's own until you change it; when two mods change the same rule, the one lower in the mod list wins.")
+				.font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+			rulesSection
+			startSection
+			WeatherRulesEditor(s: s)
+		}
+		.modCover(s, picking ? 1 : nil) { self.itemPicker }
+	}
+
+	var rulesSection: some View {
+		ModSection(title: "RULES OF THE GAME") {
+			ForEach(GameRule.allCases, id: \.self) { (r: GameRule) in self.ruleRow(r) }
+		}
+	}
+
+	func ruleRow(_ r: GameRule) -> some View {
+		let sp: GameRule.Spec = r.spec
+		let v: Double? = s.mod.rules[sp.id]
+		let set: Bool = v != nil
+		let shown: String = WorldRulesView.valueText(sp, v ?? sp.def)
+		let label: String = set ? shown : joinText("game's: ", shown)
+		return VStack(alignment: .leading, spacing: 3) {
+			HStack(spacing: 8) {
+				Text(verbatim: sp.name).font(.pixel(13, .bold)).foregroundColor(Color.white)
+				Spacer(minLength: 0)
+				Text(verbatim: label).font(.pixel(12)).foregroundColor(set ? ModUI.gold : ModUI.dim)
+				SmallButton(title: set ? "GAME'S" : "CHANGE", color: set ? ModUI.red : ModUI.blue) { self.toggleRule(sp) }
+			}
+			Text(verbatim: sp.help).font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
+			if set { ruleControl(sp) }
+		}
+		.padding(.vertical, 3)
+	}
+
+	@ViewBuilder
+	func ruleControl(_ sp: GameRule.Spec) -> some View {
+		if sp.unit == "on" {
+			ModToggle(label: sp.name, isOn: onBind(sp))
+		} else {
+			Slider(value: ruleBind(sp), in: sp.lo...sp.hi, step: sp.step).frame(minHeight: 34)
+		}
+	}
+
+	static func valueText(_ sp: GameRule.Spec, _ v: Double) -> String {
+		switch sp.unit {
+		case "on": return v >= 0.5 ? "ON" : "OFF"
+		case "x": return String(format: "x%.1f", v)
+		case "min": return String(format: "%.0f min", v)
+		default: return String(format: "%.0f", v)
+		}
+	}
+
+	func toggleRule(_ sp: GameRule.Spec) {
+		if s.mod.rules[sp.id] != nil { s.mod.rules[sp.id] = nil } else { s.mod.rules[sp.id] = sp.def }
+		s.touch()
+	}
+
+	func ruleBind(_ sp: GameRule.Spec) -> Binding<Double> {
+		let ses: ModSession = s
+		let id: String = sp.id
+		let d: Double = sp.def
+		return Binding<Double>(get: { ses.mod.rules[id] ?? d }, set: { (v: Double) in
+			ses.mod.rules[id] = v
+			ses.touch()
+		})
+	}
+
+	func onBind(_ sp: GameRule.Spec) -> Binding<Bool> {
+		let base: Binding<Double> = ruleBind(sp)
+		return Binding<Bool>(get: { base.wrappedValue >= 0.5 }, set: { (on: Bool) in base.wrappedValue = on ? 1 : 0 })
+	}
+
+	var startSection: some View {
+		let can: Bool = s.mod.startItems.count < ModWorldLimits.startItems
+		return ModSection(title: "A NEW WORLD STARTS WITH", help: "Put in the bag of every new world (not in creative), beside the game's four torches.") {
+			ForEach(0..<s.mod.startItems.count, id: \.self) { (i: Int) in self.startRow(i) }
+			if can { SmallButton(title: "+ ADD AN ITEM", color: ModUI.accent) { self.picking = true } }
+		}
+	}
+
+	func startRow(_ i: Int) -> some View {
+		let c: ModCost = s.mod.startItems[i]
+		let name: String = ModPreview.name(c.item, s.catalog)
+		return HStack(spacing: 8) {
+			ModPreview.icon(c.item, s.catalog).resizable().interpolation(.none).frame(width: 32, height: 32)
+			Text(verbatim: name).font(.pixel(13)).foregroundColor(Color.white).lineLimit(1)
+			Spacer(minLength: 0)
+			SmallButton(title: "-", color: ModUI.blue) { self.addCount(i, c.n >= 20 ? -10 : -1) }
+			Text(verbatim: String(c.n)).font(.pixel(14)).foregroundColor(ModUI.gold).frame(minWidth: 34)
+			SmallButton(title: "+", color: ModUI.blue) { self.addCount(i, c.n >= 10 ? 10 : 1) }
+			SmallButton(title: "\u{2715}", color: ModUI.red) { self.removeStart(i) }
+		}
+	}
+
+	func addCount(_ i: Int, _ d: Int) {
+		if i < 0 || i >= s.mod.startItems.count { return }
+		s.mod.startItems[i].n = clampI(s.mod.startItems[i].n + d, 1, 999)
+		s.touch()
+	}
+
+	func removeStart(_ i: Int) {
+		if i < 0 || i >= s.mod.startItems.count { return }
+		s.mod.startItems.remove(at: i)
+		s.touch()
+	}
+
+	var itemPicker: some View {
+		ItemPickerView(catalog: s.catalog, title: "A NEW WORLD STARTS WITH...", pick: { (it: Item) in
+			self.s.mod.startItems.append(ModCost(it, 1))
+			self.s.touch()
+			self.picking = false
+		}, cancel: { self.picking = false })
+	}
+}
+
+/// The Overworld's weather as the mod has it: how often each kind comes, how strong and how long
+struct WeatherRulesEditor: View {
+	@ObservedObject var s: ModSession
+
+	var body: some View {
+		let on: Bool = s.mod.weather != nil
+		return ModSection(title: "THE OVERWORLD'S WEATHER", help: "How often each kind of weather comes (1: as the game, 0: never), how hard it rains and blows, and how long each spell lasts. The weather switches in Settings still apply.") {
+			ModToggle(label: "Change the weather", help: on ? "This mod's weather is used" : "The game's weather", isOn: onBind)
+			if on { controls }
+		}
+	}
+
+	var controls: some View {
+		VStack(alignment: .leading, spacing: 6) {
+			ForEach(WeatherKind.allCases, id: \.self) { (k: WeatherKind) in
+				StatSlider(label: k.name, value: self.chanceBind(k), range: 0.0...5.0, step: 0.25, format: "x%.2f")
+			}
+			StatSlider(label: "Rain and snow", value: numBind(\ModWeather.rain), range: 0.0...3.0, step: 0.1, format: "x%.1f")
+			StatSlider(label: "Wind", value: numBind(\ModWeather.wind), range: 0.0...3.0, step: 0.1, format: "x%.1f")
+			StatSlider(label: "How long spells last", value: numBind(\ModWeather.length), range: 0.25...6.0, step: 0.25, format: "x%.2f")
+			ModColorRow(label: "Colour of the rain", color: rainBind)
+			SmallButton(title: "THE GAME'S RAIN COLOUR") { self.edit { (w: inout ModWeather) in w.rainColor = 0 } }
+		}
+	}
+
+	func edit(_ f: (inout ModWeather) -> Void) {
+		var w: ModWeather = s.mod.weather ?? ModWeather()
+		f(&w)
+		s.mod.weather = w
+		s.touch()
+	}
+
+	var onBind: Binding<Bool> {
+		let ses: ModSession = s
+		return Binding<Bool>(get: { ses.mod.weather != nil }, set: { (on: Bool) in
+			ses.mod.weather = on ? (ses.mod.weather ?? ModWeather()) : nil
+			ses.touch()
+		})
+	}
+
+	func chanceBind(_ k: WeatherKind) -> Binding<Double> {
+		let ses: ModSession = s
+		return Binding<Double>(get: { ses.mod.weather?.chanceOf(k) ?? 1 }, set: { (v: Double) in
+			var w: ModWeather = ses.mod.weather ?? ModWeather()
+			while w.chance.count < WeatherKind.allCases.count { w.chance.append(1) }
+			w.chance[k.rawValue] = v
+			ses.mod.weather = w
+			ses.touch()
+		})
+	}
+
+	func numBind(_ kp: WritableKeyPath<ModWeather, Double>) -> Binding<Double> {
+		let ses: ModSession = s
+		return Binding<Double>(get: { (ses.mod.weather ?? ModWeather())[keyPath: kp] }, set: { (v: Double) in
+			var w: ModWeather = ses.mod.weather ?? ModWeather()
+			w[keyPath: kp] = v
+			ses.mod.weather = w
+			ses.touch()
+		})
+	}
+
+	var rainBind: Binding<UInt32> {
+		let ses: ModSession = s
+		return Binding<UInt32>(get: { ses.mod.weather?.rainColor ?? 0 }, set: { (v: UInt32) in
+			var w: ModWeather = ses.mod.weather ?? ModWeather()
+			w.rainColor = v
+			ses.mod.weather = w
+			ses.touch()
+		})
+	}
+}
+
+extension BlockEditorView {
+	/// As building material, and on power lines
+	var buildSection: some View {
+		let p: ModBlock = block
+		let auto: BlockPhys = blockPhysFrom(TileDef(name: p.name, hard: p.hardness, solid: p.collision == .solid))
+		let weightNote: String = String(format: "0 = worked out from its hardness (%.1f, holds %.0f)", auto.weight, auto.carry)
+		return VStack(spacing: 10) {
+			ModSection(title: "AS BUILDING MATERIAL", help: weightNote) {
+				StatSlider(label: "Weight (stone is 2.5)", value: b(\.weight, 0), range: 0.0...(s.mod.sandbox ? 40 : 12), step: 0.1, format: "%.1f")
+				StatSlider(label: "Weight it holds up", value: b(\.carry, 0), range: 0.0...(s.mod.sandbox ? 4000 : 400), step: 5, format: "%.0f")
+				ModToggle(label: "Falls like sand", help: "With nothing under it, it drops and lands", isOn: b(\.falls, false))
+			}
+			ModSection(title: "ON POWER LINES", help: p.powerRole.help) {
+				ChoiceRows(options: ModPowerRole.allCases.map { $0.name }, selected: powerBind, columns: 3)
+				if p.powerRole != .none && p.powerRole != .signal {
+					StatSlider(label: "Strength (sparks a second)", value: b(\.powerAmt, 4), range: 0.1...(s.mod.sandbox ? 200 : 40), step: 0.1, format: "%.1f")
+				}
+			}
+		}
+	}
+
+	var powerBind: Binding<Int> {
+		let base: Binding<ModPowerRole> = b(\.powerRole, .none)
+		return Binding<Int>(get: { base.wrappedValue.rawValue }, set: { base.wrappedValue = ModPowerRole(rawValue: $0) ?? .none })
+	}
+}
+
+/// The VEHICLES tab: whole vehicles, each also an item (its kit) that builds it
+struct VehicleListView: View {
+	@ObservedObject var s: ModSession
+	var open: (String) -> Void
+
+	var body: some View {
+		let can: Bool = s.mod.vehicles.count < ModWorldLimits.vehicles
+		return VStack(alignment: .leading, spacing: 8) {
+			Text("A vehicle kept in the mod is built from its kit: an item your recipes make. Use the kit on open ground (or water, for a boat) and the vehicle is there to drive. Paint it part by part here, or build it in a TEST world and keep it with SAVE VEHICLE on the TEST panel.")
+				.font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+			if can { PixelButton(title: "+ NEW VEHICLE", color: ModUI.accent) { self.add() } }
+			ForEach(s.mod.vehicles) { (v: ModVehicle) in self.row(v) }
+		}
+	}
+
+	func row(_ v: ModVehicle) -> some View {
+		let pic: Image = pixImage(ModRuntime.shared.vehicleIconBuf(v))
+		let line: String = joinText(String(v.cells.count), " parts", v.water ? " · a boat" : "")
+		return ModRow(image: pic, title: v.name, sub: line, open: { self.open(v.id) }, copy: { self.copy(v) },
+					  delete: { self.s.mod.vehicles.removeAll { $0.id == v.id }; self.s.touch() },
+					  off: s.mod.off.contains(v.id), toggle: { self.toggleOff(v.id) })
+	}
+
+	func add() {
+		var v = ModVehicle()
+		v.id = s.mod.freshID("veh")
+		v.name = joinText("Vehicle ", String(s.mod.vehicles.count + 1))
+		v.cells = [ModVehicleCell(1, 0, .seat), ModVehicleCell(2, 0, .steering), ModVehicleCell(0, 1, .fuelTank), ModVehicleCell(1, 1, .frame),
+				   ModVehicleCell(2, 1, .frame), ModVehicleCell(3, 1, .engine), ModVehicleCell(0, 2, .wheel), ModVehicleCell(3, 2, .wheel)]
+		s.mod.vehicles.append(v)
+		s.touch()
+		open(v.id)
+	}
+
+	func copy(_ v: ModVehicle) {
+		if s.mod.vehicles.count >= ModWorldLimits.vehicles { return }
+		var c: ModVehicle = v
+		c.id = s.mod.freshID("veh")
+		c.name = joinText(v.name, " copy")
+		s.mod.vehicles.append(c)
+		s.touch()
+	}
+
+	func toggleOff(_ id: String) {
+		if s.mod.off.contains(id) { s.mod.off.removeAll { $0 == id } } else { s.mod.off.append(id) }
+		s.touch()
+	}
+}
+
+/// Editing one vehicle: its name, whether it is a boat, its fuel, and its parts painted on a grid
+struct VehicleEditorView: View {
+	@ObservedObject var s: ModSession
+	let id: String
+	@State var brush: Int = 0
+	@State var block: String = ""
+	@State var picking: Bool = false
+
+	func b<T>(_ kp: WritableKeyPath<ModVehicle, T>, _ d: T) -> Binding<T> { return s.bind(\ModPack.vehicles, id, kp, d) }
+	var veh: ModVehicle { return s.mod.vehicles.first { $0.id == id } ?? ModVehicle() }
+
+	/// what the brush can paint: every part but a plain block, then a block, then nothing
+	static let parts: [PartType] = PartType.allCases.filter { $0 != .block }
+	static var brushNames: [String] { return parts.map { $0.name.uppercased() } + ["BLOCK", "ERASE"] }
+
+	var body: some View {
+		let v: ModVehicle = veh
+		return VStack(spacing: 10) {
+			ModSection(title: v.name.uppercased(), help: "Its kit is an item: give it a recipe on the RECIPES tab.") {
+				ModTextField(label: "Name", text: b(\.name, ""), placeholder: "Sky Hauler")
+				ModTextField(label: "Description", text: b(\.desc, ""), placeholder: "Optional")
+				ModToggle(label: "A boat", help: "Put down on water instead of on the ground", isOn: b(\.water, false))
+				StatSlider(label: "Fuel it comes with", value: b(\.fuel, 40), range: 0.0...400.0, step: 5, format: "%.0f")
+			}
+			ModSection(title: "PARTS", help: brushHelp) {
+				ChoiceRows(options: VehicleEditorView.brushNames, selected: $brush, columns: 5)
+				if brush == VehicleEditorView.parts.count { blockChoice }
+				grid(v)
+				Text(verbatim: joinText(String(v.cells.count), " of ", String(ModVehicle.maxCells), " cells")).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+				SmallButton(title: "CLEAR", color: ModUI.red) { self.b(\.cells, []).wrappedValue = [] }
+			}
+			ModSection(title: "ICON", help: "Blank: drawn from its parts.") {
+				PixelEditorView(pixels: b(\.icon, ModPixels(w: 12, h: 12)), maxSide: 220, outlineDefault: true)
+			}
+		}
+		.modCover(s, picking ? 1 : nil) { self.blockPicker }
+	}
+
+	var brushHelp: String {
+		if brush < VehicleEditorView.parts.count { return joinText("Tap or drag to place: ", VehicleEditorView.parts[brush].name, ". Wheels go at the bottom, a seat or cockpit is where the driver sits.") }
+		if brush == VehicleEditorView.parts.count { return "Tap or drag to place the chosen block (a mod block that works as a vehicle part works as one)." }
+		return "Tap or drag to take parts away."
+	}
+
+	var blockChoice: some View {
+		let label: String = block.isEmpty ? "No block chosen" : blockName(block)
+		return HStack(spacing: 8) {
+			Text(verbatim: label).font(.pixel(12)).foregroundColor(Color.white)
+			Spacer(minLength: 0)
+			SmallButton(title: "CHOOSE A BLOCK...", color: ModUI.blue) { self.picking = true }
+		}
+	}
+
+	func blockName(_ k: String) -> String {
+		if k.hasPrefix("tile:"), let n = Int(k.dropFirst(5)), let t = Tile(rawValue: UInt8(clampI(n, 0, 255))) { return t.name }
+		return s.catalog.names[k] ?? k
+	}
+
+	var blockPicker: some View {
+		ItemPickerView(catalog: s.catalog, title: "BUILD WITH...", blocksOnly: true, pick: { (it: Item) in
+			switch it {
+			case .block(let t): self.block = joinText("tile:", String(t.rawValue))
+			case .custom(let k): self.block = k
+			default: break
+			}
+			self.picking = false
+		}, cancel: { self.picking = false })
+	}
+
+	func grid(_ v: ModVehicle) -> some View {
+		let n: Int = ModVehicle.maxSize
+		let cell: CGFloat = 13
+		let side: CGFloat = cell * CGFloat(n)
+		var colours: [Int: UInt32] = [:]
+		for c in v.cells { colours[c.y * n + c.x] = ModRuntime.shared.vehicleCellColor(c) }
+		return Canvas { ctx, size in
+			for y in 0..<n {
+				for x in 0..<n {
+					let r: CGRect = CGRect(x: CGFloat(x) * cell, y: CGFloat(y) * cell, width: cell - 1, height: cell - 1)
+					let col: UInt32 = colours[y * n + x] ?? 0x1A2030
+					ctx.fill(Path(r), with: .color(Color(hex: col)))
+				}
+			}
+		}
+		.frame(width: side, height: side)
+		.gesture(DragGesture(minimumDistance: 0).onChanged { (g: DragGesture.Value) in self.paint(g.location, cell) })
+	}
+
+	func paint(_ p: CGPoint, _ cell: CGFloat) {
+		let x: Int = Int(floor(p.x / cell))
+		let y: Int = Int(floor(p.y / cell))
+		let n: Int = ModVehicle.maxSize
+		if x < 0 || y < 0 || x >= n || y >= n { return }
+		var cells: [ModVehicleCell] = veh.cells
+		let had: Int? = cells.firstIndex { $0.x == x && $0.y == y }
+		let partCount: Int = VehicleEditorView.parts.count
+		if brush > partCount {
+			guard let i = had else { return }
+			cells.remove(at: i)
+		} else {
+			var c = ModVehicleCell(x, y, .frame)
+			if brush < partCount {
+				c.part = VehicleEditorView.parts[brush].rawValue
+			} else {
+				if block.isEmpty { return }
+				c.block = block
+			}
+			if let i = had {
+				if cells[i] == c { return }
+				cells[i] = c
+			} else {
+				if cells.count >= ModVehicle.maxCells { return }
+				cells.append(c)
+			}
+		}
+		b(\.cells, []).wrappedValue = cells
+	}
+}
+
+extension ModTestPanel {
+	/// In a TEST world: keeps the vehicle the player drives (or stands by) in the mod as a design
+	func saveVehicle() -> String {
+		let mid: String = game.testMod
+		guard !mid.isEmpty, var p = ModStore.pack(mid) else { return "Only in a TEST world." }
+		guard let v = game.inVehicle ?? game.nearestVehicle(3) else { return "Stand by a vehicle (or drive one) first." }
+		if p.vehicles.count >= ModWorldLimits.vehicles { return joinText(p.name, " already holds the most vehicles a mod can.") }
+		var mv: ModVehicle = game.vehicleDesign(v)
+		mv.id = p.freshID("veh")
+		mv.name = joinText("Vehicle ", String(p.vehicles.count + 1))
+		p.vehicles.append(mv)
+		return ModStore.save(p) ? joinText("Saved as \u{201C}", mv.name, "\u{201D} in ", p.name, ": give its kit a recipe in the Mod Creator.") : "The mod could not be saved."
+	}
+}
+
+/// The LOOK tab: how the game's screens look while this mod is on (the theme of the last mod in the
+/// list that has one is used, on the title screen too)
+struct ThemeEditorView: View {
+	@ObservedObject var s: ModSession
+
+	var body: some View {
+		let on: Bool = s.mod.theme != nil
+		return VStack(alignment: .leading, spacing: 10) {
+			Text("Change the colours of the game's screens and buttons, the letters, how round the buttons are, the title screen, and the size and sides of the touch controls. It shows once the mod is switched on, from the title screen.")
+				.font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+			ModToggle(label: "Change how the game looks", help: on ? "This mod's look" : "The game's own look", isOn: onBind)
+			if on { sections }
+		}
+	}
+
+	var sections: some View {
+		let t: ModTheme = s.mod.theme ?? ModTheme()
+		return VStack(alignment: .leading, spacing: 10) {
+			ThemePreview(theme: t)
+			ModSection(title: "COLOURS", help: "Each takes the place of the game's colour for that part of every screen (other shades follow it).") {
+				ForEach(ThemeRole.allCases, id: \.self) { (r: ThemeRole) in self.roleRow(r) }
+				StatSlider(label: "How much everything else leans to the tint", value: numBind(\ModTheme.tintAmt), range: 0.0...1.0, step: 0.05, format: "%.2f")
+			}
+			ModSection(title: "LETTERS AND BUTTONS") {
+				ChoiceRows(options: ModTheme.fonts, selected: intBind(\ModTheme.font), columns: 4)
+				StatSlider(label: "Rounded corners", value: numBind(\ModTheme.corner), range: 0.0...16.0, step: 1, format: "%.0f")
+				ModColorRow(label: "Outline", color: colorBind(\ModTheme.outline))
+			}
+			ModSection(title: "TITLE SCREEN", help: "Blank: the game's own title and the sky behind it.") {
+				ModTextField(label: "Title", text: textBind(\ModTheme.title), placeholder: "PIXEL REALM")
+				ModTextField(label: "Words under it", text: textBind(\ModTheme.subtitle), placeholder: "A new splash line each time")
+				PixelEditorView(pixels: backBind, maxSide: 300, outlineDefault: false)
+				HStack(spacing: 8) {
+					SmallButton(title: "PAINT A BACKGROUND", color: ModUI.blue) { self.backBind.wrappedValue = ModPixels(w: 48, h: 27) }
+					SmallButton(title: "NO PICTURE", color: ModUI.red) { self.backBind.wrappedValue = ModPixels(w: 1, h: 1) }
+				}
+			}
+			ModSection(title: "TOUCH CONTROLS") {
+				StatSlider(label: "Size", value: numBind(\ModTheme.hudScale), range: 0.6...1.5, step: 0.05, format: "x%.2f")
+				StatSlider(label: "How solid", value: numBind(\ModTheme.hudAlpha), range: 0.3...1.0, step: 0.05, format: "%.2f")
+				ModToggle(label: "Swap sides", help: "Attack stick and JUMP on the left, the walking stick on the right", isOn: boolBind(\ModTheme.swapSides))
+			}
+		}
+	}
+
+	func roleRow(_ r: ThemeRole) -> some View {
+		let c: UInt32 = (s.mod.theme ?? ModTheme()).color(r)
+		return VStack(alignment: .leading, spacing: 4) {
+			ModColorRow(label: c == 0 ? joinText(r.name, " (the game's)") : r.name, color: roleBind(r))
+			if c != 0 { SmallButton(title: "THE GAME'S", color: ModUI.red) { self.edit { (t: inout ModTheme) in t.colors[r.rawValue] = 0 } } }
+		}
+	}
+
+	func edit(_ f: (inout ModTheme) -> Void) {
+		var t: ModTheme = s.mod.theme ?? ModTheme()
+		while t.colors.count < ThemeRole.allCases.count { t.colors.append(0) }
+		f(&t)
+		s.mod.theme = t
+		s.touch()
+	}
+
+	var onBind: Binding<Bool> {
+		let ses: ModSession = s
+		return Binding<Bool>(get: { ses.mod.theme != nil }, set: { (on: Bool) in
+			ses.mod.theme = on ? (ses.mod.theme ?? ModTheme()) : nil
+			ses.touch()
+		})
+	}
+
+	func roleBind(_ r: ThemeRole) -> Binding<UInt32> {
+		let ses: ModSession = s
+		return Binding<UInt32>(get: { (ses.mod.theme ?? ModTheme()).color(r) }, set: { (v: UInt32) in
+			var t: ModTheme = ses.mod.theme ?? ModTheme()
+			while t.colors.count < ThemeRole.allCases.count { t.colors.append(0) }
+			t.colors[r.rawValue] = v
+			ses.mod.theme = t
+			ses.touch()
+		})
+	}
+
+	func field<T>(_ kp: WritableKeyPath<ModTheme, T>) -> Binding<T> {
+		let ses: ModSession = s
+		return Binding<T>(get: { (ses.mod.theme ?? ModTheme())[keyPath: kp] }, set: { (v: T) in
+			var t: ModTheme = ses.mod.theme ?? ModTheme()
+			t[keyPath: kp] = v
+			ses.mod.theme = t
+			ses.touch()
+		})
+	}
+
+	func numBind(_ kp: WritableKeyPath<ModTheme, Double>) -> Binding<Double> { return field(kp) }
+	func intBind(_ kp: WritableKeyPath<ModTheme, Int>) -> Binding<Int> { return field(kp) }
+	func textBind(_ kp: WritableKeyPath<ModTheme, String>) -> Binding<String> { return field(kp) }
+	func boolBind(_ kp: WritableKeyPath<ModTheme, Bool>) -> Binding<Bool> { return field(kp) }
+	func colorBind(_ kp: WritableKeyPath<ModTheme, UInt32>) -> Binding<UInt32> { return field(kp) }
+	var backBind: Binding<ModPixels> { return field(\ModTheme.background) }
+}
+
+/// A few buttons and a title in a theme's colours (drawn from the theme itself, before it is switched on)
+struct ThemePreview: View {
+	let theme: ModTheme
+
+	func col(_ r: ThemeRole) -> Color {
+		let c: UInt32 = theme.color(r)
+		return Color(hex: c != 0 ? c : r.gameColor)
+	}
+
+	var body: some View {
+		let design: Font.Design = [Font.Design.monospaced, .rounded, .serif, .default][clampI(theme.font, 0, 3)]
+		let r: CGFloat = CGFloat(theme.corner)
+		let title: String = theme.title.isEmpty ? "PIXEL REALM" : theme.title
+		return VStack(spacing: 8) {
+			Text(verbatim: title).font(.system(size: 22, weight: .black, design: design)).foregroundColor(col(.titles))
+			HStack(spacing: 6) {
+				sample("PLAY", col(.accept), r, design)
+				sample("BAG", col(.buttons), r, design)
+				sample("INFO", col(.info), r, design)
+				sample("QUIT", col(.danger), r, design)
+			}
+		}
+		.padding(10)
+		.frame(maxWidth: .infinity)
+		.background(RoundedRectangle(cornerRadius: r).fill(col(.panels)))
+	}
+
+	func sample(_ t: String, _ c: Color, _ r: CGFloat, _ d: Font.Design) -> some View {
+		return Text(verbatim: t)
+			.font(.system(size: 13, weight: .heavy, design: d))
+			.foregroundColor(Color.white)
+			.padding(.horizontal, 10)
+			.padding(.vertical, 8)
+			.background(RoundedRectangle(cornerRadius: r).fill(c))
+			.overlay(RoundedRectangle(cornerRadius: r).stroke(Color(hex: theme.outline), lineWidth: 2))
 	}
 }
 

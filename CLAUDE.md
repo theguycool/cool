@@ -29,7 +29,8 @@ confirmed). `tools/buildcost.sh` measures both ways:
   all; as one job 93 s and 1,194 MB. Step 5c, rules, weather, machines, vehicles and looks in mods
   (2.33 MB, 62,502 lines), first measured 471, 481, 486 and 487 MB; damage moved to part 1, custom
   infusions to part 2 and the Mod Creator's first screen pieces to part 3: 478, 482, 482 and 479 MB,
-  113 s in all; as one job 92 s and 1,228 MB. Steps 5a, 5b and 5c are not yet confirmed on the iPad.
+  113 s in all; as one job 92 s and 1,228 MB. The user confirmed steps 5a, 5b and 5c build and run
+  on the iPad, so four parts of up to about 482 MB per job are known to work.
 - A job's peak can jump by 30 MB or more after a small edit (taking the recipe lines out of one
   function once raised part 2 from 473 to 509 MB), so a few MB either way is noise; measure again
   after moving code.
@@ -405,6 +406,15 @@ the Mod Test LOGIC tab, the sun and moon editor, the tree design editor), `u06_r
   - Logic Studio: scripts are data compiled to `LInstr` and run by `runLogic` a little each frame (`LLimits`:
     300 steps a script per frame, 3000 in all, groups 8 deep, a loop that never waits is stopped after 10 s).
     Events are fired from the game with `fireLogic`; variables are saved per world (`SaveData.logicVars`).
+
+## Game design
+
+The `game-design` skill (`.claude/skills/game-design`) holds the design method and references: fun
+and motivation, loops and retention, game feel, systems and progression, UI and UX, onboarding,
+pixel art, monetization and its ethics, building bigger games, a critique checklist, and tools and a
+reading list for studying talks. `docs/design-plan.md` applies it to PixelRealm: pillars, what the
+game already does well, gaps, and steps in order of value for effort. Read the plan before
+proposing a new step, and update it when a step lands.
 
 ## Working with the user
 

@@ -100,7 +100,19 @@ Go through every common action and check it has sound, particles and a response 
 mining each material, placing, landing, hits, pickups, crafting, opening chests. Fix what is
 missing; check the big effects (blasts, storms, boss blows) are kept for big moments.
 
-### 8. Pixel art audit (M) — looks
+### 8. Pixel art: the redraw (L, in progress) — looks
+The user asked for the creatures and blocks to be redrawn after their reference sheets. Direction
+set: 16 art pixels a block, dark outlines, three or four tones a material, light from the upper left,
+colours graded earthy (the user found the first colours too bright); drawings in `tools/art`, packed
+into the game as text. Done: every creature and boss (the player from the user's own two drawings,
+with a front view at rest and a choice of hair, shirt and trouser styles and colours; zombies, the
+skeleton, the pirates on the player's own figure, bears, farm animals, the deep monsters, Ursavor,
+Tyrannax and the Hollow Warden), and about fifty blocks (land, trees with plain leaves, gaps, tufts
+and falling leaves, planks, brick, ores, plants, torch, workbench, furnace, chest). To do, in this
+order: the remaining blocks (machines, furniture), item icons, the suit on the new figure, mod block
+art at 16 pixels. The audit below still applies to whatever is drawn.
+
+### 8b. Pixel art audit (M) — looks
 A shot sheet that tests the art: every tile in a 3 by 3 grid of itself (seams), every creature as
 a black silhouette (unique shapes), screenshots in greyscale (the player and dangers stand out),
 and a count of the colours in use with near-duplicates flagged. Fix the worst offenders; note the
@@ -134,6 +146,6 @@ checks the fun.
 
 ## Rules that stay
 
-The four parts stay level in build memory (`tools/buildcost.sh`), saved enums only grow, new
+The six parts stay level in build memory (`tools/buildcost.sh`), saved enums only grow, new
 `SaveData` and `Settings` fields are optional with defaults, mods stay data only, and world
 generation stays the same for existing worlds.

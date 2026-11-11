@@ -1,8 +1,10 @@
-// PIXEL REALM v2, part 4 of 4: the Mod Creator screens, the potion and exosuit screens, the Mod Creator+ screens (with the
-// sprite editor, the sun and moon editor and the tree designer), and the app itself.
-// The game is four files that go together in one Swift Playgrounds app: PixelRealm1.swift to
-// PixelRealm4.swift. Each goes in its own file in the app (delete ContentView.swift; MyApp.swift can
-// hold part 1). All art is generated in code.
+// PIXEL REALM v2, part 4 of 6: Mod Creator+ (game content changes, ore controls, sprite tools, custom infusions, boss phases
+// and summoning, custom dimensions with their suns, moons and trees, the Logic Studio, rules, weather, machines,
+// vehicles and themes in mods), the art store and the player's look, sound, weather, ambient and animal life, the
+// journal and telegraphed attacks.
+// The game is six files that go together in one Swift Playgrounds app: PixelRealm1.swift to
+// PixelRealm6.swift. Each goes in its own file in the app (delete ContentView.swift; MyApp.swift can
+// hold part 1). The hand-drawn pictures are kept as text in part 1 (a01_artsheet).
 
 import SwiftUI
 import AVFoundation
@@ -10,10916 +12,11773 @@ import AVFoundation
 import UIKit
 #endif
 
-// ===== u07_mods =====
+// ===== p32_modplus =====
 
-// MARK: - Mod Creator: shared pieces (continued; the session and the first pieces are at the end of part 3)
+// MARK: - Mod Creator+: changing the game's own content
 
-/// A row of large choices (one is picked)
-struct ChoiceRow: View {
-	let options: [String]
-	@Binding var selected: Int
-	var columns: Int = 3
-	var body: some View {
-		let cols: [GridItem] = [GridItem](repeating: GridItem(.flexible(), spacing: 6), count: max(1, min(columns, options.count)))
-		return LazyVGrid(columns: cols, spacing: 6) {
-			ForEach(0..<options.count, id: \.self) { i in
-				chip(i)
-			}
-		}
-	}
-
-	func chip(_ i: Int) -> some View {
-		let on: Bool = selected == i
-		let col: Color = on ? ModUI.accent : Color(ui: 0x555555)
-		return Button {
-			selected = i
-		} label: {
-			Text(verbatim: options[i])
-				.font(.pixel(12))
-				.foregroundColor(Color.white)
-				.lineLimit(2)
-				.minimumScaleFactor(0.7)
-				.frame(maxWidth: .infinity, minHeight: 40)
-				.background(PixelBox(color: col))
-		}
-		.buttonStyle(.plain)
-	}
-}
-
-/// Rows of equal-width cells, `per` to a row: a plain stand-in for a lazy grid (the dimension editor
-/// crashed on the iPad with lazy grids on its pages)
-struct PlainGrid<Cell: View>: View {
-	let count: Int
-	let per: Int
-	var spacing: CGFloat = 6
-	let cell: (Int) -> Cell
-
-	var body: some View {
-		let k: Int = max(1, per)
-		let rows: Int = (count + k - 1) / k
-		return VStack(spacing: spacing) {
-			ForEach(0..<rows, id: \.self) { (r: Int) in self.row(r, k) }
-		}
-	}
-
-	func row(_ r: Int, _ k: Int) -> some View {
-		let start: Int = r * k
-		let end: Int = min(count, start + k)
-		let blanks: Int = max(0, k - (end - start))
-		return HStack(spacing: spacing) {
-			ForEach(start..<end, id: \.self) { (i: Int) in self.cell(i) }
-			ForEach(0..<blanks, id: \.self) { (_: Int) in Color.clear.frame(maxWidth: .infinity, minHeight: 1) }
-		}
-	}
-}
-
-/// The same choices as ChoiceRow, laid out in plain rows (no lazy grid)
-struct ChoiceRows: View {
-	let options: [String]
-	@Binding var selected: Int
-	var columns: Int = 3
-
-	var body: some View {
-		let per: Int = max(1, min(columns, options.count))
-		return PlainGrid(count: options.count, per: per) { (i: Int) in self.chip(i) }
-	}
-
-	func chip(_ i: Int) -> some View {
-		let on: Bool = selected == i
-		let col: Color = on ? ModUI.accent : Color(ui: 0x555555)
-		return Button {
-			selected = i
-		} label: {
-			Text(verbatim: options[i])
-				.font(.pixel(12))
-				.foregroundColor(Color.white)
-				.lineLimit(2)
-				.minimumScaleFactor(0.7)
-				.frame(maxWidth: .infinity, minHeight: 40)
-				.background(PixelBox(color: col))
-		}
-		.buttonStyle(.plain)
-	}
-}
-
-/// An on/off switch with a line of explanation
-struct ModToggle: View {
-	let label: String
-	var help: String = ""
-	@Binding var isOn: Bool
-	var body: some View {
-		Button {
-			isOn.toggle()
-		} label: {
-			HStack(spacing: 10) {
-				Text(verbatim: isOn ? "ON" : "OFF")
-					.font(.pixel(12))
-					.foregroundColor(Color.white)
-					.frame(width: 50, height: 32)
-					.background(PixelBox(color: isOn ? ModUI.accent : Color(ui: 0x555555)))
-				VStack(alignment: .leading, spacing: 1) {
-					Text(verbatim: label).font(.pixel(13, .bold)).foregroundColor(Color.white)
-					if !help.isEmpty { Text(verbatim: help).font(.pixel(10, .semibold)).foregroundColor(ModUI.dim) }
-				}
-				Spacer(minLength: 0)
-			}
-			.contentShape(Rectangle())
-		}
-		.buttonStyle(.plain)
-	}
-}
-
-/// A labelled text box
-struct ModTextField: View {
-	let label: String
-	@Binding var text: String
-	var placeholder: String = ""
-	var body: some View {
-		VStack(alignment: .leading, spacing: 3) {
-			Text(verbatim: label).font(.pixel(12, .bold)).foregroundColor(ModUI.dim)
-			TextField(placeholder, text: $text)
-				.font(.pixel(15, .bold))
-				.foregroundColor(Color.white)
-				.padding(10)
-				.background(Color.black.opacity(0.6))
-		}
-	}
-}
-
-/// "Are you sure?" over the screen
-struct ModConfirm: View {
-	let title: String
-	let text: String
-	let yes: String
-	let yesAction: () -> Void
-	let noAction: () -> Void
-	var body: some View {
-		ZStack {
-			Color.black.opacity(0.6).ignoresSafeArea()
-			VStack(spacing: 12) {
-				Text(verbatim: title).font(.pixel(18)).foregroundColor(Color.white)
-				Text(verbatim: text).font(.pixel(12, .semibold)).foregroundColor(ModUI.dim).multilineTextAlignment(.center)
-				HStack(spacing: 10) {
-					PixelButton(title: "CANCEL") { noAction() }
-					PixelButton(title: yes, color: ModUI.red) { yesAction() }
-				}
-			}
-			.padding(18)
-			.frame(maxWidth: 420)
-			.background(PixelBox(color: ModUI.panel))
-		}
-	}
-}
-
-/// Picture of a mod pixel grid, drawn crisp at any size
-func modImage(_ p: ModPixels) -> Image {
-	return pixImage(p.buf())
-}
-
-func shortDate(_ t: Double) -> String {
-	if t <= 0 { return "never" }
-	let f = DateFormatter()
-	f.dateStyle = .medium
-	f.timeStyle = .short
-	return f.string(from: Date(timeIntervalSince1970: t))
-}
-
-// MARK: - Mod Creator: pickers over the whole screen
-
-extension View {
-	/// Shows `cover` (a picker) over the whole Mod Creator screen while `key` is not nil. It sits above
-	/// the page that scrolls, so it is always on screen with its CANCEL in reach, however far the page
-	/// was scrolled; a new key shows it again with the new state.
-	func modCover<K: Equatable, C: View>(_ s: ModSession, _ key: K?, @ViewBuilder _ cover: @escaping () -> C) -> some View {
-		return self.modifier(ModCoverLink<K>(session: s, key: key, make: { AnyView(cover()) }))
-	}
-}
-
-/// Keeps the session's cover in step with one editor's picker
-struct ModCoverLink<K: Equatable>: ViewModifier {
-	let session: ModSession
-	let key: K?
-	let make: () -> AnyView
-
-	func body(content: Content) -> some View {
-		content
-			.modifier(ModChangeWatch(value: key, changed: { (k: K?) in self.show(k) }))
-			.onDisappear { if self.key != nil { self.session.cover = nil } }
-	}
-
-	func show(_ k: K?) {
-		session.cover = k == nil ? nil : make()
-	}
-}
-
-/// Runs `changed` when `value` changes (the iOS 17 form of onChange when there is one)
-struct ModChangeWatch<V: Equatable>: ViewModifier {
-	let value: V
-	let changed: (V) -> Void
-
-	func body(content: Content) -> some View {
-		if #available(iOS 17.0, macOS 14.0, *) {
-			content.onChange(of: value) { _, v in changed(v) }
-		} else {
-			content.onChange(of: value) { v in changed(v) }
-		}
-	}
-}
-
-/// Shown before loading a world whose mods are not all installed
-struct ModMissingView: View {
-	let check: ModLoadCheck
-	var load: () -> Void
-	var cancel: () -> Void
-	var body: some View {
-		ZStack {
-			Color.black.opacity(0.75).ignoresSafeArea()
-			VStack(alignment: .leading, spacing: 10) {
-				Text("MODS MISSING").font(.pixel(22)).foregroundColor(Color(ui: 0xFF9060))
-				Text(verbatim: "\u{201C}" + check.save.meta.name + "\u{201D} was made with mods that are not on this iPad:").font(.pixel(13, .semibold)).foregroundColor(Color.white)
-				if check.missing.count > 6 {
-					ScrollView { missingList }.frame(height: 200)
-				} else {
-					missingList
-				}
-				Text("You can load it anyway: their blocks show as magenta placeholders that cannot be broken, and their items wait in your bag. Nothing is deleted, so it all comes back when the mods are installed again.")
-					.font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-				HStack(spacing: 10) {
-					PixelButton(title: "BACK") { cancel() }
-					PixelButton(title: "LOAD ANYWAY", color: Color(ui: 0x8A5A2E)) { load() }
-				}
-			}
-			.padding(18)
-			.frame(maxWidth: 560)
-			.background(PixelBox(color: ModUI.panel))
-		}
-	}
-
-	var missingList: some View {
-		VStack(alignment: .leading, spacing: 4) {
-			ForEach(check.missing) { d in
-				Text(verbatim: joinText("• ", d.name, " v", d.version, d.author.isEmpty ? "" : " by " + d.author)).font(.pixel(13)).foregroundColor(ModUI.gold)
-			}
-		}
-	}
-}
-
-// MARK: - Mod Creator: the list of mods
-
-enum ModScreen: Equatable {
-	case list
-	case edit(String)
-	case info(String)
-	case packages
-	case sprites
-}
-
-struct ModCreatorView: View {
-	/// starts a test world for a mod (see ModTest)
-	var test: (ModPack) -> Void
-	var done: () -> Void
-	@State var screen: ModScreen = .list
-	@State var entries: [ModEntry] = []
-	@State var confirmDelete: String? = nil
-	@State var note: String = ""
-	@State var session: ModSession? = nil
-	/// the folder shown ("": every mod)
-	@State var folder: String = ""
-
-	var body: some View {
-		ZStack {
-			Color(ui: 0x1C1C22).ignoresSafeArea()
-			content
-			if let id = confirmDelete {
-				ModConfirm(title: "DELETE MOD?", text: "This removes the mod from this iPad. Worlds that use it will warn that it is missing.", yes: "DELETE",
-						   yesAction: { deleteMod(id) }, noAction: { confirmDelete = nil })
-			}
-		}
-		.onAppear { refresh() }
-	}
-
-	@ViewBuilder
-	var content: some View {
-		switch screen {
-		case .list: listScreen
-		case .edit:
-			if let s = session {
-				ModEditorView(session: s, test: { p in test(p) }, close: { closeEditor() })
-			} else {
-				listScreen
-			}
-		case .info(let id): ModInfoScreen(id: id, back: { screen = .list })
-		case .packages: ModPackagesScreen(back: { refresh(); screen = .list })
-		case .sprites: SpriteLibraryScreen(back: { screen = .list })
-		}
-	}
-
-	var listScreen: some View {
-		VStack(spacing: 10) {
-			HStack(spacing: 8) {
-				SmallButton(title: "< MENU") { done() }
-				Spacer()
-				Text("MOD CREATOR").font(.pixel(24)).foregroundColor(ModUI.gold)
-				Spacer()
-				SmallButton(title: "SPRITE LIBRARY", color: ModUI.blue) { screen = .sprites }
-				SmallButton(title: "IMPORT / SHARE", color: ModUI.blue) { screen = .packages }
-			}
-			Text("Make your own blocks, items, weapons, creatures, bosses, ores, recipes and structures. Mods switched on are used by new worlds; every world remembers the mods it was made with.")
-				.font(.pixel(11, .semibold)).foregroundColor(ModUI.dim).multilineTextAlignment(.center)
-			if !note.isEmpty { Text(verbatim: note).font(.pixel(12)).foregroundColor(ModUI.gold) }
-			ScrollView {
-				VStack(spacing: 8) {
-					PixelButton(title: "+ CREATE NEW MOD", color: ModUI.accent) { createMod() }
-					folderChips
-					ForEach(entries.filter { folder.isEmpty || ($0.pack?.folder ?? "") == folder }) { e in
-						ModCard(entry: e, actions: cardActions(e))
-					}
-					if entries.isEmpty {
-						Text("No mods yet. Create one to start!").font(.pixel(13)).foregroundColor(ModUI.dim).padding(.top, 20)
-					}
-				}
-				.padding(.bottom, 20)
-			}
-		}
-		.padding(14)
-		.frame(maxWidth: 900)
-	}
-
-	func cardActions(_ e: ModEntry) -> ModCardActions {
-		return ModCardActions(edit: { openEditor(e.id) }, test: { testMod(e.id) }, copy: { duplicateMod(e.id) },
-							  delete: { confirmDelete = e.id }, info: { screen = .info(e.id) },
-							  toggle: { toggleMod(e.id) }, up: { moveMod(e.id, -1) }, down: { moveMod(e.id, 1) })
-	}
-
-	func refresh() {
-		entries = ModStore.entries()
-	}
-
-	func createMod() {
-		var p = ModPack()
-		p.id = newModID()
-		p.name = "My Mod " + String(entries.count + 1)
-		if ModStore.save(p) {
-			refresh()
-			openEditor(p.id)
-		} else {
-			note = "The mod could not be saved."
-		}
-	}
-
-	func openEditor(_ id: String) {
-		guard let p = ModStore.pack(id) else {
-			note = "That mod could not be opened."
-			return
-		}
-		session = ModSession(p)
-		screen = .edit(id)
-	}
-
-	func closeEditor() {
-		if let s = session, s.dirty { _ = s.save() }
-		session = nil
-		refresh()
-		screen = .list
-	}
-
-	func testMod(_ id: String) {
-		guard let p = ModStore.pack(id) else { return }
-		test(p)
-	}
-
-	func duplicateMod(_ id: String) {
-		guard let p = ModStore.pack(id) else { return }
-		if let c = ModStore.duplicate(p) { note = "Made " + c.name + "." } else { note = "The copy could not be saved." }
-		refresh()
-	}
-
-	func deleteMod(_ id: String) {
-		ModStore.delete(id)
-		confirmDelete = nil
-		note = "Mod deleted."
-		refresh()
-	}
-
-	func toggleMod(_ id: String) {
-		let on: Bool = !ModStore.isEnabled(id)
-		if on && ModStore.enabledPacks().count >= ModLimits.maxMods {
-			note = "At most " + String(ModLimits.maxMods) + " mods can be on at once."
-			return
-		}
-		ModStore.setEnabled(id, on)
-		refresh()
-	}
-
-	func moveMod(_ id: String, _ d: Int) {
-		ModStore.move(id, by: d)
-		refresh()
-	}
-}
-
-struct ModCardActions {
-	var edit: () -> Void
-	var test: () -> Void
-	var copy: () -> Void
-	var delete: () -> Void
-	var info: () -> Void
-	var toggle: () -> Void
-	var up: () -> Void
-	var down: () -> Void
-}
-
-/// One mod in the list: what it is, whether it is on, and what you can do with it
-struct ModCard: View {
-	let entry: ModEntry
-	let actions: ModCardActions
-	var body: some View {
-		VStack(alignment: .leading, spacing: 8) {
-			if let p = entry.pack {
-				header(p)
-				Text(verbatim: p.summary).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-				buttons
-			} else {
-				Text(verbatim: "Damaged mod: " + entry.id).font(.pixel(14)).foregroundColor(Color(ui: 0xFF8060))
-				Text(verbatim: entry.error).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-				SmallButton(title: "DELETE", color: ModUI.red) { actions.delete() }
-			}
-		}
-		.padding(12)
-		.frame(maxWidth: .infinity, alignment: .leading)
-		.background(PixelBox(color: entry.enabled ? Color(ui: 0x34503A) : ModUI.card))
-	}
-
-	func header(_ p: ModPack) -> some View {
-		HStack(alignment: .top, spacing: 10) {
-			Button { actions.toggle() } label: {
-				Text(verbatim: entry.enabled ? "ON" : "OFF")
-					.font(.pixel(13))
-					.foregroundColor(Color.white)
-					.frame(width: 58, height: 44)
-					.background(PixelBox(color: entry.enabled ? ModUI.accent : Color(ui: 0x555555)))
-			}
-			.buttonStyle(.plain)
-			VStack(alignment: .leading, spacing: 2) {
-				Text(verbatim: p.name).font(.pixel(17)).foregroundColor(Color.white)
-				Text(verbatim: byline(p)).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-			}
-			Spacer(minLength: 4)
-			VStack(spacing: 4) {
-				SmallButton(title: "▲") { actions.up() }
-				SmallButton(title: "▼") { actions.down() }
-			}
-		}
-	}
-
-	func byline(_ p: ModPack) -> String {
-		let who: String = p.author.isEmpty ? "unknown author" : p.author
-		return joinText("v", p.version, " · by ", who, " · edited ", shortDate(p.edited))
-	}
-
-	var buttons: some View {
-		HStack(spacing: 6) {
-			SmallButton(title: "EDIT", color: ModUI.blue) { actions.edit() }
-			SmallButton(title: "TEST", color: ModUI.accent) { actions.test() }
-			SmallButton(title: "INFO") { actions.info() }
-			SmallButton(title: "COPY") { actions.copy() }
-			Spacer(minLength: 0)
-			SmallButton(title: "DELETE", color: ModUI.red) { actions.delete() }
-		}
-	}
-}
-
-/// Everything about one mod: details, content, and the problems the checks found
-struct ModInfoScreen: View {
-	let id: String
-	var back: () -> Void
-	var body: some View {
-		let e: ModEntry = ModStore.read(id)
-		return VStack(spacing: 10) {
-			HStack {
-				SmallButton(title: "< BACK") { back() }
-				Spacer()
-				Text("MOD INFO").font(.pixel(20)).foregroundColor(ModUI.gold)
-				Spacer()
-			}
-			ScrollView {
-				if let p = e.pack {
-					ModInfoBody(pack: p)
-				} else {
-					Text(verbatim: e.error).font(.pixel(13)).foregroundColor(Color(ui: 0xFF8060))
-				}
-			}
-		}
-		.padding(14)
-		.frame(maxWidth: 900)
-	}
-}
-
-struct ModInfoBody: View {
-	let pack: ModPack
-	var body: some View {
-		var copy: ModPack = pack
-		let rep: ModReport = ModValidator.check(&copy, known: ModCatalog.installed().keys)
-		return VStack(alignment: .leading, spacing: 10) {
-			ModSection(title: pack.name) {
-				infoLine("Author", pack.author.isEmpty ? "unknown" : pack.author)
-				infoLine("Version", pack.version)
-				infoLine("Created", shortDate(pack.created))
-				infoLine("Last edited", shortDate(pack.edited))
-				infoLine("Sandbox limits", pack.sandbox ? "on" : "off")
-				if !pack.desc.isEmpty { Text(verbatim: pack.desc).font(.pixel(12, .semibold)).foregroundColor(Color.white) }
-			}
-			ModSection(title: "CONTENT") {
-				contentList
-			}
-			ModIssueList(report: rep)
-		}
-	}
-
-	func infoLine(_ a: String, _ b: String) -> some View {
-		HStack {
-			Text(verbatim: a).font(.pixel(12, .bold)).foregroundColor(ModUI.dim)
-			Spacer()
-			Text(verbatim: b).font(.pixel(12)).foregroundColor(Color.white)
-		}
-	}
-
-	var contentList: some View {
-		VStack(alignment: .leading, spacing: 3) {
-			ForEach(pack.blocks) { b in Text(verbatim: "Block: " + b.name).font(.pixel(12, .semibold)).foregroundColor(Color.white) }
-			ForEach(pack.items) { i in Text(verbatim: i.kind.name + ": " + i.name).font(.pixel(12, .semibold)).foregroundColor(Color.white) }
-			ForEach(pack.mobs) { m in Text(verbatim: m.category.name + ": " + m.name).font(.pixel(12, .semibold)).foregroundColor(Color.white) }
-			ForEach(pack.projectiles) { s in Text(verbatim: "Shot: " + s.name).font(.pixel(12, .semibold)).foregroundColor(Color.white) }
-			ForEach(pack.ores) { o in Text(verbatim: "Ore: " + o.name).font(.pixel(12, .semibold)).foregroundColor(Color.white) }
-			ForEach(pack.structures) { s in Text(verbatim: "Structure: " + s.name).font(.pixel(12, .semibold)).foregroundColor(Color.white) }
-			ForEach(pack.loot) { l in Text(verbatim: "Loot table: " + l.name).font(.pixel(12, .semibold)).foregroundColor(Color.white) }
-			Text(verbatim: String(pack.recipes.count) + " recipes").font(.pixel(12, .semibold)).foregroundColor(Color.white)
-		}
-	}
-}
-
-/// The checks' findings, worst first
-struct ModIssueList: View {
-	let report: ModReport
-	var body: some View {
-		let list: [ModIssue] = report.issues.sorted { $0.level > $1.level }
-		return ModSection(title: report.issues.isEmpty ? "NO PROBLEMS FOUND" : "PROBLEMS (" + String(report.errors) + " errors, " + String(report.warnings) + " warnings)",
-						  help: report.issues.isEmpty ? "Everything in this mod checks out." : "Errors switch that content off until it is fixed; warnings were fixed for you.") {
-			ForEach(list) { i in
-				HStack(alignment: .top, spacing: 8) {
-					Text(verbatim: i.level >= 2 ? "✕" : (i.level == 1 ? "!" : "i"))
-						.font(.pixel(14))
-						.foregroundColor(Color(ui: i.level >= 2 ? 0xFF6060 : (i.level == 1 ? 0xFFC040 : 0x90C0FF)))
-						.frame(width: 18)
-					VStack(alignment: .leading, spacing: 1) {
-						Text(verbatim: i.place).font(.pixel(12, .bold)).foregroundColor(Color.white)
-						Text(verbatim: i.text).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-					}
-				}
-			}
-		}
-	}
-}
-
-/// Exporting a mod as a package file, and installing packages found in the packages folder
-struct ModPackagesScreen: View {
-	var back: () -> Void
-	@State var note: String = ""
-	@State var files: [URL] = []
-	@State var mods: [ModEntry] = []
-	var body: some View {
-		VStack(spacing: 10) {
-			HStack {
-				SmallButton(title: "< BACK") { back() }
-				Spacer()
-				Text("SHARE MODS").font(.pixel(20)).foregroundColor(ModUI.gold)
-				Spacer()
-			}
-			Text("Exported mods are saved as .prmod files in the PixelRealmMods/Packages folder of this app's documents. Put a .prmod file there to install it. Every package is checked before it is installed.")
-				.font(.pixel(11, .semibold)).foregroundColor(ModUI.dim).multilineTextAlignment(.center)
-			if !note.isEmpty { Text(verbatim: note).font(.pixel(12)).foregroundColor(ModUI.gold) }
-			ScrollView {
-				VStack(spacing: 8) {
-					ModSection(title: "EXPORT A MOD") {
-						ForEach(mods) { e in exportRow(e) }
-					}
-					ModSection(title: "INSTALL A PACKAGE", help: files.isEmpty ? "No package files found." : "") {
-						ForEach(files, id: \.self) { u in importRow(u) }
-					}
-				}
-			}
-		}
-		.padding(14)
-		.frame(maxWidth: 900)
-		.onAppear { reload() }
-	}
-
-	func reload() {
-		files = ModStore.packageFiles()
-		mods = ModStore.entries().filter { $0.pack != nil }
-	}
-
-	func exportRow(_ e: ModEntry) -> some View {
-		HStack {
-			Text(verbatim: e.pack?.name ?? e.id).font(.pixel(13)).foregroundColor(Color.white)
-			Spacer()
-			SmallButton(title: "EXPORT", color: ModUI.blue) {
-				if let p = e.pack, let u = ModStore.exportPackage(p) {
-					note = "Saved " + u.lastPathComponent
-				} else {
-					note = "Export failed."
-				}
-				reload()
-			}
-		}
-	}
-
-	func importRow(_ u: URL) -> some View {
-		HStack {
-			Text(verbatim: u.lastPathComponent).font(.pixel(13)).foregroundColor(Color.white)
-			Spacer()
-			SmallButton(title: "INSTALL", color: ModUI.accent) {
-				if let d = try? Data(contentsOf: u) {
-					let r: (ModPack?, String) = ModStore.importPackage(d)
-					note = r.1
-				} else {
-					note = "That file could not be read."
-				}
-				reload()
-			}
-		}
-	}
-}
-
-// MARK: - Mod Creator: editing a mod
-
-enum ModTab: Int, CaseIterable {
-	case info, blocks, items, mobs, shots, recipes, loot, ores, structures, infusions, suits, vehicles, dims, world, theme, logic, game, reference, check
+/// What a change to the game's own content applies to
+enum ModOverrideKind: Int, Codable, CaseIterable {
+	case block, item, creature
 	var name: String {
 		switch self {
-		case .suits: return "SUITS"
-		case .vehicles: return "VEHICLES"
-		case .world: return "WORLD & RULES"
-		case .theme: return "LOOK"
-		case .logic: return "LOGIC STUDIO"
-
-		case .dims: return "DIMENSIONS"
-
-		case .infusions: return "INFUSIONS"
-
-		case .reference: return "BLOCK REFERENCE"
-
-		case .game: return "GAME CONTENT"
-		case .info: return "INFO"
-		case .blocks: return "BLOCKS"
-		case .items: return "ITEMS & WEAPONS"
-		case .mobs: return "CREATURES"
-		case .shots: return "SHOTS"
-		case .recipes: return "RECIPES"
-		case .loot: return "LOOT"
-		case .ores: return "ORES"
-		case .structures: return "STRUCTURES"
-		case .check: return "CHECK"
+		case .block: return "Game block"
+		case .item: return "Game item"
+		case .creature: return "Game creature"
 		}
 	}
 }
 
-/// What the editor is showing: a tab's list, or one piece of content
-enum ModEditTarget: Equatable {
-	case none
-	case block(String)
-	case item(String)
-	case mob(String)
-	case shot(String)
-	case recipe(String)
-	case loot(String)
-	case ore(String)
-	case structure(String)
-	case override(String)
-	case infusion(String)
-	case dimension(String)
-	case script(String)
-	case suitMat(String)
-	case suitPart(String)
-	case suitDesign(String)
-	case vehicle(String)
-}
+/// A change a mod makes to something of the game itself: a block's hardness, a weapon's damage, a
+/// creature's health and so on. Only the numbers set here change (nil: the game's own value), the
+/// original is never touched (switching the mod off, or this change off, puts it back), and each
+/// change can be switched off by itself.
+struct ModOverride: Codable, Identifiable, Equatable {
+	var id: String = ""
+	var kind: ModOverrideKind = .block
+	/// the block (tile number), item, or creature (kind number) changed
+	var tile: Int = Int(Tile.stone.rawValue)
+	var item: Item? = nil
+	var mob: Int = MobKind.zombie.rawValue
+	var enabled: Bool = true
+	// blocks
+	var hardness: Double? = nil
+	var tier: Int? = nil
+	var light: Int? = nil
+	var unbreakable: Bool? = nil
+	// items
+	var damage: Double? = nil
+	var cooldown: Double? = nil
+	var reach: Double? = nil
+	var knock: Double? = nil
+	var crit: Double? = nil
+	var mineSpeed: Double? = nil
+	var defense: Double? = nil
+	var hunger: Double? = nil
+	var heal: Double? = nil
+	// creatures
+	var hp: Double? = nil
+	var mobDamage: Double? = nil
+	var speed: Double? = nil
+	var detect: Double? = nil
+	var jump: Double? = nil
+	/// a creature's own sprite, painted over the game's (nil: the game's): every frame, in the game's
+	/// order (standing, walking, the rest)
+	var frames: [ModPixels]? = nil
+	/// true when the frames were painted over the creature's hand-drawn picture (16 pixels to a block,
+	/// its frame order); false for a repaint of the older picture, which keeps that one's size and order
+	var fine: Bool = false
 
-struct ModEditorView: View {
-	@ObservedObject var session: ModSession
-	var test: (ModPack) -> Void
-	var close: () -> Void
-	@State var tab: ModTab = .info
-	@State var target: ModEditTarget = .none
-	@State var confirm: (String, () -> Void)? = nil
-	/// picking a game block, item or creature to start a new one from
-	@State var gamePick: ModOverrideKind? = nil
+	init() {}
 
-	var body: some View {
-		ZStack {
-			VStack(spacing: 8) {
-				topBar
-				if target == .none { tabBar }
-				ScrollView {
-					VStack(spacing: 10) {
-						page
-					}
-					.padding(.bottom, 30)
-				}
-			}
-			.padding(12)
-			.frame(maxWidth: 1000)
-			if let cv = session.cover { cv }
-			if let c = confirm {
-				ModConfirm(title: "DELETE?", text: c.0, yes: "DELETE", yesAction: { c.1(); confirm = nil }, noAction: { confirm = nil })
-			}
+	init(from decoder: Decoder) throws {
+		let c = try decoder.container(keyedBy: CodingKeys.self)
+		id = c.val(.id, "")
+		kind = c.val(.kind, .block)
+		tile = c.val(.tile, Int(Tile.stone.rawValue))
+		item = c.val(.item, nil)
+		mob = c.val(.mob, MobKind.zombie.rawValue)
+		enabled = c.val(.enabled, true)
+		hardness = c.val(.hardness, nil)
+		tier = c.val(.tier, nil)
+		light = c.val(.light, nil)
+		unbreakable = c.val(.unbreakable, nil)
+		damage = c.val(.damage, nil)
+		cooldown = c.val(.cooldown, nil)
+		reach = c.val(.reach, nil)
+		knock = c.val(.knock, nil)
+		crit = c.val(.crit, nil)
+		mineSpeed = c.val(.mineSpeed, nil)
+		defense = c.val(.defense, nil)
+		hunger = c.val(.hunger, nil)
+		heal = c.val(.heal, nil)
+		hp = c.val(.hp, nil)
+		mobDamage = c.val(.mobDamage, nil)
+		speed = c.val(.speed, nil)
+		detect = c.val(.detect, nil)
+		jump = c.val(.jump, nil)
+		frames = c.val(.frames, nil)
+		fine = c.val(.fine, false)
+	}
+
+	/// what it changes, by name
+	var targetName: String {
+		switch kind {
+		case .block: return Tile(rawValue: UInt8(clampI(tile, 0, 255)))?.name ?? "Block"
+		case .item: return item?.name ?? "Item"
+		case .creature: return MobKind(rawValue: mob).map { mobDef($0).name } ?? "Creature"
 		}
 	}
 
-	var topBar: some View {
-		HStack(spacing: 8) {
-			if target == .none {
-				SmallButton(title: "< MODS") { close() }
-			} else {
-				SmallButton(title: "< " + tab.name) { target = .none; session.recheck() }
-			}
-			Spacer()
-			Text(verbatim: session.mod.name).font(.pixel(18)).foregroundColor(Color.white).lineLimit(1)
-			Spacer()
-			Text(verbatim: session.dirty ? "unsaved" : "saved").font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-			SmallButton(title: "SAVE", color: ModUI.blue) { _ = session.save() }
-			SmallButton(title: "TEST", color: ModUI.accent) {
-				_ = session.save()
-				test(session.mod)
-			}
+	/// how many numbers it changes
+	var changedCount: Int {
+		let opts: [Bool] = [hardness != nil, tier != nil, light != nil, unbreakable != nil, damage != nil, cooldown != nil, reach != nil, knock != nil,
+							crit != nil, mineSpeed != nil, defense != nil, hunger != nil, heal != nil, hp != nil, mobDamage != nil, speed != nil, detect != nil, jump != nil,
+							frames != nil]
+		return opts.filter { $0 }.count
+	}
+
+	/// Later changes win, field by field (the mod lower in the load order goes on top)
+	mutating func merge(_ o: ModOverride) {
+		if let v = o.hardness { hardness = v }
+		if let v = o.tier { tier = v }
+		if let v = o.light { light = v }
+		if let v = o.unbreakable { unbreakable = v }
+		if let v = o.damage { damage = v }
+		if let v = o.cooldown { cooldown = v }
+		if let v = o.reach { reach = v }
+		if let v = o.knock { knock = v }
+		if let v = o.crit { crit = v }
+		if let v = o.mineSpeed { mineSpeed = v }
+		if let v = o.defense { defense = v }
+		if let v = o.hunger { hunger = v }
+		if let v = o.heal { heal = v }
+		if let v = o.hp { hp = v }
+		if let v = o.mobDamage { mobDamage = v }
+		if let v = o.speed { speed = v }
+		if let v = o.detect { detect = v }
+		if let v = o.jump { jump = v }
+		if let v = o.frames {
+			frames = v
+			fine = o.fine
 		}
 	}
 
-	var tabBar: some View {
-		ScrollView(.horizontal, showsIndicators: false) {
-			HStack(spacing: 6) {
-				ForEach(ModTab.allCases, id: \.self) { t in
-					tabButton(t)
-				}
-			}
-		}
-	}
-
-	func tabButton(_ t: ModTab) -> some View {
-		let on: Bool = tab == t
-		var label: String = t.name
-		if t == .check && session.report.errors > 0 { label += " (" + String(session.report.errors) + ")" }
-		return Button {
-			tab = t
-			target = .none
-			if t == .check { session.recheck() }
-		} label: {
-			Text(verbatim: label)
-				.font(.pixel(12))
-				.foregroundColor(Color.white)
-				.padding(.horizontal, 12)
-				.frame(minHeight: 40)
-				.background(PixelBox(color: on ? ModUI.accent : Color(ui: 0x4A4A50)))
-		}
-		.buttonStyle(.plain)
-	}
-
-	@ViewBuilder
-	var page: some View {
-		switch target {
-		case .none: tabPage
-		case .block(let id): BlockEditorView(s: session, id: id)
-		case .item(let id): ItemEditorView(s: session, id: id)
-		case .mob(let id): MobEditorView(s: session, id: id)
-		case .shot(let id): ShotEditorView(s: session, id: id)
-		case .recipe(let id): RecipeEditorView(s: session, id: id)
-		case .loot(let id): LootEditorView(s: session, id: id)
-		case .ore(let id): OreEditorView(s: session, id: id)
-		case .structure(let id): StructureEditorView(s: session, id: id)
-		case .override(let id): OverrideEditorView(s: session, id: id)
-		case .infusion(let id): InfusionEditorView(s: session, id: id, openRecipe: { rid in target = .recipe(rid) })
-		case .dimension(let id): DimensionEditorView(s: session, id: id)
-		case .script(let id): ScriptEditorView(s: session, id: id)
-		case .suitMat(let id): SuitMatEditorView(s: session, id: id)
-		case .suitPart(let id): SuitPartEditorView(s: session, id: id)
-		case .suitDesign(let id): SuitDesignEditorView(s: session, id: id)
-		case .vehicle(let id): VehicleEditorView(s: session, id: id)
-		}
-	}
-
-	@ViewBuilder
-	var tabPage: some View {
-		switch tab {
-		case .info: ModInfoEditor(s: session)
-		case .blocks: blockList
-		case .items: itemList
-		case .mobs: mobList
-		case .shots: shotList
-		case .recipes: recipeList
-		case .loot: lootList
-		case .ores: oreList
-		case .structures: structureList
-		case .game: GameContentList(s: session, open: { id in target = .override(id) })
-		case .reference: HardnessReferenceView(s: session)
-		case .infusions: InfusionListView(s: session, open: { id in target = .infusion(id) })
-		case .suits: SuitListView(s: session, openMat: { (id: String) in target = .suitMat(id) }, openPart: { (id: String) in target = .suitPart(id) }, openDesign: { (id: String) in target = .suitDesign(id) })
-		case .vehicles: VehicleListView(s: session, open: { (id: String) in target = .vehicle(id) })
-		case .world: WorldRulesView(s: session)
-		case .theme: ThemeEditorView(s: session)
-		case .dims: DimensionListView(s: session, open: { id in target = .dimension(id) })
-		case .logic: LogicStudioView(s: session, open: { id in target = .script(id) })
-		case .check: ModIssueList(report: session.report)
-		}
-	}
-
-	// MARK: lists
-
-	func addButton(_ title: String, _ action: @escaping () -> Void) -> some View {
-		PixelButton(title: title, color: ModUI.accent, action: action)
-	}
-
-	var blockList: some View {
-		VStack(spacing: 8) {
-			addButton("+ NEW BLOCK") {
-				var b = ModBlock()
-				b.id = session.mod.freshID("b")
-				b.name = "Block " + String(session.mod.blocks.count + 1)
-				b.art = ModPixels(buf: tileBuf(.stone))
-				session.mod.blocks.append(b)
-				session.touch()
-				target = .block(b.id)
-			}
-			fromGame(.block)
-			ForEach(session.mod.blocks) { b in
-				ModRow(image: modImage(b.art), title: b.name, sub: b.category.name + " · hardness " + String(format: "%.1f", b.hardness),
-					   open: { target = .block(b.id) }, copy: { copyBlock(b) },
-					   delete: { ask("Delete the block " + b.name + "?") { session.mod.blocks.removeAll { $0.id == b.id }; session.touch() } },
-					   off: session.mod.off.contains(b.id), toggle: { toggleOff(b.id) })
-			}
-		}
-	}
-
-	var itemList: some View {
-		VStack(spacing: 8) {
-			ItemTemplateRow { kind in addItem(kind) }
-			fromGame(.item)
-			ForEach(session.mod.items) { it in
-				ModRow(image: ModPreview.itemIcon(it, session.catalog), title: it.name, sub: it.kind.name,
-					   open: { target = .item(it.id) }, copy: { copyItem(it) },
-					   delete: { ask("Delete " + it.name + "?") { session.mod.items.removeAll { $0.id == it.id }; session.touch() } },
-					   off: session.mod.off.contains(it.id), toggle: { toggleOff(it.id) })
-			}
-		}
-	}
-
-	var mobList: some View {
-		VStack(spacing: 8) {
-			addButton("+ NEW CREATURE") {
-				var m = ModMob()
-				m.id = session.mod.freshID("c")
-				m.name = "Creature " + String(session.mod.mobs.count + 1)
-				m.behavior.chase = true
-				m.behavior.attackPlayer = true
-				session.mod.mobs.append(m)
-				session.touch()
-				target = .mob(m.id)
-			}
-			fromGame(.creature)
-			ForEach(session.mod.mobs) { m in
-				ModRow(image: ModPreview.mobImage(m), title: m.name, sub: m.category.name + " · " + String(format: "%.0f HP", m.hp),
-					   open: { target = .mob(m.id) }, copy: { copyMob(m) },
-					   delete: { ask("Delete " + m.name + "?") { session.mod.mobs.removeAll { $0.id == m.id }; session.touch() } },
-					   off: session.mod.off.contains(m.id), toggle: { toggleOff(m.id) })
-			}
-		}
-	}
-
-	var shotList: some View {
-		VStack(spacing: 8) {
-			Text("Shots are what bows, guns, wands and creatures fire: how they look, fly and land.").font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-			addButton("+ NEW SHOT") {
-				var s = ModProjectile()
-				s.id = session.mod.freshID("s")
-				s.name = "Shot " + String(session.mod.projectiles.count + 1)
-				session.mod.projectiles.append(s)
-				session.touch()
-				target = .shot(s.id)
-			}
-			ForEach(session.mod.projectiles) { s in
-				ModRow(image: ModPreview.shotImage(s), title: s.name, sub: s.shape.name + (s.explode > 0 ? " · explodes" : ""),
-					   open: { target = .shot(s.id) }, copy: nil,
-					   delete: { ask("Delete the shot " + s.name + "?") { session.mod.projectiles.removeAll { $0.id == s.id }; session.touch() } })
-			}
-		}
-	}
-
-	var recipeList: some View {
-		let cat: ModCatalog = session.catalog
-		return VStack(spacing: 8) {
-			addButton("+ NEW RECIPE") {
-				var r = ModRecipe()
-				r.id = session.mod.freshID("r")
-				if let it = session.mod.items.first { r.out = .custom(session.mod.key(it.id)) }
-				else if let b = session.mod.blocks.first { r.out = .custom(session.mod.key(b.id)) }
-				r.cost = [ModCost(.block(.planks), 2)]
-				session.mod.recipes.append(r)
-				session.touch()
-				target = .recipe(r.id)
-			}
-			ForEach(session.mod.recipes) { r in
-				ModRow(image: ModPreview.icon(r.out, cat), title: ModPreview.name(r.out, cat) + (r.count > 1 ? " x" + String(r.count) : ""),
-					   sub: recipeLine(r, cat), open: { target = .recipe(r.id) }, copy: nil,
-					   delete: { ask("Delete this recipe?") { session.mod.recipes.removeAll { $0.id == r.id }; session.touch() } })
-			}
-		}
-	}
-
-	func recipeLine(_ r: ModRecipe, _ cat: ModCatalog) -> String {
-		var parts: [String] = []
-		for c in r.cost { parts.append(String(c.n) + " " + ModPreview.name(c.item, cat)) }
-		return parts.joined(separator: " + ")
-	}
-
-	var lootList: some View {
-		VStack(spacing: 8) {
-			addButton("+ NEW LOOT TABLE") {
-				var l = ModLootTable()
-				l.id = session.mod.freshID("l")
-				l.name = "Loot " + String(session.mod.loot.count + 1)
-				l.entries = [ModLootEntry(.mat(.coal), 1, 3, 0)]
-				session.mod.loot.append(l)
-				session.touch()
-				target = .loot(l.id)
-			}
-			ForEach(session.mod.loot) { l in
-				ModRow(image: nil, title: l.name, sub: String(l.entries.count) + " entries · " + String(l.rolls) + " rolls",
-					   open: { target = .loot(l.id) }, copy: nil,
-					   delete: { ask("Delete the loot table " + l.name + "?") { session.mod.loot.removeAll { $0.id == l.id }; session.touch() } })
-			}
-		}
-	}
-
-	var oreList: some View {
-		VStack(spacing: 8) {
-			Text("An ore is one of this mod's blocks that forms in veins underground. Make the block first (BLOCKS), then add its ore here.").font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-			addButton("+ NEW ORE") {
-				var o = ModOre()
-				o.id = session.mod.freshID("o")
-				o.name = "Ore " + String(session.mod.ores.count + 1)
-				o.block = session.mod.blocks.first(where: { $0.category == .terrain })?.id ?? (session.mod.blocks.first?.id ?? "")
-				session.mod.ores.append(o)
-				session.touch()
-				target = .ore(o.id)
-			}
-			ForEach(session.mod.ores) { o in
-				let blk: ModBlock? = session.mod.blocks.first { $0.id == o.block }
-				ModRow(image: blk.map { modImage($0.art) }, title: o.name, sub: "rows " + String(o.minY) + "-" + String(o.maxY) + String(format: " · %.1f veins per chunk", o.veins),
-					   open: { target = .ore(o.id) }, copy: nil,
-					   delete: { ask("Delete the ore " + o.name + "?") { session.mod.ores.removeAll { $0.id == o.id }; session.touch() } })
-			}
-		}
-	}
-
-	var structureList: some View {
-		VStack(spacing: 8) {
-			Text("To make a structure: build it in a world (a test world is easiest), pause, choose CAPTURE STRUCTURE, tap two corners around it, and save it to this mod. Its settings are edited here.")
-				.font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-			ForEach(session.mod.structures) { st in
-				ModRow(image: nil, title: st.name, sub: String(st.w) + " x " + String(st.h) + " · " + st.placement.name,
-					   open: { target = .structure(st.id) }, copy: nil,
-					   delete: { ask("Delete the structure " + st.name + "?") { session.mod.structures.removeAll { $0.id == st.id }; session.touch() } })
-			}
-			if session.mod.structures.isEmpty {
-				Text("No structures captured yet.").font(.pixel(13)).foregroundColor(ModUI.dim)
-			}
-		}
-	}
-
-	// MARK: actions
-
-	func ask(_ text: String, _ action: @escaping () -> Void) {
-		confirm = (text, action)
-	}
-
-	func copyBlock(_ b: ModBlock) {
-		var c: ModBlock = b
-		c.id = session.mod.freshID("b")
-		c.name = b.name + " copy"
-		session.mod.blocks.append(c)
-		session.touch()
-	}
-
-	func copyItem(_ it: ModItem) {
-		var c: ModItem = it
-		c.id = session.mod.freshID("i")
-		c.name = it.name + " copy"
-		session.mod.items.append(c)
-		session.touch()
-	}
-
-	func copyMob(_ m: ModMob) {
-		var c: ModMob = m
-		c.id = session.mod.freshID("c")
-		c.name = m.name + " copy"
-		session.mod.mobs.append(c)
-		session.touch()
-	}
-
-	func addItem(_ kind: ModItemKind) {
-		var it: ModItem = ModItem.template(kind)
-		it.id = session.mod.freshID("i")
-		it.name = "New " + kind.name
-		session.mod.items.append(it)
-		session.touch()
-		target = .item(it.id)
+	/// A melee profile with this change's numbers
+	func apply(_ p0: MeleeProfile) -> MeleeProfile {
+		var p: MeleeProfile = p0
+		if let v = damage { p.damage = v }
+		if let v = cooldown { p.cooldown = v }
+		if let v = reach { p.reach = v }
+		if let v = knock { p.knock = v }
+		if let v = crit { p.critChance = v }
+		return p
 	}
 }
 
-/// One piece of content in a list
-struct ModRow: View {
-	let image: Image?
-	let title: String
-	let sub: String
-	let open: () -> Void
-	let copy: (() -> Void)?
-	let delete: () -> Void
-	/// switched off for now (left out of worlds, kept in the mod)
-	var off: Bool = false
-	var toggle: (() -> Void)? = nil
-	var body: some View {
-		HStack(spacing: 10) {
-			Button { open() } label: {
-				HStack(spacing: 10) {
-					ZStack {
-						Rectangle().fill(Color.black.opacity(0.4))
-						if let img = image { img.resizable().interpolation(.none).frame(width: 38, height: 38) }
-					}
-					.frame(width: 46, height: 46)
-					VStack(alignment: .leading, spacing: 2) {
-						Text(verbatim: title).font(.pixel(14)).foregroundColor(Color.white).lineLimit(1)
-						Text(verbatim: sub).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim).lineLimit(2)
-					}
-					Spacer(minLength: 0)
-				}
-				.contentShape(Rectangle())
-			}
-			.buttonStyle(.plain)
-			if let t = toggle { SmallButton(title: off ? "OFF" : "ON", color: off ? Color(ui: 0x555555) : ModUI.accent) { t() } }
-			if let c = copy { SmallButton(title: "COPY") { c() } }
-			SmallButton(title: "EDIT", color: ModUI.blue) { open() }
-			SmallButton(title: "✕", color: ModUI.red) { delete() }
-		}
-		.padding(8)
-		.background(PixelBox(color: ModUI.card))
-	}
-}
+/// The changes to game content of the mods a world uses, merged and ready (empty without mods). The
+/// game's own tables are put back before every new set goes in, so nothing stays changed by accident.
+final class OverrideRT {
+	static var shared: OverrideRT = OverrideRT()
+	/// tiles and creatures whose table entries are changed now
+	static var patchedTiles: Set<Int> = []
+	static var patchedMobs: Set<Int> = []
 
-/// Buttons to start a new item from a sensible template of each kind
-struct ItemTemplateRow: View {
-	var add: (ModItemKind) -> Void
-	var body: some View {
-		let cols: [GridItem] = [GridItem(.adaptive(minimum: 150), spacing: 6)]
-		return VStack(alignment: .leading, spacing: 4) {
-			Text("NEW ITEM:").font(.pixel(13)).foregroundColor(ModUI.gold)
-			LazyVGrid(columns: cols, spacing: 6) {
-				ForEach(ModItemKind.allCases, id: \.self) { k in
-					SmallButton(title: "+ " + k.name, color: ModUI.accent) { add(k) }
+	var blocks: [Int: ModOverride] = [:]
+	var items: [Item: ModOverride] = [:]
+	var mobs: [Int: ModOverride] = [:]
+	/// creatures whose sprite a mod repainted: their frames, ready to draw
+	var mobArt: [Int: [PixelBuf]] = [:]
+	/// which of those repaints were painted over the hand-drawn picture (ModOverride.fine)
+	var mobFine: [Int: Bool] = [:]
+	var isEmpty: Bool { return blocks.isEmpty && items.isEmpty && mobs.isEmpty }
+
+	static func build(_ packs: [ModPack], _ disabled: Set<String>) -> OverrideRT {
+		let o = OverrideRT()
+		for p in packs {
+			for v in p.overrides where v.enabled && !disabled.contains(p.key(v.id)) {
+				switch v.kind {
+				case .block:
+					guard let t = Tile(rawValue: UInt8(clampI(v.tile, 0, 255))), !t.isMod, t != .air, t != .bedrock else { continue }
+					var m: ModOverride = o.blocks[v.tile] ?? v
+					if o.blocks[v.tile] != nil { m.merge(v) }
+					o.blocks[v.tile] = m
+				case .item:
+					guard let it = v.item, ModOverrideCheck.itemAllowed(it) else { continue }
+					var m: ModOverride = o.items[it] ?? v
+					if o.items[it] != nil { m.merge(v) }
+					o.items[it] = m
+				case .creature:
+					guard let k = MobKind(rawValue: v.mob), k != .custom, k != .villager else { continue }
+					var m: ModOverride = o.mobs[v.mob] ?? v
+					if o.mobs[v.mob] != nil { m.merge(v) }
+					o.mobs[v.mob] = m
 				}
 			}
 		}
-	}
-}
-
-extension ModItem {
-	/// A ready-to-use starting point for each kind of item
-	static func template(_ k: ModItemKind) -> ModItem {
-		var it = ModItem()
-		it.kind = k
-		switch k {
-		case .material:
-			it.baseIcon = .mat(.diamond)
-			it.tintAmt = 0.4
-			it.tint = 0xFF60A0
-		case .food:
-			it.baseIcon = .food(.apple)
-			it.hunger = 6
-			it.effects = [ModEffect(.heal, 2, 0)]
-		case .consumable:
-			it.baseIcon = .gadget(.waterFlask)
-			it.tint = 0xFF4060
-			it.tintAmt = 0.5
-			it.effects = [ModEffect(.heal, 8, 0), ModEffect(.speed, 30, 20)]
-			it.stack = 20
-		case .tool:
-			it.baseIcon = .tool(.pickaxe, .iron)
-			it.toolType = 0
-			it.toolTier = 5
-			it.toolSpeed = 6
-			it.damage = 5
-			it.stack = 1
-		case .melee:
-			it.baseIcon = .sword(.iron)
-			it.damage = 9
-			it.cooldown = 0.42
-			it.reach = 3
-			it.arc = 1.1
-			it.stack = 1
-		case .bow:
-			it.baseIcon = .bow
-			it.damage = 9
-			it.cooldown = 0.6
-			it.speed = 30
-			it.gravity = 12
-			it.ammo = .ammo(.arrow)
-			it.stack = 1
-			it.shot = ProjKind.arrow.rawValue
-		case .gun:
-			it.baseIcon = .gun(.pistol)
-			it.damage = 10
-			it.cooldown = 0.35
-			it.speed = 36
-			it.magazine = 6
-			it.reload = 1.3
-			it.ammo = .ammo(.bullet)
-			it.stack = 1
-			it.shot = ProjKind.bullet.rawValue
-		case .thrown:
-			it.baseIcon = .gadget(.bomb)
-			it.damage = 8
-			it.cooldown = 0.6
-			it.speed = 20
-			it.gravity = 18
-			it.stack = 30
-			it.shot = ProjKind.rock.rawValue
-		case .magic:
-			it.baseIcon = .gun(.stormRod)
-			it.damage = 7
-			it.cooldown = 0.5
-			it.speed = 26
-			it.stack = 1
-			it.shot = ProjKind.fireball.rawValue
-		case .armor:
-			it.baseIcon = .armor(.chest, .iron)
-			it.slot = 1
-			it.defense = 3
-			it.look = 4
-			it.stack = 1
-		case .ammo:
-			it.baseIcon = .ammo(.arrow)
-			it.stack = 99
-		case .special:
-			it.baseIcon = .block(.glowCrystal)
-			it.light = 12
-			it.stack = 1
+		for (raw, m) in o.mobs {
+			guard let fr = m.frames, !fr.isEmpty, fr.allSatisfy({ $0.valid }) else { continue }
+			var bufs: [PixelBuf] = []
+			for f in fr { bufs.append(OverrideRT.frameBuf(f)) }
+			o.mobArt[raw] = bufs
+			o.mobFine[raw] = m.fine
 		}
-		return it
-	}
-}
-
-/// The mod's name, author, version, description and sandbox switch
-struct ModInfoEditor: View {
-	@ObservedObject var s: ModSession
-	var body: some View {
-		VStack(spacing: 10) {
-			ModSection(title: "ABOUT THIS MOD") {
-				ModTextField(label: "Mod name", text: s.modBind(\.name), placeholder: "My Mod")
-				ModTextField(label: "Author", text: s.modBind(\.author), placeholder: "Your name")
-				ModTextField(label: "Version", text: s.modBind(\.version), placeholder: "1.0")
-				ModTextField(label: "Description (optional)", text: s.modBind(\.desc), placeholder: "What does it add?")
-			}
-			ModSection(title: "LIMITS", help: "Normal limits keep numbers fair for survival. Sandbox mode allows much bigger numbers (giant bosses, huge damage) for creative play.") {
-				ModToggle(label: "Sandbox mode (fewer limits)", help: "Health up to 20000, damage up to 500, faster creatures", isOn: s.modBind(\.sandbox))
-			}
-			ModSection(title: "CONTENT") {
-				Text(verbatim: s.mod.summary).font(.pixel(13, .semibold)).foregroundColor(Color.white)
-				Text(verbatim: joinText("Created ", shortDate(s.mod.created), " · edited ", shortDate(s.mod.edited))).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-			}
-			ModOrganizeSection(s: s)
-		}
-	}
-}
-
-// MARK: - Mod Creator: previews, the pixel editor and the item picker
-
-/// Pictures and names of content in the editor (no world needs to be running)
-enum ModPreview {
-	static func itemIconBuf(_ it: ModItem, _ cat: ModCatalog) -> PixelBuf {
-		if !it.icon.isBlank {
-			var b: PixelBuf = padBuf(it.icon.buf())
-			if it.icon.outlined(true) { b.outline(0x1A1410) }
-			return b
-		}
-		if let base = it.baseIcon {
-			var b: PixelBuf = buf(base, cat, depth: 1)
-			if it.tintAmt > 0.01 { b = b.tinted(it.tint & 0xFFFFFF, it.tintAmt) }
-			return b
-		}
-		return missingItemBuf()
+		return o
 	}
 
-	static func itemIcon(_ it: ModItem, _ cat: ModCatalog) -> Image {
-		return pixImage(itemIconBuf(it, cat))
-	}
-
-	/// The picture of any item reference: the game's items, or a mod's block or item
-	static func buf(_ it: Item, _ cat: ModCatalog, depth: Int = 0) -> PixelBuf {
-		if case .custom(let k) = it {
-			if let b = cat.block(k) { return b.art.isBlank ? greyTileBuf() : b.art.buf() }
-			if let i = cat.item(k), depth < 2 {
-				if !i.icon.isBlank { return itemIconBuf(i, cat) }
-				if let base = i.baseIcon {
-					var b: PixelBuf = buf(base, cat, depth: depth + 1)
-					if i.tintAmt > 0.01 { b = b.tinted(i.tint & 0xFFFFFF, i.tintAmt) }
-					return b
-				}
-			}
-			return missingItemBuf()
-		}
-		return itemBuf(it)
-	}
-
-	static func icon(_ it: Item, _ cat: ModCatalog) -> Image {
-		if case .custom = it { return pixImage(buf(it, cat)) }
-		return Art.shared.icon(it)
-	}
-
-	static func name(_ it: Item, _ cat: ModCatalog) -> String {
-		if case .custom(let k) = it {
-			if let n = cat.names[k] { return n }
-			return "Missing (" + k + ")"
-		}
-		return it.name
-	}
-
-	static func mobImage(_ m: ModMob) -> Image {
-		let fr: ([PixelBuf], CreatureAnim) = modMobFrames(m)
-		return pixImage(fr.0.first ?? PixelBuf(w: 1, h: 1))
-	}
-
-	static func shotBuf(_ s: ModProjectile) -> PixelBuf {
-		var b = PixelBuf(w: 12, h: 12)
-		let c: UInt32 = s.color & 0xFFFFFF
-		let hi: UInt32 = mixRGB(c, 0xFFFFFF, 0.5)
-		switch s.shape {
-		case .orb:
-			b.ellipse(6, 6, 4, 4, c)
-			b.ellipse(5, 5, 1.6, 1.6, hi)
-		case .arrow:
-			b.line(1, 6, 9, 6, 0x8A6A40)
-			b.line(9, 4, 11, 6, c); b.line(9, 8, 11, 6, c)
-			b.set(1, 5, 0xE0E0E0); b.set(1, 7, 0xE0E0E0)
-		case .bolt:
-			b.rect(2, 5, 8, 2, c)
-			b.rect(9, 4, 2, 4, hi)
-		case .shard:
-			b.line(2, 9, 10, 2, c); b.line(3, 9, 10, 3, hi); b.line(2, 8, 9, 2, c)
-		case .rock:
-			b.ellipse(6, 6, 3.4, 3.0, c)
-			b.set(5, 5, hi)
-		}
+	/// One repainted frame as the game draws it (with a dark outline when the maker switched it on;
+	/// frames copied from the game already have theirs)
+	static func frameBuf(_ f: ModPixels) -> PixelBuf {
+		if !f.outlined(false) { return f.buf() }
+		var b: PixelBuf = padBuf(f.buf())
 		b.outline(0x101010)
 		return b
 	}
 
-	static func shotImage(_ s: ModProjectile) -> Image { return pixImage(shotBuf(s)) }
-}
+	/// A game creature's frames as a mod repainted them (nil: the game's own). Sheared sheep and tame
+	/// wolves keep the game's look for that state.
+	func creatureArt(_ k: MobKind, _ variant: Int) -> [PixelBuf]? {
+		if mobArt.isEmpty { return nil }
+		if variant != 0 && (k == .sheep || k == .wolf) { return nil }
+		return mobArt[k.rawValue]
+	}
 
-/// A pixel-art palette that suits the game: earth, stone, metals, gems, plants and skin tones
-let modPalette: [UInt32] = [
-	0x000000, 0x1D2B53, 0x7E2553, 0x008751, 0xAB5236, 0x5F574F, 0xC2C3C7, 0xFFF1E8,
-	0xFF004D, 0xFFA300, 0xFFEC27, 0x00E436, 0x29ADFF, 0x83769C, 0xFF77A8, 0xFFCCAA,
-	0x5DAA3A, 0x4B9230, 0x7A5230, 0x5A3A1E, 0x8A8A8A, 0x6A6A6A, 0x3A3A3E, 0xE8E0C8,
-	0xD2793A, 0xD0D4DA, 0xF5D142, 0x4FE3E8, 0x8A7CFF, 0xFF6A1E, 0xB04CFF, 0xC02040
-]
-
-/// Paints a ModPixels grid with a finger: pen, eraser, fill and colour picker, with a mirror switch,
-/// undo, clear, a palette and a colour mixer
-/// Every item a mod may refer to: the game's own and the content of installed mods
-struct ItemPickerView: View {
-	let catalog: ModCatalog
-	var title: String = "CHOOSE AN ITEM"
-	var blocksOnly: Bool = false
-	var pick: (Item) -> Void
-	var cancel: () -> Void
-	@State var search: String = ""
-	@State var group: Int = 0
-
-	static let groups: [String] = ["All", "Blocks", "Tools", "Weapons", "Armor", "Materials", "Food", "Mods"]
-
-	var body: some View {
-		ZStack {
-			Color.black.opacity(0.7).ignoresSafeArea()
-			VStack(spacing: 8) {
-				HStack {
-					Text(verbatim: title).font(.pixel(18)).foregroundColor(ModUI.gold)
-					Spacer()
-					SmallButton(title: "CANCEL", color: ModUI.red) { cancel() }
-				}
-				TextField("Search", text: $search)
-					.font(.pixel(15, .bold))
-					.foregroundColor(Color.white)
-					.padding(10)
-					.background(Color.black.opacity(0.6))
-				if !blocksOnly { ChoiceRow(options: ItemPickerView.groups, selected: $group, columns: 8) }
-				ScrollView {
-					grid
-				}
-			}
-			.padding(14)
-			.frame(maxWidth: 900, maxHeight: 700)
-			.background(PixelBox(color: ModUI.panel))
-			.padding(10)
+	/// Puts the changes into the game's tables (after putting back the last set)
+	func install() {
+		for raw in OverrideRT.patchedTiles {
+			if let t = Tile(rawValue: UInt8(clampI(raw, 0, 255))) { Tile.setGameDef(t, Tile.makeDef(t)) }
+		}
+		for raw in OverrideRT.patchedMobs {
+			if let k = MobKind(rawValue: raw), raw < mobDefTable.count { mobDefTable[raw] = makeMobDef(k) }
+		}
+		OverrideRT.patchedTiles = []
+		OverrideRT.patchedMobs = []
+		for (raw, o) in blocks {
+			guard let t = Tile(rawValue: UInt8(clampI(raw, 0, 255))) else { continue }
+			var d: TileDef = Tile.makeDef(t)
+			if let v = o.hardness { d.hard = v }
+			if let v = o.tier { d.tier = v }
+			if let v = o.light { d.light = v }
+			if o.unbreakable == true { d.hard = 9999 }
+			Tile.setGameDef(t, d)
+			OverrideRT.patchedTiles.insert(raw)
+		}
+		for (raw, o) in mobs {
+			guard let k = MobKind(rawValue: raw), raw < mobDefTable.count else { continue }
+			var d: MobDef = makeMobDef(k)
+			if let v = o.hp { d.hp = v }
+			if let v = o.mobDamage { d.dmg = v }
+			if let v = o.speed { d.speed = v }
+			if let v = o.detect { d.aggro = v }
+			if let v = o.jump { d.jump = v }
+			mobDefTable[raw] = d
+			OverrideRT.patchedMobs.insert(raw)
 		}
 	}
 
-	var grid: some View {
-		let list: [Item] = filtered()
-		let cols: [GridItem] = [GridItem(.adaptive(minimum: 82), spacing: 6)]
-		return LazyVGrid(columns: cols, spacing: 6) {
-			ForEach(0..<list.count, id: \.self) { i in
-				cell(list[i])
-			}
-		}
-	}
-
-	func cell(_ it: Item) -> some View {
-		Button {
-			pick(it)
-		} label: {
-			VStack(spacing: 2) {
-				ModPreview.icon(it, catalog).resizable().interpolation(.none).frame(width: 36, height: 36)
-				Text(verbatim: ModPreview.name(it, catalog)).font(.pixel(9, .semibold)).foregroundColor(Color.white).lineLimit(2).multilineTextAlignment(.center)
-			}
-			.frame(width: 82, height: 74)
-			.background(PixelBox(color: ModUI.card))
-		}
-		.buttonStyle(.plain)
-	}
-
-	func filtered() -> [Item] {
-		var all: [Item] = []
-		var modItems: [Item] = []
-		for p in catalog.packs {
-			for b in p.blocks { modItems.append(.custom(p.key(b.id))) }
-			if !blocksOnly { for i in p.items { modItems.append(.custom(p.key(i.id))) } }
-		}
-		let game: [Item] = allGameItems()
-		switch blocksOnly ? 1 : group {
-		case 1:
-			for it in game { if case .block = it { all.append(it) } }
-			for it in modItems { if case .custom(let k) = it, catalog.keys[k] == "block" { all.append(it) } }
-		case 2:
-			for it in game { if case .tool = it { all.append(it) } }
-		case 3:
-			all = game.filter { $0.isWeapon }
-		case 4:
-			for it in game { if case .armor = it { all.append(it) } else if case .gear = it { all.append(it) } }
-		case 5:
-			for it in game {
-				switch it {
-				case .mat, .ammo, .part: all.append(it)
-				default: break
-				}
-			}
-		case 6:
-			for it in game { if case .food = it { all.append(it) } }
-		case 7:
-			all = modItems
-		default:
-			all = modItems + game
-		}
-		let q: String = search.trimmingCharacters(in: .whitespaces).lowercased()
-		if q.isEmpty { return all }
-		return all.filter { ModPreview.name($0, catalog).lowercased().contains(q) }
+	/// a tool's mining speed when a mod changed it (nil: the game's own)
+	func toolSpeed(_ it: Item) -> Double? {
+		if items.isEmpty { return nil }
+		return items[it]?.mineSpeed
 	}
 }
 
-// MARK: - Mod Creator: block, shot and item editors
-
-/// Editing one custom block: picture, name, what it is, how it mines, collision, light, drops and
-/// what it does when tapped
-struct BlockEditorView: View {
-	@ObservedObject var s: ModSession
-	let id: String
-	@State var picking: Bool = false
-	@State var copyFrom: Bool = false
-
-	func b<T>(_ kp: WritableKeyPath<ModBlock, T>, _ d: T) -> Binding<T> { return s.bind(\ModPack.blocks, id, kp, d) }
-
-	var block: ModBlock { return s.mod.blocks.first { $0.id == id } ?? ModBlock() }
-
-	var body: some View {
-		ZStack {
-			VStack(spacing: 10) {
-				ModSection(title: "PICTURE", help: "8 x 8 pixels. Paint with your finger, or start from a game block.") {
-					PixelEditorView(pixels: b(\.art, ModPixels(w: 8, h: 8)), maxSide: 280, outlineDefault: false)
-					SmallButton(title: "START FROM A GAME BLOCK...") { copyFrom = true }
-				}
-				ModSection(title: "ABOUT") {
-					ModTextField(label: "Name", text: b(\.name, ""), placeholder: "Ruby Ore")
-					ModTextField(label: "Description", text: b(\.desc, ""), placeholder: "Optional")
-					ChoiceRow(options: ModBlockCategory.allCases.map { $0.name }, selected: catBind, columns: 4)
-				}
-				ModSection(title: "MINING", help: "Hardness sets how long it takes to break; a tier asks for a strong enough tool of that kind.") {
-					ModToggle(label: "Unbreakable", help: "Like bedrock: nothing can break it", isOn: b(\.unbreakable, false))
-					StatSlider(label: "Hardness", value: b(\.hardness, 1), range: 0.05...(s.mod.sandbox ? 200 : 40), step: 0.05, format: "%.2f")
-					Text("Best tool").font(.pixel(12, .bold)).foregroundColor(ModUI.dim)
-					ChoiceRow(options: ToolType.allCases.map { $0.name }, selected: b(\.tool, 0), columns: 4)
-					IntSlider(label: "Tool tier needed (0 = any)", value: b(\.tier, 0), range: 0...9)
-					Text(verbatim: tierLine).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-					ModToggle(label: "Blast proof", help: "Explosions do not break it", isOn: b(\.blastProof, false))
-				}
-				BlockMiningTimes(block: block, tools: s.mod.items.filter { $0.kind == .tool })
-				ModSection(title: "BODY", help: block.collision.help) {
-					ChoiceRow(options: ModCollision.allCases.map { $0.name }, selected: collisionBind, columns: 3)
-					ModToggle(label: "See-through", help: "Light passes it and you see the wall behind", isOn: b(\.transparent, false))
-					IntSlider(label: "Light given off", value: b(\.light, 0), range: 0...15)
-				}
-				ModSection(title: "DROPS", help: "What you get when you break it.") {
-					ModToggle(label: "Drops itself", isOn: b(\.dropSelf, true))
-					if !block.dropSelf {
-						HStack(spacing: 10) {
-							if let d = block.drop {
-								ModPreview.icon(d, s.catalog).resizable().interpolation(.none).frame(width: 36, height: 36)
-								Text(verbatim: ModPreview.name(d, s.catalog)).font(.pixel(13)).foregroundColor(Color.white)
-							} else {
-								Text("Drops nothing").font(.pixel(13)).foregroundColor(ModUI.dim)
-							}
-							Spacer()
-							SmallButton(title: "CHOOSE...", color: ModUI.blue) { picking = true }
-							SmallButton(title: "NOTHING") { b(\.drop, nil).wrappedValue = nil }
-						}
-					}
-					IntSlider(label: "How many", value: b(\.dropCount, 1), range: 1...16)
-				}
-				ModSection(title: "WHEN TAPPED", help: block.function.help) {
-					ChoiceRow(options: ModBlockFunction.allCases.map { $0.name }, selected: functionBind, columns: 3)
-					functionSettings
-				}
-				vehicleSection
-				buildSection
-			}
-		}
-		.modCover(s, picking ? 1 : nil) { self.dropPicker }
-		.modCover(s, copyFrom ? 2 : nil) { self.copyPicker }
-	}
-
-	var dropPicker: some View {
-		ItemPickerView(catalog: s.catalog, title: "IT DROPS...", pick: { it in
-			b(\.drop, nil).wrappedValue = it
-			picking = false
-		}, cancel: { picking = false })
-	}
-
-	var copyPicker: some View {
-		ItemPickerView(catalog: s.catalog, title: "COPY A BLOCK'S PICTURE", blocksOnly: true, pick: { it in
-			let pic: PixelBuf = ModPreview.buf(it, s.catalog)
-			b(\.art, ModPixels(w: 8, h: 8)).wrappedValue = ModPixels(buf: pic).resized(8, 8)
-			copyFrom = false
-		}, cancel: { copyFrom = false })
-	}
-
-	var tierLine: String {
-		let t: Int = block.tier
-		if t <= 0 { return "Any tool (or bare hands) can break it." }
-		let tier: Tier = Tier(rawValue: t) ?? .wood
-		return "Needs a " + tier.name + " " + (ToolType(rawValue: block.tool) ?? .pickaxe).name.lowercased() + " or better."
-	}
-
-	var catBind: Binding<Int> {
-		let base: Binding<ModBlockCategory> = b(\.category, .building)
-		return Binding<Int>(get: { base.wrappedValue.rawValue }, set: { base.wrappedValue = ModBlockCategory(rawValue: $0) ?? .building })
-	}
-
-	var collisionBind: Binding<Int> {
-		let base: Binding<ModCollision> = b(\.collision, .solid)
-		return Binding<Int>(get: { base.wrappedValue.rawValue }, set: { base.wrappedValue = ModCollision(rawValue: $0) ?? .solid })
-	}
-
-	var functionBind: Binding<Int> {
-		let base: Binding<ModBlockFunction> = b(\.function, .none)
-		return Binding<Int>(get: { base.wrappedValue.rawValue }, set: { base.wrappedValue = ModBlockFunction(rawValue: $0) ?? .none })
-	}
-
-	@ViewBuilder
-	var functionSettings: some View {
-		switch block.function {
-		case .station:
-			Text("Works as").font(.pixel(12, .bold)).foregroundColor(ModUI.dim)
-			ChoiceRow(options: ["Its own station", "Workbench", "Furnace", "Campfire", "Anvil", "Tinker's Bench", "Rift Forge", "Alchemy Still", "Infusion Crucible", "Assembly Station"], selected: stationBind, columns: 4)
-		case .healer:
-			StatSlider(label: "Health restored", value: b(\.power, 6), range: 1...40, step: 1, format: "%.0f")
-		case .bounce:
-			StatSlider(label: "Bounce strength", value: b(\.power, 6), range: 4...30, step: 1, format: "%.0f")
-		case .trap:
-			StatSlider(label: "Damage", value: b(\.power, 6), range: 1...40, step: 1, format: "%.0f")
-		case .sign:
-			ModTextField(label: "Sign text", text: b(\.text, ""), placeholder: "Welcome!")
-		default:
-			EmptyView()
-		}
-	}
-
-	/// On a vehicle: the part this block works as, its mass there and how strong it is at the work
-	var vehicleSection: some View {
-		let role: ModVehicleRole = block.vehRole
-		let help: String = role == .none ? "Built onto a vehicle (ON VEHICLE, or the Vehicle Assembler) it is just a block of its weight." : joinText("Built onto a vehicle it works as a ", role.name.lowercased(), ", with this picture.")
-		return ModSection(title: "ON A VEHICLE", help: help) {
-			ChoiceRows(options: ModVehicleRole.allCases.map { $0.name }, selected: roleBind, columns: 3)
-			if role != .none {
-				StatSlider(label: "Mass on the vehicle (0: from its hardness)", value: b(\.vehMass, 0), range: 0.0...(s.mod.sandbox ? 60.0 : 20.0), step: 0.05, format: "%.2f")
-				StatSlider(label: "Strength at its work (1 = the game's part)", value: b(\.vehPower, 1), range: 0.25...(s.mod.sandbox ? 10.0 : 4.0), step: 0.05, format: "%.2f")
-			}
-		}
-	}
-
-	var roleBind: Binding<Int> {
-		let base: Binding<ModVehicleRole> = b(\.vehRole, .none)
-		return Binding<Int>(get: { base.wrappedValue.rawValue }, set: { base.wrappedValue = ModVehicleRole(rawValue: $0) ?? .none })
-	}
-
-	var stationBind: Binding<Int> {
-		let base: Binding<Int> = b(\.station, -1)
-		// -1 own, 1 bench, 2 furnace, 3 campfire, 4 anvil, 5 tinker, 6 forge
-		return Binding<Int>(get: { base.wrappedValue < 1 ? 0 : base.wrappedValue }, set: { base.wrappedValue = $0 == 0 ? -1 : $0 })
-	}
-}
-
-/// Editing a shot: looks, flight and what happens when it lands
-struct ShotEditorView: View {
-	@ObservedObject var s: ModSession
-	let id: String
-
-	func b<T>(_ kp: WritableKeyPath<ModProjectile, T>, _ d: T) -> Binding<T> { return s.bind(\ModPack.projectiles, id, kp, d) }
-	var shot: ModProjectile { return s.mod.projectiles.first { $0.id == id } ?? ModProjectile() }
-
-	var body: some View {
-		VStack(spacing: 10) {
-			ModSection(title: "LOOK") {
-				HStack(spacing: 12) {
-					ModPreview.shotImage(shot).resizable().interpolation(.none).frame(width: 72, height: 72).background(Color.black.opacity(0.5))
-					VStack(alignment: .leading) {
-						ModTextField(label: "Name", text: b(\.name, ""), placeholder: "Fire Bolt")
-					}
-				}
-				ChoiceRow(options: ModShotShape.allCases.map { $0.name }, selected: shapeBind, columns: 5)
-				ModColorRow(label: "Colour", color: b(\.color, 0x8AF0FF))
-				StatSlider(label: "Size", value: b(\.size, 0.3), range: 0.1...1.0, step: 0.05, format: "%.2f")
-				IntSlider(label: "Glow (light)", value: b(\.glow, 6), range: 0...12)
-			}
-			ModSection(title: "FLIGHT") {
-				StatSlider(label: "Drop (gravity)", value: b(\.gravity, 0), range: 0...40, step: 1, format: "%.0f")
-				StatSlider(label: "Flies for (seconds)", value: b(\.life, 2), range: 0.2...6, step: 0.1, format: "%.1f")
-				IntSlider(label: "Passes through foes", value: b(\.pierce, 0), range: 0...5)
-			}
-			ModSection(title: "ON HIT") {
-				StatSlider(label: "Blast radius (0 = none)", value: b(\.explode, 0), range: 0...(s.mod.sandbox ? 12 : 6), step: 0.5, format: "%.1f")
-				ModToggle(label: "Blast breaks blocks", isOn: b(\.breakBlocks, false))
-				StatSlider(label: "Sets on fire (seconds)", value: b(\.burn, 0), range: 0...10, step: 0.5, format: "%.1f")
-			}
-		}
-	}
-
-	var shapeBind: Binding<Int> {
-		let base: Binding<ModShotShape> = b(\.shape, .orb)
-		return Binding<Int>(get: { base.wrappedValue.rawValue }, set: { base.wrappedValue = ModShotShape(rawValue: $0) ?? .orb })
-	}
-}
-
-/// A colour chosen from the palette
-struct ModColorRow: View {
-	let label: String
-	@Binding var color: UInt32
-
-	/// swatches in each row of the palette
-	static let perRow: Int = 8
-
-	var body: some View {
-		let rows: Int = (modPalette.count + ModColorRow.perRow - 1) / ModColorRow.perRow
-		let now: Color = Color(ui: color & 0xFFFFFF)
-		return VStack(alignment: .leading, spacing: 4) {
-			HStack(spacing: 8) {
-				Text(verbatim: label).font(.pixel(12, .bold)).foregroundColor(ModUI.dim)
-				Rectangle().fill(now).frame(width: 22, height: 22).overlay(Rectangle().stroke(Color.white, lineWidth: 1))
-			}
-			ForEach(0..<rows, id: \.self) { (r: Int) in self.paletteRow(r) }
-		}
-	}
-
-	/// One row of the palette (plain rows, not a lazy grid)
-	func paletteRow(_ r: Int) -> some View {
-		let start: Int = r * ModColorRow.perRow
-		let end: Int = min(modPalette.count, start + ModColorRow.perRow)
-		return HStack(spacing: 4) {
-			ForEach(start..<end, id: \.self) { (i: Int) in self.swatch(modPalette[i]) }
-		}
-	}
-
-	func swatch(_ c: UInt32) -> some View {
-		let on: Bool = (color & 0xFFFFFF) == c
-		return Rectangle().fill(Color(hex: c)).frame(width: 30, height: 30)
-			.overlay(Rectangle().stroke(on ? Color.white : Color.black, lineWidth: on ? 3 : 1))
-			.onTapGesture { color = c }
-	}
-}
-
-/// Editing one custom item; the sections shown depend on what kind of item it is
-struct ItemEditorView: View {
-	@ObservedObject var s: ModSession
-	let id: String
-	@State var picker: Int = 0
-
-	func b<T>(_ kp: WritableKeyPath<ModItem, T>, _ d: T) -> Binding<T> { return s.bind(\ModPack.items, id, kp, d) }
-	var item: ModItem { return s.mod.items.first { $0.id == id } ?? ModItem() }
-	var sb: Bool { return s.mod.sandbox }
-
-	var body: some View {
-		ZStack {
-			VStack(spacing: 10) {
-				header
-				ModSection(title: "KIND", help: item.kind.help) {
-					ChoiceRow(options: ModItemKind.allCases.map { $0.name }, selected: kindBind, columns: 4)
-				}
-				kindSections
-				ModSection(title: "ICON", help: "Paint 16 x 16 pixels, or leave it empty to use a game item's icon in a colour of your choice.") {
-					PixelEditorView(pixels: b(\.icon, ModPixels(w: 16, h: 16)), maxSide: 300, sizes: [8, 12, 16, 24, 32], outlineDefault: true)
-					HStack {
-						Text("Base icon:").font(.pixel(12, .bold)).foregroundColor(ModUI.dim)
-						if let bi = item.baseIcon {
-							ModPreview.icon(bi, s.catalog).resizable().interpolation(.none).frame(width: 30, height: 30)
-						}
-						SmallButton(title: "CHOOSE...", color: ModUI.blue) { picker = 1 }
-					}
-					ModColorRow(label: "Tint colour", color: b(\.tint, 0xFFFFFF))
-					StatSlider(label: "Tint amount", value: b(\.tintAmt, 0), range: 0...1, step: 0.05, format: "%.2f")
-				}
-			}
-		}
-		.modCover(s, picker == 0 ? nil : picker) { self.pickerCover }
-	}
-
-	@ViewBuilder
-	var pickerCover: some View {
-		if picker == 1 {
-			ItemPickerView(catalog: s.catalog, title: "ICON BASED ON...", pick: { it in
-				b(\.baseIcon, nil).wrappedValue = it
-				picker = 0
-			}, cancel: { picker = 0 })
-		}
-		if picker == 2 {
-			ItemPickerView(catalog: s.catalog, title: "AMMUNITION", pick: { it in
-				b(\.ammo, nil).wrappedValue = it
-				picker = 0
-			}, cancel: { picker = 0 })
-		}
-	}
-
-	var header: some View {
-		ModSection(title: "ABOUT") {
-			HStack(spacing: 12) {
-				ModPreview.itemIcon(item, s.catalog).resizable().interpolation(.none).frame(width: 64, height: 64).background(Color.black.opacity(0.4))
-				VStack(spacing: 6) {
-					ModTextField(label: "Name", text: b(\.name, ""), placeholder: "Ruby Sword")
-					ModTextField(label: "Description", text: b(\.desc, ""), placeholder: "Optional")
-				}
-			}
-			Text("Rarity").font(.pixel(12, .bold)).foregroundColor(ModUI.dim)
-			ChoiceRow(options: ModUI.rarityNames, selected: b(\.rarity, 0), columns: 5)
-			if !item.kind.isWeapon && item.kind != .tool && item.kind != .armor {
-				IntSlider(label: "Stack size", value: b(\.stack, 99), range: 1...(sb ? 999 : 99))
-			}
-		}
-	}
-
-	var kindBind: Binding<Int> {
-		let base: Binding<ModItemKind> = b(\.kind, .material)
-		return Binding<Int>(get: { base.wrappedValue.rawValue }, set: { base.wrappedValue = ModItemKind(rawValue: $0) ?? .material })
-	}
-
-	@ViewBuilder
-	var kindSections: some View {
-		switch item.kind {
-		case .food, .consumable: useSection
-		case .tool: toolSection
-		case .melee: meleeSection
-		case .bow, .gun, .thrown, .magic: rangedSection
-		case .armor: armorSection
-		case .special: specialSection
-		default: EmptyView()
-		}
-	}
-
-	var useSection: some View {
-		ModSection(title: "WHEN USED", help: "Effects come from a fixed list, so they always work safely.") {
-			StatSlider(label: "Hunger restored", value: b(\.hunger, 0), range: 0...20, step: 1, format: "%.0f")
-			StatSlider(label: "Time to use (seconds)", value: b(\.useTime, 0.6), range: 0.1...5, step: 0.1, format: "%.1f")
-			ModEffectsEditor(effects: b(\.effects, []), sandbox: sb)
-		}
-	}
-
-	var toolSection: some View {
-		ModSection(title: "TOOL") {
-			ChoiceRow(options: ToolType.allCases.map { $0.name }, selected: b(\.toolType, 0), columns: 4)
-			IntSlider(label: "Tier (what it can break)", value: b(\.toolTier, 3), range: 1...9)
-			Text(verbatim: "Breaks what a " + (Tier(rawValue: item.toolTier) ?? .wood).name + " tool breaks").font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-			StatSlider(label: "Mining speed", value: b(\.toolSpeed, 4), range: 0.3...(sb ? 200 : 30), step: 0.1, format: "x%.1f")
-			StatSlider(label: "Damage when swung", value: b(\.damage, 4), range: 0...(sb ? 500 : 60), step: 0.5, format: "%.1f")
-		}
-	}
-
-	var meleeSection: some View {
-		ModSection(title: "MELEE", help: "Aimed with the attack stick like the game's own weapons.") {
-			ChoiceRow(options: ["Slash (sword)", "Thrust (spear)", "Smash (hammer)", "Stab (knife)", "Bash (club)"], selected: b(\.style, 0), columns: 5)
-			StatSlider(label: "Damage", value: b(\.damage, 6), range: 0...(sb ? 500 : 60), step: 0.5, format: "%.1f")
-			StatSlider(label: "Time between swings", value: b(\.cooldown, 0.45), range: 0.15...3, step: 0.01, format: "%.2f s")
-			StatSlider(label: "Reach", value: b(\.reach, 3), range: 0.5...(sb ? 12 : 6), step: 0.1, format: "%.1f")
-			StatSlider(label: "Swing width", value: b(\.arc, 1), range: 0.1...1.6, step: 0.05, format: "%.2f")
-			StatSlider(label: "Knockback", value: b(\.knock, 6), range: 0...(sb ? 40 : 16), step: 0.5, format: "%.1f")
-			IntSlider(label: "Foes hit per swing", value: b(\.maxHits, 99), range: 1...99)
-			StatSlider(label: "Wind-up before the blow", value: b(\.windup, 0), range: 0...0.6, step: 0.02, format: "%.2f s")
-			ModToggle(label: "Heavy (breaks guards, cracks stone)", isOn: b(\.heavy, false))
-			StatSlider(label: "Dazes for", value: b(\.daze, 0), range: 0...3, step: 0.1, format: "%.1f s")
-			StatSlider(label: "Sets on fire for", value: b(\.burn, 0), range: 0...8, step: 0.5, format: "%.1f s")
-			StatSlider(label: "Critical chance", value: b(\.crit, 0.1), range: 0...0.6, step: 0.01, format: "%.2f")
-			ModToggle(label: "Combo (every 3rd blow hits twice)", isOn: b(\.combo, false))
-			StatSlider(label: "Blow from behind", value: b(\.backstab, 1), range: 1...3, step: 0.1, format: "x%.1f")
-			StatSlider(label: "Against the undead", value: b(\.undeadMult, 1), range: 0.5...3, step: 0.1, format: "x%.1f")
-			ModColorRow(label: "Swing trail colour", color: b(\.trail, 0xFFFFFF))
-		}
-	}
-
-	var rangedSection: some View {
-		ModSection(title: "SHOOTING", help: rangedHelp) {
-			StatSlider(label: "Damage", value: b(\.damage, 6), range: 0...(sb ? 500 : 60), step: 0.5, format: "%.1f")
-			StatSlider(label: "Time between shots", value: b(\.cooldown, 0.45), range: 0.15...3, step: 0.01, format: "%.2f s")
-			StatSlider(label: "Shot speed", value: b(\.speed, 30), range: 4...(sb ? 90 : 60), step: 1, format: "%.0f")
-			StatSlider(label: "Shot drop", value: b(\.gravity, 0), range: 0...40, step: 1, format: "%.0f")
-			StatSlider(label: "Knockback", value: b(\.knock, 6), range: 0...(sb ? 40 : 16), step: 0.5, format: "%.1f")
-			IntSlider(label: "Shots per use (a fan)", value: b(\.spread, 1), range: 1...(sb ? 12 : 7))
-			IntSlider(label: "Passes through foes", value: b(\.pierce, 0), range: 0...5)
-			shotChoice
-			if item.kind == .gun {
-				IntSlider(label: "Magazine", value: b(\.magazine, 6), range: 1...(sb ? 99 : 30))
-				StatSlider(label: "Reload time", value: b(\.reload, 1.5), range: 0.2...6, step: 0.1, format: "%.1f s")
-				ModToggle(label: "Tap for every shot", help: "Off: holding keeps firing", isOn: b(\.needsPress, false))
-			}
-			ammoRow
-		}
-	}
-
-	var rangedHelp: String {
-		switch item.kind {
-		case .bow: return "Hold to draw, release to shoot; a longer draw flies further and hits harder."
-		case .gun: return "Fires while loaded, then reloads from its ammunition."
-		case .thrown: return "Lobbed in an arc to where you aim. Each throw uses one from the stack."
-		default: return "Fires on every use and needs no ammunition unless you pick one."
-		}
-	}
-
-	var shotChoice: some View {
-		VStack(alignment: .leading, spacing: 4) {
-			Text("Shot").font(.pixel(12, .bold)).foregroundColor(ModUI.dim)
-			let opts: [String] = ["Game shot"] + s.mod.projectiles.map { $0.name }
-			ChoiceRow(options: opts, selected: shotIndexBind, columns: 4)
-			if item.projectile.isEmpty {
-				ChoiceRow(options: ModGameShots.names, selected: gameShotBind, columns: 5)
-			}
-		}
-	}
-
-	var shotIndexBind: Binding<Int> {
-		let base: Binding<String> = b(\.projectile, "")
-		let list: [String] = s.mod.projectiles.map { $0.id }
-		return Binding<Int>(get: {
-			guard let i = list.firstIndex(of: base.wrappedValue) else { return 0 }
-			return i + 1
-		}, set: { v in base.wrappedValue = v <= 0 || v > list.count ? "" : list[v - 1] })
-	}
-
-	var gameShotBind: Binding<Int> {
-		let base: Binding<Int> = b(\.shot, 0)
-		return Binding<Int>(get: { ModGameShots.kinds.firstIndex(of: base.wrappedValue) ?? 0 }, set: { base.wrappedValue = ModGameShots.kinds[clampI($0, 0, ModGameShots.kinds.count - 1)] })
-	}
-
-	var ammoRow: some View {
-		HStack(spacing: 8) {
-			Text("Ammunition:").font(.pixel(12, .bold)).foregroundColor(ModUI.dim)
-			if let a = item.ammo {
-				ModPreview.icon(a, s.catalog).resizable().interpolation(.none).frame(width: 30, height: 30)
-				Text(verbatim: ModPreview.name(a, s.catalog)).font(.pixel(12)).foregroundColor(Color.white)
-			} else {
-				Text(item.kind == .thrown ? "itself" : "none").font(.pixel(12)).foregroundColor(Color.white)
-			}
-			Spacer()
-			SmallButton(title: "CHOOSE...", color: ModUI.blue) { picker = 2 }
-			SmallButton(title: "NONE") { b(\.ammo, nil).wrappedValue = nil }
-		}
-	}
-
-	var armorSection: some View {
-		ModSection(title: "ARMOR") {
-			ChoiceRow(options: ArmorSlot.allCases.map { $0.name }, selected: b(\.slot, 0), columns: 3)
-			StatSlider(label: "Defense", value: b(\.defense, 2), range: 0...(sb ? 40 : 12), step: 0.5, format: "%.1f")
-			IntSlider(label: "Looks like (tier)", value: b(\.look, 4), range: 1...9)
-			Text(verbatim: "Drawn as " + (Tier(rawValue: item.look) ?? .iron).armorName + " armour").font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-			ModOptionalEffect(label: "While worn", effect: b(\.wornEffect, nil), sandbox: sb)
-		}
-	}
-
-	var specialSection: some View {
-		ModSection(title: "SPECIAL") {
-			IntSlider(label: "Light when held", value: b(\.light, 0), range: 0...15)
-			ModEffectsEditor(effects: b(\.effects, []), sandbox: sb)
-		}
-	}
-}
-
-/// The game's own shots a mod item or attack can fire
-enum ModGameShots {
-	static let kinds: [Int] = [ProjKind.arrow.rawValue, ProjKind.bullet.rawValue, ProjKind.fireball.rawValue, ProjKind.rock.rawValue,
-							   ProjKind.spit.rawValue, ProjKind.bolt.rawValue, ProjKind.shard.rawValue, ProjKind.quarrel.rawValue,
-							   ProjKind.pellet.rawValue, ProjKind.pebble.rawValue]
-	static let names: [String] = ["Arrow", "Bullet", "Fireball", "Rock", "Spit", "Bolt", "Shard", "Crossbow bolt", "Pellet", "Pebble"]
-}
-
-/// A list of up to four effects, each with its strength and length
-struct ModEffectsEditor: View {
-	@Binding var effects: [ModEffect]
-	var sandbox: Bool
-	var body: some View {
-		VStack(alignment: .leading, spacing: 8) {
-			ForEach(0..<effects.count, id: \.self) { i in
-				effectRow(i)
-			}
-			if effects.count < ModLimits.maxEffects {
-				SmallButton(title: "+ ADD EFFECT", color: ModUI.accent) { effects.append(ModEffect(.heal, 6, 20)) }
-			}
-		}
-	}
-
-	func effectRow(_ i: Int) -> some View {
-		let e: ModEffect = i < effects.count ? effects[i] : ModEffect()
-		let r: ModRange = e.kind.amountRange
-		return VStack(alignment: .leading, spacing: 4) {
-			HStack {
-				Text(verbatim: "Effect " + String(i + 1)).font(.pixel(12)).foregroundColor(ModUI.gold)
-				Spacer()
-				SmallButton(title: "REMOVE", color: ModUI.red) { if i < effects.count { effects.remove(at: i) } }
-			}
-			ChoiceRow(options: ModEffectKind.allCases.map { $0.name }, selected: kindBind(i), columns: 5)
-			if r.hi > r.lo {
-				StatSlider(label: e.kind.amountLabel, value: field(i, \.amount), range: r.lo...(sandbox ? r.sandboxHi : r.hi), step: r.hi <= 4 ? 0.1 : 1, format: r.hi <= 4 ? "%.1f" : "%.0f")
-			}
-			if e.kind.timed {
-				StatSlider(label: "Lasts (seconds)", value: field(i, \.seconds), range: 1...(sandbox ? 1800 : 300), step: 1, format: "%.0f")
-			}
-		}
-		.padding(8)
-		.background(Color.black.opacity(0.25))
-	}
-
-	func field(_ i: Int, _ kp: WritableKeyPath<ModEffect, Double>) -> Binding<Double> {
-		let b: Binding<[ModEffect]> = $effects
-		return Binding<Double>(get: { i < b.wrappedValue.count ? b.wrappedValue[i][keyPath: kp] : 0 }, set: { v in
-			var list: [ModEffect] = b.wrappedValue
-			if i < list.count { list[i][keyPath: kp] = v; b.wrappedValue = list }
-		})
-	}
-
-	func kindBind(_ i: Int) -> Binding<Int> {
-		let b: Binding<[ModEffect]> = $effects
-		return Binding<Int>(get: { i < b.wrappedValue.count ? b.wrappedValue[i].kind.rawValue : 0 }, set: { v in
-			var list: [ModEffect] = b.wrappedValue
-			if i < list.count {
-				let k: ModEffectKind = ModEffectKind(rawValue: v) ?? .heal
-				list[i].kind = k
-				list[i].amount = clampD(list[i].amount, k.amountRange.lo, k.amountRange.hi)
-				b.wrappedValue = list
-			}
-		})
-	}
-}
-
-/// An effect that may be switched off (armour's effect while worn)
-struct ModOptionalEffect: View {
-	let label: String
-	@Binding var effect: ModEffect?
-	var sandbox: Bool
-	var body: some View {
-		VStack(alignment: .leading, spacing: 6) {
-			ModToggle(label: label, help: effect == nil ? "No effect" : (effect?.kind.name ?? ""), isOn: onBind)
-			if effect != nil {
-				ModEffectsEditor(effects: listBind, sandbox: sandbox)
-			}
-		}
-	}
-
-	var onBind: Binding<Bool> {
-		let b: Binding<ModEffect?> = $effect
-		return Binding<Bool>(get: { b.wrappedValue != nil }, set: { v in b.wrappedValue = v ? ModEffect(.speed, 15, 0) : nil })
-	}
-
-	var listBind: Binding<[ModEffect]> {
-		let b: Binding<ModEffect?> = $effect
-		return Binding<[ModEffect]>(get: { b.wrappedValue.map { [$0] } ?? [] }, set: { v in b.wrappedValue = v.first })
-	}
-}
-
-// MARK: - Mod Creator: creature editor
-
-/// The game creatures a custom creature's body can start from
-let modBodyKinds: [MobKind] = [.zombie, .skeleton, .pirate, .imp, .archer, .golem, .pig, .cow, .sheep, .chicken, .wolf, .bear, .tiger,
-							   .cat, .frog, .crow, .bat, .slime, .emberSlime, .scorpion, .crawler, .wraith, .fish, .elephant,
-							   .giraffe, .mimic, .bearBoss, .rex, .sentinel, .warden]
-
-struct MobEditorView: View {
-	@ObservedObject var s: ModSession
-	let id: String
-	@State var page: Int = 0
-	@State var picking: Int = -1
-	@State var frame: Int = 0
-
-	func b<T>(_ kp: WritableKeyPath<ModMob, T>, _ d: T) -> Binding<T> { return s.bind(\ModPack.mobs, id, kp, d) }
-	var mob: ModMob { return s.mod.mobs.first { $0.id == id } ?? ModMob() }
-	var sb: Bool { return s.mod.sandbox }
-
-	static let pages: [String] = ["BASICS", "LOOK", "STATS", "BEHAVIOUR", "ATTACKS", "SPAWNING", "DROPS", "PHASES", "SUMMON"]
-
-	var body: some View {
-		ZStack {
-			VStack(spacing: 10) {
-				previewHeader
-				ChoiceRow(options: MobEditorView.pages, selected: $page, columns: 5)
-				pageView
-			}
-		}
-		.modCover(s, picking >= 0 ? picking : nil) { self.pickerCover }
-	}
-
-	var pickerCover: some View {
-		ItemPickerView(catalog: s.catalog, title: "DROPS...", pick: { it in
-			var list: [ModDrop] = mob.drops
-			if picking < list.count { list[picking].item = it } else { list.append(ModDrop(it, 1, 1, 0.5)) }
-			b(\.drops, []).wrappedValue = list
-			picking = -1
-		}, cancel: { picking = -1 })
-	}
-
-	var previewHeader: some View {
-		let set: SpriteSet = modMobSpriteSet(mob)
-		let img: Image = set.frame(0, left: false, hurt: false)
-		let hb: (Double, Double) = hitBox
-		return HStack(spacing: 14) {
-			img.resizable().interpolation(.none).frame(width: CGFloat(set.w) * 2.0, height: CGFloat(set.h) * 2.0)
-				.frame(width: 140, height: 140)
-				.background(Color(ui: 0x5A7A9A).opacity(0.6))
-			VStack(alignment: .leading, spacing: 4) {
-				Text(verbatim: mob.name).font(.pixel(20)).foregroundColor(Color.white)
-				Text(verbatim: mob.category.name).font(.pixel(12)).foregroundColor(ModUI.gold)
-				Text(verbatim: String(format: "%.0f health · %.1f damage · speed %.1f", mob.hp, mob.damage, mob.speed)).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-				Text(verbatim: String(format: "Size %.1f x %.1f blocks", hb.0, hb.1)).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-			}
-			Spacer(minLength: 0)
-		}
-		.padding(10)
-		.background(PixelBox(color: ModUI.card))
-	}
-
-	var hitBox: (Double, Double) {
-		let base: MobKind = MobKind(rawValue: mob.base) ?? .zombie
-		let d: MobDef = mobDef(base)
-		return (d.w * mob.scale, d.h * mob.scale)
-	}
-
-	@ViewBuilder
-	var pageView: some View {
-		switch page {
-		case 1: lookPage
-		case 2: statsPage
-		case 3: behaviourPage
-		case 4: attacksPage
-		case 5: spawnPage
-		case 6: dropsPage
-		case 7: BossPhasesPage(s: s, id: id)
-		case 8: SummonPage(s: s, id: id)
-		default: basicsPage
-		}
-	}
-
-	var basicsPage: some View {
-		VStack(spacing: 10) {
-			ModSection(title: "BASICS") {
-				ModTextField(label: "Name", text: b(\.name, ""), placeholder: "Crystal Wolf")
-				ModTextField(label: "Description", text: b(\.desc, ""), placeholder: "Optional")
-			}
-			ModSection(title: "CATEGORY", help: mob.category.help) {
-				ChoiceRow(options: ModMobCategory.allCases.map { $0.name }, selected: categoryBind, columns: 3)
-				SmallButton(title: "USE TYPICAL SETTINGS FOR THIS CATEGORY", color: ModUI.blue) { applyPreset() }
-			}
-		}
-	}
-
-	var categoryBind: Binding<Int> {
-		let base: Binding<ModMobCategory> = b(\.category, .hostile)
-		return Binding<Int>(get: { base.wrappedValue.rawValue }, set: { base.wrappedValue = ModMobCategory(rawValue: $0) ?? .hostile })
-	}
-
-	/// Behaviour and numbers that suit the category (a quick start for beginners)
-	func applyPreset() {
-		var m: ModMob = mob
-		var bh = ModBehavior()
-		switch m.category {
-		case .passive:
-			bh.wander = true; bh.runAway = true; bh.retaliate = false
-			m.hp = 12; m.damage = 0; m.speed = 1.6; m.attacks = []
-		case .neutral:
-			bh.wander = true; bh.retaliate = true; bh.chase = true
-			m.hp = 30; m.damage = 6; m.speed = 2.6; m.attacks = [ModAttack()]
-		case .hostile:
-			bh.wander = true; bh.chase = true; bh.attackPlayer = true
-			m.hp = 30; m.damage = 7; m.speed = 2.2; m.attacks = [ModAttack()]
-			m.spawn.when = 2
-		case .boss:
-			bh.wander = false; bh.chase = true; bh.attackPlayer = true; bh.defendArea = true; bh.defendRadius = 24
-			m.hp = 800; m.damage = 18; m.speed = 2.6; m.scale = 2.2
-			var slam = ModAttack(); slam.kind = .stomp; slam.damage = 14; slam.radius = 4; slam.cooldown = 4; slam.windup = 0.8
-			var hit = ModAttack(); hit.kind = .melee; hit.damage = 18; hit.range = 2.4; hit.cooldown = 1.6
-			m.attacks = [hit, slam]
-			m.spawn.enabled = false
-			if m.phases.isEmpty {
-				var rage = ModPhase()
-				rage.name = "Enraged"
-				rage.message = joinText(m.name, " flies into a rage!")
-				m.phases = [rage]
-			}
-		case .flying:
-			bh.wander = true; bh.fly = true; bh.chase = true; bh.attackPlayer = true
-			m.base = MobKind.bat.rawValue; m.hp = 12; m.damage = 4; m.speed = 4
-			m.attacks = [ModAttack()]
-		case .water:
-			bh.wander = true; bh.swim = true; bh.runAway = true
-			m.base = MobKind.fish.rawValue; m.hp = 6; m.damage = 0; m.attacks = []
-			m.spawn.place = .ocean
-		}
-		m.behavior = bh
-		if let i = s.mod.mobs.firstIndex(where: { $0.id == id }) {
-			s.mod.mobs[i] = m
-			s.touch()
-		}
-	}
-
-	var lookPage: some View {
-		VStack(spacing: 10) {
-			ModSection(title: "BODY", help: "The body sets the shape, animations and hit box. Pick one, then change its colours and size.") {
-				bodyGrid
-				StatSlider(label: "Size", value: b(\.scale, 1), range: 0.5...((sb || mob.category == .boss) ? 4 : 2.5), step: 0.05, format: "x%.2f")
-			}
-			ModSection(title: "COLOURS") {
-				StatSlider(label: "Hue turn", value: b(\.hue, 0), range: -180...180, step: 5, format: "%.0f°")
-				StatSlider(label: "Colour strength", value: b(\.saturation, 1), range: 0...2, step: 0.05, format: "%.2f")
-				StatSlider(label: "Brightness", value: b(\.brightness, 1), range: 0.4...1.6, step: 0.05, format: "%.2f")
-				ModColorRow(label: "Tint", color: b(\.tint, 0xFFFFFF))
-				StatSlider(label: "Tint amount", value: b(\.tintAmt, 0), range: 0...1, step: 0.05, format: "%.2f")
-				IntSlider(label: "Glow (light)", value: b(\.glow, 0), range: 0...10)
-			}
-			ModSection(title: "OWN PIXEL ART (OPTIONAL)", help: "Draw up to 4 frames (standing, two walking, attacking) of up to 32 x 32 pixels. The body above still sets the hit box.") {
-				ModToggle(label: "Use my own pictures", isOn: customArtBind)
-				if mob.customArt { frameEditor }
-			}
-		}
-	}
-
-	var bodyGrid: some View {
-		let cols: [GridItem] = [GridItem(.adaptive(minimum: 76), spacing: 6)]
-		return LazyVGrid(columns: cols, spacing: 6) {
-			ForEach(0..<modBodyKinds.count, id: \.self) { i in
-				bodyCell(modBodyKinds[i])
-			}
-		}
-	}
-
-	func bodyCell(_ k: MobKind) -> some View {
-		let on: Bool = mob.base == k.rawValue
-		let set: SpriteSet = Art.shared.creaturePreview(k)
-		return Button {
-			b(\.base, MobKind.zombie.rawValue).wrappedValue = k.rawValue
-		} label: {
-			VStack(spacing: 1) {
-				set.frame(0, left: false, hurt: false).resizable().interpolation(.none).frame(width: 52, height: 52)
-				Text(verbatim: mobDef(k).name).font(.pixel(8, .semibold)).foregroundColor(Color.white).lineLimit(1).minimumScaleFactor(0.6)
-			}
-			.frame(width: 76, height: 72)
-			.background(PixelBox(color: on ? ModUI.accent : ModUI.card))
-		}
-		.buttonStyle(.plain)
-	}
-
-	var customArtBind: Binding<Bool> {
-		let base: Binding<Bool> = b(\.customArt, false)
-		let fr: Binding<[ModPixels]> = b(\.frames, [])
-		return Binding<Bool>(get: { base.wrappedValue }, set: { v in
-			if v && fr.wrappedValue.isEmpty { fr.wrappedValue = [ModPixels(w: 24, h: 24)] }
-			base.wrappedValue = v
-		})
-	}
-
-	var frameEditor: some View {
-		let n: Int = mob.frames.count
-		return VStack(alignment: .leading, spacing: 8) {
-			HStack(spacing: 6) {
-				ForEach(0..<n, id: \.self) { i in
-					SmallButton(title: ["STAND", "WALK 1", "WALK 2", "ATTACK"][min(i, 3)], color: frame == i ? ModUI.accent : Color(ui: 0x555555)) { frame = i }
-				}
-				if n < ModLimits.maxFrames {
-					SmallButton(title: "+ FRAME", color: ModUI.blue) {
-						var list: [ModPixels] = mob.frames
-						list.append(list.last ?? ModPixels(w: 24, h: 24))
-						b(\.frames, []).wrappedValue = list
-						frame = list.count - 1
-					}
-				}
-			}
-			HStack(spacing: 6) {
-				Text("Size:").font(.pixel(12, .bold)).foregroundColor(ModUI.dim)
-				ForEach([16, 24, 32], id: \.self) { sz in
-					SmallButton(title: String(sz) + " x " + String(sz)) { resizeFrames(sz) }
-				}
-			}
-			if frame < n {
-				HStack(spacing: 6) {
-					SmallButton(title: "COPY FRAME") {
-						var list: [ModPixels] = mob.frames
-						if list.count < ModLimits.maxFrames && frame < list.count {
-							list.insert(list[frame], at: frame + 1)
-							b(\.frames, []).wrappedValue = list
-							frame += 1
-						}
-					}
-					if n > 1 {
-						SmallButton(title: "DELETE FRAME", color: ModUI.red) {
-							var list: [ModPixels] = mob.frames
-							if list.count > 1 && frame < list.count {
-								list.remove(at: frame)
-								b(\.frames, []).wrappedValue = list
-								frame = max(0, min(frame, list.count - 1))
-							}
-						}
-						SmallButton(title: "◀ MOVE") {
-							var list: [ModPixels] = mob.frames
-							if frame > 0 && frame < list.count {
-								list.swapAt(frame, frame - 1)
-								b(\.frames, []).wrappedValue = list
-								frame -= 1
-							}
-						}
-						SmallButton(title: "MOVE ▶") {
-							var list: [ModPixels] = mob.frames
-							if frame + 1 < list.count {
-								list.swapAt(frame, frame + 1)
-								b(\.frames, []).wrappedValue = list
-								frame += 1
-							}
-						}
-					}
-				}
-				PixelEditorView(pixels: frameBind(frame), maxSide: 360, frames: mob.frames, frameIndex: frame, sizes: [12, 16, 24, 32], outlineDefault: true,
-								onResize: { w, h in b(\.frames, []).wrappedValue = mob.frames.map { $0.resized(w, h) } })
-			}
-		}
-	}
-
-	func frameBind(_ i: Int) -> Binding<ModPixels> {
-		let fr: Binding<[ModPixels]> = b(\.frames, [])
-		return Binding<ModPixels>(get: { i < fr.wrappedValue.count ? fr.wrappedValue[i] : ModPixels(w: 24, h: 24) }, set: { v in
-			var list: [ModPixels] = fr.wrappedValue
-			if i < list.count { list[i] = v; fr.wrappedValue = list }
-		})
-	}
-
-	func resizeFrames(_ sz: Int) {
-		let list: [ModPixels] = mob.frames.map { $0.resized(sz, sz) }
-		b(\.frames, []).wrappedValue = list
-	}
-
-	var statsPage: some View {
-		let hpR: ModRange = mob.category == .boss ? ModRange.bossHP : ModRange.mobHP
-		return ModSection(title: "STATS", help: "Numbers are held to fair ranges (sandbox mode allows more).") {
-			StatSlider(label: "Health", value: b(\.hp, 30), range: hpR.lo...(sb ? hpR.sandboxHi : hpR.hi), step: 1, format: "%.0f")
-			StatSlider(label: "Contact damage", value: b(\.damage, 6), range: 0...(sb ? 500 : 60), step: 0.5, format: "%.1f")
-			StatSlider(label: "Speed", value: b(\.speed, 2), range: 0...(sb ? 20 : 8), step: 0.1, format: "%.1f")
-			StatSlider(label: "Notices you within", value: b(\.detect, 14), range: 2...(sb ? 64 : 32), step: 1, format: "%.0f blocks")
-			StatSlider(label: "Jump", value: b(\.jump, 12), range: 0...(sb ? 30 : 20), step: 0.5, format: "%.1f")
-			StatSlider(label: "Toughness (damage shrugged off)", value: b(\.defense, 0), range: 0...0.9, step: 0.05, format: "%.2f")
-			StatSlider(label: "Knockback resistance", value: b(\.knockResist, 0), range: 0...1, step: 0.05, format: "%.2f")
-			ModToggle(label: "Fireproof", help: "Fire and lava do not hurt it", isOn: b(\.fireproof, false))
-		}
-	}
-
-	func bh<T>(_ kp: WritableKeyPath<ModBehavior, T>, _ d: T) -> Binding<T> {
-		let base: Binding<ModBehavior> = b(\.behavior, ModBehavior())
-		return Binding<T>(get: { base.wrappedValue[keyPath: kp] }, set: { v in
-			var x: ModBehavior = base.wrappedValue
-			x[keyPath: kp] = v
-			base.wrappedValue = x
-		})
-	}
-
-	var behaviourPage: some View {
-		VStack(spacing: 10) {
-			ModSection(title: "MOVING", help: "Switch on what it should do; the game's creature AI handles senses, paths and memory.") {
-				ModToggle(label: "Wander", help: "Strolls around its home", isOn: bh(\.wander, true))
-				ModToggle(label: "Stand still", help: "Stays where it is until something happens", isOn: bh(\.standStill, false))
-				ModToggle(label: "Patrol", help: "Walks back and forth", isOn: bh(\.patrol, false))
-				if mob.behavior.patrol { StatSlider(label: "Patrol distance", value: bh(\.patrolRange, 8), range: 2...40, step: 1, format: "%.0f blocks") }
-				ModToggle(label: "Follow the player", help: "Keeps close to you without attacking", isOn: bh(\.followPlayer, false))
-				ModToggle(label: "Run away", help: "From the player and from monsters", isOn: bh(\.runAway, false))
-				ModToggle(label: "Fly", isOn: bh(\.fly, false))
-				ModToggle(label: "Swim", isOn: bh(\.swim, false))
-				ModToggle(label: "Stay in its biome", isOn: bh(\.stayInBiome, false))
-				ModToggle(label: "Burns in sunlight", isOn: bh(\.burnsInSun, false))
-			}
-			ModSection(title: "FIGHTING") {
-				ModToggle(label: "Chase the player", isOn: bh(\.chase, false))
-				ModToggle(label: "Attack the player", isOn: bh(\.attackPlayer, false))
-				ModToggle(label: "Fight back when hit", isOn: bh(\.retaliate, true))
-				ModToggle(label: "Attack monsters nearby", help: "Hunts hostile creatures (a guardian)", isOn: bh(\.attackMobs, false))
-				ModToggle(label: "Defend an area", help: "Attacks anyone who comes near its home", isOn: bh(\.defendArea, false))
-				if mob.behavior.defendArea { StatSlider(label: "Area radius", value: bh(\.defendRadius, 10), range: 3...40, step: 1, format: "%.0f blocks") }
-				guardRow
-			}
-		}
-	}
-
-	var guardRow: some View {
-		let others: [ModMob] = s.mod.mobs.filter { $0.id != id }
-		var names: [String] = ["Nobody"]
-		var keys: [String] = [""]
-		for o in others { names.append(o.name); keys.append(s.mod.key(o.id)) }
-		for k in [MobKind.pig, .cow, .sheep, .villager] where k != .villager { names.append(mobDef(k).name); keys.append(mobDef(k).name) }
-		let base: Binding<String> = bh(\.guardKey, "")
-		let sel: Binding<Int> = Binding<Int>(get: { keys.firstIndex(of: base.wrappedValue) ?? 0 }, set: { base.wrappedValue = keys[clampI($0, 0, keys.count - 1)] })
-		return VStack(alignment: .leading, spacing: 4) {
-			Text("Guards (stays beside)").font(.pixel(12, .bold)).foregroundColor(ModUI.dim)
-			ChoiceRow(options: names, selected: sel, columns: 4)
-		}
-	}
-
-	var attacksPage: some View {
-		VStack(spacing: 10) {
-			Text("Attacks use the same damage rules as every weapon and monster in the game.").font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-			ForEach(0..<mob.attacks.count, id: \.self) { i in
-				attackEditor(i)
-			}
-			if mob.attacks.count < ModLimits.maxAttacks {
-				PixelButton(title: "+ ADD ATTACK", color: ModUI.accent) {
-					var list: [ModAttack] = mob.attacks
-					list.append(ModAttack())
-					b(\.attacks, []).wrappedValue = list
-				}
-			}
-		}
-	}
-
-	func at<T>(_ i: Int, _ kp: WritableKeyPath<ModAttack, T>, _ d: T) -> Binding<T> {
-		let base: Binding<[ModAttack]> = b(\.attacks, [])
-		return Binding<T>(get: { i < base.wrappedValue.count ? base.wrappedValue[i][keyPath: kp] : d }, set: { v in
-			var list: [ModAttack] = base.wrappedValue
-			if i < list.count { list[i][keyPath: kp] = v; base.wrappedValue = list }
-		})
-	}
-
-	func attackEditor(_ i: Int) -> some View {
-		let a: ModAttack = i < mob.attacks.count ? mob.attacks[i] : ModAttack()
-		let kindB: Binding<Int> = Binding<Int>(get: { a.kind.rawValue }, set: { v in at(i, \.kind, .melee).wrappedValue = ModAttackKind(rawValue: v) ?? .melee })
-		let aimB: Binding<Int> = Binding<Int>(get: { a.aim.rawValue }, set: { v in at(i, \.aim, .forward).wrappedValue = ModAttackAim(rawValue: v) ?? .forward })
-		return ModSection(title: "ATTACK " + String(i + 1) + ": " + a.kind.name.uppercased(), help: a.kind.help) {
-			ChoiceRow(options: ModAttackKind.allCases.map { $0.name }, selected: kindB, columns: 4)
-			StatSlider(label: "Damage", value: at(i, \.damage, 6), range: 0...(sb ? 500 : 60), step: 0.5, format: "%.1f")
-			StatSlider(label: a.kind == .ranged ? "Range" : "Reach", value: at(i, \.range, 1.6), range: 0.5...(a.kind == .ranged ? 30 : 8), step: 0.1, format: "%.1f")
-			StatSlider(label: "Time between attacks", value: at(i, \.cooldown, 1.2), range: 0.2...20, step: 0.1, format: "%.1f s")
-			StatSlider(label: "Warning before it lands", value: at(i, \.windup, 0.3), range: 0...2, step: 0.05, format: "%.2f s")
-			StatSlider(label: "Knockback", value: at(i, \.knock, 6), range: 0...(sb ? 40 : 16), step: 0.5, format: "%.1f")
-			if a.kind == .area || a.kind == .stomp {
-				StatSlider(label: "Area radius", value: at(i, \.radius, 2.5), range: 0.5...(sb ? 12 : 6), step: 0.1, format: "%.1f")
-			}
-			if a.kind == .multiHit {
-				IntSlider(label: "Blows", value: at(i, \.hits, 3), range: 1...(sb ? 12 : 6))
-			}
-			if a.kind == .charge || a.kind == .jump {
-				Text(verbatim: joinText(a.kind == .charge ? "Rushes up to " : "Leaps up to ", String(format: "%.0f", max(4.0, a.range * 3.0)), " blocks"))
-					.font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-			}
-			if a.kind == .melee || a.kind == .multiHit || a.kind == .stomp {
-				Text(a.kind == .stomp ? "Shockwaves (Forward: one way; otherwise both ways)" : "Where the blow lands").font(.pixel(12, .bold)).foregroundColor(ModUI.dim)
-				ChoiceRow(options: ModAttackAim.allCases.map { $0.name }, selected: aimB, columns: 4)
-			}
-			if a.kind == .ranged {
-				Text("Aim").font(.pixel(12, .bold)).foregroundColor(ModUI.dim)
-				ChoiceRow(options: ModAttackAim.allCases.map { $0.name }, selected: aimB, columns: 4)
-				StatSlider(label: "Shot speed", value: at(i, \.speed, 16), range: 4...(sb ? 90 : 60), step: 1, format: "%.0f")
-				attackShot(i, a)
-			}
-			SmallButton(title: "REMOVE ATTACK", color: ModUI.red) {
-				var list: [ModAttack] = mob.attacks
-				if i < list.count { list.remove(at: i) }
-				b(\.attacks, []).wrappedValue = list
-			}
-		}
-	}
-
-	func attackShot(_ i: Int, _ a: ModAttack) -> some View {
-		let ids: [String] = s.mod.projectiles.map { $0.id }
-		let opts: [String] = ["Game shot"] + s.mod.projectiles.map { $0.name }
-		let pb: Binding<String> = at(i, \.projectile, "")
-		let sel: Binding<Int> = Binding<Int>(get: { (ids.firstIndex(of: pb.wrappedValue) ?? -1) + 1 }, set: { v in pb.wrappedValue = v <= 0 || v > ids.count ? "" : ids[v - 1] })
-		let gs: Binding<Int> = at(i, \.shot, 2)
-		let gsel: Binding<Int> = Binding<Int>(get: { ModGameShots.kinds.firstIndex(of: gs.wrappedValue) ?? 0 }, set: { gs.wrappedValue = ModGameShots.kinds[clampI($0, 0, ModGameShots.kinds.count - 1)] })
-		return VStack(alignment: .leading, spacing: 4) {
-			ChoiceRow(options: opts, selected: sel, columns: 4)
-			if a.projectile.isEmpty { ChoiceRow(options: ModGameShots.names, selected: gsel, columns: 5) }
-		}
-	}
-
-	func sp<T>(_ kp: WritableKeyPath<ModSpawn, T>, _ d: T) -> Binding<T> {
-		let base: Binding<ModSpawn> = b(\.spawn, ModSpawn())
-		return Binding<T>(get: { base.wrappedValue[keyPath: kp] }, set: { v in
-			var x: ModSpawn = base.wrappedValue
-			x[keyPath: kp] = v
-			base.wrappedValue = x
-		})
-	}
-
-	var spawnPage: some View {
-		let placeB: Binding<Int> = Binding<Int>(get: { mob.spawn.place.rawValue }, set: { v in sp(\.place, .surface).wrappedValue = ModSpawnPlace(rawValue: v) ?? .surface })
-		return ModSection(title: "SPAWNING", help: "Where and when it appears by itself. It also counts towards the game's limits on monsters.") {
-			ModToggle(label: "Appears in the world", help: mob.category == .boss ? "Bosses are best placed with the test tools or a structure" : "", isOn: sp(\.enabled, true))
-			if mob.spawn.enabled {
-				ChoiceRow(options: ModSpawnPlace.allCases.map { $0.name }, selected: placeB, columns: 5)
-				ChoiceRow(options: ["Any time", "By day", "At night"], selected: sp(\.when, 0), columns: 3)
-				ModBiomePicker(biomes: sp(\.biomes, []))
-				IntSlider(label: "Highest row", value: sp(\.minY, 0), range: 0...559)
-				IntSlider(label: "Lowest row", value: sp(\.maxY, 559), range: 0...559)
-				StatSlider(label: "How common (zombie = 7)", value: sp(\.weight, 3), range: 0.1...10, step: 0.1, format: "%.1f")
-				IntSlider(label: "Group size", value: sp(\.group, 1), range: 1...(mob.category == .boss ? 1 : 4))
-				IntSlider(label: "At most nearby", value: sp(\.maxNearby, 4), range: 1...(mob.category == .boss ? 1 : 8))
-			}
-		}
-	}
-
-	var dropsPage: some View {
-		let lootIDs: [String] = [""] + s.mod.loot.map { $0.id }
-		let lootNames: [String] = ["No loot table"] + s.mod.loot.map { $0.name }
-		let lb: Binding<String> = b(\.loot, "")
-		let lsel: Binding<Int> = Binding<Int>(get: { lootIDs.firstIndex(of: lb.wrappedValue) ?? 0 }, set: { lb.wrappedValue = lootIDs[clampI($0, 0, lootIDs.count - 1)] })
-		return VStack(spacing: 10) {
-			ModSection(title: "DROPS", help: "Each drop has its own chance.") {
-				ForEach(0..<mob.drops.count, id: \.self) { i in
-					dropRow(i)
-				}
-				if mob.drops.count < ModLimits.maxDrops {
-					SmallButton(title: "+ ADD DROP", color: ModUI.accent) { picking = mob.drops.count }
-				}
-			}
-			ModSection(title: "LOOT TABLE", help: "Also rolled when it dies (make tables in the LOOT tab).") {
-				ChoiceRow(options: lootNames, selected: lsel, columns: 3)
-			}
-		}
-	}
-
-	func dr<T>(_ i: Int, _ kp: WritableKeyPath<ModDrop, T>, _ d: T) -> Binding<T> {
-		let base: Binding<[ModDrop]> = b(\.drops, [])
-		return Binding<T>(get: { i < base.wrappedValue.count ? base.wrappedValue[i][keyPath: kp] : d }, set: { v in
-			var list: [ModDrop] = base.wrappedValue
-			if i < list.count { list[i][keyPath: kp] = v; base.wrappedValue = list }
-		})
-	}
-
-	func dropRow(_ i: Int) -> some View {
-		let d: ModDrop = i < mob.drops.count ? mob.drops[i] : ModDrop()
-		return VStack(alignment: .leading, spacing: 4) {
-			HStack(spacing: 8) {
-				ModPreview.icon(d.item, s.catalog).resizable().interpolation(.none).frame(width: 30, height: 30)
-				Text(verbatim: ModPreview.name(d.item, s.catalog)).font(.pixel(13)).foregroundColor(Color.white)
-				Spacer()
-				SmallButton(title: "CHANGE", color: ModUI.blue) { picking = i }
-				SmallButton(title: "✕", color: ModUI.red) {
-					var list: [ModDrop] = mob.drops
-					if i < list.count { list.remove(at: i) }
-					b(\.drops, []).wrappedValue = list
-				}
-			}
-			IntSlider(label: "At least", value: dr(i, \.min, 1), range: 0...64)
-			IntSlider(label: "At most", value: dr(i, \.max, 1), range: 0...64)
-			StatSlider(label: "Chance", value: dr(i, \.chance, 0.5), range: 0...1, step: 0.01, format: "%.2f")
-		}
-		.padding(8)
-		.background(Color.black.opacity(0.25))
-	}
-}
-
-/// Biomes to pick from (none picked means every biome)
-struct ModBiomePicker: View {
-	@Binding var biomes: [Int]
-	static let all: [Biome] = [.plains, .forest, .desert, .tundra, .jungle, .savanna, .swamp, .mountain, .ocean, .umbral]
-	var body: some View {
-		let cols: [GridItem] = [GridItem(.adaptive(minimum: 110), spacing: 6)]
-		return VStack(alignment: .leading, spacing: 4) {
-			Text(verbatim: biomes.isEmpty ? "Biomes: every biome" : "Biomes: only those picked").font(.pixel(12, .bold)).foregroundColor(ModUI.dim)
-			LazyVGrid(columns: cols, spacing: 6) {
-				ForEach(0..<ModBiomePicker.all.count, id: \.self) { i in
-					chip(ModBiomePicker.all[i])
-				}
-			}
-		}
-	}
-
-	func chip(_ bi: Biome) -> some View {
-		let on: Bool = biomes.contains(bi.rawValue)
-		return Button {
-			if on { biomes.removeAll { $0 == bi.rawValue } } else { biomes.append(bi.rawValue) }
-		} label: {
-			Text(verbatim: bi.name).font(.pixel(11)).foregroundColor(Color.white).frame(maxWidth: .infinity, minHeight: 36)
-				.background(PixelBox(color: on ? ModUI.accent : Color(ui: 0x555555)))
-		}
-		.buttonStyle(.plain)
-	}
-}
-
-// MARK: - Mod Creator: recipes, loot, ores and structures
-
-struct RecipeEditorView: View {
-	@ObservedObject var s: ModSession
-	let id: String
-	@State var picking: Int = -2
-
-	func b<T>(_ kp: WritableKeyPath<ModRecipe, T>, _ d: T) -> Binding<T> { return s.bind(\ModPack.recipes, id, kp, d) }
-	var rec: ModRecipe { return s.mod.recipes.first { $0.id == id } ?? ModRecipe() }
-
-	static let stations: [String] = ["By hand", "Workbench", "Furnace", "Campfire", "Anvil", "Tinker's Bench", "Rift Forge", "A block of this mod"]
-
-	var body: some View {
-		let cat: ModCatalog = s.catalog
-		return ZStack {
-			VStack(spacing: 10) {
-				ModSection(title: "MAKES") {
-					HStack(spacing: 10) {
-						ModPreview.icon(rec.out, cat).resizable().interpolation(.none).frame(width: 48, height: 48)
-						Text(verbatim: ModPreview.name(rec.out, cat)).font(.pixel(15)).foregroundColor(Color.white)
-						Spacer()
-						SmallButton(title: "CHOOSE...", color: ModUI.blue) { picking = -1 }
-					}
-					IntSlider(label: "How many", value: b(\.count, 1), range: 1...99)
-				}
-				ModSection(title: "INGREDIENTS", help: "Up to " + String(ModLimits.maxCost) + ".") {
-					ForEach(0..<rec.cost.count, id: \.self) { i in costRow(i, cat) }
-					if rec.cost.count < ModLimits.maxCost {
-						SmallButton(title: "+ ADD INGREDIENT", color: ModUI.accent) { picking = rec.cost.count }
-					}
-				}
-				ModSection(title: "WHERE") {
-					ChoiceRow(options: RecipeEditorView.stations, selected: stationBind, columns: 4)
-					if rec.station == -1 { stationBlockRow }
-					Text("Crafting tab").font(.pixel(12, .bold)).foregroundColor(ModUI.dim)
-					ChoiceRow(options: RecipeCat.allCases.map { $0.name }, selected: b(\.cat, RecipeCat.mods.rawValue), columns: 6)
-				}
-				ModIssueList(report: recipeReport)
-			}
-		}
-		.modCover(s, picking >= -1 ? picking : nil) { self.pickerCover }
-	}
-
-	var pickerCover: some View {
-		let title: String = picking == -1 ? "IT MAKES..." : "INGREDIENT"
-		return ItemPickerView(catalog: s.catalog, title: title, pick: { it in
-			if picking == -1 {
-				b(\.out, .block(.planks)).wrappedValue = it
-			} else {
-				var list: [ModCost] = rec.cost
-				if picking < list.count { list[picking].item = it } else { list.append(ModCost(it, 1)) }
-				b(\.cost, []).wrappedValue = list
-			}
-			picking = -2
-		}, cancel: { picking = -2 })
-	}
-
-	var recipeReport: ModReport {
-		var p: ModPack = s.mod
-		p.recipes = [rec]
-		let full: ModReport = ModValidator.check(&p, known: s.catalog.keys)
-		var r = ModReport()
-		for i in full.issues where i.place.hasPrefix("Recipe") { r.issues.append(i) }
-		return r
-	}
-
-	var stationBind: Binding<Int> {
-		let base: Binding<Int> = b(\.station, 0)
-		return Binding<Int>(get: { base.wrappedValue < 0 ? 7 : base.wrappedValue }, set: { base.wrappedValue = $0 == 7 ? -1 : $0 })
-	}
-
-	var stationBlockRow: some View {
-		let blocks: [ModBlock] = s.mod.blocks.filter { $0.function == .station }
-		let ids: [String] = blocks.map { $0.id }
-		let base: Binding<String> = b(\.stationBlock, "")
-		let sel: Binding<Int> = Binding<Int>(get: { ids.firstIndex(of: base.wrappedValue) ?? 0 }, set: { v in if !ids.isEmpty { base.wrappedValue = ids[clampI(v, 0, ids.count - 1)] } })
-		return VStack(alignment: .leading, spacing: 4) {
-			if blocks.isEmpty {
-				Text("Make a block whose 'When tapped' is Crafting station first.").font(.pixel(11, .semibold)).foregroundColor(Color(ui: 0xFF9060))
-			} else {
-				ChoiceRow(options: blocks.map { $0.name }, selected: sel, columns: 3)
-			}
-		}
-	}
-
-	func costRow(_ i: Int, _ cat: ModCatalog) -> some View {
-		let c: ModCost = i < rec.cost.count ? rec.cost[i] : ModCost()
-		let nB: Binding<Int> = Binding<Int>(get: { c.n }, set: { v in
-			var list: [ModCost] = rec.cost
-			if i < list.count { list[i].n = v; b(\.cost, []).wrappedValue = list }
-		})
-		return VStack(spacing: 4) {
-			HStack(spacing: 8) {
-				ModPreview.icon(c.item, cat).resizable().interpolation(.none).frame(width: 30, height: 30)
-				Text(verbatim: ModPreview.name(c.item, cat)).font(.pixel(13)).foregroundColor(Color.white)
-				Spacer()
-				SmallButton(title: "CHANGE", color: ModUI.blue) { picking = i }
-				SmallButton(title: "✕", color: ModUI.red) {
-					var list: [ModCost] = rec.cost
-					if i < list.count { list.remove(at: i) }
-					b(\.cost, []).wrappedValue = list
-				}
-			}
-			IntSlider(label: "Amount", value: nB, range: 1...99)
-		}
-		.padding(8)
-		.background(Color.black.opacity(0.25))
-	}
-}
-
-struct LootEditorView: View {
-	@ObservedObject var s: ModSession
-	let id: String
-	@State var picking: Int = -1
-
-	func b<T>(_ kp: WritableKeyPath<ModLootTable, T>, _ d: T) -> Binding<T> { return s.bind(\ModPack.loot, id, kp, d) }
-	var table: ModLootTable { return s.mod.loot.first { $0.id == id } ?? ModLootTable() }
-	/// the chest chance shown as a percentage
-	var pctB: Binding<Double> {
-		let base: Binding<Double> = b(\.chestChance, 0)
-		return Binding<Double>(get: { base.wrappedValue * 100.0 }, set: { base.wrappedValue = clampD($0 / 100.0, 0, 1) })
-	}
-
-	var body: some View {
-		let cat: ModCatalog = s.catalog
-		return ZStack {
-			VStack(spacing: 10) {
-				ModSection(title: "LOOT TABLE", help: "Each roll picks one entry by weight. Rarer entries have smaller weights.") {
-					ModTextField(label: "Name", text: b(\.name, ""), placeholder: "Treasure")
-					IntSlider(label: "Rolls", value: b(\.rolls, 2), range: 1...6)
-					StatSlider(label: "Weight of 'nothing'", value: b(\.nothing, 0), range: 0...200, step: 1, format: "%.0f")
-					StatSlider(label: "Also in the world's chests", value: pctB, range: 0...100, step: 1, format: "%.0f%% of chests")
-				}
-				ModSection(title: "ENTRIES") {
-					ForEach(0..<table.entries.count, id: \.self) { i in entryRow(i, cat) }
-					if table.entries.count < ModLimits.maxLootEntries {
-						SmallButton(title: "+ ADD ENTRY", color: ModUI.accent) { picking = table.entries.count }
-					}
-				}
-			}
-		}
-		.modCover(s, picking >= 0 ? picking : nil) { self.pickerCover }
-	}
-
-	var pickerCover: some View {
-		ItemPickerView(catalog: s.catalog, title: "LOOT ENTRY", pick: { it in
-			var list: [ModLootEntry] = table.entries
-			if picking < list.count { list[picking].item = it } else { list.append(ModLootEntry(it, 1, 1, 0)) }
-			b(\.entries, []).wrappedValue = list
-			picking = -1
-		}, cancel: { picking = -1 })
-	}
-
-	func en<T>(_ i: Int, _ kp: WritableKeyPath<ModLootEntry, T>, _ d: T) -> Binding<T> {
-		let base: Binding<[ModLootEntry]> = b(\.entries, [])
-		return Binding<T>(get: { i < base.wrappedValue.count ? base.wrappedValue[i][keyPath: kp] : d }, set: { v in
-			var list: [ModLootEntry] = base.wrappedValue
-			if i < list.count { list[i][keyPath: kp] = v; base.wrappedValue = list }
-		})
-	}
-
-	func entryRow(_ i: Int, _ cat: ModCatalog) -> some View {
-		let e: ModLootEntry = i < table.entries.count ? table.entries[i] : ModLootEntry()
-		let pct: Double = table.chance(i) * 100.0
-		let col: UInt32 = ModLootEntry.rarityColors[clampI(e.rarity, 0, 3)]
-		return VStack(alignment: .leading, spacing: 4) {
-			HStack(spacing: 8) {
-				ModPreview.icon(e.item, cat).resizable().interpolation(.none).frame(width: 30, height: 30)
-				VStack(alignment: .leading, spacing: 1) {
-					Text(verbatim: ModPreview.name(e.item, cat)).font(.pixel(13)).foregroundColor(Color.white)
-					Text(verbatim: ModLootEntry.rarityNames[clampI(e.rarity, 0, 3)] + String(format: " · %.1f%% per roll", pct)).font(.pixel(11)).foregroundColor(Color(ui: col))
-				}
-				Spacer()
-				SmallButton(title: "CHANGE", color: ModUI.blue) { picking = i }
-				SmallButton(title: "✕", color: ModUI.red) {
-					var list: [ModLootEntry] = table.entries
-					if i < list.count { list.remove(at: i) }
-					b(\.entries, []).wrappedValue = list
-				}
-			}
-			ChoiceRow(options: ModLootEntry.rarityNames, selected: en(i, \.rarity, 0), columns: 4)
-			IntSlider(label: "At least", value: en(i, \.min, 1), range: 1...64)
-			IntSlider(label: "At most", value: en(i, \.max, 1), range: 1...64)
-			StatSlider(label: "Own weight (0 = by rarity)", value: en(i, \.weight, 0), range: 0...200, step: 1, format: "%.0f")
-		}
-		.padding(8)
-		.background(Color.black.opacity(0.25))
-	}
-}
-
-struct OreEditorView: View {
-	@ObservedObject var s: ModSession
-	let id: String
-
-	func b<T>(_ kp: WritableKeyPath<ModOre, T>, _ d: T) -> Binding<T> { return s.bind(\ModPack.ores, id, kp, d) }
-	var ore: ModOre { return s.mod.ores.first { $0.id == id } ?? ModOre() }
-
-	var body: some View {
-		let blocks: [ModBlock] = s.mod.blocks
-		let ids: [String] = blocks.map { $0.id }
-		let bb: Binding<String> = b(\.block, "")
-		let bsel: Binding<Int> = Binding<Int>(get: { ids.firstIndex(of: bb.wrappedValue) ?? 0 }, set: { v in if !ids.isEmpty { bb.wrappedValue = ids[clampI(v, 0, ids.count - 1)] } })
-		return VStack(spacing: 10) {
-			ModSection(title: "ORE") {
-				ModTextField(label: "Name", text: b(\.name, ""), placeholder: "Ruby veins")
-				if blocks.isEmpty {
-					Text("Make the ore's block in the BLOCKS tab first.").font(.pixel(12)).foregroundColor(Color(ui: 0xFF9060))
-				} else {
-					Text("Made of").font(.pixel(12, .bold)).foregroundColor(ModUI.dim)
-					ChoiceRow(options: blocks.map { $0.name }, selected: bsel, columns: 3)
-				}
-				ModDimChoice(s: s, dim: b(\.dim, 0), dimKey: b(\.dimKey, ""))
-			}
-			ModSection(title: "DEPTH", help: "Drag the two sliders: the green band shows where veins form. The sea is at row 120.") {
-				HStack(alignment: .top, spacing: 14) {
-					OreDepthBar(minY: ore.minY, maxY: ore.maxY, bottom: ore.dim == 0 ? WorldGen.H : umbralH, dim: ore.dim)
-						.frame(width: 120, height: 300)
-					VStack(spacing: 6) {
-						IntSlider(label: "Highest row", value: b(\.minY, 150), range: 2...((ore.dim == 0 ? WorldGen.H : umbralH) - 2))
-						IntSlider(label: "Lowest row", value: b(\.maxY, 330), range: 2...((ore.dim == 0 ? WorldGen.H : umbralH) - 2))
-						Text(verbatim: depthWords).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-					}
-				}
-			}
-			ModSection(title: "RARITY") {
-				StatSlider(label: "Veins per 16 blocks of width", value: b(\.veins, 1.5), range: 0.05...8, step: 0.05, format: "%.2f")
-				Text(verbatim: rarityWords).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-				IntSlider(label: "Blocks per vein", value: b(\.size, 6), range: 1...24)
-				Text("Forms in").font(.pixel(12, .bold)).foregroundColor(ModUI.dim)
-				ChoiceRow(options: ModOre.hostNames, selected: b(\.host, 0), columns: 3)
-			}
-			OreControlsView(s: s, id: id)
-		}
-	}
-
-	var depthWords: String {
-		let mid: Int = (ore.minY + ore.maxY) / 2
-		if ore.dim == 1 {
-			// the realm is rock above row 40 and below row 200, an open cavern between
-			if ore.maxY < 40 || ore.minY > 200 { return "In the Umbral Realm's ash rock." }
-			if ore.minY >= 40 && ore.maxY <= 200 { return "Mostly open cavern here: few veins will find rock." }
-			return "Partly in the open cavern (rows 40 to 200), where there is little rock."
-		}
-		if mid < 130 { return "Near the surface." }
-		if mid < 220 { return "In the upper caves (like coal and copper)." }
-		if mid < 360 { return "Deep underground (like iron and silver)." }
-		if mid < 460 { return "Very deep (like gold)." }
-		return "In the abyss (like diamond and mythril)."
-	}
-
-	var rarityWords: String {
-		let v: Double = ore.veins
-		if v < 0.2 { return "Very rare" }
-		if v < 0.6 { return "Rare" }
-		if v < 1.5 { return "Uncommon" }
-		if v < 3.5 { return "Common" }
-		return "Everywhere"
-	}
-}
-
-/// The world's layers from the sky down, with the band where an ore forms
-struct OreDepthBar: View {
-	let minY: Int
-	let maxY: Int
-	let bottom: Int
-	var dim: Int = 0
-	var body: some View {
-		Canvas { ctx, size in
-			let w: Double = Double(size.width)
-			let h: Double = Double(size.height)
-			let fb: Double = Double(max(1, bottom))
-			let over: [(Int, UInt32, String)] = [(0, 0x7AB0E8, "sky"), (110, 0x6A8A40, "surface"), (130, 0x8A6A40, "earth"),
-												 (200, 0x7A7A7A, "caves"), (330, 0x5A5A68, "deep"), (450, 0x3A3448, "abyss")]
-			// the Umbral Realm: a rock ceiling, the open cavern, then ash rock over lava
-			let umbral: [(Int, UInt32, String)] = [(0, 0x5A4446, "ceiling"), (40, 0x1A1018, "cavern"), (200, 0x6A4A40, "ash rock"), (240, 0x8A3A20, "lava")]
-			let layers: [(Int, UInt32, String)] = dim == 1 ? umbral : over
-			for (i, l) in layers.enumerated() where l.0 < bottom {
-				let y0: Double = Double(l.0) / fb * h
-				let y1: Double = i + 1 < layers.count ? min(h, Double(layers[i + 1].0) / fb * h) : h
-				ctx.fill(Path(CGRect(x: 0, y: y0, width: w, height: max(0, y1 - y0))), with: .color(Color(hex: l.1)))
-			}
-			let a: Double = Double(minY) / fb * h
-			let b: Double = Double(maxY) / fb * h
-			ctx.fill(Path(CGRect(x: w * 0.15, y: a, width: w * 0.7, height: max(3, b - a))), with: .color(Color(hex: 0x50E070, alpha: 0.75)))
-			ctx.stroke(Path(CGRect(x: w * 0.15, y: a, width: w * 0.7, height: max(3, b - a))), with: .color(Color.white), lineWidth: 2)
-		}
-		.overlay(Rectangle().stroke(Color.white.opacity(0.5), lineWidth: 2))
-	}
-}
-
-/// The strip shown while picking a structure's corners
-struct CaptureBar: View {
-	@ObservedObject var game: Game
-	@ObservedObject var hud: HUDSignal
-	var body: some View {
-		let step: String = game.capA == nil ? "Tap the first corner of what you built" : "Now tap the opposite corner"
-		return VStack {
-			HStack(spacing: 10) {
-				Text("CAPTURE").font(.pixel(14)).foregroundColor(Color(ui: 0x60E0FF))
-				Text(verbatim: step).font(.pixel(12, .semibold)).foregroundColor(Color.white)
-				SmallButton(title: "CANCEL", color: ModUI.red) { game.cancelCapture() }
-			}
-			.padding(10)
-			.background(Color.black.opacity(0.7))
-			.cornerRadius(6)
-			.padding(.top, 58)
-			Spacer()
-		}
-	}
-}
-
-/// Saving a captured structure: its name, the mod it goes into, where it appears
-struct CapturePanel: View {
-	@ObservedObject var game: Game
-	@State var name: String = "My Structure"
-	@State var target: Int = 0
-	@State var newModName: String = "My Structures"
-	@State var clearAir: Bool = true
-	@State var placement: Int = 0
-	@State var entries: [ModEntry] = []
-	@State var note: String = ""
-	@State var started: Bool = false
-
-	var body: some View {
-		let cap: (ModStructure, Int) = game.captureStructure(clearAir: clearAir)
-		let cat: ModCatalog = ModCatalog.installed()
-		let names: [String] = ["New mod"] + entries.map { $0.pack?.name ?? $0.id }
-		return ScrollView {
-			VStack(spacing: 10) {
-				Text("SAVE STRUCTURE").font(.pixel(22)).foregroundColor(Color.white)
-				StructurePreview(st: cap.0, catalog: cat).frame(height: 200)
-				Text(verbatim: joinText(String(cap.0.w), " x ", String(cap.0.h), " blocks", cap.1 > 0 ? joinText(" · ", String(cap.1), " left out (machines, bedrock, the rift gate)") : ""))
-					.font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-				ModTextField(label: "Name", text: $name, placeholder: "Ruined Hut")
-				Text("Save into").font(.pixel(12, .bold)).foregroundColor(ModUI.dim).frame(maxWidth: .infinity, alignment: .leading)
-				ChoiceRow(options: names, selected: $target, columns: 3)
-				if target == 0 { ModTextField(label: "New mod's name", text: $newModName, placeholder: "My Structures") }
-				Text("Where it appears").font(.pixel(12, .bold)).foregroundColor(ModUI.dim).frame(maxWidth: .infinity, alignment: .leading)
-				ChoiceRow(options: ModPlacement.allCases.map { $0.name }, selected: $placement, columns: 3)
-				ModToggle(label: "Empty space clears the ground", help: "Off: only its blocks are placed and the ground around them stays", isOn: $clearAir)
-				if !note.isEmpty { Text(verbatim: note).font(.pixel(12, .semibold)).foregroundColor(Color(ui: 0xFFB060)) }
-				HStack(spacing: 10) {
-					PixelButton(title: "SAVE", color: ModUI.accent) {
-						let id: String = target > 0 && target - 1 < entries.count ? entries[target - 1].id : ""
-						let msg: String = game.saveCapture(name: name, modID: id, newModName: newModName, placement: ModPlacement(rawValue: placement) ?? .surface, clearAir: clearAir)
-						if game.capturing { note = msg } else { game.say(msg, 5.0) }
-					}
-					PixelButton(title: "PICK AGAIN", color: ModUI.blue) {
-						game.capA = nil
-						game.capB = nil
-						game.showCapture = false
-						game.bumpHUD()
-					}
-					PixelButton(title: "CANCEL", color: ModUI.red) { game.cancelCapture() }
-				}
-			}
-			.padding(16)
-			.frame(maxWidth: 620)
-			.background(ModUI.panel)
-			.cornerRadius(10)
-			.padding(20)
-		}
-		.onAppear {
-			if started { return }
-			started = true
-			entries = ModStore.entries().filter { $0.pack != nil }
-			placement = cap.0.placement.rawValue
-		}
-	}
-}
-
-/// The Mod Test tools, opened from the TEST button: the creatures, items and recipes of the world's mods,
-/// the time of day, god mode, survival rules, clearing creatures, starting again and leaving
-struct ModTestPanel: View {
-	@ObservedObject var game: Game
-	@ObservedObject var hud: HUDSignal
-	var reset: () -> Void
-	var exit: () -> Void
-	@State var tab: Int = 0
-	@State var note: String = ""
-
-	var body: some View {
-		let rt: ModRuntime = ModRuntime.shared
-		let title: String = rt.packs.first { $0.id == game.testMod }?.name ?? "Mod"
-		return VStack(spacing: 10) {
-			HStack {
-				Text("MOD TEST").font(.pixel(20)).foregroundColor(Color(ui: 0x60E0FF))
-				Text(verbatim: title).font(.pixel(14)).foregroundColor(Color.white).lineLimit(1)
-				Spacer()
-				SmallButton(title: "CLOSE", color: ModUI.accent) { game.showModTest = false }
-			}
-			Text("A test world: nothing here is saved.").font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-				.frame(maxWidth: .infinity, alignment: .leading)
-			ChoiceRow(options: ["CREATURES", "ITEMS", "RECIPES", "WORLD", "PROBLEMS", "LOGIC"], selected: $tab, columns: 6)
-			ScrollView {
-				VStack(spacing: 10) {
-					if tab == 0 { creatures }
-					if tab == 1 { items }
-					if tab == 2 { recipes }
-					if tab == 3 { worldTools }
-					if tab == 4 { problems }
-					if tab == 5 { LogicDebugView(game: game, hud: hud) }
-				}
-			}
-			.frame(maxHeight: 420)
-			if !note.isEmpty {
-				Text(verbatim: note).font(.pixel(12, .semibold)).foregroundColor(Color(ui: 0xFFE070))
-			}
-		}
-		.padding(16)
-		.frame(maxWidth: 720)
-		.background(ModUI.panel)
-		.cornerRadius(10)
-		.padding(16)
-	}
-
-	var creatures: some View {
-		let rt: ModRuntime = ModRuntime.shared
-		let cols: [GridItem] = [GridItem(.adaptive(minimum: 120), spacing: 8)]
-		return VStack(alignment: .leading, spacing: 8) {
-			if rt.mobs.isEmpty {
-				Text("This mod has no creatures yet.").font(.pixel(12)).foregroundColor(ModUI.dim)
-			}
-			LazyVGrid(columns: cols, spacing: 8) {
-				ForEach(0..<rt.mobs.count, id: \.self) { i in
-					Button(action: { note = game.testSpawn(i) }) {
-						VStack(spacing: 4) {
-							creatureImage(i)
-							Text(verbatim: rt.mobs[i].def.name).font(.pixel(11)).foregroundColor(Color.white).lineLimit(1)
-							Text(verbatim: rt.mobs[i].def.category.name).font(.pixel(9)).foregroundColor(ModUI.dim).lineLimit(1)
-						}
-						.frame(maxWidth: .infinity, minHeight: 96)
-						.background(ModUI.card)
-						.cornerRadius(6)
-					}
-				}
-			}
-			Text("Targets from the game").font(.pixel(12, .bold)).foregroundColor(ModUI.dim)
-			HStack(spacing: 8) {
-				ForEach([MobKind.zombie, .skeleton, .pig, .cow], id: \.self) { k in
-					SmallButton(title: mobDef(k).name.uppercased(), color: ModUI.blue) { note = game.testSpawnGame(k) }
-				}
-			}
-			PixelButton(title: "CLEAR ALL CREATURES", color: ModUI.red) {
-				game.clearCreatures()
-				note = "Every creature is gone."
-			}
-		}
-	}
-
-	/// A creature's standing frame, 56 points high at its own width
-	func creatureImage(_ slot: Int) -> some View {
-		let set: SpriteSet = Art.shared.customMobSet(slot)
-		let ratio: Double = Double(set.w) / Double(max(1, set.h))
-		return set.frame(0, left: false, hurt: false).resizable().interpolation(.none)
-			.frame(width: CGFloat(clampD(56.0 * ratio, 16, 112)), height: 56)
-	}
-
-	var items: some View {
-		let list: [Item] = ModRuntime.shared.paletteItems()
-		let cols: [GridItem] = [GridItem(.adaptive(minimum: 64), spacing: 8)]
-		return VStack(alignment: .leading, spacing: 8) {
-			Text("Tap to put a stack in your bag.").font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-			if list.isEmpty { Text("This mod has no items or blocks yet.").font(.pixel(12)).foregroundColor(ModUI.dim) }
-			LazyVGrid(columns: cols, spacing: 8) {
-				ForEach(0..<list.count, id: \.self) { i in
-					Button(action: {
-						game.creativeGive(list[i])
-						note = joinText("Took ", list[i].name, ".")
-					}) {
-						VStack(spacing: 2) {
-							SlotView(stack: Stack(item: list[i], count: 1), size: 44)
-							Text(verbatim: list[i].name).font(.pixel(9)).foregroundColor(Color.white).lineLimit(1)
-						}
-						.frame(maxWidth: .infinity, minHeight: 70)
-					}
-				}
-			}
-		}
-	}
-
-	var recipes: some View {
-		let list: [Recipe] = ModRuntime.shared.recipes
-		return VStack(alignment: .leading, spacing: 8) {
-			Text("Take the ingredients (and the station), then craft it here or in the crafting panel. With survival rules on, the station is needed as it would be in play.")
-				.font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-			if list.isEmpty { Text("This mod has no recipes yet.").font(.pixel(12)).foregroundColor(ModUI.dim) }
-			ForEach(list) { r in
-				HStack(spacing: 8) {
-					RecipeRow.live(game, r)
-					VStack(spacing: 4) {
-						SmallButton(title: "INGREDIENTS", color: ModUI.blue) { note = game.testIngredients(r) }
-						SmallButton(title: "CRAFT", color: game.canCraft(r) ? ModUI.accent : Color(ui: 0x555555)) {
-							let before: Int = game.inv.total(r.out)
-							game.craft(r)
-							note = game.inv.total(r.out) > before ? joinText("Made ", r.out.name, ".") : "Not yet: something is missing."
-						}
-					}
-				}
-			}
-		}
-	}
-
-	var worldTools: some View {
-		let god: Binding<Bool> = Binding<Bool>(get: { game.godMode }, set: { game.godMode = $0; game.bumpHUD() })
-		let surv: Binding<Bool> = Binding<Bool>(get: { game.testSurvival }, set: { game.testSurvival = $0 })
-		let spawns: Binding<Bool> = Binding<Bool>(get: { !game.pauseSpawning }, set: { game.pauseSpawning = !$0; game.bumpHUD() })
-		return VStack(alignment: .leading, spacing: 10) {
-			Text("Time of day").font(.pixel(12, .bold)).foregroundColor(ModUI.dim)
-			HStack(spacing: 8) {
-				SmallButton(title: "MORNING", color: ModUI.blue) { setTime(0.02, "Morning.") }
-				SmallButton(title: "NOON", color: ModUI.blue) { setTime(0.25, "Noon.") }
-				SmallButton(title: "DUSK", color: ModUI.blue) { setTime(0.53, "Dusk.") }
-				SmallButton(title: "MIDNIGHT", color: ModUI.blue) { setTime(0.75, "Midnight.") }
-			}
-			if ModRuntime.shared.dimSlots.contains(where: { $0 != nil }) {
-				Text("Dimensions").font(.pixel(12, .bold)).foregroundColor(ModUI.dim)
-				ForEach(0..<3, id: \.self) { i in
-					if let d = ModRuntime.shared.dimSlots[i] {
-						SmallButton(title: game.world.dim == d.dim ? joinText("LEAVE ", d.def.name.uppercased()) : joinText("VISIT ", d.def.name.uppercased()), color: Color(ui: 0x6A4AAA)) {
-							note = game.testVisitDim(i)
-						}
-					}
-				}
-			}
-			ModToggle(label: "God mode", help: "Nothing can hurt you", isOn: god)
-			ModToggle(label: "Survival rules", help: "Hunger, damage, stations and using things up, as in a real game", isOn: surv)
-			ModToggle(label: "Creatures spawn by themselves", help: "Off: only what you spawn here appears", isOn: spawns)
-			SmallButton(title: "SAVE VEHICLE TO THE MOD", color: ModUI.accent) { note = saveVehicle() }
-			HStack(spacing: 8) {
-				PixelButton(title: "CLEAR CREATURES", color: ModUI.red) {
-					game.clearCreatures()
-					note = "Every creature is gone."
-				}
-				PixelButton(title: "RESET WORLD", color: Color(ui: 0x8A5A2E)) { reset() }
-			}
-			PixelButton(title: "EXIT TEST", color: Color(ui: 0x6A3A8A)) { exit() }
-		}
-	}
-
-	func setTime(_ t: Double, _ what: String) {
-		game.timeOfDay = t
-		game.light.valid = false
-		game.bumpHUD()
-		note = what
-	}
-
-	var problems: some View {
-		let reps: [ModReport] = ModRuntime.shared.reports
-		return VStack(spacing: 8) {
-			if reps.isEmpty { Text("No mods are active.").font(.pixel(12)).foregroundColor(ModUI.dim) }
-			ForEach(0..<reps.count, id: \.self) { i in ModIssueList(report: reps[i]) }
-		}
-	}
-}
-
-struct StructureEditorView: View {
-	@ObservedObject var s: ModSession
-	let id: String
-
-	func b<T>(_ kp: WritableKeyPath<ModStructure, T>, _ d: T) -> Binding<T> { return s.bind(\ModPack.structures, id, kp, d) }
-	var st: ModStructure { return s.mod.structures.first { $0.id == id } ?? ModStructure() }
-
-	var body: some View {
-		let lootIDs: [String] = [""] + s.mod.loot.map { $0.id }
-		let lootNames: [String] = ["Normal chest loot"] + s.mod.loot.map { $0.name }
-		let lb: Binding<String> = b(\.loot, "")
-		let lsel: Binding<Int> = Binding<Int>(get: { lootIDs.firstIndex(of: lb.wrappedValue) ?? 0 }, set: { lb.wrappedValue = lootIDs[clampI($0, 0, lootIDs.count - 1)] })
-		let placeB: Binding<Int> = Binding<Int>(get: { st.placement.rawValue }, set: { v in b(\.placement, .surface).wrappedValue = ModPlacement(rawValue: v) ?? .surface })
-		return VStack(spacing: 10) {
-			ModSection(title: "STRUCTURE") {
-				ModTextField(label: "Name", text: b(\.name, ""), placeholder: "Ruined Hut")
-				StructurePreview(st: st, catalog: s.catalog).frame(height: 220)
-				Text(verbatim: String(st.w) + " x " + String(st.h) + " blocks").font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-			}
-			ModSection(title: "WHERE IT APPEARS", help: "It never cuts into bedrock or the rift gate, and keeps away from the world's own landmarks.") {
-				ChoiceRow(options: ModPlacement.allCases.map { $0.name }, selected: placeB, columns: 3)
-				ModDimChoice(s: s, dim: b(\.dim, 0), dimKey: b(\.dimKey, ""))
-				if st.placement == .underground {
-					IntSlider(label: "Highest row", value: b(\.minY, 150), range: 4...550)
-					IntSlider(label: "Lowest row", value: b(\.maxY, 400), range: 4...550)
-				}
-				ModBiomePicker(biomes: b(\.biomes, []))
-			}
-			ModSection(title: "HOW OFTEN") {
-				StatSlider(label: "Chance at each site", value: b(\.chance, 0.35), range: 0.01...1, step: 0.01, format: "%.2f")
-				IntSlider(label: "Blocks between sites", value: b(\.spacing, 300), range: 64...2048)
-				Text(verbatim: String(format: "About one every %.0f blocks", Double(st.spacing) / max(0.01, st.chance))).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-			}
-			ModSection(title: "CHESTS INSIDE") {
-				ChoiceRow(options: lootNames, selected: lsel, columns: 3)
-			}
-		}
-	}
-}
-
-/// A side view of a captured structure, drawn with the blocks' pictures
-struct StructurePreview: View {
-	let st: ModStructure
-	let catalog: ModCatalog
-	var body: some View {
-		let w: Int = max(1, st.w)
-		let h: Int = max(1, st.h)
-		let palette: [Image] = st.palette.map { k in pixImage(catalog.block(k).map { $0.art.isBlank ? greyTileBuf() : $0.art.buf() } ?? missingTileBuf()) }
-		let cells: [Int] = st.cells
-		return Canvas { ctx, size in
-			let c: Double = min(Double(size.width) / Double(w), Double(size.height) / Double(h))
-			let ox: Double = (Double(size.width) - c * Double(w)) * 0.5
-			ctx.fill(Path(CGRect(x: ox, y: 0, width: c * Double(w), height: c * Double(h))), with: .color(Color(hex: 0x6A90B8)))
-			for y in 0..<h {
-				for x in 0..<w {
-					let i: Int = y * w + x
-					if i >= cells.count { continue }
-					let v: Int = cells[i]
-					let r: CGRect = CGRect(x: ox + Double(x) * c, y: Double(y) * c, width: c + 0.5, height: c + 0.5)
-					if v >= 1000 {
-						let pi: Int = v - 1000
-						if pi < palette.count { ctx.draw(palette[pi], in: r) }
-					} else if v > 0, let t = Tile(rawValue: UInt8(v)), !t.isMod {
-						ctx.draw(Art.shared.tile(t), in: r)
-					}
-				}
-			}
-		}
-		.background(Color.black.opacity(0.4))
-	}
-}
-
-// ===== u08_alchemy =====
-
-// MARK: - HUD: effects and suit energy
-
-/// The potion effects on the player: a small flask in the effect's colour and the seconds left
-struct EffectStrip: View {
-	let game: Game
-	/// the HUD's tick: a new value makes SwiftUI draw the strip again (it reads the game, which it does not watch)
-	var tick: Int = 0
-	var body: some View {
-		let list: [(ModEffectKind, Double)] = game.activeEffects()
-		return HStack(spacing: 4) {
-			ForEach(0..<list.count, id: \.self) { i in
-				EffectChip(kind: list[i].0, secs: list[i].1)
-			}
-		}
-	}
-}
-
-struct EffectChip: View {
-	let kind: ModEffectKind
-	let secs: Double
-	var body: some View {
-		let t: Int = Int(secs.rounded(.up))
-		let label: String = t >= 60 ? joinText(String(t / 60), "m") : joinText(String(t), "s")
-		return HStack(spacing: 2) {
-			Rectangle().fill(Color(hex: kind.color)).frame(width: 9, height: 9)
-				.overlay(Rectangle().stroke(Color.black, lineWidth: 1))
-			OutlinedText(text: label, size: 10, color: secs < 6 ? Color(ui: 0xFFB060) : Color.white)
-		}
-		.padding(.horizontal, 3)
-		.padding(.vertical, 2)
-		.background(Color.black.opacity(0.35))
-	}
-}
-
-/// The worn suit's energy, and the PACK button when it carries a cargo pack
-struct SuitBar: View {
-	let game: Game
-	/// the HUD's tick, so the bar redraws as the suit's energy changes
-	var tick: Int = 0
-	var body: some View {
-		let st: ExoStats = game.suitStats
-		let cap: Double = max(1, st.capacity)
-		let f: Double = clampD(game.suit.energy / cap, 0, 1)
-		let col: Color = f > 0.25 ? Color(ui: 0x60E0FF) : Color(ui: 0xFF8A40)
-		return HStack(spacing: 6) {
-			OutlinedText(text: "SUIT", size: 10, color: Color(ui: 0x9AD8F0))
-			ZStack(alignment: .leading) {
-				Rectangle().fill(Color.black.opacity(0.6)).frame(width: 110, height: 9)
-				Rectangle().fill(col).frame(width: CGFloat(110.0 * f), height: 9)
-			}
-			.overlay(Rectangle().stroke(Color.white.opacity(0.4), lineWidth: 1))
-			OutlinedText(text: joinText(String(Int(game.suit.energy)), "/", String(Int(cap))), size: 10)
-			if st.broken > 0 { OutlinedText(text: joinText(String(st.broken), " BROKEN"), size: 10, color: Color(ui: 0xFF8A40)) }
-			if st.has(.cargo) {
-				SmallButton(title: "PACK", color: Color(ui: 0x7A5A2A)) { game.openPack() }
-			}
-			if st.has(.cannon) || st.has(.laser) {
-				HoldButton(label: "SUIT FIRE", size: 58, color: Color(ui: 0x8A3A3A)) { (on: Bool) in game.suitFireHeld = on }
-			}
-		}
-	}
-}
-
-// MARK: - Infusion Crucible
-
-/// The Infusion Crucible: pick a piece of equipment, pick a compound, see what will change, confirm.
-/// The item never leaves its slot while this is open, so a slip of the finger can't lose it.
-struct InfusionPanel: View {
-	@ObservedObject var game: Game
-	@ObservedObject var hud: HUDSignal
-	@State var pick: Int = -1
-	@State var choice: Int = -1
-	@State var removing: Int = -1
-	@State var note: String = ""
-	@State var customChoice: Int = -1
-
-	var body: some View {
-		VStack(spacing: 10) {
-			HStack {
-				Text("INFUSION CRUCIBLE").font(.pixel(20)).foregroundColor(Color(ui: 0xC07CFF))
-				Spacer()
-				SmallButton(title: "MAKE COMPOUNDS", color: Color(ui: 0x5A4A8A)) { game.openCrafting(.infuser) }
-				SmallButton(title: "CLOSE", color: Color(ui: 0xA03030)) { close() }
-			}
-			Text("1 Choose equipment  ·  2 Choose an infusion  ·  3 Check what changes, then confirm")
-				.font(.pixel(11, .semibold)).foregroundColor(Color.white.opacity(0.7))
-				.frame(maxWidth: .infinity, alignment: .leading)
-			HStack(alignment: .top, spacing: 12) {
-				equipmentColumn.frame(width: 250)
-				infusionColumn.frame(width: 330)
-				previewColumn.frame(width: 300)
-			}
-			if !note.isEmpty {
-				Text(verbatim: note).font(.pixel(12, .semibold)).foregroundColor(Color(ui: 0xFFE070))
-			}
-		}
-		.foregroundColor(Color.white)
-		.padding(14)
-		.background(PixelBox(color: Color(ui: 0x2C2834)).opacity(0.97))
-		.frame(maxWidth: 940)
-		.padding(10)
-	}
-
-	func close() {
-		game.showInfuse = false
-		game.bumpHUD()
-	}
-
-	/// bag slots holding something that takes infusions
-	var candidates: [Int] {
-		var out: [Int] = []
-		for i in 0..<game.inv.slots.count {
-			if let s = game.inv.slots[i], infusionSlots(s.item) > 0, s.item.maxStack == 1 { out.append(i) }
-		}
-		return out
-	}
-
-	var equipmentColumn: some View {
-		let list: [Int] = candidates
-		let cols: [GridItem] = [GridItem(.adaptive(minimum: 46), spacing: 4)]
-		return VStack(alignment: .leading, spacing: 6) {
-			Text("EQUIPMENT").font(.pixel(13)).foregroundColor(Color(ui: 0xB8A8D8))
-			if list.isEmpty {
-				Text("Nothing in your bag can take an infusion yet: weapons, tools, armour and suit parts can (take worn armour off first).")
-					.font(.pixel(11, .semibold)).foregroundColor(Color.white.opacity(0.6))
-			}
-			ScrollView {
-				LazyVGrid(columns: cols, spacing: 4) {
-					ForEach(list, id: \.self) { i in
-						Button(action: {
-							pick = i
-							removing = -1
-							note = ""
-						}) {
-							SlotView(stack: game.inv.slots[i], selected: pick == i, size: 44)
-						}
-						.buttonStyle(.plain)
-					}
-				}
-			}
-			.frame(maxHeight: 300)
-			if let s = picked { pickedInfo(s) }
-		}
-	}
-
-	var picked: Stack? {
-		if pick < 0 || pick >= game.inv.slots.count { return nil }
-		guard let s = game.inv.slots[pick], infusionSlots(s.item) > 0 else { return nil }
-		return s
-	}
-
-	func pickedInfo(_ s: Stack) -> some View {
-		let slots: Int = infusionSlots(s.item)
-		let have: [Infusion] = s.infusions
-		return VStack(alignment: .leading, spacing: 4) {
-			Text(verbatim: s.item.name).font(.pixel(13))
-			Text(verbatim: joinText(String(s.inf?.count ?? 0), " of ", String(slots), " slots used")).font(.pixel(10, .semibold)).foregroundColor(Color.white.opacity(0.7))
-			ForEach((s.inf ?? []).filter { $0 >= customInfusionBase }, id: \.self) { n in
-				HStack(spacing: 6) {
-					Rectangle().fill(Color(hex: infusionColor(n))).frame(width: 10, height: 10)
-					Text(verbatim: infusionName(n)).font(.pixel(11)).foregroundColor(Color.white)
-					Spacer(minLength: 0)
-					SmallButton(title: "REMOVE", color: Color(ui: 0x5A4A4A)) { note = game.removeCustomInfusion(slot: pick, n) }
-				}
-			}
-			ForEach(0..<have.count, id: \.self) { k in
-				HStack(spacing: 6) {
-					Rectangle().fill(Color(hex: have[k].color)).frame(width: 10, height: 10)
-					Text(verbatim: have[k].name).font(.pixel(11)).foregroundColor(Color(ui: have[k].rarity.color))
-					Spacer(minLength: 0)
-					SmallButton(title: removing == have[k].rawValue ? "SURE?" : "REMOVE", color: Color(ui: removing == have[k].rawValue ? 0xC04030 : 0x5A4A4A)) {
-						if removing == have[k].rawValue {
-							note = game.removeInfusion(slot: pick, have[k])
-							removing = -1
-						} else {
-							removing = have[k].rawValue
-							note = "Removing it spends the compound; the item is unharmed. Tap SURE? to go ahead."
-						}
-					}
-				}
-			}
-		}
-		.padding(6)
-		.background(Color.black.opacity(0.25))
-	}
-
-	var infusionColumn: some View {
-		let all: [Infusion] = Infusion.allCases
-		return VStack(alignment: .leading, spacing: 6) {
-			Text("INFUSIONS").font(.pixel(13)).foregroundColor(Color(ui: 0xB8A8D8))
-			ScrollView {
-				VStack(spacing: 4) {
-					ForEach(all, id: \.self) { inf in infusionRow(inf) }
-					customRows
-				}
-			}
-			.frame(maxHeight: 420)
-		}
-	}
-
-	func infusionRow(_ inf: Infusion) -> some View {
-		let owned: Int = game.inv.total(.compound(inf))
-		let problem: String? = picked?.infuseProblem(inf)
-		let usable: Bool = (owned > 0 || game.isCreative) && problem == nil && picked != nil
-		let chosen: Bool = choice == inf.rawValue
-		return Button(action: {
-			choice = inf.rawValue
-			customChoice = -1
-			note = ""
-		}) {
-			HStack(spacing: 6) {
-				SlotView(stack: Stack(item: .compound(inf), count: max(1, owned)), selected: chosen, size: 34, dim: owned == 0)
-				VStack(alignment: .leading, spacing: 1) {
-					HStack(spacing: 4) {
-						Text(verbatim: inf.name).font(.pixel(12)).foregroundColor(Color(ui: inf.rarity.color))
-						Text(verbatim: inf.rarity.name).font(.pixel(9, .semibold)).foregroundColor(Color.white.opacity(0.5))
-					}
-					Text(verbatim: inf.blurb).font(.pixel(10, .semibold)).foregroundColor(Color.white.opacity(usable ? 0.85 : 0.5)).lineLimit(2)
-				}
-				Spacer(minLength: 0)
-				Text(verbatim: owned > 0 ? joinText("x", String(owned)) : "none").font(.pixel(10)).foregroundColor(Color.white.opacity(0.6))
-			}
-			.padding(4)
-			.background(chosen ? Color(ui: 0x4A3A6A) : Color.black.opacity(0.2))
-		}
-		.buttonStyle(.plain)
-	}
-
-	var previewColumn: some View {
-		let inf: Infusion? = Infusion(rawValue: choice)
-		return VStack(alignment: .leading, spacing: 6) {
-			Text("WHAT CHANGES").font(.pixel(13)).foregroundColor(Color(ui: 0xB8A8D8))
-			if let s = picked, customChoice >= 0, let r = ModRuntime.shared.infusion(customChoice) {
-				customPreview(s, r)
-			} else if let s = picked, let i = inf {
-				previewBody(s, i)
-			} else {
-				Text("Pick a piece of equipment and an infusion to see how it changes.")
-					.font(.pixel(11, .semibold)).foregroundColor(Color.white.opacity(0.6))
-			}
-		}
-	}
-
-	func previewBody(_ s: Stack, _ i: Infusion) -> some View {
-		let problem: String? = s.infuseProblem(i)
-		let owned: Int = game.inv.total(.compound(i))
-		var after: Stack = s
-		after.inf = (s.inf ?? []) + [i.rawValue]
-		let rows: [(String, String, String)] = game.infusionCompare(s, after)
-		let ok: Bool = problem == nil && (owned > 0 || game.isCreative)
-		return VStack(alignment: .leading, spacing: 5) {
-			Text(verbatim: joinText(s.item.name, " + ", i.name)).font(.pixel(12))
-			Text(verbatim: i.blurb).font(.pixel(10, .semibold)).foregroundColor(Color.white.opacity(0.8))
-			ForEach(0..<rows.count, id: \.self) { k in
-				HStack {
-					Text(verbatim: rows[k].0).font(.pixel(11, .semibold)).foregroundColor(Color.white.opacity(0.75))
-					Spacer(minLength: 4)
-					Text(verbatim: rows[k].1).font(.pixel(11)).foregroundColor(Color.white.opacity(0.6))
-					Text("→").font(.pixel(11)).foregroundColor(Color.white.opacity(0.6))
-					Text(verbatim: rows[k].2).font(.pixel(11)).foregroundColor(rows[k].1 == rows[k].2 ? Color.white : Color(ui: 0x7AF08A))
-				}
-			}
-			if let p = problem {
-				Text(verbatim: p).font(.pixel(11, .semibold)).foregroundColor(Color(ui: 0xFF9A7A))
-			} else if owned == 0 && !game.isCreative {
-				Text(verbatim: joinText("You have no ", i.name, " compound: make one with MAKE COMPOUNDS.")).font(.pixel(11, .semibold)).foregroundColor(Color(ui: 0xFF9A7A))
-			}
-			PixelButton(title: ok ? "CONFIRM INFUSION" : "CAN'T INFUSE", color: ok ? Color(ui: 0x6A4AA8) : Color(ui: 0x444444)) {
-				if !ok { return }
-				note = game.infuse(slot: pick, i)
-				choice = -1
-			}
-		}
-		.padding(6)
-		.background(Color.black.opacity(0.25))
-	}
-}
-
-extension Game {
-	/// Before-and-after numbers for an infusion preview: what a weapon, tool or armour piece does
-	func infusionCompare(_ a: Stack, _ b: Stack) -> [(String, String, String)] {
-		var rows: [(String, String, String)] = []
-		let cls: [InfuseClass] = infuseClasses(a.item)
-		func f1(_ v: Double) -> String { return String(format: "%.1f", v) }
-		func pct(_ v: Double) -> String { return joinText(String(Int((v * 100).rounded())), "%") }
-		if cls.contains(.melee) {
-			let p0: MeleeProfile = Game.infuseProfile(a.item.melee, a.inf ?? [])
-			let p1: MeleeProfile = Game.infuseProfile(a.item.melee, b.inf ?? [])
-			rows.append(("Damage", f1(p0.damage), f1(p1.damage)))
-			rows.append(("Swing every", joinText(String(format: "%.2f", p0.cooldown), " s"), joinText(String(format: "%.2f", p1.cooldown), " s")))
-			rows.append(("Reach", f1(p0.reach), f1(p1.reach)))
-			rows.append(("Critical chance", pct(p0.critChance), pct(p1.critChance)))
-			rows.append(("Knockback", f1(p0.knock), f1(p1.knock)))
-		}
-		if cls.contains(.ranged) {
-			var d0: Double = 1
-			var d1: Double = 1
-			if a.has(.honed) { d0 *= 1.2 }
-			if a.has(.voidrend) { d0 *= 1.15 }
-			if b.has(.honed) { d1 *= 1.2 }
-			if b.has(.voidrend) { d1 *= 1.15 }
-			rows.append(("Shot damage", pct(d0), pct(d1)))
-			rows.append(("Range", a.has(.longReach) ? "125%" : "100%", b.has(.longReach) ? "125%" : "100%"))
-		}
-		if cls.contains(.tool) {
-			rows.append(("Mining speed", a.has(.haste) ? "125%" : "100%", b.has(.haste) ? "125%" : "100%"))
-			rows.append(("Extra ore chance", a.has(.bountiful) ? "20%" : "0%", b.has(.bountiful) ? "20%" : "0%"))
-		}
-		if cls.contains(.armor) || cls.contains(.suit) {
-			var x: ArmorInf = ArmorInf()
-			x.add(a)
-			var y: ArmorInf = ArmorInf()
-			y.add(b)
-			rows.append(("Extra defence", f1(x.defense), f1(y.defense)))
-			if x.fireCut != y.fireCut { rows.append(("Fire and lava", joinText("-", pct(x.fireCut)), joinText("-", pct(y.fireCut)))) }
-			if x.coldCut != y.coldCut { rows.append(("Cold", joinText("-", pct(x.coldCut)), joinText("-", pct(y.coldCut)))) }
-			if x.stormCut != y.stormCut { rows.append(("Lightning and hail", joinText("-", pct(x.stormCut)), joinText("-", pct(y.stormCut)))) }
-			if x.speed != y.speed { rows.append(("Run speed", joinText("+", pct(x.speed)), joinText("+", pct(y.speed)))) }
-			if x.thorns != y.thorns { rows.append(("Blow returned", pct(x.thorns), pct(y.thorns))) }
-			if x.knockMul != y.knockMul { rows.append(("Knockback taken", pct(x.knockMul), pct(y.knockMul))) }
-			if x.regen != y.regen { rows.append(("Healing a minute", f1(x.regen * 60), f1(y.regen * 60))) }
-		}
-		rows.append(("Slots used", String(a.inf?.count ?? 0), String(b.inf?.count ?? 0)))
-		return rows
-	}
-
-	/// Opens the crafting screen at a station (the crucible's compounds, the assembly station's parts)
-	func openCrafting(_ s: Station) {
-		showInfuse = false
-		showExo = false
-		craftStation = s
-		showInventory = true
-		bumpHUD()
-	}
-
-	/// The effects on the player, for the HUD: kind and seconds left
-	func activeEffects() -> [(ModEffectKind, Double)] {
-		var out: [(ModEffectKind, Double)] = []
-		for k in ModEffectKind.allCases where k.timed && effects.time[k.rawValue] > 0 {
-			out.append((k, effects.time[k.rawValue]))
-		}
-		if mendCD > 0 { out.append((.heal, mendCD)) }
-		return out
-	}
-}
-
-// MARK: - Assembly Station: the suit designer
-
-/// A material a piece can be made of: one of the game's metals, or a mod's (by key)
-struct SuitMatChoice {
-	var mat: Int
-	var key: String
-	var name: String
-	var color: UInt32
-}
-
-/// The Assembly Station: the suit designer. The body is drawn large; tap with a placing tool to put
-/// down a plate or a frame piece, tap a piece to pick it and drag to move it, and set its size, turn,
-/// shape, thickness, metal and paint. Working parts (cores, jets, turrets...) come from the bag. The
-/// bill shows what the changes cost before BUILD makes them; nothing changes until then.
-struct ExoAssemblyPanel: View {
-	@ObservedObject var game: Game
-	@ObservedObject var hud: HUDSignal
-	@State var plan: SuitDesign = SuitDesign()
-	@State var started: Bool = false
-	@State var pick: Int = -1
-	/// 0 pick and move, 1 place plates, 2 place frame pieces
-	@State var tool: Int = 0
-	@State var matPick: Int = 0
-	@State var shapePick: Int = 0
-	@State var page: Int = 0
-	@State var pose: Int = 0
-	@State var undo: [SuitDesign] = []
-	@State var note: String = ""
-	@State var grabbing: Bool = false
-	@State var grabStart: CGPoint = .zero
-	@State var grabFrom: CGPoint = .zero
-	@State var colorOn: Bool = false
-	@State var paint: UInt32 = 0xC8CCD4
-	@State var templateMat: Int = 0
-
-	/// screen points to a suit unit on the canvas, and the strip of the frame it shows (suit units)
-	static let k: CGFloat = 6.5
-	static let cropX: Double = 6
-	static let cropW: Double = 54
-	static let tools: [String] = ["PICK / MOVE", "PLACE PLATES", "PLACE FRAMES"]
-	static let pages: [String] = ["PIECE", "PARTS", "SUIT"]
-	static let poses: [String] = ["STAND", "WALK", "STRIDE", "WIND UP", "STRIKE", "BLOCK", "SHOOT"]
-	static let thick: [String] = ["THIN", "DOUBLE", "TRIPLE"]
-
-	var body: some View {
-		VStack(spacing: 8) {
-			header
-			ScrollView {
-				HStack(alignment: .top, spacing: 12) {
-					leftColumn
-					rightColumn.frame(width: 380)
-				}
-				.padding(.bottom, 12)
-			}
-		}
-		.foregroundColor(Color.white)
-		.padding(12)
-		.background(PixelBox(color: Color(ui: 0x262A32)).opacity(0.97))
-		.frame(maxWidth: 1000)
-		.padding(8)
-		.onAppear { self.begin() }
-	}
-
-	func begin() {
-		if started { return }
-		started = true
-		plan = game.suit.d
-	}
-
-	var changed: Bool { return plan != game.suit.d }
-
-	var header: some View {
-		let st: ExoStats = ExoStats.of(plan)
-		let line: String = joinText(String(plan.pieces.count), " pieces · weight ", String(Int(st.weight.rounded())), " / ", String(Int(st.strength)), " · guards ", String(Int((st.guardAll * 100).rounded())), "%")
-		return HStack(spacing: 8) {
-			Text("ASSEMBLY STATION").font(.pixel(20)).foregroundColor(Color(ui: 0x60E0FF))
-			Text(verbatim: line).font(.pixel(11, .semibold)).foregroundColor(Color.white.opacity(0.75))
-			Spacer()
-			SmallButton(title: "MAKE PARTS", color: Color(ui: 0x4A5A3A)) { self.game.openCrafting(.assembly) }
-			SmallButton(title: "CLOSE", color: Color(ui: 0xA03030)) { self.close() }
-		}
-	}
-
-	func close() {
-		game.showExo = false
-		game.bumpHUD()
-	}
-
-	// MARK: the body and its pieces
-
-	var leftColumn: some View {
-		VStack(alignment: .leading, spacing: 8) {
-			ChoiceRows(options: ExoAssemblyPanel.tools, selected: $tool, columns: 3)
-			canvas
-			ChoiceRows(options: ExoAssemblyPanel.poses, selected: $pose, columns: 4)
-			billBox
-			buildRow
-			if !note.isEmpty { Text(verbatim: note).font(.pixel(12, .semibold)).foregroundColor(Color(ui: 0xFFE070)) }
-		}
-	}
-
-	/// The figure in its suit, large; touches place, pick and move pieces (on the body standing still)
-	var canvas: some View {
-		let k: CGFloat = ExoAssemblyPanel.k
-		let w: CGFloat = CGFloat(ExoAssemblyPanel.cropW) * k
-		let h: CGFloat = CGFloat(suitBodyH) * k
-		let img: Image = SuitPictures.shared.image(plan, pose == 0 ? 0 : clampI(pose, 0, 6), pick)
-		let fullW: CGFloat = CGFloat(humanW * suitUnit) * k
-		let off: CGFloat = -CGFloat(ExoAssemblyPanel.cropX) * k
-		return ZStack(alignment: .topLeading) {
-			Rectangle().fill(Color.black.opacity(0.35))
-			grid(w, h)
-			img.resizable().interpolation(.none).frame(width: fullW, height: h).offset(x: off, y: 0)
-		}
-		.frame(width: w, height: h)
-		.clipped()
-		.overlay(Rectangle().stroke(Color.white.opacity(0.25), lineWidth: 1))
-		.gesture(DragGesture(minimumDistance: 0).onChanged { (v: DragGesture.Value) in self.touchMoved(v.startLocation, v.location) }.onEnded { (v: DragGesture.Value) in self.touchEnded(v.startLocation, v.location) })
-	}
-
-	/// faint lines every sprite pixel, so pieces can be lined up
-	func grid(_ w: CGFloat, _ h: CGFloat) -> some View {
-		let k: CGFloat = ExoAssemblyPanel.k
-		let step: CGFloat = k * CGFloat(suitUnit)
-		return Canvas { ctx, size in
-			var p: Path = Path()
-			var x: CGFloat = 0
-			while x <= w {
-				p.addRect(CGRect(x: x, y: 0, width: 1, height: h))
-				x += step
-			}
-			var y: CGFloat = 0
-			while y <= h {
-				p.addRect(CGRect(x: 0, y: y, width: w, height: 1))
-				y += step
-			}
-			ctx.fill(p, with: .color(Color.white.opacity(0.06)))
-		}
-	}
-
-	/// a point on the canvas as a point on the body (suit units from the figure's left edge)
-	func bodyPoint(_ p: CGPoint) -> (Double, Double) {
-		let k: Double = Double(ExoAssemblyPanel.k)
-		let fx: Double = Double(p.x) / k + ExoAssemblyPanel.cropX
-		let fy: Double = Double(p.y) / k
-		return (fx - Double(humanOX * suitUnit), fy)
-	}
-
-	/// the outermost piece under a body point
-	func pieceAt(_ x: Double, _ y: Double) -> Int? {
-		var best: Int? = nil
-		var bestKey: Int = -1
-		for (i, p) in plan.pieces.enumerated() where p.covers(x, y) {
-			let key: Int = p.bone.layer * 1000 + i
-			if key > bestKey {
-				bestKey = key
-				best = i
-			}
-		}
-		return best
-	}
-
-	func touchMoved(_ start: CGPoint, _ now: CGPoint) {
-		if tool != 0 || pose != 0 { return }
-		if !grabbing {
-			grabbing = true
-			let b: (Double, Double) = bodyPoint(start)
-			if let i = pieceAt(b.0, b.1) {
-				pick = plan.pieces[i].id
-				remember()
-				grabStart = start
-				grabFrom = CGPoint(x: plan.pieces[i].x, y: plan.pieces[i].y)
-			} else {
-				pick = -1
-				grabStart = .zero
-			}
-			return
-		}
-		guard grabStart != .zero, let i = plan.index(pick) else { return }
-		let k: Double = Double(ExoAssemblyPanel.k)
-		var p: SuitPiece = plan.pieces[i]
-		// moves snap to whole suit units
-		p.x = (Double(grabFrom.x) + Double(now.x - grabStart.x) / k).rounded()
-		p.y = (Double(grabFrom.y) + Double(now.y - grabStart.y) / k).rounded()
-		p.clamp()
-		plan.pieces[i] = p
-	}
-
-	func touchEnded(_ start: CGPoint, _ end: CGPoint) {
-		defer {
-			grabbing = false
-			grabStart = .zero
-		}
-		if pose != 0 {
-			note = "Pick STAND to change the suit (the other poses show how it moves)."
-			return
-		}
-		if tool == 0 { return }
-		let b: (Double, Double) = bodyPoint(end)
-		if plan.pieces.count >= SuitDesign.maxPieces {
-			note = joinText("A suit holds at most ", String(SuitDesign.maxPieces), " pieces.")
-			return
-		}
-		remember()
-		var p = SuitPiece()
-		p.kind = tool == 1 ? .plate : .frame
-		p.x = b.0.rounded()
-		p.y = b.1.rounded()
-		p.w = tool == 1 ? 6 : 4
-		p.h = tool == 1 ? 6 : 2
-		p.shape = SuitShape(rawValue: shapePick) ?? .box
-		applyMaterial(&p, matPick)
-		p.bone = SuitBody.bone(p.x, p.y)
-		p.id = plan.newID()
-		p.clamp()
-		plan.pieces.append(p)
-		pick = p.id
-		note = ""
-	}
-
-	func remember() {
-		undo.append(plan)
-		if undo.count > 60 { undo.removeFirst() }
-	}
-
-	// MARK: materials
-
-	var materials: [SuitMatChoice] {
-		var out: [SuitMatChoice] = []
-		for m in ExoMat.allCases { out.append(SuitMatChoice(mat: m.rawValue, key: "", name: m.name, color: m.color)) }
-		for k in ModRuntime.shared.suitMats.keys.sorted() {
-			if let i = ModRuntime.shared.suitMats[k] { out.append(SuitMatChoice(mat: 0, key: k, name: i.name, color: i.color)) }
-		}
-		return out
-	}
-
-	func applyMaterial(_ p: inout SuitPiece, _ i: Int) {
-		let list: [SuitMatChoice] = materials
-		let c: SuitMatChoice = list[clampI(i, 0, list.count - 1)]
-		p.mat = c.mat
-		p.modMat = c.key
-	}
-
-	func materialIndex(_ p: SuitPiece) -> Int {
-		let list: [SuitMatChoice] = materials
-		if !p.modMat.isEmpty { return list.firstIndex { $0.key == p.modMat } ?? 0 }
-		return list.firstIndex { $0.key.isEmpty && $0.mat == p.mat } ?? 0
-	}
-
-	// MARK: the right column
-
-	var rightColumn: some View {
-		VStack(alignment: .leading, spacing: 8) {
-			ChoiceRows(options: ExoAssemblyPanel.pages, selected: $page, columns: 3)
-			pageView
-		}
-	}
-
-	@ViewBuilder
-	var pageView: some View {
-		switch page {
-		case 1: partsPage
-		case 2: suitPage
-		default: piecePage
-		}
-	}
-
-	var piecePage: some View {
-		VStack(alignment: .leading, spacing: 8) {
-			newPieceBox
-			if let i = plan.index(pick) { pieceBox(i) } else {
-				Text("Tap a piece to pick it, or choose PLACE PLATES and tap the body.").font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-			}
-		}
-	}
-
-	/// what a placing tap puts down
-	var newPieceBox: some View {
-		let names: [String] = materials.map { $0.name }
-		return VStack(alignment: .leading, spacing: 6) {
-			Text("NEW PIECES").font(.pixel(12)).foregroundColor(ModUI.gold)
-			ChoiceRows(options: names, selected: $matPick, columns: 4)
-			ChoiceRows(options: SuitShape.allCases.map { $0.name }, selected: $shapePick, columns: 5)
-		}
-		.padding(8)
-		.background(PixelBox(color: ModUI.card))
-	}
-
-	func pb<T>(_ i: Int, _ kp: WritableKeyPath<SuitPiece, T>) -> Binding<T> {
-		let id: Int = plan.pieces[i].id
-		return Binding<T>(get: {
-			guard let j = self.plan.index(id) else { return self.plan.pieces[0][keyPath: kp] }
-			return self.plan.pieces[j][keyPath: kp]
-		}, set: { v in
-			guard let j = self.plan.index(id) else { return }
-			var p: SuitPiece = self.plan.pieces[j]
-			p[keyPath: kp] = v
-			p.clamp()
-			self.plan.pieces[j] = p
-		})
-	}
-
-	func pieceBox(_ i: Int) -> some View {
-		let p: SuitPiece = plan.pieces[i]
-		let title: String = game.suitPieceName(p).uppercased()
-		let wear: String = p.dmg > 0.001 ? joinText(" · worn ", String(Int((p.dmg * 100).rounded())), "%") : ""
-		let made: String = p.kind == .plate || p.kind == .frame ? joinText(suitMat(p).name, " ", p.kind.name.lowercased()) : p.kind.name
-		return VStack(alignment: .leading, spacing: 6) {
-			Text(verbatim: title).font(.pixel(13)).foregroundColor(ModUI.gold)
-			Text(verbatim: joinText(made, " on the ", p.bone.name.lowercased(), wear)).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-			sizeControls(i)
-			if p.kind == .plate || p.kind == .frame { makeControls(i) }
-			nudgeRow(i)
-			actionRow(i)
-		}
-		.padding(8)
-		.background(PixelBox(color: ModUI.card))
-	}
-
-	func sizeControls(_ i: Int) -> some View {
-		VStack(alignment: .leading, spacing: 4) {
-			StatSlider(label: "Width", value: pb(i, \.w), range: 1.0...30.0, step: 1, format: "%.0f")
-			StatSlider(label: "Height", value: pb(i, \.h), range: 1.0...30.0, step: 1, format: "%.0f")
-			StatSlider(label: "Turn", value: pb(i, \.rot), range: -180.0...180.0, step: 5, format: "%.0f°")
-			ChoiceRows(options: SuitShape.allCases.map { $0.name }, selected: shapeBind(i), columns: 5)
-			ChoiceRows(options: SuitBone.allCases.map { $0.name }, selected: boneBind(i), columns: 4)
-		}
-	}
-
-	func makeControls(_ i: Int) -> some View {
-		let names: [String] = materials.map { $0.name }
-		let painted: Bool = plan.pieces[i].color != 0
-		return VStack(alignment: .leading, spacing: 4) {
-			ChoiceRows(options: ExoAssemblyPanel.thick, selected: thickBind(i), columns: 3)
-			ChoiceRows(options: names, selected: matBind(i), columns: 4)
-			ModToggle(label: "Painted", help: "Off: the metal's own colour", isOn: paintedBind(i))
-			if painted { ModColorRow(label: "Paint", color: pb(i, \.color)) }
-		}
-	}
-
-	func nudgeRow(_ i: Int) -> some View {
-		HStack(spacing: 6) {
-			SmallButton(title: "\u{2190}") { self.nudge(i, -1, 0) }
-			SmallButton(title: "\u{2192}") { self.nudge(i, 1, 0) }
-			SmallButton(title: "\u{2191}") { self.nudge(i, 0, -1) }
-			SmallButton(title: "\u{2193}") { self.nudge(i, 0, 1) }
-			SmallButton(title: "TO FRONT") { self.layer(i, 1) }
-			SmallButton(title: "TO BACK") { self.layer(i, -1) }
-		}
-	}
-
-	func actionRow(_ i: Int) -> some View {
-		HStack(spacing: 6) {
-			SmallButton(title: "COPY", color: ModUI.blue) { self.duplicate(i, false) }
-			SmallButton(title: "MIRROR", color: ModUI.blue) { self.duplicate(i, true) }
-			SmallButton(title: "REMOVE", color: ModUI.red) { self.removePiece(i) }
-		}
-	}
-
-	func shapeBind(_ i: Int) -> Binding<Int> {
-		let b: Binding<SuitShape> = pb(i, \.shape)
-		return Binding<Int>(get: { b.wrappedValue.rawValue }, set: { b.wrappedValue = SuitShape(rawValue: $0) ?? .box })
-	}
-
-	func boneBind(_ i: Int) -> Binding<Int> {
-		let b: Binding<SuitBone> = pb(i, \.bone)
-		return Binding<Int>(get: { b.wrappedValue.rawValue }, set: { b.wrappedValue = SuitBone(rawValue: $0) ?? .torso })
-	}
-
-	func thickBind(_ i: Int) -> Binding<Int> {
-		let b: Binding<Int> = pb(i, \.thick)
-		return Binding<Int>(get: { b.wrappedValue - 1 }, set: { b.wrappedValue = $0 + 1 })
-	}
-
-	func matBind(_ i: Int) -> Binding<Int> {
-		let id: Int = plan.pieces[i].id
-		return Binding<Int>(get: {
-			guard let j = self.plan.index(id) else { return 0 }
-			return self.materialIndex(self.plan.pieces[j])
-		}, set: { v in
-			guard let j = self.plan.index(id) else { return }
-			var p: SuitPiece = self.plan.pieces[j]
-			self.applyMaterial(&p, v)
-			self.plan.pieces[j] = p
-		})
-	}
-
-	func paintedBind(_ i: Int) -> Binding<Bool> {
-		let b: Binding<UInt32> = pb(i, \.color)
-		let base: UInt32 = suitMat(plan.pieces[i]).color
-		return Binding<Bool>(get: { b.wrappedValue != 0 }, set: { on in b.wrappedValue = on ? base : 0 })
-	}
-
-	func nudge(_ i: Int, _ dx: Double, _ dy: Double) {
-		remember()
-		var p: SuitPiece = plan.pieces[i]
-		p.x += dx
-		p.y += dy
-		p.clamp()
-		plan.pieces[i] = p
-	}
-
-	/// moves a piece over (or under) the others on its part of the body
-	func layer(_ i: Int, _ dir: Int) {
-		remember()
-		let p: SuitPiece = plan.pieces.remove(at: i)
-		if dir > 0 { plan.pieces.append(p) } else { plan.pieces.insert(p, at: 0) }
-	}
-
-	/// a copy beside it, or mirrored to the other side of the body (the other arm or leg)
-	func duplicate(_ i: Int, _ mirror: Bool) {
-		if plan.pieces.count >= SuitDesign.maxPieces { return }
-		var p: SuitPiece = plan.pieces[i]
-		if p.kind == .core || p.kind == .module {
-			note = "Working parts come from the bag: add another from PARTS."
-			return
-		}
-		remember()
-		if mirror {
-			p.x = suitBodyW - p.x
-			p.rot = -p.rot
-			p.bone = p.bone.other
-		} else {
-			p.x += 3
-			p.y += 3
-		}
-		p.id = plan.newID()
-		p.dmg = 0
-		p.src = 0
-		p.clamp()
-		plan.pieces.append(p)
-		pick = p.id
-	}
-
-	func removePiece(_ i: Int) {
-		remember()
-		plan.pieces.remove(at: i)
-		pick = -1
-	}
-
-	// MARK: working parts from the bag
-
-	/// cores and working parts that can go on: those in the bag (all of them in creative)
-	var partChoices: [Stack] {
-		var out: [Stack] = []
-		if game.isCreative {
-			for c in ExoCore.allCases { out.append(Stack(item: .exoCore(c), count: 1)) }
-			for m in ExoModule.allCases { out.append(Stack(item: .exoModule(m), count: 1)) }
-			return out
-		}
-		let inPlan: [Stack] = Array(plan.items.values)
-		var used: [Stack] = inPlan
-		for s in game.inv.slots {
-			guard let st = s else { continue }
-			switch st.item {
-			case .exoCore, .exoModule:
-				if let j = used.firstIndex(of: st) { used.remove(at: j) } else { out.append(st) }
-			case .custom(let k):
-				if ModRuntime.shared.suitParts[k] != nil {
-					if let j = used.firstIndex(of: st) { used.remove(at: j) } else { out.append(st) }
-				}
-			default: break
-			}
-		}
-		return out
-	}
-
-	var partsPage: some View {
-		let list: [Stack] = partChoices
-		return VStack(alignment: .leading, spacing: 6) {
-			Text("Cores give energy; parts work: jets lift, wings glide, turrets shoot by themselves, cannons and lasers fire with SUIT FIRE. Each goes on where you put it.").font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-			if list.isEmpty { Text("No cores or suit parts in your bag. MAKE PARTS shows what can be made here.").font(.pixel(11, .semibold)).foregroundColor(Color(ui: 0xFF9060)) }
-			ForEach(0..<list.count, id: \.self) { (i: Int) in self.partRow(list[i]) }
-		}
-	}
-
-	func partRow(_ st: Stack) -> some View {
-		let info: String = partBlurb(st.item)
-		return HStack(spacing: 8) {
-			SlotView(stack: st, size: 38)
-			VStack(alignment: .leading, spacing: 2) {
-				Text(verbatim: st.item.name).font(.pixel(12)).foregroundColor(Color.white)
-				Text(verbatim: info).font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
-			}
-			Spacer(minLength: 0)
-			SmallButton(title: "ADD", color: ModUI.accent) { self.addPart(st) }
-		}
-		.padding(6)
-		.background(PixelBox(color: ModUI.card))
-	}
-
-	func partBlurb(_ it: Item) -> String {
+/// What the override editor may change, and the ranges it allows
+enum ModOverrideCheck {
+	static func itemAllowed(_ it: Item) -> Bool {
 		switch it {
-		case .exoCore(let c): return joinText("Holds ", String(Int(c.capacity)), ", gives ", String(Int(c.output)), " a second")
-		case .exoModule(let m): return m.blurb
-		case .custom(let k): return ModRuntime.shared.suitParts[k].map { joinText("Works as: ", $0.works.name) } ?? ""
-		default: return ""
+		case .sword, .spear, .hammer, .knife, .club, .relic, .tool, .armor, .food, .gun, .bow, .sling: return true
+		default: return false
 		}
 	}
 
-	func addPart(_ st: Stack) {
-		if plan.pieces.count >= SuitDesign.maxPieces { return }
-		var p: SuitPiece
-		switch st.item {
-		case .exoCore(let c): p = SuitTemplates.core(c)
-		case .exoModule(let m): p = SuitTemplates.module(m)
-		case .custom(let k):
-			guard let mp = ModRuntime.shared.suitParts[k] else { return }
-			p = SuitTemplates.module(mp.works)
-			p.modPart = k
-		default: return
-		}
-		remember()
-		if !game.isCreative {
-			let g: Int = plan.newGroup()
-			plan.items[g] = st
-			p.src = g
-		}
-		p.id = plan.newID()
-		plan.pieces.append(p)
-		pick = p.id
-		page = 0
+	/// Every game item that can be changed, in a sensible order
+	static func items() -> [Item] {
+		return allGameItems().filter { itemAllowed($0) }
 	}
 
-	// MARK: the whole suit
-
-	var suitPage: some View {
-		let st: ExoStats = ExoStats.of(plan)
-		return VStack(alignment: .leading, spacing: 8) {
-			statsBox(st)
-			templateBox
-			modDesignBox
-			repairBox
-			wearRow
-		}
+	/// Every game block that can be changed
+	static func tiles() -> [Tile] {
+		return Tile.allCases.filter { !$0.isMod && $0 != .air && $0 != .bedrock && $0 != .portalOn && $0 != .portalOff && $0 != .portalFrame }
 	}
 
-	func statsBox(_ st: ExoStats) -> some View {
-		let energy: String = joinText("Energy ", String(Int(st.capacity)), " · gives ", String(Int(st.output)), "/s · refills ", String(format: "%.1f", st.recharge), "/s")
-		let move: String = joinText("Speed ", String(Int((st.speedMul * 100).rounded())), "% · jump ", String(Int((st.jumpMul * 100).rounded())), "%", st.has(.hover) ? joinText(" · jets lift ", String(Int((st.thrust * 100).rounded())), "%") : "")
-		let parts: String = st.modules.isEmpty ? "No working parts" : st.modules.map { $0.name }.joined(separator: ", ")
-		return VStack(alignment: .leading, spacing: 4) {
-			Text("HOW IT GUARDS").font(.pixel(12)).foregroundColor(ModUI.gold)
-			ForEach(SuitSection.allCases, id: \.self) { (s: SuitSection) in self.coverRow(s, st) }
-			Text(verbatim: energy).font(.pixel(11, .semibold)).foregroundColor(Color.white)
-			Text(verbatim: move).font(.pixel(11, .semibold)).foregroundColor(Color.white)
-			Text(verbatim: parts).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-			ForEach(0..<st.notes.count, id: \.self) { (k: Int) in
-				Text(verbatim: st.notes[k]).font(.pixel(10, .semibold)).foregroundColor(Color(ui: 0xFF9060))
+	/// Every game creature that can be changed
+	static func mobs() -> [MobKind] {
+		return MobKind.allCases.filter { $0 != .custom && $0 != .villager }
+	}
+
+	static func clamp(_ o: inout ModOverride, _ sandbox: Bool) {
+		if let v = o.hardness { o.hardness = ModRange.hardness.clamp(v, sandbox) }
+		if let v = o.tier { o.tier = clampI(v, 0, 9) }
+		if let v = o.light { o.light = clampI(v, 0, 15) }
+		if let v = o.damage { o.damage = ModRange.damage.clamp(v, sandbox) }
+		if let v = o.cooldown { o.cooldown = ModRange.cooldown.clamp(v, sandbox) }
+		if let v = o.reach { o.reach = ModRange.reach.clamp(v, sandbox) }
+		if let v = o.knock { o.knock = ModRange.knock.clamp(v, sandbox) }
+		if let v = o.crit { o.crit = clampD(v.isFinite ? v : 0, 0, 1) }
+		if let v = o.mineSpeed { o.mineSpeed = ModRange.toolSpeed.clamp(v, sandbox) }
+		if let v = o.defense { o.defense = ModRange.defense.clamp(v, sandbox) }
+		if let v = o.hunger { o.hunger = ModRange.heal.clamp(v, sandbox) }
+		if let v = o.heal { o.heal = ModRange.heal.clamp(v, sandbox) }
+		if let v = o.hp { o.hp = ModRange.bossHP.clamp(max(1, v), sandbox) }
+		if let fr = o.frames {
+			// only whole, sound pictures, at most 12 frames, all one size
+			let good: [ModPixels] = fr.filter { $0.valid }.prefix(12).map { $0 }
+			if good.isEmpty { o.frames = nil } else {
+				let w0: Int = good[0].w
+				let h0: Int = good[0].h
+				o.frames = good.map { ($0.w == w0 && $0.h == h0) ? $0 : $0.resized(w0, h0) }
 			}
 		}
-		.padding(8)
-		.background(PixelBox(color: ModUI.card))
-	}
-
-	func coverRow(_ s: SuitSection, _ st: ExoStats) -> some View {
-		let cov: Double = st.cover[s.rawValue]
-		let g: Double = st.guardBy[s.rawValue]
-		let label: String = joinText(s.name, ": covered ", String(Int((cov * 100).rounded())), "%, stops ", String(Int((g * 100).rounded())), "%")
-		return VStack(alignment: .leading, spacing: 1) {
-			Text(verbatim: label).font(.pixel(10, .semibold)).foregroundColor(Color.white)
-			ZStack(alignment: .leading) {
-				Rectangle().fill(Color.black.opacity(0.5)).frame(width: 300, height: 6)
-				Rectangle().fill(Color(hex: 0x60E0FF)).frame(width: CGFloat(300.0 * clampD(g, 0, 1)), height: 6)
-			}
-		}
-	}
-
-	var templateBox: some View {
-		let mats: [String] = ExoMat.allCases.map { $0.name }
-		return VStack(alignment: .leading, spacing: 6) {
-			Text("START FROM").font(.pixel(12)).foregroundColor(ModUI.gold)
-			ChoiceRows(options: mats, selected: $templateMat, columns: 4)
-			PlainGrid(count: SuitTemplates.names.count, per: 5) { (i: Int) in
-				SmallButton(title: SuitTemplates.names[i].uppercased(), color: ModUI.blue) { self.loadTemplate(i) }
-			}
-			Text("Plates of the chosen metal; parts it needs come from your bag.").font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
-		}
-		.padding(8)
-		.background(PixelBox(color: ModUI.card))
-	}
-
-	/// Replaces the plan with a ready-made design (its working parts only where the bag has them)
-	func loadTemplate(_ i: Int) {
-		remember()
-		let m: ExoMat = ExoMat(rawValue: clampI(templateMat, 0, ExoMat.allCases.count - 1)) ?? .iron
-		var t: SuitDesign = SuitTemplates.design(i, m)
-		var keep: [SuitPiece] = []
-		var items: [Int: Stack] = [:]
-		var bag: [Stack] = partChoices
-		var missing: [String] = []
-		for var p in t.pieces {
-			if p.kind == .core || p.kind == .module {
-				if !game.isCreative {
-					let want: Item = p.kind == .core ? .exoCore(ExoCore(rawValue: p.part) ?? .sparkCell) : .exoModule(ExoModule(rawValue: p.part) ?? .hover)
-					guard let j = bag.firstIndex(where: { $0.item == want }) else {
-						missing.append(want.name)
-						continue
-					}
-					var g: Int = 1
-					while items[g] != nil { g += 1 }
-					items[g] = bag.remove(at: j)
-					p.src = g
-				}
-			}
-			keep.append(p)
-		}
-		t.pieces = keep
-		t.items = items
-		// the parts already on the suit stay on (they are not lost by starting over)
-		for p in plan.pieces where p.kind == .core || p.kind == .module {
-			var q: SuitPiece = p
-			q.id = t.newID()
-			if p.src != 0, let st = plan.items[p.src] {
-				let g: Int = t.newGroup()
-				t.items[g] = st
-				q.src = g
-			}
-			t.pieces.append(q)
-		}
-		plan = t
-		pick = -1
-		note = missing.isEmpty ? "" : joinText("Not in your bag (left off): ", missing.joined(separator: ", "), ".")
-	}
-
-	var repairBox: some View {
-		let bill: [Item: Int] = game.suit.d.repairBill()
-		let text: String = bill.isEmpty ? "Every piece is whole." : bill.map { joinText(String($0.value), " ", $0.key.name) }.sorted().joined(separator: ", ")
-		let can: Bool = !bill.isEmpty
-		return VStack(alignment: .leading, spacing: 6) {
-			Text("MEND").font(.pixel(12)).foregroundColor(ModUI.gold)
-			Text(verbatim: text).font(.pixel(11, .semibold)).foregroundColor(Color.white)
-			if can { SmallButton(title: "MEND EVERY PIECE", color: ModUI.accent) { self.mend() } }
-		}
-		.padding(8)
-		.background(PixelBox(color: ModUI.card))
-	}
-
-	func mend() {
-		note = game.repairSuit()
-		// the plan keeps up with the mended suit (pieces it still has as they are)
-		var p: SuitDesign = plan
-		for k in p.pieces.indices { p.pieces[k].dmg = 0 }
-		plan = p
-	}
-
-	var wearRow: some View {
-		let worn: Bool = game.suit.worn
-		return HStack(spacing: 8) {
-			SmallButton(title: worn ? "TAKE OFF" : "PUT ON", color: worn ? Color(ui: 0x6A4A3A) : ModUI.accent) { self.wear() }
-		}
-	}
-
-	func wear() {
-		if game.suit.worn {
-			note = game.takeOffSuit()
-		} else {
-			if changed {
-				note = "BUILD the changes first."
-				return
-			}
-			note = game.wearSuit()
-		}
-	}
-
-	// MARK: the bill and building
-
-	var billBox: some View {
-		let b: SuitBill = game.suit.d.bill(to: plan)
-		let pay: String = b.payText()
-		var back: [String] = []
-		for (it, n) in b.back.sorted(by: { $0.key.name < $1.key.name }) { back.append(joinText(String(n), " ", it.name)) }
-		for st in b.give { back.append(st.item.name) }
-		let free: Bool = game.isCreative
-		return VStack(alignment: .leading, spacing: 3) {
-			Text(verbatim: pay.isEmpty ? "Costs nothing" : joinText("Costs: ", pay, free ? " (free in creative)" : "")).font(.pixel(11, .semibold)).foregroundColor(Color.white)
-			if !back.isEmpty { Text(verbatim: joinText("Gives back: ", back.joined(separator: ", "))).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim) }
-		}
-	}
-
-	var buildRow: some View {
-		let can: Bool = changed
-		return HStack(spacing: 8) {
-			SmallButton(title: "BUILD", color: can ? ModUI.accent : Color(ui: 0x3A3E48)) { self.build() }
-			SmallButton(title: "UNDO", color: undo.isEmpty ? Color(ui: 0x3A3E48) : Color(ui: 0x5A6270)) { self.undoLast() }
-			SmallButton(title: "START AGAIN", color: Color(ui: 0x5A6270)) { self.reset() }
-		}
-	}
-
-	func build() {
-		if !changed {
-			note = "Nothing has changed."
-			return
-		}
-		note = game.applyDesign(plan)
-		plan = game.suit.d
-		if plan.index(pick) == nil { pick = -1 }
-	}
-
-	func undoLast() {
-		guard let u = undo.popLast() else { return }
-		plan = u
-		if plan.index(pick) == nil { pick = -1 }
-	}
-
-	func reset() {
-		remember()
-		plan = game.suit.d
-		pick = -1
-		note = ""
+		if let v = o.mobDamage { o.mobDamage = ModRange.damage.clamp(v, sandbox) }
+		if let v = o.speed { o.speed = ModRange.mobSpeed.clamp(v, sandbox) }
+		if let v = o.detect { o.detect = ModRange.detect.clamp(v, sandbox) }
+		if let v = o.jump { o.jump = ModRange.jump.clamp(v, sandbox) }
+		if o.kind == .creature && o.hp != nil { o.hp = max(1, min(o.hp ?? 1, sandbox ? 20000 : 4000)) }
 	}
 }
 
-// MARK: - Mod Creator: suits (materials, parts, designs)
-
-/// The SUITS tab: a mod's suit materials, its working parts (items placed on suits) and whole suit
-/// designs to start from
-struct SuitListView: View {
-	@ObservedObject var s: ModSession
-	var openMat: (String) -> Void
-	var openPart: (String) -> Void
-	var openDesign: (String) -> Void
-
-	var body: some View {
-		VStack(alignment: .leading, spacing: 8) {
-			Text("Suits are built piece by piece at an Assembly Station. A mod can add metals to build them from, working parts to put on them (each an item your recipes make), and whole designs to start from.")
-				.font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-			matSection
-			partSection
-			designSection
-		}
-	}
-
-	var matSection: some View {
-		let can: Bool = s.mod.suitMats.count < ModSuitLimits.mats
-		return ModSection(title: "MATERIALS") {
-			if can { SmallButton(title: "+ NEW MATERIAL", color: ModUI.accent) { self.addMat() } }
-			ForEach(s.mod.suitMats) { (m: ModSuitMat) in self.matRow(m) }
-		}
-	}
-
-	func matRow(_ m: ModSuitMat) -> some View {
-		let line: String = String(format: "Guards x%.1f · weight x%.1f · lasts x%.1f", m.protect, m.weight, m.durability)
-		return HStack(spacing: 8) {
-			Rectangle().fill(Color(hex: m.color & 0xFFFFFF)).frame(width: 28, height: 28).overlay(Rectangle().stroke(Color.black, lineWidth: 1))
-			VStack(alignment: .leading, spacing: 2) {
-				Text(verbatim: m.name).font(.pixel(13)).foregroundColor(Color.white)
-				Text(verbatim: line).font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
-			}
-			Spacer(minLength: 0)
-			SmallButton(title: "EDIT", color: ModUI.blue) { self.openMat(m.id) }
-			SmallButton(title: "\u{2715}", color: ModUI.red) { self.s.mod.suitMats.removeAll { $0.id == m.id }; self.s.touch() }
-		}
-	}
-
-	var partSection: some View {
-		let can: Bool = s.mod.suitParts.count < ModSuitLimits.parts
-		return ModSection(title: "WORKING PARTS", help: "Each is an item: give it a recipe on the RECIPES tab, then place it on a suit.") {
-			if can { SmallButton(title: "+ NEW PART", color: ModUI.accent) { self.addPart() } }
-			ForEach(s.mod.suitParts) { (p: ModSuitPart) in self.partRow(p) }
-		}
-	}
-
-	func partRow(_ p: ModSuitPart) -> some View {
-		let line: String = joinText("Works as a ", p.works.name.lowercased(), String(format: " · strength x%.1f · weight %.0f", p.power, p.weight))
-		return HStack(spacing: 8) {
-			Rectangle().fill(Color(hex: p.color & 0xFFFFFF)).frame(width: 28, height: 28).overlay(Rectangle().stroke(Color.black, lineWidth: 1))
-			VStack(alignment: .leading, spacing: 2) {
-				Text(verbatim: p.name).font(.pixel(13)).foregroundColor(Color.white)
-				Text(verbatim: line).font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
-			}
-			Spacer(minLength: 0)
-			SmallButton(title: "EDIT", color: ModUI.blue) { self.openPart(p.id) }
-			SmallButton(title: "\u{2715}", color: ModUI.red) { self.s.mod.suitParts.removeAll { $0.id == p.id }; self.s.touch() }
-		}
-	}
-
-	var designSection: some View {
-		ModSection(title: "DESIGNS", help: "Build a suit at an Assembly Station in a TEST world, then SAVE TO THIS MOD there. Players start from it at their own station.") {
-			if s.mod.suitDesigns.isEmpty { Text("No designs yet.").font(.pixel(11, .semibold)).foregroundColor(ModUI.dim) }
-			ForEach(s.mod.suitDesigns) { (d: ModSuitDesign) in self.designRow(d) }
-		}
-	}
-
-	func designRow(_ d: ModSuitDesign) -> some View {
-		let pic: Image = SuitPictures.shared.image(d.design, 0, -1)
-		return HStack(spacing: 8) {
-			pic.resizable().interpolation(.none).frame(width: 66, height: 51)
-			VStack(alignment: .leading, spacing: 2) {
-				Text(verbatim: d.name).font(.pixel(13)).foregroundColor(Color.white)
-				Text(verbatim: joinText(String(d.design.pieces.count), " pieces")).font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
-			}
-			Spacer(minLength: 0)
-			SmallButton(title: "EDIT", color: ModUI.blue) { self.openDesign(d.id) }
-			SmallButton(title: "\u{2715}", color: ModUI.red) { self.s.mod.suitDesigns.removeAll { $0.id == d.id }; self.s.touch() }
-		}
-	}
-
-	func addMat() {
-		var m = ModSuitMat()
-		m.id = s.mod.freshID("smat")
-		m.name = joinText("Metal ", String(s.mod.suitMats.count + 1))
-		s.mod.suitMats.append(m)
-		s.touch()
-		openMat(m.id)
-	}
-
-	func addPart() {
-		var p = ModSuitPart()
-		p.id = s.mod.freshID("spart")
-		p.name = joinText("Part ", String(s.mod.suitParts.count + 1))
-		s.mod.suitParts.append(p)
-		s.touch()
-		openPart(p.id)
+extension Tile {
+	/// Changes a game tile's entry in every table (a mod's override, or putting the original back)
+	static func setGameDef(_ t: Tile, _ d: TileDef) {
+		let i: Int = Int(t.rawValue)
+		if t.isMod || i >= defTable.count { return }
+		defTable[i] = d
+		hardTable[i] = d.hard
+		tierTable[i] = d.tier
+		lightTable[i] = d.light
 	}
 }
 
-/// Editing a mod's suit material: name, colour, its numbers, and what it is paid with
-struct SuitMatEditorView: View {
-	@ObservedObject var s: ModSession
-	let id: String
-	@State var picking: Bool = false
+// MARK: - The game's own numbers, as the editors show them
 
-	func b<T>(_ kp: WritableKeyPath<ModSuitMat, T>, _ d: T) -> Binding<T> { return s.bind(\ModPack.suitMats, id, kp, d) }
-	var mat: ModSuitMat { return s.mod.suitMats.first { $0.id == id } ?? ModSuitMat() }
+/// How quickly a tool breaks a block: the same numbers mining uses (bare hands: kind nil). The time a
+/// block takes is hardness x 1.5 divided by this; nil when the tool can't break it at all.
+func miningSpeed(_ t: Tile, _ kind: ToolType?, _ tier: Tier?, toolSpeed: Double? = nil) -> Double? {
+	let def: TileDef = t.def
+	if def.hard >= 9999 { return nil }
+	let cls: ToolType = toolClass(t)
+	if def.tier > 0 {
+		let pt: Int = (kind == cls) ? (tier?.rawValue ?? 0) : 0
+		if pt < def.tier { return nil }
+	}
+	var speed: Double = 1.0
+	if let k = kind, let tr = tier { speed = (toolSpeed ?? tr.mineSpeed) * (k == cls ? 1.0 : 0.35) }
+	return speed
+}
 
-	static let numbers: [DSlider<ModSuitMat>] = [
-		DSlider(label: "Guards (iron 1)", kp: \.protect, lo: 0.2, hi: 3, sbHi: 6, step: 0.05, format: "%.2f"),
-		DSlider(label: "Weight (iron 1)", kp: \.weight, lo: 0.2, hi: 3, sbHi: 6, step: 0.05, format: "%.2f"),
-		DSlider(label: "Lasts (iron 1)", kp: \.durability, lo: 0.2, hi: 4, sbHi: 8, step: 0.05, format: "%.2f"),
-		DSlider(label: "Carries energy (iron 1)", kp: \.conduct, lo: 0.5, hi: 2, sbHi: 4, step: 0.05, format: "%.2f"),
-		DSlider(label: "Less fire, each piece", kp: \.fireCut, lo: 0, hi: 0.1, sbHi: 0.1, step: 0.01, format: "%.2f"),
-		DSlider(label: "Less cold, each piece", kp: \.coldCut, lo: 0, hi: 0.1, sbHi: 0.1, step: 0.01, format: "%.2f"),
-		DSlider(label: "Less lightning, each piece", kp: \.stormCut, lo: 0, hi: 0.1, sbHi: 0.1, step: 0.01, format: "%.2f")
-	]
+/// Seconds a block takes to break with a tool (nil: it can't)
+func miningSeconds(_ t: Tile, _ kind: ToolType?, _ tier: Tier?, toolSpeed: Double? = nil) -> Double? {
+	guard let s = miningSpeed(t, kind, tier, toolSpeed: toolSpeed) else { return nil }
+	let need: Double = max(0.05, t.def.hard * 1.5)
+	return need / max(0.001, s)
+}
 
-	var body: some View {
-		let m: ModSuitMat = mat
-		let costName: String = m.cost.map { ModPreview.name($0, s.catalog) } ?? "Iron Bar"
-		return VStack(spacing: 10) {
-			ModSection(title: m.name.uppercased()) {
-				ModTextField(label: "Name", text: b(\.name, ""), placeholder: "Starsteel")
-				ModColorRow(label: "Colour", color: b(\.color, 0x8AC8E8))
-			}
-			ModSection(title: "NUMBERS", help: "A plate's guard is 20% a layer times this; heavier suits are slower unless strong; lasting longer means more blows before a piece breaks.") {
-				sliders
-				IntSlider(label: "Drill tier (a drill of it bores up to)", value: b(\.drillTier, 4), range: 0...9)
-			}
-			ModSection(title: "PAID WITH", help: "Pieces cost units of this, by their size.") {
-				HStack(spacing: 8) {
-					Text(verbatim: costName).font(.pixel(13)).foregroundColor(Color.white)
-					Spacer(minLength: 0)
-					SmallButton(title: "CHOOSE...", color: ModUI.blue) { self.picking = true }
-					SmallButton(title: "IRON BARS") { self.b(\.cost, nil).wrappedValue = nil }
-				}
-			}
-		}
-		.modCover(s, picking ? 1 : nil) { self.picker }
+/// Seconds a mod block would take with a tool, from its own numbers (before it is in any world)
+func miningSecondsFor(hardness: Double, tier: Int, blockTool: ToolType, unbreakable: Bool, _ kind: ToolType?, _ toolTier: Int, toolSpeed: Double) -> Double? {
+	if unbreakable || hardness >= 9999 { return nil }
+	if tier > 0 {
+		let pt: Int = kind == blockTool ? toolTier : 0
+		if pt < tier { return nil }
+	}
+	var speed: Double = 1.0
+	if let k = kind { speed = toolSpeed * (k == blockTool ? 1.0 : 0.35) }
+	let need: Double = max(0.05, hardness * 1.5)
+	return need / max(0.001, speed)
+}
+
+func secondsText(_ s: Double?) -> String {
+	guard let v = s else { return "can't" }
+	if v < 10 { return String(format: "%.2f s", v) }
+	return String(format: "%.0f s", v)
+}
+
+// MARK: - Starting from game content
+
+extension ModBlock {
+	/// A block's picture is 16 x 16 like the game's hand-drawn blocks, or 8 x 8 (drawn with every pixel
+	/// doubled) as all custom blocks used to be; any other size is cut to 8 x 8
+	static func fitArt(_ a: ModPixels) -> ModPixels {
+		if a.w == tileArtPx && a.h == tileArtPx { return a }
+		return a.resized(8, 8)
 	}
 
-	var sliders: some View {
-		let sb: Bool = s.mod.sandbox
-		return VStack(alignment: .leading, spacing: 8) {
-			ForEach(0..<SuitMatEditorView.numbers.count, id: \.self) { (i: Int) in self.slider(SuitMatEditorView.numbers[i], sb) }
-		}
-	}
-
-	func slider(_ d: DSlider<ModSuitMat>, _ sb: Bool) -> StatSlider {
-		let r: ClosedRange<Double> = d.lo...(sb ? d.sbHi : d.hi)
-		return StatSlider(label: d.label, value: b(d.kp, 0), range: r, step: d.step, format: d.format)
-	}
-
-	var picker: some View {
-		ItemPickerView(catalog: s.catalog, title: "PAID WITH...", pick: { (it: Item) in
-			self.b(\.cost, nil).wrappedValue = it
-			self.picking = false
-		}, cancel: { self.picking = false })
+	/// A custom block copied from one of the game's blocks: its picture and numbers, ready to change
+	static func fromGame(_ t: Tile) -> ModBlock {
+		var b = ModBlock()
+		b.name = joinText(t.name, " (custom)")
+		b.art = ModPixels(buf: tileBuf(t))
+		b.hardness = min(40, t.def.hard)
+		b.unbreakable = t.def.hard >= 9999
+		b.tool = toolClass(t).rawValue
+		b.tier = t.def.tier
+		b.light = t.def.light
+		b.transparent = !t.def.opaque
+		b.collision = t.def.solid ? .solid : (t.def.platform ? .platform : .none)
+		b.category = t.def.light > 0 ? .light : .building
+		return b
 	}
 }
 
-/// Editing a mod's suit part: name and words, what it works as and how strongly, its weight, colour
-/// and icon
-struct SuitPartEditorView: View {
-	@ObservedObject var s: ModSession
-	let id: String
-
-	func b<T>(_ kp: WritableKeyPath<ModSuitPart, T>, _ d: T) -> Binding<T> { return s.bind(\ModPack.suitParts, id, kp, d) }
-	var part: ModSuitPart { return s.mod.suitParts.first { $0.id == id } ?? ModSuitPart() }
-
-	static let works: [String] = ExoModule.allCases.map { $0.name }
-
-	var body: some View {
-		let p: ModSuitPart = part
-		let top: Double = s.mod.sandbox ? 10 : 4
-		return VStack(spacing: 10) {
-			ModSection(title: p.name.uppercased()) {
-				ModTextField(label: "Name", text: b(\.name, ""), placeholder: "Plasma Lance")
-				ModTextField(label: "Description", text: b(\.desc, ""), placeholder: "Optional")
-			}
-			ModSection(title: "WORKS AS", help: p.works.blurb) {
-				ChoiceRows(options: SuitPartEditorView.works, selected: worksBind, columns: 4)
-				StatSlider(label: "Strength (the game's part is 1)", value: b(\.power, 1), range: 0.25...top, step: 0.05, format: "%.2f")
-				StatSlider(label: "Weight", value: b(\.weight, 2), range: 0.0...10.0, step: 0.5, format: "%.1f")
-			}
-			ModSection(title: "LOOK", help: "Its colour on the suit, and its icon (blank: the game part's icon in this colour).") {
-				ModColorRow(label: "Colour", color: b(\.color, 0x8A929E))
-				PixelEditorView(pixels: b(\.icon, ModPixels(w: 12, h: 12)), maxSide: 220, outlineDefault: true)
-			}
+extension ModItem {
+	/// A custom item copied from one of the game's items: its kind, look and numbers
+	static func fromGame(_ it: Item) -> ModItem {
+		var m = ModItem()
+		m.name = joinText(it.name, " (custom)")
+		m.baseIcon = it
+		m.stack = it.maxStack
+		let p: MeleeProfile = it.melee
+		switch it {
+		case .sword, .spear, .hammer, .knife, .club, .relic:
+			m.kind = .melee
+			m.damage = p.damage
+			m.cooldown = p.cooldown
+			m.reach = p.reach
+			m.arc = p.halfArc
+			m.knock = p.knock
+			m.maxHits = p.maxHits
+			m.heavy = p.heavy
+			m.daze = p.daze
+			m.burn = p.burn
+			m.windup = p.windup
+			m.combo = p.combo
+			m.backstab = p.backstab
+			m.undeadMult = p.undeadMult
+			m.crit = p.critChance
+			m.trail = p.trail
+			m.style = p.style.rawValue
+		case .tool(let k, let t):
+			m.kind = .tool
+			m.toolType = k.rawValue
+			m.toolTier = t.rawValue
+			m.toolSpeed = t.mineSpeed
+			m.damage = p.damage
+			m.cooldown = p.cooldown
+		case .armor(let s, let t):
+			m.kind = .armor
+			m.slot = s.rawValue
+			m.defense = t.defense * s.weight
+			m.look = t.rawValue
+		case .food(let f):
+			m.kind = .food
+			m.hunger = f.hunger
+			if f.heal > 0 { m.effects = [ModEffect(.heal, f.heal, 0)] }
+		case .gun(let g):
+			m.kind = .gun
+			m.damage = g.damage
+			m.cooldown = g.cooldown
+			m.speed = g.speed
+			m.gravity = g.gravity
+			m.pierce = g.pierce
+			m.magazine = g.magazine
+			m.reload = g.reloadTime
+			m.needsPress = g.needsPress
+			if let a = g.ammo { m.ammo = .ammo(a) }
+		case .bow, .sling:
+			m.kind = .bow
+			m.damage = 8
+		default:
+			m.kind = .material
 		}
-	}
-
-	var worksBind: Binding<Int> {
-		let base: Binding<ExoModule> = b(\.works, .turret)
-		return Binding<Int>(get: { base.wrappedValue.rawValue }, set: { base.wrappedValue = ExoModule(rawValue: $0) ?? .turret })
+		return m
 	}
 }
 
-/// A mod's saved suit design: its name and picture (designs are built at an Assembly Station)
-struct SuitDesignEditorView: View {
-	@ObservedObject var s: ModSession
-	let id: String
-
-	func b<T>(_ kp: WritableKeyPath<ModSuitDesign, T>, _ d: T) -> Binding<T> { return s.bind(\ModPack.suitDesigns, id, kp, d) }
-	var design: ModSuitDesign { return s.mod.suitDesigns.first { $0.id == id } ?? ModSuitDesign() }
-
-	var body: some View {
-		let d: ModSuitDesign = design
-		let st: ExoStats = ExoStats.of(d.design)
-		let line: String = joinText(String(d.design.pieces.count), " pieces · weight ", String(Int(st.weight.rounded())), " · guards ", String(Int((st.guardAll * 100).rounded())), "% on average")
-		let pic: Image = SuitPictures.shared.image(d.design, 0, -1)
-		return ModSection(title: d.name.uppercased(), help: "To change its pieces, build it again at an Assembly Station in a TEST world and save it over this one.") {
-			ModTextField(label: "Name", text: b(\.name, ""), placeholder: "Knight of the Deep")
-			pic.resizable().interpolation(.none).frame(width: 264, height: 204)
-			Text(verbatim: line).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-		}
-	}
-}
-
-extension ExoAssemblyPanel {
-	/// the mods' designs to start from
-	var modDesignBox: some View {
-		let list: [(String, SuitDesign)] = ModRuntime.shared.suitDesigns
-		let testing: Bool = !game.testMod.isEmpty
-		return VStack(alignment: .leading, spacing: 6) {
-			if !list.isEmpty {
-				Text("FROM MODS").font(.pixel(12)).foregroundColor(ModUI.gold)
-				ForEach(0..<list.count, id: \.self) { (i: Int) in
-					SmallButton(title: list[i].0.uppercased(), color: ModUI.blue) { self.loadDesign(list[i].1) }
-				}
-			}
-			if testing {
-				Text("This is a TEST world: keep this design in the mod.").font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
-				SmallButton(title: "SAVE TO THE MOD AS A DESIGN", color: ModUI.accent) { self.saveToMod() }
-			}
-		}
-	}
-
-	/// Starts from a mod's design (its working parts only where the bag has them)
-	func loadDesign(_ d0: SuitDesign) {
-		remember()
-		var t: SuitDesign = SuitDesign()
-		var bag: [Stack] = partChoices
-		var missing: [String] = []
-		for p0 in d0.pieces {
-			var p: SuitPiece = p0
-			p.dmg = 0
-			p.src = 0
-			if (p.kind == .core || p.kind == .module) && !game.isCreative {
-				let want: Item
-				if !p.modPart.isEmpty { want = .custom(p.modPart) } else if p.kind == .core { want = .exoCore(ExoCore(rawValue: p.part) ?? .sparkCell) } else { want = .exoModule(ExoModule(rawValue: p.part) ?? .hover) }
-				guard let j = bag.firstIndex(where: { $0.item == want }) else {
-					missing.append(want.name)
-					continue
-				}
-				let g: Int = t.newGroup()
-				t.items[g] = bag.remove(at: j)
-				p.src = g
-			}
-			p.id = t.newID()
-			t.pieces.append(p)
-		}
-		plan = t
-		pick = -1
-		note = missing.isEmpty ? "" : joinText("Not in your bag (left off): ", missing.joined(separator: ", "), ".")
-	}
-
-	/// Keeps the planned design in the mod being tested
-	func saveToMod() {
-		let mid: String = game.testMod
-		guard !mid.isEmpty, var p = ModStore.pack(mid) else { return }
-		if p.suitDesigns.count >= ModSuitLimits.designs {
-			note = joinText(p.name, " already holds the most suit designs a mod can.")
-			return
-		}
-		var d = ModSuitDesign()
-		d.id = p.freshID("suit")
-		d.name = joinText("Suit ", String(p.suitDesigns.count + 1))
-		var g: SuitDesign = plan
-		g.items = [:]
-		for k in g.pieces.indices {
-			g.pieces[k].src = 0
-			g.pieces[k].dmg = 0
-		}
-		d.design = g
-		p.suitDesigns.append(d)
-		note = ModStore.save(p) ? joinText("Saved as \u{201C}", d.name, "\u{201D} in ", p.name, ": rename it in the Mod Creator.") : "The mod could not be saved."
-	}
-}
-
-extension SlotView {
-	/// little squares in the corner, one in each infusion's colour
-	func infusionMarks(_ l: [Int]) -> some View {
-		let sz: CGFloat = max(3, size * 0.11)
-		return VStack {
-			HStack(spacing: 1) {
-				ForEach(0..<min(3, l.count), id: \.self) { k in
-					Rectangle().fill(Color(hex: infusionColor(l[k]))).frame(width: sz, height: sz)
-						.overlay(Rectangle().stroke(Color.black, lineWidth: 1))
-				}
-				Spacer(minLength: 0)
-			}
-			Spacer(minLength: 0)
-		}
-		.padding(2)
-		.frame(width: size, height: size)
-	}
-}
-
-extension WorldRenderer {
-	/// The suit's laser beams this frame: a bright core in a soft glow
-	static func drawSuitBeams(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
-		if g.suitBeams.isEmpty { return }
-		for b in g.suitBeams {
-			var p: Path = Path()
-			p.move(to: CGPoint(x: v.sx(b.0), y: v.sy(b.1)))
-			p.addLine(to: CGPoint(x: v.sx(b.2), y: v.sy(b.3)))
-			ctx.stroke(p, with: .color(Color(hex: 0xFF4A6A, alpha: 0.35)), lineWidth: CGFloat(max(3.0, v.tp * 0.2)))
-			ctx.stroke(p, with: .color(Color(hex: 0xFFD0DA, alpha: 0.95)), lineWidth: CGFloat(max(1.0, v.tp * 0.06)))
-		}
-	}
-
-	/// What a potion is doing to a creature, kept faint: a blue film while slowed, rising green bubbles
-	/// while poisoned, a grey shade while weakened, pink motes while it regenerates
-	static func drawMobStatus(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D, _ m: Mob) {
-		if m.slowT > 0 {
-			fillRect(&ctx, v.rect(m.b.left, m.b.top + m.b.h * 0.55, m.b.w, m.b.h * 0.45), Color(hex: 0x7AB8F0, alpha: 0.22))
-		}
-		if m.weakT > 0 {
-			fillRect(&ctx, v.rect(m.b.left, m.b.top, m.b.w, m.b.h * 0.5), Color(hex: 0x6A6478, alpha: 0.2))
-		}
-		if m.poisonT > 0 {
-			let sz: Double = max(3.0, v.tp * 0.12)
-			for k in 0..<2 {
-				let ph: Double = (g.clock * 0.9 + Double(k) * 0.5 + Double(m.id % 7) * 0.13).truncatingRemainder(dividingBy: 1.0)
-				let bx: Double = m.b.x + (k == 0 ? -0.25 : 0.25) * m.b.w
-				let by: Double = m.b.top + 0.2 - ph * 0.8
-				fillRect(&ctx, mkRect(v.sx(bx) - sz * 0.5, v.sy(by) - sz * 0.5, sz, sz), Color(hex: 0x8AE04A, alpha: 0.8 * (1.0 - ph)))
-			}
-		}
-		if m.regenT > 0 {
-			let sz: Double = max(3.0, v.tp * 0.1)
-			let ph: Double = (g.clock * 0.7 + Double(m.id % 5) * 0.2).truncatingRemainder(dividingBy: 1.0)
-			fillRect(&ctx, mkRect(v.sx(m.b.x) - sz * 0.5, v.sy(m.b.top - ph * 0.6) - sz * 0.5, sz, sz), Color(hex: 0xF07AB8, alpha: 0.8 * (1.0 - ph)))
-		}
-	}
-}
-
-// ===== u09_modplus =====
-
-// MARK: - Mod Creator+: changing game content (screens)
-
-/// The game's own blocks, items or creatures to pick from (for a change, or to start from)
-struct GamePickerView: View {
-	let kind: ModOverrideKind
-	var title: String = "PICK FROM THE GAME"
-	var pick: (Int, Item?) -> Void
-	var cancel: () -> Void
-	@State var filter: String = ""
-
-	var body: some View {
-		let cols: [GridItem] = [GridItem(.adaptive(minimum: 92), spacing: 6)]
-		return VStack(alignment: .leading, spacing: 8) {
-			HStack {
-				Text(verbatim: title).font(.pixel(15)).foregroundColor(ModUI.gold)
-				Spacer()
-				SmallButton(title: "CANCEL", color: ModUI.red) { cancel() }
-			}
-			ModTextField(label: "Search", text: $filter, placeholder: "name")
-			LazyVGrid(columns: cols, spacing: 6) {
-				switch kind {
-				case .block:
-					ForEach(tiles, id: \.self) { t in
-						cell(pixImage(tileBuf(t)), t.name) { pick(Int(t.rawValue), nil) }
-					}
-				case .item:
-					ForEach(0..<items.count, id: \.self) { i in
-						cell(Art.shared.icon(items[i]), items[i].name) { pick(0, items[i]) }
-					}
-				case .creature:
-					ForEach(mobs, id: \.self) { k in
-						cell(mobIcon(k), mobDef(k).name) { pick(k.rawValue, nil) }
-					}
-				}
-			}
-		}
-		.padding(10)
-		.background(PixelBox(color: ModUI.panel))
-	}
-
-	func match(_ name: String) -> Bool {
-		let f: String = filter.trimmingCharacters(in: .whitespaces).lowercased()
-		return f.isEmpty || name.lowercased().contains(f)
-	}
-	var tiles: [Tile] { return ModOverrideCheck.tiles().filter { match($0.name) } }
-	var items: [Item] { return ModOverrideCheck.items().filter { match($0.name) } }
-	var mobs: [MobKind] { return ModOverrideCheck.mobs().filter { match(mobDef($0).name) } }
-
-	func mobIcon(_ k: MobKind) -> Image {
-		let s: SpriteSet = Art.shared.creaturePreview(k)
-		return s.frame(0, left: false, hurt: false)
-	}
-
-	func cell(_ img: Image, _ name: String, _ action: @escaping () -> Void) -> some View {
-		Button(action: action) {
-			VStack(spacing: 3) {
-				img.resizable().interpolation(.none).frame(width: 40, height: 40)
-				Text(verbatim: name).font(.pixel(9, .semibold)).foregroundColor(Color.white).lineLimit(2).multilineTextAlignment(.center)
-			}
-			.frame(maxWidth: .infinity, minHeight: 76)
-			.background(ModUI.card)
-		}
-		.buttonStyle(.plain)
-	}
-}
-
-/// The GAME CONTENT tab: every change this mod makes to the game's own content
-struct GameContentList: View {
-	@ObservedObject var s: ModSession
-	var open: (String) -> Void
-	@State var picking: ModOverrideKind? = nil
-	@State var showSky: Bool = false
-	@State var skyPick: Int = 0
-
-	var body: some View {
-		VStack(alignment: .leading, spacing: 8) {
-			Text("Change the game's own blocks, items and creatures: only the numbers you set change, the originals are kept, and switching a change off (or the whole mod) puts the game back as it was.")
-				.font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-			skyPart
-			if let k = picking {
-				GamePickerView(kind: k, title: joinText("CHANGE A ", k.name.uppercased()), pick: { raw, it in add(k, raw, it) }, cancel: { picking = nil })
-			} else {
-				HStack(spacing: 6) {
-					PixelButton(title: "+ BLOCK", color: ModUI.accent) { picking = .block }
-					PixelButton(title: "+ ITEM", color: ModUI.accent) { picking = .item }
-					PixelButton(title: "+ CREATURE", color: ModUI.accent) { picking = .creature }
-				}
-			}
-			if s.mod.overrides.isEmpty && picking == nil {
-				Text("No changes to game content yet.").font(.pixel(12)).foregroundColor(ModUI.dim)
-			}
-			ForEach(s.mod.overrides) { o in row(o) }
-		}
-	}
-
-	/// The Overworld's sun and moon as this mod draws them
-	var skyPart: some View {
-		let shown: Bool = showSky
-		let pick: Int = clampI(skyPick, 0, 1)
-		let sun: String = s.mod.skySun == nil ? "the game's" : "its own"
-		let moon: String = s.mod.skyMoon == nil ? "the game's" : "its own"
-		let line: String = joinText("The Overworld's sky: ", sun, " sun, ", moon, " moon")
-		return VStack(alignment: .leading, spacing: 8) {
-			HStack(spacing: 8) {
-				Text(verbatim: line).font(.pixel(12, .bold)).foregroundColor(Color.white)
-				Spacer(minLength: 0)
-				SmallButton(title: shown ? "CLOSE" : "SUN AND MOON...", color: ModUI.blue) { self.showSky.toggle() }
-			}
-			if shown {
-				ChoiceRows(options: DimensionEditorView.bodyNames, selected: $skyPick, columns: 2)
-				if pick == 0 {
-					SkyBodyEditor(sky: s.modBind(\.skySun), moon: false)
-				} else {
-					SkyBodyEditor(sky: s.modBind(\.skyMoon), moon: true, skyTop: 0x060A1E, skyBottom: 0x18223E)
-				}
-			}
-		}
-		.padding(8)
-		.background(PixelBox(color: ModUI.card))
-	}
-
-	func add(_ k: ModOverrideKind, _ raw: Int, _ it: Item?) {
-		var o = ModOverride()
-		o.id = s.mod.freshID("g")
-		o.kind = k
-		if k == .block { o.tile = raw }
-		if k == .item { o.item = it }
-		if k == .creature { o.mob = raw }
-		// one change per thing: open the one there is
-		if let same = s.mod.overrides.first(where: { $0.kind == k && (k == .block ? $0.tile == raw : (k == .item ? $0.item == it : $0.mob == raw)) }) {
-			picking = nil
-			open(same.id)
-			return
-		}
-		s.mod.overrides.append(o)
-		s.touch()
-		picking = nil
-		open(o.id)
-	}
-
-	func row(_ o: ModOverride) -> some View {
-		let on: Binding<Bool> = s.bind(\.overrides, o.id, \.enabled, true)
-		return HStack(spacing: 8) {
-			overrideIcon(o).resizable().interpolation(.none).frame(width: 38, height: 38).background(Color.black.opacity(0.4))
-			VStack(alignment: .leading, spacing: 2) {
-				Text(verbatim: o.targetName).font(.pixel(13)).foregroundColor(Color.white)
-				Text(verbatim: joinText(o.kind.name, " · ", String(o.changedCount), o.changedCount == 1 ? " change" : " changes")).font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
-			}
-			Spacer()
-			SmallButton(title: o.enabled ? "ON" : "OFF", color: o.enabled ? ModUI.accent : Color(ui: 0x555555)) { on.wrappedValue.toggle() }
-			SmallButton(title: "EDIT", color: ModUI.blue) { open(o.id) }
-			SmallButton(title: "✕", color: ModUI.red) {
-				s.mod.overrides.removeAll { $0.id == o.id }
-				s.touch()
-			}
-		}
-		.padding(8)
-		.background(PixelBox(color: ModUI.card))
-	}
-}
-
-func overrideIcon(_ o: ModOverride) -> Image {
-	switch o.kind {
-	case .block: return pixImage(tileBuf(Tile(rawValue: UInt8(clampI(o.tile, 0, 255))) ?? .stone))
-	case .item: return Art.shared.icon(o.item ?? .mat(.stick))
-	case .creature: return Art.shared.creaturePreview(MobKind(rawValue: o.mob) ?? .zombie).frame(0, left: false, hurt: false)
-	}
-}
-
-/// One number of a change: the game's value, a switch to change it, the new value, and RESTORE
-struct OverrideField: View {
-	let label: String
-	let original: Double
-	@Binding var value: Double?
-	let range: ClosedRange<Double>
-	var step: Double = 0
-	var format: String = "%.1f"
-
-	var body: some View {
-		let changed: Bool = value != nil
-		let bind: Binding<Double> = Binding<Double>(get: { value ?? original }, set: { value = $0 })
-		return VStack(alignment: .leading, spacing: 4) {
-			HStack {
-				Text(verbatim: label).font(.pixel(12)).foregroundColor(Color.white)
-				Spacer()
-				Text(verbatim: joinText("game: ", String(format: format, original))).font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
-				if changed {
-					SmallButton(title: "RESTORE", color: Color(ui: 0x6A5A3A)) { value = nil }
-				} else {
-					SmallButton(title: "CHANGE", color: ModUI.blue) { value = original }
-				}
-			}
-			if changed {
-				StatSlider(label: "New value", value: bind, range: range, step: step, format: format)
-			}
-		}
-		.padding(6)
-		.background(Color.black.opacity(changed ? 0.3 : 0.15))
-	}
-}
-
-/// A game creature's own sprite, repainted by a mod: its frames copied from the game to paint over (the
-/// game then draws them in place of its own, timed the same), put back to the game's, or saved as a new
-/// custom creature that starts from it
-struct CreatureSpriteEditor: View {
-	@ObservedObject var s: ModSession
-	let id: String
-	@State var frame: Int = 0
-	@State var note: String = ""
-
-	var override: ModOverride { return s.mod.overrides.first { $0.id == id } ?? ModOverride() }
-	var kind: MobKind { return MobKind(rawValue: override.mob) ?? .zombie }
-
-	var body: some View {
-		let fr: [ModPixels] = override.frames ?? []
-		let help: String = fr.isEmpty ? "Paint over the game's own sprite: every frame, pixel by pixel." : "The game draws these frames instead of its own (standing, walking, then the rest, in the game's order)."
-		return ModSection(title: "ITS SPRITE", help: help) {
-			if fr.isEmpty { startRow } else { editor(fr) }
-			if !note.isEmpty { Text(verbatim: note).font(.pixel(11, .semibold)).foregroundColor(ModUI.gold) }
-		}
-	}
-
-	var startRow: some View {
-		let bufs: [PixelBuf] = GameSprites.creatureFrames(kind)
-		return HStack(spacing: 8) {
-			ForEach(0..<min(6, bufs.count), id: \.self) { (i: Int) in
-				pixImage(bufs[i]).resizable().interpolation(.none).frame(width: 44, height: 44).background(Color.black.opacity(0.35))
-			}
-			Spacer()
-			SmallButton(title: "EDIT ITS SPRITE", color: ModUI.accent) { self.startEditing() }
-		}
-	}
-
-	func editor(_ fr: [ModPixels]) -> some View {
-		let i: Int = min(frame, fr.count - 1)
-		return VStack(alignment: .leading, spacing: 8) {
-			frameRow(fr.count)
-			PixelEditorView(pixels: frameBind(i), maxSide: 360, frames: fr, frameIndex: i, sizes: [], outlineDefault: false)
-			HStack(spacing: 6) {
-				SmallButton(title: "BACK TO THE GAME'S SPRITE", color: ModUI.red) { self.setFrames(nil) }
-				SmallButton(title: "SAVE AS A NEW CREATURE", color: ModUI.blue) { self.saveAsCreature() }
-			}
-		}
-	}
-
-	func frameRow(_ n: Int) -> some View {
-		HStack(spacing: 6) {
-			ForEach(0..<n, id: \.self) { (i: Int) in
-				SmallButton(title: joinText("FRAME ", String(i + 1)), color: self.frame == i ? ModUI.accent : Color(ui: 0x555555)) { self.frame = i }
-			}
-			if n < 12 { SmallButton(title: "+ FRAME", color: ModUI.blue) { self.copyFrame() } }
-			if n > 1 { SmallButton(title: "DELETE FRAME", color: ModUI.red) { self.deleteFrame() } }
-		}
-	}
-
-	func frameBind(_ i: Int) -> Binding<ModPixels> {
-		return Binding<ModPixels>(get: {
-			let fr: [ModPixels] = self.override.frames ?? []
-			return i < fr.count ? fr[i] : ModPixels(w: 24, h: 24)
-		}, set: { (v: ModPixels) in
-			var fr: [ModPixels] = self.override.frames ?? []
-			if i < fr.count {
-				fr[i] = v
-				self.setFrames(fr)
-			}
-		})
-	}
-
-	func setFrames(_ fr: [ModPixels]?) {
-		guard let k = s.mod.overrides.firstIndex(where: { $0.id == id }) else { return }
-		s.mod.overrides[k].frames = fr
-		s.touch()
-		if fr == nil { frame = 0 }
-	}
-
-	/// The game's own frames, copied in to paint over (they already have the game's outline)
-	func startEditing() {
-		let bufs: [PixelBuf] = GameSprites.creatureFrames(kind)
-		guard let f0 = bufs.first else { return }
-		if f0.w > ModPixels.maxSide || f0.h > ModPixels.maxSide {
-			note = joinText("Its sprite is too big to paint here (", String(f0.w), " x ", String(f0.h), ").")
-			return
-		}
-		var fr: [ModPixels] = []
-		for b in bufs {
-			var p: ModPixels = ModPixels(buf: b)
-			p.outline = false
-			fr.append(p)
-		}
-		frame = 0
-		setFrames(fr)
-	}
-
-	func copyFrame() {
-		var fr: [ModPixels] = override.frames ?? []
-		if fr.isEmpty || fr.count >= 12 { return }
-		let i: Int = min(frame, fr.count - 1)
-		fr.insert(fr[i], at: i + 1)
-		setFrames(fr)
-		frame = i + 1
-	}
-
-	func deleteFrame() {
-		var fr: [ModPixels] = override.frames ?? []
-		if fr.count <= 1 { return }
-		fr.remove(at: min(frame, fr.count - 1))
-		setFrames(fr)
-		frame = max(0, min(frame, fr.count - 1))
-	}
-
-	/// A new custom creature with this sprite and the game creature's numbers (its body and hit box
-	/// come from the game creature): standing, two walking frames, and its attack
-	func saveAsCreature() {
-		let fr: [ModPixels] = override.frames ?? []
-		if fr.isEmpty { return }
-		let k: MobKind = kind
-		let d: MobDef = makeMobDef(k)
-		let anim: CreatureAnim = creatureArt(k, 0).1
+extension ModMob {
+	/// A custom creature copied from one of the game's: its look (as its base) and its numbers
+	static func fromGame(_ k: MobKind) -> ModMob {
 		var m = ModMob()
-		m.id = s.mod.freshID("m")
-		m.name = String(joinText(d.name, " (own look)").prefix(32))
+		let d: MobDef = mobDef(k)
+		m.name = joinText(d.name, " (custom)")
 		m.base = k.rawValue
-		m.customArt = true
-		var pick: [Int] = [0, min(1, fr.count - 1), min(2, fr.count - 1)]
-		pick.append(anim.attack >= 0 && anim.attack < fr.count ? anim.attack : fr.count - 1)
-		m.frames = pick.map { fr[$0] }
 		m.hp = d.hp
 		m.damage = d.dmg
 		m.speed = d.speed
 		m.detect = d.aggro
 		m.jump = d.jump
-		m.category = d.hostile ? .hostile : (d.flying ? .flying : .passive)
-		s.mod.mobs.append(m)
-		s.touch()
-		note = joinText("Saved as a new creature, \u{201C}", m.name, "\u{201D}, in CREATURES.")
+		switch d.behavior {
+		case .passive, .skittish: m.category = .passive
+		case .defensive: m.category = .neutral
+		case .boss: m.category = .boss
+		case .flyer: m.category = .flying
+		case .swimmer: m.category = .water
+		default: m.category = d.hostile ? .hostile : .neutral
+		}
+		m.behavior.chase = d.hostile
+		m.behavior.attackPlayer = d.hostile
+		return m
 	}
 }
 
-/// Editing one change to game content, with what it does before and after
-struct OverrideEditorView: View {
-	@ObservedObject var s: ModSession
-	let id: String
+// MARK: - Versions, folders and dependencies
 
-	var body: some View {
-		guard let o = s.mod.overrides.first(where: { $0.id == id }) else {
-			return AnyView(Text("This change no longer exists.").font(.pixel(13)).foregroundColor(ModUI.dim))
+/// A saved snapshot of a mod
+struct ModVersion: Codable {
+	var label: String
+	var time: Double
+	var mod: ModPack
+}
+
+/// A snapshot as the version list shows it
+struct ModVersionInfo: Identifiable {
+	var id: String { return file }
+	var file: String
+	var label: String
+	var time: Double
+	var version: String
+}
+
+extension ModStore {
+	static var versionDir: URL {
+		let u: URL = dir.appendingPathComponent("versions", isDirectory: true)
+		try? FileManager.default.createDirectory(at: u, withIntermediateDirectories: true)
+		return u
+	}
+	static let maxVersions: Int = 12
+
+	/// Keeps a copy of the mod as it is now, under a label (the oldest copies go past the limit)
+	@discardableResult
+	static func saveVersion(_ p: ModPack, label: String) -> Bool {
+		if p.id.isEmpty { return false }
+		let now: Double = Date().timeIntervalSince1970
+		let v: ModVersion = ModVersion(label: label.isEmpty ? "Saved version" : String(label.prefix(40)), time: now, mod: p)
+		guard let d = try? JSONEncoder().encode(v) else { return false }
+		let name: String = joinText(p.id, "@", String(Int(now * 1000)), ".json")
+		do {
+			try d.write(to: versionDir.appendingPathComponent(name), options: .atomic)
+		} catch {
+			return false
 		}
-		return AnyView(VStack(alignment: .leading, spacing: 10) {
-			header(o)
-			ModToggle(label: "This change is on", help: "Off: the game's own numbers, kept with the mod for later", isOn: s.bind(\.overrides, id, \.enabled, true))
-			fields(o)
-			preview(o)
-		})
+		let list: [ModVersionInfo] = versions(p.id)
+		if list.count > maxVersions {
+			for old in list.suffix(list.count - maxVersions) { try? FileManager.default.removeItem(at: versionDir.appendingPathComponent(old.file)) }
+		}
+		return true
 	}
 
-	func header(_ o: ModOverride) -> some View {
-		HStack(spacing: 10) {
-			overrideIcon(o).resizable().interpolation(.none).frame(width: 56, height: 56).background(Color.black.opacity(0.4))
-			VStack(alignment: .leading, spacing: 2) {
-				Text(verbatim: o.targetName).font(.pixel(18)).foregroundColor(Color.white)
-				Text(verbatim: o.kind.name).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
+	/// The saved versions of a mod, newest first
+	static func versions(_ id: String) -> [ModVersionInfo] {
+		let names: [String] = (try? FileManager.default.contentsOfDirectory(atPath: versionDir.path)) ?? []
+		var out: [ModVersionInfo] = []
+		for n in names where n.hasPrefix(id + "@") && n.hasSuffix(".json") {
+			guard let d = try? Data(contentsOf: versionDir.appendingPathComponent(n)), let v = try? JSONDecoder().decode(ModVersion.self, from: d) else { continue }
+			out.append(ModVersionInfo(file: n, label: v.label, time: v.time, version: v.mod.version))
+		}
+		out.sort { $0.time > $1.time }
+		return out
+	}
+
+	/// Puts a saved version back as the mod (keeping a copy of how it was just before)
+	static func restoreVersion(_ id: String, _ file: String) -> ModPack? {
+		guard let d = try? Data(contentsOf: versionDir.appendingPathComponent(file)), var v = try? JSONDecoder().decode(ModVersion.self, from: d) else { return nil }
+		if let cur = pack(id) { saveVersion(cur, label: "Before restoring an older version") }
+		v.mod.id = id
+		return save(v.mod) ? pack(id) : nil
+	}
+
+	static func deleteVersion(_ file: String) {
+		try? FileManager.default.removeItem(at: versionDir.appendingPathComponent(file))
+	}
+
+	/// The other mods this mod needs: those it names, and those whose content it uses
+	static func dependencies(_ p: ModPack) -> [String] {
+		var out: [String] = p.requires.filter { $0 != p.id }
+		func add(_ k: String) {
+			let m: String = splitModKey(k).0
+			if !m.isEmpty && m != p.id && !out.contains(m) { out.append(m) }
+		}
+		func addItem(_ it: Item?) {
+			if let i = it, case .custom(let k) = i { add(k) }
+		}
+		for b in p.blocks { addItem(b.drop) }
+		for i in p.items {
+			addItem(i.ammo)
+			addItem(i.baseIcon)
+		}
+		for m in p.mobs {
+			for d in m.drops { addItem(d.item) }
+			if !m.behavior.guardKey.isEmpty { add(m.behavior.guardKey) }
+		}
+		for r in p.recipes {
+			addItem(r.out)
+			for c in r.cost { addItem(c.item) }
+		}
+		for l in p.loot { for e in l.entries { addItem(e.item) } }
+		for s in p.structures { for k in s.palette where k.contains(":") { add(k) } }
+		for f in p.infusions { for it in f.items { addItem(it) } }
+		for m in p.mobs {
+			for f in m.phases where f.helper.contains(":") { add(f.helper) }
+			for sm in m.summons {
+				addItem(sm.item)
+				for k in sm.pattern.cells where k.contains(":") && !k.hasPrefix("tile:") { add(k) }
 			}
-			Spacer()
-			SmallButton(title: "RESTORE ALL", color: Color(ui: 0x6A5A3A)) { self.restoreAll() }
 		}
-	}
-
-	func preview(_ o: ModOverride) -> some View {
-		let rows: [(String, String, String)] = previewRows(o)
-		return ModSection(title: "BEFORE AND AFTER", help: "Worked out with the game's own rules") {
-			ForEach(0..<rows.count, id: \.self) { i in PreviewRow(name: rows[i].0, before: rows[i].1, after: rows[i].2) }
+		for o in p.ores {
+			for k in o.hosts where k.contains(":") && !k.hasPrefix("tile:") { add(k) }
+			if o.near.contains(":") && !o.near.hasPrefix("tile:") { add(o.near) }
 		}
-	}
-
-	func restoreAll() {
-		guard let i = s.mod.overrides.firstIndex(where: { $0.id == id }) else { return }
-		var o: ModOverride = s.mod.overrides[i]
-		let keep: ModOverride = o
-		o = ModOverride()
-		o.id = keep.id
-		o.kind = keep.kind
-		o.tile = keep.tile
-		o.item = keep.item
-		o.mob = keep.mob
-		o.enabled = keep.enabled
-		s.mod.overrides[i] = o
-		s.touch()
-	}
-
-	func b(_ kp: WritableKeyPath<ModOverride, Double?>) -> Binding<Double?> {
-		return s.bind(\.overrides, id, kp, nil)
-	}
-
-	func bi(_ kp: WritableKeyPath<ModOverride, Int?>) -> Binding<Double?> {
-		let inner: Binding<Int?> = s.bind(\.overrides, id, kp, nil)
-		return Binding<Double?>(get: { inner.wrappedValue.map { Double($0) } }, set: { v in inner.wrappedValue = v.map { Int($0.rounded()) } })
-	}
-
-	func unbreakableBind() -> Binding<Bool> {
-		let inner: Binding<Bool?> = s.bind(\.overrides, id, \.unbreakable, nil)
-		return Binding<Bool>(get: { inner.wrappedValue ?? false }, set: { v in inner.wrappedValue = v ? true : nil })
-	}
-
-	func fields(_ o: ModOverride) -> AnyView {
-		switch o.kind {
-		case .block: return blockFields(o)
-		case .item: return itemFields(o)
-		case .creature: return creatureFields(o)
+		for m in p.mobs { for sm in m.summons { for k in sm.dimKeys { add(k) } } }
+		for d in p.dims {
+			for k in [d.stone, d.hazard, d.gateBlock] where k.contains(":") && !k.hasPrefix("tile:") { add(k) }
+			for z in d.zones {
+				for k in [z.ground, z.filler, z.plant, z.log, z.leaves] where k.contains(":") && !k.hasPrefix("tile:") { add(k) }
+			}
+			for sp in d.spawns where sp.creature.contains(":") { add(sp.creature) }
+			addItem(d.entry.item)
+			for k in d.entry.pattern.cells where k.contains(":") && !k.hasPrefix("tile:") { add(k) }
 		}
-	}
-
-	func blockFields(_ o: ModOverride) -> AnyView {
-		let sb: Bool = s.mod.sandbox
-		let t: Tile = Tile(rawValue: UInt8(clampI(o.tile, 0, 255))) ?? .stone
-		let d: TileDef = Tile.makeDef(t)
-		let top: Double = sb ? 200 : 40
-		let tier: Double = Double(d.tier)
-		let light: Double = Double(d.light)
-		return AnyView(VStack(alignment: .leading, spacing: 8) {
-			OverrideField(label: "Hardness", original: min(d.hard, top), value: b(\.hardness), range: 0.05...top, step: 0.05, format: "%.2f")
-			OverrideField(label: "Tool tier needed", original: tier, value: bi(\.tier), range: 0.0...9.0, step: 1, format: "%.0f")
-			OverrideField(label: "Light given off", original: light, value: bi(\.light), range: 0.0...15.0, step: 1, format: "%.0f")
-			ModToggle(label: "Unbreakable", help: "Nothing can mine it", isOn: unbreakableBind())
-		})
-	}
-
-	func itemFields(_ o: ModOverride) -> AnyView {
-		let sb: Bool = s.mod.sandbox
-		let it: Item = o.item ?? .sword(.iron)
-		let p: MeleeProfile = it.baseMelee
-		let dmgR: ClosedRange<Double> = sbRange(0, 60, 500, sb)
-		switch it {
-		case .armor(let sl, let tr):
-			let d0: Double = tr.defense * sl.weight
-			return AnyView(OverrideField(label: "Defence", original: d0, value: b(\.defense), range: sbRange(0, 12, 40, sb), step: 0.1))
-		case .food(let f):
-			return AnyView(VStack(alignment: .leading, spacing: 8) {
-				OverrideField(label: "Hunger restored", original: f.hunger, value: b(\.hunger), range: 0.0...20.0, step: 0.5)
-				OverrideField(label: "Health restored", original: f.heal, value: b(\.heal), range: sbRange(0, 40, 400, sb), step: 0.5)
-			})
-		case .gun(let g):
-			return AnyView(VStack(alignment: .leading, spacing: 8) {
-				OverrideField(label: "Shot damage", original: g.damage, value: b(\.damage), range: dmgR, step: 0.5)
-				OverrideField(label: "Time between shots", original: g.cooldown, value: b(\.cooldown), range: 0.15...10.0, step: 0.05, format: "%.2f")
-			})
-		case .bow, .sling:
-			let base: Double = it == .bow ? 14 : 4.5
-			return AnyView(OverrideField(label: "Shot damage (full draw)", original: base, value: b(\.damage), range: dmgR, step: 0.5))
-		case .tool(_, let tr):
-			return AnyView(VStack(alignment: .leading, spacing: 8) {
-				OverrideField(label: "Mining speed", original: tr.mineSpeed, value: b(\.mineSpeed), range: sbRange(0.3, 30, 200, sb), step: 0.1)
-				OverrideField(label: "Damage when swung", original: p.damage, value: b(\.damage), range: dmgR, step: 0.5)
-			})
-		default:
-			return AnyView(VStack(alignment: .leading, spacing: 8) {
-				OverrideField(label: "Damage", original: p.damage, value: b(\.damage), range: dmgR, step: 0.5)
-				OverrideField(label: "Time between swings", original: p.cooldown, value: b(\.cooldown), range: 0.15...10.0, step: 0.01, format: "%.2f")
-				OverrideField(label: "Reach", original: p.reach, value: b(\.reach), range: sbRange(0.5, 6, 12, sb), step: 0.1)
-				OverrideField(label: "Knockback", original: p.knock, value: b(\.knock), range: sbRange(0, 16, 40, sb), step: 0.5)
-				OverrideField(label: "Critical chance", original: p.critChance, value: b(\.crit), range: 0.0...1.0, step: 0.01, format: "%.2f")
-			})
+		for t in p.trees {
+			for k in [t.trunk, t.branch, t.leaves, t.ground] where k.contains(":") && !k.hasPrefix("tile:") { add(k) }
 		}
-	}
-
-	func creatureFields(_ o: ModOverride) -> AnyView {
-		let sb: Bool = s.mod.sandbox
-		let k: MobKind = MobKind(rawValue: o.mob) ?? .zombie
-		let d: MobDef = makeMobDef(k)
-		return AnyView(VStack(alignment: .leading, spacing: 8) {
-			OverrideField(label: "Health", original: d.hp, value: b(\.hp), range: sbRange(1, 4000, 20000, sb), step: 1, format: "%.0f")
-			OverrideField(label: "Damage", original: d.dmg, value: b(\.mobDamage), range: sbRange(0, 60, 500, sb), step: 0.5)
-			OverrideField(label: "Speed", original: d.speed, value: b(\.speed), range: sbRange(0, 8, 20, sb), step: 0.1)
-			OverrideField(label: "Notices you from", original: d.aggro, value: b(\.detect), range: sbRange(2, 32, 64, sb), step: 1, format: "%.0f")
-			OverrideField(label: "Jump", original: d.jump, value: b(\.jump), range: sbRange(0, 20, 30, sb), step: 0.5)
-			CreatureSpriteEditor(s: s, id: id)
-		})
-	}
-
-	/// Before-and-after numbers for the preview
-	func previewRows(_ o: ModOverride) -> [(String, String, String)] {
-		switch o.kind {
-		case .block: return blockRows(o)
-		case .item: return itemRows(o)
-		case .creature: return creatureRows(o)
+		for m in p.suitMats { addItem(m.cost) }
+		for d in p.suitDesigns {
+			for piece in d.design.pieces {
+				if piece.modMat.contains(":") { add(piece.modMat) }
+				if piece.modPart.contains(":") { add(piece.modPart) }
+			}
 		}
-	}
-
-	func blockRows(_ o: ModOverride) -> [(String, String, String)] {
-		var rows: [(String, String, String)] = []
-		let t: Tile = Tile(rawValue: UInt8(clampI(o.tile, 0, 255))) ?? .stone
-		let d: TileDef = Tile.makeDef(t)
-		let hard1: Double = o.unbreakable == true ? 9999 : (o.hardness ?? d.hard)
-		let tier1: Int = o.tier ?? d.tier
-		let cls: ToolType = toolClass(t)
-		let toolName: String = cls.name.lowercased()
-		let tools: [(String, ToolType?, Tier)] = [("Bare hands", nil, .wood), (joinText("Wooden ", toolName), cls, .wood),
-												   (joinText("Iron ", toolName), cls, .iron), (joinText("Diamond ", toolName), cls, .diamond)]
-		for (name, k, tr) in tools {
-			let tierN: Int = k == nil ? 0 : tr.rawValue
-			let speed: Double = tr.mineSpeed
-			let a: Double? = miningSecondsFor(hardness: d.hard, tier: d.tier, blockTool: cls, unbreakable: d.hard >= 9999, k, tierN, toolSpeed: speed)
-			let bb: Double? = miningSecondsFor(hardness: hard1, tier: tier1, blockTool: cls, unbreakable: hard1 >= 9999, k, tierN, toolSpeed: speed)
-			rows.append((name, secondsText(a), secondsText(bb)))
+		for s in p.startItems { addItem(s.item) }
+		for v in p.vehicles {
+			for c in v.cells where c.block.contains(":") && !c.block.hasPrefix("tile:") { add(c.block) }
 		}
-		let l1: Int = o.light ?? d.light
-		rows.append(("Light", String(d.light), String(l1)))
-		return rows
+		for sc in p.scripts { LKeys.uses(sc, add, addItem) }
+		return out
 	}
 
-	func itemRows(_ o: ModOverride) -> [(String, String, String)] {
-		var rows: [(String, String, String)] = []
-		let it: Item = o.item ?? .sword(.iron)
-		let p0: MeleeProfile = it.baseMelee
-		let p1: MeleeProfile = o.apply(p0)
-		switch it {
-		case .armor(let sl, let tr):
-			let d0: Double = tr.defense * sl.weight
-			let d1: Double = o.defense ?? d0
-			rows.append(("Defence", oneDecimal(d0), oneDecimal(d1)))
-		case .food(let f):
-			let h1: Double = o.hunger ?? f.hunger
-			let l1: Double = o.heal ?? f.heal
-			rows.append(("Hunger", oneDecimal(f.hunger), oneDecimal(h1)))
-			rows.append(("Health", oneDecimal(f.heal), oneDecimal(l1)))
-		case .tool(_, let tr):
-			let speed: Double = o.mineSpeed ?? tr.mineSpeed
-			let s0: Double? = miningSeconds(.stone, .pickaxe, tr)
-			let s1: Double? = miningSeconds(.stone, .pickaxe, tr, toolSpeed: speed)
-			rows.append(("Stone takes (as a pickaxe)", secondsText(s0), secondsText(s1)))
-		case .gun(let g):
-			let dmg1: Double = o.damage ?? g.damage
-			let cd1: Double = o.cooldown ?? g.cooldown
-			let dps0: Double = g.damage / max(0.05, g.cooldown)
-			let dps1: Double = dmg1 / max(0.05, cd1)
-			rows.append(("Damage a second", oneDecimal(dps0), oneDecimal(dps1)))
-		default:
-			let dps0: Double = p0.damage / max(0.05, p0.cooldown)
-			let dps1: Double = p1.damage / max(0.05, p1.cooldown)
-			let z: Double = mobDef(.zombie).hp
-			let blows0: Int = Int(ceil(z / max(0.1, p0.damage)))
-			let blows1: Int = Int(ceil(z / max(0.1, p1.damage)))
-			rows.append(("Damage", oneDecimal(p0.damage), oneDecimal(p1.damage)))
-			rows.append(("Damage a second", oneDecimal(dps0), oneDecimal(dps1)))
-			rows.append(("Blows to fell a zombie", String(blows0), String(blows1)))
-		}
-		return rows
-	}
-
-	func creatureRows(_ o: ModOverride) -> [(String, String, String)] {
-		var rows: [(String, String, String)] = []
-		let k: MobKind = MobKind(rawValue: o.mob) ?? .zombie
-		let d: MobDef = makeMobDef(k)
-		let sword: Double = Item.sword(.iron).baseMelee.damage
-		let hp1: Double = o.hp ?? d.hp
-		let blows0: Int = Int(ceil(d.hp / sword))
-		let blows1: Int = Int(ceil(hp1 / sword))
-		rows.append(("Iron sword blows to fell it", String(blows0), String(blows1)))
-		rows.append(("Its blow (before armour)", oneDecimal(d.dmg), oneDecimal(o.mobDamage ?? d.dmg)))
-		rows.append(("Speed", oneDecimal(d.speed), oneDecimal(o.speed ?? d.speed)))
-		return rows
+	/// Folder names in use, sorted
+	static func folders() -> [String] {
+		var out: Set<String> = []
+		for e in entries() { if let p = e.pack, !p.folder.isEmpty { out.insert(p.folder) } }
+		return out.sorted()
 	}
 }
 
-/// A slider's range: its top in normal play, or in sandbox mode
-func sbRange(_ lo: Double, _ hi: Double, _ sbHi: Double, _ sb: Bool) -> ClosedRange<Double> {
-	let top: Double = sb ? sbHi : hi
-	return lo...top
+extension ModValidator {
+	/// The Mod Creator+ parts of a mod: changes to game content, the folder, needed mods and content
+	/// switched off
+	static func checkPlus(_ p: inout ModPack, _ mn: String, _ sb: Bool, _ known: [String: String], _ r: inout ModReport) {
+		if p.folder.count > 24 { p.folder = String(p.folder.prefix(24)) }
+		var req: [String] = []
+		for q in p.requires where !q.isEmpty && q != p.id && !req.contains(q) { req.append(q) }
+		if req.count > 12 { req = Array(req.prefix(12)) }
+		p.requires = req
+		if p.overrides.count > 64 {
+			r.add(1, mn, "Mod", "Only 64 changes to game content fit in one mod; the rest were left out.")
+			p.overrides = Array(p.overrides.prefix(64))
+		}
+		var used: Set<String> = Set(p.blocks.map { $0.id } + p.items.map { $0.id } + p.mobs.map { $0.id })
+		var keep: [ModOverride] = []
+		for var o in p.overrides {
+			if o.id.isEmpty || used.contains(o.id) { o.id = p.freshID("g") + String(keep.count) }
+			used.insert(o.id)
+			let place: String = joinText("Change to \u{201C}", o.targetName, "\u{201D}")
+			switch o.kind {
+			case .block:
+				guard let t = Tile(rawValue: UInt8(clampI(o.tile, 0, 255))), ModOverrideCheck.tiles().contains(t) else {
+					r.add(1, mn, place, "That block can't be changed; the change was left out.")
+					continue
+				}
+			case .item:
+				guard let it = o.item, ModOverrideCheck.itemAllowed(it) else {
+					r.add(1, mn, place, "That item can't be changed; the change was left out.")
+					continue
+				}
+			case .creature:
+				guard let k = MobKind(rawValue: o.mob), k != .custom, k != .villager else {
+					r.add(1, mn, place, "That creature can't be changed; the change was left out.")
+					continue
+				}
+			}
+			ModOverrideCheck.clamp(&o, sb)
+			keep.append(o)
+		}
+		p.overrides = keep
+		let ids: Set<String> = Set(p.blocks.map { $0.id } + p.items.map { $0.id } + p.mobs.map { $0.id } + p.recipes.map { $0.id } + p.ores.map { $0.id } + p.structures.map { $0.id } + p.overrides.map { $0.id } + p.projectiles.map { $0.id } + p.loot.map { $0.id } + p.infusions.map { $0.id } + p.dims.map { $0.id } + p.scripts.map { $0.id })
+		p.off = p.off.filter { ids.contains($0) }
+		_ = known
+		checkOrePlus(&p, mn, &r)
+		checkInfusions(&p, mn, sb, known, &r)
+		checkBosses(&p, mn, sb, known, &r)
+		checkDims(&p, mn, sb, known, &r)
+		checkSuits(&p, mn, sb, known, &r)
+		checkWorldRules(&p, mn, sb, known, &r)
+		checkScripts(&p, mn, sb, known, &r)
+		let dimIDs: Set<String> = Set(p.dims.map { $0.id })
+		for i in p.ores.indices where !p.ores[i].dimKey.isEmpty && !dimIDs.contains(p.ores[i].dimKey) { p.ores[i].dimKey = "" }
+		for i in p.structures.indices where !p.structures[i].dimKey.isEmpty && !dimIDs.contains(p.structures[i].dimKey) { p.structures[i].dimKey = "" }
+	}
 }
 
-/// A number with one decimal place ("4.5")
-func oneDecimal(_ v: Double) -> String { return String(format: "%.1f", v) }
+// MARK: - Mod Creator+: ore generation
 
-/// Folders, saved versions and the mods this one needs (on the INFO tab)
-struct ModOrganizeSection: View {
-	@ObservedObject var s: ModSession
-	@State var label: String = ""
-	@State var versions: [ModVersionInfo] = []
-	@State var note: String = ""
-	@State var loaded: Bool = false
-	@State var confirmFile: String = ""
-	/// the other installed mods (read when the section opens and after a change)
-	@State var entries: [ModEntry] = []
-	@State var folders: [String] = []
+extension ModOre {
+	static let placeNames: [String] = ["Inside the rock", "On cave walls", "Near the surface", "Under water"]
+	static let placeHelp: [String] = ["Anywhere in its host ground between the two depths.",
+									  "Only where the ground meets a cave (a block with open air beside it).",
+									  "Within a few blocks of the top of the ground (the depths are ignored).",
+									  "In the ground under seas and lakes (the depths are ignored)."]
+	static let shapeNames: [String] = ["Lumps", "Streaks", "Scattered"]
+}
 
-	var body: some View {
-		VStack(spacing: 10) {
-			folderSection
-			needsSection
-			versionsSection
+/// Where one ore is generated, worked out once per world
+extension ModOreRT {
+	/// Places this ore in one freshly made chunk. With the original settings (inside the rock, every
+	/// chunk, lumps, any host of its kind) it uses the same random numbers in the same order as before
+	/// these controls existed, so worlds made with older mods keep generating the same ore.
+	func place(_ g: WorldGen, _ ch: Chunk) {
+		let H: Int = ch.H
+		var rng = RNG(hashU(ch.cx, 0x51ED, g.seed &+ salt))
+		var extra = RNG(hashU(ch.cx, 0x7A11, g.seed &+ salt))
+		if rarity < 1.0 && extra.double() >= rarity { return }
+		var colOK: [Bool] = [Bool](repeating: true, count: chunkW)
+		if !biomes.isEmpty {
+			var any: Bool = false
+			for lx in 0..<chunkW {
+				colOK[lx] = biomes.contains(g.col(ch.x0 + lx).biome.rawValue)
+				if colOK[lx] { any = true }
+			}
+			if !any { return }
 		}
-		.onAppear { self.load() }
-	}
-
-	func load() {
-		if loaded { return }
-		loaded = true
-		refresh()
-	}
-
-	func refresh() {
-		versions = ModStore.versions(s.mod.id)
-		let me: String = s.mod.id
-		entries = ModStore.entries().filter { $0.id != me }
-		folders = ModStore.folders()
-	}
-
-	var folderSection: some View {
-		let names: [String] = Array(folders.prefix(6))
-		return ModSection(title: "FOLDER", help: "Mods in the same folder are listed together") {
-			ModTextField(label: "Folder", text: s.modBind(\.folder), placeholder: "e.g. Monsters")
-			if !names.isEmpty {
-				HStack(spacing: 6) {
-					ForEach(names, id: \.self) { f in self.folderButton(f) }
+		let whole: Int = Int(veins)
+		let n: Int = min(24, whole + (rng.double() < veins - Double(whole) ? 1 : 0))
+		let y0: Int = clampI(minY, 1, H - 2)
+		let y1: Int = clampI(maxY, y0, H - 2)
+		var v: Int = 0
+		while v < n {
+			var lx: Int = rng.int(chunkW)
+			var y: Int = y0 + rng.int(y1 - y0 + 1)
+			v += 1
+			var lo: Int = y0
+			var hi: Int = y1
+			if place == 2 || place == 3 {
+				// near the top of the ground (or the sea bed): the depths do not apply
+				y = clampI(ch.surf[lx] + extra.int(3), 1, H - 2)
+				lo = max(1, y - 3)
+				hi = min(H - 2, y + 4)
+			}
+			if let near = nearTile {
+				var found: Bool = hasNear(ch, lx, y, near)
+				var tries: Int = 0
+				while !found && tries < 10 {
+					lx = extra.int(chunkW)
+					y = lo + extra.int(max(1, hi - lo + 1))
+					found = hasNear(ch, lx, y, near)
+					tries += 1
+				}
+				if !found { continue }
+			}
+			var k: Int = 0
+			switch shape {
+			case 1:
+				// a streak: a line in one direction, wandering a little
+				let dirs: [(Int, Int)] = [(1, 0), (-1, 0), (1, 1), (-1, 1), (1, -1), (-1, -1), (0, 1), (0, -1)]
+				let d: (Int, Int) = dirs[extra.int(dirs.count)]
+				while k < size {
+					put(ch, g, lx, y, colOK)
+					lx = clampI(lx + d.0, 0, chunkW - 1)
+					y = clampI(y + d.1, lo, hi)
+					if extra.int(4) == 0 { y = clampI(y + (extra.int(2) == 0 ? -1 : 1), lo, hi) }
+					k += 1
+				}
+			case 2:
+				// scattered single blocks around the spot
+				while k < size {
+					put(ch, g, clampI(lx + extra.int(7) - 3, 0, chunkW - 1), clampI(y + extra.int(7) - 3, lo, hi), colOK)
+					k += 1
+				}
+			default:
+				// a short random walk keeps each vein in one lump, inside this chunk and the ore's depths
+				while k < size {
+					put(ch, g, lx, y, colOK)
+					switch rng.int(4) {
+					case 0: lx = min(chunkW - 1, lx + 1)
+					case 1: lx = max(0, lx - 1)
+					case 2: y = min(hi, y + 1)
+					default: y = max(lo, y - 1)
+					}
+					k += 1
 				}
 			}
 		}
 	}
 
-	func folderButton(_ f: String) -> some View {
-		let col: Color = s.mod.folder == f ? ModUI.accent : Color(ui: 0x4A4A50)
-		return SmallButton(title: f, color: col) {
-			self.s.mod.folder = f
-			self.s.touch()
-		}
-	}
-
-	var needsSection: some View {
-		let deps: [String] = ModStore.dependencies(s.mod)
-		let others: [ModEntry] = Array(entries.filter { e in !deps.contains(e.id) && e.pack != nil }.prefix(5))
-		return ModSection(title: "NEEDS OTHER MODS", help: "A world using this mod needs these too. Mods whose blocks or items this one uses are found by themselves.") {
-			if deps.isEmpty { Text("None.").font(.pixel(11, .semibold)).foregroundColor(ModUI.dim) }
-			ForEach(deps, id: \.self) { d in self.depRow(d) }
-			if !others.isEmpty {
-				Text("Add a mod it needs:").font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
-				HStack(spacing: 6) {
-					ForEach(others) { e in self.addDepButton(e) }
-				}
-			}
-		}
-	}
-
-	func depRow(_ d: String) -> some View {
-		let e: ModEntry? = entries.first { $0.id == d }
-		let name: String = e?.pack?.name ?? joinText("Missing mod (", d, ")")
-		var state: String = "not installed"
-		if let x = e { state = x.enabled ? "on" : "off" }
-		let col: Color = e == nil ? Color(ui: 0xFF9A7A) : Color.white
-		let mine: Bool = s.mod.requires.contains(d)
-		return HStack {
-			Text(verbatim: name).font(.pixel(12)).foregroundColor(col)
-			Text(verbatim: state).font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
-			Spacer()
-			if mine {
-				SmallButton(title: "REMOVE", color: ModUI.red) { self.removeDep(d) }
-			}
-		}
-	}
-
-	func removeDep(_ d: String) {
-		s.mod.requires.removeAll { $0 == d }
-		s.touch()
-	}
-
-	func addDepButton(_ e: ModEntry) -> some View {
-		let name: String = e.pack?.name ?? e.id
-		return SmallButton(title: name, color: ModUI.blue) {
-			self.s.mod.requires.append(e.id)
-			self.s.touch()
-		}
-	}
-
-	var versionsSection: some View {
-		let hint: String = joinText("Version ", s.mod.version)
-		return ModSection(title: "SAVED VERSIONS", help: "Keep a copy of the mod as it is now, and go back to it later (the last 12 are kept)") {
-			HStack(spacing: 6) {
-				ModTextField(label: "Name for this version", text: $label, placeholder: hint)
-				SmallButton(title: "SAVE VERSION", color: ModUI.accent) { self.saveVersion() }
-			}
-			if !note.isEmpty { Text(verbatim: note).font(.pixel(11, .semibold)).foregroundColor(ModUI.gold) }
-			ForEach(versions) { v in self.versionRow(v) }
-		}
-	}
-
-	func saveVersion() {
-		_ = s.save()
-		let name: String = label.isEmpty ? joinText("Version ", s.mod.version) : label
-		note = ModStore.saveVersion(s.mod, label: name) ? "Version saved." : "It could not be saved."
-		label = ""
-		versions = ModStore.versions(s.mod.id)
-	}
-
-	func versionRow(_ v: ModVersionInfo) -> some View {
-		let sure: Bool = confirmFile == v.file
-		let when: String = joinText("v", v.version, " \u{00B7} ", shortDate(v.time))
-		let col: Color = Color(ui: sure ? 0xC04030 : 0x6A5A3A)
-		return HStack {
-			VStack(alignment: .leading, spacing: 1) {
-				Text(verbatim: v.label).font(.pixel(12)).foregroundColor(Color.white)
-				Text(verbatim: when).font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
-			}
-			Spacer()
-			SmallButton(title: sure ? "SURE?" : "RESTORE", color: col) { self.restore(v) }
-			SmallButton(title: "\u{2715}", color: ModUI.red) { self.deleteVersion(v) }
-		}
-	}
-
-	func restore(_ v: ModVersionInfo) {
-		if confirmFile != v.file {
-			confirmFile = v.file
-			note = "Restoring replaces the mod as it is now (a copy of it is kept first). Tap SURE? to go ahead."
+	/// One block of ore, if the spot is right for it
+	func put(_ ch: Chunk, _ g: WorldGen, _ lx: Int, _ y: Int, _ colOK: [Bool]) {
+		if !colOK[lx] { return }
+		let t: Tile = ch.get(lx, y)
+		if hostTiles.isEmpty {
+			if !modOreHost(t, host) { return }
+		} else if !hostTiles.contains(t.rawValue) {
 			return
 		}
-		confirmFile = ""
-		if let p = ModStore.restoreVersion(s.mod.id, v.file) {
-			s.mod = p
-			s.dirty = false
-			s.recheck()
-			note = joinText("Restored ", v.label, ".")
-		} else {
-			note = "That version could not be read."
+		switch place {
+		case 1:
+			// a cave wall: open air beside it
+			let open: Bool = (lx > 0 && ch.get(lx - 1, y) == .air) || (lx < chunkW - 1 && ch.get(lx + 1, y) == .air) || ch.get(lx, y - 1) == .air || ch.get(lx, y + 1) == .air
+			if !open { return }
+		case 3:
+			// under water: water just above in this column
+			var wet: Bool = false
+			for dy in 1...4 where ch.get(lx, y - dy) == .water { wet = true }
+			if !wet { return }
+		default: break
 		}
-		versions = ModStore.versions(s.mod.id)
+		ch.setLocal(lx, y, tile)
 	}
 
-	func deleteVersion(_ v: ModVersionInfo) {
-		ModStore.deleteVersion(v.file)
-		versions = ModStore.versions(s.mod.id)
+	/// Another ore within three blocks (in this chunk)
+	func hasNear(_ ch: Chunk, _ lx: Int, _ y: Int, _ t: Tile) -> Bool {
+		for dy in -3...3 {
+			for dx in -3...3 {
+				let x: Int = lx + dx
+				if x < 0 || x >= chunkW { continue }
+				if ch.get(x, y + dy) == t { return true }
+			}
+		}
+		return false
 	}
 }
 
-extension ModCreatorView {
-	/// The folders the mods are filed under: tap one to see only those mods
-	var folderChips: some View {
-		let names: [String] = ModStore.folders()
-		return Group {
-			if !names.isEmpty {
-				ScrollView(.horizontal, showsIndicators: false) {
-					HStack(spacing: 6) {
-						SmallButton(title: "ALL MODS", color: folder.isEmpty ? ModUI.accent : Color(ui: 0x4A4A50)) { folder = "" }
-						ForEach(names, id: \.self) { f in
-							SmallButton(title: f.uppercased(), color: folder == f ? ModUI.accent : Color(ui: 0x4A4A50)) { folder = f }
-						}
+/// Picks of game ground for an ore's host and neighbour: game tiles as "tile:<number>"
+enum ModGround {
+	static let hosts: [Tile] = [.stone, .slate, .deepRock, .dirt, .sand, .mud, .snow, .sandstone, .ashStone, .grass, .ice, .obsidian]
+	static let ores: [Tile] = [.coal, .copper, .tin, .iron, .silver, .gold, .saltpeter, .amethyst, .diamond, .mythril, .emberOre, .voidOre, .crystalOre]
+
+	static func key(_ t: Tile) -> String { return joinText("tile:", String(Int(t.rawValue))) }
+
+	/// A host or neighbour key as a tile in a world (game tiles directly, mod blocks through the runtime)
+	static func resolve(_ k: String, _ rt: ModRuntime) -> Tile? {
+		if k.hasPrefix("tile:") {
+			guard let n = Int(k.dropFirst(5)), let t = Tile(rawValue: UInt8(clampI(n, 0, 255))) else { return nil }
+			return t
+		}
+		return rt.tileForKey[k]
+	}
+
+	static func name(_ k: String, _ p: ModPack) -> String {
+		if k.hasPrefix("tile:") {
+			if let n = Int(k.dropFirst(5)), let t = Tile(rawValue: UInt8(clampI(n, 0, 255))) { return t.name }
+			return "Block"
+		}
+		let s: (String, String) = splitModKey(k)
+		return p.blocks.first { $0.id == s.1 }?.name ?? k
+	}
+}
+
+/// A picture of where an ore forms: a slice of a sample world (six chunks wide, from the sky to the
+/// bottom), generated by the game's own world generator, with the ore marked
+enum ModOrePreview {
+	static let seed: UInt64 = 20_240_611
+	static let chunks: Int = 6
+
+	/// The picture (one pixel a block wide and two rows tall) and how many blocks of ore it holds
+	static func render(_ o: ModOre, _ p: ModPack) -> (PixelBuf, Int) {
+		let dim: Dimension = o.dim == 1 ? .umbral : .overworld
+		let g = WorldGen(seed: seed, infinite: true, rareChance: 0.28)
+		let marker: Tile = .amethystBlock
+		var hosts: Set<UInt8> = []
+		for k in o.hosts {
+			if k.hasPrefix("tile:"), let n = Int(k.dropFirst(5)) { hosts.insert(UInt8(clampI(n, 0, 255))) }
+		}
+		var near: Tile? = nil
+		if o.near.hasPrefix("tile:"), let n = Int(o.near.dropFirst(5)) { near = Tile(rawValue: UInt8(clampI(n, 0, 255))) }
+		let salt: UInt64 = UInt64(truncatingIfNeeded: modChecksum(Data((p.id + o.id).utf8)))
+		let rtOre = ModOreRT(tile: marker, dim: o.dim, minY: o.minY, maxY: o.maxY, veins: o.veins, size: o.size, host: o.host, salt: salt,
+							 place: o.place, biomes: Set(o.biomes), rarity: o.rarity, shape: o.shape, nearTile: near, hostTiles: hosts)
+		let H: Int = dimHeight(dim)
+		let rows: Int = (H + 1) / 2
+		var b = PixelBuf(w: chunks * chunkW, h: rows)
+		var count: Int = 0
+		let ore: UInt32 = 0xFF40FF
+		for c in 0..<chunks {
+			let ch: Chunk = generateChunk(g, dim, c - chunks / 2)
+			rtOre.place(g, ch)
+			for lx in 0..<chunkW {
+				let surf: Int = ch.surf[lx]
+				for r in 0..<rows {
+					let y0: Int = r * 2
+					var col: UInt32 = 0
+					var hit: Bool = false
+					for y in y0..<min(H, y0 + 2) {
+						let t: Tile = ch.get(lx, y)
+						if t == marker { hit = true; count += 1 }
 					}
-				}
-			}
-		}
-	}
-}
-
-extension ModEditorView {
-	/// Starting a new block, item or creature from one of the game's own (its picture and numbers)
-	@ViewBuilder
-	func fromGame(_ k: ModOverrideKind) -> some View {
-		if gamePick == k {
-			GamePickerView(kind: k, title: joinText("START FROM A ", k.name.uppercased()), pick: { raw, it in startFromGame(k, raw, it) }, cancel: { gamePick = nil })
-		} else {
-			SmallButton(title: joinText("+ START FROM A ", k.name.uppercased()), color: ModUI.blue) { gamePick = k }
-		}
-	}
-
-	func startFromGame(_ k: ModOverrideKind, _ raw: Int, _ it: Item?) {
-		gamePick = nil
-		switch k {
-		case .block:
-			guard let t = Tile(rawValue: UInt8(clampI(raw, 0, 255))) else { return }
-			var b: ModBlock = ModBlock.fromGame(t)
-			b.id = session.mod.freshID("b")
-			session.mod.blocks.append(b)
-			session.touch()
-			target = .block(b.id)
-		case .item:
-			guard let i = it else { return }
-			var m: ModItem = ModItem.fromGame(i)
-			m.id = session.mod.freshID("i")
-			session.mod.items.append(m)
-			session.touch()
-			target = .item(m.id)
-		case .creature:
-			guard let kind = MobKind(rawValue: raw) else { return }
-			var m: ModMob = ModMob.fromGame(kind)
-			m.id = session.mod.freshID("c")
-			session.mod.mobs.append(m)
-			session.touch()
-			target = .mob(m.id)
-		}
-	}
-
-	/// Switches a piece of content off for now (it stays in the mod) or back on
-	func toggleOff(_ id: String) {
-		if session.mod.off.contains(id) {
-			session.mod.off.removeAll { $0 == id }
-		} else {
-			session.mod.off.append(id)
-		}
-		session.touch()
-	}
-}
-
-// MARK: - Mod Creator+: ore controls, the generation preview and the hardness reference
-
-/// More ore controls: where in the ground, what shape, how often, which biomes, which host blocks,
-/// near which other ore, and a preview made by the real world generator
-struct OreControlsView: View {
-	@ObservedObject var s: ModSession
-	let id: String
-	@State var preview: PixelBuf? = nil
-	@State var previewCount: Int = 0
-	@State var previewRev: Int = -1
-
-	func b<T>(_ kp: WritableKeyPath<ModOre, T>, _ d: T) -> Binding<T> { return s.bind(\ModPack.ores, id, kp, d) }
-	var ore: ModOre { return s.mod.ores.first { $0.id == id } ?? ModOre() }
-
-	var body: some View {
-		let o: ModOre = ore
-		return VStack(spacing: 10) {
-			whereSection(o)
-			ModSection(title: "HOST BLOCKS", help: "Pick the exact blocks it may replace (none picked: the \u{201C}Forms in\u{201D} choice above)") {
-				hostChips(o)
-			}
-			ModSection(title: "NEAR ANOTHER ORE", help: "Veins only start within three blocks of this one") {
-				nearChips(o)
-			}
-			previewSection
-		}
-	}
-
-	func whereSection(_ o: ModOre) -> some View {
-		let help: String = ModOre.placeHelp[clampI(o.place, 0, 3)]
-		return ModSection(title: "WHERE IT FORMS") {
-			ChoiceRow(options: ModOre.placeNames, selected: b(\.place, 0), columns: 2)
-			Text(verbatim: help).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-			Text("Vein shape").font(.pixel(12, .bold)).foregroundColor(ModUI.dim)
-			ChoiceRow(options: ModOre.shapeNames, selected: b(\.shape, 0), columns: 3)
-			StatSlider(label: "Chance a stretch of ground has it", value: b(\.rarity, 1), range: 0.02...1.0, step: 0.01, format: "%.2f")
-			ModBiomePicker(biomes: b(\.biomes, []))
-		}
-	}
-
-	var previewSection: some View {
-		ModSection(title: "PREVIEW", help: "A slice of a sample world, made by the game's own generator: the pink is your ore") {
-			HStack(alignment: .top, spacing: 12) {
-				previewImage
-				previewNotes
-			}
-		}
-	}
-
-	var previewImage: AnyView {
-		guard let img = preview else { return AnyView(EmptyView()) }
-		let w: CGFloat = CGFloat(img.w * 2)
-		let h: CGFloat = CGFloat(img.h)
-		return AnyView(pixImage(img).resizable().interpolation(.none).frame(width: w, height: h)
-			.overlay(Rectangle().stroke(Color.white.opacity(0.3), lineWidth: 1)))
-	}
-
-	var previewNotes: some View {
-		let made: Bool = preview != nil
-		let title: String = made ? "MAKE IT AGAIN" : "MAKE PREVIEW"
-		let count: String = joinText(String(previewCount), " blocks in ", String(ModOrePreview.chunks * chunkW), " columns")
-		let fresh: String = previewRev == s.rev ? "Up to date." : "Settings changed since: make it again."
-		return VStack(alignment: .leading, spacing: 6) {
-			SmallButton(title: title, color: ModUI.blue) { self.makePreview() }
-			if made {
-				Text(verbatim: count).font(.pixel(11, .semibold)).foregroundColor(Color.white)
-				Text(verbatim: fresh).font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
-				Text("Sky blue, caves black, water blue, lava orange.").font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
-			}
-		}
-	}
-
-	func makePreview() {
-		let r: (PixelBuf, Int) = ModOrePreview.render(ore, s.mod)
-		preview = r.0
-		previewCount = r.1
-		previewRev = s.rev
-	}
-
-	func hostChips(_ o: ModOre) -> some View {
-		let cols: [GridItem] = [GridItem(.adaptive(minimum: 100), spacing: 6)]
-		var keys: [String] = ModGround.hosts.map { ModGround.key($0) }
-		for blk in s.mod.blocks where blk.id != o.block { keys.append(s.mod.key(blk.id)) }
-		let chosen: [String] = o.hosts
-		return LazyVGrid(columns: cols, spacing: 6) {
-			ForEach(keys, id: \.self) { k in
-				ToggleChip(title: ModGround.name(k, self.s.mod), on: chosen.contains(k)) { self.flipHost(k) }
-			}
-		}
-	}
-
-	func flipHost(_ k: String) {
-		let hosts: Binding<[String]> = b(\.hosts, [])
-		if hosts.wrappedValue.contains(k) {
-			hosts.wrappedValue.removeAll { $0 == k }
-		} else if hosts.wrappedValue.count < 8 {
-			hosts.wrappedValue.append(k)
-		}
-	}
-
-	func nearChips(_ o: ModOre) -> some View {
-		let cols: [GridItem] = [GridItem(.adaptive(minimum: 100), spacing: 6)]
-		var keys: [String] = [""] + ModGround.ores.map { ModGround.key($0) }
-		for blk in s.mod.blocks where blk.id != o.block { keys.append(s.mod.key(blk.id)) }
-		let cur: String = o.near
-		return LazyVGrid(columns: cols, spacing: 6) {
-			ForEach(keys, id: \.self) { k in
-				ToggleChip(title: k.isEmpty ? "ANYWHERE" : ModGround.name(k, self.s.mod), on: cur == k) { self.b(\.near, "").wrappedValue = k }
-			}
-		}
-	}
-}
-
-/// How long a mod block takes to break with each tool, worked out with the game's own mining rules
-struct BlockMiningTimes: View {
-	let block: ModBlock
-	let tools: [ModItem]
-
-	var body: some View {
-		let cls: ToolType = ToolType(rawValue: block.tool) ?? .pickaxe
-		let tiers: [Tier] = [.wood, .stone, .iron, .diamond, .voidium]
-		return ModSection(title: "MINING TIMES", help: "From the game's own mining rules") {
-			row("Bare hands", miningSecondsFor(hardness: block.hardness, tier: block.tier, blockTool: cls, unbreakable: block.unbreakable, nil, 0, toolSpeed: 1))
-			ForEach(tiers, id: \.self) { t in
-				row(joinText(t.name, " ", cls.name.lowercased()), miningSecondsFor(hardness: block.hardness, tier: block.tier, blockTool: cls, unbreakable: block.unbreakable, cls, t.rawValue, toolSpeed: t.mineSpeed))
-			}
-			ForEach(tools) { it in
-				let k: ToolType = ToolType(rawValue: it.toolType) ?? .pickaxe
-				row(joinText(it.name, " (yours)"), miningSecondsFor(hardness: block.hardness, tier: block.tier, blockTool: cls, unbreakable: block.unbreakable, k, it.toolTier, toolSpeed: it.toolSpeed))
-			}
-		}
-	}
-
-	func row(_ name: String, _ t: Double?) -> some View {
-		HStack {
-			Text(verbatim: name).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-			Spacer()
-			Text(verbatim: secondsText(t)).font(.pixel(11)).foregroundColor(t == nil ? Color(ui: 0xFF9A7A) : Color.white)
-		}
-	}
-}
-
-/// Every game block with its hardness, the tool that mines it, the tier it needs, and how long each
-/// tool takes (the mod's own tools too), all from the game's mining rules
-struct HardnessReferenceView: View {
-	@ObservedObject var s: ModSession
-	@State var filter: String = ""
-	@State var picked: Int = Int(Tile.stone.rawValue)
-
-	var body: some View {
-		let tiles: [Tile] = ModOverrideCheck.tiles().filter { t in filter.isEmpty || t.name.lowercased().contains(filter.lowercased()) }
-		let cols: [GridItem] = [GridItem(.adaptive(minimum: 120), spacing: 6)]
-		let t: Tile = Tile(rawValue: UInt8(clampI(picked, 0, 255))) ?? .stone
-		return VStack(alignment: .leading, spacing: 10) {
-			Text("The game's blocks and how hard they are. Tap one to see every tool's mining time.").font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-			detail(t)
-			ModTextField(label: "Search", text: $filter, placeholder: "block name")
-			LazyVGrid(columns: cols, spacing: 6) {
-				ForEach(tiles, id: \.self) { tile in
-					Button { picked = Int(tile.rawValue) } label: {
-						HStack(spacing: 6) {
-							pixImage(tileBuf(tile)).resizable().interpolation(.none).frame(width: 26, height: 26)
-							VStack(alignment: .leading, spacing: 1) {
-								Text(verbatim: tile.name).font(.pixel(10)).foregroundColor(Color.white).lineLimit(1)
-								Text(verbatim: tile.def.hard >= 9999 ? "unbreakable" : String(format: "hardness %.2f", tile.def.hard)).font(.pixel(9, .semibold)).foregroundColor(ModUI.dim)
-							}
-							Spacer(minLength: 0)
-						}
-						.padding(4)
-						.background(picked == Int(tile.rawValue) ? ModUI.accent : ModUI.card)
+					let t: Tile = ch.get(lx, y0)
+					if hit {
+						col = ore
+					} else if t == .air {
+						col = y0 < surf ? (dim == .umbral ? 0x2A1A3A : 0x7AB8F0) : 0x16161C
+					} else if t == .water {
+						col = 0x2E5FD0
+					} else if t == .lava {
+						col = 0xE8601A
+					} else {
+						col = shadeRGB(t.def.colors.first ?? 0x808080, 0.8)
 					}
-					.buttonStyle(.plain)
+					b.set(c * chunkW + lx, r, col)
 				}
 			}
 		}
+		return (b, count)
 	}
+}
 
-	func detail(_ t: Tile) -> some View {
-		let cls: ToolType = toolClass(t)
-		let d: TileDef = t.def
-		let tools: [ModItem] = s.mod.items.filter { $0.kind == .tool }
-		return ModSection(title: t.name.uppercased()) {
-			HStack(spacing: 10) {
-				pixImage(tileBuf(t)).resizable().interpolation(.none).frame(width: 48, height: 48)
-				VStack(alignment: .leading, spacing: 2) {
-					Text(verbatim: d.hard >= 9999 ? "Unbreakable" : String(format: "Hardness %.2f", d.hard)).font(.pixel(12)).foregroundColor(Color.white)
-					Text(verbatim: joinText("Best tool: ", cls.name.lowercased(), d.tier > 0 ? joinText(" · needs tier ", String(d.tier), " (", Tier(rawValue: d.tier)?.name ?? "", ")") : " · any tool")).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-				}
+extension ModValidator {
+	/// The ore controls kept in range; hosts and neighbours must be real blocks
+	static func checkOrePlus(_ p: inout ModPack, _ mn: String, _ r: inout ModReport) {
+		let own: Set<String> = Set(p.blocks.map { p.key($0.id) })
+		let biomeRaws: Set<Int> = Set(ModBiomePicker.all.map { $0.rawValue })
+		func validKey(_ k: String) -> Bool {
+			if k.hasPrefix("tile:") {
+				guard let n = Int(k.dropFirst(5)), let t = Tile(rawValue: UInt8(clampI(n, 0, 255))) else { return false }
+				return !t.isMod && t != .air && t != .bedrock
 			}
-			row("Bare hands", miningSeconds(t, nil, nil))
-			ForEach(Tier.allCases, id: \.self) { tr in
-				row(joinText(tr.name, " ", cls.name.lowercased()), miningSeconds(t, cls, tr))
-			}
-			let wrong: ToolType = cls == .pickaxe ? .axe : .pickaxe
-			row(joinText("Iron ", wrong.name.lowercased(), " (wrong tool)"), miningSeconds(t, wrong, .iron))
-			ForEach(tools) { it in
-				let k: ToolType = ToolType(rawValue: it.toolType) ?? .pickaxe
-				let tier: Tier = Tier(rawValue: clampI(it.toolTier, 1, 9)) ?? .wood
-				row(joinText(it.name, " (yours)"), miningSeconds(t, k, tier, toolSpeed: it.toolSpeed))
-			}
+			return own.contains(k)
 		}
-	}
-
-	func row(_ name: String, _ v: Double?) -> some View {
-		HStack {
-			Text(verbatim: name).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-			Spacer()
-			Text(verbatim: secondsText(v)).font(.pixel(11)).foregroundColor(v == nil ? Color(ui: 0xFF9A7A) : Color.white)
+		for i in p.ores.indices {
+			var o: ModOre = p.ores[i]
+			o.place = clampI(o.place, 0, 3)
+			o.shape = clampI(o.shape, 0, 2)
+			o.rarity = clampD(o.rarity.isFinite ? o.rarity : 1, 0.01, 1)
+			o.biomes = Array(Set(o.biomes.filter { biomeRaws.contains($0) })).sorted()
+			let hosts: [String] = o.hosts.filter { validKey($0) }
+			if hosts.count != o.hosts.count { r.add(1, mn, joinText("Ore \u{201C}", o.name, "\u{201D}"), "A host block no longer exists and was taken off the list.") }
+			o.hosts = Array(hosts.prefix(8))
+			if !o.near.isEmpty && !validKey(o.near) {
+				o.near = ""
+				r.add(1, mn, joinText("Ore \u{201C}", o.name, "\u{201D}"), "The ore it formed next to no longer exists: it forms anywhere now.")
+			}
+			p.ores[i] = o
 		}
 	}
 }
 
-// MARK: - Mod Creator+: the Sprite Studio
+// MARK: - Mod Creator+: sprite tools
 
-/// The Sprite Studio's tools
-enum SpriteTool: Int, CaseIterable {
-	case pen, erase, fill, pick, line, box, circle, select, shade, dither, pan
-	var name: String {
-		switch self {
-		case .pen: return "PEN"
-		case .erase: return "ERASE"
-		case .fill: return "FILL"
-		case .pick: return "PICK"
-		case .line: return "LINE"
-		case .box: return "BOX"
-		case .circle: return "CIRCLE"
-		case .select: return "SELECT"
-		case .shade: return "SHADE"
-		case .dither: return "DITHER"
-		case .pan: return "PAN"
-		}
-	}
-	/// tools that paint with the brush as the finger moves
-	var brush: Bool { return self == .pen || self == .erase || self == .shade || self == .dither }
-	/// tools drawn from where the finger went down to where it lifts
-	var shape: Bool { return self == .line || self == .box || self == .circle }
-}
+extension ModPixels {
+	/// whether the game draws this picture with a dark outline (nil: the usual for what it is)
+	func outlined(_ usual: Bool) -> Bool { return outline ?? usual }
 
-/// A rectangle of pixels the SELECT tool has chosen (inclusive corners)
-struct SpriteSel: Equatable {
-	var x0: Int
-	var y0: Int
-	var x1: Int
-	var y1: Int
-	var w: Int { return x1 - x0 + 1 }
-	var h: Int { return y1 - y0 + 1 }
-	func contains(_ x: Int, _ y: Int) -> Bool { return x >= x0 && x <= x1 && y >= y0 && y <= y1 }
-	static func from(_ a: (Int, Int), _ b: (Int, Int)) -> SpriteSel {
-		return SpriteSel(x0: min(a.0, b.0), y0: min(a.1, b.1), x1: max(a.0, b.0), y1: max(a.1, b.1))
-	}
-}
-
-/// One pixel painted in the current stroke, and what it was before (pixel-perfect lines put back the
-/// corner pixel of an L, and shading touches each pixel once a stroke)
-struct StrokeCell {
-	var x: Int
-	var y: Int
-	var before: UInt32
-}
-
-/// How the Sprite Studio paints: brushes, opacity and blending, shading, shapes and selections. Pure
-/// functions on a picture, so they are the same in the editor and the tests.
-enum SpritePaint {
-	/// the pixels a brush of this size and shape covers, centred on (x, y)
-	static func brushCells(_ x: Int, _ y: Int, _ size: Int, _ round: Bool) -> [(Int, Int)] {
-		let s: Int = clampI(size, 1, 8)
-		if s == 1 { return [(x, y)] }
-		var out: [(Int, Int)] = []
-		let lo: Int = -(s - 1) / 2
-		let hi: Int = s / 2
-		let r: Double = Double(s) * 0.5
-		for dy in lo...hi {
-			for dx in lo...hi {
-				if round {
-					let fx: Double = Double(dx) - Double(lo + hi) * 0.5
-					let fy: Double = Double(dy) - Double(lo + hi) * 0.5
-					if fx * fx + fy * fy > r * r + 0.25 { continue }
-				}
-				out.append((x + dx, y + dy))
-			}
-		}
-		return out
+	func flippedH() -> ModPixels {
+		var o = ModPixels(w: w, h: h)
+		o.outline = outline
+		for y in 0..<h { for x in 0..<w { o.setARGB(w - 1 - x, y, argb(x, y)) } }
+		return o
 	}
 
-	/// `src` laid over `dst` (both 0xAARRGGBB, not premultiplied)
-	static func over(_ src: UInt32, _ dst: UInt32) -> UInt32 {
-		let sa: Double = Double(src >> 24) / 255.0
-		if sa >= 0.999 { return src }
-		let da: Double = Double(dst >> 24) / 255.0
-		let oa: Double = sa + da * (1.0 - sa)
-		if oa <= 0.001 { return 0 }
-		let k: Double = da * (1.0 - sa)
-		let r: Double = (Double((src >> 16) & 0xFF) * sa + Double((dst >> 16) & 0xFF) * k) / oa
-		let g: Double = (Double((src >> 8) & 0xFF) * sa + Double((dst >> 8) & 0xFF) * k) / oa
-		let b: Double = (Double(src & 0xFF) * sa + Double(dst & 0xFF) * k) / oa
-		let a: UInt32 = UInt32(clampD(oa * 255.0, 0, 255).rounded())
-		return (a << 24) | (UInt32(clampD(r, 0, 255).rounded()) << 16) | (UInt32(clampD(g, 0, 255).rounded()) << 8) | UInt32(clampD(b, 0, 255).rounded())
+	func flippedV() -> ModPixels {
+		var o = ModPixels(w: w, h: h)
+		o.outline = outline
+		for y in 0..<h { for x in 0..<w { o.setARGB(x, h - 1 - y, argb(x, y)) } }
+		return o
 	}
 
-	/// The colour as the pen lays it: its opacity scaled by the pen's
-	static func penColor(_ c: UInt32, _ opacity: Double) -> UInt32 {
-		let a: Double = Double(c >> 24) * clampD(opacity, 0.05, 1)
-		return (UInt32(clampD(a, 8, 255).rounded()) << 24) | (c & 0xFFFFFF)
-	}
-
-	/// One pixel painted: laid over what is there (blend), or set as it is (then a part see-through
-	/// colour makes a part see-through pixel)
-	static func paint(_ px: inout ModPixels, _ x: Int, _ y: Int, _ c: UInt32, _ blend: Bool) {
-		if blend { px.setARGB(x, y, over(c, px.argb(x, y))) } else { px.setARGB(x, y, c) }
-	}
-
-	/// Rubbing out: all of it at full strength, some of its opacity at less
-	static func erase(_ px: inout ModPixels, _ x: Int, _ y: Int, _ opacity: Double) {
-		if opacity >= 0.99 { px.setARGB(x, y, 0); return }
-		let c: UInt32 = px.argb(x, y)
-		if c == 0 { return }
-		let a: Double = Double(c >> 24) * (1.0 - clampD(opacity, 0, 1))
-		px.setARGB(x, y, a < 8 ? 0 : ((UInt32(a.rounded()) << 24) | (c & 0xFFFFFF)))
-	}
-
-	/// Shading: a shade darker or lighter, its opacity kept
-	static func shade(_ px: inout ModPixels, _ x: Int, _ y: Int, _ darker: Bool) {
-		let c: UInt32 = px.argb(x, y)
-		if c == 0 { return }
-		px.setARGB(x, y, (c & 0xFF000000) | shadeRGB(c & 0xFFFFFF, darker ? 0.82 : 1.2))
-	}
-
-	/// A box, its edge or filled
-	static func boxCells(_ a: (Int, Int), _ b: (Int, Int), _ filled: Bool) -> [(Int, Int)] {
-		var out: [(Int, Int)] = []
-		let x0: Int = min(a.0, b.0)
-		let x1: Int = max(a.0, b.0)
-		let y0: Int = min(a.1, b.1)
-		let y1: Int = max(a.1, b.1)
-		for y in y0...y1 {
-			for x in x0...x1 where filled || x == x0 || x == x1 || y == y0 || y == y1 { out.append((x, y)) }
-		}
-		return out
-	}
-
-	/// An ellipse fitted in the box from a to b, its edge or filled
-	static func ellipseCells(_ a: (Int, Int), _ b: (Int, Int), _ filled: Bool) -> [(Int, Int)] {
-		let x0: Int = min(a.0, b.0)
-		let x1: Int = max(a.0, b.0)
-		let y0: Int = min(a.1, b.1)
-		let y1: Int = max(a.1, b.1)
-		let cx: Double = Double(x0 + x1 + 1) * 0.5
-		let cy: Double = Double(y0 + y1 + 1) * 0.5
-		let rx: Double = Double(x1 - x0 + 1) * 0.5
-		let ry: Double = Double(y1 - y0 + 1) * 0.5
-		func inside(_ x: Int, _ y: Int) -> Bool {
-			if x < x0 || x > x1 || y < y0 || y > y1 { return false }
-			let dx: Double = (Double(x) + 0.5 - cx) / rx
-			let dy: Double = (Double(y) + 0.5 - cy) / ry
-			return dx * dx + dy * dy <= 1.0 + 0.12 / max(1.0, min(rx, ry))
-		}
-		var out: [(Int, Int)] = []
-		for y in y0...y1 {
-			for x in x0...x1 where inside(x, y) {
-				let edge: Bool = !inside(x - 1, y) || !inside(x + 1, y) || !inside(x, y - 1) || !inside(x, y + 1)
-				if filled || edge { out.append((x, y)) }
-			}
-		}
-		return out
-	}
-
-	/// Pixel-perfect lines: when the newest pixel makes an L with the two before it, the corner
-	/// pixel is put back (single-pixel lines stay one pixel thick)
-	static func perfectCorner(_ stroke: [StrokeCell], _ x: Int, _ y: Int) -> Bool {
-		if stroke.count < 2 { return false }
-		let a: StrokeCell = stroke[stroke.count - 2]
-		let b: StrokeCell = stroke[stroke.count - 1]
-		if abs(a.x - x) != 1 || abs(a.y - y) != 1 { return false }
-		return (b.x == a.x && b.y == y) || (b.y == a.y && b.x == x)
-	}
-
-	/// The pixels of a selection, lifted out of the picture
-	static func cut(_ px: ModPixels, _ s: SpriteSel) -> ModPixels {
-		var o = ModPixels(w: max(1, s.w), h: max(1, s.h))
-		for y in 0..<s.h {
-			for x in 0..<s.w { o.setARGB(x, y, px.argb(s.x0 + x, s.y0 + y)) }
+	/// moved by a pixel or more, wrapping round the edges (nothing is lost)
+	func shifted(_ dx: Int, _ dy: Int) -> ModPixels {
+		var o = ModPixels(w: w, h: h)
+		o.outline = outline
+		for y in 0..<h {
+			for x in 0..<w { o.setARGB(((x + dx) % w + w) % w, ((y + dy) % h + h) % h, argb(x, y)) }
 		}
 		return o
 	}
 
-	/// Pixels laid into the picture at (ox, oy); clear pixels leave what is under them
-	static func drop(_ px: inout ModPixels, _ part: ModPixels, _ ox: Int, _ oy: Int) {
-		for y in 0..<part.h {
-			for x in 0..<part.w {
-				let c: UInt32 = part.argb(x, y)
-				if c != 0 { px.setARGB(ox + x, oy + y, over(c, px.argb(ox + x, oy + y))) }
+	/// stretched or shrunk to a new size (each pixel copied from the nearest)
+	func scaled(_ nw: Int, _ nh: Int) -> ModPixels {
+		var o = ModPixels(w: nw, h: nh)
+		o.outline = outline
+		for y in 0..<o.h {
+			for x in 0..<o.w { o.setARGB(x, y, argb(x * w / max(1, o.w), y * h / max(1, o.h))) }
+		}
+		return o
+	}
+
+	/// a quarter turn clockwise (width and height swap)
+	func rotated() -> ModPixels {
+		var o = ModPixels(w: h, h: w)
+		o.outline = outline
+		for y in 0..<h { for x in 0..<w { o.setARGB(h - 1 - y, x, argb(x, y)) } }
+		return o
+	}
+
+	/// A game picture fitted into this many pixels (nearest pixel, see-through kept)
+	static func fitted(_ b: PixelBuf, _ nw: Int, _ nh: Int) -> ModPixels {
+		var o = ModPixels(w: nw, h: nh)
+		for y in 0..<o.h {
+			for x in 0..<o.w {
+				let sx: Int = min(b.w - 1, x * b.w / max(1, o.w))
+				let sy: Int = min(b.h - 1, y * b.h / max(1, o.h))
+				o.setARGB(x, y, b.px[sy * b.w + sx])
 			}
 		}
+		return o
 	}
 
-	static func clearSel(_ px: inout ModPixels, _ s: SpriteSel) {
-		for y in s.y0...s.y1 {
-			for x in s.x0...s.x1 { px.setARGB(x, y, 0) }
-		}
-	}
-}
-
-/// Colour sets for the Sprite Studio, and the player's own saved colours (kept on this iPad)
-enum SpritePalettes {
-	static let names: [String] = ["GAME", "EARTH", "METAL", "SKIN", "SKY", "FIRE", "GREYS", "MINE"]
-	static let sets: [[UInt32]] = [
-		modPalette,
-		[0x2A1A10, 0x4A2E1A, 0x6A4224, 0x8A5A30, 0xAA7A44, 0xC89A5C, 0xE0BC80, 0xF0DCA8, 0x3A4A1E, 0x4E6A26, 0x5DAA3A, 0x8ACA5A,
-		 0x5A5048, 0x7A7064, 0x9A9080, 0xC0B8A4],
-		[0x1E2028, 0x3A3E4A, 0x5A606E, 0x7E8696, 0xA8B0BE, 0xD0D8E4, 0x6A4A20, 0xA8783A, 0xE0B050, 0xFFE08A, 0x4A1E1E, 0x8A3A2A,
-		 0x2AA8A0, 0x6FE6EC, 0x8A3CD0, 0xD8A8FF],
-		[0x3A2014, 0x6A3A24, 0x9A5A3A, 0xC88660, 0xE8B090, 0xF8D8C0, 0x7A2A3A, 0xC04A5A, 0x2A3A6A, 0x4A6AAA, 0x2A5A3A, 0x5A9A5A,
-		 0xD8C8A0, 0xF0E8D0, 0x6A4A8A, 0xA88AC8],
-		[0x0A1030, 0x1D2B53, 0x2A4A8A, 0x3E86D8, 0x6AA8F0, 0xB4DCFF, 0xF0F8FF, 0xFFFFFF, 0x0A3A4A, 0x1A6A7A, 0x3AA0B0, 0x7AD0D8,
-		 0xF08A4A, 0xF0B06A, 0x8A6AB0, 0xC8A8E0],
-		[0x3A0A0A, 0x7A1A0A, 0xB0300A, 0xE0601A, 0xFF8A30, 0xFFC050, 0xFFE88A, 0xFFFFD0, 0x2A0A3A, 0x5A1A8A, 0x9A3AE0, 0xC880FF,
-		 0x0A3A2A, 0x1A8A5A, 0x3AE0A0, 0xA0FFD8],
-		[0x000000, 0x111111, 0x222222, 0x333333, 0x444444, 0x555555, 0x666666, 0x777777, 0x888888, 0x999999, 0xAAAAAA, 0xBBBBBB,
-		 0xCCCCCC, 0xDDDDDD, 0xEEEEEE, 0xFFFFFF]
-	]
-	static let key: String = "pr.sprite.myColours"
-
-	/// The player's own colours (0xAARRGGBB, opacity kept)
-	static func loadMine() -> [UInt32] {
-		guard let list = UserDefaults.standard.array(forKey: key) as? [Int] else { return [] }
-		return list.prefix(32).map { UInt32(truncatingIfNeeded: $0) }
-	}
-
-	static func saveMine(_ list: [UInt32]) {
-		UserDefaults.standard.set(list.prefix(32).map { Int($0) }, forKey: key)
-	}
-}
-
-/// The pixel editor used for every picture in the Mod Creator: zoom and pan, brushes of any size
-/// (square or round) with opacity and blending, pixel-perfect lines, eraser, fill, colour picker,
-/// lines, boxes and circles (open or filled), selections (move, copy, paste, flip, delete), shading
-/// and dithering, mirror drawing, undo and redo, flips, shifts and turns, palettes and the player's
-/// own colours, a reference picture beside or under the canvas (or copied in as a starting sample),
-/// the outline switch, other sizes, copying in and out as text or a picture, the sprite library, and
-/// onion skin and an animation preview for sprites with frames.
-struct PixelEditorView: View {
-	@Binding var pixels: ModPixels
-	var maxSide: CGFloat = 320
-	/// the sprite's other frames (onion skin and the animation preview)
-	var frames: [ModPixels] = []
-	var frameIndex: Int = 0
-	/// sizes it may change to (empty: its size is fixed here)
-	var sizes: [Int] = []
-	/// the outline it has when none is chosen (creatures and items yes, blocks no)
-	var outlineDefault: Bool = true
-	/// called instead of resizing just this picture (a creature resizes all its frames together)
-	var onResize: ((Int, Int) -> Void)? = nil
-
-	@State var color: UInt32 = 0xFF5DAA3A
-	@State var tool: Int = 0
-	@State var mirror: Bool = false
-	@State var undo: [ModPixels] = []
-	@State var redo: [ModPixels] = []
-	@State var stroking: Bool = false
-	@State var lastCell: Int = -1
-	@State var lastXY: (Int, Int)? = nil
-	@State var mixR: Double = 120
-	@State var mixG: Double = 160
-	@State var mixB: Double = 90
-	@State var showMixer: Bool = false
-	@State var zoom: CGFloat = 0
-	@State var panX: CGFloat = 0
-	@State var panY: CGFloat = 0
-	@State var panStart: CGPoint = .zero
-	@State var shapeA: (Int, Int)? = nil
-	@State var shapeB: (Int, Int)? = nil
-	@State var recent: [UInt32] = []
-	@State var showGrid: Bool = true
-	@State var onion: Bool = true
-	@State var ref: PixelBuf? = nil
-	@State var refName: String = ""
-	@State var refMode: Int = 1
-	@State var refOpacity: Double = 0.45
-	@State var panel: Int = 0
-	@State var note: String = ""
-	@State var codeText: String = ""
-	@State var libName: String = ""
-	@State var library: [SpriteProject] = []
-	// brushes, opacity, shapes, shading
-	@State var brushSize: Int = 1
-	@State var brushRound: Bool = false
-	@State var perfect: Bool = true
-	@State var filled: Bool = false
-	@State var opacity: Double = 1.0
-	@State var blend: Bool = true
-	@State var darken: Bool = true
-	@State var stroke: [StrokeCell] = []
-	/// pixels already painted this stroke (each once: lingering does not pile up see-through paint)
-	@State var touched: Set<Int> = []
-	// selections
-	@State var sel: SpriteSel? = nil
-	@State var floating: ModPixels? = nil
-	@State var floatX: Int = 0
-	@State var floatY: Int = 0
-	@State var moveFrom: (Int, Int)? = nil
-	// palettes
-	@State var paletteIx: Int = 0
-	@State var mine: [UInt32] = SpritePalettes.loadMine()
-	@State var removing: Bool = false
-
-	/// what COPY in a selection keeps, shared by every picture (copy from one, paste into another)
-	static var clip: ModPixels? = nil
-
-	var current: SpriteTool { return SpriteTool(rawValue: tool) ?? .pen }
-
-	/// pixels per picture pixel on screen
-	var cell: CGFloat {
-		let fit: CGFloat = max(3, floor(maxSide / CGFloat(max(pixels.w, pixels.h))))
-		return zoom > 0 ? zoom : fit
-	}
-
-	var body: some View {
-		VStack(alignment: .leading, spacing: 8) {
-			HStack(alignment: .top, spacing: 12) {
-				VStack(alignment: .leading, spacing: 6) {
-					viewport
-					zoomBar
-				}
-				VStack(alignment: .leading, spacing: 6) {
-					toolGrid
-					editButtons
-					previewBox
-					if refMode == 1, let r = ref { refBeside(r) }
-				}
-			}
-			toolOptions
-			if sel != nil { selectionBar }
-			palette
-			if showMixer { mixer }
-			panelTabs
-			panelBody
-			if !note.isEmpty { Text(verbatim: note).font(.pixel(11, .semibold)).foregroundColor(ModUI.gold) }
-		}
-	}
-
-	// MARK: canvas
-
-	var viewW: CGFloat { return min(maxSide, cell * CGFloat(pixels.w)) }
-	var viewH: CGFloat { return min(maxSide, cell * CGFloat(pixels.h)) }
-
-	var viewport: some View {
-		let c: CGFloat = cell
-		let px: ModPixels = pixels
-		let under: PixelBuf? = refMode == 2 ? ref : nil
-		let op: Double = refOpacity
-		let onionFrame: ModPixels? = (onion && frameIndex > 0 && frameIndex - 1 < frames.count) ? frames[frameIndex - 1] : nil
-		let grid: Bool = showGrid
-		let ox: CGFloat = panX
-		let oy: CGFloat = panY
-		let preview: [(Int, Int)] = shapePreview
-		let col: UInt32 = SpritePaint.penColor(color, opacity)
-		let s: SpriteSel? = sel
-		let fl: ModPixels? = floating
-		let fx: Int = floatX
-		let fy: Int = floatY
-		return Canvas { ctx, size in
-			PixelEditorView.paintCanvas(&ctx, px, c, ox, oy, under, op, onionFrame, grid)
-			PixelEditorView.paintOverlay(&ctx, c, ox, oy, preview, col, s, fl, fx, fy)
-		}
-		.frame(width: viewW, height: viewH)
-		.clipped()
-		.overlay(Rectangle().stroke(Color.white.opacity(0.35), lineWidth: 1))
-		.contentShape(Rectangle())
-		.gesture(DragGesture(minimumDistance: 0).onChanged { v in dragged(v.startLocation, v.location) }.onEnded { v in ended(v.location) })
-	}
-
-	/// the cells of the line, box or circle being drawn
-	var shapePreview: [(Int, Int)] {
-		guard let a = shapeA, let b = shapeB, current.shape else { return [] }
-		return shapeCells(a, b)
-	}
-
-	func shapeCells(_ a: (Int, Int), _ b: (Int, Int)) -> [(Int, Int)] {
-		switch current {
-		case .line: return PixelEditorView.lineCells(a, b)
-		case .box: return SpritePaint.boxCells(a, b, filled)
-		default: return SpritePaint.ellipseCells(a, b, filled)
-		}
-	}
-
-	static func paintCanvas(_ ctx: inout GraphicsContext, _ px: ModPixels, _ c: CGFloat, _ ox: CGFloat, _ oy: CGFloat, _ under: PixelBuf?, _ op: Double, _ onionFrame: ModPixels?, _ grid: Bool) {
-		let w: Int = px.w
-		let h: Int = px.h
-		for y in 0..<h {
-			for x in 0..<w {
-				let r: CGRect = CGRect(x: CGFloat(x) * c - ox, y: CGFloat(y) * c - oy, width: c, height: c)
-				let checker: Bool = (x + y) % 2 == 0
-				ctx.fill(Path(r), with: .color(Color(hex: checker ? 0x3A3A3A : 0x2A2A2A)))
-			}
-		}
-		if let u = under {
-			// the reference, stretched to the canvas, under the drawing
-			for y in 0..<h {
-				for x in 0..<w {
-					let sx: Int = min(u.w - 1, x * u.w / max(1, w))
-					let sy: Int = min(u.h - 1, y * u.h / max(1, h))
-					let v: UInt32 = u.px[sy * u.w + sx]
-					if (v >> 24) == 0 { continue }
-					let r: CGRect = CGRect(x: CGFloat(x) * c - ox, y: CGFloat(y) * c - oy, width: c, height: c)
-					ctx.fill(Path(r), with: .color(Color(hex: v & 0xFFFFFF).opacity(op)))
-				}
-			}
-		}
-		if let f = onionFrame {
-			for y in 0..<min(h, f.h) {
-				for x in 0..<min(w, f.w) {
-					let v: UInt32 = f.argb(x, y)
-					if (v >> 24) == 0 { continue }
-					let r: CGRect = CGRect(x: CGFloat(x) * c - ox, y: CGFloat(y) * c - oy, width: c, height: c)
-					ctx.fill(Path(r), with: .color(Color(hex: v & 0xFFFFFF).opacity(0.25)))
-				}
-			}
-		}
-		for y in 0..<h {
-			for x in 0..<w {
-				let v: UInt32 = px.argb(x, y)
-				if (v >> 24) == 0 { continue }
-				let r: CGRect = CGRect(x: CGFloat(x) * c - ox, y: CGFloat(y) * c - oy, width: c, height: c)
-				let a: Double = Double(v >> 24) / 255.0
-				ctx.fill(Path(r), with: .color(Color(hex: v & 0xFFFFFF).opacity(a)))
-			}
-		}
-		if grid && c >= 8 {
-			for x in 0...w {
-				var p = Path()
-				p.move(to: CGPoint(x: CGFloat(x) * c - ox, y: -oy))
-				p.addLine(to: CGPoint(x: CGFloat(x) * c - ox, y: CGFloat(h) * c - oy))
-				ctx.stroke(p, with: .color(Color.white.opacity(x % 8 == 0 ? 0.25 : 0.1)), lineWidth: 1)
-			}
-			for y in 0...h {
-				var p = Path()
-				p.move(to: CGPoint(x: -ox, y: CGFloat(y) * c - oy))
-				p.addLine(to: CGPoint(x: CGFloat(w) * c - ox, y: CGFloat(y) * c - oy))
-				ctx.stroke(p, with: .color(Color.white.opacity(y % 8 == 0 ? 0.25 : 0.1)), lineWidth: 1)
-			}
-		}
-	}
-
-	/// The shape being drawn, the lifted pixels of a selection being moved, and the selection's edge
-	static func paintOverlay(_ ctx: inout GraphicsContext, _ c: CGFloat, _ ox: CGFloat, _ oy: CGFloat, _ preview: [(Int, Int)], _ col: UInt32, _ s: SpriteSel?, _ fl: ModPixels?, _ fx: Int, _ fy: Int) {
-		let a: Double = Double(col >> 24) / 255.0 * 0.85
-		for (x, y) in preview {
-			let r: CGRect = CGRect(x: CGFloat(x) * c - ox, y: CGFloat(y) * c - oy, width: c, height: c)
-			ctx.fill(Path(r), with: .color(Color(hex: col & 0xFFFFFF).opacity(a)))
-		}
-		if let f = fl {
-			for y in 0..<f.h {
-				for x in 0..<f.w {
-					let v: UInt32 = f.argb(x, y)
-					if v == 0 { continue }
-					let r: CGRect = CGRect(x: CGFloat(fx + x) * c - ox, y: CGFloat(fy + y) * c - oy, width: c, height: c)
-					ctx.fill(Path(r), with: .color(Color(hex: v & 0xFFFFFF).opacity(Double(v >> 24) / 255.0)))
-				}
-			}
-		}
-		if let s0 = s {
-			let r: CGRect = CGRect(x: CGFloat(s0.x0) * c - ox, y: CGFloat(s0.y0) * c - oy, width: CGFloat(s0.w) * c, height: CGFloat(s0.h) * c)
-			ctx.stroke(Path(r), with: .color(Color.black), lineWidth: 3)
-			ctx.stroke(Path(r), with: .color(Color.white), lineWidth: 1)
-		}
-	}
-
-	func cellAt(_ p: CGPoint) -> (Int, Int)? {
-		let c: CGFloat = cell
-		let x: Int = Int(floor((p.x + panX) / c))
-		let y: Int = Int(floor((p.y + panY) / c))
-		if x < 0 || y < 0 || x >= pixels.w || y >= pixels.h { return nil }
-		return (x, y)
-	}
-
-	/// the cell under the finger, kept inside the picture (for selections dragged past the edge)
-	func cellClamped(_ p: CGPoint) -> (Int, Int) {
-		let c: CGFloat = cell
-		let x: Int = clampI(Int(floor((p.x + panX) / c)), 0, pixels.w - 1)
-		let y: Int = clampI(Int(floor((p.y + panY) / c)), 0, pixels.h - 1)
-		return (x, y)
-	}
-
-	func remember() {
-		undo.append(pixels)
-		if undo.count > 80 { undo.removeFirst() }
-		redo.removeAll()
-	}
-
-	// MARK: drawing with the finger
-
-	func dragged(_ start: CGPoint, _ p: CGPoint) {
-		switch current {
-		case .pan:
-			panDrag(start, p)
-		case .select:
-			selectDrag(start, p)
-		case .line, .box, .circle:
-			guard let xy = cellAt(p) else { return }
-			if shapeA == nil, let s = cellAt(start) { shapeA = s }
-			shapeB = xy
-		case .fill, .pick:
-			guard let xy = cellAt(p), !stroking else { return }
-			stroking = true
-			if current == .pick {
-				let picked: UInt32 = pixels.argb(xy.0, xy.1)
-				if (picked >> 24) != 0 { pickColor(picked) }
-				tool = SpriteTool.pen.rawValue
-				return
-			}
-			remember()
-			var px: ModPixels = pixels
-			PixelEditorView.floodFill(&px, xy.0, xy.1, SpritePaint.penColor(color, opacity))
-			pixels = px
-			useColor(color)
-		default:
-			guard let xy = cellAt(p) else { return }
-			brushDrag(xy)
-		}
-	}
-
-	func panDrag(_ start: CGPoint, _ p: CGPoint) {
-		if !stroking {
-			stroking = true
-			panStart = CGPoint(x: panX, y: panY)
-		}
-		let maxX: CGFloat = max(0, cell * CGFloat(pixels.w) - viewW)
-		let maxY: CGFloat = max(0, cell * CGFloat(pixels.h) - viewH)
-		panX = min(maxX, max(0, panStart.x - (p.x - start.x)))
-		panY = min(maxY, max(0, panStart.y - (p.y - start.y)))
-	}
-
-	/// The brush tools: each pixel the finger crosses (fast strokes are joined up), the brush laid
-	/// around it, the mirror copy too
-	func brushDrag(_ xy: (Int, Int)) {
-		let idx: Int = xy.1 * pixels.w + xy.0
-		if !stroking {
-			stroking = true
-			remember()
-			stroke = []
-			touched = []
-			lastXY = nil
-		} else if idx == lastCell {
-			return
-		}
-		lastCell = idx
-		var px: ModPixels = pixels
-		let path: [(Int, Int)] = lastXY.map { PixelEditorView.lineCells($0, xy).dropFirst().map { $0 } } ?? [xy]
-		for (x, y) in path { brushAt(&px, x, y) }
-		lastXY = xy
-		pixels = px
-		if current == .pen || current == .dither { useColor(color) }
-	}
-
-	func brushAt(_ px: inout ModPixels, _ x: Int, _ y: Int) {
-		let t: SpriteTool = current
-		let col: UInt32 = SpritePaint.penColor(color, opacity)
-		let single: Bool = t == .pen && brushSize == 1 && perfect && !mirror
-		// pixel-perfect: a one-pixel pen stroke never leaves L-shaped corners
-		if single && SpritePaint.perfectCorner(stroke, x, y) {
-			let b: StrokeCell = stroke.removeLast()
-			px.setARGB(b.x, b.y, b.before)
-			touched.remove(b.y * px.w + b.x)
-		}
-		var cells: [(Int, Int)] = SpritePaint.brushCells(x, y, brushSize, brushRound)
-		if mirror { cells += cells.map { (px.w - 1 - $0.0, $0.1) } }
-		for (cx, cy) in cells {
-			if cx < 0 || cy < 0 || cx >= px.w || cy >= px.h { continue }
-			let k: Int = cy * px.w + cx
-			if touched.contains(k) { continue }
-			touched.insert(k)
-			let before: UInt32 = px.argb(cx, cy)
-			switch t {
-			case .erase: SpritePaint.erase(&px, cx, cy, opacity)
-			case .shade: SpritePaint.shade(&px, cx, cy, darken)
-			case .dither: if (cx + cy) % 2 == 0 { SpritePaint.paint(&px, cx, cy, col, blend) }
-			default: SpritePaint.paint(&px, cx, cy, col, blend)
-			}
-			if single && cx == x && cy == y { stroke.append(StrokeCell(x: cx, y: cy, before: before)) }
-		}
-	}
-
-	func ended(_ p: CGPoint) {
-		if current.shape, let a = shapeA {
-			let b: (Int, Int) = cellAt(p) ?? shapeB ?? a
-			remember()
-			var px: ModPixels = pixels
-			let col: UInt32 = SpritePaint.penColor(color, opacity)
-			for (x, y) in shapeCells(a, b) {
-				SpritePaint.paint(&px, x, y, col, blend)
-				if mirror { SpritePaint.paint(&px, px.w - 1 - x, y, col, blend) }
-			}
-			pixels = px
-			useColor(color)
-		}
-		if current == .select { selectEnded() }
-		shapeA = nil
-		shapeB = nil
-		stroking = false
-		lastCell = -1
-		lastXY = nil
-		stroke = []
-		touched = []
-	}
-
-	// MARK: selections
-
-	/// Dragging inside the selection lifts its pixels and moves them; anywhere else chooses a new one
-	func selectDrag(_ start: CGPoint, _ p: CGPoint) {
-		let s0: (Int, Int) = cellClamped(start)
-		let cur: (Int, Int) = cellClamped(p)
-		if !stroking {
-			stroking = true
-			if let s = sel, s.contains(s0.0, s0.1) {
-				if floating == nil {
-					// lift the chosen pixels off the picture to move them
-					remember()
-					var px: ModPixels = pixels
-					floating = SpritePaint.cut(px, s)
-					SpritePaint.clearSel(&px, s)
-					pixels = px
-					floatX = s.x0
-					floatY = s.y0
-				}
-				moveFrom = (s0.0 - floatX, s0.1 - floatY)
-			} else {
-				dropFloating()
-				moveFrom = nil
-				sel = SpriteSel.from(s0, s0)
-			}
-		}
-		if let m = moveFrom, let f = floating {
-			floatX = cur.0 - m.0
-			floatY = cur.1 - m.1
-			sel = SpriteSel(x0: floatX, y0: floatY, x1: floatX + f.w - 1, y1: floatY + f.h - 1)
-		} else {
-			sel = SpriteSel.from(s0, cur)
-		}
-	}
-
-	func selectEnded() {
-		if floating != nil { dropFloating() }
-		moveFrom = nil
-	}
-
-	/// Puts moved pixels down where they are now
-	func dropFloating() {
-		guard let f = floating else { return }
-		var px: ModPixels = pixels
-		SpritePaint.drop(&px, f, floatX, floatY)
-		pixels = px
-		floating = nil
-	}
-
-	var selectionBar: some View {
-		HStack(spacing: 4) {
-			Text("SELECTION").font(.pixel(10)).foregroundColor(ModUI.dim)
-			SmallButton(title: "COPY", color: ModUI.blue) { copySel() }
-			SmallButton(title: "PASTE", color: ModUI.blue) { pasteSel() }
-			SmallButton(title: "FLIP ↔") { flipSel() }
-			SmallButton(title: "DELETE", color: ModUI.red) { deleteSel() }
-			SmallButton(title: "DONE") { dropFloating(); sel = nil }
-		}
-	}
-
-	func copySel() {
-		guard let s = sel else { return }
-		PixelEditorView.clip = floating ?? SpritePaint.cut(pixels, s)
-		note = "Copied. PASTE puts it here or in another picture."
-	}
-
-	func pasteSel() {
-		guard let c = PixelEditorView.clip else { note = "Copy a selection first."; return }
-		dropFloating()
-		remember()
-		let ox: Int = sel?.x0 ?? 0
-		let oy: Int = sel?.y0 ?? 0
-		floating = c
-		floatX = ox
-		floatY = oy
-		sel = SpriteSel(x0: ox, y0: oy, x1: ox + c.w - 1, y1: oy + c.h - 1)
-		tool = SpriteTool.select.rawValue
-		note = "Pasted: drag it where you want it, then DONE."
-	}
-
-	func flipSel() {
-		guard let s = sel else { return }
-		remember()
-		if let f = floating {
-			floating = f.flippedH()
-			return
-		}
-		var px: ModPixels = pixels
-		let part: ModPixels = SpritePaint.cut(px, s).flippedH()
-		SpritePaint.clearSel(&px, s)
-		SpritePaint.drop(&px, part, s.x0, s.y0)
-		pixels = px
-	}
-
-	func deleteSel() {
-		guard let s = sel else { return }
-		remember()
-		if floating != nil {
-			floating = nil
-		} else {
-			var px: ModPixels = pixels
-			SpritePaint.clearSel(&px, s)
-			pixels = px
-		}
-		sel = nil
-	}
-
-	static func lineCells(_ a: (Int, Int), _ b: (Int, Int)) -> [(Int, Int)] {
-		var out: [(Int, Int)] = []
-		var x0: Int = a.0
-		var y0: Int = a.1
-		let dx: Int = abs(b.0 - x0)
-		let dy: Int = -abs(b.1 - y0)
-		let sx: Int = x0 < b.0 ? 1 : -1
-		let sy: Int = y0 < b.1 ? 1 : -1
-		var err: Int = dx + dy
-		var guardN: Int = 0
-		while guardN < 512 {
-			guardN += 1
-			out.append((x0, y0))
-			if x0 == b.0 && y0 == b.1 { break }
-			let e2: Int = 2 * err
-			if e2 >= dy { err += dy; x0 += sx }
-			if e2 <= dx { err += dx; y0 += sy }
-		}
-		return out
-	}
-
-	static func boxCells(_ a: (Int, Int), _ b: (Int, Int)) -> [(Int, Int)] {
-		return SpritePaint.boxCells(a, b, false)
-	}
-
-	static func floodFill(_ px: inout ModPixels, _ sx: Int, _ sy: Int, _ col: UInt32) {
-		let target: UInt32 = px.argb(sx, sy)
-		if target == col { return }
-		var stack: [(Int, Int)] = [(sx, sy)]
-		var guardN: Int = 0
-		while let cur = stack.popLast() {
-			guardN += 1
-			if guardN > 40000 { break }
-			let (x, y) = cur
-			if x < 0 || y < 0 || x >= px.w || y >= px.h { continue }
-			if px.argb(x, y) != target { continue }
-			px.setARGB(x, y, col)
-			stack.append((x + 1, y))
-			stack.append((x - 1, y))
-			stack.append((x, y + 1))
-			stack.append((x, y - 1))
-		}
-	}
-
-	// MARK: tools
-
-	var zoomBar: some View {
-		HStack(spacing: 6) {
-			SmallButton(title: "−") { setZoom(cell - (cell > 16 ? 8 : 2)) }
-			Text(verbatim: joinText(String(Int(cell)), " px")).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-			SmallButton(title: "+") { setZoom(cell + (cell >= 16 ? 8 : 2)) }
-			SmallButton(title: "FIT") { zoom = 0; panX = 0; panY = 0 }
-			SmallButton(title: showGrid ? "GRID ON" : "GRID OFF", color: showGrid ? ModUI.accent : Color(ui: 0x555555)) { showGrid.toggle() }
-			if frameIndex > 0 {
-				SmallButton(title: onion ? "ONION ON" : "ONION OFF", color: onion ? ModUI.accent : Color(ui: 0x555555)) { onion.toggle() }
-			}
-		}
-	}
-
-	func setZoom(_ z: CGFloat) {
-		zoom = min(48, max(3, z))
-		panX = 0
-		panY = 0
-	}
-
-	var toolGrid: some View {
-		PlainGrid(count: SpriteTool.allCases.count + 1, per: 3, spacing: 4) { (i: Int) in self.toolButton(i) }
-			.frame(width: 250)
-	}
-
-	func toolButton(_ i: Int) -> some View {
-		if i >= SpriteTool.allCases.count {
-			return SmallButton(title: mirror ? "MIRROR ON" : "MIRROR", color: mirror ? ModUI.accent : Color(ui: 0x555555)) { mirror.toggle() }
-		}
-		let name: String = SpriteTool.allCases[i].name
-		return SmallButton(title: name, color: tool == i ? ModUI.accent : Color(ui: 0x555555)) { selectTool(i) }
-	}
-
-	func selectTool(_ i: Int) {
-		if tool == SpriteTool.select.rawValue && i != tool { dropFloating(); sel = nil }
-		tool = i
-	}
-
-	/// The chosen tool's settings: brush size and shape, pixel-perfect, filled shapes, darker or lighter
-	@ViewBuilder
-	var toolOptions: some View {
-		let t: SpriteTool = current
-		if t.brush || t == .line {
-			HStack(spacing: 6) {
-				if t.brush {
-					Text(verbatim: joinText("BRUSH ", String(brushSize))).font(.pixel(11)).foregroundColor(Color.white)
-					SmallButton(title: "−") { brushSize = max(1, brushSize - 1) }
-					SmallButton(title: "+") { brushSize = min(8, brushSize + 1) }
-					SmallButton(title: brushRound ? "ROUND" : "SQUARE") { brushRound.toggle() }
-				}
-				if t == .pen && brushSize == 1 {
-					SmallButton(title: perfect ? "PIXEL-PERFECT ON" : "PIXEL-PERFECT OFF", color: perfect ? ModUI.accent : Color(ui: 0x555555)) { perfect.toggle() }
-				}
-				if t == .shade {
-					SmallButton(title: darken ? "DARKER" : "LIGHTER", color: darken ? Color(ui: 0x3A3A5A) : Color(ui: 0x8A8A5A)) { darken.toggle() }
-				}
-			}
-		} else if t == .box || t == .circle {
-			HStack(spacing: 6) {
-				SmallButton(title: filled ? "FILLED" : "OUTLINE", color: filled ? ModUI.accent : Color(ui: 0x555555)) { filled.toggle() }
-			}
-		} else if t == .select && sel == nil {
-			Text("Drag to choose pixels; drag inside the choice to move them.").font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
-		}
-	}
-
-	var editButtons: some View {
-		VStack(alignment: .leading, spacing: 4) {
-			HStack(spacing: 4) {
-				SmallButton(title: "UNDO", color: undo.isEmpty ? Color(ui: 0x444444) : Color(ui: 0x5A5A70)) { undoStep() }
-				SmallButton(title: "REDO", color: redo.isEmpty ? Color(ui: 0x444444) : Color(ui: 0x5A5A70)) { redoStep() }
-				SmallButton(title: "CLEAR", color: ModUI.red) {
-					remember()
-					var e = ModPixels(w: pixels.w, h: pixels.h)
-					e.outline = pixels.outline
-					pixels = e
-				}
-			}
-			HStack(spacing: 4) {
-				SmallButton(title: "FLIP ↔") { change { $0.flippedH() } }
-				SmallButton(title: "FLIP ↕") { change { $0.flippedV() } }
-				if pixels.w == pixels.h { SmallButton(title: "TURN") { change { $0.rotated() } } }
-			}
-			HStack(spacing: 4) {
-				SmallButton(title: "◀") { change { $0.shifted(-1, 0) } }
-				SmallButton(title: "▶") { change { $0.shifted(1, 0) } }
-				SmallButton(title: "▲") { change { $0.shifted(0, -1) } }
-				SmallButton(title: "▼") { change { $0.shifted(0, 1) } }
-			}
-			outlineButton
-		}
-	}
-
-	var outlineButton: some View {
-		let on: Bool = pixels.outlined(outlineDefault)
-		return SmallButton(title: on ? "OUTLINE ON" : "OUTLINE OFF", color: on ? ModUI.accent : Color(ui: 0x555555)) {
-			var p: ModPixels = pixels
-			p.outline = !on
-			pixels = p
-		}
-	}
-
-	func undoStep() {
-		floating = nil
-		if let last = undo.popLast() {
-			redo.append(pixels)
-			pixels = last
-		}
-	}
-
-	func redoStep() {
-		if let next = redo.popLast() {
-			undo.append(pixels)
-			pixels = next
-		}
-	}
-
-	func change(_ f: (ModPixels) -> ModPixels) {
-		dropFloating()
-		remember()
-		pixels = f(pixels)
-	}
-
-	/// what it looks like in the game: actual pixels, outlined or not as chosen
-	var previewBox: some View {
-		let on: Bool = pixels.outlined(outlineDefault)
-		var b: PixelBuf = pixels.buf()
-		if on {
-			b = padBuf(b)
-			b.outline(0x101010)
-		}
-		let scale: CGFloat = max(1, floor(96 / CGFloat(max(b.w, b.h))))
-		return VStack(alignment: .leading, spacing: 4) {
-			Text("IN THE GAME").font(.pixel(10)).foregroundColor(ModUI.dim)
-			HStack(alignment: .bottom, spacing: 8) {
-				pixImage(b).resizable().interpolation(.none).frame(width: CGFloat(b.w) * scale, height: CGFloat(b.h) * scale)
-					.background(Color(ui: 0x6AA0D8).opacity(0.5))
-				if frames.count > 1 { animation }
-			}
-			currentSwatch
-		}
-	}
-
-	/// The colour in use, over a checker so its opacity shows
-	var currentSwatch: some View {
-		let a: Double = Double(SpritePaint.penColor(color, opacity) >> 24) / 255.0
-		let pct: Int = Int((a * 100).rounded())
-		return HStack(spacing: 6) {
-			ZStack {
-				HStack(spacing: 0) {
-					Rectangle().fill(Color(hex: 0xC8C8C8)).frame(width: 13, height: 26)
-					Rectangle().fill(Color(hex: 0x6A6A6A)).frame(width: 13, height: 26)
-				}
-				Rectangle().fill(Color(hex: color & 0xFFFFFF).opacity(a)).frame(width: 26, height: 26)
-			}
-			.overlay(Rectangle().stroke(Color.white, lineWidth: 2))
-			Text(verbatim: joinText(String(pixels.w), " x ", String(pixels.h), "  ", String(pct), "%")).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-		}
-	}
-
-	/// the frames played in a loop (about six a second)
-	var animation: some View {
-		let fr: [ModPixels] = frames.isEmpty ? [pixels] : frames
-		let i: Int = frameIndex
-		let cur: ModPixels = pixels
-		return TimelineView(.animation) { context in
-			let n: Int = max(1, fr.count)
-			let k: Int = Int(context.date.timeIntervalSinceReferenceDate * 6.0) % n
-			let f: ModPixels = k == i ? cur : fr[k]
-			pixImage(f.buf()).resizable().interpolation(.none).frame(width: 56, height: 56 * CGFloat(f.h) / CGFloat(max(1, f.w)))
-		}
-	}
-
-	func refBeside(_ r: PixelBuf) -> some View {
-		let scale: CGFloat = max(1, floor(120 / CGFloat(max(r.w, r.h))))
-		return VStack(alignment: .leading, spacing: 2) {
-			Text(verbatim: joinText("REFERENCE: ", refName)).font(.pixel(10)).foregroundColor(ModUI.dim).lineLimit(1)
-			pixImage(r).resizable().interpolation(.none).frame(width: CGFloat(r.w) * scale, height: CGFloat(r.h) * scale)
-				.background(Color.black.opacity(0.35))
-		}
-	}
-
-	// MARK: colours
-
-	var paletteColors: [UInt32] {
-		if paletteIx >= SpritePalettes.sets.count { return mine }
-		return SpritePalettes.sets[paletteIx]
-	}
-
-	var palette: some View {
-		let cols: [UInt32] = paletteColors
-		return VStack(alignment: .leading, spacing: 4) {
-			HStack(spacing: 4) {
-				ForEach(0..<SpritePalettes.names.count, id: \.self) { (i: Int) in self.paletteChip(i) }
-			}
-			if cols.isEmpty {
-				Text("Your own colours go here: mix one, then SAVE COLOUR.").font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
-			} else {
-				PlainGrid(count: cols.count, per: 16, spacing: 4) { (i: Int) in self.swatch(cols[i]) }
-			}
-			if !recent.isEmpty {
-				HStack(spacing: 4) {
-					Text("RECENT").font(.pixel(9)).foregroundColor(ModUI.dim)
-					ForEach(0..<recent.count, id: \.self) { (i: Int) in self.swatch(recent[i]) }
-				}
-			}
-			HStack(spacing: 6) {
-				SmallButton(title: showMixer ? "HIDE COLOUR MIXER" : "MIX A COLOUR...") { showMixer.toggle() }
-				SmallButton(title: "SAVE COLOUR", color: ModUI.blue) { saveColour() }
-				if paletteIx >= SpritePalettes.sets.count && !mine.isEmpty {
-					SmallButton(title: removing ? "TAP ONE TO REMOVE" : "REMOVE...", color: removing ? ModUI.red : Color(ui: 0x555555)) { removing.toggle() }
-				}
-			}
-		}
-	}
-
-	func paletteChip(_ i: Int) -> some View {
-		let on: Bool = paletteIx == i
-		return SmallButton(title: SpritePalettes.names[i], color: on ? ModUI.blue : Color(ui: 0x4A4A50)) {
-			paletteIx = i
-			removing = false
-		}
-	}
-
-	func swatch(_ c0: UInt32) -> some View {
-		let c: UInt32 = (c0 >> 24) == 0 ? (0xFF000000 | c0) : c0
-		let on: Bool = (color & 0xFFFFFF) == (c & 0xFFFFFF)
-		let a: Double = Double(c >> 24) / 255.0
-		return Rectangle().fill(Color(hex: c & 0xFFFFFF).opacity(a))
-			.frame(width: 30, height: 30)
-			.background(Color(ui: 0x8A8A8A))
-			.overlay(Rectangle().stroke(on ? Color.white : Color.black, lineWidth: on ? 3 : 1))
-			.onTapGesture { self.tapSwatch(c) }
-	}
-
-	func tapSwatch(_ c: UInt32) {
-		if removing {
-			mine.removeAll { $0 == c }
-			SpritePalettes.saveMine(mine)
-			if mine.isEmpty { removing = false }
-			return
-		}
-		pickColor(0xFF000000 | (c & 0xFFFFFF))
-		if (c >> 24) < 255 { opacity = Double(c >> 24) / 255.0 }
-		let t: SpriteTool = current
-		if t == .erase || t == .pick || t == .pan || t == .select || t == .shade { selectTool(SpriteTool.pen.rawValue) }
-	}
-
-	func saveColour() {
-		let c: UInt32 = SpritePaint.penColor(color, opacity)
-		if mine.contains(c) { note = "That colour is saved already."; return }
-		mine.append(c)
-		if mine.count > 32 { mine.removeFirst() }
-		SpritePalettes.saveMine(mine)
-		paletteIx = SpritePalettes.sets.count
-		note = "Saved to MINE (kept on this iPad)."
-	}
-
-	func pickColor(_ c: UInt32) {
-		color = 0xFF000000 | (c & 0xFFFFFF)
-		mixR = Double((c >> 16) & 0xFF)
-		mixG = Double((c >> 8) & 0xFF)
-		mixB = Double(c & 0xFF)
-	}
-
-	func useColor(_ c: UInt32) {
-		if modPalette.contains(c & 0xFFFFFF) { return }
-		recent.removeAll { $0 == c }
-		recent.insert(c, at: 0)
-		if recent.count > 8 { recent.removeLast() }
-	}
-
-	var mixer: some View {
-		VStack(spacing: 4) {
-			StatSlider(label: "Red", value: mixBind(0), range: 0...255, step: 1, format: "%.0f")
-			StatSlider(label: "Green", value: mixBind(1), range: 0...255, step: 1, format: "%.0f")
-			StatSlider(label: "Blue", value: mixBind(2), range: 0...255, step: 1, format: "%.0f")
-			StatSlider(label: "Opacity (pen)", value: $opacity, range: 0.05...1.0, step: 0.05, format: "%.2f")
-			HStack(spacing: 6) {
-				SmallButton(title: blend ? "BLEND ON" : "BLEND OFF", color: blend ? ModUI.accent : Color(ui: 0x555555)) { blend.toggle() }
-				Text(verbatim: blend ? "See-through paint mixes with what is under it." : "See-through paint makes see-through pixels.").font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
-			}
-		}
-	}
-
-	func mixBind(_ k: Int) -> Binding<Double> {
-		return Binding<Double>(get: {
-			k == 0 ? mixR : (k == 1 ? mixG : mixB)
-		}, set: { v in
-			if k == 0 { mixR = v } else if k == 1 { mixG = v } else { mixB = v }
-			let r: UInt32 = UInt32(clampD(mixR, 0, 255))
-			let g: UInt32 = UInt32(clampD(mixG, 0, 255))
-			let b: UInt32 = UInt32(clampD(mixB, 0, 255))
-			color = 0xFF000000 | (r << 16) | (g << 8) | b
-			let t: SpriteTool = current
-			if !(t == .pen || t == .fill || t.shape || t == .dither) { selectTool(SpriteTool.pen.rawValue) }
-		})
-	}
-
-	// MARK: panels: reference, size, copy in and out, library
-
-	var panelTabs: some View {
-		HStack(spacing: 6) {
-			ForEach(0..<4, id: \.self) { i in
-				SmallButton(title: ["REFERENCE", "SIZE", "COPY & PASTE", "SPRITE LIBRARY"][i], color: panel == i + 1 ? ModUI.blue : Color(ui: 0x4A4A50)) {
-					panel = panel == i + 1 ? 0 : i + 1
-					if panel == 4 { library = SpriteLibrary.load() }
-				}
-			}
-		}
-	}
-
-	@ViewBuilder
-	var panelBody: some View {
-		switch panel {
-		case 1: referencePanel
-		case 2: sizePanel
-		case 3: copyPanel
-		case 4: libraryPanel
-		default: EmptyView()
-		}
-	}
-
-	var referencePanel: some View {
-		VStack(alignment: .leading, spacing: 6) {
-			Text("Pick any picture from the game, your library or the clipboard. Show it beside the canvas or under it as a guide, or copy it in as a starting sample (the original never changes).")
-				.font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
-			if ref != nil {
-				HStack(spacing: 6) {
-					SmallButton(title: "BESIDE", color: refMode == 1 ? ModUI.accent : Color(ui: 0x555555)) { refMode = 1 }
-					SmallButton(title: "UNDER", color: refMode == 2 ? ModUI.accent : Color(ui: 0x555555)) { refMode = 2 }
-					SmallButton(title: "HIDE", color: refMode == 0 ? ModUI.accent : Color(ui: 0x555555)) { refMode = 0 }
-					SmallButton(title: "USE AS SAMPLE", color: ModUI.blue) { useSample() }
-					SmallButton(title: "REMOVE", color: ModUI.red) { ref = nil; refName = "" }
-				}
-				if refMode == 2 { StatSlider(label: "See-through", value: $refOpacity, range: 0.1...0.9, step: 0.05, format: "%.2f") }
-			}
-			SpriteRefPicker(pick: { b, name in
-				ref = b
-				refName = name
-				if refMode == 0 { refMode = 1 }
-				note = joinText("Reference: ", name, ".")
-			}, pasteNote: { note = $0 }, size: (pixels.w, pixels.h))
-		}
-	}
-
-	/// Copies the reference into the canvas as a starting point (fitted to the canvas, or the canvas
-	/// sized to it where that is allowed)
-	func useSample() {
-		guard let r = ref else { return }
-		remember()
-		var p: ModPixels
-		if !sizes.isEmpty && onResize == nil && r.w <= 64 && r.h <= 64 && (sizes.contains(r.w) && sizes.contains(r.h)) {
-			p = ModPixels(buf: r)
-		} else {
-			p = ModPixels.fitted(r, pixels.w, pixels.h)
-		}
-		p.outline = pixels.outline
-		pixels = p
-		note = joinText("Copied ", refName, " in to start from. The original is unchanged.")
-	}
-
-	var sizePanel: some View {
-		VStack(alignment: .leading, spacing: 6) {
-			if sizes.isEmpty {
-				Text(verbatim: joinText("This picture is always ", String(pixels.w), " x ", String(pixels.h), ".")).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-			} else {
-				Text("New size (KEEP keeps the picture as it is, centred at the bottom; STRETCH scales it)").font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
-				ForEach(sizes, id: \.self) { sz in
-					HStack(spacing: 6) {
-						Text(verbatim: joinText(String(sz), " x ", String(sz))).font(.pixel(11)).foregroundColor(Color.white).frame(width: 70, alignment: .leading)
-						SmallButton(title: "KEEP") { resize(sz, sz, false) }
-						SmallButton(title: "STRETCH") { resize(sz, sz, true) }
-						if sz != pixels.h && pixels.w != sz {
-							SmallButton(title: joinText(String(sz), " x ", String(pixels.h))) { resize(sz, pixels.h, false) }
-						}
+	/// A picture of any size squeezed into this many pixels by averaging (for pasted photos and
+	/// drawings): `bytes` are RGBA, top row first
+	static func fromRGBA(_ bytes: [UInt8], _ sw: Int, _ sh: Int, _ nw: Int, _ nh: Int) -> ModPixels {
+		var o = ModPixels(w: nw, h: nh)
+		if sw <= 0 || sh <= 0 || bytes.count < sw * sh * 4 { return o }
+		for y in 0..<o.h {
+			for x in 0..<o.w {
+				let x0: Int = x * sw / o.w
+				let x1: Int = max(x0 + 1, (x + 1) * sw / o.w)
+				let y0: Int = y * sh / o.h
+				let y1: Int = max(y0 + 1, (y + 1) * sh / o.h)
+				var r: Int = 0
+				var g: Int = 0
+				var b: Int = 0
+				var a: Int = 0
+				var n: Int = 0
+				for yy in y0..<min(sh, y1) {
+					for xx in x0..<min(sw, x1) {
+						let i: Int = (yy * sw + xx) * 4
+						let al: Int = Int(bytes[i + 3])
+						r += Int(bytes[i]) * al
+						g += Int(bytes[i + 1]) * al
+						b += Int(bytes[i + 2]) * al
+						a += al
+						n += 1
 					}
 				}
+				if n == 0 || a / n < 8 { continue }
+				let rr: UInt32 = UInt32(clampI(r / max(1, a), 0, 255))
+				let gg: UInt32 = UInt32(clampI(g / max(1, a), 0, 255))
+				let bb: UInt32 = UInt32(clampI(b / max(1, a), 0, 255))
+				let aa: UInt32 = UInt32(clampI(a / n, 0, 255))
+				o.setARGB(x, y, (aa << 24) | (rr << 16) | (gg << 8) | bb)
 			}
 		}
+		return o
 	}
 
-	func resize(_ w: Int, _ h: Int, _ stretch: Bool) {
-		if let f = onResize {
-			f(w, h)
-			return
+	/// The picture as a short text code, to copy between mods, worlds and iPads
+	func spriteCode() -> String {
+		return joinText("PRSPR1:", String(w), "x", String(h), ":", (outline ?? true) ? "o" : "n", ":", rgba.base64EncodedString())
+	}
+
+	/// A picture read back from its text code (nil: not a sprite code, or damaged)
+	static func fromSpriteCode(_ code: String) -> ModPixels? {
+		let parts: [Substring] = code.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: ":", maxSplits: 3, omittingEmptySubsequences: false)
+		if parts.count != 4 || parts[0] != "PRSPR1" { return nil }
+		let wh: [Substring] = parts[1].split(separator: "x")
+		guard wh.count == 2, let w = Int(wh[0]), let h = Int(wh[1]), w >= 1, h >= 1, w <= ModPixels.maxSide, h <= ModPixels.maxSide else { return nil }
+		guard let data = Data(base64Encoded: String(parts[3])), data.count == w * h * 4 else { return nil }
+		var p = ModPixels(w: w, h: h)
+		p.rgba = data
+		p.outline = parts[2] == "o"
+		return p.valid ? p : nil
+	}
+}
+
+/// Copying sprites in and out through the iPad's clipboard: as a text code (exact), or a picture
+/// (any image copied from Photos or a drawing app, shrunk to the sprite's size)
+enum SpriteClipboard {
+	static func copy(_ p: ModPixels) {
+		UIPasteboard.general.string = p.spriteCode()
+	}
+
+	static func pasteCode() -> ModPixels? {
+		guard let s = UIPasteboard.general.string else { return nil }
+		return ModPixels.fromSpriteCode(s)
+	}
+
+	/// The image on the clipboard shrunk to w x h pixels (nil: no image there)
+	static func pasteImage(_ w: Int, _ h: Int) -> ModPixels? {
+		guard let img = UIPasteboard.general.image, let cg = img.cgImage else { return nil }
+		return pixels(cg, w, h)
+	}
+
+	/// A picture's pixels at its own size (capped at 256 on a side), then shrunk by averaging
+	static func pixels(_ cg: CGImage, _ w: Int, _ h: Int) -> ModPixels? {
+		let sw: Int = min(256, max(1, cg.width))
+		let sh: Int = min(256, max(1, cg.height))
+		var bytes: [UInt8] = [UInt8](repeating: 0, count: sw * sh * 4)
+		let space: CGColorSpace = CGColorSpaceCreateDeviceRGB()
+		let ok: Bool = bytes.withUnsafeMutableBytes { (bp: UnsafeMutableRawBufferPointer) -> Bool in
+			guard let ctx = CGContext(data: bp.baseAddress, width: sw, height: sh, bitsPerComponent: 8, bytesPerRow: sw * 4, space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+			ctx.interpolationQuality = .medium
+			ctx.draw(cg, in: CGRect(x: 0, y: 0, width: sw, height: sh))
+			return true
 		}
-		remember()
-		var p: ModPixels = stretch ? pixels.scaled(w, h) : pixels.resized(w, h)
-		p.outline = pixels.outline
-		pixels = p
-		zoom = 0
-		panX = 0
-		panY = 0
+		if !ok { return nil }
+		return ModPixels.fromRGBA(bytes, sw, sh, w, h)
+	}
+}
+
+/// A sprite saved in the sprite library: finished or not, ready to use in any mod or as a reference
+struct SpriteProject: Codable, Identifiable, Equatable {
+	var id: String = ""
+	var name: String = "Sprite"
+	var frames: [ModPixels] = [ModPixels(w: 16, h: 16)]
+	var edited: Double = 0
+
+	init() {}
+
+	init(from decoder: Decoder) throws {
+		let c = try decoder.container(keyedBy: CodingKeys.self)
+		id = c.val(.id, "")
+		name = c.val(.name, "Sprite")
+		var skip: Int = 0
+		frames = c.list(.frames, &skip)
+		if frames.isEmpty { frames = [ModPixels(w: 16, h: 16)] }
+		edited = c.val(.edited, 0)
+	}
+}
+
+/// The sprite library: sprites kept on this iPad apart from any mod
+enum SpriteLibrary {
+	static let maxSprites: Int = 120
+	static var url: URL { return ModStore.dir.appendingPathComponent("sprites.json") }
+
+	static func load() -> [SpriteProject] {
+		guard let d = try? Data(contentsOf: url) else { return [] }
+		let raw: [Lenient<SpriteProject>] = (try? JSONDecoder().decode([Lenient<SpriteProject>].self, from: d)) ?? []
+		return raw.compactMap { $0.value }.filter { !$0.frames.isEmpty && $0.frames.allSatisfy { $0.valid } }
 	}
 
-	var copyPanel: some View {
-		VStack(alignment: .leading, spacing: 6) {
-			Text("A sprite code copies a picture exactly (paste it into another mod, or send it to a friend). A picture copied from Photos or a drawing app is shrunk to this size.")
-				.font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
-			HStack(spacing: 6) {
-				SmallButton(title: "COPY CODE", color: ModUI.blue) {
-					SpriteClipboard.copy(pixels)
-					codeText = pixels.spriteCode()
-					note = "The sprite code is on the clipboard."
-				}
-				SmallButton(title: "PASTE CODE", color: ModUI.blue) {
-					if let p = SpriteClipboard.pasteCode() ?? ModPixels.fromSpriteCode(codeText) { pasteIn(p) } else { note = "No sprite code on the clipboard (or in the box below)." }
-				}
-				SmallButton(title: "PASTE PICTURE", color: ModUI.blue) {
-					if let p = SpriteClipboard.pasteImage(pixels.w, pixels.h) { pasteIn(p) } else { note = "No picture on the clipboard: copy one first." }
-				}
-			}
-			ModTextField(label: "Sprite code", text: $codeText, placeholder: "PRSPR1:...")
-		}
+	static func saveAll(_ list: [SpriteProject]) {
+		guard let d = try? JSONEncoder().encode(Array(list.prefix(maxSprites))) else { return }
+		try? d.write(to: url, options: .atomic)
 	}
 
-	func pasteIn(_ p0: ModPixels) {
-		remember()
-		var p: ModPixels = p0
-		if p.w != pixels.w || p.h != pixels.h {
-			if sizes.contains(p.w) && sizes.contains(p.h) && onResize == nil {
-				// fits a size this picture may take: keep it as it is
-			} else {
-				p = ModPixels.fitted(p0.buf(), pixels.w, pixels.h)
-				p.outline = p0.outline
-			}
-		}
-		pixels = p
-		note = "Pasted."
+	/// Adds a sprite or replaces the one with its id; returns it as saved
+	@discardableResult
+	static func put(_ p0: SpriteProject) -> SpriteProject {
+		var p: SpriteProject = p0
+		if p.id.isEmpty { p.id = joinText("s", String(Int(Date().timeIntervalSince1970 * 1000) % 1_000_000_000), String(Int.random(in: 10...99))) }
+		if p.name.trimmingCharacters(in: .whitespaces).isEmpty { p.name = "Sprite" }
+		p.name = String(p.name.prefix(32))
+		p.frames = Array(p.frames.prefix(ModLimits.maxFrames)).filter { $0.valid }
+		if p.frames.isEmpty { p.frames = [ModPixels(w: 16, h: 16)] }
+		p.edited = Date().timeIntervalSince1970
+		var list: [SpriteProject] = load()
+		if let i = list.firstIndex(where: { $0.id == p.id }) { list[i] = p } else { list.insert(p, at: 0) }
+		saveAll(list)
+		return p
 	}
 
-	var libraryPanel: some View {
-		VStack(alignment: .leading, spacing: 6) {
-			HStack(spacing: 6) {
-				ModTextField(label: "Save as", text: $libName, placeholder: "My sprite")
-				SmallButton(title: "SAVE TO LIBRARY", color: ModUI.accent) {
-					var pr = SpriteProject()
-					pr.name = libName.isEmpty ? "Sprite" : libName
-					pr.frames = frames.count > 1 ? frames.enumerated().map { $0.offset == frameIndex ? pixels : $0.element } : [pixels]
-					let saved: SpriteProject = SpriteLibrary.put(pr)
-					library = SpriteLibrary.load()
-					note = joinText("Saved ", saved.name, " to the library.")
-				}
-			}
-			if library.isEmpty { Text("The library is empty.").font(.pixel(11, .semibold)).foregroundColor(ModUI.dim) }
-			ForEach(library) { pr in
-				HStack(spacing: 8) {
-					pixImage(pr.frames[0].buf()).resizable().interpolation(.none).frame(width: 36, height: 36).background(Color.black.opacity(0.35))
-					VStack(alignment: .leading, spacing: 1) {
-						Text(verbatim: pr.name).font(.pixel(12)).foregroundColor(Color.white)
-						Text(verbatim: joinText(String(pr.frames[0].w), " x ", String(pr.frames[0].h), pr.frames.count > 1 ? joinText(" · ", String(pr.frames.count), " frames") : "")).font(.pixel(9, .semibold)).foregroundColor(ModUI.dim)
-					}
-					Spacer()
-					SmallButton(title: "OPEN") { pasteIn(pr.frames[min(frameIndex, pr.frames.count - 1)]) }
-					SmallButton(title: "REFERENCE") {
-						ref = pr.frames[0].buf()
-						refName = pr.name
-						if refMode == 0 { refMode = 1 }
-					}
-					SmallButton(title: "✕", color: ModUI.red) {
-						SpriteLibrary.delete(pr.id)
-						library = SpriteLibrary.load()
-					}
-				}
-			}
+	static func delete(_ id: String) {
+		saveAll(load().filter { $0.id != id })
+	}
+
+	static func duplicate(_ id: String) -> SpriteProject? {
+		guard var p = load().first(where: { $0.id == id }) else { return nil }
+		p.id = ""
+		p.name = String(joinText(p.name, " (copy)").prefix(32))
+		return put(p)
+	}
+}
+
+/// The game's own pictures, to use as a reference or a starting sample: creatures (each frame),
+/// items and blocks
+enum GameSprites {
+	static func creatureFrames(_ k: MobKind) -> [PixelBuf] {
+		return creatureArt(k, 0).0
+	}
+
+	static let creatures: [MobKind] = MobKind.allCases.filter { $0 != .custom && $0 != .villager }
+
+	static func items() -> [Item] {
+		return allGameItems().filter { if case .block = $0 { return false }; if case .wall = $0 { return false }; return true }
+	}
+
+	static func tiles() -> [Tile] {
+		return Tile.allCases.filter { !$0.isMod && $0 != .air }
+	}
+}
+
+// MARK: - Mod Creator+: custom infusions
+
+/// When a custom infusion's effect is given to the player
+enum ModInfuseTrigger: Int, Codable, CaseIterable {
+	case none, onHit, onKill, whenHurt, lowHealth
+	var name: String {
+		switch self {
+		case .none: return "Never"
+		case .onHit: return "When it hits"
+		case .onKill: return "When it fells a foe"
+		case .whenHurt: return "When you are hurt"
+		case .lowHealth: return "When your health is low"
 		}
 	}
 }
 
-/// Choosing a reference picture: a game creature (any of its frames), item or block, a sprite from
-/// the library, or a picture from the clipboard
-struct SpriteRefPicker: View {
-	var pick: (PixelBuf, String) -> Void
-	var pasteNote: (String) -> Void
-	var size: (Int, Int)
-	@State var tab: Int = 0
-	@State var filter: String = ""
-	@State var creature: Int = -1
-
-	static let tabNames: [String] = ["CREATURES", "ITEMS", "BLOCKS", "LIBRARY"]
-
-	var body: some View {
-		VStack(alignment: .leading, spacing: 6) {
-			tabRow
-			ModTextField(label: "Search", text: $filter, placeholder: "name")
-			grid
-		}
-		.padding(8)
-		.background(Color.black.opacity(0.25))
-	}
-
-	var tabRow: some View {
-		HStack(spacing: 6) {
-			ForEach(0..<4, id: \.self) { i in self.tabButton(i) }
-			SmallButton(title: "PASTE PICTURE", color: ModUI.blue) { self.paste() }
-		}
-	}
-
-	func tabButton(_ i: Int) -> some View {
-		let col: Color = tab == i ? ModUI.accent : Color(ui: 0x555555)
-		return SmallButton(title: SpriteRefPicker.tabNames[i], color: col) {
-			self.tab = i
-			self.creature = -1
-		}
-	}
-
-	func paste() {
-		let w: Int = min(64, max(16, size.0 * 2))
-		let h: Int = min(64, max(16, size.1 * 2))
-		if let p = SpriteClipboard.pasteImage(w, h) {
-			pick(p.buf(), "Pasted picture")
-		} else if let p = SpriteClipboard.pasteCode() {
-			pick(p.buf(), "Pasted sprite")
-		} else {
-			pasteNote("No picture on the clipboard: copy one first.")
-		}
-	}
-
-	/// A picture to offer: what it shows, its name, and the creature it opens (-1: it is picked)
-	struct RefEntry {
-		let buf: PixelBuf
-		let name: String
-		let opens: Int
-	}
-
-	/// What the chosen tab offers
-	var entries: [RefEntry] {
-		var out: [RefEntry] = []
-		switch tab {
-		case 0:
-			if creature >= 0, let k = MobKind(rawValue: creature) {
-				let frs: [PixelBuf] = GameSprites.creatureFrames(k)
-				let name: String = mobDef(k).name
-				for (i, f) in frs.enumerated() { out.append(RefEntry(buf: f, name: joinText(name, " ", String(i + 1)), opens: -1)) }
-			} else {
-				for k in GameSprites.creatures where match(mobDef(k).name) {
-					let f: PixelBuf = GameSprites.creatureFrames(k).first ?? PixelBuf(w: 1, h: 1)
-					out.append(RefEntry(buf: f, name: mobDef(k).name, opens: k.rawValue))
-				}
-			}
-		case 1:
-			for it in GameSprites.items() where match(it.name) { out.append(RefEntry(buf: itemBuf(it), name: it.name, opens: -1)) }
-		case 2:
-			for t in GameSprites.tiles() where match(t.name) { out.append(RefEntry(buf: tileBuf(t), name: t.name, opens: -1)) }
-		default:
-			for pr in SpriteLibrary.load() where match(pr.name) { out.append(RefEntry(buf: pr.frames[0].buf(), name: pr.name, opens: -1)) }
-		}
-		return out
-	}
-
-	var grid: some View {
-		let cols: [GridItem] = [GridItem(.adaptive(minimum: 64), spacing: 6)]
-		let list: [RefEntry] = entries
-		return LazyVGrid(columns: cols, spacing: 6) {
-			ForEach(0..<list.count, id: \.self) { i in self.entryCell(list[i]) }
-		}
-	}
-
-	func entryCell(_ e: RefEntry) -> some View {
-		Button(action: { self.tapped(e) }) { self.label(e.buf, e.name) }.buttonStyle(.plain)
-	}
-
-	func tapped(_ e: RefEntry) {
-		if e.opens >= 0 { creature = e.opens } else { pick(e.buf, e.name) }
-	}
-
-	func match(_ n: String) -> Bool {
-		let f: String = filter.trimmingCharacters(in: .whitespaces).lowercased()
-		return f.isEmpty || n.lowercased().contains(f)
-	}
-
-	func cell(_ b: PixelBuf, _ name: String) -> some View {
-		Button { pick(b, name) } label: { label(b, name) }.buttonStyle(.plain)
-	}
-
-	func label(_ b: PixelBuf, _ name: String) -> some View {
-		VStack(spacing: 2) {
-			pixImage(b).resizable().interpolation(.none).frame(width: 40, height: 40 * CGFloat(b.h) / CGFloat(max(1, b.w)))
-				.frame(height: 44)
-			Text(verbatim: name).font(.pixel(8, .semibold)).foregroundColor(Color.white).lineLimit(1)
-		}
-		.frame(maxWidth: .infinity, minHeight: 64)
-		.background(ModUI.card)
-	}
-}
-
-/// The sprite library on its own: every saved sprite, to make, open, copy, rename and delete
-struct SpriteLibraryScreen: View {
-	var back: () -> Void
-	@State var list: [SpriteProject] = []
-	@State var editing: SpriteProject? = nil
-	@State var frame: Int = 0
-	@State var loaded: Bool = false
-
-	static let sizes: [Int] = [8, 16, 24, 32]
-
-	var body: some View {
-		VStack(spacing: 10) {
-			topBar
-			ScrollView {
-				VStack(spacing: 10) {
-					if editing != nil { editor } else { listPage }
-				}
-				.padding(.bottom, 30)
-			}
-		}
-		.padding(14)
-		.frame(maxWidth: 1000)
-		.onAppear { self.load() }
-	}
-
-	/// Stays at the top while the page scrolls, so there is always a way back
-	var topBar: some View {
-		HStack(spacing: 8) {
-			if editing != nil {
-				SmallButton(title: "< LIBRARY", color: ModUI.blue) { self.done() }
-				SmallButton(title: "SAVE", color: ModUI.accent) { self.save() }
-			} else {
-				SmallButton(title: "< MODS") { self.back() }
-			}
-			Spacer()
-			Text("SPRITE LIBRARY").font(.pixel(22)).foregroundColor(ModUI.gold)
-			Spacer()
-		}
-	}
-
-	func load() {
-		if loaded { return }
-		loaded = true
-		list = SpriteLibrary.load()
-	}
-
-	var listPage: some View {
-		VStack(spacing: 10) {
-			Text("Sprites kept here belong to no mod: finish them later, use them as references, or copy them into any mod's content.")
-				.font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-			HStack(spacing: 6) {
-				ForEach(SpriteLibraryScreen.sizes, id: \.self) { sz in self.newButton(sz) }
-			}
-			VStack(spacing: 6) {
-				ForEach(list) { pr in self.row(pr) }
-			}
-		}
-	}
-
-	func newButton(_ sz: Int) -> some View {
-		let title: String = joinText("+ NEW ", String(sz), " x ", String(sz))
-		return PixelButton(title: title, color: ModUI.accent) { self.makeNew(sz) }
-	}
-
-	func makeNew(_ sz: Int) {
-		var p = SpriteProject()
-		p.name = joinText("Sprite ", String(list.count + 1))
-		p.frames = [ModPixels(w: sz, h: sz)]
-		editing = SpriteLibrary.put(p)
-		frame = 0
-	}
-
-	func row(_ pr: SpriteProject) -> some View {
-		let f0: ModPixels = pr.frames[0]
-		let frames: String = pr.frames.count == 1 ? " frame \u{00B7} " : " frames \u{00B7} "
-		let line: String = joinText(String(f0.w), " x ", String(f0.h), " \u{00B7} ", String(pr.frames.count), frames, shortDate(pr.edited))
-		let img: Image = pixImage(f0.buf())
-		return HStack(spacing: 8) {
-			img.resizable().interpolation(.none).frame(width: 44, height: 44).background(Color.black.opacity(0.35))
-			VStack(alignment: .leading, spacing: 1) {
-				Text(verbatim: pr.name).font(.pixel(13)).foregroundColor(Color.white)
-				Text(verbatim: line).font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
-			}
-			Spacer()
-			SmallButton(title: "EDIT", color: ModUI.blue) { self.open(pr) }
-			SmallButton(title: "COPY") { self.copy(pr) }
-			SmallButton(title: "\u{2715}", color: ModUI.red) { self.delete(pr) }
-		}
-		.padding(6)
-		.background(PixelBox(color: ModUI.card))
-	}
-
-	func open(_ pr: SpriteProject) {
-		editing = pr
-		frame = 0
-	}
-
-	func copy(_ pr: SpriteProject) {
-		_ = SpriteLibrary.duplicate(pr.id)
-		list = SpriteLibrary.load()
-	}
-
-	func delete(_ pr: SpriteProject) {
-		SpriteLibrary.delete(pr.id)
-		list = SpriteLibrary.load()
-	}
-
-	var nameBind: Binding<String> {
-		return Binding<String>(get: { self.editing?.name ?? "" }, set: { (v: String) in self.editing?.name = v })
-	}
-
-	var pixBind: Binding<ModPixels> {
-		return Binding<ModPixels>(get: { self.currentFrame() }, set: { (v: ModPixels) in self.setFrame(v) })
-	}
-
-	func currentFrame() -> ModPixels {
-		guard let e = editing, frame < e.frames.count else { return ModPixels(w: 16, h: 16) }
-		return e.frames[frame]
-	}
-
-	func setFrame(_ v: ModPixels) {
-		guard var e = editing, frame < e.frames.count else { return }
-		e.frames[frame] = v
-		editing = e
-	}
-
-	var editor: some View {
-		let pr: SpriteProject = editing ?? SpriteProject()
-		return VStack(alignment: .leading, spacing: 8) {
-			ModTextField(label: "Name", text: nameBind, placeholder: "Sprite")
-			frameRow(pr.frames.count)
-			PixelEditorView(pixels: pixBind, maxSide: 420, frames: pr.frames, frameIndex: frame, sizes: [8, 12, 16, 24, 32, 48, 64], outlineDefault: true,
-							onResize: { (w: Int, h: Int) in self.resizeAll(w, h) })
-		}
-	}
-
-	func frameRow(_ count: Int) -> some View {
-		let canAdd: Bool = count < ModLimits.maxFrames
-		let canDelete: Bool = count > 1
-		return HStack(spacing: 6) {
-			ForEach(0..<count, id: \.self) { i in self.frameButton(i) }
-			if canAdd { SmallButton(title: "+ FRAME", color: ModUI.blue) { self.addFrame() } }
-			if canDelete { SmallButton(title: "DELETE FRAME", color: ModUI.red) { self.deleteFrame() } }
-		}
-	}
-
-	func frameButton(_ i: Int) -> some View {
-		let col: Color = frame == i ? ModUI.accent : Color(ui: 0x555555)
-		return SmallButton(title: joinText("FRAME ", String(i + 1)), color: col) { self.frame = i }
-	}
-
-	func addFrame() {
-		guard var e = editing else { return }
-		e.frames.append(e.frames[min(frame, e.frames.count - 1)])
-		editing = e
-		frame = e.frames.count - 1
-	}
-
-	func deleteFrame() {
-		guard var e = editing, e.frames.count > 1 else { return }
-		e.frames.remove(at: min(frame, e.frames.count - 1))
-		editing = e
-		frame = max(0, min(frame, e.frames.count - 1))
-	}
-
-	func resizeAll(_ w: Int, _ h: Int) {
-		guard var e = editing else { return }
-		e.frames = e.frames.map { $0.resized(w, h) }
-		editing = e
-	}
-
-	func done() {
-		save()
-		editing = nil
-	}
-
-	func save() {
-		guard let e = editing else { return }
-		editing = SpriteLibrary.put(e)
-		list = SpriteLibrary.load()
-	}
-}
-
-// MARK: - Mod Creator+: the infusion editor
-
-/// The INFUSIONS tab: the mod's own infusions
-struct InfusionListView: View {
-	@ObservedObject var s: ModSession
-	var open: (String) -> Void
-
-	var body: some View {
-		VStack(spacing: 8) {
-			Text("Infusions are worked into equipment at an Infusion Crucible. Each one has a compound: make a recipe for it so players can craft it.")
-				.font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-			PixelButton(title: "+ NEW INFUSION", color: ModUI.accent) { self.makeNew() }
-			ForEach(s.mod.infusions) { f in self.row(f) }
-		}
-	}
-
-	func makeNew() {
-		var f = ModInfusion()
-		f.id = s.mod.freshID("f")
-		f.name = joinText("Infusion ", String(s.mod.infusions.count + 1))
-		f.damagePct = 10
-		s.mod.infusions.append(f)
-		s.touch()
-		open(f.id)
-	}
-
-	func row(_ f: ModInfusion) -> some View {
-		let img: Image = pixImage(ModRuntime.shared.compoundIcon(f))
-		let isOff: Bool = s.mod.off.contains(f.id)
-		let fid: String = f.id
-		return ModRow(image: img, title: f.name, sub: f.blurb, open: { self.open(fid) }, copy: { self.copy(f) },
-					  delete: { self.delete(fid) }, off: isOff, toggle: { self.toggle(fid) })
-	}
-
-	func copy(_ f: ModInfusion) {
-		var c: ModInfusion = f
-		c.id = s.mod.freshID("f")
-		c.name = String(joinText(f.name, " copy").prefix(32))
-		s.mod.infusions.append(c)
-		s.touch()
-	}
-
-	func delete(_ fid: String) {
-		s.mod.infusions.removeAll { $0.id == fid }
-		s.touch()
-	}
-
-	func toggle(_ fid: String) {
-		if s.mod.off.contains(fid) { s.mod.off.removeAll { $0 == fid } } else { s.mod.off.append(fid) }
-		s.touch()
-	}
-}
-
-/// Editing one custom infusion
-/// A slider of an editor, as data: its label, the number it changes, its range (and the top in sandbox
-/// mode), its step and how it is shown. Editors with many numbers list them like this, which keeps them
-/// quick for the compiler (one row type instead of a long chain of views).
-struct DSlider<Root> {
-	let label: String
-	let kp: WritableKeyPath<Root, Double>
-	let lo: Double
-	let hi: Double
-	let sbHi: Double
-	let step: Double
-	let format: String
-}
-
-/// A before-and-after line of a preview
-struct PreviewRow: View {
-	let name: String
-	let before: String
-	let after: String
-	var body: some View {
-		let changed: Bool = before != after
-		let col: Color = changed ? Color(ui: 0x7AF08A) : Color.white
-		return HStack {
-			Text(verbatim: name).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-			Spacer()
-			Text(verbatim: before).font(.pixel(11)).foregroundColor(Color.white.opacity(0.7))
-			Text("\u{2192}").font(.pixel(11)).foregroundColor(ModUI.dim)
-			Text(verbatim: after).font(.pixel(11)).foregroundColor(col)
-		}
-	}
-}
-
-struct InfusionEditorView: View {
-	@ObservedObject var s: ModSession
-	let id: String
-	var openRecipe: (String) -> Void
-	@State var pickingItem: Bool = false
-
-	func b<T>(_ kp: WritableKeyPath<ModInfusion, T>, _ d: T) -> Binding<T> { return s.bind(\ModPack.infusions, id, kp, d) }
-	var inf: ModInfusion { return s.mod.infusions.first { $0.id == id } ?? ModInfusion() }
-
-	static let numbers: [DSlider<ModInfusion>] = [
-		DSlider(label: "Damage %", kp: \.damagePct, lo: -50, hi: 100, sbHi: 400, step: 1, format: "%.0f"),
-		DSlider(label: "Extra damage", kp: \.damageFlat, lo: 0, hi: 20, sbHi: 100, step: 0.5, format: "%.1f"),
-		DSlider(label: "Attack speed %", kp: \.attackSpeedPct, lo: -50, hi: 60, sbHi: 60, step: 1, format: "%.0f"),
-		DSlider(label: "Extra reach", kp: \.reach, lo: 0, hi: 1.5, sbHi: 4, step: 0.1, format: "%.1f"),
-		DSlider(label: "Critical chance %", kp: \.critPct, lo: 0, hi: 40, sbHi: 100, step: 1, format: "%.0f"),
-		DSlider(label: "Knockback %", kp: \.knockPct, lo: -80, hi: 100, sbHi: 400, step: 1, format: "%.0f"),
-		DSlider(label: "Mining speed %", kp: \.miningPct, lo: 0, hi: 100, sbHi: 400, step: 1, format: "%.0f"),
-		DSlider(label: "Defence (armour)", kp: \.defense, lo: 0, hi: 4, sbHi: 20, step: 0.1, format: "%.1f"),
-		DSlider(label: "Run speed % (armour)", kp: \.moveSpeedPct, lo: 0, hi: 15, sbHi: 50, step: 1, format: "%.0f"),
-		DSlider(label: "Less fire and lava harm %", kp: \.fireCut, lo: 0, hi: 60, sbHi: 60, step: 1, format: "%.0f"),
-		DSlider(label: "Less cold %", kp: \.coldCut, lo: 0, hi: 75, sbHi: 75, step: 1, format: "%.0f"),
-		DSlider(label: "Less lightning and hail %", kp: \.stormCut, lo: 0, hi: 60, sbHi: 60, step: 1, format: "%.0f"),
-		DSlider(label: "Healing a minute (armour)", kp: \.regen, lo: 0, hi: 12, sbHi: 60, step: 0.5, format: "%.1f"),
-		DSlider(label: "Less suit energy %", kp: \.energyPct, lo: 0, hi: 50, sbHi: 50, step: 1, format: "%.0f"),
-	]
-	static let strikes: [DSlider<ModInfusion>] = [
-		DSlider(label: "Sets alight (seconds)", kp: \.burn, lo: 0, hi: 8, sbHi: 8, step: 0.5, format: "%.1f"),
-		DSlider(label: "Slows (seconds)", kp: \.slow, lo: 0, hi: 8, sbHi: 8, step: 0.5, format: "%.1f"),
-		DSlider(label: "Poisons (seconds)", kp: \.poison, lo: 0, hi: 10, sbHi: 10, step: 0.5, format: "%.1f"),
-		DSlider(label: "Spark chance", kp: \.sparkChance, lo: 0, hi: 0.4, sbHi: 1, step: 0.01, format: "%.2f"),
-		DSlider(label: "Little blast (damage)", kp: \.blast, lo: 0, hi: 8, sbHi: 40, step: 0.5, format: "%.1f"),
-		DSlider(label: "Health stolen %", kp: \.lifeSteal, lo: 0, hi: 15, sbHi: 50, step: 1, format: "%.0f"),
-		DSlider(label: "Blow returned % (armour)", kp: \.thorns, lo: 0, hi: 40, sbHi: 40, step: 1, format: "%.0f"),
-	]
-
-	var body: some View {
-		VStack(spacing: 10) {
-			aboutSection
-			iconSection
-			goesOnSection
-			ModSection(title: "NUMBERS", help: "Percentages of what the item already does, so a good item stays better than a poor one") {
-				ModToggle(label: "Percentages multiply", help: "Off: they add to those of other infusions", isOn: b(\.multiply, false))
-				sliders(InfusionEditorView.numbers)
-			}
-			ModSection(title: "WHEN IT STRIKES", help: "What happens to what a weapon or shot hits") {
-				sliders(InfusionEditorView.strikes)
-			}
-			effectSection
-			ModSection(title: "STACKING AND LOOKS") {
-				IntSlider(label: "Times one item may hold it", value: b(\.stack, 1), range: 1...3)
-				ModToggle(label: "Sparks of its colour when it works", isOn: b(\.particles, true))
-			}
-			recipeSection
-			previewSection
-		}
-	}
-
-	var aboutSection: some View {
-		ModSection(title: "ABOUT") {
-			ModTextField(label: "Name", text: b(\.name, ""), placeholder: "Thunderstrike")
-			ModTextField(label: "Description", text: b(\.desc, ""), placeholder: "Optional")
-			Text("Rarity").font(.pixel(12, .bold)).foregroundColor(ModUI.dim)
-			ChoiceRow(options: InfusionEditorView.rarityNames, selected: b(\.rarity, 1), columns: 5)
-			ModColorRow(label: "Its colour (sparks and marks on items)", color: b(\.color, 0x60E0FF))
-		}
-	}
-	static let rarityNames: [String] = Rarity.allCases.map { $0.name }
-
-	var iconSection: some View {
-		ModSection(title: "COMPOUND ICON", help: "Leave it blank for a phial in its colour") {
-			PixelEditorView(pixels: b(\.icon, ModPixels(w: 12, h: 12)), maxSide: 240, sizes: [12, 16], outlineDefault: true)
-		}
-	}
-
-	var goesOnSection: some View {
-		let f: ModInfusion = inf
-		return ModSection(title: "GOES ON", help: "Kinds of equipment, or (if any are picked below) only certain items") {
-			classChips(f)
-			itemList(f)
-		}
-	}
-
-	var effectSection: some View {
-		let on: Bool = inf.trigger != .none
-		return ModSection(title: "EFFECT ON YOU", help: "A timed effect for the player, given now and then") {
-			ChoiceRow(options: InfusionEditorView.triggerNames, selected: triggerBind, columns: 3)
-			if on {
-				effectEditor
-				StatSlider(label: "Rests between (seconds)", value: b(\.effectCooldown, 10), range: 2...300, step: 1, format: "%.0f")
-			}
-		}
-	}
-	static let triggerNames: [String] = ModInfuseTrigger.allCases.map { $0.name }
-
-	var recipeSection: some View {
-		let key: String = s.mod.key(inf.id)
-		let recs: [ModRecipe] = s.mod.recipes.filter { $0.out == .custom(key) }
-		return ModSection(title: "ITS COMPOUND'S RECIPE") {
-			ForEach(recs) { r in self.recipeRow(r) }
-			SmallButton(title: "+ MAKE A RECIPE FOR IT", color: ModUI.accent) { self.makeRecipe(key) }
-		}
-	}
-
-	func recipeRow(_ r: ModRecipe) -> some View {
-		let names: String = r.cost.map { $0.item.name }.joined(separator: ", ")
-		let line: String = joinText("Recipe ", r.id, ": ", names)
-		return HStack {
-			Text(verbatim: line).font(.pixel(11, .semibold)).foregroundColor(Color.white).lineLimit(1)
-			Spacer()
-			SmallButton(title: "EDIT", color: ModUI.blue) { self.openRecipe(r.id) }
-		}
-	}
-
-	func makeRecipe(_ key: String) {
-		var r = ModRecipe()
-		r.id = s.mod.freshID("r")
-		r.out = .custom(key)
-		r.count = 1
-		r.cost = [ModCost(.mat(.waterVial), 1), ModCost(.mat(.crystalShard), 1)]
-		r.station = Station.infuser.rawValue
-		s.mod.recipes.append(r)
-		s.touch()
-		openRecipe(r.id)
-	}
-
-	var previewSection: some View {
-		let f: ModInfusion = inf
-		let rows: [(String, String, String)] = previewRows(f)
-		return ModSection(title: "PREVIEW", help: "What it would do to a sample item of the first kind it goes on") {
-			ForEach(0..<rows.count, id: \.self) { i in PreviewRow(name: rows[i].0, before: rows[i].1, after: rows[i].2) }
-			Text(verbatim: f.blurb).font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
-		}
-	}
-
-	func sliders(_ list: [DSlider<ModInfusion>]) -> some View {
-		let sb: Bool = s.mod.sandbox
-		return VStack(alignment: .leading, spacing: 8) {
-			ForEach(0..<list.count, id: \.self) { i in self.slider(list[i], sb) }
-		}
-	}
-
-	func slider(_ d: DSlider<ModInfusion>, _ sb: Bool) -> StatSlider {
-		let top: Double = sb ? d.sbHi : d.hi
-		let r: ClosedRange<Double> = d.lo...top
-		return StatSlider(label: d.label, value: b(d.kp, 0), range: r, step: d.step, format: d.format)
-	}
-
-	var triggerBind: Binding<Int> {
-		let inner: Binding<ModInfuseTrigger> = b(\.trigger, .none)
-		return Binding<Int>(get: { inner.wrappedValue.rawValue }, set: { inner.wrappedValue = ModInfuseTrigger(rawValue: $0) ?? .none })
-	}
-
-	var effectEditor: some View {
-		let e: Binding<ModEffect> = b(\.effect, ModEffect(.speed, 20, 8))
-		let timed: [ModEffectKind] = ModEffectKind.allCases.filter { $0.timed }
-		let kindB: Binding<Int> = Binding<Int>(get: { timed.firstIndex(of: e.wrappedValue.kind) ?? 0 }, set: { v in
-			var x: ModEffect = e.wrappedValue
-			x.kind = timed[clampI(v, 0, timed.count - 1)]
-			x.amount = x.kind.amountRange.clamp(x.amount, s.mod.sandbox)
-			e.wrappedValue = x
-		})
-		let amount: Binding<Double> = Binding<Double>(get: { e.wrappedValue.amount }, set: { v in var x: ModEffect = e.wrappedValue; x.amount = v; e.wrappedValue = x })
-		let secs: Binding<Double> = Binding<Double>(get: { e.wrappedValue.seconds }, set: { v in var x: ModEffect = e.wrappedValue; x.seconds = v; e.wrappedValue = x })
-		let range: ModRange = e.wrappedValue.kind.amountRange
-		return VStack(alignment: .leading, spacing: 6) {
-			ChoiceRow(options: timed.map { $0.name }, selected: kindB, columns: 4)
-			StatSlider(label: e.wrappedValue.kind.amountLabel, value: amount, range: range.lo...(s.mod.sandbox ? range.sandboxHi : range.hi), step: 0.5)
-			StatSlider(label: "Seconds", value: secs, range: 1...120, step: 1, format: "%.0f")
-		}
-	}
-
-	func classChips(_ f: ModInfusion) -> some View {
-		let names: [String] = ["Melee weapons", "Bows, slings and guns", "Tools", "Armour and suit plating", "Suit cores and modules"]
-		let cls: Binding<[Int]> = b(\.classes, [0])
-		let cols: [GridItem] = [GridItem(.adaptive(minimum: 150), spacing: 6)]
-		return LazyVGrid(columns: cols, spacing: 6) {
-			ForEach(0..<names.count, id: \.self) { i in
-				let on: Bool = cls.wrappedValue.contains(i)
-				SmallButton(title: names[i], color: on ? ModUI.accent : Color(ui: 0x555555)) {
-					if on { cls.wrappedValue.removeAll { $0 == i } } else { cls.wrappedValue.append(i) }
-				}
-			}
-		}
-	}
-
-	func itemList(_ f: ModInfusion) -> some View {
-		let items: Binding<[Item]> = b(\.items, [])
-		return VStack(alignment: .leading, spacing: 6) {
-			Text(verbatim: f.items.isEmpty ? "Any item of the kinds picked" : "Only these items:").font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-			ForEach(0..<f.items.count, id: \.self) { i in
-				HStack {
-					Art.shared.icon(f.items[i]).resizable().interpolation(.none).frame(width: 24, height: 24)
-					Text(verbatim: f.items[i].name).font(.pixel(11)).foregroundColor(Color.white)
-					Spacer()
-					SmallButton(title: "✕", color: ModUI.red) { if i < items.wrappedValue.count { items.wrappedValue.remove(at: i) } }
-				}
-			}
-			if pickingItem {
-				GamePickerView(kind: .item, title: "ONLY ON THIS ITEM", pick: { _, it in
-					if let x = it, !items.wrappedValue.contains(x) { items.wrappedValue.append(x) }
-					pickingItem = false
-				}, cancel: { pickingItem = false })
-			} else if f.items.count < 12 {
-				SmallButton(title: "+ ONLY ON A CERTAIN ITEM", color: ModUI.blue) { pickingItem = true }
-			}
-		}
-	}
-
-	/// Before-and-after numbers on a sample item of its first kind
-	func previewRows(_ f: ModInfusion) -> [(String, String, String)] {
-		var rows: [(String, String, String)] = []
-		let first: Int = f.classes.first ?? 0
-		func f1(_ v: Double) -> String { return String(format: "%.1f", v) }
-		switch first {
-		case 0, 1:
-			let it: Item = first == 0 ? .sword(.iron) : .gun(.pistol)
-			let p0: MeleeProfile = first == 0 ? it.melee : MeleeProfile(damage: GunType.pistol.damage, cooldown: GunType.pistol.cooldown, reach: 14, halfArc: 0)
-			let p1: MeleeProfile = f.apply(p0)
-			rows.append((joinText(it.name, " damage"), f1(p0.damage), f1(p1.damage)))
-			rows.append(("Time between attacks", String(format: "%.2f s", p0.cooldown), String(format: "%.2f s", p1.cooldown)))
-			if first == 0 {
-				rows.append(("Reach", f1(p0.reach), f1(p1.reach)))
-				rows.append(("Critical chance", joinText(String(Int(p0.critChance * 100)), "%"), joinText(String(Int(p1.critChance * 100)), "%")))
-			}
-		case 2:
-			let s0: Double? = miningSeconds(.stone, .pickaxe, .iron)
-			let s1: Double? = s0.map { $0 / max(0.01, 1.0 + f.miningPct / 100.0) }
-			rows.append(("Iron pickaxe on stone", secondsText(s0), secondsText(s1)))
-		default:
-			let d0: Double = Tier.iron.defense * ArmorSlot.chest.weight
-			rows.append(("Iron chestplate defence", f1(d0), f1(d0 + f.defense)))
-			rows.append(("Run speed", "100%", joinText(String(Int((100 + f.moveSpeedPct).rounded())), "%")))
-		}
-		return rows
-	}
-}
-
-extension InfusionPanel {
-	/// The world's custom infusions (from its mods), in the crucible beside the game's own
-	var customRows: some View {
-		let list: [ModInfusionRT] = ModRuntime.shared.infusionDefs.values.sorted { $0.number < $1.number }
-		return VStack(spacing: 4) {
-			if !list.isEmpty {
-				Text("FROM MODS").font(.pixel(11)).foregroundColor(Color(ui: 0xB8A8D8)).frame(maxWidth: .infinity, alignment: .leading)
-			}
-			ForEach(list, id: \.number) { r in customRow(r) }
-		}
-	}
-
-	func customRow(_ r: ModInfusionRT) -> some View {
-		let compound: Item = .custom(r.key)
-		let owned: Int = game.inv.total(compound)
-		let chosen: Bool = customChoice == r.number
-		return Button(action: {
-			customChoice = r.number
-			choice = -1
-			note = ""
-		}) {
-			HStack(spacing: 6) {
-				SlotView(stack: Stack(item: compound, count: max(1, owned)), selected: chosen, size: 34, dim: owned == 0)
-				VStack(alignment: .leading, spacing: 1) {
-					Text(verbatim: r.def.name).font(.pixel(12)).foregroundColor(Color(ui: (Rarity(rawValue: r.def.rarity) ?? .uncommon).color))
-					Text(verbatim: r.def.blurb).font(.pixel(10, .semibold)).foregroundColor(Color.white.opacity(0.8)).lineLimit(2)
-				}
-				Spacer(minLength: 0)
-				Text(verbatim: owned > 0 ? joinText("x", String(owned)) : "none").font(.pixel(10)).foregroundColor(Color.white.opacity(0.6))
-			}
-			.padding(4)
-			.background(chosen ? Color(ui: 0x4A3A6A) : Color.black.opacity(0.2))
-		}
-		.buttonStyle(.plain)
-	}
-
-	func customPreview(_ s: Stack, _ r: ModInfusionRT) -> some View {
-		let problem: String? = s.customProblem(r)
-		let owned: Int = game.inv.total(.custom(r.key))
-		let ok: Bool = problem == nil && (owned > 0 || game.isCreative)
-		let p0: MeleeProfile = s.item.melee
-		let p1: MeleeProfile = r.def.apply(p0)
-		return VStack(alignment: .leading, spacing: 5) {
-			Text(verbatim: joinText(s.item.name, " + ", r.def.name)).font(.pixel(12))
-			Text(verbatim: r.def.blurb).font(.pixel(10, .semibold)).foregroundColor(Color.white.opacity(0.8))
-			if infuseClasses(s.item).contains(.melee) {
-				Text(verbatim: joinText("Damage ", String(format: "%.1f", p0.damage), " → ", String(format: "%.1f", p1.damage))).font(.pixel(11)).foregroundColor(Color.white)
-			}
-			if let p = problem { Text(verbatim: p).font(.pixel(11, .semibold)).foregroundColor(Color(ui: 0xFF9A7A)) }
-			PixelButton(title: ok ? "CONFIRM INFUSION" : "CAN'T INFUSE", color: ok ? Color(ui: 0x6A4AA8) : Color(ui: 0x444444)) {
-				if !ok { return }
-				note = game.infuseCustom(slot: pick, r.number)
-				customChoice = -1
-			}
-		}
-		.padding(6)
-		.background(Color.black.opacity(0.25))
-	}
-}
-
-// MARK: - Mod Creator+: boss phases and summoning (screens)
-
-/// The PHASES page of a creature: the stages of its fight, shown along its health bar
-struct BossPhasesPage: View {
-	@ObservedObject var s: ModSession
-	let id: String
-	@State var open: Int = 0
-
-	static let gameHelpers: [MobKind] = [.zombie, .skeleton, .slime, .bat, .scorpion, .wraith, .imp, .emberSlime, .cinderBat, .crawler, .archer, .pirate]
-
-	var mob: ModMob { return s.mod.mobs.first { $0.id == id } ?? ModMob() }
-	var phases: Binding<[ModPhase]> { return s.bind(\ModPack.mobs, id, \ModMob.phases, []) }
-	var sb: Bool { return s.mod.sandbox }
-
-	func pb<T>(_ i: Int, _ kp: WritableKeyPath<ModPhase, T>, _ d: T) -> Binding<T> {
-		let base: Binding<[ModPhase]> = phases
-		return Binding<T>(get: { i < base.wrappedValue.count ? base.wrappedValue[i][keyPath: kp] : d }, set: { v in
-			var list: [ModPhase] = base.wrappedValue
-			if i < list.count {
-				list[i][keyPath: kp] = v
-				base.wrappedValue = list
-			}
-		})
-	}
-
-	var body: some View {
-		VStack(spacing: 10) {
-			Text("A fight in stages. Each phase begins when its moment comes and changes the creature for the rest of the fight; phases follow one another in order. They work for any creature, and bosses show the phase on their health bar.")
-				.font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-			timeline
-			ForEach(0..<mob.phases.count, id: \.self) { i in phaseCard(i) }
-			if mob.phases.count < ModLimits.maxPhases {
-				PixelButton(title: "+ ADD PHASE", color: ModUI.accent) { add() }
-			}
-		}
-	}
-
-	/// The fight along the health bar: where each health phase begins, then the others in order
-	var timeline: some View {
-		let segs: [(Double, UInt32, String)] = segments
-		let others: [String] = laterPhases
-		return VStack(alignment: .leading, spacing: 4) {
-			Text("THE FIGHT, FULL HEALTH TO NONE").font(.pixel(12, .bold)).foregroundColor(ModUI.gold)
-			HStack(spacing: 2) {
-				ForEach(0..<segs.count, id: \.self) { k in BossPhasesPage.segmentView(segs[k]) }
-			}
-			ForEach(0..<others.count, id: \.self) { k in
-				Text(verbatim: others[k]).font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
-			}
-		}
-		.padding(8)
-		.background(PixelBox(color: ModUI.card))
-	}
-
-	static func segmentView(_ seg: (Double, UInt32, String)) -> some View {
-		let w: CGFloat = CGFloat(max(10.0, seg.0 * 420.0))
-		let col: Color = Color(ui: seg.1)
-		return VStack(spacing: 2) {
-			Rectangle().fill(col).frame(width: w, height: 16)
-			Text(verbatim: seg.2).font(.pixel(9, .semibold)).foregroundColor(Color.white).lineLimit(1).frame(width: w)
-		}
-	}
-
-	/// Stretches of the health bar: (share, colour, the phase's name)
-	var segments: [(Double, UInt32, String)] {
-		var out: [(Double, UInt32, String)] = []
-		var from: Double = 1.0
-		var col: UInt32 = 0x5AA85A
-		var name: String = "Start"
-		for p in mob.phases where p.when == .health && p.value < from {
-			out.append((from - p.value, col, name))
-			from = p.value
-			col = p.tintAmt > 0.05 ? p.tint : 0xA05050
-			name = p.name
-		}
-		out.append((from, col, name))
-		return out
-	}
-
-	var laterPhases: [String] {
-		var out: [String] = []
-		for (i, p) in mob.phases.enumerated() where p.when != .health {
-			out.append(joinText("Phase ", String(i + 1), " \u{201C}", p.name, "\u{201D} begins ", p.whenText, "."))
-		}
-		return out
-	}
-
-	func phaseCard(_ i: Int) -> some View {
-		let p: ModPhase = i < mob.phases.count ? mob.phases[i] : ModPhase()
-		let isOpen: Bool = open == i
-		return VStack(alignment: .leading, spacing: 8) {
-			cardHeader(i, p)
-			Text(verbatim: summary(p)).font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
-			if isOpen { editor(i, p) }
-		}
-		.padding(10)
-		.background(PixelBox(color: ModUI.card))
-	}
-
-	func cardHeader(_ i: Int, _ p: ModPhase) -> some View {
-		let title: String = joinText(String(i + 1), ". ", p.name, " \u{2014} ", p.whenText)
-		let toggle: String = open == i ? "CLOSE" : "EDIT"
-		let canUp: Bool = i > 0
-		let canDown: Bool = i < mob.phases.count - 1
-		return HStack(spacing: 6) {
-			Rectangle().fill(Color(hex: p.tint)).frame(width: 14, height: 14)
-			Text(verbatim: title).font(.pixel(13, .bold)).foregroundColor(Color.white)
-			Spacer(minLength: 0)
-			SmallButton(title: toggle, color: ModUI.blue) { self.toggleOpen(i) }
-			if canUp { SmallButton(title: "UP") { self.move(i, -1) } }
-			if canDown { SmallButton(title: "DOWN") { self.move(i, 1) } }
-			SmallButton(title: "DELETE", color: ModUI.red) { self.remove(i) }
-		}
-	}
-
-	func toggleOpen(_ i: Int) { open = open == i ? -1 : i }
-
-	func summary(_ p: ModPhase) -> String {
+/// An infusion made in the Mod Creator: what it goes on, the numbers it changes (added to, or
+/// multiplied with, the others), what it does when it strikes or is struck, how it looks, and how
+/// many times one item may hold it. Its compound is an item of the mod with the same key.
+struct ModInfusion: Codable, Identifiable, Equatable {
+	var id: String = ""
+	var name: String = "New Infusion"
+	var desc: String = ""
+	/// its compound's icon (blank: a phial in its colour)
+	var icon: ModPixels = ModPixels(w: 12, h: 12)
+	var color: UInt32 = 0x60E0FF
+	/// Rarity number (basic to boss relic)
+	var rarity: Int = 1
+	/// the kinds of equipment it goes on (InfuseClass numbers)
+	var classes: [Int] = [InfuseClass.melee.rawValue]
+	/// only these items (empty: anything of those kinds)
+	var items: [Item] = []
+	/// percentages multiply with the others (off: they add)
+	var multiply: Bool = false
+	var damagePct: Double = 0
+	var damageFlat: Double = 0
+	var attackSpeedPct: Double = 0
+	var reach: Double = 0
+	var critPct: Double = 0
+	var knockPct: Double = 0
+	var miningPct: Double = 0
+	var defense: Double = 0
+	var moveSpeedPct: Double = 0
+	var fireCut: Double = 0
+	var coldCut: Double = 0
+	var stormCut: Double = 0
+	/// health a minute while worn
+	var regen: Double = 0
+	/// less energy used by suit parts (percent)
+	var energyPct: Double = 0
+	/// on a hit: seconds of fire, seconds of slowing, seconds of poison
+	var burn: Double = 0
+	var slow: Double = 0
+	var poison: Double = 0
+	/// on a hit: the chance of a spark leaping to two more foes
+	var sparkChance: Double = 0
+	/// on a hit: a little blast of this much damage around what was hit
+	var blast: Double = 0
+	/// worn: the share of a melee blow returned to the attacker (percent)
+	var thorns: Double = 0
+	/// on a hit: the share of the damage healed back (percent)
+	var lifeSteal: Double = 0
+	var trigger: ModInfuseTrigger = .none
+	var effect: ModEffect = ModEffect(.speed, 20, 8)
+	var effectCooldown: Double = 10
+	/// sparks of its colour when it does something
+	var particles: Bool = true
+	/// times one item may hold it
+	var stack: Int = 1
+
+	init() {}
+
+	init(from decoder: Decoder) throws {
+		let c = try decoder.container(keyedBy: CodingKeys.self)
+		id = c.val(.id, "")
+		name = c.val(.name, "Infusion")
+		desc = c.val(.desc, "")
+		icon = c.val(.icon, ModPixels(w: 12, h: 12))
+		color = c.val(.color, 0x60E0FF)
+		rarity = c.val(.rarity, 1)
+		classes = c.val(.classes, [0])
+		items = c.val(.items, [])
+		multiply = c.val(.multiply, false)
+		damagePct = c.val(.damagePct, 0)
+		damageFlat = c.val(.damageFlat, 0)
+		attackSpeedPct = c.val(.attackSpeedPct, 0)
+		reach = c.val(.reach, 0)
+		critPct = c.val(.critPct, 0)
+		knockPct = c.val(.knockPct, 0)
+		miningPct = c.val(.miningPct, 0)
+		defense = c.val(.defense, 0)
+		moveSpeedPct = c.val(.moveSpeedPct, 0)
+		fireCut = c.val(.fireCut, 0)
+		coldCut = c.val(.coldCut, 0)
+		stormCut = c.val(.stormCut, 0)
+		regen = c.val(.regen, 0)
+		energyPct = c.val(.energyPct, 0)
+		burn = c.val(.burn, 0)
+		slow = c.val(.slow, 0)
+		poison = c.val(.poison, 0)
+		sparkChance = c.val(.sparkChance, 0)
+		blast = c.val(.blast, 0)
+		thorns = c.val(.thorns, 0)
+		lifeSteal = c.val(.lifeSteal, 0)
+		trigger = c.val(.trigger, .none)
+		effect = c.val(.effect, ModEffect(.speed, 20, 8))
+		effectCooldown = c.val(.effectCooldown, 10)
+		particles = c.val(.particles, true)
+		stack = c.val(.stack, 1)
+	}
+
+	/// what it does, in a line (for tooltips and the crucible)
+	var blurb: String {
 		var parts: [String] = []
-		parts.append(String(format: "speed x%.2f", p.speedMul))
-		parts.append(String(format: "damage x%.2f", p.damageMul))
-		if abs(p.cooldownMul - 1) > 0.01 { parts.append(String(format: "attacks rest x%.2f", p.cooldownMul)) }
-		if p.defense > 0.01 { parts.append(joinText("shrugs off ", String(Int((p.defense * 100).rounded())), "%")) }
-		if p.heal > 0.01 { parts.append(joinText("heals ", String(Int((p.heal * 100).rounded())), "%")) }
-		if p.helpers > 0 && !p.helper.isEmpty { parts.append(joinText("calls ", String(p.helpers), " helpers")) }
-		if !p.attacks.isEmpty { parts.append(joinText("uses ", String(p.attacks.count), " of its attacks")) }
-		return parts.joined(separator: " \u{00B7} ")
-	}
-
-	func editor(_ i: Int, _ p: ModPhase) -> some View {
-		VStack(alignment: .leading, spacing: 10) {
-			ModTextField(label: "Name", text: pb(i, \.name, ""), placeholder: "Enraged")
-			whenSection(i, p)
-			changeSection(i)
-			if !mob.attacks.isEmpty { attacksSection(i) }
-			lookSection(i, p)
-			helpersSection(i, p)
-			ModTextField(label: "Message", text: pb(i, \.message, ""), placeholder: "The ground splits open!")
-		}
-	}
-
-	static let whenNames: [String] = ModPhaseWhen.allCases.map { $0.name }
-
-	func whenSection(_ i: Int, _ p: ModPhase) -> some View {
-		let health: Bool = p.when == .health
-		let time: Bool = p.when == .time
-		return ModSection(title: "WHEN IT BEGINS", help: p.when.help) {
-			ChoiceRow(options: BossPhasesPage.whenNames, selected: whenBind(i), columns: 3)
-			if health {
-				StatSlider(label: "Health", value: percent(pb(i, \.value, 0.5)), range: 5.0...95.0, step: 1, format: "%.0f", unit: "%")
-			}
-			if time {
-				StatSlider(label: "Seconds of fighting", value: pb(i, \.value, 30), range: 3.0...600.0, step: 1, format: "%.0f", unit: " s")
-			}
-		}
-	}
-
-	func changeSection(_ i: Int) -> some View {
-		let sb: Bool = self.sb
-		return ModSection(title: "HOW IT CHANGES", help: "Multipliers of its own numbers, for the rest of the fight.") {
-			StatSlider(label: "Speed", value: pb(i, \.speedMul, 1), range: sbRange(0.5, 2, 3, sb), step: 0.05, format: "x%.2f")
-			StatSlider(label: "Damage", value: pb(i, \.damageMul, 1), range: sbRange(0.5, 3, 6, sb), step: 0.05, format: "x%.2f")
-			StatSlider(label: "Rest between attacks", value: pb(i, \.cooldownMul, 1), range: 0.3...2.0, step: 0.05, format: "x%.2f")
-			StatSlider(label: "Hits shrugged off", value: percent(pb(i, \.defense, 0)), range: sbRange(0, 60, 90, sb), step: 1, format: "%.0f", unit: "%")
-			StatSlider(label: "Heals as it begins", value: percent(pb(i, \.heal, 0)), range: 0.0...50.0, step: 1, format: "%.0f", unit: "%")
-			StatSlider(label: "Can't be hurt while changing", value: pb(i, \.shield, 1), range: 0.0...5.0, step: 0.25, format: "%.2f", unit: " s")
-		}
-	}
-
-	func attacksSection(_ i: Int) -> some View {
-		let names: [String] = mob.attacks.enumerated().map { (j: Int, a: ModAttack) -> String in joinText("Attack ", String(j + 1), ": ", a.kind.name) }
-		return ModSection(title: "ATTACKS IN THIS PHASE", help: "All on: it uses every attack it has.") {
-			ForEach(0..<names.count, id: \.self) { j in ModToggle(label: names[j], isOn: self.attackBind(i, j)) }
-		}
-	}
-
-	func lookSection(_ i: Int, _ p: ModPhase) -> some View {
-		let img: Image = tinted(p)
-		return ModSection(title: "LOOK") {
-			HStack(spacing: 12) {
-				img.resizable().interpolation(.none).frame(width: 72, height: 72).background(Color(ui: 0x5A7A9A).opacity(0.6))
-				VStack(alignment: .leading, spacing: 6) {
-					StatSlider(label: "Colour strength", value: pb(i, \.tintAmt, 0.25), range: 0.0...1.0, step: 0.05, format: "%.2f")
-					ModToggle(label: "Roars as it begins", isOn: pb(i, \.roar, true))
-				}
-			}
-			ModColorRow(label: "Colour", color: pb(i, \.tint, 0xFF4030))
-		}
-	}
-
-	func helpersSection(_ i: Int, _ p: ModPhase) -> some View {
-		let names: [String] = helperChoices.0
-		let has: Bool = !p.helper.isEmpty
-		let most: ClosedRange<Int> = 0...(sb ? 10 : 6)
-		return ModSection(title: "HELPERS", help: "Creatures it calls to its side as this phase begins.") {
-			ChoiceRow(options: names, selected: helperBind(i), columns: 4)
-			if has { IntSlider(label: "How many", value: pb(i, \.helpers, 0), range: most) }
-		}
-	}
-
-	func percent(_ b: Binding<Double>) -> Binding<Double> {
-		return Binding<Double>(get: { b.wrappedValue * 100.0 }, set: { b.wrappedValue = $0 / 100.0 })
-	}
-
-	func whenBind(_ i: Int) -> Binding<Int> {
-		let base: Binding<ModPhaseWhen> = pb(i, \.when, .health)
-		let val: Binding<Double> = pb(i, \.value, 0.5)
-		return Binding<Int>(get: { base.wrappedValue.rawValue }, set: { n in
-			let w: ModPhaseWhen = ModPhaseWhen(rawValue: n) ?? .health
-			if w != base.wrappedValue {
-				base.wrappedValue = w
-				val.wrappedValue = w == .time ? 30 : 0.5
-			}
-		})
-	}
-
-	/// One attack switched on or off for a phase (all on is stored as "every attack")
-	func attackBind(_ i: Int, _ j: Int) -> Binding<Bool> {
-		let base: Binding<[Int]> = pb(i, \.attacks, [])
-		let n: Int = mob.attacks.count
-		return Binding<Bool>(get: { base.wrappedValue.isEmpty || base.wrappedValue.contains(j) }, set: { on in
-			var l: [Int] = base.wrappedValue.isEmpty ? Array(0..<n) : base.wrappedValue
-			if on {
-				if !l.contains(j) { l.append(j) }
-			} else {
-				// at least one attack stays on
-				if l.count <= 1 { return }
-				l.removeAll { $0 == j }
-			}
-			l.sort()
-			base.wrappedValue = l.count >= n ? [] : l
-		})
-	}
-
-	var helperChoices: ([String], [String]) {
-		var names: [String] = ["Nobody"]
-		var keys: [String] = [""]
-		for o in s.mod.mobs where o.id != id {
-			names.append(o.name)
-			keys.append(s.mod.key(o.id))
-		}
-		for k in BossPhasesPage.gameHelpers {
-			names.append(mobDef(k).name)
-			keys.append(mobDef(k).name)
-		}
-		return (names, keys)
-	}
-
-	func helperBind(_ i: Int) -> Binding<Int> {
-		let base: Binding<String> = pb(i, \.helper, "")
-		let count: Binding<Int> = pb(i, \.helpers, 0)
-		let keys: [String] = helperChoices.1
-		return Binding<Int>(get: { keys.firstIndex(of: base.wrappedValue) ?? 0 }, set: { n in
-			base.wrappedValue = keys[clampI(n, 0, keys.count - 1)]
-			if base.wrappedValue.isEmpty { count.wrappedValue = 0 } else if count.wrappedValue == 0 { count.wrappedValue = 2 }
-		})
-	}
-
-	/// The creature as it looks in this phase
-	func tinted(_ p: ModPhase) -> Image {
-		let fr: ([PixelBuf], CreatureAnim) = modMobFrames(mob)
-		guard let f = fr.0.first else { return pixImage(PixelBuf(w: 1, h: 1)) }
-		return pixImage(recolorBuf(f, hue: 0, sat: 1, bright: 1, tint: p.tint, amt: p.tintAmt))
-	}
-
-	func add() {
-		var list: [ModPhase] = mob.phases
-		var p = ModPhase()
-		let health: [Double] = list.filter { $0.when == .health }.map { $0.value }
-		let lowest: Double = health.min() ?? 1.0
-		let next: Double = (lowest - 0.25).rounded(toPlaces: 2)
-		p.value = max(0.1, next)
-		p.name = list.isEmpty ? "Enraged" : joinText("Phase ", String(list.count + 1))
-		list.append(p)
-		phases.wrappedValue = list
-		open = list.count - 1
-	}
-
-	func move(_ i: Int, _ d: Int) {
-		var list: [ModPhase] = mob.phases
-		let j: Int = i + d
-		if i < 0 || j < 0 || i >= list.count || j >= list.count { return }
-		list.swapAt(i, j)
-		phases.wrappedValue = list
-		open = j
-	}
-
-	func remove(_ i: Int) {
-		var list: [ModPhase] = mob.phases
-		if i < 0 || i >= list.count { return }
-		list.remove(at: i)
-		phases.wrappedValue = list
-		open = -1
+		func pct(_ v: Double, _ what: String) { if abs(v) > 0.01 { parts.append(joinText(v > 0 ? "+" : "", String(Int(v.rounded())), "% ", what)) } }
+		pct(damagePct, "damage")
+		if abs(damageFlat) > 0.01 { parts.append(joinText("+", String(format: "%.1f", damageFlat), " damage")) }
+		pct(attackSpeedPct, "attack speed")
+		if reach > 0.01 { parts.append(joinText("+", String(format: "%.1f", reach), " reach")) }
+		pct(critPct, "critical chance")
+		pct(knockPct, "knockback")
+		pct(miningPct, "mining speed")
+		if defense > 0.01 { parts.append(joinText("+", String(format: "%.1f", defense), " defence")) }
+		pct(moveSpeedPct, "run speed")
+		pct(fireCut, "less fire harm")
+		pct(coldCut, "less cold")
+		pct(stormCut, "less storm harm")
+		if regen > 0.01 { parts.append(joinText("heals ", String(format: "%.1f", regen), " a minute")) }
+		pct(energyPct, "less suit energy")
+		if burn > 0.01 { parts.append("sets alight") }
+		if slow > 0.01 { parts.append("slows") }
+		if poison > 0.01 { parts.append("poisons") }
+		if sparkChance > 0.01 { parts.append("sparks") }
+		if blast > 0.01 { parts.append("bursts") }
+		pct(thorns, "of blows returned")
+		pct(lifeSteal, "of damage healed")
+		if trigger != .none { parts.append(joinText(effect.kind.short.lowercased(), " ", trigger.name.lowercased())) }
+		return parts.isEmpty ? "No effect yet" : parts.joined(separator: ", ")
 	}
 }
 
-extension Double {
-	func rounded(toPlaces n: Int) -> Double {
-		let f: Double = pow(10.0, Double(n))
-		return (self * f).rounded() / f
-	}
-}
-
-/// A summoning shape as a grid of big cells to paint
-struct PatternGrid: View {
-	@Binding var pattern: ModPattern
-	let brush: String
-	let catalog: ModCatalog
-
-	var body: some View {
-		VStack(spacing: 2) {
-			ForEach(0..<pattern.h, id: \.self) { y in
-				HStack(spacing: 2) {
-					ForEach(0..<pattern.w, id: \.self) { x in
-						Button(action: {
-							var p: ModPattern = pattern
-							p.set(x, y, p.cell(x, y) == brush ? "" : brush)
-							pattern = p
-						}) {
-							PatternGrid.cellImage(pattern.cell(x, y), catalog).resizable().interpolation(.none)
-								.frame(width: 46, height: 46)
-								.background(Color.black.opacity(0.35))
-						}
-						.buttonStyle(.plain)
-					}
-				}
-			}
-		}
-		.padding(6)
-		.background(Color(ui: 0x6A8AAA).opacity(0.5))
-	}
-
-	/// The picture of a cell: a block, a cross for "empty", or a faint dot for "anything"
-	static func cellImage(_ k: String, _ cat: ModCatalog) -> Image {
-		if k.isEmpty {
-			var b = PixelBuf(w: 8, h: 8)
-			b.set(3, 3, 0xFF707070)
-			b.set(4, 4, 0xFF707070)
-			b.set(3, 4, 0xFF707070)
-			b.set(4, 3, 0xFF707070)
-			return pixImage(b)
-		}
-		if k == "air" {
-			var b = PixelBuf(w: 8, h: 8)
-			for i in 1..<7 {
-				b.set(i, i, 0xFFE04040)
-				b.set(7 - i, i, 0xFFE04040)
-			}
-			return pixImage(b)
-		}
-		if k.hasPrefix("tile:"), let n = Int(k.dropFirst(5)), let t = Tile(rawValue: UInt8(clampI(n, 0, 255))) { return pixImage(tileBuf(t)) }
-		return ModPreview.icon(.custom(k), cat)
-	}
-}
-
-// MARK: - Mod Creator+: summoning rules and custom dimensions (screens)
-
-/// A chip that is on or off (tap to change it)
-struct ToggleChip: View {
-	let title: String
-	let on: Bool
-	var action: () -> Void
-	var body: some View {
-		let bg: Color = on ? ModUI.accent : Color.black.opacity(0.4)
-		return Button(action: action) {
-			Text(verbatim: title).font(.pixel(11, .bold)).foregroundColor(Color.white)
-				.frame(maxWidth: .infinity, minHeight: 40)
-				.background(bg)
-		}
-		.buttonStyle(.plain)
-	}
-}
-
-/// One way to summon (or a dimension's way in): what the player does, the item, the shape, and when
-/// and where it works. Used by the SUMMON page and the dimension editor.
-struct SummonRuleEditor: View {
-	@ObservedObject var s: ModSession
-	@Binding var rule: ModSummon
-	var forDimension: Bool = false
-	@State var pickingItem: Bool = false
-	@State var pickingBlock: Bool = false
-	/// what a tap on the shape paints: "" anything, "air" empty, or a block key
-	@State var brush: String = "air"
-	@State var recent: [String] = []
-
-	func rb<T>(_ kp: WritableKeyPath<ModSummon, T>) -> Binding<T> {
-		return Binding<T>(get: { rule[keyPath: kp] }, set: { rule[keyPath: kp] = $0 })
-	}
-
-	var body: some View {
-		ZStack {
-			VStack(alignment: .leading, spacing: 8) {
-				ModToggle(label: forDimension ? "Players can get in this way" : "Works in play", isOn: rb(\.enabled))
-				howSection
-				if rule.usesItem { itemSection }
-				if rule.usesPattern { shapeSection }
-				whereSection
-				if !forDimension { entranceSection }
-			}
-		}
-		.modCover(s, pickingItem ? 1 : nil) { self.itemPicker }
-		.modCover(s, pickingBlock ? 2 : nil) { self.blockPicker }
-	}
-
-	static let howNames: [String] = ModSummonHow.allCases.map { $0.name }
-
-	var howSection: some View {
-		ModSection(title: "WHAT THE PLAYER DOES", help: rule.how.help) {
-			ChoiceRows(options: SummonRuleEditor.howNames, selected: howBind, columns: 3)
-		}
-	}
-
-	var itemSection: some View {
-		let title: String = forDimension ? "THE KEY ITEM" : "THE ITEM"
-		let help: String = forDimension ? "Using it again inside the dimension brings the player back." : ""
-		let used: String = forDimension ? "Used up on the way in" : "Used up when the creature comes"
-		return ModSection(title: title, help: help) {
-			itemRow
-			ModToggle(label: used, isOn: rb(\.consume))
-		}
-	}
-
-	var itemRow: some View {
-		HStack(spacing: 10) {
-			if let it = rule.item {
-				ModPreview.icon(it, s.catalog).resizable().interpolation(.none).frame(width: 36, height: 36)
-			}
-			Text(verbatim: itemName).font(.pixel(13, .bold)).foregroundColor(Color.white)
-			Spacer(minLength: 0)
-			SmallButton(title: "CHOOSE", color: ModUI.blue) { self.pickingItem = true }
-		}
-	}
-
-	var shapeSection: some View {
-		let title: String = forDimension ? "THE GATEWAY SHAPE" : "THE SHAPE"
-		return ModSection(title: title, help: "Tap a cell to paint it. ANY: the cell can hold anything. EMPTY: it must be clear. It is built facing the way it is drawn.") {
-			palette
-			PatternGrid(pattern: rb(\.pattern), brush: brush, catalog: s.catalog)
-			sizeRow
-			ModToggle(label: "The shape's blocks are used up", isOn: rb(\.clearPattern))
-		}
-	}
-
-	var sizeRow: some View {
-		let side: ClosedRange<Int> = 1...ModPattern.maxSide
-		return HStack(spacing: 10) {
-			IntSlider(label: "Width", value: sizeBind(true), range: side)
-			IntSlider(label: "Height", value: sizeBind(false), range: side)
-		}
-	}
-
-	var whereSection: some View {
-		ModSection(title: "WHEN AND WHERE", help: "Weather conditions are skipped for players who switch the weather off.") {
-			ChoiceRows(options: ModSummonText.times, selected: rb(\.time), columns: 3)
-			ChoiceRows(options: ModSummonText.weathers, selected: rb(\.weather), columns: 5)
-			ChoiceRows(options: ModSummonText.places, selected: rb(\.place), columns: 3)
-			ModBiomePicker(biomes: rb(\.biomes))
-			Text("Dimensions (none chosen: any)").font(.pixel(11, .bold)).foregroundColor(ModUI.dim)
-			chips(SummonRuleEditor.gameDims, rb(\.dims))
-			if !s.mod.dims.isEmpty { keyChips(modDims, rb(\.dimKeys)) }
-		}
-	}
-
-	static let gameDims: [(Int, String)] = [(0, "Overworld"), (1, "Umbral Realm")]
-
-	var modDims: [(String, String)] {
-		var out: [(String, String)] = []
-		for d in s.mod.dims { out.append((s.mod.key(d.id), d.name)) }
-		return out
-	}
-
-	var entranceSection: some View {
-		ModSection(title: "ITS ENTRANCE") {
-			ChoiceRows(options: ModSummonText.appears, selected: rb(\.appear), columns: 2)
-			ModTextField(label: "Message", text: rb(\.message), placeholder: "The Frost King answers your call!")
-		}
-	}
-
-	var itemPicker: some View {
-		let title: String = forDimension ? "THE KEY ITEM" : "THE SUMMONING ITEM"
-		return ItemPickerView(catalog: s.catalog, title: title, pick: { (it: Item) in
-			self.rule.item = it
-			self.pickingItem = false
-		}, cancel: { self.pickingItem = false })
-	}
-
-	var blockPicker: some View {
-		ItemPickerView(catalog: s.catalog, title: "A BLOCK FOR THE SHAPE", blocksOnly: true, pick: { (it: Item) in
-			self.useBlock(it)
-		}, cancel: { self.pickingBlock = false })
-	}
-
-	func useBlock(_ it: Item) {
-		let k: String = SummonRuleEditor.key(it)
-		if !k.isEmpty {
-			brush = k
-			recent.removeAll { $0 == k }
-			recent.insert(k, at: 0)
-			if recent.count > 8 { recent = Array(recent.prefix(8)) }
-		}
-		pickingBlock = false
-	}
-
-	static func key(_ it: Item) -> String {
-		switch it {
-		case .block(let t): return t.isMod || t == .air ? "" : ModGround.key(t)
-		case .custom(let k): return k
-		default: return ""
-		}
-	}
-
-	var itemName: String {
-		guard let i = rule.item else { return "None chosen" }
-		return ModPreview.name(i, s.catalog)
-	}
-
-	var palette: some View {
-		let n: Int = recent.count + 3
-		return PlainGrid(count: n, per: 6) { (i: Int) in self.paletteCell(i) }
-	}
-
-	/// ANY, EMPTY, the blocks used lately, then + BLOCK
-	@ViewBuilder
-	func paletteCell(_ i: Int) -> some View {
-		if i == 0 {
-			brushButton("", "ANY")
-		} else if i == 1 {
-			brushButton("air", "EMPTY")
-		} else if i - 2 < recent.count {
-			brushButton(recent[i - 2], ModGround.name(recent[i - 2], s.mod))
+extension ModInfusion {
+	/// Its numbers on a melee profile (percentages of the profile it is given, added or multiplied)
+	func apply(_ p0: MeleeProfile) -> MeleeProfile {
+		var p: MeleeProfile = p0
+		if multiply {
+			p.damage *= 1.0 + damagePct / 100.0
+			p.cooldown /= max(0.2, 1.0 + attackSpeedPct / 100.0)
+			p.knock *= 1.0 + knockPct / 100.0
+			p.critChance *= 1.0 + critPct / 100.0
 		} else {
-			Button(action: { self.pickingBlock = true }) {
-				Text("+ BLOCK").font(.pixel(11, .bold)).foregroundColor(Color.white)
-					.frame(maxWidth: .infinity, minHeight: 52)
-					.background(ModUI.blue)
-			}
-			.buttonStyle(.plain)
+			p.damage += p0.damage * damagePct / 100.0
+			p.cooldown = max(0.08, p.cooldown - p0.cooldown * attackSpeedPct / 100.0)
+			p.knock += p0.knock * knockPct / 100.0
+			p.critChance += critPct / 100.0
 		}
-	}
-
-	func brushButton(_ k: String, _ label: String) -> some View {
-		let on: Bool = brush == k
-		let bg: Color = on ? ModUI.accent : Color.black.opacity(0.4)
-		let img: Image = PatternGrid.cellImage(k, s.catalog)
-		return Button(action: { self.brush = k }) {
-			VStack(spacing: 2) {
-				img.resizable().interpolation(.none).frame(width: 28, height: 28)
-				Text(verbatim: label).font(.pixel(8, .semibold)).foregroundColor(Color.white).lineLimit(1)
-			}
-			.frame(maxWidth: .infinity, minHeight: 52)
-			.background(bg)
-		}
-		.buttonStyle(.plain)
-	}
-
-	func chips(_ opts: [(Int, String)], _ b: Binding<[Int]>) -> some View {
-		let chosen: [Int] = b.wrappedValue
-		return PlainGrid(count: opts.count, per: 4) { (k: Int) in
-			ToggleChip(title: opts[k].1, on: chosen.contains(opts[k].0)) { SummonRuleEditor.flip(b, opts[k].0) }
-		}
-	}
-
-	func keyChips(_ opts: [(String, String)], _ b: Binding<[String]>) -> some View {
-		let chosen: [String] = b.wrappedValue
-		return PlainGrid(count: opts.count, per: 4) { (k: Int) in
-			ToggleChip(title: opts[k].1, on: chosen.contains(opts[k].0)) { SummonRuleEditor.flipKey(b, opts[k].0) }
-		}
-	}
-
-	static func flip(_ b: Binding<[Int]>, _ v: Int) {
-		var l: [Int] = b.wrappedValue
-		if let j = l.firstIndex(of: v) { l.remove(at: j) } else { l.append(v) }
-		b.wrappedValue = l.sorted()
-	}
-
-	static func flipKey(_ b: Binding<[String]>, _ v: String) {
-		var l: [String] = b.wrappedValue
-		if let j = l.firstIndex(of: v) { l.remove(at: j) } else { l.append(v) }
-		b.wrappedValue = l
-	}
-
-	var howBind: Binding<Int> {
-		return Binding<Int>(get: { rule.how.rawValue }, set: { rule.how = ModSummonHow(rawValue: $0) ?? .useItem })
-	}
-
-	func sizeBind(_ across: Bool) -> Binding<Int> {
-		return Binding<Int>(get: { across ? rule.pattern.w : rule.pattern.h }, set: { n in
-			let p: ModPattern = rule.pattern
-			rule.pattern = across ? p.resized(n, p.h) : p.resized(p.w, n)
-		})
+		p.damage += damageFlat
+		p.reach += reach
+		p.critChance = clampD(p.critChance, 0, 1)
+		if burn > 0 { p.burn = max(p.burn, burn) }
+		return p
 	}
 }
 
-/// The SUMMON page of a creature: the ways a player can call it into the world
-struct SummonPage: View {
-	@ObservedObject var s: ModSession
-	let id: String
-	@State var open: Int = 0
+/// A custom infusion in a world: its number on items, its key, and what it goes on
+final class ModInfusionRT {
+	let key: String
+	let number: Int
+	let def: ModInfusion
+	let classes: Set<Int>
+	let items: Set<Item>
 
-	var mob: ModMob { return s.mod.mobs.first { $0.id == id } ?? ModMob() }
-	var summons: Binding<[ModSummon]> { return s.bind(\ModPack.mobs, id, \ModMob.summons, []) }
-
-	func rule(_ i: Int) -> Binding<ModSummon> {
-		let base: Binding<[ModSummon]> = summons
-		return Binding<ModSummon>(get: { i < base.wrappedValue.count ? base.wrappedValue[i] : ModSummon() }, set: { v in
-			var list: [ModSummon] = base.wrappedValue
-			if i < list.count {
-				list[i] = v
-				base.wrappedValue = list
-			}
-		})
+	init(key: String, number: Int, def: ModInfusion) {
+		self.key = key
+		self.number = number
+		self.def = def
+		self.classes = Set(def.classes)
+		self.items = Set(def.items)
 	}
 
-	var body: some View {
-		VStack(spacing: 10) {
-			Text("Ways for a player to call this creature into the world in normal play: with an item, a shape of blocks, or both, where and when you say. Every condition you set must hold at once.")
-				.font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-			ForEach(0..<mob.summons.count, id: \.self) { i in card(i) }
-			if mob.summons.count < ModLimits.maxSummons {
-				PixelButton(title: "+ ADD A WAY TO SUMMON", color: ModUI.accent) { add() }
-			}
-		}
-	}
-
-	func itemName(_ it: Item?) -> String {
-		guard let i = it else { return "an item (none chosen)" }
-		return ModPreview.name(i, s.catalog)
-	}
-
-	func card(_ i: Int) -> some View {
-		let sm: ModSummon = i < mob.summons.count ? mob.summons[i] : ModSummon()
-		return VStack(alignment: .leading, spacing: 8) {
-			HStack(spacing: 6) {
-				Text(verbatim: joinText(String(i + 1), ". ", sm.how.name)).font(.pixel(13, .bold)).foregroundColor(sm.enabled ? Color.white : ModUI.dim)
-				Spacer(minLength: 0)
-				SmallButton(title: open == i ? "CLOSE" : "EDIT", color: ModUI.blue) { open = open == i ? -1 : i }
-				SmallButton(title: "DELETE", color: ModUI.red) { remove(i) }
-			}
-			Text(verbatim: joinText(ModSummonText.describe(sm, itemName(sm.item)), sm.enabled ? "." : " (switched off).")).font(.pixel(10, .semibold)).foregroundColor(ModUI.gold)
-			if open == i { SummonRuleEditor(s: s, rule: rule(i)) }
-		}
-		.padding(10)
-		.background(PixelBox(color: ModUI.card))
-	}
-
-	func add() {
-		var list: [ModSummon] = mob.summons
-		var sm = ModSummon()
-		sm.time = 2
-		sm.message = joinText(mob.name, " answers the call!")
-		list.append(sm)
-		summons.wrappedValue = list
-		open = list.count - 1
-	}
-
-	func remove(_ i: Int) {
-		var list: [ModSummon] = mob.summons
-		if i < 0 || i >= list.count { return }
-		list.remove(at: i)
-		summons.wrappedValue = list
-		open = -1
-	}
+	/// the share a percentage adds (or the factor it multiplies by)
+	func factor(_ pct: Double) -> Double { return 1.0 + pct / 100.0 }
 }
 
-/// The DIMENSIONS tab: the mod's dimensions
-struct DimensionListView: View {
-	@ObservedObject var s: ModSession
-	var open: (String) -> Void
+/// Custom infusions are numbered from here on items (the game's own use 0 to 999)
+let customInfusionBase: Int = 1000
+let maxCustomInfusions: Int = 256
 
-	var body: some View {
-		VStack(alignment: .leading, spacing: 8) {
-			Text("Whole new places to travel to: their own sky, light, land, regions, weather and creatures, and a way in that you design (a key item, a gateway shape, or both). A world holds up to three custom dimensions.")
-				.font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-			if s.mod.dims.count < 3 {
-				PixelButton(title: "+ NEW DIMENSION", color: ModUI.accent) { add() }
+extension ModRuntime {
+	/// Gives each custom infusion its number (the world's own numbers first, so items keep theirs) and
+	/// makes its compound an item of the mod
+	func buildInfusions(_ world: ModWorldInfo?) {
+		var taken: Set<Int> = []
+		if let w = world {
+			for (k, n) in w.infusions where n >= customInfusionBase && n < customInfusionBase + maxCustomInfusions {
+				infusionNumber[k] = n
+				taken.insert(n)
 			}
-			ForEach(s.mod.dims) { d in
-				Button(action: { open(d.id) }) {
-					HStack(spacing: 10) {
-						SkySwatch(top: d.skyTop, bottom: d.skyBottom).frame(width: 44, height: 44)
-						VStack(alignment: .leading, spacing: 3) {
-							Text(verbatim: d.name).font(.pixel(14)).foregroundColor(Color.white)
-							Text(verbatim: summary(d)).font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
-						}
-						Spacer(minLength: 0)
-						if s.mod.off.contains(d.id) { Text("OFF").font(.pixel(11, .bold)).foregroundColor(ModUI.red) }
-					}
-					.padding(8)
-					.frame(maxWidth: .infinity, alignment: .leading)
-					.background(PixelBox(color: ModUI.card))
+		}
+		var next: Int = customInfusionBase
+		for p in packs {
+			for f in p.infusions where !disabled.contains(p.key(f.id)) {
+				let k: String = p.key(f.id)
+				var n: Int = infusionNumber[k] ?? -1
+				if n < 0 {
+					while taken.contains(next) { next += 1 }
+					if next >= customInfusionBase + maxCustomInfusions { continue }
+					n = next
+					taken.insert(n)
+					infusionNumber[k] = n
 				}
-				.buttonStyle(.plain)
+				infusionDefs[n] = ModInfusionRT(key: k, number: n, def: f)
+				// its compound: an item of the mod under the same key
+				var it = ModItem()
+				it.id = f.id
+				it.name = joinText(f.name, " Compound")
+				it.desc = joinText("Work it into equipment at an Infusion Crucible: ", f.blurb)
+				it.kind = .material
+				it.stack = 10
+				it.rarity = clampI(f.rarity, 0, 4)
+				let r = ModItemRT(key: k, def: it, modName: p.name)
+				r.icon = compoundIcon(f)
+				items[k] = r
+				itemOrder.append(k)
 			}
 		}
 	}
 
-	func summary(_ d: ModDimension) -> String {
-		var parts: [String] = []
-		parts.append(d.ceiling ? "a cavern world" : "open sky")
-		parts.append(joinText(String(d.zones.count), d.zones.count == 1 ? " region" : " regions"))
-		if d.sea > 0 { parts.append(d.liquid == 1 ? "lava seas" : "seas") }
-		if d.islands > 0.05 { parts.append("floating islands") }
-		parts.append(joinText(String(d.spawns.count), d.spawns.count == 1 ? " creature" : " creatures"))
-		parts.append(d.entry.enabled ? d.entry.how.name.lowercased() : "no way in yet")
-		return parts.joined(separator: " \u{00B7} ")
-	}
+	func infusion(_ n: Int) -> ModInfusionRT? { return infusionDefs[n] }
 
-	func add() {
-		var d = ModDimension()
-		d.id = s.mod.freshID("d")
-		d.name = joinText("Dimension ", String(s.mod.dims.count + 1))
-		s.mod.dims.append(d)
-		s.touch()
-		open(d.id)
-	}
-}
-
-/// Editing one dimension: its sky and light, its land, its regions, its creatures, the way in and out,
-/// and a preview made by the game's own generator
-/// A mod's own sun or moon: switched on, its picture (or the round one in its colour), how big it is,
-/// its glow, rays, turning and pulsing, how it moves across the sky and how much light it gives. Used by
-/// the dimension editor and, for the Overworld, by the GAME CONTENT tab.
-struct SkyBodyEditor: View {
-	@Binding var sky: ModSkyBody?
-	let moon: Bool
-	/// the sky's colour behind it in the preview
-	var skyTop: UInt32 = 0x3E86D8
-	var skyBottom: UInt32 = 0xB4DCFF
-	@State var colorPick: Int = 0
-
-	static let colorNames: [String] = ["Its colour", "Its glow"]
-	static let pathNames: [String] = ["Rises and sets", "Stays in one place"]
-	static let numbers: [DSlider<ModSkyBody>] = [
-		DSlider(label: "Size (times the game's)", kp: \.size, lo: 0.3, hi: 3, sbHi: 3, step: 0.05, format: "%.2f"),
-		DSlider(label: "Glow", kp: \.glow, lo: 0, hi: 1, sbHi: 1, step: 0.05, format: "%.2f"),
-		DSlider(label: "Pulsing glow", kp: \.pulse, lo: 0, hi: 1, sbHi: 1, step: 0.05, format: "%.2f"),
-		DSlider(label: "Turning (degrees a second)", kp: \.spin, lo: -180, hi: 180, sbHi: 180, step: 1, format: "%.0f"),
-		DSlider(label: "Light it gives (1 = the game's)", kp: \.bright, lo: 0, hi: 2, sbHi: 2, step: 0.05, format: "%.2f")
-	]
-	static let pathNumbers: [DSlider<ModSkyBody>] = [
-		DSlider(label: "How high it climbs", kp: \.arc, lo: 0.2, hi: 1.2, sbHi: 1.2, step: 0.05, format: "%.2f")
-	]
-	static let placeNumbers: [DSlider<ModSkyBody>] = [
-		DSlider(label: "Across (left ... right)", kp: \.posX, lo: 0, hi: 1, sbHi: 1, step: 0.01, format: "%.2f"),
-		DSlider(label: "Down (top ... horizon)", kp: \.posY, lo: 0, hi: 1, sbHi: 1, step: 0.01, format: "%.2f")
-	]
-
-	var fresh: ModSkyBody { return moon ? ModSkyBody.moon() : ModSkyBody() }
-
-	func f<T>(_ kp: WritableKeyPath<ModSkyBody, T>) -> Binding<T> {
-		let base: Binding<ModSkyBody?> = $sky
-		let start: ModSkyBody = fresh
-		return Binding<T>(get: { (base.wrappedValue ?? start)[keyPath: kp] }, set: { v in
-			var b: ModSkyBody = base.wrappedValue ?? start
-			b[keyPath: kp] = v
-			base.wrappedValue = b
-		})
-	}
-
-	var onBind: Binding<Bool> {
-		let base: Binding<ModSkyBody?> = $sky
-		let start: ModSkyBody = fresh
-		return Binding<Bool>(get: { base.wrappedValue != nil }, set: { on in base.wrappedValue = on ? start : nil })
-	}
-
-	var body: some View {
-		let own: Bool = sky != nil
-		let word: String = moon ? "moon" : "sun"
-		return VStack(alignment: .leading, spacing: 8) {
-			ModToggle(label: joinText("Its own ", word), help: joinText("Off: the game's ", word, " as it always was"), isOn: onBind)
-			if own { fields }
+	/// The compound's icon: its own picture, or a phial in its colour
+	func compoundIcon(_ f: ModInfusion) -> PixelBuf {
+		if !f.icon.isBlank {
+			var b: PixelBuf = padBuf(f.icon.buf())
+			if f.icon.outlined(true) { b.outline(0x1A1410) }
+			return b
 		}
-	}
-
-	var fields: some View {
-		let b: ModSkyBody = sky ?? fresh
-		let pick: Int = clampI(colorPick, 0, 1)
-		let fixed: Bool = b.path == 1
-		let pictured: Bool = !b.art.isBlank
-		return VStack(alignment: .leading, spacing: 8) {
-			SkyBodyPreview(b: b, moon: moon, top: skyTop, bottom: skyBottom).frame(height: 130)
-			Text("Its picture (leave it blank for a round one in its colour)").font(.pixel(11, .bold)).foregroundColor(ModUI.dim)
-			PixelEditorView(pixels: f(\.art), maxSide: 240, sizes: [16, 24, 32], outlineDefault: false)
-			if pictured { SmallButton(title: "BACK TO A ROUND ONE", color: ModUI.red) { self.f(\.art).wrappedValue = ModPixels(w: 16, h: 16) } }
-			ChoiceRows(options: SkyBodyEditor.colorNames, selected: $colorPick, columns: 2)
-			ModColorRow(label: SkyBodyEditor.colorNames[pick], color: pick == 0 ? f(\.color) : f(\.glowColor))
-			ModToggle(label: "Rays", help: "Short rays all round it, in its glow's colour", isOn: f(\.rays))
-			sliderRows(SkyBodyEditor.numbers)
-			ChoiceRows(options: SkyBodyEditor.pathNames, selected: f(\.path), columns: 2)
-			if fixed {
-				Text("It hangs there day and night.").font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-				sliderRows(SkyBodyEditor.placeNumbers)
-			} else {
-				sliderRows(SkyBodyEditor.pathNumbers)
-			}
-		}
-	}
-
-	func sliderRows(_ list: [DSlider<ModSkyBody>]) -> some View {
-		VStack(alignment: .leading, spacing: 8) {
-			ForEach(0..<list.count, id: \.self) { (i: Int) in self.slider(list[i]) }
-		}
-	}
-
-	func slider(_ d: DSlider<ModSkyBody>) -> StatSlider {
-		let r: ClosedRange<Double> = d.lo...d.hi
-		return StatSlider(label: d.label, value: f(d.kp), range: r, step: d.step, format: d.format)
-	}
-}
-
-/// A strip of sky with a sun or moon in it, as the game draws it (at the top of its path, or where it stays)
-struct SkyBodyPreview: View {
-	let b: ModSkyBody
-	let moon: Bool
-	let top: UInt32
-	let bottom: UInt32
-
-	var body: some View {
-		let body: ModSkyBody = b
-		let isMoon: Bool = moon
-		let t0: UInt32 = top
-		let b0: UInt32 = bottom
-		return Canvas { ctx, size in
-			let w: Double = Double(size.width)
-			let h: Double = Double(size.height)
-			let full: CGRect = CGRect(x: 0, y: 0, width: w, height: h)
-			vGradient(&ctx, full, [rgbColor(t0), rgbColor(b0)], 0, h)
-			// noon for a sun, midnight for a moon: the top of its path
-			WorldRenderer.drawSkyBody(&ctx, w, h * 1.6, 0, body, isMoon ? 0.75 : 0.25, isMoon, isMoon ? 44.0 : 56.0, false, t0)
-		}
-		.background(Color.black)
-	}
-}
-
-/// A tree design's cells as a small picture: three of them, short, middling and tall, in the colours of
-/// the blocks they are made of
-enum TreePreview {
-	static func colour(_ k: String, _ p: ModPack, _ d: UInt32) -> UInt32 {
-		if k.isEmpty { return d }
-		if k.hasPrefix("tile:") {
-			guard let n = Int(k.dropFirst(5)), let t = Tile(rawValue: UInt8(clampI(n, 0, 255))) else { return d }
-			return t.def.colors.first ?? d
-		}
-		let s: (String, String) = splitModKey(k)
-		if let b = p.blocks.first(where: { $0.id == s.1 }) { return ModDimPreview.averageColor(b.art) }
-		return d
-	}
-
-	static func render(_ t: ModTree, _ p: ModPack) -> PixelBuf {
-		let px: Int = 3
-		let cellsW: Int = 3 * (treeReach * 2 + 1)
-		let rows: Int = 34
-		var b = PixelBuf(w: cellsW * px, h: (rows + 2) * px)
-		let sky: UInt32 = 0x8AC0F0
-		for i in 0..<b.px.count { b.px[i] = 0xFF000000 | sky }
-		let trunk: UInt32 = colour(t.trunk, p, 0x6B4A2A)
-		let branch: UInt32 = t.branch.isEmpty ? shadeRGB(trunk, 0.85) : colour(t.branch, p, trunk)
-		let leaves: UInt32 = colour(t.leaves, p, 0x3E8A2E)
-		let ground: UInt32 = colour(t.ground.isEmpty ? ModGround.key(.grass) : t.ground, p, 0x5DAA3A)
-		func plot(_ cx: Int, _ cy: Int, _ c: UInt32) {
-			if cx < 0 || cy < 0 || cx >= cellsW || cy >= rows + 2 { return }
-			for y in 0..<px {
-				for x in 0..<px { b.px[(cy * px + y) * b.w + cx * px + x] = 0xFF000000 | c }
-			}
-		}
-		for x in 0..<cellsW {
-			plot(x, rows, ground)
-			plot(x, rows + 1, shadeRGB(ground, 0.7))
-		}
-		let lo: Int = clampI(t.minHeight, 1, 24)
-		let hi: Int = max(lo, clampI(t.maxHeight, 1, 24))
-		let heights: [Int] = [lo, (lo + hi) / 2, hi]
-		for k in 0..<3 {
-			let root: Int = treeReach + k * (treeReach * 2 + 1)
-			let cells: [TreeCell] = TreeShapes.cells(t, heights[k], UInt64(1234 + k * 977))
-			for c in cells {
-				let col: UInt32 = c.part == 1 ? trunk : (c.part == 2 ? branch : leaves)
-				plot(root + c.dx, rows - c.dy, col)
-			}
-		}
+		var b = PixelBuf(w: 12, h: 12)
+		let c: UInt32 = f.color & 0xFFFFFF
+		let ring: UInt32 = (Rarity(rawValue: clampI(f.rarity, 0, 4)) ?? .uncommon).color
+		b.rect(5, 0, 2, 2, 0x6A6E78)
+		b.rect(4, 2, 4, 1, ring)
+		b.rect(3, 3, 6, 7, 0x2A2A34)
+		b.rect(4, 4, 4, 5, c)
+		b.set(4, 4, shadeRGB(c, 1.4))
+		b.set(6, 6, shadeRGB(c, 0.6))
+		b.rect(3, 10, 6, 1, ring)
+		b.outline(0x1A1410)
 		return b
 	}
 }
 
-/// Painting a tree cell by cell: empty, trunk, branch or leaves. Its root is the middle of the bottom row.
-struct TreeGridEditor: View {
-	@Binding var grid: ModTreeGrid
-	@State var brush: Int = 3
-
-	static let brushes: [String] = ["EMPTY", "TRUNK", "BRANCH", "LEAVES"]
-	static let colours: [UInt32] = [0x1A2030, 0x7A5230, 0xA07040, 0x3E9A30]
-
-	var body: some View {
-		let g: ModTreeGrid = grid
-		let cell: CGFloat = min(26, 300 / CGFloat(max(1, g.w)))
-		let cw: CGFloat = cell * CGFloat(g.w)
-		let ch: CGFloat = cell * CGFloat(g.h)
-		return VStack(alignment: .leading, spacing: 8) {
-			ChoiceRows(options: TreeGridEditor.brushes, selected: $brush, columns: 4)
-			canvas(g, cell).frame(width: cw, height: ch)
-			IntSlider(label: "Width", value: sizeBind(true), range: 3...15)
-			IntSlider(label: "Height", value: sizeBind(false), range: 3...24)
-			HStack(spacing: 8) {
-				SmallButton(title: "CLEAR", color: ModUI.red) { self.clear() }
-				SmallButton(title: "START FROM THE SAMPLE", color: ModUI.blue) { self.sample() }
-			}
-		}
-	}
-
-	func canvas(_ g: ModTreeGrid, _ cell: CGFloat) -> some View {
-		let cols: [UInt32] = TreeGridEditor.colours
-		return Canvas { ctx, size in
-			for y in 0..<g.h {
-				for x in 0..<g.w {
-					let v: Int = Int(g.at(x, y))
-					let r: CGRect = CGRect(x: CGFloat(x) * cell, y: CGFloat(y) * cell, width: cell - 1, height: cell - 1)
-					ctx.fill(Path(r), with: .color(Color(hex: cols[clampI(v, 0, 3)])))
-				}
-			}
-			// the root, where it stands on the ground
-			let mid: CGFloat = CGFloat(g.w / 2) * cell
-			ctx.fill(Path(CGRect(x: mid, y: CGFloat(g.h) * cell - 3, width: cell - 1, height: 3)), with: .color(Color(hex: 0xFFE066)))
-		}
-		.gesture(DragGesture(minimumDistance: 0).onChanged { (v: DragGesture.Value) in self.paint(v.location, cell) })
-	}
-
-	func paint(_ p: CGPoint, _ cell: CGFloat) {
-		let x: Int = Int(floor(p.x / cell))
-		let y: Int = Int(floor(p.y / cell))
-		var g: ModTreeGrid = grid
-		if x < 0 || y < 0 || x >= g.w || y >= g.h || !g.valid { return }
-		let v: UInt8 = UInt8(clampI(brush, 0, 3))
-		if g.cells[y * g.w + x] == v { return }
-		g.cells[y * g.w + x] = v
-		grid = g
-	}
-
-	func sizeBind(_ wide: Bool) -> Binding<Int> {
-		let base: Binding<ModTreeGrid> = $grid
-		return Binding<Int>(get: { wide ? base.wrappedValue.w : base.wrappedValue.h }, set: { v in
-			let g: ModTreeGrid = base.wrappedValue
-			if (wide ? g.w : g.h) == v { return }
-			base.wrappedValue = wide ? g.resized(v, g.h) : g.resized(g.w, v)
-		})
-	}
-
-	func clear() {
-		var g: ModTreeGrid = grid
-		g.cells = [UInt8](repeating: 0, count: g.w * g.h)
-		grid = g
-	}
-
-	func sample() {
-		var g: ModTreeGrid = grid
-		g.cells = ModTreeGrid.sample(g.w, g.h)
-		grid = g
-	}
+/// The name and colour of any infusion number (the game's own or a custom one)
+func infusionName(_ n: Int) -> String {
+	if let i = Infusion(rawValue: n) { return i.name }
+	return ModRuntime.shared.infusion(n)?.def.name ?? "Missing infusion"
 }
 
-/// Editing one tree design: its name and shape, the blocks it is made of, its sizes and how often it grows,
-/// and for a painted design the picture of it
-struct TreeDesignEditor: View {
-	@ObservedObject var s: ModSession
-	let id: String
-	var pickBlock: (String) -> Void
-	var done: () -> Void
-
-	func b<T>(_ kp: WritableKeyPath<ModTree, T>, _ d: T) -> Binding<T> { return s.bind(\ModPack.trees, id, kp, d) }
-	var tree: ModTree { return s.mod.trees.first { $0.id == id } ?? ModTree() }
-
-	static let shapeNames: [String] = ModTreeShape.allCases.map { $0.name }
-
-	var body: some View {
-		let t: ModTree = tree
-		let painted: Bool = t.shape == .painted
-		let pic: Image = pixImage(TreePreview.render(t, s.mod))
-		return ModSection(title: t.name.uppercased(), help: "Its trunk, branches and leaves are always passed through, like the game's trees.") {
-			pic.resizable().interpolation(.none).frame(width: 237, height: 150)
-			ModTextField(label: "Name", text: b(\.name, ""), placeholder: "Crystal Oak")
-			Text("Shape").font(.pixel(11, .bold)).foregroundColor(ModUI.dim)
-			ChoiceRows(options: TreeDesignEditor.shapeNames, selected: shapeBind, columns: 3)
-			blocksPart(t)
-			if painted {
-				TreeGridEditor(grid: b(\.grid, ModTreeGrid()))
-			} else {
-				sizesPart(t)
-			}
-			StatSlider(label: "How often it grows (among the region's designs)", value: b(\.weight, 1), range: 0.1...20.0, step: 0.1, format: "%.1f")
-			SmallButton(title: "DONE", color: ModUI.accent) { self.done() }
-		}
-	}
-
-	func blocksPart(_ t: ModTree) -> some View {
-		VStack(alignment: .leading, spacing: 8) {
-			blockRow("Trunk", t.trunk, "trunk", "")
-			blockRow("Branches", t.branch, "branch", t.branch.isEmpty ? "" : "SAME AS THE TRUNK")
-			blockRow("Leaves", t.leaves, "leaves", "")
-			blockRow("Grows only on", t.ground, "ground", t.ground.isEmpty ? "" : "ANY GROUND")
-		}
-	}
-
-	func sizesPart(_ t: ModTree) -> some View {
-		VStack(alignment: .leading, spacing: 8) {
-			IntSlider(label: "Shortest trunk", value: b(\.minHeight, 4), range: 1...24)
-			IntSlider(label: "Tallest trunk", value: b(\.maxHeight, 7), range: 1...24)
-			IntSlider(label: "Crown (how far the leaves reach)", value: b(\.crown, 2), range: 0...6)
-			IntSlider(label: "Branches", value: b(\.branches, 1), range: 0...4)
-			StatSlider(label: "Fullness of the leaves", value: b(\.density, 0.9), range: 0.2...1.0, step: 0.05, format: "%.2f")
-			ModToggle(label: "A thick trunk", help: "Two blocks wide", isOn: b(\.thick, false))
-		}
-	}
-
-	func blockRow(_ label: String, _ key: String, _ field: String, _ clear: String) -> some View {
-		let img: Image = PatternGrid.cellImage(key, s.catalog)
-		let name: String = key.isEmpty ? (field == "branch" ? "The trunk's block" : "Any") : ModGround.name(key, s.mod)
-		let canClear: Bool = !clear.isEmpty
-		return HStack(spacing: 10) {
-			img.resizable().interpolation(.none).frame(width: 32, height: 32)
-			VStack(alignment: .leading, spacing: 2) {
-				Text(verbatim: label).font(.pixel(11, .bold)).foregroundColor(ModUI.dim)
-				Text(verbatim: name).font(.pixel(13, .bold)).foregroundColor(Color.white)
-			}
-			Spacer(minLength: 0)
-			if canClear { SmallButton(title: clear) { self.clearField(field) } }
-			SmallButton(title: "CHOOSE", color: ModUI.blue) { self.pickBlock(field) }
-		}
-	}
-
-	func clearField(_ field: String) {
-		if field == "branch" { b(\.branch, "").wrappedValue = "" }
-		if field == "ground" { b(\.ground, "").wrappedValue = "" }
-	}
-
-	var shapeBind: Binding<Int> {
-		let base: Binding<ModTreeShape> = b(\.shape, .round)
-		return Binding<Int>(get: { base.wrappedValue.rawValue }, set: { base.wrappedValue = ModTreeShape(rawValue: $0) ?? .round })
-	}
+func infusionColor(_ n: Int) -> UInt32 {
+	if let i = Infusion(rawValue: n) { return i.color }
+	return ModRuntime.shared.infusion(n)?.def.color ?? 0xFF00FF
 }
 
-struct DimensionEditorView: View {
-	@ObservedObject var s: ModSession
-	let id: String
-	@State var page: Int = 0
-	@State var picking: String = ""
-	@State var zonePick: Int = 0
-	@State var preview: PixelBuf? = nil
-	@State var previewOf: ModDimension? = nil
-	/// which sky colour the palette sets (see skyColorNames)
-	@State var skyPick: Int = 0
-	/// the sun (0) or the moon (1) on the SUN & MOON page
-	@State var bodyPick: Int = 0
-	/// the tree design open on the TREES page
-	@State var treeEdit: String = ""
+extension Stack {
+	/// names of everything worked into it, custom infusions too
+	var infusionNames: [String] { return (inf ?? []).map { infusionName($0) } }
 
-	static let pages: [String] = ["BASICS", "SKY", "SUN & MOON", "LAND", "REGIONS", "TREES", "LIFE", "WAY IN", "PREVIEW"]
-	static let bodyNames: [String] = ["SUN", "MOON"]
-	static let skyColorNames: [String] = ["Day: top", "Day: bottom", "Night: top", "Night: bottom", "Sun"]
-
-	func b<T>(_ kp: WritableKeyPath<ModDimension, T>, _ d: T) -> Binding<T> { return s.bind(\ModPack.dims, id, kp, d) }
-	var dim: ModDimension { return s.mod.dims.first { $0.id == id } ?? ModDimension() }
-
-	var body: some View {
-		ZStack {
-			VStack(spacing: 10) {
-				header
-				ChoiceRows(options: DimensionEditorView.pages, selected: $page, columns: 5)
-				pageView
-			}
-		}
-		.modCover(s, picking.isEmpty ? nil : picking) { self.blockPicker }
-	}
-
-	var blockPicker: some View {
-		ItemPickerView(catalog: s.catalog, title: "CHOOSE A BLOCK", blocksOnly: true, pick: { (it: Item) in
-			self.setBlock(self.picking, SummonRuleEditor.key(it))
-			self.picking = ""
-		}, cancel: { self.picking = "" })
-	}
-
-	var header: some View {
-		let d: ModDimension = dim
-		let way: String = d.entry.enabled ? joinText("Way in: ", d.entry.how.name.lowercased()) : "No way in yet (visit it from the Mod Test tools)"
-		let col: Color = d.entry.enabled ? ModUI.gold : Color(ui: 0xFF9060)
-		return HStack(spacing: 12) {
-			SkySwatch(top: d.skyTop, bottom: d.skyBottom).frame(width: 64, height: 64)
-			VStack(alignment: .leading, spacing: 4) {
-				Text(verbatim: d.name).font(.pixel(20)).foregroundColor(Color.white)
-				Text(verbatim: way).font(.pixel(11, .semibold)).foregroundColor(col)
-			}
-			Spacer(minLength: 0)
-		}
-		.padding(10)
-		.background(PixelBox(color: ModUI.card))
-	}
-
-	/// The page shown: a plain switch, as the creature editor's pages (wrapping each page in AnyView
-	/// crashed on the iPad)
-	@ViewBuilder
-	var pageView: some View {
-		switch page {
-		case 1: skyPage
-		case 2: bodiesPage
-		case 3: landPage
-		case 4: zonesPage
-		case 5: treesPage
-		case 6: lifePage
-		case 7: entryPage
-		case 8: previewPage
-		default: basicsPage
-		}
-	}
-
-	var bodiesPage: some View {
-		let d: ModDimension = dim
-		let pick: Int = clampI(bodyPick, 0, 1)
-		let roof: Bool = d.ceiling
-		return ModSection(title: "SUN AND MOON", help: "Give the dimension a sun and a moon of its own: a picture or a round one in your colour, its size and glow, how it crosses the sky, and how much light it gives (it lights the land as the game's do).") {
-			if roof { Text("This is a cavern world: it has no sky, so they are never seen.").font(.pixel(11, .semibold)).foregroundColor(Color(ui: 0xFF9060)) }
-			ChoiceRows(options: DimensionEditorView.bodyNames, selected: $bodyPick, columns: 2)
-			if pick == 0 {
-				SkyBodyEditor(sky: b(\.sunBody, nil), moon: false, skyTop: d.skyTop, skyBottom: d.skyBottom)
-			} else {
-				SkyBodyEditor(sky: b(\.moonBody, nil), moon: true, skyTop: d.nightTop, skyBottom: d.nightBottom)
-			}
-		}
-	}
-
-	var treesPage: some View {
-		let list: [ModTree] = s.mod.trees
-		let editing: Bool = !treeEdit.isEmpty && list.contains { $0.id == treeEdit }
-		let canAdd: Bool = list.count < ModTree.maxDesigns
-		return VStack(spacing: 10) {
-			Text("Tree designs belong to the whole mod: choose which grow in each region on the REGIONS page. Their trunks, branches and leaves are always passed through, like the game's trees: a solid block chosen for them grows as a pass-through form of itself (each such block uses one of a world's 64 mod block numbers).")
-				.font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-			if editing {
-				TreeDesignEditor(s: s, id: treeEdit, pickBlock: { (f: String) in self.picking = joinText("t:", f) }, done: { self.treeEdit = "" })
-			} else {
-				ForEach(list) { (t: ModTree) in self.treeRow(t) }
-				if canAdd { SmallButton(title: "+ TREE DESIGN", color: ModUI.accent) { self.addTree() } }
-			}
-		}
-	}
-
-	func treeRow(_ t: ModTree) -> some View {
-		let pic: Image = pixImage(TreePreview.render(t, s.mod))
-		let uses: Int = treeUses(t.id)
-		let where0: String = uses == 0 ? "not grown in any region yet" : joinText("grows in ", String(uses), uses == 1 ? " region" : " regions")
-		let line: String = joinText(t.shape.name, " \u{00B7} ", where0)
-		return HStack(spacing: 8) {
-			pic.resizable().interpolation(.none).frame(width: 111, height: 70)
-			VStack(alignment: .leading, spacing: 2) {
-				Text(verbatim: t.name).font(.pixel(13)).foregroundColor(Color.white)
-				Text(verbatim: line).font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
-			}
-			Spacer(minLength: 0)
-			SmallButton(title: "EDIT", color: ModUI.blue) { self.treeEdit = t.id }
-			SmallButton(title: "\u{2715}", color: ModUI.red) { self.deleteTree(t.id) }
-		}
-		.padding(8)
-		.background(PixelBox(color: ModUI.card))
-	}
-
-	func treeUses(_ tid: String) -> Int {
-		var n: Int = 0
-		for d in s.mod.dims {
-			for z in d.zones where z.treeKinds.contains(tid) { n += 1 }
-		}
-		return n
-	}
-
-	func addTree() {
-		var t = ModTree()
-		t.id = s.mod.freshID("tree")
-		t.name = joinText("Tree ", String(s.mod.trees.count + 1))
-		s.mod.trees.append(t)
-		s.touch()
-		treeEdit = t.id
-	}
-
-	func deleteTree(_ tid: String) {
-		s.mod.trees.removeAll { $0.id == tid }
-		for i in s.mod.dims.indices {
-			for k in s.mod.dims[i].zones.indices { s.mod.dims[i].zones[k].treeKinds.removeAll { $0 == tid } }
-		}
-		s.touch()
-	}
-
-	var basicsPage: some View {
-		ModSection(title: "BASICS") {
-			ModTextField(label: "Name", text: b(\.name, ""), placeholder: "The Frostlands")
-			ModTextField(label: "Description", text: b(\.desc, ""), placeholder: "Optional")
-			ModTextField(label: "Message on arrival", text: b(\.arriveMessage, ""), placeholder: "Snow crunches underfoot.")
-		}
-	}
-
-	var skyPage: some View {
-		VStack(spacing: 10) {
-			skySection
-			lightSection
-			airSection
-		}
-	}
-
-	var skySection: some View {
-		let pick: Int = clampI(skyPick, 0, DimensionEditorView.skyColorNames.count - 1)
-		return ModSection(title: "SKY", help: "Colours at the top and the bottom of the sky, by day and by night, and the sun's. Choose one, then tap a colour.") {
-			ModToggle(label: "A rock roof overhead (a cavern world)", help: "No sky, sun or rain; like the Umbral Realm", isOn: b(\.ceiling, false))
-			skyPictures
-			ChoiceRows(options: DimensionEditorView.skyColorNames, selected: $skyPick, columns: 5)
-			ModColorRow(label: DimensionEditorView.skyColorNames[pick], color: skyColorBind(pick))
-		}
-	}
-
-	/// The day sky, the night sky and the sun, as they are now
-	var skyPictures: some View {
-		let d: ModDimension = dim
-		let sun: Color = Color(ui: d.sunColor & 0xFFFFFF)
-		return HStack(alignment: .bottom, spacing: 12) {
-			skyPicture("DAY", d.skyTop, d.skyBottom)
-			skyPicture("NIGHT", d.nightTop, d.nightBottom)
-			VStack(spacing: 2) {
-				Rectangle().fill(sun).frame(width: 28, height: 28).overlay(Rectangle().stroke(Color.black, lineWidth: 1))
-				Text("SUN").font(.pixel(10)).foregroundColor(ModUI.dim)
-			}
-		}
-	}
-
-	func skyPicture(_ name: String, _ top: UInt32, _ bottom: UInt32) -> some View {
-		VStack(spacing: 2) {
-			SkySwatch(top: top, bottom: bottom).frame(width: 96, height: 54)
-			Text(verbatim: name).font(.pixel(10)).foregroundColor(ModUI.dim)
-		}
-	}
-
-	/// The sky colour the palette sets
-	func skyColorBind(_ pick: Int) -> Binding<UInt32> {
-		switch pick {
-		case 1: return b(\.skyBottom, 0xC07AB0)
-		case 2: return b(\.nightTop, 0x080614)
-		case 3: return b(\.nightBottom, 0x241A3A)
-		case 4: return b(\.sunColor, 0xFFE8A0)
-		default: return b(\.skyTop, 0x3A2A6A)
-		}
-	}
-
-	var lightSection: some View {
-		let fixed: Bool = !dim.cycle
-		let word: String = timeWord(dim.fixedTime)
-		return ModSection(title: "LIGHT AND TIME") {
-			StatSlider(label: "Daylight", value: b(\.light, 0.8), range: 0.0...1.0, step: 0.05, format: "%.2f")
-			ModToggle(label: "Day and night", help: "Off: it is always the same time there", isOn: b(\.cycle, true))
-			if fixed {
-				StatSlider(label: "The time it always is", value: b(\.fixedTime, 0.25), range: 0.0...1.0, step: 0.01, format: "%.2f")
-				Text(verbatim: word).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-			}
-			ModToggle(label: "Sun", isOn: b(\.sun, true))
-			ModToggle(label: "Moon", isOn: b(\.moon, true))
-			ModToggle(label: "Stars", isOn: b(\.stars, true))
-		}
-	}
-
-	var airSection: some View {
-		ModSection(title: "AIR AND WEATHER") {
-			Text("Motes in the air").font(.pixel(11, .bold)).foregroundColor(ModUI.dim)
-			ChoiceRows(options: ModDimText.ambients, selected: b(\.ambient, 0), columns: 6)
-			Text("Weather").font(.pixel(11, .bold)).foregroundColor(ModUI.dim)
-			ChoiceRows(options: ModDimText.weathers, selected: b(\.weather, 0), columns: 5)
-			StatSlider(label: "Cold", value: b(\.chill, 0), range: 0.0...1.0, step: 0.05, format: "%.2f")
-			ModToggle(label: "Hot", isOn: b(\.hot, false))
-		}
-	}
-
-	func timeWord(_ t: Double) -> String {
-		if t < 0.04 || t > 0.95 { return "Dawn" }
-		if t < 0.46 { return "Day" }
-		if t < 0.6 { return "Dusk" }
-		return "Night"
-	}
-
-	var landPage: some View {
-		VStack(spacing: 10) {
-			groundSection
-			ModSection(title: "UNDERGROUND") {
-				StatSlider(label: "Caves", value: b(\.caves, 0.4), range: 0.0...1.0, step: 0.05, format: "%.2f")
-				ModToggle(label: "Pools deep in the caves", isOn: b(\.pools, true))
-			}
-			seaSection
-			hazardSection
-		}
-	}
-
-	var groundSection: some View {
-		let low: Int = dim.ceiling ? 80 : 40
-		let rows: ClosedRange<Int> = low...260
-		let rock: String = dim.stone
-		return ModSection(title: "THE GROUND", help: "Rows count down from the top of the dimension (320 rows deep).") {
-			IntSlider(label: "Ground level (row)", value: b(\.surface, 150), range: rows)
-			StatSlider(label: "Hills", value: b(\.hills, 12), range: 0.0...40.0, step: 1, format: "%.0f")
-			StatSlider(label: "Roughness", value: b(\.roughness, 1), range: 0.2...3.0, step: 0.1, format: "%.1f")
-			StatSlider(label: "Mountains", value: b(\.mountains, 0.2), range: 0.0...1.0, step: 0.05, format: "%.2f")
-			blockRow("Rock", rock, "stone")
-		}
-	}
-
-	var seaSection: some View {
-		let seas: Bool = dim.sea > 0
-		return ModSection(title: "SEAS AND SKY") {
-			ModToggle(label: "Seas", isOn: seaOn)
-			if seas { IntSlider(label: "Sea level (row)", value: b(\.sea, 160), range: 60...280) }
-			ChoiceRows(options: ModDimText.liquids, selected: b(\.liquid, 0), columns: 2)
-			StatSlider(label: "Floating islands", value: b(\.islands, 0), range: 0.0...1.0, step: 0.05, format: "%.2f")
-		}
-	}
-
-	var hazardSection: some View {
-		let hz: String = dim.hazard
-		let has: Bool = !hz.isEmpty
-		return ModSection(title: "HAZARDS", help: "A block scattered on the ground, such as spikes or one of your own.") {
-			blockRow("Hazard", hz, "hazard")
-			if has {
-				StatSlider(label: "How often", value: b(\.hazardChance, 0.02), range: 0.0...0.3, step: 0.01, format: "%.2f")
-				SmallButton(title: "NO HAZARD", color: ModUI.red) { self.setBlock("hazard", "") }
-			}
-		}
-	}
-
-	var seaOn: Binding<Bool> {
-		let base: Binding<Int> = b(\.sea, 0)
-		let surf: Int = dim.surface
-		return Binding<Bool>(get: { base.wrappedValue > 0 }, set: { on in base.wrappedValue = on ? clampI(surf + 6, 60, 280) : 0 })
-	}
-
-	func blockRow(_ label: String, _ key: String, _ field: String) -> some View {
-		let img: Image = PatternGrid.cellImage(key, s.catalog)
-		let name: String = key.isEmpty ? "None" : ModGround.name(key, s.mod)
-		return HStack(spacing: 10) {
-			img.resizable().interpolation(.none).frame(width: 32, height: 32)
-			VStack(alignment: .leading, spacing: 2) {
-				Text(verbatim: label).font(.pixel(11, .bold)).foregroundColor(ModUI.dim)
-				Text(verbatim: name).font(.pixel(13, .bold)).foregroundColor(Color.white)
-			}
-			Spacer(minLength: 0)
-			SmallButton(title: "CHOOSE", color: ModUI.blue) { self.picking = field }
-		}
-	}
-
-	/// A block chosen in the picker goes where it was asked for (a region's blocks are "z<n>:<field>",
-	/// the open tree design's "t:<field>")
-	func setBlock(_ field: String, _ key: String) {
-		if field.hasPrefix("t:") {
-			guard let ti = s.mod.trees.firstIndex(where: { $0.id == treeEdit }) else { return }
-			var t: ModTree = s.mod.trees[ti]
-			let part: String = String(field.dropFirst(2))
-			switch part {
-			case "trunk": if !key.isEmpty { t.trunk = key }
-			case "branch": t.branch = key
-			case "leaves": if !key.isEmpty { t.leaves = key }
-			case "ground": t.ground = key
-			default: break
-			}
-			s.mod.trees[ti] = t
-			s.touch()
-			return
-		}
-		guard let i = s.mod.dims.firstIndex(where: { $0.id == id }) else { return }
-		var d: ModDimension = s.mod.dims[i]
-		if field.hasPrefix("z") {
-			let parts: [Substring] = field.dropFirst().split(separator: ":")
-			guard parts.count == 2, let zi = Int(parts[0]), zi >= 0 && zi < d.zones.count else { return }
-			switch parts[1] {
-			case "ground": if !key.isEmpty { d.zones[zi].ground = key }
-			case "filler": if !key.isEmpty { d.zones[zi].filler = key }
-			case "plant": d.zones[zi].plant = key
-			case "log": if !key.isEmpty { d.zones[zi].log = key }
-			case "leaves": if !key.isEmpty { d.zones[zi].leaves = key }
-			default: break
-			}
+	/// Why a custom infusion can't go on this item (nil: it can)
+	func customProblem(_ r: ModInfusionRT) -> String? {
+		let slots: Int = infusionSlots(item)
+		if slots <= 0 { return "This can't be infused." }
+		if item.maxStack > 1 { return "Only single items can be infused." }
+		if !r.items.isEmpty {
+			if !r.items.contains(item) { return joinText(r.def.name, " only goes on certain items.") }
 		} else {
-			switch field {
-			case "stone": if !key.isEmpty { d.stone = key }
-			case "hazard": d.hazard = key
-			case "gate": d.gateBlock = key.hasPrefix("tile:") ? "" : key
-			default: break
+			let cls: [InfuseClass] = infuseClasses(item)
+			if !cls.contains(where: { r.classes.contains($0.rawValue) }) { return joinText(r.def.name, " doesn't go on this kind of equipment.") }
+		}
+		let held: Int = (inf ?? []).filter { $0 == r.number }.count
+		if held >= max(1, r.def.stack) { return r.def.stack > 1 ? joinText("It already holds ", r.def.name, " as many times as it can.") : joinText("It already has ", r.def.name, ".") }
+		if (inf?.count ?? 0) >= slots { return joinText("All ", String(slots), " of its slots are taken.") }
+		return nil
+	}
+}
+
+extension Game {
+	/// Works a custom infusion's compound into the item in a bag slot (checked again here, the item
+	/// never leaves its slot)
+	@discardableResult
+	func infuseCustom(slot i: Int, _ number: Int) -> String {
+		guard let r = ModRuntime.shared.infusion(number) else { return "That infusion's mod is not on." }
+		guard i >= 0 && i < inv.slots.count, var s = inv.slots[i] else { return "That item is gone." }
+		if let why = s.customProblem(r) { return why }
+		let compound: Item = .custom(r.key)
+		if !isCreative && inv.total(compound) < 1 { return joinText("You need a ", r.def.name, " compound.") }
+		if !isCreative { _ = inv.remove(compound, 1) }
+		var list: [Int] = s.inf ?? []
+		list.append(number)
+		s.inf = list
+		inv.slots[i] = s
+		sfx(.infuse, 0.8)
+		spawnParticles(pb.x, pb.y - 1.2, r.def.color, 12, 3.0, 0.7, -4)
+		bumpHUD()
+		return joinText(s.item.name, " now holds ", r.def.name, ".")
+	}
+
+	/// Takes one custom infusion back out of an item (the compound is spent; the item is unharmed)
+	@discardableResult
+	func removeCustomInfusion(slot i: Int, _ number: Int) -> String {
+		guard i >= 0 && i < inv.slots.count, var s = inv.slots[i], var list = s.inf, let k = list.firstIndex(of: number) else { return "Nothing to remove." }
+		list.remove(at: k)
+		s.inf = list.isEmpty ? nil : list
+		inv.slots[i] = s
+		sfx(.tap, 0.6)
+		bumpHUD()
+		return joinText(infusionName(number), " was drawn out of ", s.item.name, ".")
+	}
+
+	/// A custom infusion's numbers on a melee profile
+	static func customProfile(_ p0: MeleeProfile, _ n: Int) -> MeleeProfile {
+		guard let r = ModRuntime.shared.infusion(n) else { return p0 }
+		return r.def.apply(p0)
+	}
+
+	/// What a custom infusion does when a blow or a shot lands on a creature
+	func customHit(_ m: Mob, _ n: Int, _ dmg: Double, _ x: Double, _ y: Double) {
+		guard let r = ModRuntime.shared.infusion(n) else { return }
+		let d: ModInfusion = r.def
+		if m.hp > 0 {
+			if d.burn > 0 && !heatImmune(m) { m.burn = max(m.burn, d.burn) }
+			if d.slow > 0 {
+				m.slowT = max(m.slowT, m.isBoss ? d.slow * 0.5 : d.slow)
+				m.slowAmt = max(m.slowAmt, m.isBoss ? 0.2 : 0.4)
+			}
+			if d.poison > 0 && !poisonImmune(m) {
+				m.poisonT = max(m.poisonT, m.isBoss ? d.poison * 0.5 : d.poison)
+				m.poisonDps = max(m.poisonDps, 1.0)
+				m.poisonByPlayer = true
+			}
+			if d.sparkChance > 0 && Double.random(in: 0...1) < d.sparkChance { stormSpark(m) }
+		}
+		if d.blast > 0 { customBlast(x, y, d.blast, d.color) }
+		if d.lifeSteal > 0 && !dead { heal(dmg * d.lifeSteal / 100.0) }
+		if d.particles { spawnParticles(m.b.x, m.b.cy, d.color, 3, 2.0, 0.3, 4) }
+		if d.trigger == .onHit || (d.trigger == .onKill && m.hp <= 0) { customTrigger(r) }
+	}
+
+	/// A custom infusion's little blast (hurts creatures close by, breaks nothing)
+	func customBlast(_ x: Double, _ y: Double, _ dmg: Double, _ color: UInt32) {
+		var info = DamageInfo(amount: dmg, type: .explosion, source: .player)
+		info.knock = 4
+		info.key = newID()
+		info.cooldown = 0.5
+		for m in mobsNear(x - 2.5, x + 2.5) where m.hp > 0 && !m.removed && !m.tame {
+			if boxDistance(x, y, m.b.left, m.b.top, m.b.right, m.b.y) <= 1.3 {
+				var i2: DamageInfo = info
+				i2.originX = x
+				i2.originY = y
+				applyMobDamage(m, i2)
 			}
 		}
-		s.mod.dims[i] = d
-		s.touch()
+		spawnParticles(x, y, color, 8, 4.0, 0.3, 4)
 	}
 
-	func zb<T>(_ i: Int, _ kp: WritableKeyPath<ModDimZone, T>, _ d: T) -> Binding<T> {
-		let base: Binding<[ModDimZone]> = b(\.zones, [])
-		return Binding<T>(get: { i < base.wrappedValue.count ? base.wrappedValue[i][keyPath: kp] : d }, set: { v in
-			var list: [ModDimZone] = base.wrappedValue
-			if i < list.count {
-				list[i][keyPath: kp] = v
-				base.wrappedValue = list
-			}
-		})
+	/// Gives a custom infusion's effect to the player, no more often than its rest allows
+	func customTrigger(_ r: ModInfusionRT) {
+		let d: ModInfusion = r.def
+		if d.trigger == .none { return }
+		if let t = infTriggerCD[r.number], clock - t < d.effectCooldown { return }
+		infTriggerCD[r.number] = clock
+		applyEffects([d.effect])
+		floatText(d.effect.kind.short, pb.x, pb.y - pb.h - 0.4, d.color)
 	}
 
-	var zonesPage: some View {
-		let zones: [ModDimZone] = dim.zones
-		let zi: Int = clampI(zonePick, 0, max(0, zones.count - 1))
-		let names: [String] = zones.map { $0.name }
-		let many: Bool = zones.count > 1
-		return VStack(spacing: 10) {
-			Text("Regions lie side by side, each with its own ground, plants and trees: the dimension's biomes. Each counts as one of the game's biomes for ores, structures, summoning and creature rules.")
-				.font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-			ChoiceRows(options: names, selected: $zonePick, columns: 4)
-			zoneButtons(zones.count, zi)
-			if zi < zones.count { zoneEditor(zi, zones[zi]) }
-			if many { IntSlider(label: "Width of each region (blocks)", value: b(\.zoneWidth, 300), range: 40...2000) }
-		}
-	}
-
-	func zoneButtons(_ count: Int, _ zi: Int) -> some View {
-		let canAdd: Bool = count < 4
-		let canDelete: Bool = count > 1
-		return HStack(spacing: 8) {
-			if canAdd { SmallButton(title: "+ REGION", color: ModUI.accent) { self.addZone() } }
-			if canDelete { SmallButton(title: "DELETE THIS REGION", color: ModUI.red) { self.deleteZone(zi) } }
-		}
-	}
-
-	func addZone() {
-		var l: [ModDimZone] = dim.zones
-		var z = ModDimZone()
-		z.name = joinText("Region ", String(l.count + 1))
-		l.append(z)
-		b(\.zones, []).wrappedValue = l
-		zonePick = l.count - 1
-	}
-
-	func deleteZone(_ zi: Int) {
-		var l: [ModDimZone] = dim.zones
-		if zi < l.count { l.remove(at: zi) }
-		b(\.zones, []).wrappedValue = l
-		zonePick = 0
-	}
-
-	static let biomeNames: [String] = ModBiomePicker.all.map { $0.name }
-
-	func zoneEditor(_ zi: Int, _ z: ModDimZone) -> some View {
-		let tag: String = joinText("z", String(zi), ":")
-		let plants: Bool = !z.plant.isEmpty
-		let trees: Bool = z.trees > 0
-		return ModSection(title: z.name.uppercased()) {
-			ModTextField(label: "Name", text: zb(zi, \.name, ""), placeholder: "Frozen Wastes")
-			Text("Counts as").font(.pixel(11, .bold)).foregroundColor(ModUI.dim)
-			ChoiceRows(options: DimensionEditorView.biomeNames, selected: biomeBind(zi), columns: 5)
-			blockRow("Ground", z.ground, joinText(tag, "ground"))
-			blockRow("Under the ground", z.filler, joinText(tag, "filler"))
-			blockRow("Plants", z.plant, joinText(tag, "plant"))
-			if plants { StatSlider(label: "How many plants", value: zb(zi, \.plantChance, 0.1), range: 0.0...0.8, step: 0.02, format: "%.2f") }
-			Text("Trees").font(.pixel(11, .bold)).foregroundColor(ModUI.dim)
-			ChoiceRows(options: ModDimText.trees, selected: zb(zi, \.trees, 1), columns: 3)
-			if trees { treeKindsPart(zi, z) }
-			if trees && z.treeKinds.isEmpty {
-				blockRow("Trunk", z.log, joinText(tag, "log"))
-				blockRow("Leaves", z.leaves, joinText(tag, "leaves"))
+	/// After the player is hurt: worn custom infusions that answer being hurt (or low health)
+	func customHurtTriggers() {
+		for i in 0..<min(3, inv.armor.count) {
+			guard let s = inv.armor[i], let l = s.inf else { continue }
+			for n in l where n >= customInfusionBase {
+				guard let r = ModRuntime.shared.infusion(n) else { continue }
+				if r.def.trigger == .whenHurt || (r.def.trigger == .lowHealth && hp > 0 && hp < maxHP * 0.3) { customTrigger(r) }
 			}
 		}
 	}
 
-	func treeKindsPart(_ zi: Int, _ z: ModDimZone) -> some View {
-		let list: [ModTree] = s.mod.trees
-		let none: Bool = list.isEmpty
-		return VStack(alignment: .leading, spacing: 6) {
-			Text("Tree designs that grow here (none chosen: simple trees of the trunk and leaves below)").font(.pixel(11, .bold)).foregroundColor(ModUI.dim)
-			if none {
-				Text("Make designs on the TREES page.").font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-			} else {
-				PlainGrid(count: list.count, per: 3) { (i: Int) in self.treeChip(zi, z, list[i]) }
+	/// A shot's custom infusions (worked out when it is fired)
+	func customShot(_ p: inout Projectile, _ l: [Int]) {
+		for n in l where n >= customInfusionBase {
+			guard let r = ModRuntime.shared.infusion(n) else { continue }
+			let d: ModInfusion = r.def
+			p.dmg = d.multiply ? p.dmg * r.factor(d.damagePct) : p.dmg + p.dmg * d.damagePct / 100.0
+			p.dmg += d.damageFlat
+			if d.reach > 0 { p.life *= 1.0 + d.reach * 0.1 }
+			p.custom.append(n)
+		}
+	}
+
+	/// The held tool's custom mining infusions
+	func customMining(_ s: Stack) -> Double {
+		var m: Double = 1.0
+		for n in s.inf ?? [] where n >= customInfusionBase {
+			guard let r = ModRuntime.shared.infusion(n) else { continue }
+			m *= r.factor(r.def.miningPct)
+		}
+		return m
+	}
+}
+
+extension ArmorInf {
+	/// A worn custom infusion's numbers
+	mutating func addCustom(_ n: Int) {
+		guard let r = ModRuntime.shared.infusion(n) else { return }
+		let d: ModInfusion = r.def
+		defense += d.defense
+		fireCut = min(0.8, fireCut + d.fireCut / 100.0)
+		coldCut = min(0.9, coldCut + d.coldCut / 100.0)
+		stormCut = min(0.8, stormCut + d.stormCut / 100.0)
+		speed = min(0.4, speed + d.moveSpeedPct / 100.0)
+		regen = min(1.0, regen + d.regen / 60.0)
+		thorns = min(0.6, thorns + d.thorns / 100.0)
+	}
+}
+
+/// Less energy for suit parts holding custom infusions that save it
+func customEnergyMul(_ s: Stack) -> Double {
+	var m: Double = 1.0
+	for n in s.inf ?? [] where n >= customInfusionBase {
+		if let r = ModRuntime.shared.infusion(n) { m *= max(0.3, 1.0 - r.def.energyPct / 100.0) }
+	}
+	return m
+}
+
+extension ModValidator {
+	/// Custom infusions: numbers in range, kinds and items real, ids not shared with items
+	static func checkInfusions(_ p: inout ModPack, _ mn: String, _ sb: Bool, _ known: [String: String], _ r: inout ModReport) {
+		if p.infusions.count > 24 {
+			r.add(1, mn, "Mod", "Only 24 infusions fit in one mod; the rest were left out.")
+			p.infusions = Array(p.infusions.prefix(24))
+		}
+		var used: Set<String> = Set(p.blocks.map { $0.id } + p.items.map { $0.id } + p.mobs.map { $0.id } + p.projectiles.map { $0.id } + p.loot.map { $0.id })
+		let mx: Double = sb ? 400 : 100
+		for i in p.infusions.indices {
+			var f: ModInfusion = p.infusions[i]
+			if f.id.isEmpty || used.contains(f.id) { f.id = joinText("inf", String(i + 1), "x", String(used.count)) }
+			used.insert(f.id)
+			if f.name.trimmingCharacters(in: .whitespaces).isEmpty { f.name = "Infusion" }
+			f.name = String(f.name.prefix(32))
+			f.desc = String(f.desc.prefix(200))
+			if !f.icon.valid { f.icon = ModPixels(w: 12, h: 12) }
+			f.rarity = clampI(f.rarity, 0, 4)
+			f.classes = Array(Set(f.classes.filter { $0 >= 0 && $0 <= 4 })).sorted()
+			if f.classes.isEmpty && f.items.isEmpty { f.classes = [0] }
+			f.items = Array(f.items.filter { it in
+				if case .custom(let k) = it { return known[k] != nil || p.items.contains { p.key($0.id) == k } }
+				return infusionSlots(it) > 0
+			}.prefix(12))
+			func c(_ v: Double, _ lo: Double, _ hi: Double) -> Double { return clampD(v.isFinite ? v : 0, lo, hi) }
+			f.damagePct = c(f.damagePct, -50, mx)
+			f.damageFlat = c(f.damageFlat, 0, sb ? 100 : 20)
+			f.attackSpeedPct = c(f.attackSpeedPct, -50, 60)
+			f.reach = c(f.reach, 0, sb ? 4 : 1.5)
+			f.critPct = c(f.critPct, 0, sb ? 100 : 40)
+			f.knockPct = c(f.knockPct, -80, mx)
+			f.miningPct = c(f.miningPct, 0, mx)
+			f.defense = c(f.defense, 0, sb ? 20 : 4)
+			f.moveSpeedPct = c(f.moveSpeedPct, 0, sb ? 50 : 15)
+			f.fireCut = c(f.fireCut, 0, 60)
+			f.coldCut = c(f.coldCut, 0, 75)
+			f.stormCut = c(f.stormCut, 0, 60)
+			f.regen = c(f.regen, 0, sb ? 60 : 12)
+			f.energyPct = c(f.energyPct, 0, 50)
+			f.burn = c(f.burn, 0, 8)
+			f.slow = c(f.slow, 0, 8)
+			f.poison = c(f.poison, 0, 10)
+			f.sparkChance = c(f.sparkChance, 0, sb ? 1 : 0.4)
+			f.blast = c(f.blast, 0, sb ? 40 : 8)
+			f.thorns = c(f.thorns, 0, 40)
+			f.lifeSteal = c(f.lifeSteal, 0, sb ? 50 : 15)
+			f.effect.amount = f.effect.kind.amountRange.clamp(f.effect.amount, sb)
+			f.effect.seconds = ModRange.seconds.clamp(f.effect.seconds, sb)
+			f.effectCooldown = c(f.effectCooldown, 2, 300)
+			f.stack = clampI(f.stack, 1, 3)
+			p.infusions[i] = f
+		}
+	}
+}
+
+// MARK: - Mod Creator+: boss phases and summoning
+
+/// What moves a creature on to its next phase
+enum ModPhaseWhen: Int, Codable, CaseIterable {
+	case health, time, helpersGone
+	var name: String {
+		switch self {
+		case .health: return "Health falls below"
+		case .time: return "After fighting for"
+		case .helpersGone: return "Its helpers are beaten"
+		}
+	}
+	var help: String {
+		switch self {
+		case .health: return "Begins when its health drops under this share of the most it has."
+		case .time: return "Begins once the fight has gone on this long."
+		case .helpersGone: return "Begins when every helper an earlier phase called is beaten."
+		}
+	}
+}
+
+/// One stage of a fight: when it begins, and how the creature changes for the rest of the fight.
+/// Phases follow one another in order; each lasts until the next begins.
+struct ModPhase: Codable, Equatable {
+	var name: String = "Phase"
+	var when: ModPhaseWhen = .health
+	/// a share of its health (health phases) or seconds (time phases)
+	var value: Double = 0.5
+	var speedMul: Double = 1.2
+	var damageMul: Double = 1.2
+	/// how long its attacks rest between uses, as a share of their own rest
+	var cooldownMul: Double = 0.8
+	/// a share of every hit it shrugs off (on top of its own toughness)
+	var defense: Double = 0
+	/// the attacks it may use in this phase (their numbers; empty: all of them)
+	var attacks: [Int] = []
+	var tint: UInt32 = 0xFF4030
+	var tintAmt: Double = 0.25
+	/// share of its health healed as the phase begins
+	var heal: Double = 0
+	/// seconds it can't be hurt while it changes
+	var shield: Double = 1.0
+	/// helpers it calls: a creature ("mod:id" or a game creature's name) and how many
+	var helper: String = ""
+	var helpers: Int = 0
+	var message: String = ""
+	var roar: Bool = true
+
+	init() {}
+
+	init(from decoder: Decoder) throws {
+		let c = try decoder.container(keyedBy: CodingKeys.self)
+		name = c.val(.name, "Phase")
+		when = c.val(.when, .health)
+		value = c.val(.value, 0.5)
+		speedMul = c.val(.speedMul, 1.2)
+		damageMul = c.val(.damageMul, 1.2)
+		cooldownMul = c.val(.cooldownMul, 0.8)
+		defense = c.val(.defense, 0)
+		attacks = c.val(.attacks, [])
+		tint = c.val(.tint, 0xFF4030)
+		tintAmt = c.val(.tintAmt, 0.25)
+		heal = c.val(.heal, 0)
+		shield = c.val(.shield, 1.0)
+		helper = c.val(.helper, "")
+		helpers = c.val(.helpers, 0)
+		message = c.val(.message, "")
+		roar = c.val(.roar, true)
+	}
+
+	/// when it begins, in words
+	var whenText: String {
+		switch when {
+		case .health: return joinText("below ", String(Int((value * 100).rounded())), "% health")
+		case .time: return joinText("after ", String(Int(value.rounded())), " s of fighting")
+		case .helpersGone: return "when its helpers are beaten"
+		}
+	}
+}
+
+/// How a summoning is started
+enum ModSummonHow: Int, Codable, CaseIterable {
+	case useItem, itemOnPattern, buildPattern
+	var name: String {
+		switch self {
+		case .useItem: return "Use an item"
+		case .itemOnPattern: return "Use an item on a shape"
+		case .buildPattern: return "Finish building a shape"
+		}
+	}
+	var help: String {
+		switch self {
+		case .useItem: return "Tap with the item in hand, where the conditions are right."
+		case .itemOnPattern: return "Build the shape, then tap one of its blocks with the item in hand."
+		case .buildPattern: return "Placing the last block of the shape calls the creature."
+		}
+	}
+}
+
+/// A shape of blocks for a summoning, top row first. A cell is "" (anything), "air" (must be empty),
+/// or a block ("tile:<number>" for the game's own, "mod:id" for a mod's).
+struct ModPattern: Codable, Equatable {
+	static let maxSide: Int = 7
+	var w: Int = 3
+	var h: Int = 3
+	var cells: [String] = [String](repeating: "", count: 9)
+
+	init() {}
+	init(w: Int, h: Int) {
+		self.w = clampI(w, 1, ModPattern.maxSide)
+		self.h = clampI(h, 1, ModPattern.maxSide)
+		cells = [String](repeating: "", count: self.w * self.h)
+	}
+
+	init(from decoder: Decoder) throws {
+		let c = try decoder.container(keyedBy: CodingKeys.self)
+		w = c.val(.w, 3)
+		h = c.val(.h, 3)
+		cells = c.val(.cells, [])
+	}
+
+	func cell(_ x: Int, _ y: Int) -> String {
+		if x < 0 || y < 0 || x >= w || y >= h { return "" }
+		let i: Int = y * w + x
+		return i < cells.count ? cells[i] : ""
+	}
+
+	mutating func set(_ x: Int, _ y: Int, _ k: String) {
+		if x < 0 || y < 0 || x >= w || y >= h { return }
+		while cells.count < w * h { cells.append("") }
+		cells[y * w + x] = k
+	}
+
+	/// The same shape in a new size (what fits is kept, from the top left)
+	func resized(_ nw: Int, _ nh: Int) -> ModPattern {
+		var o = ModPattern(w: nw, h: nh)
+		for y in 0..<o.h { for x in 0..<o.w { o.set(x, y, cell(x, y)) } }
+		return o
+	}
+
+	/// cells that need a block
+	var blockCells: Int { return cells.filter { !$0.isEmpty && $0 != "air" }.count }
+}
+
+/// A way to call a creature into the world: what the player does, the item and shape it takes, and
+/// where and when it works. Every condition set must hold at once.
+struct ModSummon: Codable, Equatable {
+	var enabled: Bool = true
+	var how: ModSummonHow = .useItem
+	var item: Item? = nil
+	var consume: Bool = true
+	var pattern: ModPattern = ModPattern()
+	/// the shape's blocks are used up when the creature comes
+	var clearPattern: Bool = true
+	/// Biome numbers (empty: any)
+	var biomes: [Int] = []
+	/// Dimension numbers (empty: any)
+	var dims: [Int] = []
+	/// 0 any time, 1 by day, 2 at night
+	var time: Int = 0
+	/// 0 any, 1 clear, 2 rain or snow, 3 thunderstorm, 4 snowfall
+	var weather: Int = 0
+	/// 0 anywhere, 1 under the open sky, 2 underground
+	var place: Int = 0
+	/// 0 right there (on the shape, or beside the player), 1 a little way off
+	var appear: Int = 0
+	var message: String = ""
+	/// custom dimensions it works in ("mod:id"; with `dims`, any of them)
+	var dimKeys: [String] = []
+
+	init() {}
+
+	init(from decoder: Decoder) throws {
+		let c = try decoder.container(keyedBy: CodingKeys.self)
+		enabled = c.val(.enabled, true)
+		how = c.val(.how, .useItem)
+		item = c.val(.item, nil)
+		consume = c.val(.consume, true)
+		pattern = c.val(.pattern, ModPattern())
+		clearPattern = c.val(.clearPattern, true)
+		biomes = c.val(.biomes, [])
+		dims = c.val(.dims, [])
+		time = c.val(.time, 0)
+		weather = c.val(.weather, 0)
+		place = c.val(.place, 0)
+		appear = c.val(.appear, 0)
+		message = c.val(.message, "")
+		dimKeys = c.val(.dimKeys, [])
+	}
+
+	var usesItem: Bool { return how != .buildPattern }
+	var usesPattern: Bool { return how != .useItem }
+}
+
+/// Words for the summoning settings (the editor and the messages in play use the same ones)
+enum ModSummonText {
+	static let times: [String] = ["Any time", "By day", "At night"]
+	static let weathers: [String] = ["Any weather", "Clear skies", "Rain or snow", "Thunderstorm", "Snowfall"]
+	static let places: [String] = ["Anywhere", "Open sky", "Underground"]
+	static let appears: [String] = ["Right there", "A little way off"]
+	static let timeWords: [String] = ["", "by day", "at night"]
+	static let weatherWords: [String] = ["", "under clear skies", "in rain or snow", "in a thunderstorm", "while snow falls"]
+	static let placeWords: [String] = ["", "under the open sky", "underground"]
+
+	static func dimName(_ n: Int) -> String {
+		switch n {
+		case 0: return "the Overworld"
+		case 1: return "the Umbral Realm"
+		default: return "another dimension"
+		}
+	}
+
+	static func biomeName(_ n: Int) -> String { return Biome(rawValue: n)?.name ?? "?" }
+
+	/// "Hold Ember Totem and tap, at night, in Desert" (what the player needs to do)
+	static func describe(_ s: ModSummon, _ itemName: String) -> String {
+		var parts: [String] = []
+		switch s.how {
+		case .useItem: parts.append(joinText("Tap with ", itemName, " in hand"))
+		case .itemOnPattern: parts.append(joinText("Build the shape, then tap it with ", itemName))
+		case .buildPattern: parts.append("Finish building the shape")
+		}
+		if s.time > 0 && s.time < timeWords.count { parts.append(timeWords[s.time]) }
+		if s.weather > 0 && s.weather < weatherWords.count { parts.append(weatherWords[s.weather]) }
+		if s.place > 0 && s.place < placeWords.count { parts.append(placeWords[s.place]) }
+		if !s.biomes.isEmpty { parts.append(joinText("in ", s.biomes.map { biomeName($0) }.joined(separator: " or "))) }
+		if !s.dims.isEmpty { parts.append(joinText("in ", s.dims.map { dimName($0) }.joined(separator: " or "))) }
+		return parts.joined(separator: ", ")
+	}
+}
+
+/// A summoning ready for play: its creature, its item, and its shape as this world's blocks
+final class ModSummonRT {
+	let slot: Int
+	let key: String
+	let def: ModSummon
+	/// the shape's cells that matter: across and down from its top left, and the block (nil: empty)
+	let cells: [(Int, Int, Tile?)]
+	/// a custom dimension's way in (its slot), instead of a creature (-1)
+	let dimSlot: Int
+
+	init(slot: Int, key: String, def: ModSummon, cells: [(Int, Int, Tile?)], dimSlot: Int = -1) {
+		self.slot = slot
+		self.key = key
+		self.def = def
+		self.cells = cells
+		self.dimSlot = dimSlot
+	}
+
+	/// The top left of a finished shape that takes in the block at (x, y) (nil: there is none)
+	func shapeAt(_ w: World, _ x: Int, _ y: Int) -> (Int, Int)? {
+		let here: Tile = w.tile(x, y)
+		if here == .air { return nil }
+		for c in cells {
+			guard let t = c.2, t == here else { continue }
+			let ox: Int = x - c.0
+			let oy: Int = y - c.1
+			var ok: Bool = true
+			for d in cells {
+				let tt: Tile = w.tile(ox + d.0, oy + d.1)
+				if let need = d.2 {
+					if tt != need { ok = false; break }
+				} else if tt != .air {
+					ok = false
+					break
+				}
 			}
+			if ok { return (ox, oy) }
 		}
+		return nil
 	}
+}
 
-	func treeChip(_ zi: Int, _ z: ModDimZone, _ t: ModTree) -> some View {
-		let on: Bool = z.treeKinds.contains(t.id)
-		return ToggleChip(title: t.name, on: on) { self.toggleTree(zi, t.id) }
-	}
-
-	func toggleTree(_ zi: Int, _ tid: String) {
-		let bind: Binding<[String]> = zb(zi, \.treeKinds, [])
-		var l: [String] = bind.wrappedValue
-		if let k = l.firstIndex(of: tid) {
-			l.remove(at: k)
-		} else if l.count < ModTree.maxDesigns {
-			l.append(tid)
-		}
-		bind.wrappedValue = l
-	}
-
-	func biomeBind(_ zi: Int) -> Binding<Int> {
-		let base: Binding<Int> = zb(zi, \.biome, Biome.plains.rawValue)
-		let all: [Biome] = ModBiomePicker.all
-		return Binding<Int>(get: { all.firstIndex { $0.rawValue == base.wrappedValue } ?? 0 }, set: { v in base.wrappedValue = all[clampI(v, 0, all.count - 1)].rawValue })
-	}
-
-	func sp<T>(_ i: Int, _ kp: WritableKeyPath<ModDimSpawn, T>, _ d: T) -> Binding<T> {
-		let base: Binding<[ModDimSpawn]> = b(\.spawns, [])
-		return Binding<T>(get: { i < base.wrappedValue.count ? base.wrappedValue[i][keyPath: kp] : d }, set: { v in
-			var list: [ModDimSpawn] = base.wrappedValue
-			if i < list.count {
-				list[i][keyPath: kp] = v
-				base.wrappedValue = list
-			}
-		})
-	}
-
-	static let gameCreatures: [MobKind] = [.pig, .cow, .sheep, .wolf, .bat, .zombie, .skeleton, .slime, .wraith, .imp, .emberSlime, .cinderBat, .crawler, .golem]
-
-	var creatureChoices: ([String], [String]) {
-		var names: [String] = []
-		var keys: [String] = []
-		for m in s.mod.mobs {
-			names.append(m.name)
-			keys.append(s.mod.key(m.id))
-		}
-		for k in DimensionEditorView.gameCreatures {
-			names.append(mobDef(k).name)
-			keys.append(mobDef(k).name)
-		}
-		return (names, keys)
-	}
-
-	var lifePage: some View {
-		let ch: ([String], [String]) = creatureChoices
-		let n: Int = dim.spawns.count
-		let canAdd: Bool = n < 8
-		return VStack(spacing: 10) {
-			Text("The creatures of this dimension (the game's own creatures don't come here unless you list them). Bosses are best called with a SUMMON rule that only works in this dimension.")
-				.font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-			ForEach(0..<n, id: \.self) { i in self.spawnCard(i, ch) }
-			if canAdd { PixelButton(title: "+ ADD A CREATURE", color: ModUI.accent) { self.addSpawn(ch.1) } }
-		}
-	}
-
-	func spawnCard(_ i: Int, _ ch: ([String], [String])) -> some View {
-		let who: String = i < dim.spawns.count ? nameOf(dim.spawns[i].creature) : ""
-		let title: String = joinText(String(i + 1), ". ", who)
-		return VStack(alignment: .leading, spacing: 6) {
-			HStack {
-				Text(verbatim: title).font(.pixel(13, .bold)).foregroundColor(Color.white)
-				Spacer(minLength: 0)
-				SmallButton(title: "DELETE", color: ModUI.red) { self.deleteSpawn(i) }
-			}
-			ChoiceRows(options: ch.0, selected: creatureBind(i, ch.1), columns: 4)
-			ChoiceRows(options: ModDimText.places, selected: sp(i, \.place, 0), columns: 3)
-			ChoiceRows(options: ModDimText.times, selected: sp(i, \.when, 0), columns: 3)
-			StatSlider(label: "How common", value: sp(i, \.weight, 5), range: 0.1...20.0, step: 0.1, format: "%.1f")
-			IntSlider(label: "Group", value: sp(i, \.group, 1), range: 1...4)
-		}
-		.padding(8)
-		.background(PixelBox(color: ModUI.card))
-	}
-
-	func deleteSpawn(_ i: Int) {
-		var l: [ModDimSpawn] = dim.spawns
-		if i < l.count { l.remove(at: i) }
-		b(\.spawns, []).wrappedValue = l
-	}
-
-	func addSpawn(_ keys: [String]) {
-		var l: [ModDimSpawn] = dim.spawns
-		var n = ModDimSpawn()
-		n.creature = keys.first ?? mobDef(.zombie).name
-		l.append(n)
-		b(\.spawns, []).wrappedValue = l
-	}
-
-	func nameOf(_ key: String) -> String {
-		if let m = s.mod.mobs.first(where: { s.mod.key($0.id) == key }) { return m.name }
-		return key
-	}
-
-	func creatureBind(_ i: Int, _ keys: [String]) -> Binding<Int> {
-		let base: Binding<String> = sp(i, \.creature, "")
-		return Binding<Int>(get: { keys.firstIndex(of: base.wrappedValue) ?? 0 }, set: { v in if !keys.isEmpty { base.wrappedValue = keys[clampI(v, 0, keys.count - 1)] } })
-	}
-
-	var entryPage: some View {
-		VStack(spacing: 10) {
-			ModSection(title: "THE WAY BACK") {
-				ModToggle(label: "A gate where the player arrives", help: "Tapping it takes them back to where they came in", isOn: b(\.returnGate, true))
-				if dim.returnGate {
-					blockRow("The gate's block (one of this mod's)", dim.gateBlock, "gate")
-					if dim.gateBlock.isEmpty {
-						Text("None chosen: a glowing crystal.").font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
+extension ModRuntime {
+	/// Every summoning of every custom creature, with its shape turned into this world's blocks (one
+	/// whose item or blocks are missing is left out)
+	func buildSummons() {
+		summons = []
+		for (i, r) in mobs.enumerated() {
+			for s in r.def.summons where s.enabled {
+				var cells: [(Int, Int, Tile?)] = []
+				var bad: Bool = false
+				if s.usesPattern {
+					for y in 0..<s.pattern.h {
+						for x in 0..<s.pattern.w {
+							let k: String = s.pattern.cell(x, y)
+							if k.isEmpty { continue }
+							if k == "air" {
+								cells.append((x, y, nil))
+								continue
+							}
+							guard let t = ModGround.resolve(k, self), t != .air else {
+								bad = true
+								continue
+							}
+							cells.append((x, y, t))
+						}
 					}
+					if bad || !cells.contains(where: { $0.2 != nil }) { continue }
 				}
-			}
-			ModSection(title: "THE WAY IN", help: "For a portal, draw a frame of your gateway block with EMPTY inside, and use a key item on it.") {
-				SummonRuleEditor(s: s, rule: b(\.entry, ModDimension.defaultEntry), forDimension: true)
-			}
-		}
-	}
-
-	var previewPage: some View {
-		VStack(spacing: 10) {
-			Text("Six chunks of the dimension, from the top to the bottom, made by the same generator the game uses (a sample world). Make the preview again after changing something.")
-				.font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-			PixelButton(title: preview == nil ? "MAKE PREVIEW" : "MAKE IT AGAIN", color: ModUI.blue) {
-				preview = ModDimPreview.render(dim, s.mod)
-				previewOf = dim
-			}
-			if let p = preview {
-				pixImage(p).resizable().interpolation(.none)
-					.frame(width: CGFloat(p.w) * 1.5, height: CGFloat(p.h) * 1.5)
-					.background(Color.black)
-				if previewOf != dim {
-					Text("Changed since this preview was made.").font(.pixel(11, .semibold)).foregroundColor(Color(ui: 0xFF9060))
-				}
+				if s.usesItem && s.item == nil { continue }
+				summons.append(ModSummonRT(slot: i, key: r.key, def: s, cells: cells))
 			}
 		}
 	}
 }
 
-/// The dimension an ore or structure is made in: the game's two, or one of the mod's own
-struct ModDimChoice: View {
-	@ObservedObject var s: ModSession
-	@Binding var dim: Int
-	@Binding var dimKey: String
-
-	var body: some View {
-		let names: [String] = ["Overworld", "Umbral Realm"] + s.mod.dims.map { $0.name }
-		let ids: [String] = s.mod.dims.map { $0.id }
-		let sel: Binding<Int> = Binding<Int>(get: {
-			if !dimKey.isEmpty, let i = ids.firstIndex(of: dimKey) { return 2 + i }
-			return dim == 1 ? 1 : 0
-		}, set: { v in
-			if v >= 2 && v - 2 < ids.count {
-				dimKey = ids[v - 2]
-			} else {
-				dimKey = ""
-				dim = v == 1 ? 1 : 0
-			}
-		})
-		return ChoiceRow(options: names, selected: sel, columns: min(5, names.count))
-	}
+/// A summoned creature still about when the world was saved (it comes back where it was)
+struct ModBossSave: Codable {
+	var key: String
+	var x: Double
+	var y: Double
+	var hp: Double
+	var phase: Int
+	var fightT: Double
 }
 
-/// A little square of a dimension's sky (its two colours and the step between)
-struct SkySwatch: View {
-	let top: UInt32
-	let bottom: UInt32
-	var body: some View {
-		VStack(spacing: 0) {
-			Rectangle().fill(Color(hex: top))
-			Rectangle().fill(Color(hex: mixRGB(top, bottom, 0.5)))
-			Rectangle().fill(Color(hex: bottom))
+extension Game {
+	// MARK: phases
+
+	/// A custom creature's fight: the time it has been fighting, and the next phase when its moment
+	/// comes (one at a time, in order)
+	func stepPhases(_ m: Mob, _ r: ModMobRT, _ dt: Double) {
+		if m.phaseShield > 0 { m.phaseShield -= dt }
+		let ph: [ModPhase] = r.def.phases
+		if ph.isEmpty { return }
+		if m.ai == .chase || m.ai == .alert || m.st >= 3 || clock - m.lastHitByPlayer < 8.0 { m.fightT += dt }
+		if m.mphase >= ph.count { return }
+		let p: ModPhase = ph[m.mphase]
+		var go: Bool = false
+		switch p.when {
+		case .health: go = m.hp < m.maxHP * p.value
+		case .time: go = m.fightT >= p.value
+		case .helpersGone: go = m.helpersCalled > 0 && helpersAlive(m) == 0
 		}
-	}
-}
-
-// MARK: - Mod Creator+: Logic Studio (screens)
-
-/// Finding, changing and moving blocks inside a script. A path is a block's place: its index at the top
-/// level, then for each block it sits in, which part (0 inside, 1 else) and its index there.
-enum LPath {
-	static func get(_ list: [LNode], _ path: [Int]) -> LNode? {
-		guard let i = path.first, i >= 0, i < list.count else { return nil }
-		if path.count == 1 { return list[i] }
-		let rest: [Int] = Array(path.dropFirst(2))
-		return path[1] == 0 ? get(list[i].body, rest) : get(list[i].alt, rest)
+		if go { enterPhase(m, r, m.mphase, quiet: false) }
 	}
 
-	static func update(_ list: inout [LNode], _ path: [Int], _ f: (inout LNode) -> Void) {
-		guard let i = path.first, i >= 0, i < list.count else { return }
-		if path.count == 1 {
-			f(&list[i])
-			return
+	/// Starts phase k: its numbers from now on, and (unless quiet, as when a saved fight comes back) its
+	/// healing, shield, message, roar and helpers
+	func enterPhase(_ m: Mob, _ r: ModMobRT, _ k: Int, quiet: Bool) {
+		guard k >= 0 && k < r.def.phases.count else { return }
+		let p: ModPhase = r.def.phases[k]
+		m.mphase = k + 1
+		m.phaseSpeed = p.speedMul
+		m.phaseDmg = p.damageMul
+		m.phaseCD = p.cooldownMul
+		m.phaseDef = p.defense
+		if quiet { return }
+		if p.heal > 0 { m.hp = min(m.maxHP, m.hp + m.maxHP * p.heal) }
+		m.phaseShield = p.shield
+		if !p.message.isEmpty { say(p.message, 3.0) }
+		if p.roar {
+			sfx(.roar, at: m.b.x, 0.9)
+			addShake(0.3)
 		}
-		if path.count < 3 { return }
-		let rest: [Int] = Array(path.dropFirst(2))
-		if path[1] == 0 { update(&list[i].body, rest, f) } else { update(&list[i].alt, rest, f) }
+		spawnParticles(m.b.x, m.b.cy, p.tint, 20, 6.0, 0.8, 0)
+		if p.helpers > 0 && !p.helper.isEmpty { callHelpers(m, p) }
+		if !logicRT.isEmpty { fireLogic(.phase, mob: m, key: r.key, number: Double(k + 1)) }
+		bumpHUD()
 	}
 
-	/// the list a block sits in, changed by f
-	static func updateList(_ list: inout [LNode], _ parent: [Int], _ f: (inout [LNode]) -> Void) {
-		if parent.isEmpty {
-			f(&list)
-			return
-		}
-		let container: [Int] = Array(parent.dropLast())
-		let br: Int = parent.last ?? 0
-		update(&list, container) { n in
-			if br == 0 { f(&n.body) } else { f(&n.alt) }
-		}
-	}
-
-	static func remove(_ list: inout [LNode], _ path: [Int]) {
-		guard let i = path.last else { return }
-		updateList(&list, Array(path.dropLast())) { l in if i >= 0 && i < l.count { l.remove(at: i) } }
-	}
-
-	static func move(_ list: inout [LNode], _ path: [Int], _ d: Int) {
-		guard let i = path.last else { return }
-		updateList(&list, Array(path.dropLast())) { l in
-			let j: Int = i + d
-			if i >= 0 && i < l.count && j >= 0 && j < l.count { l.swapAt(i, j) }
-		}
-	}
-
-	/// `into` is a block's path and a part (0 inside, 1 else); nil adds to the end of the script
-	static func insert(_ list: inout [LNode], _ into: [Int]?, _ node: LNode) {
-		guard let p = into, p.count >= 2 else {
-			list.append(node)
-			return
-		}
-		updateList(&list, p) { l in l.append(node) }
-	}
-
-	static func exprUpdate(_ e: inout LExpr, _ path: [Int], _ f: (inout LExpr) -> Void) {
-		if path.isEmpty {
-			f(&e)
-			return
-		}
-		let i: Int = path[0]
-		if i < 0 || i >= e.args.count { return }
-		exprUpdate(&e.args[i], Array(path.dropFirst()), f)
-	}
-}
-
-/// The LOGIC STUDIO tab: the mod's variables and scripts (optional: everything else works without it)
-struct LogicStudioView: View {
-	@ObservedObject var s: ModSession
-	var open: (String) -> Void
-	@State var newVar: String = ""
-
-	var body: some View {
-		VStack(alignment: .leading, spacing: 10) {
-			Text("Optional. Every part of the Mod Creator works without scripts. Scripts are stacks of blocks run by the game's own safe interpreter: they can only use the blocks shown here, loops that go on must wait, and nothing outside the game can be reached.")
-				.font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-			variablesSection
-			addRow
-			ForEach(s.mod.scripts) { sc in self.scriptRow(sc) }
-		}
-	}
-
-	var variablesSection: some View {
-		let vars: [String] = s.mod.variables
-		let room: Bool = vars.count < LLimits.maxVariables
-		return ModSection(title: "VARIABLES", help: "Numbers your scripts keep, one set per world (saved with it).") {
-			ForEach(vars, id: \.self) { v in self.variableRow(v) }
-			if room {
-				HStack(spacing: 8) {
-					ModTextField(label: "New variable", text: $newVar, placeholder: "score")
-					SmallButton(title: "+ ADD", color: ModUI.accent) { self.addVariable() }
-				}
-			}
-		}
-	}
-
-	func variableRow(_ v: String) -> some View {
-		HStack {
-			Text(verbatim: v).font(.pixel(13, .bold)).foregroundColor(Color.white)
-			Spacer(minLength: 0)
-			SmallButton(title: "DELETE", color: ModUI.red) { self.deleteVariable(v) }
-		}
-	}
-
-	func deleteVariable(_ v: String) {
-		s.mod.variables.removeAll { $0 == v }
-		s.touch()
-	}
-
-	func addVariable() {
-		let n: String = String(newVar.trimmingCharacters(in: .whitespaces).prefix(20))
-		if !n.isEmpty && !s.mod.variables.contains(n) {
-			s.mod.variables.append(n)
-			s.touch()
-		}
-		newVar = ""
-	}
-
-	var addRow: some View {
-		let room: Bool = s.mod.scripts.count < LLimits.maxScripts
-		return HStack(spacing: 8) {
-			if room {
-				PixelButton(title: "+ NEW SCRIPT", color: ModUI.accent) { self.add(.worldStart) }
-				PixelButton(title: "+ NEW GROUP", color: Color(ui: 0x8A6A2A)) { self.add(.group) }
-			}
-		}
-	}
-
-	func scriptRow(_ sc: ModScript) -> some View {
-		let bar: Color = Color(ui: sc.event == .group ? 0xC08A3A : 0xE8C040)
-		let nameCol: Color = sc.enabled ? Color.white : ModUI.dim
-		let blocks: String = String(LogicStudioView.count(sc.blocks))
-		let line: String = joinText(sc.event.name, " \u{00B7} ", blocks, " blocks", sc.enabled ? "" : " \u{00B7} off")
-		return Button(action: { self.open(sc.id) }) {
-			HStack(spacing: 10) {
-				Rectangle().fill(bar).frame(width: 10, height: 44)
-				VStack(alignment: .leading, spacing: 3) {
-					Text(verbatim: sc.name).font(.pixel(14)).foregroundColor(nameCol)
-					Text(verbatim: line).font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
-				}
-				Spacer(minLength: 0)
-			}
-			.padding(8)
-			.frame(maxWidth: .infinity, alignment: .leading)
-			.background(PixelBox(color: ModUI.card))
-		}
-		.buttonStyle(.plain)
-	}
-
-	static func count(_ l: [LNode]) -> Int {
+	/// Helpers called by a creature that are still standing
+	func helpersAlive(_ m: Mob) -> Int {
 		var n: Int = 0
-		for b in l { n += 1 + count(b.body) + count(b.alt) }
+		for o in mobs where o.helperOf == m.id && o.hp > 0 && !o.removed { n += 1 }
 		return n
 	}
 
-	func add(_ e: LEvent) {
-		var sc = ModScript()
-		sc.id = s.mod.freshID("sc")
-		sc.event = e
-		let number: String = String(s.mod.scripts.count + 1)
-		let word: String = e == .group ? "Group " : "Script "
-		sc.name = joinText(word, number)
-		if e == .worldStart {
-			var hi = LNode(.say)
-			hi.s = "My mod is on!"
-			sc.blocks = [hi]
+	/// The helpers a phase calls: they appear on either side of the creature, where there is room
+	func callHelpers(_ m: Mob, _ p: ModPhase) {
+		let rt: ModRuntime = ModRuntime.shared
+		let slot: Int? = rt.mobSlot[p.helper]
+		var kind: MobKind? = nil
+		if slot == nil { kind = MobKind.allCases.first { $0 != .custom && $0 != .villager && mobDef($0).name == p.helper } }
+		var hw: Double = 0.6
+		var hh: Double = 1.8
+		if let s = slot, let hr = rt.mob(s) {
+			hw = hr.mdef.w
+			hh = hr.mdef.h
+		} else if let k = kind {
+			hw = mobDef(k).w
+			hh = mobDef(k).h
+		} else {
+			return
 		}
-		s.mod.scripts.append(sc)
-		s.touch()
-		open(sc.id)
-	}
-}
-
-/// Editing one script, Scratch-style: what starts it (the hat), then its blocks. Tap a block in the
-/// palette to add it at the end, or inside the block chosen with IN.
-struct ScriptEditorView: View {
-	@ObservedObject var s: ModSession
-	let id: String
-	@State var cat: Int = 0
-	/// where new blocks go: a block's path and part, or nil for the end of the script
-	@State var into: [Int]? = nil
-	@State var exprPick: ([Int], Int, [Int])? = nil
-	@State var itemPick: [Int]? = nil
-	@State var exprItemPick: ([Int], Int, [Int])? = nil
-	@State var blockPick: [Int]? = nil
-
-	var script: ModScript { return s.mod.scripts.first { $0.id == id } ?? ModScript() }
-	func b<T>(_ kp: WritableKeyPath<ModScript, T>, _ d: T) -> Binding<T> { return s.bind(\ModPack.scripts, id, kp, d) }
-
-	var body: some View {
-		ZStack {
-			VStack(alignment: .leading, spacing: 10) {
-				hat
-				palette
-				whereNote
-				blockList(script.blocks, [])
-				if script.blocks.isEmpty {
-					Text("No blocks yet: tap one in the palette above.").font(.pixel(12)).foregroundColor(ModUI.dim)
-				}
-				issues
-			}
+		var n: Int = 0
+		var i: Int = 0
+		while i < p.helpers * 3 && n < p.helpers {
+			let side: Double = i % 2 == 0 ? 1.0 : -1.0
+			let x: Double = m.b.x + side * (m.b.w * 0.5 + 1.5 + Double(i / 2) * (hw + 0.8))
+			i += 1
+			guard let y = roomNear(x, m.b.y, hw, hh) else { continue }
+			var made: Mob? = nil
+			if let s = slot { made = addCustomMob(s, x, y) } else if let k = kind { made = addMob(k, x, y) }
+			guard let h = made else { break }
+			h.helperOf = m.id
+			h.lastHitByPlayer = clock
+			spawnParticles(x, y - hh * 0.5, p.tint, 8, 3.0, 0.5, 0)
+			n += 1
 		}
-		.modCover(s, coverKey) { self.overlay }
+		m.helpersCalled += n
 	}
 
-	/// which picker is open (nil: none)
-	var coverKey: Int? {
-		if exprPick != nil { return 1 }
-		if itemPick != nil { return 2 }
-		if exprItemPick != nil { return 3 }
-		if blockPick != nil { return 4 }
+	/// Feet height near (x, y) where a body this big fits without touching blocks (nil: no room)
+	func roomNear(_ x: Double, _ y: Double, _ w: Double, _ h: Double) -> Double? {
+		let tries: [Double] = [0, -1, -2, 1, -3, -4, 2, -5, -6, -8, -10]
+		for d in tries {
+			let fy: Double = floor(y + d) + 0.999
+			if !world.boxSolid(x - w * 0.5, fy - h, x + w * 0.5, fy - 0.02) { return fy }
+		}
 		return nil
 	}
 
-	var whereNote: some View {
-		let atEnd: Bool = into == nil
-		let text: String = atEnd ? "New blocks go at the end of the script." : joinText("New blocks go inside \u{201C}", intoTitle, "\u{201D}.")
-		return VStack(alignment: .leading, spacing: 6) {
-			Text(verbatim: text).font(.pixel(11, .bold)).foregroundColor(ModUI.gold)
-			if !atEnd { SmallButton(title: "ADD AT THE END INSTEAD", color: ModUI.blue) { self.into = nil } }
+	/// Whether the creature's present phase lets it use attack i
+	func phaseAllows(_ m: Mob, _ r: ModMobRT, _ i: Int) -> Bool {
+		if m.mphase <= 0 || m.mphase > r.def.phases.count { return true }
+		let l: [Int] = r.def.phases[m.mphase - 1].attacks
+		return l.isEmpty || l.contains(i)
+	}
+
+	/// The name on the boss bar: the creature's, and the phase it is in
+	func bossTitle(_ b: Mob) -> String {
+		if b.kind == .custom && b.mphase > 0, let r = ModRuntime.shared.mob(b.cslot), b.mphase <= r.def.phases.count {
+			let pn: String = r.def.phases[b.mphase - 1].name.trimmingCharacters(in: .whitespaces)
+			if !pn.isEmpty { return joinText(b.def.name, " \u{00B7} ", pn) }
 		}
+		return b.def.name
 	}
 
-	/// The picker that is open, if any
-	var overlay: AnyView {
-		if let ep = exprPick { return AnyView(reporterPicker(ep)) }
-		if let ip = itemPick { return AnyView(itemPicker(ip)) }
-		if let ep = exprItemPick { return AnyView(exprItemPicker(ep)) }
-		if let bp = blockPick { return AnyView(blockPicker(bp)) }
-		return AnyView(EmptyView())
+	/// A summoned creature leaves once the player is gone (dead, or far away) for a few seconds
+	func summonedLeaves(_ m: Mob, _ dt: Double) -> Bool {
+		if dead || abs(pb.x - m.b.x) > 150 || abs(pb.y - m.b.y) > 100 { m.leaveT += dt } else { m.leaveT = 0 }
+		if m.leaveT < 4.0 { return false }
+		m.removed = true
+		say(joinText(m.def.name, " has gone."), 2.5)
+		spawnParticles(m.b.x, m.b.cy, 0xB0A0FF, 16, 4.0, 0.6, -2)
+		return true
 	}
 
-	func reporterPicker(_ ep: ([Int], Int, [Int])) -> some View {
-		ReporterPicker(s: s, pick: { (e: LExpr) in
-			self.setExpr(ep.0, ep.1, ep.2) { $0 = e }
-			self.exprPick = nil
-		}, cancel: { self.exprPick = nil })
+	// MARK: summoning
+
+	/// The biome at x in the world the player is in
+	func biomeAt(_ x: Double) -> Biome {
+		if world.dim == .overworld { return gen.col(Int(floor(x))).biome }
+		if let d = customDim { return d.biomeAt(x) }
+		return .umbral
 	}
 
-	func itemPicker(_ ip: [Int]) -> some View {
-		ItemPickerView(catalog: s.catalog, title: "CHOOSE AN ITEM", pick: { (it: Item) in
-			self.edit(ip) { $0.item = it }
-			self.itemPick = nil
-		}, cancel: { self.itemPick = nil })
-	}
-
-	func exprItemPicker(_ ep: ([Int], Int, [Int])) -> some View {
-		ItemPickerView(catalog: s.catalog, title: "CHOOSE AN ITEM", pick: { (it: Item) in
-			self.setExpr(ep.0, ep.1, ep.2) { $0.item = it }
-			self.exprItemPick = nil
-		}, cancel: { self.exprItemPick = nil })
-	}
-
-	func blockPicker(_ bp: [Int]) -> some View {
-		ItemPickerView(catalog: s.catalog, title: "CHOOSE A BLOCK", blocksOnly: true, pick: { (it: Item) in
-			let k: String = SummonRuleEditor.key(it)
-			self.edit(bp) { $0.s = k }
-			self.blockPick = nil
-		}, cancel: { self.blockPick = nil })
-	}
-
-	var intoTitle: String {
-		guard let p = into, p.count >= 2, let n = LPath.get(script.blocks, Array(p.dropLast())) else { return "the script" }
-		return LSpec.of(n.op).title + (p.last == 1 ? " (else)" : "")
-	}
-
-	// MARK: the hat block
-
-	var hat: some View {
-		let sc: ModScript = script
-		let group: Bool = sc.event == .group
-		let bg: Color = Color(ui: group ? 0xC08A3A : 0xE8C040)
-		return VStack(alignment: .leading, spacing: 8) {
-			HStack(spacing: 8) {
-				ModTextField(label: "Name", text: b(\.name, ""), placeholder: "Boss rage")
-				ModToggle(label: "On", isOn: b(\.enabled, true))
+	/// Tries the summonings this item starts (a tap with it in hand). True when a creature came, or
+	/// when the item does nothing else (then the reason it didn't work is shown)
+	func trySummonWith(_ it: Item) -> Bool {
+		var why: String? = nil
+		for s in ModRuntime.shared.summons where s.def.usesItem && s.def.item == it {
+			// inside the dimension, its key item takes the player back
+			if s.dimSlot >= 0 && world.dim == .custom(s.dimSlot) {
+				leaveCustomDim()
+				return true
 			}
-			if group { groupInputs } else { eventPart(sc) }
+			var at: (Int, Int)? = nil
+			if s.def.how == .itemOnPattern {
+				let tx: Int = Int(floor(aimX))
+				let ty: Int = Int(floor(aimY))
+				if !inReach(Double(tx) + 0.5, Double(ty) + 0.5) {
+					why = "Tap the shape you built, within reach."
+					continue
+				}
+				guard let o = s.shapeAt(world, tx, ty) else {
+					why = "Tap a block of the finished shape."
+					continue
+				}
+				at = o
+			}
+			if s.dimSlot >= 0 {
+				guard let dr = ModRuntime.shared.dimSlots[s.dimSlot] else { continue }
+				if let w = conditionsProblem(s.def, dr.def.name, at) {
+					why = w
+					continue
+				}
+				if s.def.consume && !isCreative { inv.removeAt(sel, 1) }
+				if let o = at, s.def.clearPattern { for c in s.cells where c.2 != nil { world.set(o.0 + c.0, o.1 + c.1, .air) } }
+				enterCustomDim(dr)
+				return true
+			}
+			if let w = summonProblem(s, at) {
+				why = w
+				continue
+			}
+			if let w = summonCreature(s, at) {
+				why = w
+				continue
+			}
+			if s.def.consume && !isCreative { inv.removeAt(sel, 1) }
+			bumpHUD()
+			return true
 		}
-		.padding(10)
-		.background(bg)
-		.cornerRadius(10)
+		guard let w = why else { return false }
+		say(w, 2.2)
+		return summonOnly(it)
 	}
 
-	var groupInputs: some View {
-		VStack(alignment: .leading, spacing: 6) {
-			Text("A GROUP: other scripts run it with \u{201C}run a group\u{201D}, giving it up to three inputs (read them with \u{201C}group input\u{201D}).")
-				.font(.pixel(11, .semibold)).foregroundColor(Color.black)
-			ForEach(0..<3, id: \.self) { k in self.inputField(k) }
-		}
-	}
-
-	func inputField(_ k: Int) -> ModTextField {
-		let label: String = joinText("Input ", String(k + 1))
-		let hint: String = k == 0 ? "damage" : ""
-		return ModTextField(label: label, text: paramBind(k), placeholder: hint)
-	}
-
-	static let eventList: [LEvent] = LEvent.allCases.filter { $0 != .group }
-	static let eventNames: [String] = ScriptEditorView.eventList.map { $0.name }
-
-	func eventPart(_ sc: ModScript) -> some View {
-		VStack(alignment: .leading, spacing: 6) {
-			Text("WHEN").font(.pixel(12, .bold)).foregroundColor(Color.black)
-			ChoiceRow(options: ScriptEditorView.eventNames, selected: eventBind, columns: 2)
-			eventDetail(sc)
-			eventTarget(sc)
-		}
-	}
-
-	var eventBind: Binding<Int> {
-		let base: Binding<LEvent> = b(\.event, .worldStart)
-		let list: [LEvent] = LEvent.allCases.filter { $0 != .group }
-		return Binding<Int>(get: { list.firstIndex(of: base.wrappedValue) ?? 0 }, set: { base.wrappedValue = list[clampI($0, 0, list.count - 1)] })
-	}
-
-	func paramBind(_ k: Int) -> Binding<String> {
-		let base: Binding<[String]> = b(\.params, [])
-		return Binding<String>(get: { k < base.wrappedValue.count ? base.wrappedValue[k] : "" }, set: { v in
-			var l: [String] = base.wrappedValue
-			while l.count <= k { l.append("") }
-			l[k] = String(v.prefix(16))
-			base.wrappedValue = l
-		})
-	}
-
-	func eventDetail(_ sc: ModScript) -> AnyView {
-		switch sc.event {
-		case .every, .creatureEvery:
-			return AnyView(StatSlider(label: "Seconds between", value: b(\.ev, 5), range: 0.25...120.0, step: 0.25, format: "%.2f", unit: " s"))
-		case .phase:
-			return AnyView(StatSlider(label: "Phase", value: b(\.ev, 1), range: 1.0...6.0, step: 1, format: "%.0f"))
-		case .custom:
-			return AnyView(ModTextField(label: "Message name", text: b(\.evText, ""), placeholder: "open the gate"))
-		case .enterDim:
-			let names: [String] = ["Any dimension"] + s.mod.dims.map { $0.name }
-			return AnyView(ChoiceRow(options: names, selected: dimEventBind, columns: 3))
-		default:
-			return AnyView(EmptyView())
+	/// Items that do nothing but summon (a failed summoning doesn't fall through to another use)
+	func summonOnly(_ it: Item) -> Bool {
+		switch it {
+		case .mat(let m): return m != .seeds && m != .vial
+		case .custom(let k):
+			guard let r = ModRuntime.shared.item(k) else { return true }
+			return r.def.kind == .material || r.def.kind == .ammo
+		default: return false
 		}
 	}
 
-	func eventTarget(_ sc: ModScript) -> AnyView {
-		var opts: [(String, String)] = []
-		var label: String = ""
-		switch sc.event.subject {
-		case 1:
-			label = "Which creature"
-			for m in s.mod.mobs { opts.append((m.name, s.mod.key(m.id))) }
-		case 2:
-			label = "Which item"
-			for m in s.mod.items { opts.append((m.name, s.mod.key(m.id))) }
-		case 3:
-			label = "Which block"
-			for m in s.mod.blocks { opts.append((m.name, s.mod.key(m.id))) }
-		default:
-			return AnyView(EmptyView())
+	/// After the player places a block: a shape it finishes calls its creature
+	func summonByBuilding(_ x: Int, _ y: Int) {
+		for s in ModRuntime.shared.summons where s.def.how == .buildPattern {
+			guard let o = s.shapeAt(world, x, y) else { continue }
+			if s.dimSlot >= 0 {
+				guard let dr = ModRuntime.shared.dimSlots[s.dimSlot], world.dim != dr.dim else { continue }
+				if let w = conditionsProblem(s.def, dr.def.name, o) {
+					say(w, 2.5)
+					continue
+				}
+				if s.def.clearPattern { for c in s.cells where c.2 != nil { world.set(o.0 + c.0, o.1 + c.1, .air) } }
+				enterCustomDim(dr)
+				return
+			}
+			if let w = summonProblem(s, o) {
+				say(w, 2.5)
+				continue
+			}
+			if let w = summonCreature(s, o) {
+				say(w, 2.2)
+				continue
+			}
+			return
 		}
-		return AnyView(targetRow(label, opts))
 	}
 
-	var dimEventBind: Binding<Int> {
-		let base: Binding<String> = b(\.evText, "")
-		let keys: [String] = [""] + s.mod.dims.map { s.mod.key($0.id) }
-		return Binding<Int>(get: { keys.firstIndex(of: base.wrappedValue) ?? 0 }, set: { base.wrappedValue = keys[clampI($0, 0, keys.count - 1)] })
+	/// Why the summoning can't happen here and now (nil: it can)
+	func summonProblem(_ s: ModSummonRT, _ at: (Int, Int)?) -> String? {
+		guard let r = ModRuntime.shared.mob(s.slot) else { return "That creature's mod is not on." }
+		let name: String = r.def.name
+		for m in mobs where m.kind == .custom && m.cslot == s.slot && m.hp > 0 && !m.removed && (m.summoned || r.boss) {
+			return joinText(name, " is already here.")
+		}
+		return conditionsProblem(s.def, name, at)
 	}
 
-	func targetRow(_ label: String, _ opts: [(String, String)]) -> some View {
-		let base: Binding<String> = b(\.target, "")
-		let keys: [String] = opts.map { $0.1 }
-		let sel: Binding<Int> = Binding<Int>(get: { keys.firstIndex(of: base.wrappedValue) ?? -1 }, set: { v in if !keys.isEmpty { base.wrappedValue = keys[clampI(v, 0, keys.count - 1)] } })
-		return VStack(alignment: .leading, spacing: 4) {
-			Text(verbatim: label).font(.pixel(11, .bold)).foregroundColor(Color.black)
-			if opts.isEmpty {
-				Text("Make one in this mod first.").font(.pixel(11, .semibold)).foregroundColor(Color(ui: 0x7A1A1A))
+	/// Why a summoning's (or a dimension's way in) conditions don't hold here and now (nil: they do)
+	func conditionsProblem(_ d: ModSummon, _ name: String, _ at: (Int, Int)?) -> String? {
+		var x: Double = pb.x
+		var y: Double = pb.y - 0.5
+		if let o = at {
+			x = Double(o.0) + Double(d.pattern.w) * 0.5
+			y = Double(o.1) - 0.5
+		}
+		if !d.dims.isEmpty || !d.dimKeys.isEmpty {
+			var ok: Bool = d.dims.contains(world.dim.rawValue)
+			if let cd = customDim, d.dimKeys.contains(cd.key) { ok = true }
+			if !ok {
+				var names: [String] = d.dims.map { ModSummonText.dimName($0) }
+				for k in d.dimKeys {
+					let n: String? = ModRuntime.shared.dimSlots.first { $0?.key == k }??.def.name
+					names.append(n ?? "another dimension")
+				}
+				return joinText(name, " only answers in ", names.joined(separator: " or "), ".")
+			}
+		}
+		if !d.biomes.isEmpty && !d.biomes.contains(biomeAt(x).rawValue) {
+			return joinText(name, " only answers in ", d.biomes.map { ModSummonText.biomeName($0) }.joined(separator: " or "), ".")
+		}
+		if d.time == 1 && isNight { return joinText(name, " only answers by day.") }
+		if d.time == 2 && !isNight { return joinText(name, " only answers at night.") }
+		if d.weather > 0 && d.weather < ModSummonText.weatherWords.count && settings.weatherOn {
+			let w: LocalWeather = weatherAt(x, y)
+			var ok: Bool = true
+			switch d.weather {
+			case 1: ok = w.precip < 0.15 && w.thunder < 0.1
+			case 2: ok = w.precip >= 0.2
+			case 3: ok = w.thunder >= 0.2
+			default: ok = w.snow && w.precip >= 0.2
+			}
+			if !ok { return joinText(name, " only answers ", ModSummonText.weatherWords[d.weather], ".") }
+		}
+		let open: Bool = world.isSkyExposed(Int(floor(x)), Int(floor(y)) - 1)
+		if d.place == 1 && !open { return joinText(name, " only answers under the open sky.") }
+		if d.place == 2 && open { return joinText(name, " only answers underground.") }
+		return nil
+	}
+
+	/// Calls the creature: it appears on the shape (which is used up if the summoning says so), beside
+	/// the player, or a little way off. Returns why it couldn't (nil: it came).
+	func summonCreature(_ s: ModSummonRT, _ at: (Int, Int)?) -> String? {
+		guard let r = ModRuntime.shared.mob(s.slot) else { return "That creature's mod is not on." }
+		let w: Double = r.mdef.w
+		let h: Double = r.mdef.h
+		var x: Double = pb.x + Double(facing) * (w * 0.5 + 1.6)
+		var y: Double = pb.y
+		if let o = at {
+			x = Double(o.0) + Double(s.def.pattern.w) * 0.5
+			y = Double(o.1) - 0.001
+		}
+		if s.def.appear == 1 {
+			let side: Double = Double.random(in: 0...1) < 0.5 ? -1.0 : 1.0
+			x = pb.x + side * 14.0
+			let open: Bool = world.isSkyExposed(Int(floor(pb.x)), Int(floor(pb.y)) - 2)
+			y = open ? Double(world.surfaceY(Int(floor(x)))) - 0.001 : pb.y
+		}
+		// the shape goes first (so the creature can stand where it was); put back if nothing comes
+		var used: [(Int, Int, Tile)] = []
+		if let o = at, s.def.clearPattern {
+			for c in s.cells where c.2 != nil {
+				let tx: Int = o.0 + c.0
+				let ty: Int = o.1 + c.1
+				used.append((tx, ty, world.tile(tx, ty)))
+				world.set(tx, ty, .air)
+			}
+		}
+		func undo() { for u in used { world.set(u.0, u.1, u.2) } }
+		guard let fy = roomNear(x, y, w, h) else {
+			undo()
+			return joinText("There's no room for ", r.def.name, " here.")
+		}
+		guard let m = addCustomMob(s.slot, x, fy) else {
+			undo()
+			return "Too many creatures are about right now."
+		}
+		m.persistent = true
+		m.summoned = true
+		m.homeX = x
+		m.homeY = fy
+		m.dir = pb.x >= x ? 1 : -1
+		m.lastHitByPlayer = clock
+		m.phaseShield = 1.0
+		say(s.def.message.isEmpty ? joinText(r.def.name, " has been summoned!") : s.def.message, 3.5)
+		sfx(.roar, at: x, 1.0)
+		addShake(0.4)
+		let glow: UInt32 = r.def.tintAmt > 0.05 ? r.def.tint : 0xC070FF
+		spawnParticles(x, fy - h * 0.5, glow, 30, 7.0, 0.9, 0)
+		for u in used { spawnParticles(Double(u.0) + 0.5, Double(u.1) + 0.5, glow, 3, 2.0, 0.5, 0) }
+		refreshBossBar()
+		return nil
+	}
+
+	// MARK: saving a fight
+
+	func bossSaves() -> [ModBossSave]? {
+		var out: [ModBossSave] = []
+		for m in mobs where m.kind == .custom && m.summoned && m.hp > 0 && !m.removed {
+			guard let r = ModRuntime.shared.mob(m.cslot) else { continue }
+			out.append(ModBossSave(key: r.key, x: m.b.x, y: m.b.y, hp: m.hp, phase: m.mphase, fightT: m.fightT))
+		}
+		return out.isEmpty ? nil : out
+	}
+
+	/// Summoned creatures of a loaded world come back, in the phase they were in (if their mod is on,
+	/// and they were near the player)
+	func restoreBosses(_ l: [ModBossSave]) {
+		for b in l {
+			guard let slot = ModRuntime.shared.mobSlot[b.key], let r = ModRuntime.shared.mob(slot) else { continue }
+			if abs(b.x - pb.x) > 60 || abs(b.y - pb.y) > 60 { continue }
+			guard let m = addCustomMob(slot, b.x, b.y) else { continue }
+			m.persistent = true
+			m.summoned = true
+			m.homeX = b.x
+			m.homeY = b.y
+			m.hp = clampD(b.hp.isFinite ? b.hp : m.maxHP, 1, m.maxHP)
+			for k in 0..<clampI(b.phase, 0, r.def.phases.count) { enterPhase(m, r, k, quiet: true) }
+			m.fightT = clampD(b.fightT.isFinite ? b.fightT : 0, 0, 3600)
+		}
+	}
+}
+
+extension Art {
+	/// A custom creature's sprites in a phase (tinted with the phase's colour; made once per phase)
+	func customMobSet(_ slot: Int, _ phase: Int) -> SpriteSet {
+		if phase <= 0 { return customMobSet(slot) }
+		let key: Int = 1_000_000 + slot * 16 + min(phase, 15)
+		if let s = modMobSets[key] { return s }
+		guard let r = ModRuntime.shared.mob(slot), phase <= r.def.phases.count else { return customMobSet(slot) }
+		let p: ModPhase = r.def.phases[phase - 1]
+		let s: SpriteSet = p.tintAmt > 0.01 ? modMobSpriteSet(r.def, tint: p.tint, amt: p.tintAmt) : customMobSet(slot)
+		modMobSets[key] = s
+		return s
+	}
+}
+
+/// A custom creature's sprites with a colour laid over them (its phases)
+func modMobSpriteSet(_ m: ModMob, tint: UInt32, amt: Double) -> SpriteSet {
+	let fr: ([PixelBuf], CreatureAnim) = modMobFrames(m)
+	var frames: [PixelBuf] = []
+	for f in fr.0 { frames.append(recolorBuf(f, hue: 0, sat: 1, bright: 1, tint: tint, amt: clampD(amt, 0, 1))) }
+	return modMobSet(m, frames, fr.1)
+}
+
+extension ModValidator {
+	/// Phases and summonings of custom creatures: numbers in range, helpers, items and blocks real
+	static func checkBosses(_ p: inout ModPack, _ mn: String, _ sb: Bool, _ known: [String: String], _ r: inout ModReport) {
+		let ownMobs: Set<String> = Set(p.mobs.map { p.key($0.id) })
+		let gameNames: Set<String> = Set(MobKind.allCases.filter { $0 != .custom && $0 != .villager }.map { mobDef($0).name })
+		func c(_ v: Double, _ lo: Double, _ hi: Double, _ d: Double) -> Double { return clampD(v.isFinite ? v : d, lo, hi) }
+		for i in p.mobs.indices {
+			var m: ModMob = p.mobs[i]
+			let place: String = joinText("Creature \u{201C}", m.name, "\u{201D}")
+			if m.phases.count > ModLimits.maxPhases {
+				r.add(1, mn, place, joinText("Only ", String(ModLimits.maxPhases), " phases fit; the rest were left out."))
+				m.phases = Array(m.phases.prefix(ModLimits.maxPhases))
+			}
+			var calls: Bool = false
+			var lastHealth: Double = 2
+			for k in m.phases.indices {
+				var f: ModPhase = m.phases[k]
+				f.name = String(f.name.prefix(24))
+				f.message = String(f.message.prefix(80))
+				switch f.when {
+				case .health:
+					f.value = c(f.value, 0.05, 0.95, 0.5)
+					if f.value > lastHealth + 0.001 { r.add(1, mn, place, joinText("Phase ", String(k + 1), " begins at more health than the one before it, so it follows straight after.")) }
+					lastHealth = f.value
+				case .time: f.value = c(f.value, 3, 600, 30)
+				case .helpersGone:
+					if !calls { r.add(1, mn, place, joinText("Phase ", String(k + 1), " waits for helpers, but no phase before it calls any.")) }
+				}
+				f.speedMul = c(f.speedMul, 0.5, sb ? 3 : 2, 1)
+				f.damageMul = c(f.damageMul, 0.5, sb ? 6 : 3, 1)
+				f.cooldownMul = c(f.cooldownMul, 0.3, 2, 1)
+				f.defense = c(f.defense, 0, sb ? 0.9 : 0.6, 0)
+				f.tintAmt = c(f.tintAmt, 0, 1, 0)
+				f.heal = c(f.heal, 0, 0.5, 0)
+				f.shield = c(f.shield, 0, 5, 0)
+				f.attacks = Array(Set(f.attacks.filter { $0 >= 0 && $0 < m.attacks.count })).sorted()
+				f.helpers = clampI(f.helpers, 0, sb ? 10 : 6)
+				if !f.helper.isEmpty && !gameNames.contains(f.helper) && !ownMobs.contains(f.helper) && known[f.helper] != "mob" {
+					r.add(1, mn, place, joinText("The helper phase ", String(k + 1), " calls does not exist."))
+					f.helper = ""
+				}
+				if f.helper == p.key(m.id) {
+					r.add(1, mn, place, "A creature can't call more of itself as helpers.")
+					f.helper = ""
+				}
+				if f.helper.isEmpty { f.helpers = 0 }
+				if f.helpers > 0 { calls = true }
+				m.phases[k] = f
+			}
+			if m.summons.count > ModLimits.maxSummons {
+				r.add(1, mn, place, joinText("Only ", String(ModLimits.maxSummons), " ways to summon fit; the rest were left out."))
+				m.summons = Array(m.summons.prefix(ModLimits.maxSummons))
+			}
+			for k in m.summons.indices {
+				var s: ModSummon = m.summons[k]
+				for n in fixSummon(&s, p, known) { r.add(1, mn, place, n) }
+				m.summons[k] = s
+			}
+			p.mobs[i] = m
+		}
+	}
+}
+
+// MARK: - Mod Creator+: custom dimensions
+
+/// Height of every custom dimension (blocks)
+let customDimH: Int = 320
+/// Dimensions one world holds: the Overworld, the Umbral Realm and three custom ones
+let dimCount: Int = 5
+
+extension Dimension {
+	var isCustom: Bool { return rawValue >= 2 }
+	/// which of the three custom dimension slots it is (-1: not a custom one)
+	var customSlot: Int { return rawValue >= 2 ? rawValue - 2 : -1 }
+	static func custom(_ slot: Int) -> Dimension { return Dimension(rawValue: 2 + clampI(slot, 0, 2)) ?? .overworld }
+}
+
+/// Whether a dimension has open sky (sunlight, rain, the sky drawn behind it)
+func dimHasSky(_ d: Dimension) -> Bool {
+	if d == .overworld { return true }
+	if d.isCustom, let r = ModRuntime.shared.dimRT(d) { return !r.def.ceiling }
+	return false
+}
+
+/// The shape a tree design grows in
+enum ModTreeShape: Int, Codable, CaseIterable {
+	case round, pine, tall, umbrella, palm, willow, bush, bare, painted
+	var name: String {
+		switch self {
+		case .round: return "Round"
+		case .pine: return "Pine (a cone)"
+		case .tall: return "Tall and thin"
+		case .umbrella: return "Umbrella"
+		case .palm: return "Palm"
+		case .willow: return "Willow (hanging)"
+		case .bush: return "Bush"
+		case .bare: return "Bare (no leaves)"
+		case .painted: return "Painted (your own)"
+		}
+	}
+}
+
+/// A tree painted cell by cell: 0 empty, 1 trunk, 2 branch, 3 leaves. Its root is the middle of the
+/// bottom row, which stands on the ground.
+struct ModTreeGrid: Codable, Equatable {
+	var w: Int = 9
+	var h: Int = 12
+	var cells: [UInt8] = ModTreeGrid.sample(9, 12)
+
+	init() {}
+
+	init(from decoder: Decoder) throws {
+		let c = try decoder.container(keyedBy: CodingKeys.self)
+		w = c.val(.w, 9)
+		h = c.val(.h, 12)
+		cells = c.val(.cells, [])
+	}
+
+	var valid: Bool { return w >= 3 && h >= 3 && w <= 15 && h <= 24 && cells.count == w * h }
+
+	func at(_ x: Int, _ y: Int) -> UInt8 {
+		if x < 0 || y < 0 || x >= w || y >= h || !valid { return 0 }
+		return cells[y * w + x]
+	}
+
+	/// a small round tree to start painting from
+	static func sample(_ w: Int, _ h: Int) -> [UInt8] {
+		var out: [UInt8] = [UInt8](repeating: 0, count: w * h)
+		let mid: Int = w / 2
+		for y in (h - 5)..<h { out[y * w + mid] = 1 }
+		for y in 0..<(h - 4) {
+			for x in 0..<w {
+				let dx: Double = Double(x - mid) / 3.5
+				let dy: Double = Double(y - (h - 8)) / 3.6
+				if dx * dx + dy * dy <= 1.0 && out[y * w + x] == 0 { out[y * w + x] = 3 }
+			}
+		}
+		return out
+	}
+
+	/// another size, the tree kept standing at the bottom middle
+	func resized(_ nw: Int, _ nh: Int) -> ModTreeGrid {
+		var o = ModTreeGrid()
+		o.w = clampI(nw, 3, 15)
+		o.h = clampI(nh, 3, 24)
+		o.cells = [UInt8](repeating: 0, count: o.w * o.h)
+		let ox: Int = o.w / 2 - w / 2
+		let oy: Int = o.h - h
+		for y in 0..<h {
+			for x in 0..<w {
+				let tx: Int = x + ox
+				let ty: Int = y + oy
+				if tx >= 0 && ty >= 0 && tx < o.w && ty < o.h { o.cells[ty * o.w + tx] = at(x, y) }
+			}
+		}
+		return o
+	}
+}
+
+/// A tree design for a mod's dimensions: the blocks it is made of, its shape and size, how often it
+/// grows and on what. Like the game's trees, its trunk, branches and leaves are passed through (a solid
+/// block of a mod chosen for them gets a pass-through tree form of its own).
+struct ModTree: Codable, Identifiable, Equatable {
+	/// designs one mod may hold
+	static let maxDesigns: Int = 12
+
+	var id: String = ""
+	var name: String = "New Tree"
+	var trunk: String = ModGround.key(.log)
+	/// the branches' block (empty: the trunk's)
+	var branch: String = ""
+	var leaves: String = ModGround.key(.leaves)
+	var shape: ModTreeShape = .round
+	var minHeight: Int = 4
+	var maxHeight: Int = 7
+	/// a trunk two blocks wide
+	var thick: Bool = false
+	/// how far the leaves reach from the trunk
+	var crown: Int = 2
+	var branches: Int = 1
+	/// how full the leaves are (0.2 sparse ... 1 solid)
+	var density: Double = 0.9
+	var grid: ModTreeGrid = ModTreeGrid()
+	/// how often it grows among its region's trees
+	var weight: Double = 1
+	/// it grows only on this ground (empty: on any)
+	var ground: String = ""
+
+	init() {}
+
+	init(from decoder: Decoder) throws {
+		let c = try decoder.container(keyedBy: CodingKeys.self)
+		id = c.val(.id, "")
+		name = c.val(.name, "Tree")
+		trunk = c.val(.trunk, ModGround.key(.log))
+		branch = c.val(.branch, "")
+		leaves = c.val(.leaves, ModGround.key(.leaves))
+		shape = c.val(.shape, .round)
+		minHeight = c.val(.minHeight, 4)
+		maxHeight = c.val(.maxHeight, 7)
+		thick = c.val(.thick, false)
+		crown = c.val(.crown, 2)
+		branches = c.val(.branches, 1)
+		density = c.val(.density, 0.9)
+		grid = c.val(.grid, ModTreeGrid())
+		weight = c.val(.weight, 1)
+		ground = c.val(.ground, "")
+	}
+}
+
+/// A stretch of a custom dimension with its own ground, plants and trees: its biomes
+struct ModDimZone: Codable, Equatable {
+	var name: String = "Meadow"
+	/// the game biome it counts as (for ores, structures, summoning and creature rules)
+	var biome: Int = Biome.plains.rawValue
+	var ground: String = ModGround.key(.grass)
+	var filler: String = ModGround.key(.dirt)
+	/// a small plant on the ground (empty: none)
+	var plant: String = ModGround.key(.tallGrass)
+	var plantChance: Double = 0.12
+	/// 0 none, 1 a few, 2 many
+	var trees: Int = 1
+	var log: String = ModGround.key(.log)
+	var leaves: String = ModGround.key(.leaves)
+	/// the mod's tree designs that grow here, by id (empty: the simple trees of its log and leaves)
+	var treeKinds: [String] = []
+
+	init() {}
+
+	init(from decoder: Decoder) throws {
+		let c = try decoder.container(keyedBy: CodingKeys.self)
+		name = c.val(.name, "Zone")
+		biome = c.val(.biome, Biome.plains.rawValue)
+		ground = c.val(.ground, ModGround.key(.grass))
+		filler = c.val(.filler, ModGround.key(.dirt))
+		plant = c.val(.plant, "")
+		plantChance = c.val(.plantChance, 0.12)
+		trees = c.val(.trees, 1)
+		log = c.val(.log, ModGround.key(.log))
+		leaves = c.val(.leaves, ModGround.key(.leaves))
+		treeKinds = c.val(.treeKinds, [])
+	}
+}
+
+/// A creature that lives in a custom dimension
+struct ModDimSpawn: Codable, Equatable {
+	/// "mod:id", or a game creature's name
+	var creature: String = ""
+	/// 0 on the surface, 1 in caves, 2 anywhere
+	var place: Int = 0
+	/// 0 any time, 1 by day, 2 at night
+	var when: Int = 0
+	var weight: Double = 5
+	var group: Int = 1
+
+	init() {}
+
+	init(from decoder: Decoder) throws {
+		let c = try decoder.container(keyedBy: CodingKeys.self)
+		creature = c.val(.creature, "")
+		place = c.val(.place, 0)
+		when = c.val(.when, 0)
+		weight = c.val(.weight, 5)
+		group = c.val(.group, 1)
+	}
+}
+
+/// A sun or a moon of a mod's own: its picture (blank: the game's, in its colour), how big it is, its
+/// glow, how it moves across the sky, and how much light it gives
+struct ModSkyBody: Codable, Equatable {
+	var art: ModPixels = ModPixels(w: 16, h: 16)
+	/// times the game's size
+	var size: Double = 1.0
+	/// the colour of the game's round one (a picture keeps its own colours)
+	var color: UInt32 = 0xFFD84A
+	var glow: Double = 0.35
+	var glowColor: UInt32 = 0xFFE680
+	/// 0 rises and sets with the time of day, 1 stays in one place in the sky (day and night)
+	var path: Int = 0
+	/// how high its path climbs (0.2 low ... 1.2 high)
+	var arc: Double = 1.0
+	/// where it stays: across (0 left ... 1 right) and down (0 top ... 1 the horizon)
+	var posX: Double = 0.75
+	var posY: Double = 0.2
+	/// the light it gives: a sun scales the daylight, a moon the light at night (1: the game's)
+	var bright: Double = 1.0
+	/// turning slowly (degrees a second; 0 still)
+	var spin: Double = 0
+	/// its glow swelling and fading (0 steady ... 1 strong)
+	var pulse: Double = 0
+	/// rays all round it
+	var rays: Bool = false
+
+	init() {}
+
+	init(from decoder: Decoder) throws {
+		let c = try decoder.container(keyedBy: CodingKeys.self)
+		art = c.val(.art, ModPixels(w: 16, h: 16))
+		size = c.val(.size, 1.0)
+		color = c.val(.color, 0xFFD84A)
+		glow = c.val(.glow, 0.35)
+		glowColor = c.val(.glowColor, 0xFFE680)
+		path = c.val(.path, 0)
+		arc = c.val(.arc, 1.0)
+		posX = c.val(.posX, 0.75)
+		posY = c.val(.posY, 0.2)
+		bright = c.val(.bright, 1.0)
+		spin = c.val(.spin, 0)
+		pulse = c.val(.pulse, 0)
+		rays = c.val(.rays, false)
+	}
+
+	/// a new moon: pale, faint glow
+	static func moon() -> ModSkyBody {
+		var m = ModSkyBody()
+		m.color = 0xE8ECF4
+		m.glow = 0.15
+		m.glowColor = 0xC8D0E8
+		return m
+	}
+
+	/// every number kept within what the sky can show
+	mutating func clamp() {
+		if !art.valid || art.w > 32 || art.h > 32 { art = ModPixels(w: 16, h: 16) }
+		size = clampD(size.isFinite ? size : 1, 0.3, 3.0)
+		glow = clampD(glow.isFinite ? glow : 0, 0, 1)
+		path = clampI(path, 0, 1)
+		arc = clampD(arc.isFinite ? arc : 1, 0.2, 1.2)
+		posX = clampD(posX.isFinite ? posX : 0.75, 0, 1)
+		posY = clampD(posY.isFinite ? posY : 0.2, 0, 1)
+		bright = clampD(bright.isFinite ? bright : 1, 0, 2)
+		spin = clampD(spin.isFinite ? spin : 0, -180, 180)
+		pulse = clampD(pulse.isFinite ? pulse : 0, 0, 1)
+	}
+}
+
+/// A dimension made in the Mod Creator: how its sky and light look, how its land is made, what lives
+/// there, and how a player gets in and out. Each world gives its dimensions one of three slots.
+struct ModDimension: Codable, Identifiable, Equatable {
+	var id: String = ""
+	var name: String = "New Dimension"
+	var desc: String = ""
+	// sky and light
+	var skyTop: UInt32 = 0x3A2A6A
+	var skyBottom: UInt32 = 0xC07AB0
+	var nightTop: UInt32 = 0x080614
+	var nightBottom: UInt32 = 0x241A3A
+	/// how bright the open air is (0 dark ... 1 full daylight)
+	var light: Double = 0.8
+	/// follows the world's day and night (off: always the same time)
+	var cycle: Bool = true
+	/// the time it always is without a cycle (0.25 noon ... 0.75 midnight)
+	var fixedTime: Double = 0.25
+	var sun: Bool = true
+	var moon: Bool = true
+	var stars: Bool = true
+	var sunColor: UInt32 = 0xFFE8A0
+	/// its own sun and moon (nil: the game's round ones)
+	var sunBody: ModSkyBody? = nil
+	var moonBody: ModSkyBody? = nil
+	/// floating motes: 0 none, 1 embers, 2 snowflakes, 3 fireflies, 4 ash, 5 spores
+	var ambient: Int = 0
+	/// 0 none, 1 drizzle, 2 rain, 3 thunderstorms, 4 snow
+	var weather: Int = 0
+	/// 0 mild ... 1 bitter cold (as the game's cold: it chills the player)
+	var chill: Double = 0
+	var hot: Bool = false
+	// the land
+	/// a roof of rock overhead: a cavern world, like the Umbral Realm (no sky, no sun)
+	var ceiling: Bool = false
+	/// the row the ground lies at (smaller is higher up)
+	var surface: Int = 150
+	var hills: Double = 12
+	var roughness: Double = 1.0
+	/// tall peaks (0 none ... 1 many)
+	var mountains: Double = 0.2
+	var caves: Double = 0.4
+	/// floating islands in the sky (0 none ... 1 many)
+	var islands: Double = 0
+	/// the row its seas fill up to (0: no seas)
+	var sea: Int = 0
+	/// 0 water, 1 lava (seas, and pools deep in the caves)
+	var liquid: Int = 0
+	var pools: Bool = true
+	var stone: String = ModGround.key(.stone)
+	/// its regions, side by side (at least one)
+	var zones: [ModDimZone] = [ModDimZone()]
+	var zoneWidth: Int = 300
+	/// a block scattered on the ground that harms or hinders (empty: none)
+	var hazard: String = ""
+	var hazardChance: Double = 0.02
+	// life
+	var spawns: [ModDimSpawn] = []
+	// getting in and out
+	var entry: ModSummon = ModDimension.defaultEntry
+	/// a gate stands where the player arrives; tapping it takes them back
+	var returnGate: Bool = true
+	/// the gate's block: one of this mod's blocks (empty: a glowing crystal)
+	var gateBlock: String = ""
+	var arriveMessage: String = ""
+
+	static var defaultEntry: ModSummon {
+		var s = ModSummon()
+		s.how = .itemOnPattern
+		s.clearPattern = false
+		return s
+	}
+
+	init() {}
+
+	init(from decoder: Decoder) throws {
+		let c = try decoder.container(keyedBy: CodingKeys.self)
+		var skip: Int = 0
+		id = c.val(.id, "")
+		name = c.val(.name, "Dimension")
+		desc = c.val(.desc, "")
+		skyTop = c.val(.skyTop, 0x3A2A6A)
+		skyBottom = c.val(.skyBottom, 0xC07AB0)
+		nightTop = c.val(.nightTop, 0x080614)
+		nightBottom = c.val(.nightBottom, 0x241A3A)
+		light = c.val(.light, 0.8)
+		cycle = c.val(.cycle, true)
+		fixedTime = c.val(.fixedTime, 0.25)
+		sun = c.val(.sun, true)
+		moon = c.val(.moon, true)
+		stars = c.val(.stars, true)
+		sunColor = c.val(.sunColor, 0xFFE8A0)
+		sunBody = c.val(.sunBody, nil)
+		moonBody = c.val(.moonBody, nil)
+		ambient = c.val(.ambient, 0)
+		weather = c.val(.weather, 0)
+		chill = c.val(.chill, 0)
+		hot = c.val(.hot, false)
+		ceiling = c.val(.ceiling, false)
+		surface = c.val(.surface, 150)
+		hills = c.val(.hills, 12)
+		roughness = c.val(.roughness, 1.0)
+		mountains = c.val(.mountains, 0.2)
+		caves = c.val(.caves, 0.4)
+		islands = c.val(.islands, 0)
+		sea = c.val(.sea, 0)
+		liquid = c.val(.liquid, 0)
+		pools = c.val(.pools, true)
+		stone = c.val(.stone, ModGround.key(.stone))
+		zones = c.list(.zones, &skip)
+		if zones.isEmpty { zones = [ModDimZone()] }
+		zoneWidth = c.val(.zoneWidth, 300)
+		hazard = c.val(.hazard, "")
+		hazardChance = c.val(.hazardChance, 0.02)
+		spawns = c.list(.spawns, &skip)
+		entry = c.val(.entry, ModDimension.defaultEntry)
+		returnGate = c.val(.returnGate, true)
+		gateBlock = c.val(.gateBlock, "")
+		arriveMessage = c.val(.arriveMessage, "")
+	}
+}
+
+/// Words for the dimension settings
+enum ModDimText {
+	static let ambients: [String] = ["None", "Embers", "Snowflakes", "Fireflies", "Ash", "Spores"]
+	static let weathers: [String] = ["None", "Drizzle", "Rain", "Thunderstorms", "Snow", "Strong wind", "Windstorms", "Hailstorms", "Blizzards"]
+	static let liquids: [String] = ["Water", "Lava"]
+	static let trees: [String] = ["None", "A few", "Many"]
+	static let places: [String] = ["Surface", "Caves", "Anywhere"]
+	static let times: [String] = ["Any time", "By day", "At night"]
+}
+
+/// Where a player came from when they entered a custom dimension (to go back there)
+struct DimReturn: Codable, Equatable {
+	var dim: Int
+	var x: Double
+	var y: Double
+}
+
+/// A custom dimension ready for play: its blocks resolved, its creature rules, its land's shape
+final class ModDimRT {
+	let key: String
+	let slot: Int
+	let def: ModDimension
+	let salt: UInt64
+	let stone: Tile
+	let liquid: Tile
+	let hazard: Tile?
+	let gate: Tile
+	let zones: [ModDimZoneRT]
+	var spawnRules: [SpawnRule] = []
+	var modName: String = ""
+	/// some region grows the mod's tree designs
+	let hasDesigns: Bool
+	/// the regions' plants (trees grow over them), and their ground (where saplings take root)
+	let plantTiles: Set<UInt8>
+	let soils: Set<UInt8>
+
+	var dim: Dimension { return .custom(slot) }
+
+	/// `trees` are the mod's tree designs; `treeTile` gives the tile a tree is made of for a block key
+	/// (a solid block's pass-through tree form; role 1 trunk or branch, 2 leaves)
+	init(key: String, slot: Int, def: ModDimension, resolve: (String) -> Tile?, trees: [ModTree] = [], treeTile: ((String, Int) -> Tile?)? = nil) {
+		self.key = key
+		self.slot = slot
+		self.def = def
+		salt = UInt64(truncatingIfNeeded: modChecksum(Data(key.utf8))) &* 0x9E37_79B9 &+ 0x5D1
+		func pick(_ k: String, _ d: Tile) -> Tile {
+			guard let t = resolve(k), t != .air else { return d }
+			return t
+		}
+		stone = pick(def.stone, .stone)
+		liquid = def.liquid == 1 ? .lava : .water
+		hazard = def.hazard.isEmpty ? nil : resolve(def.hazard)
+		gate = def.gateBlock.isEmpty ? .glowCrystal : pick(def.gateBlock, .glowCrystal)
+		func pickTree(_ k: String, _ role: Int, _ d: Tile) -> Tile {
+			if let f = treeTile, let t = f(k, role), t != .air, !t.liquid { return t }
+			return pick(k, d)
+		}
+		var zs: [ModDimZoneRT] = []
+		var plants: Set<UInt8> = []
+		var soil: Set<UInt8> = []
+		var any: Bool = false
+		for z in def.zones.prefix(4) {
+			let plant: Tile? = z.plant.isEmpty ? nil : resolve(z.plant)
+			var zr = ModDimZoneRT(ground: pick(z.ground, .grass), filler: pick(z.filler, .dirt), plant: plant, plantChance: z.plantChance,
+								  trees: z.trees, log: pickTree(z.log, 1, .log), leaves: pickTree(z.leaves, 2, .leaves), biome: Biome(rawValue: z.biome) ?? .plains)
+			for tid in z.treeKinds {
+				guard let t = trees.first(where: { $0.id == tid }) else { continue }
+				let trunk: Tile = pickTree(t.trunk, 1, .log)
+				let br: Tile = t.branch.isEmpty ? trunk : pickTree(t.branch, 1, trunk)
+				let lv: Tile = pickTree(t.leaves, 2, .leaves)
+				let gr: Tile? = t.ground.isEmpty ? nil : resolve(t.ground)
+				zr.designs.append(ModTreeRT(def: t, trunk: trunk, branch: br, leaves: lv, ground: gr))
+			}
+			if !zr.designs.isEmpty {
+				any = true
+				// trees stand further apart the wider the widest design grows
+				var half: Int = 1
+				for t in zr.designs {
+					let w: Int = t.def.shape == .painted ? t.def.grid.w / 2 : clampI(t.def.crown, 0, 6) + (t.def.thick ? 1 : 0)
+					half = max(half, w)
+				}
+				zr.gap = clampI(half + 2, 3, 12)
+			}
+			if let p = plant { plants.insert(p.rawValue) }
+			soil.insert(zr.ground.rawValue)
+			soil.insert(zr.filler.rawValue)
+			zs.append(zr)
+		}
+		if zs.isEmpty { zs.append(ModDimZoneRT(ground: .grass, filler: .dirt, plant: nil, plantChance: 0, trees: 0, log: .log, leaves: .leaves, biome: .plains)) }
+		zones = zs
+		hasDesigns = any
+		plantTiles = plants
+		soils = soil
+	}
+
+	/// the region at column x
+	func zoneIndex(_ x: Int) -> Int {
+		if zones.count <= 1 { return 0 }
+		let w: Int = max(40, def.zoneWidth)
+		let off: Int = Int(salt % 997)
+		let k: Int = floorDiv(x + off, w)
+		return ((k % zones.count) + zones.count) % zones.count
+	}
+
+	func biomeAt(_ x: Double) -> Biome { return zones[zoneIndex(Int(floor(x)))].biome }
+
+	/// The row of the ground at column x, for a world's seed
+	func surfaceAt(_ x: Int, _ seed: UInt64) -> Int {
+		let s: UInt64 = seed &+ salt
+		let f: Double = clampD(def.roughness, 0.2, 3.0)
+		let n: Double = fbm1(Double(x) / (60.0 / f), s &+ 501, 4)
+		var h: Double = Double(def.surface) + (n - 0.5) * 2.0 * def.hills
+		if def.mountains > 0.001 {
+			let m: Double = fbm1(Double(x) / 140.0, s &+ 502, 3)
+			let th: Double = 0.78 - def.mountains * 0.26
+			if m > th { h -= pow((m - th) / (1.0 - th), 1.4) * 80.0 }
+		}
+		let lo: Int = def.ceiling ? 72 : 24
+		return clampI(Int(h.rounded()), lo, customDimH - 30)
+	}
+
+	/// The row where the rock roof ends at column x (roofed dimensions)
+	func ceilingAt(_ x: Int, _ seed: UInt64) -> Int {
+		return 10 + Int(fbm1(Double(x) / 50.0, seed &+ salt &+ 511, 3) * 28.0)
+	}
+
+	/// Where a player arrives: the first dry column near the middle of the dimension
+	func arrival(_ seed: UInt64) -> (Double, Double) {
+		var x: Int = 0
+		for k in 0..<400 {
+			let c: Int = k % 2 == 0 ? k / 2 : -(k / 2) - 1
+			let s: Int = surfaceAt(c, seed)
+			if def.sea <= 0 || s < def.sea - 1 {
+				x = c
+				break
+			}
+		}
+		return (Double(x) + 0.5, Double(surfaceAt(x, seed)) - 0.001)
+	}
+}
+
+struct ModDimZoneRT {
+	var ground: Tile
+	var filler: Tile
+	var plant: Tile?
+	var plantChance: Double
+	var trees: Int
+	var log: Tile
+	var leaves: Tile
+	var biome: Biome
+	/// the mod's tree designs that grow here (empty: the simple trees of its log and leaves)
+	var designs: [ModTreeRT] = []
+	/// how many columns apart its design trees stand at least (by the widest design's crown)
+	var gap: Int = 4
+}
+
+/// A chunk of a custom dimension: rolling ground in regions, caves, seas, floating islands, trees,
+/// plants and hazards, then the mods' ores and structures for it. A dimension whose mod is missing
+/// is an empty void (nobody is sent there: see Game.load).
+func generateCustomChunk(_ g: WorldGen, _ dim: Dimension, _ cx: Int) -> Chunk {
+	let H: Int = customDimH
+	let ch = Chunk(cx: cx, H: H)
+	guard let d = ModRuntime.shared.dimRT(dim) else {
+		ch.hasSky = false
+		for lx in 0..<chunkW {
+			for y in (H - 3)..<H { ch.tiles[lx * H + y] = Tile.bedrock.rawValue }
+			ch.surf[lx] = H - 3
+		}
+		ch.rebuildSky()
+		return ch
+	}
+	fillCustomChunk(g.seed, g.infinite, g.width, d, ch)
+	if ModRuntime.shared.hasWorldGen { applyModGen(g, ch, dim) }
+	ch.rebuildSky()
+	return ch
+}
+
+/// The land of a custom dimension in one chunk (shared by the game and the editor's preview)
+func fillCustomChunk(_ seed0: UInt64, _ infinite: Bool, _ width: Int, _ d: ModDimRT, _ ch: Chunk) {
+	let H: Int = ch.H
+	let def: ModDimension = d.def
+	let seed: UInt64 = seed0 &+ d.salt
+	ch.hasSky = !def.ceiling
+	let x0: Int = ch.x0
+	let caveT: Double = 0.035 + clampD(def.caves, 0, 1) * 0.07
+	let cavern: Double = 0.9 - clampD(def.caves, 0, 1) * 0.12
+	// floating islands: rarer and flatter than the noise alone would make them (they shade the ground)
+	let isleT: Double = 0.86 - clampD(def.islands, 0, 1) * 0.08
+	for lx in 0..<chunkW {
+		let x: Int = x0 + lx
+		let base: Int = lx * H
+		if !infinite && (x < 0 || x >= width) {
+			for y in 0..<H { ch.tiles[base + y] = Tile.bedrock.rawValue }
+			continue
+		}
+		let surf: Int = d.surfaceAt(x, seed0)
+		let ceil: Int = def.ceiling ? d.ceilingAt(x, seed0) : 0
+		let z: ModDimZoneRT = d.zones[d.zoneIndex(x)]
+		ch.surf[lx] = surf
+		ch.ceilY[lx] = ceil
+		let fill: Int = 3 + Int(hash2(x, 11, seed) * 3.0)
+		let seaRow: Int = def.sea > 0 ? clampI(def.sea, 10, H - 10) : H
+		for y in 0..<H {
+			var t: Tile = .air
+			if y >= H - 3 || (def.ceiling && y <= 2) {
+				t = .bedrock
+			} else if def.ceiling && y < ceil {
+				t = d.stone
+			} else if y >= surf {
+				let depth: Int = y - surf
+				t = depth == 0 ? (surf >= seaRow ? z.filler : z.ground) : (depth <= fill ? z.filler : d.stone)
+				if depth >= 4 && def.caves > 0.001 {
+					let a: Double = vnoise(Double(x) * 0.05, Double(y) * 0.08, seed &+ 601)
+					let b: Double = vnoise(Double(x) * 0.028, Double(y) * 0.05, seed &+ 602)
+					if abs(a - 0.5) < caveT || b > cavern {
+						t = def.pools && y >= H - 40 ? d.liquid : .air
+					}
+				}
 			} else {
-				ChoiceRow(options: opts.map { $0.0 }, selected: sel, columns: 3)
+				if y >= seaRow { t = d.liquid }
+				if def.islands > 0.001 && y > (def.ceiling ? ceil + 12 : 30) && y < surf - 26 {
+					let n: Double = vnoise(Double(x) * 0.05, Double(y) * 0.14, seed &+ 631)
+					// they gather in a band some way above the ground
+					let band: Double = abs(Double(y) - Double(surf - 60)) / 60.0
+					if n > isleT + band * 0.06 { t = d.stone }
+				}
+			}
+			ch.tiles[base + y] = t.rawValue
+		}
+		// the tops of floating islands get the region's ground
+		if def.islands > 0.001 {
+			var y: Int = 4
+			while y < surf - 1 {
+				if ch.tiles[base + y] == d.stone.rawValue && ch.tiles[base + y - 1] == Tile.air.rawValue {
+					ch.tiles[base + y] = z.ground.rawValue
+					if ch.tiles[base + y + 1] == d.stone.rawValue { ch.tiles[base + y + 1] = z.filler.rawValue }
+				}
+				y += 1
+			}
+		}
+	}
+	// trees, plants and hazards on dry ground (trees only where the whole tree fits in this chunk)
+	for lx in 0..<chunkW {
+		let x: Int = x0 + lx
+		if !infinite && (x < 0 || x >= width) { continue }
+		let surf: Int = ch.surf[lx]
+		if surf <= 12 || surf >= H - 8 { continue }
+		if def.sea > 0 && surf >= def.sea - 1 { continue }
+		if ch.get(lx, surf - 1) != .air || ch.get(lx, surf) == .air { continue }
+		let z: ModDimZoneRT = d.zones[d.zoneIndex(x)]
+		if z.trees > 0 && z.designs.isEmpty && lx >= 2 && lx < chunkW - 2 && customTreeAt(x, z.trees, seed) {
+			let h: Int = 4 + Int(hash2(x, 22, seed) * 4.0)
+			if surf - h - 3 > (def.ceiling ? ch.ceilY[lx] + 2 : 2) {
+				for k in 1...h { ch.setLocal(lx, surf - k, z.log) }
+				let top: Int = surf - h
+				for dy in -2...1 {
+					for dx in -2...2 where abs(dx) + abs(dy) <= 3 && lx + dx >= 0 && lx + dx < chunkW {
+						let y: Int = top + dy
+						if ch.get(lx + dx, y) == .air { ch.setLocal(lx + dx, y, z.leaves) }
+					}
+				}
+				continue
+			}
+		}
+		let r: Double = hash2(x, 5, seed)
+		if let hz = d.hazard, r < clampD(def.hazardChance, 0, 0.5) {
+			ch.setLocal(lx, surf - 1, hz)
+		} else if let p = z.plant, r < clampD(def.hazardChance, 0, 0.5) + clampD(z.plantChance, 0, 0.8) {
+			ch.setLocal(lx, surf - 1, p)
+		}
+	}
+	// the mod's own tree designs, in the regions that grow them
+	plantTreeDesigns(seed0, infinite, width, d, ch)
+}
+
+/// Trees stand at least five columns apart
+func customTreeAt(_ x: Int, _ trees: Int, _ seed: UInt64) -> Bool {
+	let p: Double = trees >= 2 ? 0.2 : 0.07
+	if hash2(x, 21, seed) >= p { return false }
+	for k in 1...4 where hash2(x - k, 21, seed) < p { return false }
+	return true
+}
+
+/// How far a tree design's cells may reach sideways from its root. The generator looks this far past
+/// each side of a chunk for trees that lean into it, so a tree across a chunk's edge is whole.
+let treeReach: Int = 9
+
+/// One cell of a tree: where it is from the root (dx across, dy rows up: 1 is the row on the ground)
+/// and what it is (1 trunk, 2 branch, 3 leaves)
+struct TreeCell: Equatable {
+	var dx: Int
+	var dy: Int
+	var part: UInt8
+}
+
+/// A tree design ready to grow in a world: its blocks as tiles (solid blocks as their pass-through
+/// tree forms), and the ground it needs
+struct ModTreeRT {
+	var def: ModTree
+	var trunk: Tile
+	var branch: Tile
+	var leaves: Tile
+	/// it grows only on this tile (nil: on any ground)
+	var ground: Tile?
+
+	func tile(_ part: UInt8) -> Tile { return part == 1 ? trunk : (part == 2 ? branch : leaves) }
+
+	/// rows from the ground to its top, about (for room under a roof and above a sapling)
+	func height(_ h: Int) -> Int {
+		if def.shape == .painted { return def.grid.h }
+		return h + clampI(def.crown, 0, 6) + 2
+	}
+}
+
+/// The shapes tree designs grow in. Everything comes from the design's numbers and one random seed,
+/// so the same seed always makes the same tree.
+enum TreeShapes {
+	static func cells(_ t: ModTree, _ h0: Int, _ seed: UInt64) -> [TreeCell] {
+		var b = TreeBuilder(t, seed)
+		let h: Int = clampI(h0, 1, 24)
+		switch t.shape {
+		case .round: b.round(h)
+		case .pine: b.pine(h)
+		case .tall: b.tall(h)
+		case .umbrella: b.umbrella(h)
+		case .palm: b.palm(h)
+		case .willow: b.willow(h)
+		case .bush: b.bush(h)
+		case .bare: b.bare(h)
+		case .painted: b.painted()
+		}
+		return b.out()
+	}
+}
+
+/// Builds one tree's cells: trunk first, then branches, then leaves, each only where nothing of higher
+/// rank is (a trunk is never covered by its own leaves)
+struct TreeBuilder {
+	var map: [Int: UInt8] = [:]
+	var order: [Int] = []
+	var rng: RNG
+	let c: Int
+	let wide: Bool
+	let cx: Double
+	let dens: Double
+	let branches: Int
+
+	init(_ t: ModTree, _ seed: UInt64) {
+		rng = RNG(seed)
+		c = clampI(t.crown, 0, 6)
+		wide = t.thick && t.shape != .painted && t.shape != .bush
+		cx = wide ? 0.5 : 0
+		dens = clampD(t.density.isFinite ? t.density : 1, 0.2, 1)
+		branches = clampI(t.branches, 0, 4)
+		grid = t.grid
+	}
+
+	let grid: ModTreeGrid
+
+	func out() -> [TreeCell] {
+		var o: [TreeCell] = []
+		o.reserveCapacity(order.count)
+		for k in order {
+			guard let p = map[k] else { continue }
+			o.append(TreeCell(dx: k / 128 - 64, dy: k % 128, part: p))
+		}
+		return o
+	}
+
+	mutating func put(_ dx: Int, _ dy: Int, _ p: UInt8) {
+		if abs(dx) > treeReach || dy < 1 || dy > 60 { return }
+		let k: Int = (dx + 64) * 128 + dy
+		if let old = map[k] {
+			if old <= p { return }
+		} else {
+			order.append(k)
+		}
+		map[k] = p
+	}
+
+	/// a leaf, kept by the design's fullness: cells at the edge of a crown go first
+	mutating func leaf(_ dx: Int, _ dy: Int, _ edge: Double) {
+		let e: Double = clampD(edge, 0, 1)
+		let keep: Double = dens + (1 - dens) * (1 - e) * (1 - e)
+		if rng.double() < keep { put(dx, dy, 3) }
+	}
+
+	/// leaves filling an oval around (ox, oy)
+	mutating func blob(_ ox: Double, _ oy: Double, _ rx0: Double, _ ry0: Double) {
+		let rx: Double = max(0.5, rx0)
+		let ry: Double = max(0.5, ry0)
+		let x0: Int = Int(floor(ox - rx))
+		let x1: Int = Int(ceil(ox + rx))
+		let y0: Int = max(1, Int(floor(oy - ry)))
+		let y1: Int = Int(ceil(oy + ry))
+		if x1 < x0 || y1 < y0 { return }
+		for dy in y0...y1 {
+			for dx in x0...x1 {
+				let a: Double = (Double(dx) - ox) / rx
+				let q: Double = (Double(dy) - oy) / ry
+				let r2: Double = a * a + q * q
+				if r2 <= 1.0 { leaf(dx, dy, sqrt(r2)) }
 			}
 		}
 	}
 
-	// MARK: the palette
+	mutating func trunk(_ dy0: Int, _ dy1: Int) {
+		if dy1 < dy0 { return }
+		for dy in dy0...dy1 {
+			put(0, dy, 1)
+			if wide { put(1, dy, 1) }
+		}
+	}
 
-	static let catNames: [String] = LCat.allCases.map { $0.name }
+	/// a branch from the trunk at height dy to one side, rising one row a cell; a tuft of leaves at its tip
+	mutating func branch(_ dy: Int, _ side: Int, _ len: Int, _ tuft: Bool) {
+		var x: Int = side < 0 ? 0 : (wide ? 1 : 0)
+		var y: Int = dy
+		if len <= 0 { return }
+		for k in 0..<len {
+			x += side
+			if k > 0 { y += 1 }
+			put(x, y, 2)
+		}
+		if tuft { blob(Double(x), Double(y) + 0.6, 1.3, 1.0) }
+	}
 
-	var palette: some View {
-		let cats: [LCat] = LCat.allCases
-		let c: LCat = cats[clampI(cat, 0, cats.count - 1)]
-		let specs: [LSpec] = LSpec.all.filter { $0.cat == c }
-		let cols: [GridItem] = [GridItem(.adaptive(minimum: 150), spacing: 6)]
-		let col: Color = Color(ui: c.color)
-		return VStack(alignment: .leading, spacing: 6) {
-			ChoiceRow(options: ScriptEditorView.catNames, selected: $cat, columns: 4)
-			LazyVGrid(columns: cols, spacing: 6) {
-				ForEach(0..<specs.count, id: \.self) { k in self.paletteButton(specs[k], col) }
+	/// the design's branches spread up the trunk below its crown, sides taking turns
+	mutating func sideBranches(_ h: Int, _ top: Int, _ tuft: Bool) {
+		if branches <= 0 { return }
+		let lo: Int = max(2, h / 2)
+		let hi: Int = max(lo, top)
+		let first: Int = rng.int(2) == 0 ? -1 : 1
+		for k in 0..<branches {
+			let by: Int = branches == 1 ? (lo + hi) / 2 : lo + (hi - lo) * k / (branches - 1)
+			let side: Int = k % 2 == 0 ? first : -first
+			let len: Int = 1 + rng.int(2) + c / 3
+			branch(by, side, len, tuft)
+		}
+	}
+
+	mutating func round(_ h: Int) {
+		trunk(1, h)
+		let rx: Double = Double(c) + 0.6
+		let ry: Double = Double(c) * 0.8 + 0.7
+		let oy: Double = Double(h) + Double(c) * 0.25
+		blob(cx, oy, rx, ry)
+		sideBranches(h, Int(oy - ry) - 1, true)
+	}
+
+	mutating func pine(_ h: Int) {
+		let tip: Int = h + max(1, c)
+		trunk(1, tip - 1)
+		let base: Int = max(2, h / 3)
+		if base <= tip - 1 {
+			for dy in base...(tip - 1) {
+				let f: Double = Double(tip - dy) / Double(max(1, tip - base))
+				var w: Double = (Double(c) + 0.4) * f
+				// boughs in tiers: every other row a little narrower, but never bare beside the trunk
+				if (tip - dy) % 2 == 0 { w -= 0.7 }
+				let ww: Double = max(c > 0 ? 1.0 : 0.0, w)
+				let x0: Int = Int(floor(cx - ww - 0.01))
+				let x1: Int = Int(ceil(cx + ww + 0.01))
+				for dx in x0...x1 where abs(Double(dx) - cx) <= ww + 0.5 {
+					leaf(dx, dy, abs(Double(dx) - cx) / (ww + 0.6))
+				}
 			}
 		}
-		.padding(8)
-		.background(PixelBox(color: ModUI.card))
+		put(0, tip, 3)
+		if wide { put(1, tip, 3) }
 	}
 
-	func paletteButton(_ sp: LSpec, _ col: Color) -> some View {
-		Button(action: { self.addBlock(sp.op) }) {
-			Text(verbatim: sp.title).font(.pixel(11, .bold)).foregroundColor(Color.white)
-				.multilineTextAlignment(.center)
-				.frame(maxWidth: .infinity, minHeight: 44)
-				.background(col)
-				.cornerRadius(8)
+	mutating func tall(_ h: Int) {
+		trunk(1, h)
+		let ry: Double = Double(c) + 1.2
+		let oy: Double = Double(h) - Double(c) * 0.3
+		blob(cx, oy, max(0.8, Double(c) * 0.5 + 0.3), ry)
+		sideBranches(h, Int(oy - ry) - 1, true)
+	}
+
+	mutating func umbrella(_ h: Int) {
+		trunk(1, h)
+		// two limbs fork up into the crown, then any others lower down
+		if branches > 0 {
+			branch(h - 1, -1, 2, false)
+			branch(h - 1, 1, 2, false)
 		}
-		.buttonStyle(.plain)
-	}
-
-	func addBlock(_ op: LOp) {
-		var list: [LNode] = script.blocks
-		if LogicStudioView.count(list) >= LLimits.maxBlocks { return }
-		LPath.insert(&list, into, LNode(op))
-		b(\.blocks, []).wrappedValue = list
-	}
-
-	// MARK: the script
-
-	func blockList(_ list: [LNode], _ base: [Int]) -> AnyView {
-		return AnyView(VStack(alignment: .leading, spacing: 4) {
-			ForEach(0..<list.count, id: \.self) { i in
-				self.blockRow(list[i], base + [i])
-			}
-		})
-	}
-
-	func blockRow(_ n: LNode, _ path: [Int]) -> AnyView {
-		let sp: LSpec = LSpec.of(n.op)
-		let col: Color = Color(ui: sp.cat.color)
-		return AnyView(VStack(alignment: .leading, spacing: 6) {
-			rowHeader(sp, path)
-			fields(n, path, sp)
-			if sp.inside >= 1 { inner(n.body, path + [0], col, "(empty: choose IN, then add blocks)") }
-			if sp.inside == 2 {
-				Text("else").font(.pixel(12, .bold)).foregroundColor(Color.white)
-				inner(n.alt, path + [1], col, "(empty: choose ELSE, then add blocks)")
-			}
+		let w0: Double = Double(c) + 1.5
+		let x0: Int = Int(floor(cx - w0))
+		let x1: Int = Int(ceil(cx + w0))
+		for dx in x0...x1 {
+			let e: Double = abs(Double(dx) - cx) / w0
+			if e <= 1 { leaf(dx, h + 1, e) }
+			if e <= 0.7 { leaf(dx, h + 2, e + 0.3) }
 		}
-		.padding(8)
-		.background(col.opacity(0.92))
-		.cornerRadius(8))
-	}
-
-	func rowHeader(_ sp: LSpec, _ path: [Int]) -> some View {
-		let dark: Color = Color.black.opacity(0.35)
-		let inTitle: String = isInto(path, 0) ? "IN \u{2713}" : "IN"
-		let elseTitle: String = isInto(path, 1) ? "ELSE \u{2713}" : "ELSE"
-		let hasIn: Bool = sp.inside >= 1
-		let hasElse: Bool = sp.inside == 2
-		return HStack(spacing: 6) {
-			Text(verbatim: sp.title).font(.pixel(13, .bold)).foregroundColor(Color.white)
-			Spacer(minLength: 0)
-			if hasIn { SmallButton(title: inTitle, color: dark) { self.into = path + [0] } }
-			if hasElse { SmallButton(title: elseTitle, color: dark) { self.into = path + [1] } }
-			SmallButton(title: "\u{2191}", color: dark) { self.moveBlock(path, -1) }
-			SmallButton(title: "\u{2193}", color: dark) { self.moveBlock(path, 1) }
-			SmallButton(title: "\u{2715}", color: ModUI.red) { self.removeBlock(path) }
-		}
-	}
-
-	func inner(_ list: [LNode], _ path: [Int], _ col: Color, _ empty: String) -> some View {
-		let none: Bool = list.isEmpty
-		return HStack(alignment: .top, spacing: 6) {
-			Rectangle().fill(col).frame(width: 8)
-			VStack(alignment: .leading, spacing: 4) {
-				blockList(list, path)
-				if none { Text(verbatim: empty).font(.pixel(10, .semibold)).foregroundColor(Color.white.opacity(0.8)) }
+		if branches > 2 {
+			for k in 2..<branches {
+				let side: Int = k % 2 == 0 ? -1 : 1
+				branch(max(2, h / 2 + k - 2), side, 1 + c / 2, true)
 			}
 		}
 	}
 
-	func moveBlock(_ path: [Int], _ d: Int) {
-		mutate { LPath.move(&$0, path, d) }
-	}
-
-	func removeBlock(_ path: [Int]) {
-		if let p = into, p.starts(with: path) { into = nil }
-		mutate { LPath.remove(&$0, path) }
-	}
-
-	func isInto(_ path: [Int], _ part: Int) -> Bool { return into == path + [part] }
-
-	func mutate(_ f: (inout [LNode]) -> Void) {
-		var list: [LNode] = script.blocks
-		f(&list)
-		b(\.blocks, []).wrappedValue = list
-	}
-
-	func edit(_ path: [Int], _ f: (inout LNode) -> Void) {
-		mutate { LPath.update(&$0, path, f) }
-	}
-
-	func setExpr(_ path: [Int], _ arg: Int, _ sub: [Int], _ f: (inout LExpr) -> Void) {
-		edit(path) { n in
-			while n.args.count <= arg { n.args.append(LExpr(0)) }
-			LPath.exprUpdate(&n.args[arg], sub, f)
+	mutating func palm(_ h: Int) {
+		// a trunk that leans as it climbs, with fronds that droop at their ends
+		let side: Int = rng.int(2) == 0 ? -1 : 1
+		var x: Int = 0
+		for dy in 1...h {
+			if dy > h / 2 && dy % 3 == 0 { x += side }
+			put(x, dy, 1)
+			if wide { put(x + 1, dy, 1) }
+		}
+		let right: Int = x + (wide ? 1 : 0)
+		let reach: Int = max(2, c + 1)
+		// fronds along the top, a few pointing up, and their tips drooping on both sides
+		for dx in (x - reach + 1)...(right + reach - 1) {
+			let from: Int = dx < x ? x : right
+			put(dx, h + 1, abs(dx - from) <= 1 ? 3 : 3)
+		}
+		var k: Int = -reach + 2
+		while k <= reach - 2 + (wide ? 1 : 0) {
+			leaf(x + k, h + 2, 0.4)
+			k += 2
+		}
+		for s in [-1, 1] {
+			let from: Int = s < 0 ? x : right
+			leaf(from + s * reach, h, 0.3)
+			leaf(from + s * (reach + 1), h - 1, 0.5)
+			if c >= 3 { leaf(from + s * (reach + 1), h - 2, 0.8) }
 		}
 	}
 
-	// MARK: a block's inputs
+	mutating func willow(_ h: Int) {
+		trunk(1, h)
+		let rx: Double = Double(c) + 1.2
+		let ry: Double = max(1.0, Double(c) * 0.55 + 0.5)
+		let oy: Double = Double(h) + 0.5
+		blob(cx, oy, rx, ry)
+		sideBranches(h, h - 2, false)
+		// strands hang from under the crown, clear of the trunk
+		let x0: Int = Int(floor(cx - rx + 0.5))
+		let x1: Int = Int(ceil(cx + rx - 0.5))
+		if x1 < x0 { return }
+		for dx in x0...x1 {
+			if dx == 0 || (wide && dx == 1) { continue }
+			if rng.double() > dens + (1 - dens) * 0.4 { continue }
+			let a: Double = (Double(dx) - cx) / rx
+			let bottom: Double = oy - ry * sqrt(max(0, 1 - a * a))
+			let len: Int = 1 + rng.int(max(1, h - 1))
+			let y0: Int = Int(bottom.rounded())
+			for k in 0..<len { put(dx, y0 - k, 3) }
+		}
+	}
 
-	func fields(_ n: LNode, _ path: [Int], _ sp: LSpec) -> AnyView {
-		return AnyView(VStack(alignment: .leading, spacing: 4) {
-			ForEach(0..<sp.fields.count, id: \.self) { k in
-				self.field(n, path, sp.fields[k])
+	mutating func bush(_ h: Int) {
+		put(0, 1, 1)
+		let ry: Double = Double(clampI(h / 2, 1, c + 2)) + 0.5
+		blob(0, 0.5, Double(c) + 0.7, ry)
+	}
+
+	mutating func bare(_ h: Int) {
+		trunk(1, h)
+		let n: Int = max(2, branches + 1)
+		let first: Int = rng.int(2) == 0 ? -1 : 1
+		let step: Int = max(1, h / (n + 1))
+		for k in 0..<n {
+			let by: Int = max(2, h - 1 - k * step)
+			let side: Int = k % 2 == 0 ? first : -first
+			branch(by, side, 1 + rng.int(max(1, c + 1)), false)
+		}
+		let r: Int = wide ? 1 : 0
+		put(-1, h + 1, 2)
+		put(1 + r, h + 1, 2)
+		if c >= 2 {
+			put(-2, h + 2, 2)
+			put(2 + r, h + 2, 2)
+		}
+	}
+
+	mutating func painted() {
+		let g: ModTreeGrid = grid
+		if !g.valid { return }
+		let mid: Int = g.w / 2
+		for gy in 0..<g.h {
+			for gx in 0..<g.w {
+				let v: UInt8 = g.at(gx, gy)
+				if v == 0 || v > 3 { continue }
+				put(gx - mid, g.h - gy, v)
 			}
-		})
-	}
-
-	func field(_ n: LNode, _ path: [Int], _ f: LField) -> AnyView {
-		switch f.kind {
-		case .number:
-			return AnyView(LNumBox(label: f.label, value: numBind(path, f.slot), lo: f.lo, hi: f.hi))
-		case .text:
-			return AnyView(ModTextField(label: f.label, text: strBind(path), placeholder: ""))
-		case .choice:
-			let names: [String] = ScriptEditorView.choiceNames(f.list)
-			return labelled(f.label, AnyView(ChoiceRow(options: names, selected: choiceBind(path, f.slot), columns: 4)))
-		case .item:
-			return itemField(n, path, f.label)
-		case .key:
-			return keyField(n, path, f)
-		case .expr:
-			let e: LExpr = f.slot < n.args.count ? n.args[f.slot] : LExpr(0)
-			return AnyView(HStack(spacing: 6) {
-				Text(verbatim: f.label).font(.pixel(10, .bold)).foregroundColor(Color.white.opacity(0.85))
-				exprView(e, path, f.slot, [])
-			})
 		}
 	}
+}
 
-	/// A small label above an input
-	func labelled(_ label: String, _ content: AnyView) -> AnyView {
-		return AnyView(VStack(alignment: .leading, spacing: 2) {
-			Text(verbatim: label).font(.pixel(10, .bold)).foregroundColor(Color.white.opacity(0.85))
-			content
-		})
+/// The mod's tree designs in one chunk of a custom dimension. Each tree that could reach into the chunk
+/// is worked out from the seed alone (where it stands, which design, how tall, its shape), so a tree
+/// across a chunk's edge is the same on both sides. Its cells go only into open air or wild plants.
+func plantTreeDesigns(_ seed0: UInt64, _ infinite: Bool, _ width: Int, _ d: ModDimRT, _ ch: Chunk) {
+	if !d.hasDesigns { return }
+	let H: Int = ch.H
+	let seed: UInt64 = seed0 &+ d.salt
+	let x0: Int = ch.x0
+	for rx in (x0 - treeReach)..<(x0 + chunkW + treeReach) {
+		guard let at = d.designTreeAt(rx, seed0, infinite, width) else { continue }
+		let tr: ModTreeRT = at.0
+		let surf: Int = at.1
+		let cells: [TreeCell] = TreeShapes.cells(tr.def, at.2, hashU(rx, 47, seed))
+		let top: Int = d.def.ceiling ? d.ceilingAt(rx, seed0) + 1 : 1
+		for c in cells {
+			let x: Int = rx + c.dx
+			let lx: Int = x - x0
+			if lx < 0 || lx >= chunkW { continue }
+			if !infinite && (x < 0 || x >= width) { continue }
+			let y: Int = surf - c.dy
+			if y <= top || y >= H - 3 { continue }
+			let old: Tile = ch.get(lx, y)
+			if old != .air && !old.isPlant && !d.plantTiles.contains(old.rawValue) { continue }
+			ch.setLocal(lx, y, tr.tile(c.part))
+		}
+	}
+}
+
+extension ModDimRT {
+	/// The design tree rooted at column x, if one grows there: its design, the ground row and its
+	/// trunk's height. It needs dry ground with no hazard, room under a roof, and a design that grows
+	/// on the region's ground.
+	func designTreeAt(_ x: Int, _ seed0: UInt64, _ infinite: Bool, _ width: Int) -> (ModTreeRT, Int, Int)? {
+		if !infinite && (x < 0 || x >= width) { return nil }
+		let z: ModDimZoneRT = zones[zoneIndex(x)]
+		if z.designs.isEmpty || z.trees <= 0 { return nil }
+		let seed: UInt64 = seed0 &+ salt
+		// one tree at most in each stretch of columns, at least `gap` from the next: a stretch a little
+		// wider than that for many trees, three times as wide for a few
+		let m: Int = max(2, z.gap)
+		let span: Int = z.trees >= 2 ? m + 3 : m * 3
+		let k: Int = floorDiv(x, span)
+		let at: Int = k * span + min(span - m, Int(hash2(k, 41, seed) * Double(span - m + 1)))
+		if x != at || hash2(k, 42, seed) >= (z.trees >= 2 ? 0.9 : 0.7) { return nil }
+		let surf: Int = surfaceAt(x, seed0)
+		if surf <= 12 || surf >= customDimH - 8 { return nil }
+		if def.sea > 0 && surf >= def.sea - 1 { return nil }
+		if hazard != nil && hash2(x, 5, seed) < clampD(def.hazardChance, 0, 0.5) { return nil }
+		guard let tr = pickDesign(z, z.ground, hash2(x, 43, seed)) else { return nil }
+		let lo: Int = clampI(tr.def.minHeight, 1, 24)
+		let hi: Int = max(lo, clampI(tr.def.maxHeight, 1, 24))
+		let h: Int = min(hi, lo + Int(hash2(x, 44, seed) * Double(hi - lo + 1)))
+		let roof: Int = def.ceiling ? ceilingAt(x, seed0) + 2 : 2
+		if surf - tr.height(h) <= roof { return nil }
+		return (tr, surf, h)
 	}
 
-	func choiceBind(_ path: [Int], _ slot: Int) -> Binding<Int> {
-		return Binding<Int>(get: { Int(self.num(path, slot)) }, set: { (v: Int) in
-			let d: Double = Double(v)
-			self.edit(path) { n in
-				if slot == 0 { n.a = d } else if slot == 1 { n.b = d } else { n.c = d }
+	/// One of a region's designs, by their weights, among those that grow on this ground (r: 0 ..< 1)
+	func pickDesign(_ z: ModDimZoneRT, _ ground: Tile, _ r: Double) -> ModTreeRT? {
+		var total: Double = 0
+		for t in z.designs where t.ground == nil || t.ground == ground { total += max(0.1, t.def.weight) }
+		if total <= 0 { return nil }
+		var left: Double = r * total
+		var pick: ModTreeRT? = nil
+		for t in z.designs where t.ground == nil || t.ground == ground {
+			pick = t
+			left -= max(0.1, t.def.weight)
+			if left < 0 { break }
+		}
+		return pick
+	}
+}
+
+extension ModRuntime {
+	func dimRT(_ d: Dimension) -> ModDimRT? {
+		let s: Int = d.customSlot
+		if s < 0 || s >= dimSlots.count { return nil }
+		return dimSlots[s]
+	}
+
+	/// Gives each custom dimension one of the three slots (the world's own first, so its land stays
+	/// where it is), makes its creature rules, and adds its way in to the summonings
+	func buildDims(_ world: ModWorldInfo?) {
+		dimSlots = [ModDimRT?](repeating: nil, count: 3)
+		dimSlotKey = [String?](repeating: nil, count: 3)
+		var taken: Set<Int> = []
+		if let w = world {
+			for (k, s) in w.dims where s >= 0 && s < 3 {
+				dimSlotKey[s] = k
+				taken.insert(s)
 			}
-		})
-	}
-
-	func itemField(_ n: LNode, _ path: [Int], _ label: String) -> AnyView {
-		let name: String = n.item.map { ModPreview.name($0, s.catalog) } ?? "none"
-		let line: String = joinText(label, ": ", name)
-		return AnyView(HStack(spacing: 8) {
-			Text(verbatim: line).font(.pixel(11, .bold)).foregroundColor(Color.white)
-			SmallButton(title: "CHOOSE", color: Color.black.opacity(0.35)) { self.itemPick = path }
-		})
-	}
-
-	func num(_ path: [Int], _ slot: Int) -> Double {
-		guard let n = LPath.get(script.blocks, path) else { return 0 }
-		return slot == 0 ? n.a : (slot == 1 ? n.b : n.c)
-	}
-
-	func numBind(_ path: [Int], _ slot: Int) -> Binding<Double> {
-		return Binding<Double>(get: { self.num(path, slot) }, set: { v in self.edit(path) { n in
-			if slot == 0 { n.a = v } else if slot == 1 { n.b = v } else { n.c = v }
-		} })
-	}
-
-	func strBind(_ path: [Int]) -> Binding<String> {
-		return Binding<String>(get: { LPath.get(self.script.blocks, path)?.s ?? "" }, set: { v in self.edit(path) { $0.s = String(v.prefix(80)) } })
-	}
-
-	static func choiceNames(_ list: Int) -> [String] {
-		switch list {
-		case 0: return LReporters.soundNames
-		case 1: return ModEffectKind.allCases.map { $0.name }
-		default: return ModGameShots.names
+		}
+		for p in packs {
+			for d in p.dims where !disabled.contains(p.key(d.id)) {
+				let k: String = p.key(d.id)
+				var slot: Int = dimSlotKey.firstIndex { $0 == k } ?? -1
+				if slot < 0 {
+					guard let free = (0..<3).first(where: { !taken.contains($0) }) else {
+						var r = ModReport()
+						r.add(1, p.name, joinText("Dimension \u{201C}", d.name, "\u{201D}"), "A world holds three custom dimensions; this one was left out.")
+						reports.append(r)
+						continue
+					}
+					slot = free
+					taken.insert(free)
+					dimSlotKey[slot] = k
+				}
+				let designs: [ModTree] = p.trees.filter { !disabled.contains(p.key($0.id)) }
+				let rt = ModDimRT(key: k, slot: slot, def: d, resolve: { key in ModGround.resolve(key, self) }, trees: designs,
+								  treeTile: { (key: String, role: Int) -> Tile? in self.treeTile(key, role) })
+				rt.modName = p.name
+				rt.spawnRules = dimSpawnRules(d)
+				dimSlots[slot] = rt
+				// its way in: a summoning that takes the player there
+				let e: ModSummon = d.entry
+				if e.enabled {
+					var cells: [(Int, Int, Tile?)] = []
+					var bad: Bool = false
+					if e.usesPattern {
+						for y in 0..<e.pattern.h {
+							for x in 0..<e.pattern.w {
+								let c: String = e.pattern.cell(x, y)
+								if c.isEmpty { continue }
+								if c == "air" {
+									cells.append((x, y, nil))
+									continue
+								}
+								guard let t = ModGround.resolve(c, self), t != .air else {
+									bad = true
+									continue
+								}
+								cells.append((x, y, t))
+							}
+						}
+						if !cells.contains(where: { $0.2 != nil }) { bad = true }
+					}
+					if e.usesItem && e.item == nil { bad = true }
+					if !bad { summons.append(ModSummonRT(slot: -1, key: k, def: e, cells: cells, dimSlot: slot)) }
+				}
+			}
 		}
 	}
 
-	func keyField(_ n: LNode, _ path: [Int], _ f: LField) -> AnyView {
-		switch f.list {
-		case 1: return blockField(n, path, f.label)
-		case 3: return AnyView(ModTextField(label: f.label, text: strBind(path), placeholder: "open the gate"))
+	/// A dimension's creatures as rules the spawner understands
+	func dimSpawnRules(_ d: ModDimension) -> [SpawnRule] {
+		var out: [SpawnRule] = []
+		for s in d.spawns {
+			var kind: MobKind = .custom
+			var slot: Int = -1
+			if let sl = mobSlot[s.creature] {
+				slot = sl
+			} else if let k = MobKind.allCases.first(where: { $0 != .custom && $0 != .villager && mobDef($0).name == s.creature }) {
+				kind = k
+			} else {
+				continue
+			}
+			let when: SpawnWhen = s.when == 1 ? .day : (s.when == 2 ? .night : .any)
+			var places: [SpawnPlace] = []
+			if s.place == 0 || s.place == 2 { places.append(.surface) }
+			if s.place == 1 || s.place == 2 { places.append(.cave) }
+			for pl in places {
+				var r = SpawnRule(kind: kind, weight: max(0.1, s.weight), place: pl, when: when, biomes: [], group: clampI(s.group, 1, 4))
+				r.slot = slot
+				r.maxNearby = slot >= 0 ? 6 : 99
+				if slot >= 0, let m = mob(slot) { r.sky = m.mdef.flying }
+				out.append(r)
+			}
+		}
+		return out
+	}
+
+	/// A content dimension number for a mod's ore or structure: the game's own, or a custom one by key
+	/// (-1: its dimension is not in this world)
+	func dimNumber(_ dim: Int, _ key: String) -> Int {
+		if key.isEmpty { return dim }
+		guard let s = dimSlotKey.firstIndex(where: { $0 == key }), dimSlots[s] != nil else { return -1 }
+		return 2 + s
+	}
+}
+
+extension Game {
+	/// The custom dimension the player is in (nil: the Overworld, the Umbral Realm, or its mod is off)
+	var customDim: ModDimRT? { return world.dim.isCustom ? ModRuntime.shared.dimRT(world.dim) : nil }
+
+	/// The ground row at x in a custom dimension
+	func customSurface(_ x: Int) -> Int {
+		guard let d = customDim else { return world.surfaceY(x) }
+		return d.surfaceAt(x, gen.seed)
+	}
+
+	/// Takes the player into a custom dimension (remembering where they came from)
+	func enterCustomDim(_ r: ModDimRT) {
+		if world.dim == r.dim { return }
+		if !world.dim.isCustom { dimReturn = DimReturn(dim: world.dim.rawValue, x: pb.x, y: pb.y) }
+		let spot: (Double, Double) = r.arrival(gen.seed)
+		travelTo(r.dim, arriveX: spot.0, arriveY: spot.1, silent: true)
+		if r.def.returnGate { placeReturnGate(r) }
+		say(r.def.arriveMessage.isEmpty ? joinText("You step into ", r.def.name, ".") : r.def.arriveMessage, 4.0)
+		addShake(0.4)
+		sfx(.portal, 0.8)
+		spawnParticles(pb.x, pb.y - 1.0, 0xC8A0FF, 24, 5.0, 0.8, -2)
+		if !logicRT.isEmpty { fireLogic(.enterDim, text: r.key) }
+	}
+
+	/// Back to where the player entered from (the Overworld's spawn if that is unknown)
+	func leaveCustomDim() {
+		let back: DimReturn = dimReturn ?? DimReturn(dim: 0, x: spawnX, y: spawnY)
+		var d: Dimension = Dimension(rawValue: back.dim) ?? .overworld
+		if d.isCustom { d = .overworld }
+		dimReturn = nil
+		travelTo(d, arriveX: back.x, arriveY: back.y, silent: true)
+		say(d == .overworld ? "You return to the Overworld." : "You return to the Umbral Realm.", 3.0)
+		addShake(0.3)
+		sfx(.portal, 0.7)
+	}
+
+	/// The way back: a gate on the ground beside where the player arrived
+	func placeReturnGate(_ r: ModDimRT) {
+		for dx in [2, -2, 3, -3, 4] {
+			let x: Int = Int(floor(pb.x)) + dx
+			var y: Int = Int(floor(pb.y))
+			var k: Int = 0
+			while k < 6 && !world.tile(x, y).solid { y += 1; k += 1 }
+			while k < 12 && world.tile(x, y - 1).solid { y -= 1; k += 1 }
+			if world.tile(x, y).solid && world.tile(x, y - 1) == .air {
+				world.set(x, y - 1, r.gate)
+				return
+			}
+		}
+	}
+
+	/// A tap on the gate of the custom dimension the player is in takes them back
+	func tryReturnGate() -> Bool {
+		guard let d = customDim, d.def.returnGate else { return false }
+		let tx: Int = Int(floor(aimX))
+		let ty: Int = Int(floor(aimY))
+		if world.tile(tx, ty) != d.gate || !inReach(Double(tx) + 0.5, Double(ty) + 0.5) { return false }
+		leaveCustomDim()
+		return true
+	}
+
+	/// The light of a custom dimension's day
+	func customDayFactor(_ d: ModDimRT) -> Double {
+		let t: Double = d.def.cycle ? timeOfDay : clampD(d.def.fixedTime, 0, 1)
+		if t < 0.50 { return 1.0 }
+		if t < 0.58 { return 1.0 - smooth((t - 0.50) / 0.08) }
+		if t < 0.92 { return 0.0 }
+		return smooth((t - 0.92) / 0.08)
+	}
+
+	/// A custom dimension's weather where it can fall (under the open sky): set by its maker
+	func customWeather(_ d: ModDimRT, _ x: Double, _ y: Double) -> LocalWeather {
+		var L = LocalWeather()
+		L.chill = clampD(d.def.chill, 0, 1)
+		L.hot = d.def.hot
+		// nothing falls under a rock roof
+		if d.def.ceiling { return L }
+		switch d.def.weather {
+		case 1:
+			L.precip = 0.3
+			L.cloud = 0.6
+		case 2:
+			L.precip = 0.75
+			L.cloud = 0.9
+		case 3:
+			L.precip = 0.85
+			L.cloud = 1.0
+			L.thunder = 0.6
+			L.wind = 4.0 * sin(clock * 0.3)
+		case 4:
+			L.precip = 0.6
+			L.cloud = 0.85
+			L.snow = true
+			L.chill = max(L.chill, 0.55)
+		case 5:
+			L.cloud = 0.4
+			L.wind = 8.0 * (0.8 + 0.4 * sin(clock * 0.5 + x * 0.02))
+		case 6:
+			L.cloud = 0.75
+			L.precip = 0.15
+			L.wind = 14.0 * (0.75 + 0.5 * sin(clock * 0.4 + x * 0.015))
+		case 7:
+			L.cloud = 0.95
+			L.precip = 0.55
+			L.hail = 1.0
+			L.thunder = 2.0
+			L.wind = 5.0 * sin(clock * 0.3)
+		case 8:
+			L.cloud = 1.0
+			L.precip = 1.0
+			L.snow = true
+			L.chill = 1.0
+			L.wind = 13.0 * (0.8 + 0.3 * sin(clock * 0.5))
 		default: break
 		}
-		let opts: ([String], [String]) = keyOptions(f.list)
-		if opts.0.isEmpty {
-			let what: String = ScriptEditorView.missingWhat(f.list)
-			let line: String = joinText(f.label, ": ", what)
-			return AnyView(Text(verbatim: line).font(.pixel(10, .semibold)).foregroundColor(Color.white))
+		if L.chill >= 0.5 && L.precip > 0 { L.snow = true }
+		L.wet = L.snow ? 0 : L.precip
+		L.fog = L.precip * 0.3
+		return L
+	}
+
+	/// Visiting a dimension from the Mod Test tools (by slot)
+	@discardableResult
+	func testVisitDim(_ slot: Int) -> String {
+		guard let r = ModRuntime.shared.dimSlots.indices.contains(slot) ? ModRuntime.shared.dimSlots[slot] : nil else { return "That dimension is not in this world." }
+		if world.dim == r.dim {
+			leaveCustomDim()
+			return "Back from the dimension."
 		}
-		return labelled(f.label, AnyView(ChoiceRow(options: opts.0, selected: keyBind(path, opts.1), columns: 4)))
+		enterCustomDim(r)
+		return joinText("Visiting ", r.def.name, ".")
 	}
+}
 
-	static func missingWhat(_ list: Int) -> String {
-		if list == 4 { return "Add a variable in the Logic Studio list first." }
-		if list == 5 { return "Make a group first (+ NEW GROUP)." }
-		return "Make one in this mod first."
-	}
-
-	/// What a key input may be set to: (names, keys)
-	func keyOptions(_ list: Int) -> ([String], [String]) {
-		var names: [String] = []
-		var keys: [String] = []
-		switch list {
-		case 0:
-			for m in s.mod.mobs {
-				names.append(m.name)
-				keys.append(s.mod.key(m.id))
+extension WorldRenderer {
+	/// The sky of a custom dimension: its colours by day and night, stars, sun and moon, and motes
+	static func drawCustomSky(_ ctx: inout GraphicsContext, _ W: Double, _ H: Double, _ g: Game, _ v: View2D, _ d: ModDimRT) {
+		let full: CGRect = mkRect(0, 0, W, H)
+		let day: Double = d.def.ceiling ? 0 : g.dayFactor
+		let def: ModDimension = d.def
+		if def.ceiling {
+			vGradient(&ctx, full, [rgbColor(shadeRGB(def.nightTop, 0.6)), rgbColor(def.nightBottom)], 0, H)
+		} else {
+			let top: UInt32 = mixRGB(def.nightTop, def.skyTop, day)
+			let bot: UInt32 = mixRGB(def.nightBottom, def.skyBottom, day)
+			vGradient(&ctx, full, [rgbColor(top), rgbColor(bot)], 0, H)
+			let cover: Double = g.wxHere.cloud
+			if def.stars && day < 0.6 {
+				let a: Double = (0.6 - day) / 0.6 * (1.0 - cover * 0.8)
+				var path: Path = Path()
+				var i: Int = 0
+				while i < 70 {
+					let x: Double = hash2(i, 1, 9) * W
+					let y: Double = hash2(i, 2, 9) * H * 0.6
+					path.addRect(mkRect(x, y, i % 7 == 0 ? 3.0 : 2.0, i % 7 == 0 ? 3.0 : 2.0))
+					i += 1
+				}
+				ctx.fill(path, with: .color(Color.white.opacity(a * (0.75 + 0.25 * sin(g.clock * 2.0)))))
 			}
-			for k in ScriptEditorView.gameCreatures {
-				names.append(mobDef(k).name)
-				keys.append(mobDef(k).name)
-			}
-		case 2:
-			names.append("Game shot")
-			keys.append("")
-			for p in s.mod.projectiles {
-				names.append(p.name)
-				keys.append(s.mod.key(p.id))
-			}
-		case 4:
-			for v in s.mod.variables {
-				names.append(v)
-				keys.append(v)
-			}
-		case 5:
-			for g in s.mod.scripts where g.event == .group && g.id != id {
-				names.append(g.name)
-				keys.append(s.mod.key(g.id))
-			}
-		default:
-			for d in s.mod.dims {
-				names.append(d.name)
-				keys.append(s.mod.key(d.id))
+			let t: Double = def.cycle ? g.timeOfDay : clampD(def.fixedTime, 0, 1)
+			let ang: Double = t < 0.5 ? (t / 0.5) : ((t - 0.5) / 0.5)
+			let bx: Double = (0.1 + 0.8 * ang) * W
+			let by: Double = H * (0.55 - 0.42 * sin(ang * Double.pi))
+			let r: Double = max(10.0, v.tp * 1.6)
+			// a mod's own sun and moon, each in place of the round one
+			let night: UInt32 = mixRGB(def.nightTop, def.skyTop, day)
+			if def.sun, let sb = def.sunBody { drawSkyBody(&ctx, W, H, g.clock, sb, t, false, r * 2.0, true, night) }
+			if def.moon, let mb = def.moonBody { drawSkyBody(&ctx, W, H, g.clock, mb, t, true, r * 1.6, true, night) }
+			if t < 0.5 && def.sun && def.sunBody == nil {
+				ctx.fill(Path(ellipseIn: mkRect(bx - r * 1.6, by - r * 1.6, r * 3.2, r * 3.2)), with: .color(rgbColor(def.sunColor).opacity(0.18)))
+				ctx.fill(Path(ellipseIn: mkRect(bx - r, by - r, r * 2.0, r * 2.0)), with: .color(rgbColor(def.sunColor)))
+			} else if t >= 0.5 && def.moon && def.moonBody == nil {
+				ctx.fill(Path(ellipseIn: mkRect(bx - r * 0.8, by - r * 0.8, r * 1.6, r * 1.6)), with: .color(Color(hex: 0xE8ECF8)))
+				ctx.fill(Path(ellipseIn: mkRect(bx - r * 0.3, by - r * 0.9, r * 1.4, r * 1.4)), with: .color(rgbColor(mixRGB(def.nightTop, def.skyTop, day)).opacity(0.85)))
 			}
 		}
-		return (names, keys)
+		// drifting motes, each in its own 12-block cell of the world: they stay put as the camera moves
+		// (fireflies wander around their spot; embers, snow, ash and spores drift through their cell)
+		if def.ambient > 0 {
+			let cols: [UInt32] = [0, 0xFF8A3A, 0xF4F8FF, 0xD8F070, 0x8A8A8A, 0xB0E0A0]
+			let col: UInt32 = cols[clampI(def.ambient, 0, cols.count - 1)]
+			var path: Path = Path()
+			let rise: Double = def.ambient == 2 || def.ambient == 4 ? -1.0 : 1.0
+			let flies: Bool = def.ambient == 3
+			let cell: Double = 12.0
+			let v: View2D = View2D(tp: Double(g.tilePx), left: g.camX - W / Double(g.tilePx) * 0.5, top: g.camY - H / Double(g.tilePx) * 0.5, wTiles: W / Double(g.tilePx), hTiles: H / Double(g.tilePx))
+			let cx0: Int = Int(floor(v.left / cell)), cx1: Int = Int(floor((v.left + v.wTiles) / cell))
+			let cy0: Int = Int(floor(v.top / cell)), cy1: Int = Int(floor((v.top + v.hTiles) / cell))
+			for cy in cy0...max(cy0, cy1) {
+				for cx in cx0...max(cx0, cx1) {
+					for k in 0..<3 {
+						let id: Int = cx &* 7919 &+ cy &* 104729 &+ k
+						let sp: Double = 0.4 + hash2(id, 31, 3) * 0.8
+						var ox: Double = hash2(id, 32, 3) * cell
+						var oy: Double = hash2(id, 33, 3) * cell
+						if flies {
+							ox += sin(g.clock * 0.5 + Double(k) * 2.1) * 0.8
+							oy += sin(g.clock * 0.8 + Double(k) * 1.3) * 0.5
+						} else {
+							ox = (ox + sin(g.clock * 0.3 + Double(k)) * 0.6)
+							oy = (oy - rise * g.clock * sp).truncatingRemainder(dividingBy: cell)
+							if oy < 0 { oy += cell }
+						}
+						let wx: Double = Double(cx) * cell + ox
+						let wy: Double = Double(cy) * cell + oy
+						let s: Double = flies ? 3.0 : 2.0
+						path.addRect(mkRect(v.sx(wx), v.sy(wy), s, s))
+					}
+				}
+			}
+			let a: Double = flies ? 0.5 + 0.5 * sin(g.clock * 3.0) : 0.75
+			ctx.fill(path, with: .color(rgbColor(col).opacity(a)))
+		}
+	}
+}
+
+/// A picture of a custom dimension for its editor: six chunks of its land from the sky to the
+/// bottom, made by the same generator the game uses (its mod's blocks drawn in their own colours)
+enum ModDimPreview {
+	static let seed: UInt64 = 7_771_234
+	static let chunks: Int = 6
+
+	static func render(_ d: ModDimension, _ p: ModPack) -> PixelBuf {
+		// the mod's blocks stand in as spare tile numbers, coloured from their art
+		var proxy: [String: Tile] = [:]
+		var colour: [UInt8: UInt32] = [:]
+		for (i, b) in p.blocks.prefix(ModLimits.blockSlots).enumerated() {
+			guard let t = Tile(rawValue: Tile.modBase + UInt8(i)) else { continue }
+			proxy[p.key(b.id)] = t
+			colour[t.rawValue] = averageColor(b.art)
+		}
+		let rt = ModDimRT(key: p.key(d.id), slot: 0, def: d, resolve: { k in
+			if k.hasPrefix("tile:") {
+				guard let n = Int(k.dropFirst(5)) else { return nil }
+				return Tile(rawValue: UInt8(clampI(n, 0, 255)))
+			}
+			return proxy[k]
+		}, trees: p.trees)
+		let H: Int = customDimH
+		let rows: Int = (H + 1) / 2
+		var b = PixelBuf(w: chunks * chunkW, h: rows)
+		for c in 0..<chunks {
+			let ch = Chunk(cx: c - chunks / 2, H: H)
+			fillCustomChunk(seed, true, 0, rt, ch)
+			for lx in 0..<chunkW {
+				for r in 0..<rows {
+					let y: Int = r * 2
+					let t: Tile = ch.get(lx, y)
+					var col: UInt32 = 0
+					if t == .air {
+						if d.ceiling && y < ch.ceilY[lx] + 2 { col = shadeRGB(d.nightBottom, 0.8) }
+						else if y < ch.surf[lx] { col = mixRGB(d.skyTop, d.skyBottom, Double(y) / Double(max(1, ch.surf[lx]))) }
+						else { col = 0x16161C }
+					} else if t == .water {
+						col = 0x2E5FD0
+					} else if t == .lava {
+						col = 0xE8601A
+					} else if let mc = colour[t.rawValue] {
+						col = mc
+					} else {
+						col = shadeRGB(t.def.colors.first ?? 0x808080, 0.85)
+					}
+					b.set(c * chunkW + lx, r, col)
+				}
+			}
+		}
+		return b
 	}
 
-	static let gameCreatures: [MobKind] = BossPhasesPage.gameHelpers + [MobKind.pig, .cow, .wolf]
+	static func averageColor(_ p: ModPixels) -> UInt32 {
+		var r: Int = 0
+		var g: Int = 0
+		var bl: Int = 0
+		var n: Int = 0
+		for y in 0..<p.h {
+			for x in 0..<p.w {
+				let c: UInt32 = p.argb(x, y)
+				if c >> 24 < 128 { continue }
+				r += Int((c >> 16) & 0xFF)
+				g += Int((c >> 8) & 0xFF)
+				bl += Int(c & 0xFF)
+				n += 1
+			}
+		}
+		if n == 0 { return 0x808080 }
+		return (UInt32(r / n) << 16) | (UInt32(g / n) << 8) | UInt32(bl / n)
+	}
+}
 
-	func keyBind(_ path: [Int], _ keys: [String]) -> Binding<Int> {
-		return Binding<Int>(get: {
-			let cur: String = LPath.get(self.script.blocks, path)?.s ?? ""
-			return keys.firstIndex(of: cur) ?? -1
-		}, set: { (v: Int) in
-			let k: String = keys[clampI(v, 0, keys.count - 1)]
-			self.edit(path) { $0.s = k }
-		})
+extension ModValidator {
+	/// One summoning's settings kept in range (a creature's, or a dimension's way in); returns what was wrong
+	static func fixSummon(_ s: inout ModSummon, _ p: ModPack, _ known: [String: String]) -> [String] {
+		var notes: [String] = []
+		let ownItems: Set<String> = Set(p.items.map { p.key($0.id) } + p.infusions.map { p.key($0.id) })
+		let ownBlocks: Set<String> = Set(p.blocks.map { p.key($0.id) })
+		let ownDims: Set<String> = Set(p.dims.map { p.key($0.id) })
+		s.message = String(s.message.prefix(80))
+		s.time = clampI(s.time, 0, 2)
+		s.weather = clampI(s.weather, 0, 4)
+		s.place = clampI(s.place, 0, 2)
+		s.appear = clampI(s.appear, 0, 1)
+		s.biomes = Array(Set(s.biomes.filter { Biome(rawValue: $0) != nil })).sorted()
+		s.dims = Array(Set(s.dims.filter { $0 >= 0 && $0 <= 1 })).sorted()
+		s.dimKeys = Array(s.dimKeys.filter { ownDims.contains($0) || known[$0] == "dimension" }.prefix(3))
+		var pt: ModPattern = s.pattern
+		pt.w = clampI(pt.w, 1, ModPattern.maxSide)
+		pt.h = clampI(pt.h, 1, ModPattern.maxSide)
+		var cells: [String] = Array(pt.cells.prefix(pt.w * pt.h))
+		while cells.count < pt.w * pt.h { cells.append("") }
+		var broken: Bool = false
+		for j in cells.indices {
+			let key: String = cells[j]
+			if key.isEmpty || key == "air" { continue }
+			if key.hasPrefix("tile:") {
+				if let n = Int(key.dropFirst(5)), n >= 0 && n <= 255, let t = Tile(rawValue: UInt8(n)), t != .air, !t.isMod { continue }
+			} else if ownBlocks.contains(key) || known[key] == "block" {
+				continue
+			}
+			cells[j] = ""
+			broken = true
+		}
+		pt.cells = cells
+		s.pattern = pt
+		if broken { notes.append("A block in a shape does not exist; that cell now takes anything.") }
+		if s.usesPattern && pt.blockCells == 0 && s.enabled {
+			notes.append("A way that uses a shape needs at least one block in it; it is switched off.")
+			s.enabled = false
+		}
+		if s.usesItem {
+			if let it = s.item, case .custom(let key) = it, !ownItems.contains(key) && known[key] != "item" { s.item = nil }
+			if s.item == nil && s.enabled {
+				notes.append("A way that uses an item needs an item that exists; it is switched off.")
+				s.enabled = false
+			}
+		}
+		return notes
 	}
 
-	func blockField(_ n: LNode, _ path: [Int], _ label: String) -> AnyView {
-		let name: String = n.s.isEmpty ? "none" : ModGround.name(n.s, s.mod)
-		let line: String = joinText(label, ": ", name)
-		return AnyView(HStack(spacing: 8) {
-			Text(verbatim: line).font(.pixel(11, .bold)).foregroundColor(Color.white)
-			SmallButton(title: "CHOOSE", color: Color.black.opacity(0.35)) { self.blockPick = path }
-		})
+	/// Custom dimensions: numbers in range, blocks and creatures real, a way in and a way back
+	static func checkDims(_ p: inout ModPack, _ mn: String, _ sb: Bool, _ known: [String: String], _ r: inout ModReport) {
+		p.skySun?.clamp()
+		p.skyMoon?.clamp()
+		checkTrees(&p, mn, known, &r)
+		if p.dims.count > 3 {
+			r.add(1, mn, "Mod", "Only 3 dimensions fit in one mod; the rest were left out.")
+			p.dims = Array(p.dims.prefix(3))
+		}
+		let ownBlocks: Set<String> = Set(p.blocks.map { p.key($0.id) })
+		let ownMobs: Set<String> = Set(p.mobs.map { p.key($0.id) })
+		let gameNames: Set<String> = Set(MobKind.allCases.filter { $0 != .custom && $0 != .villager }.map { mobDef($0).name })
+		var used: Set<String> = Set(p.blocks.map { $0.id } + p.items.map { $0.id } + p.mobs.map { $0.id } + p.infusions.map { $0.id })
+		func c(_ v: Double, _ lo: Double, _ hi: Double, _ d: Double) -> Double { return clampD(v.isFinite ? v : d, lo, hi) }
+		func block(_ k: String, _ d: String, _ allowEmpty: Bool) -> String {
+			if k.isEmpty { return allowEmpty ? "" : d }
+			if k.hasPrefix("tile:") {
+				if let n = Int(k.dropFirst(5)), n > 0 && n <= 255, let t = Tile(rawValue: UInt8(n)), !t.isMod, t != .air { return k }
+				return allowEmpty ? "" : d
+			}
+			if ownBlocks.contains(k) || known[k] == "block" { return k }
+			return allowEmpty ? "" : d
+		}
+		for i in p.dims.indices {
+			var d: ModDimension = p.dims[i]
+			if d.id.isEmpty || used.contains(d.id) { d.id = joinText("dim", String(i + 1), "x", String(used.count)) }
+			used.insert(d.id)
+			let place: String = joinText("Dimension \u{201C}", d.name, "\u{201D}")
+			if d.name.trimmingCharacters(in: .whitespaces).isEmpty { d.name = "Dimension" }
+			d.name = String(d.name.prefix(32))
+			d.desc = String(d.desc.prefix(200))
+			d.arriveMessage = String(d.arriveMessage.prefix(80))
+			d.light = c(d.light, 0, 1, 0.8)
+			d.fixedTime = c(d.fixedTime, 0, 1, 0.25)
+			d.sunBody?.clamp()
+			d.moonBody?.clamp()
+			d.ambient = clampI(d.ambient, 0, ModDimText.ambients.count - 1)
+			d.weather = clampI(d.weather, 0, ModDimText.weathers.count - 1)
+			d.chill = c(d.chill, 0, 1, 0)
+			d.surface = clampI(d.surface, d.ceiling ? 80 : 40, 260)
+			d.hills = c(d.hills, 0, 40, 12)
+			d.roughness = c(d.roughness, 0.2, 3, 1)
+			d.mountains = c(d.mountains, 0, 1, 0)
+			d.caves = c(d.caves, 0, 1, 0.4)
+			d.islands = c(d.islands, 0, 1, 0)
+			d.sea = d.sea <= 0 ? 0 : clampI(d.sea, 60, 280)
+			d.liquid = clampI(d.liquid, 0, 1)
+			d.stone = block(d.stone, ModGround.key(.stone), false)
+			if d.zones.isEmpty { d.zones = [ModDimZone()] }
+			if d.zones.count > 4 {
+				r.add(1, mn, place, "Only 4 regions fit; the rest were left out.")
+				d.zones = Array(d.zones.prefix(4))
+			}
+			for k in d.zones.indices {
+				var z: ModDimZone = d.zones[k]
+				z.name = String(z.name.prefix(24))
+				if Biome(rawValue: z.biome) == nil { z.biome = Biome.plains.rawValue }
+				z.ground = block(z.ground, ModGround.key(.grass), false)
+				z.filler = block(z.filler, ModGround.key(.dirt), false)
+				z.plant = block(z.plant, "", true)
+				z.plantChance = c(z.plantChance, 0, 0.8, 0.1)
+				z.trees = clampI(z.trees, 0, 2)
+				z.log = block(z.log, ModGround.key(.log), false)
+				z.leaves = block(z.leaves, ModGround.key(.leaves), false)
+				var kinds: [String] = []
+				for tid in z.treeKinds where !kinds.contains(tid) && p.trees.contains(where: { $0.id == tid }) { kinds.append(tid) }
+				z.treeKinds = Array(kinds.prefix(ModTree.maxDesigns))
+				d.zones[k] = z
+			}
+			d.zoneWidth = clampI(d.zoneWidth, 40, 2000)
+			d.hazard = block(d.hazard, "", true)
+			d.hazardChance = c(d.hazardChance, 0, 0.3, 0.02)
+			if d.spawns.count > 8 {
+				r.add(1, mn, place, "Only 8 kinds of creature fit; the rest were left out.")
+				d.spawns = Array(d.spawns.prefix(8))
+			}
+			var keep: [ModDimSpawn] = []
+			for var s in d.spawns {
+				if !gameNames.contains(s.creature) && !ownMobs.contains(s.creature) && known[s.creature] != "mob" {
+					r.add(1, mn, place, "A creature it spawns does not exist; it was left out.")
+					continue
+				}
+				s.place = clampI(s.place, 0, 2)
+				s.when = clampI(s.when, 0, 2)
+				s.weight = c(s.weight, 0.1, 20, 5)
+				s.group = clampI(s.group, 1, 4)
+				keep.append(s)
+			}
+			d.spawns = keep
+			d.gateBlock = block(d.gateBlock, "", true)
+			if d.gateBlock.hasPrefix("tile:") { d.gateBlock = "" }
+			for n in fixSummon(&d.entry, p, known) { r.add(1, mn, place, n) }
+			if !d.entry.enabled { r.add(1, mn, place, "It has no way in that works yet: players can only reach it from the Mod Test tools.") }
+			if !d.entry.usesItem && !d.returnGate {
+				d.returnGate = true
+				r.add(1, mn, place, "Without an item to use again, the way back is the gate; it was switched on.")
+			}
+			p.dims[i] = d
+		}
+	}
+}
+
+extension ModValidator {
+	/// A mod's tree designs kept in range: blocks that exist (never air or a liquid), sizes the generator
+	/// can grow, a painted design of a size that fits
+	static func checkTrees(_ p: inout ModPack, _ mn: String, _ known: [String: String], _ r: inout ModReport) {
+		if p.trees.count > ModTree.maxDesigns {
+			r.add(1, mn, "Mod", joinText("Only ", String(ModTree.maxDesigns), " tree designs fit in one mod; the rest were left out."))
+			p.trees = Array(p.trees.prefix(ModTree.maxDesigns))
+		}
+		let ownBlocks: Set<String> = Set(p.blocks.map { p.key($0.id) })
+		var used: Set<String> = Set(p.blocks.map { $0.id } + p.items.map { $0.id } + p.mobs.map { $0.id } + p.infusions.map { $0.id } + p.dims.map { $0.id })
+		func block(_ k: String, _ d: String, _ allowEmpty: Bool) -> String {
+			if k.isEmpty { return allowEmpty ? "" : d }
+			if k.hasPrefix("tile:") {
+				if let n = Int(k.dropFirst(5)), n > 0 && n <= 255, let t = Tile(rawValue: UInt8(n)), !t.isMod, t != .air, !t.liquid { return k }
+				return allowEmpty ? "" : d
+			}
+			if ownBlocks.contains(k) || known[k] == "block" { return k }
+			return allowEmpty ? "" : d
+		}
+		for i in p.trees.indices {
+			var t: ModTree = p.trees[i]
+			if t.id.isEmpty || used.contains(t.id) { t.id = joinText("tree", String(i + 1), "x", String(used.count)) }
+			used.insert(t.id)
+			if t.name.trimmingCharacters(in: .whitespaces).isEmpty { t.name = "Tree" }
+			t.name = String(t.name.prefix(24))
+			let place: String = joinText("Tree \u{201C}", t.name, "\u{201D}")
+			let trunk0: String = t.trunk
+			let leaves0: String = t.leaves
+			t.trunk = block(t.trunk, ModGround.key(.log), false)
+			t.branch = block(t.branch, "", true)
+			t.leaves = block(t.leaves, ModGround.key(.leaves), false)
+			t.ground = block(t.ground, "", true)
+			if t.trunk != trunk0 || t.leaves != leaves0 { r.add(1, mn, place, "A block it was made of does not exist (or is a liquid); the game's log and leaves stand in.") }
+			t.minHeight = clampI(t.minHeight, 1, 24)
+			t.maxHeight = clampI(t.maxHeight, t.minHeight, 24)
+			t.crown = clampI(t.crown, 0, 6)
+			t.branches = clampI(t.branches, 0, 4)
+			t.density = clampD(t.density.isFinite ? t.density : 0.9, 0.2, 1)
+			t.weight = clampD(t.weight.isFinite ? t.weight : 1, 0.1, 20)
+			var g: ModTreeGrid = t.grid
+			if !g.valid {
+				g = g.cells.isEmpty ? ModTreeGrid() : g.resized(g.w, g.h)
+				if !g.valid { g = ModTreeGrid() }
+			}
+			for k in g.cells.indices where g.cells[k] > 3 { g.cells[k] = 0 }
+			t.grid = g
+			if t.shape == .painted && !g.cells.contains(where: { $0 != 0 }) { r.add(1, mn, place, "Its painted design is empty, so it grows nothing.") }
+			p.trees[i] = t
+		}
+	}
+}
+
+// MARK: - Mod Creator+: Logic Studio (optional visual scripting)
+//
+// Scripts are data: stacks of blocks chosen from the lists below, nothing else. The game turns each into
+// a short list of steps and runs it with its own interpreter, a little at a time each frame: a script
+// can't run forever without waiting, call itself too deeply, reach outside the game, or crash it. Every
+// number a block uses is kept in range, and anything it names (a block, an item, a creature) is looked up
+// safely; what is missing is skipped and reported in the Mod Test tools' LOGIC tab.
+
+/// What starts a script
+enum LEvent: Int, Codable, CaseIterable {
+	case worldStart, every, nightFalls, dayBreaks, custom, playerHurt, enterDim
+	case spawned, hurt, dies, creatureEvery, phase
+	case itemUsed, blockPlaced, blockBroken, blockTapped
+	/// not an event: a group of blocks other scripts run ("run group")
+	case group
+
+	var name: String {
+		switch self {
+		case .worldStart: return "When the world starts"
+		case .every: return "Every few seconds"
+		case .nightFalls: return "When night falls"
+		case .dayBreaks: return "When day breaks"
+		case .custom: return "When I receive a message"
+		case .playerHurt: return "When the player is hurt"
+		case .enterDim: return "When the player enters a dimension"
+		case .spawned: return "When my creature appears"
+		case .hurt: return "When my creature is hurt"
+		case .dies: return "When my creature is beaten"
+		case .creatureEvery: return "Every few seconds, for each of my creatures"
+		case .phase: return "When my creature enters a phase"
+		case .itemUsed: return "When my item is used"
+		case .blockPlaced: return "When my block is placed"
+		case .blockBroken: return "When my block is broken"
+		case .blockTapped: return "When my block is tapped"
+		case .group: return "A group of blocks (run by other scripts)"
+		}
+	}
+	/// what the script is about: 0 the world, 1 a creature, 2 an item, 3 a block
+	var subject: Int {
+		switch self {
+		case .spawned, .hurt, .dies, .creatureEvery, .phase: return 1
+		case .itemUsed: return 2
+		case .blockPlaced, .blockBroken, .blockTapped: return 3
+		default: return 0
+		}
+	}
+}
+
+/// A block's command
+enum LOp: Int, Codable, CaseIterable {
+	case ifThen, ifElse, repeatN, whileDo, forever, wait, stop, broadcast, runGroup, log
+	case setVar, changeVar
+	case say, floatText, particles, sound, shake, flash
+	case jump, dash, stepToPlayer, teleportNear, facePlayer
+	case hurtPlayer, healPlayer, hurtSelf, healSelf, hurtNearby, explode, fireShot, summon
+	case giveEffect, placeBlock, breakBlock, setTime, giveItem, takeItem, enterPhase
+}
+
+/// A reporter (a value a block reads)
+enum LEOp: Int, Codable, CaseIterable {
+	case num, variable, param, random, add, sub, mul, div, mod, lt, gt, eq, and, or, not
+	case playerHP, playerMaxHP, selfHP, selfHPPct, distance, timeOfDay, isNight, itemCount
+	case playerX, playerY, selfX, selfY, nearby, inDim, inBiome, raining
+}
+
+/// A value: a number, a variable, or a reporter with its inputs
+struct LExpr: Codable, Equatable {
+	var op: LEOp = .num
+	var v: Double = 0
+	var s: String = ""
+	var item: Item? = nil
+	var args: [LExpr] = []
+
+	init() {}
+	init(_ v: Double) { self.v = v }
+	init(op: LEOp, args: [LExpr] = []) {
+		self.op = op
+		self.args = args
+	}
+
+	init(from decoder: Decoder) throws {
+		let c = try decoder.container(keyedBy: CodingKeys.self)
+		op = c.val(.op, .num)
+		v = c.val(.v, 0)
+		s = c.val(.s, "")
+		item = c.val(.item, nil)
+		args = c.val(.args, [])
+	}
+}
+
+/// One block of a script; `body` and `alt` hold the blocks inside an if, a loop or an else
+struct LNode: Codable, Equatable {
+	var op: LOp = .say
+	var a: Double = 0
+	var b: Double = 0
+	var c: Double = 0
+	var s: String = ""
+	var item: Item? = nil
+	var args: [LExpr] = []
+	var body: [LNode] = []
+	var alt: [LNode] = []
+
+	init() {}
+	init(_ op: LOp) {
+		self.op = op
+		let sp: LSpec = LSpec.of(op)
+		for f in sp.fields {
+			switch f.kind {
+			case .number:
+				if f.slot == 0 { a = f.def } else if f.slot == 1 { b = f.def } else { c = f.def }
+			case .choice:
+				if f.slot == 0 { a = f.def } else if f.slot == 1 { b = f.def } else { c = f.def }
+			case .expr:
+				while args.count <= f.slot { args.append(LExpr(0)) }
+				args[f.slot] = LExpr(f.def)
+			case .text: s = f.label == "" ? "" : s
+			default: break
+			}
+		}
+		if op == .say || op == .floatText { s = "Hello!" }
+		if op == .log { s = "Here" }
+	}
+
+	init(from decoder: Decoder) throws {
+		let c0 = try decoder.container(keyedBy: CodingKeys.self)
+		op = c0.val(.op, .say)
+		a = c0.val(.a, 0)
+		b = c0.val(.b, 0)
+		c = c0.val(.c, 0)
+		s = c0.val(.s, "")
+		item = c0.val(.item, nil)
+		args = c0.val(.args, [])
+		body = c0.val(.body, [])
+		alt = c0.val(.alt, [])
+	}
+}
+
+/// A script: what starts it, what it is about, and its blocks
+struct ModScript: Codable, Identifiable, Equatable {
+	var id: String = ""
+	var name: String = "Script"
+	var enabled: Bool = true
+	var event: LEvent = .worldStart
+	/// the event's number: seconds (every), a phase
+	var ev: Double = 5
+	/// the event's text: a message name, a dimension key
+	var evText: String = ""
+	/// the creature, item or block it belongs to (this mod's, "mod:id")
+	var target: String = ""
+	var blocks: [LNode] = []
+	/// a group's inputs (up to three names)
+	var params: [String] = []
+
+	init() {}
+
+	init(from decoder: Decoder) throws {
+		let c = try decoder.container(keyedBy: CodingKeys.self)
+		id = c.val(.id, "")
+		name = c.val(.name, "Script")
+		enabled = c.val(.enabled, true)
+		event = c.val(.event, .worldStart)
+		ev = c.val(.ev, 5)
+		evText = c.val(.evText, "")
+		target = c.val(.target, "")
+		blocks = c.val(.blocks, [])
+		params = c.val(.params, [])
+	}
+}
+
+// MARK: the block catalogue (shared by the editor, the checks and the interpreter)
+
+enum LCat: Int, CaseIterable {
+	case control, looks, movement, combat, world, items, variables
+	var name: String {
+		switch self {
+		case .control: return "CONTROL"
+		case .looks: return "LOOKS & SOUND"
+		case .movement: return "MOVEMENT"
+		case .combat: return "COMBAT"
+		case .world: return "WORLD"
+		case .items: return "ITEMS & EFFECTS"
+		case .variables: return "VARIABLES"
+		}
+	}
+	var color: UInt32 {
+		switch self {
+		case .control: return 0xD8A030
+		case .looks: return 0x9A6AE0
+		case .movement: return 0x4A8AE0
+		case .combat: return 0xD85A4A
+		case .world: return 0x4AAA5A
+		case .items: return 0x3AB0B0
+		case .variables: return 0xE07A30
+		}
+	}
+}
+
+enum LFieldKind {
+	case number, text, key, item, expr, choice
+}
+
+/// One input of a block: what it holds and where (slot: a b c for numbers, the argument for values)
+struct LField {
+	let kind: LFieldKind
+	let slot: Int
+	let label: String
+	var lo: Double = 0
+	var hi: Double = 100
+	var def: Double = 0
+	/// for keys: 0 creature, 1 block, 2 shot, 3 message, 4 variable, 5 group, 6 dimension
+	/// for choices: 0 sound, 1 effect, 2 game shot
+	var list: Int = 0
+}
+
+struct LSpec {
+	let op: LOp
+	let cat: LCat
+	let title: String
+	let fields: [LField]
+	/// 0 no blocks inside, 1 blocks inside, 2 blocks inside and an else
+	var inside: Int = 0
+	/// it needs a creature to act on
+	var creature: Bool = false
+
+	static let all: [LSpec] = [
+		LSpec(op: .ifThen, cat: .control, title: "if", fields: [LField(kind: .expr, slot: 0, label: "this is true", def: 1)], inside: 1),
+		LSpec(op: .ifElse, cat: .control, title: "if, else", fields: [LField(kind: .expr, slot: 0, label: "this is true", def: 1)], inside: 2),
+		LSpec(op: .repeatN, cat: .control, title: "repeat", fields: [LField(kind: .expr, slot: 0, label: "times", def: 3)], inside: 1),
+		LSpec(op: .whileDo, cat: .control, title: "repeat while", fields: [LField(kind: .expr, slot: 0, label: "this is true", def: 1)], inside: 1),
+		LSpec(op: .forever, cat: .control, title: "forever", fields: [], inside: 1),
+		LSpec(op: .wait, cat: .control, title: "wait", fields: [LField(kind: .expr, slot: 0, label: "seconds", def: 1)]),
+		LSpec(op: .stop, cat: .control, title: "stop this script", fields: []),
+		LSpec(op: .broadcast, cat: .control, title: "send a message", fields: [LField(kind: .key, slot: 0, label: "message", list: 3)]),
+		LSpec(op: .runGroup, cat: .control, title: "run a group", fields: [LField(kind: .key, slot: 0, label: "group", list: 5), LField(kind: .expr, slot: 0, label: "input 1"),
+																			LField(kind: .expr, slot: 1, label: "input 2"), LField(kind: .expr, slot: 2, label: "input 3")]),
+		LSpec(op: .log, cat: .control, title: "note in the test log", fields: [LField(kind: .text, slot: 0, label: "text"), LField(kind: .expr, slot: 0, label: "value")]),
+		LSpec(op: .setVar, cat: .variables, title: "set variable", fields: [LField(kind: .key, slot: 0, label: "variable", list: 4), LField(kind: .expr, slot: 0, label: "to")]),
+		LSpec(op: .changeVar, cat: .variables, title: "change variable", fields: [LField(kind: .key, slot: 0, label: "variable", list: 4), LField(kind: .expr, slot: 0, label: "by", def: 1)]),
+		LSpec(op: .say, cat: .looks, title: "show a message", fields: [LField(kind: .text, slot: 0, label: "text"), LField(kind: .number, slot: 0, label: "seconds", lo: 0.5, hi: 10, def: 3)]),
+		LSpec(op: .floatText, cat: .looks, title: "float text over it", fields: [LField(kind: .text, slot: 0, label: "text"), LField(kind: .number, slot: 0, label: "colour", lo: 0, hi: 7, def: 0)]),
+		LSpec(op: .particles, cat: .looks, title: "sparkle", fields: [LField(kind: .number, slot: 0, label: "colour", lo: 0, hi: 7, def: 2), LField(kind: .number, slot: 1, label: "how many", lo: 1, hi: 40, def: 12)]),
+		LSpec(op: .sound, cat: .looks, title: "play a sound", fields: [LField(kind: .choice, slot: 0, label: "sound", def: 0, list: 0)]),
+		LSpec(op: .shake, cat: .looks, title: "shake the screen", fields: [LField(kind: .number, slot: 0, label: "strength", lo: 0.05, hi: 1, def: 0.3)]),
+		LSpec(op: .flash, cat: .looks, title: "flash my creature", fields: [LField(kind: .number, slot: 0, label: "seconds", lo: 0.05, hi: 2, def: 0.3)], creature: true),
+		LSpec(op: .jump, cat: .movement, title: "jump", fields: [LField(kind: .number, slot: 0, label: "strength", lo: 2, hi: 24, def: 12)], creature: true),
+		LSpec(op: .dash, cat: .movement, title: "dash forward", fields: [LField(kind: .number, slot: 0, label: "speed", lo: 1, hi: 30, def: 12)], creature: true),
+		LSpec(op: .stepToPlayer, cat: .movement, title: "lunge toward the player", fields: [LField(kind: .number, slot: 0, label: "speed", lo: 1, hi: 20, def: 6)], creature: true),
+		LSpec(op: .teleportNear, cat: .movement, title: "appear beside the player", fields: [LField(kind: .number, slot: 0, label: "how far", lo: 2, hi: 12, def: 4)], creature: true),
+		LSpec(op: .facePlayer, cat: .movement, title: "face the player", fields: [], creature: true),
+		LSpec(op: .hurtPlayer, cat: .combat, title: "hurt the player", fields: [LField(kind: .expr, slot: 0, label: "damage", def: 4)]),
+		LSpec(op: .healPlayer, cat: .combat, title: "heal the player", fields: [LField(kind: .expr, slot: 0, label: "health", def: 4)]),
+		LSpec(op: .hurtSelf, cat: .combat, title: "hurt my creature", fields: [LField(kind: .expr, slot: 0, label: "damage", def: 4)], creature: true),
+		LSpec(op: .healSelf, cat: .combat, title: "heal my creature", fields: [LField(kind: .expr, slot: 0, label: "health", def: 4)], creature: true),
+		LSpec(op: .hurtNearby, cat: .combat, title: "hurt creatures nearby", fields: [LField(kind: .number, slot: 0, label: "how far", lo: 1, hi: 8, def: 3), LField(kind: .expr, slot: 0, label: "damage", def: 4)]),
+		LSpec(op: .explode, cat: .combat, title: "blast (breaks no blocks)", fields: [LField(kind: .number, slot: 0, label: "size", lo: 1, hi: 4, def: 2), LField(kind: .number, slot: 1, label: "power", lo: 1, hi: 20, def: 6)]),
+		LSpec(op: .fireShot, cat: .combat, title: "fire a shot at the player", fields: [LField(kind: .key, slot: 0, label: "mod shot (or none)", list: 2), LField(kind: .choice, slot: 1, label: "game shot", def: 2, list: 2),
+																						 LField(kind: .number, slot: 0, label: "speed", lo: 4, hi: 30, def: 14), LField(kind: .number, slot: 2, label: "damage", lo: 0, hi: 30, def: 5)]),
+		LSpec(op: .summon, cat: .combat, title: "call creatures", fields: [LField(kind: .key, slot: 0, label: "creature", list: 0), LField(kind: .number, slot: 0, label: "how many", lo: 1, hi: 4, def: 1)]),
+		LSpec(op: .giveEffect, cat: .items, title: "give the player an effect", fields: [LField(kind: .choice, slot: 0, label: "effect", def: 2, list: 1), LField(kind: .number, slot: 1, label: "strength", lo: 0, hi: 100, def: 20),
+																						 LField(kind: .number, slot: 2, label: "seconds", lo: 1, hi: 120, def: 10)]),
+		LSpec(op: .placeBlock, cat: .world, title: "place a block", fields: [LField(kind: .key, slot: 0, label: "block", list: 1), LField(kind: .number, slot: 0, label: "across", lo: -8, hi: 8, def: 0),
+																			LField(kind: .number, slot: 1, label: "up", lo: -8, hi: 8, def: 1)]),
+		LSpec(op: .breakBlock, cat: .world, title: "break a block", fields: [LField(kind: .number, slot: 0, label: "across", lo: -8, hi: 8, def: 0), LField(kind: .number, slot: 1, label: "up", lo: -8, hi: 8, def: -1)]),
+		LSpec(op: .setTime, cat: .world, title: "set the time of day", fields: [LField(kind: .number, slot: 0, label: "time (0.25 noon, 0.75 midnight)", lo: 0, hi: 1, def: 0.25)]),
+		LSpec(op: .giveItem, cat: .items, title: "give the player items", fields: [LField(kind: .item, slot: 0, label: "item"), LField(kind: .number, slot: 0, label: "how many", lo: 1, hi: 64, def: 1)]),
+		LSpec(op: .takeItem, cat: .items, title: "take items from the player", fields: [LField(kind: .item, slot: 0, label: "item"), LField(kind: .number, slot: 0, label: "how many", lo: 1, hi: 64, def: 1)]),
+		LSpec(op: .enterPhase, cat: .combat, title: "move my creature to a phase", fields: [LField(kind: .number, slot: 0, label: "phase", lo: 1, hi: 6, def: 1)], creature: true),
+	]
+
+	static func of(_ op: LOp) -> LSpec {
+		return all.first { $0.op == op } ?? LSpec(op: op, cat: .control, title: "?", fields: [])
+	}
+}
+
+/// The reporters, by name, and how many values each takes
+enum LReporters {
+	static func name(_ op: LEOp) -> String {
+		switch op {
+		case .num: return "number"
+		case .variable: return "variable"
+		case .param: return "group input"
+		case .random: return "random between"
+		case .add: return "+"
+		case .sub: return "\u{2212}"
+		case .mul: return "\u{00D7}"
+		case .div: return "\u{00F7}"
+		case .mod: return "remainder"
+		case .lt: return "<"
+		case .gt: return ">"
+		case .eq: return "="
+		case .and: return "and"
+		case .or: return "or"
+		case .not: return "not"
+		case .playerHP: return "player's health"
+		case .playerMaxHP: return "player's most health"
+		case .selfHP: return "my creature's health"
+		case .selfHPPct: return "my creature's health %"
+		case .distance: return "distance to the player"
+		case .timeOfDay: return "time of day"
+		case .isNight: return "it is night"
+		case .itemCount: return "how many the player has of"
+		case .playerX: return "player across"
+		case .playerY: return "player up/down"
+		case .selfX: return "my across"
+		case .selfY: return "my up/down"
+		case .nearby: return "creatures within"
+		case .inDim: return "the player is in dimension"
+		case .inBiome: return "the player is in biome"
+		case .raining: return "it is raining or snowing"
+		}
+	}
+	static func arity(_ op: LEOp) -> Int {
+		switch op {
+		case .random, .add, .sub, .mul, .div, .mod, .lt, .gt, .eq, .and, .or: return 2
+		case .not: return 1
+		default: return 0
+		}
+	}
+	/// reporters that only make sense for a creature
+	static func needsCreature(_ op: LEOp) -> Bool { return op == .selfHP || op == .selfHPPct }
+	static let colours: [UInt32] = [0xFFFFFF, 0xFF5A4A, 0xFFD24A, 0x5AE070, 0x5AB8FF, 0xC070FF, 0xFF8A3A, 0x8A8A8A]
+	static let sounds: [SoundID] = [.zap, .roar, .portal, .discovery, .warn, .explosion, .chestOpen, .craft, .infuse, .tap, .hit, .crit, .flask, .rareLoot]
+	static let soundNames: [String] = ["Zap", "Roar", "Portal", "Discovery", "Warning", "Explosion", "Chest", "Craft", "Infuse", "Tap", "Hit", "Critical", "Flask", "Rare find"]
+}
+
+// MARK: the interpreter
+
+/// A step of a compiled script
+enum LInstr {
+	case run(LNode)
+	case jumpUnless(LExpr, Int)
+	case jump(Int)
+	case loopStart(Int, LExpr)
+	case loopCheck(Int, Int)
+	case wait(LExpr)
+	case call(String, [LExpr])
+	case stop
+}
+
+/// Limits that keep scripts from slowing or stopping the game
+enum LLimits {
+	static let maxThreads: Int = 32
+	static let perScript: Int = 4
+	static let stepsPerThread: Int = 300
+	static let stepsPerFrame: Int = 3000
+	static let maxDepth: Int = 8
+	static let maxExprDepth: Int = 32
+	static let maxRepeat: Int = 1000
+	/// seconds a script may run without ever waiting before it is stopped
+	static let noWaitLimit: Double = 10
+	static let maxScripts: Int = 40
+	static let maxBlocks: Int = 400
+	static let maxVariables: Int = 16
+}
+
+extension LExpr {
+	static var zero: LExpr { return LExpr(0) }
+}
+
+/// A script ready to run: its steps, its mod, what starts it
+final class LProgram {
+	let key: String
+	let modID: String
+	let name: String
+	let def: ModScript
+	var code: [LInstr] = []
+	/// how many loop counters it needs
+	var slots: Int = 0
+
+	init(key: String, modID: String, def: ModScript) {
+		self.key = key
+		self.modID = modID
+		self.name = def.name
+		self.def = def
+		var out: [LInstr] = []
+		var n: Int = 0
+		LProgram.compile(def.blocks, &out, &n)
+		code = out
+		slots = n
+	}
+
+	static func compile(_ list: [LNode], _ out: inout [LInstr], _ slots: inout Int) {
+		for n in list {
+			let cond: LExpr = n.args.first ?? LExpr.zero
+			switch n.op {
+			case .ifThen:
+				let j: Int = out.count
+				out.append(.jumpUnless(cond, -1))
+				compile(n.body, &out, &slots)
+				out[j] = .jumpUnless(cond, out.count)
+			case .ifElse:
+				let j: Int = out.count
+				out.append(.jumpUnless(cond, -1))
+				compile(n.body, &out, &slots)
+				let k: Int = out.count
+				out.append(.jump(-1))
+				out[j] = .jumpUnless(cond, out.count)
+				compile(n.alt, &out, &slots)
+				out[k] = .jump(out.count)
+			case .repeatN:
+				let sl: Int = slots
+				slots += 1
+				out.append(.loopStart(sl, cond))
+				let top: Int = out.count
+				out.append(.loopCheck(sl, -1))
+				compile(n.body, &out, &slots)
+				out.append(.jump(top))
+				out[top] = .loopCheck(sl, out.count)
+			case .whileDo:
+				let top: Int = out.count
+				out.append(.jumpUnless(cond, -1))
+				compile(n.body, &out, &slots)
+				out.append(.jump(top))
+				out[top] = .jumpUnless(cond, out.count)
+			case .forever:
+				let top: Int = out.count
+				compile(n.body, &out, &slots)
+				out.append(.jump(top))
+			case .wait:
+				out.append(.wait(cond))
+			case .stop:
+				out.append(.stop)
+			case .runGroup:
+				out.append(.call(n.s, n.args))
+			default:
+				out.append(.run(n))
+			}
+		}
+	}
+}
+
+/// Where a running script is in one program (a group run from it gets a frame of its own)
+struct LFrame {
+	let prog: LProgram
+	var pc: Int = 0
+	var counters: [Int]
+	var params: [Double]
+}
+
+/// One running script
+final class LThread {
+	let prog: LProgram
+	let id: Int
+	var frames: [LFrame]
+	var waitT: Double = 0
+	weak var mob: Mob? = nil
+	var hasMob: Bool = false
+	var bx: Int = 0
+	var by: Int = 0
+	var hasBlock: Bool = false
+	var noWaitT: Double = 0
+	var steps: Int = 0
+	var done: Bool = false
+	var error: String = ""
+
+	init(_ p: LProgram, id: Int) {
+		prog = p
+		self.id = id
+		frames = [LFrame(prog: p, pc: 0, counters: [Int](repeating: 0, count: p.slots), params: [0, 0, 0])]
+	}
+
+	/// where it is, for the step debugger ("Script name, step 3")
+	var whereText: String {
+		guard let f = frames.last else { return prog.name }
+		return joinText(f.prog.name, ", step ", String(f.pc + 1), " of ", String(f.prog.code.count))
+	}
+}
+
+/// The scripts of the world's mods, compiled once per world
+final class LogicRT {
+	var programs: [LProgram] = []
+	var groups: [String: LProgram] = [:]
+	/// programs by what starts them
+	var byEvent: [LEvent: [LProgram]] = [:]
+
+	var isEmpty: Bool { return programs.isEmpty }
+
+	static func build(_ packs: [ModPack], _ off: Set<String>) -> LogicRT {
+		let rt = LogicRT()
+		for p in packs {
+			for s in p.scripts where s.enabled && !off.contains(p.key(s.id)) {
+				let prog = LProgram(key: p.key(s.id), modID: p.id, def: s)
+				rt.programs.append(prog)
+				if s.event == .group {
+					rt.groups[p.key(s.id)] = prog
+				} else {
+					rt.byEvent[s.event, default: []].append(prog)
+				}
+			}
+		}
+		return rt
+	}
+
+	func listeners(_ e: LEvent) -> [LProgram] { return byEvent[e] ?? [] }
+}
+
+/// The running side of the Logic Studio in one game: running scripts, timers, the world's variables, the
+/// test log, and the step debugger
+final class LogicVM {
+	var threads: [LThread] = []
+	/// what the last scripts did (newest last), for the Mod Test tools
+	var log: [String] = []
+	var nextID: Int = 1
+	var started: Bool = false
+	var lastNight: Bool? = nil
+	var timers: [String: Double] = [:]
+	var mobTimers: [Int: Double] = [:]
+	/// step debugger: scripts wait while paused; `stepOnce` lets one step through
+	var paused: Bool = false
+	var stepOnce: Bool = false
+	var ran: Int = 0
+	var errors: Int = 0
+
+	func note(_ s: String) {
+		log.append(s)
+		if log.count > 60 { log.removeFirst(log.count - 60) }
+	}
+}
+
+extension Game {
+	// MARK: starting scripts
+
+	var logicRT: LogicRT { return ModRuntime.shared.logic }
+
+	/// Starts every script waiting for this event (that belongs to this subject)
+	func fireLogic(_ e: LEvent, mob: Mob? = nil, x: Int = 0, y: Int = 0, block: Bool = false, key: String = "", text: String = "", number: Double = 0) {
+		let rt: LogicRT = logicRT
+		if rt.isEmpty { return }
+		for p in rt.listeners(e) {
+			let d: ModScript = p.def
+			switch e.subject {
+			case 1, 2, 3:
+				if d.target != key { continue }
+			default: break
+			}
+			if e == .custom && d.evText != text { continue }
+			if e == .enterDim && !d.evText.isEmpty && d.evText != text { continue }
+			if e == .phase && Int(d.ev.rounded()) != Int(number.rounded()) { continue }
+			startThread(p, mob: mob, x: x, y: y, block: block)
+		}
+	}
+
+	@discardableResult
+	func startThread(_ p: LProgram, mob: Mob?, x: Int, y: Int, block: Bool) -> LThread? {
+		let vm: LogicVM = logic
+		if vm.threads.count >= LLimits.maxThreads {
+			vm.note(joinText(p.name, ": not started, too many scripts are running at once."))
+			return nil
+		}
+		var same: Int = 0
+		for t in vm.threads where t.prog === p && !t.done { same += 1 }
+		if same >= LLimits.perScript { return nil }
+		let t = LThread(p, id: vm.nextID)
+		vm.nextID += 1
+		t.mob = mob
+		t.hasMob = mob != nil
+		t.bx = x
+		t.by = y
+		t.hasBlock = block
+		vm.threads.append(t)
+		vm.ran += 1
+		return t
+	}
+
+	/// The clock of the Logic Studio: timed and time-of-day events, then a little of every running script
+	func updateLogic(_ dt: Double) {
+		let rt: LogicRT = logicRT
+		let vm: LogicVM = logic
+		if rt.isEmpty {
+			if !vm.threads.isEmpty { vm.threads.removeAll() }
+			return
+		}
+		// the step debugger stops the scripts' clock too: nothing new starts by time while paused
+		if vm.paused {
+			runLogic(dt)
+			return
+		}
+		if !vm.started {
+			vm.started = true
+			fireLogic(.worldStart)
+		}
+		let night: Bool = isNight
+		if let was = vm.lastNight, was != night { fireLogic(night ? .nightFalls : .dayBreaks) }
+		vm.lastNight = night
+		for p in rt.listeners(.every) {
+			let gap: Double = clampD(p.def.ev, 0.25, 600)
+			let next: Double = vm.timers[p.key] ?? (clock + gap)
+			if clock >= next {
+				vm.timers[p.key] = clock + gap
+				startThread(p, mob: nil, x: 0, y: 0, block: false)
+			} else if vm.timers[p.key] == nil {
+				vm.timers[p.key] = next
+			}
+		}
+		let each: [LProgram] = rt.listeners(.creatureEvery)
+		if !each.isEmpty {
+			for m in mobs where m.kind == .custom && m.hp > 0 && !m.removed {
+				guard let r = ModRuntime.shared.mob(m.cslot) else { continue }
+				for (i, p) in each.enumerated() where p.def.target == r.key {
+					let k: Int = m.id &* 64 &+ i
+					let gap: Double = clampD(p.def.ev, 0.25, 600)
+					let next: Double = vm.mobTimers[k] ?? (clock + gap)
+					if clock >= next {
+						vm.mobTimers[k] = clock + gap
+						startThread(p, mob: m, x: 0, y: 0, block: false)
+					} else if vm.mobTimers[k] == nil {
+						vm.mobTimers[k] = next
+					}
+				}
+			}
+			if vm.mobTimers.count > 400 { vm.mobTimers.removeAll() }
+		}
+		runLogic(dt)
+	}
+
+	/// Runs a little of each script (all of them wait while the step debugger is paused)
+	func runLogic(_ dt: Double) {
+		let vm: LogicVM = logic
+		if vm.threads.isEmpty { return }
+		if vm.paused {
+			if !vm.stepOnce { return }
+			vm.stepOnce = false
+			if let t = vm.threads.first(where: { !$0.done }) {
+				if t.waitT > 0 { t.waitT = 0 }
+				logicStep(t)
+			}
+			vm.threads.removeAll { $0.done }
+			return
+		}
+		var budget: Int = LLimits.stepsPerFrame
+		for t in vm.threads where !t.done {
+			if t.hasMob {
+				// a creature's script ends with the creature (its "beaten" script still runs)
+				if t.mob == nil || t.mob!.removed || (t.mob!.hp <= 0 && t.prog.def.event != .dies) {
+					t.done = true
+					continue
+				}
+			}
+			if t.waitT > 0 {
+				t.waitT -= dt
+				t.noWaitT = 0
+				continue
+			}
+			var n: Int = 0
+			while n < LLimits.stepsPerThread && budget > 0 && !t.done && t.waitT <= 0 {
+				logicStep(t)
+				n += 1
+				budget -= 1
+			}
+			if n >= LLimits.stepsPerThread {
+				t.noWaitT += dt
+				if t.noWaitT > LLimits.noWaitLimit {
+					logicFail(t, "It ran for 10 seconds without waiting, so it was stopped. Put a \u{201C}wait\u{201D} inside loops that go on.")
+				}
+			}
+			if budget <= 0 { break }
+		}
+		vm.threads.removeAll { $0.done }
+	}
+
+	func logicFail(_ t: LThread, _ why: String) {
+		t.error = why
+		t.done = true
+		logic.errors += 1
+		logic.note(joinText("\u{26A0} ", t.prog.name, ": ", why))
+	}
+
+	/// One step of a running script
+	func logicStep(_ t: LThread) {
+		guard !t.frames.isEmpty else {
+			t.done = true
+			return
+		}
+		let fi: Int = t.frames.count - 1
+		let code: [LInstr] = t.frames[fi].prog.code
+		let pc: Int = t.frames[fi].pc
+		if pc >= code.count || pc < 0 {
+			t.frames.removeLast()
+			if t.frames.isEmpty { t.done = true }
+			return
+		}
+		t.frames[fi].pc = pc + 1
+		t.steps += 1
+		switch code[pc] {
+		case .run(let n):
+			logicExec(t, n)
+		case .jumpUnless(let e, let to):
+			if logicEval(t, e, 0) == 0 { t.frames[fi].pc = to }
+		case .jump(let to):
+			t.frames[fi].pc = to
+		case .loopStart(let sl, let e):
+			if sl < t.frames[fi].counters.count { t.frames[fi].counters[sl] = clampI(Int(logicEval(t, e, 0).rounded()), 0, LLimits.maxRepeat) }
+		case .loopCheck(let sl, let to):
+			if sl >= t.frames[fi].counters.count || t.frames[fi].counters[sl] <= 0 {
+				t.frames[fi].pc = to
+			} else {
+				t.frames[fi].counters[sl] -= 1
+			}
+		case .wait(let e):
+			t.waitT = clampD(logicEval(t, e, 0), 0.05, 60)
+			t.noWaitT = 0
+		case .call(let name, let args):
+			guard let g = logicRT.groups[name] else {
+				logic.note(joinText(t.prog.name, ": the group it runs is missing; skipped."))
+				return
+			}
+			if t.frames.count >= LLimits.maxDepth {
+				logicFail(t, "Groups ran each other too deeply (more than 8 inside one another).")
+				return
+			}
+			var ps: [Double] = [0, 0, 0]
+			for k in 0..<min(3, args.count) { ps[k] = logicEval(t, args[k], 0) }
+			t.frames.append(LFrame(prog: g, pc: 0, counters: [Int](repeating: 0, count: g.slots), params: ps))
+		case .stop:
+			t.done = true
+		}
 	}
 
 	// MARK: values
 
-	/// A value as a chip: a number to type, or a reporter (tap its name to swap it for another) with
-	/// its own inputs inside
-	func exprView(_ e: LExpr, _ path: [Int], _ arg: Int, _ sub: [Int]) -> AnyView {
-		if e.op == .num { return numberChip(e, path, arg, sub) }
-		return AnyView(HStack(spacing: 4) {
-			reporterButton(e.op, path, arg, sub)
-			exprDetail(e, path, arg, sub)
-			ForEach(0..<e.args.count, id: \.self) { k in self.exprView(e.args[k], path, arg, sub + [k]) }
-		}
-		.padding(4)
-		.background(Color.black.opacity(0.2))
-		.cornerRadius(10))
+	/// Where a script's subject is: its creature, its block, or the player
+	func logicPos(_ t: LThread) -> (Double, Double) {
+		if t.hasMob, let m = t.mob { return (m.b.x, m.b.cy) }
+		if t.hasBlock { return (Double(t.bx) + 0.5, Double(t.by) + 0.5) }
+		return (pb.x, pb.y - pb.h * 0.5)
 	}
 
-	func numberChip(_ e: LExpr, _ path: [Int], _ arg: Int, _ sub: [Int]) -> AnyView {
-		let vb: Binding<Double> = exprNum(e.v, path, arg, sub)
-		return AnyView(HStack(spacing: 4) {
-			LNumBox(label: "", value: vb, lo: -100000, hi: 100000, compact: true)
-			SmallButton(title: "\u{25BE}", color: Color.black.opacity(0.35)) { self.exprPick = (path, arg, sub) }
-		}
-		.padding(4)
-		.background(Color.white.opacity(0.25))
-		.cornerRadius(10))
-	}
+	func logicVarKey(_ t: LThread, _ name: String) -> String { return joinText(t.prog.modID, ":", name) }
 
-	func reporterButton(_ op: LEOp, _ path: [Int], _ arg: Int, _ sub: [Int]) -> some View {
-		Button(action: { self.exprPick = (path, arg, sub) }) {
-			Text(verbatim: LReporters.name(op)).font(.pixel(11, .bold)).foregroundColor(Color.black)
-				.padding(.horizontal, 8)
-				.frame(minHeight: 34)
-				.background(Color(ui: 0x9AE070))
-				.cornerRadius(10)
-		}
-		.buttonStyle(.plain)
-	}
-
-	/// A value's number, read and set through its place in the script
-	func exprNum(_ cur: Double, _ path: [Int], _ arg: Int, _ sub: [Int]) -> Binding<Double> {
-		return Binding<Double>(get: { cur }, set: { (v: Double) in self.setExpr(path, arg, sub) { $0.v = v } })
-	}
-
-	/// A value's choice among keys, read and set through its place in the script
-	func exprKey(_ cur: String, _ keys: [String], _ path: [Int], _ arg: Int, _ sub: [Int]) -> Binding<Int> {
-		return Binding<Int>(get: { keys.firstIndex(of: cur) ?? -1 }, set: { (v: Int) in
-			let k: String = keys[clampI(v, 0, keys.count - 1)]
-			self.setExpr(path, arg, sub) { $0.s = k }
-		})
-	}
-
-	/// The setting a reporter needs (which variable, input, item, distance, dimension or biome)
-	func exprDetail(_ e: LExpr, _ path: [Int], _ arg: Int, _ sub: [Int]) -> AnyView {
+	func logicEval(_ t: LThread, _ e: LExpr, _ depth: Int) -> Double {
+		if depth > LLimits.maxExprDepth { return 0 }
+		func arg(_ i: Int) -> Double { return i < e.args.count ? logicEval(t, e.args[i], depth + 1) : 0 }
+		var v: Double = 0
 		switch e.op {
-		case .variable:
-			let vars: [String] = s.mod.variables
-			if vars.isEmpty { return AnyView(Text("(no variables)").font(.pixel(10)).foregroundColor(Color.white)) }
-			let cols: Int = min(4, vars.count)
-			return AnyView(ChoiceRow(options: vars, selected: exprKey(e.s, vars, path, arg, sub), columns: cols).frame(maxWidth: 360))
+		case .num: v = e.v
+		case .variable: v = logicVars[logicVarKey(t, e.s)] ?? 0
 		case .param:
-			return AnyView(LNumBox(label: "", value: exprNum(e.v, path, arg, sub), lo: 1, hi: 3, compact: true))
+			let k: Int = Int(e.v.rounded()) - 1
+			if let f = t.frames.last, k >= 0 && k < f.params.count { v = f.params[k] }
+		case .random:
+			let a: Double = arg(0)
+			let b: Double = arg(1)
+			v = a == b ? a : Double.random(in: min(a, b)...max(a, b))
+		case .add: v = arg(0) + arg(1)
+		case .sub: v = arg(0) - arg(1)
+		case .mul: v = arg(0) * arg(1)
+		case .div:
+			let d: Double = arg(1)
+			v = d == 0 ? 0 : arg(0) / d
+		case .mod:
+			let d: Double = arg(1)
+			v = d == 0 ? 0 : fmod(arg(0), d)
+		case .lt: v = arg(0) < arg(1) ? 1 : 0
+		case .gt: v = arg(0) > arg(1) ? 1 : 0
+		case .eq: v = abs(arg(0) - arg(1)) < 0.0001 ? 1 : 0
+		case .and: v = arg(0) != 0 && arg(1) != 0 ? 1 : 0
+		case .or: v = arg(0) != 0 || arg(1) != 0 ? 1 : 0
+		case .not: v = arg(0) == 0 ? 1 : 0
+		case .playerHP: v = hp
+		case .playerMaxHP: v = maxHP
+		case .selfHP: v = t.mob?.hp ?? 0
+		case .selfHPPct:
+			if let m = t.mob, m.maxHP > 0 { v = m.hp / m.maxHP * 100.0 }
+		case .distance:
+			let p: (Double, Double) = logicPos(t)
+			let dx: Double = p.0 - pb.x
+			let dy: Double = p.1 - (pb.y - pb.h * 0.5)
+			v = sqrt(dx * dx + dy * dy)
+		case .timeOfDay: v = timeOfDay
+		case .isNight: v = isNight ? 1 : 0
+		case .itemCount: v = e.item.map { Double(inv.total($0)) } ?? 0
+		case .playerX: v = pb.x
+		case .playerY: v = pb.y
+		case .selfX: v = logicPos(t).0
+		case .selfY: v = logicPos(t).1
 		case .nearby:
-			return AnyView(HStack(spacing: 2) {
-				LNumBox(label: "", value: exprNum(e.v, path, arg, sub), lo: 1, hi: 30, compact: true)
-				Text("blocks").font(.pixel(10)).foregroundColor(Color.white)
-			})
-		case .itemCount:
-			let name: String = e.item.map { ModPreview.name($0, s.catalog) } ?? "CHOOSE ITEM"
-			return AnyView(SmallButton(title: name, color: Color.black.opacity(0.35)) { self.exprItemPick = (path, arg, sub) })
-		case .inDim:
-			let keys: [String] = ["overworld", "umbral"] + s.mod.dims.map { s.mod.key($0.id) }
-			let names: [String] = ["Overworld", "Umbral Realm"] + s.mod.dims.map { $0.name }
-			return AnyView(ChoiceRow(options: names, selected: exprKey(e.s, keys, path, arg, sub), columns: 3).frame(maxWidth: 360))
-		case .inBiome:
-			return biomeChoice(e, path, arg, sub)
-		default:
-			return AnyView(EmptyView())
-		}
-	}
-
-	func biomeChoice(_ e: LExpr, _ path: [Int], _ arg: Int, _ sub: [Int]) -> AnyView {
-		let all: [Biome] = ModBiomePicker.all
-		let cur: Int = Int(e.v)
-		let sel: Binding<Int> = Binding<Int>(get: { all.firstIndex { $0.rawValue == cur } ?? -1 }, set: { (v: Int) in
-			let raw: Double = Double(all[clampI(v, 0, all.count - 1)].rawValue)
-			self.setExpr(path, arg, sub) { $0.v = raw }
-		})
-		return AnyView(ChoiceRow(options: DimensionEditorView.biomeNames, selected: sel, columns: 5).frame(maxWidth: 420))
-	}
-
-	/// What the checks found in this script
-	var issues: some View {
-		let place: String = joinText("Script \u{201C}", script.name, "\u{201D}")
-		let mine: [ModIssue] = s.report.issues.filter { $0.place == place }
-		return VStack(alignment: .leading, spacing: 4) {
-			if !mine.isEmpty {
-				Text("CHECKS").font(.pixel(12, .bold)).foregroundColor(ModUI.gold)
-				ForEach(mine) { i in
-					Text(verbatim: joinText("\u{2022} ", i.text)).font(.pixel(11, .semibold)).foregroundColor(Color(ui: 0xFFB070))
-				}
+			let p: (Double, Double) = logicPos(t)
+			let r: Double = clampD(e.v, 1, 30)
+			var n: Int = 0
+			for m in mobsNear(p.0 - r, p.0 + r) where m.hp > 0 && !m.removed && m !== t.mob {
+				if abs(m.b.cy - p.1) <= r { n += 1 }
 			}
+			v = Double(n)
+		case .inDim:
+			if e.s == "overworld" { v = world.dim == .overworld ? 1 : 0 }
+			else if e.s == "umbral" { v = world.dim == .umbral ? 1 : 0 }
+			else { v = customDim?.key == e.s ? 1 : 0 }
+		case .inBiome: v = biomeAt(pb.x).rawValue == Int(e.v.rounded()) ? 1 : 0
+		case .raining: v = wxHere.precip > 0.2 ? 1 : 0
 		}
-	}
-}
-
-/// A number with big minus and plus buttons (and typing)
-struct LNumBox: View {
-	let label: String
-	@Binding var value: Double
-	let lo: Double
-	let hi: Double
-	var compact: Bool = false
-
-	var step: Double { return hi - lo <= 2.01 ? 0.05 : (hi - lo <= 20.01 ? 0.5 : 1) }
-
-	var text: Binding<String> {
-		return Binding<String>(get: {
-			let v: Double = value
-			return v == v.rounded() ? String(Int(v)) : String(format: "%.2f", v)
-		}, set: { t in
-			if let v = Double(t.trimmingCharacters(in: .whitespaces)) { value = clampD(v, lo, hi) }
-		})
+		return v.isFinite ? v : 0
 	}
 
-	var body: some View {
-		HStack(spacing: 4) {
-			if !label.isEmpty { Text(verbatim: label).font(.pixel(10, .bold)).foregroundColor(Color.white.opacity(0.85)) }
-			SmallButton(title: "\u{2212}", color: Color.black.opacity(0.35)) { value = clampD(value - step, lo, hi) }
-			TextField("0", text: text)
-				.font(.pixel(13, .bold))
-				.foregroundColor(Color.white)
-				.frame(width: compact ? 64 : 80)
-				.padding(4)
-				.background(Color.black.opacity(0.35))
-			SmallButton(title: "+", color: Color.black.opacity(0.35)) { value = clampD(value + step, lo, hi) }
+	// MARK: commands
+
+	func logicExec(_ t: LThread, _ n: LNode) {
+		let sp: LSpec = LSpec.of(n.op)
+		if sp.creature && t.mob == nil {
+			logic.note(joinText(t.prog.name, ": \u{201C}", sp.title, "\u{201D} needs a creature; skipped."))
+			return
 		}
-	}
-}
-
-/// Choosing a reporter for a value
-struct ReporterPicker: View {
-	@ObservedObject var s: ModSession
-	var pick: (LExpr) -> Void
-	var cancel: () -> Void
-
-	static let groups: [(String, [LEOp])] = [
-		("NUMBERS", [.num, .random, .variable, .param]),
-		("MATHS", [.add, .sub, .mul, .div, .mod]),
-		("TESTS", [.lt, .gt, .eq, .and, .or, .not]),
-		("THE PLAYER", [.playerHP, .playerMaxHP, .playerX, .playerY, .itemCount, .distance]),
-		("MY CREATURE OR BLOCK", [.selfHP, .selfHPPct, .selfX, .selfY, .nearby]),
-		("THE WORLD", [.timeOfDay, .isNight, .raining, .inDim, .inBiome]),
-	]
-
-	var body: some View {
-		ZStack {
-			Color.black.opacity(0.7).ignoresSafeArea()
-			VStack(alignment: .leading, spacing: 8) {
-				HStack {
-					Text("CHOOSE A VALUE").font(.pixel(18)).foregroundColor(ModUI.gold)
-					Spacer()
-					SmallButton(title: "CANCEL", color: ModUI.red) { self.cancel() }
-				}
-				ScrollView {
-					VStack(alignment: .leading, spacing: 8) {
-						ForEach(0..<ReporterPicker.groups.count, id: \.self) { g in self.group(g) }
+		func arg(_ i: Int) -> Double { return i < n.args.count ? logicEval(t, n.args[i], 0) : 0 }
+		let pos: (Double, Double) = logicPos(t)
+		let sb: Bool = ModRuntime.shared.packs.first { $0.id == t.prog.modID }?.sandbox ?? false
+		let maxDmg: Double = sb ? 200 : 50
+		switch n.op {
+		case .broadcast:
+			if !n.s.isEmpty { fireLogic(.custom, text: n.s) }
+		case .log:
+			let val: String = n.args.isEmpty ? "" : joinText(" = ", String(format: "%.2f", arg(0)))
+			logic.note(joinText(t.prog.name, ": ", String(n.s.prefix(60)), val))
+		case .setVar:
+			if !n.s.isEmpty { logicVars[logicVarKey(t, n.s)] = clampD(arg(0), -1e9, 1e9) }
+		case .changeVar:
+			if !n.s.isEmpty {
+				let k: String = logicVarKey(t, n.s)
+				logicVars[k] = clampD((logicVars[k] ?? 0) + arg(0), -1e9, 1e9)
+			}
+		case .say:
+			say(String(n.s.prefix(80)), clampD(n.a, 0.5, 10))
+		case .floatText:
+			let col: UInt32 = LReporters.colours[clampI(Int(n.a), 0, LReporters.colours.count - 1)]
+			floatText(String(n.s.prefix(24)), pos.0, pos.1 - 1.0, col)
+		case .particles:
+			let col: UInt32 = LReporters.colours[clampI(Int(n.a), 0, LReporters.colours.count - 1)]
+			spawnParticles(pos.0, pos.1, col, clampI(Int(n.b), 1, 40), 4.0, 0.6, 2)
+		case .sound:
+			let i: Int = clampI(Int(n.a), 0, LReporters.sounds.count - 1)
+			sfx(LReporters.sounds[i], at: pos.0, 0.8)
+		case .shake:
+			addShake(clampD(n.a, 0, 1))
+		case .flash:
+			if let m = t.mob { m.flash = clampD(n.a, 0.05, 2) }
+		case .jump:
+			// on the ground, flying, or standing still (one that has just appeared has not landed yet)
+			if let m = t.mob, m.b.onGround || m.def.flying || abs(m.b.vy) < 0.5 { m.b.vy = -clampD(n.a, 2, 24) }
+		case .dash:
+			if let m = t.mob { m.b.vx = Double(m.dir) * clampD(n.a, 1, 30) }
+		case .stepToPlayer:
+			if let m = t.mob {
+				m.dir = pb.x >= m.b.x ? 1 : -1
+				m.b.vx = Double(m.dir) * clampD(n.a, 1, 20)
+			}
+		case .teleportNear:
+			if let m = t.mob {
+				let d: Double = clampD(n.a, 2, 12)
+				let side: Double = m.b.x >= pb.x ? 1.0 : -1.0
+				for k in 0..<2 {
+					let x: Double = pb.x + (k == 0 ? side : -side) * d
+					if let y = roomNear(x, pb.y, m.b.w, m.b.h) {
+						spawnParticles(m.b.x, m.b.cy, 0xC070FF, 10, 3.0, 0.5, 0)
+						m.b.x = x
+						m.b.y = y
+						m.b.vx = 0
+						m.b.vy = 0
+						m.dir = pb.x >= x ? 1 : -1
+						spawnParticles(x, y - m.b.h * 0.5, 0xC070FF, 10, 3.0, 0.5, 0)
+						break
 					}
 				}
 			}
-			.padding(14)
-			.frame(maxWidth: 820, maxHeight: 640)
-			.background(PixelBox(color: ModUI.panel))
-			.padding(10)
-		}
-	}
-
-	func group(_ g: Int) -> some View {
-		let title: String = ReporterPicker.groups[g].0
-		let ops: [LEOp] = ReporterPicker.groups[g].1
-		let cols: [GridItem] = [GridItem(.adaptive(minimum: 150), spacing: 6)]
-		return VStack(alignment: .leading, spacing: 6) {
-			Text(verbatim: title).font(.pixel(12, .bold)).foregroundColor(ModUI.dim)
-			LazyVGrid(columns: cols, spacing: 6) {
-				ForEach(0..<ops.count, id: \.self) { k in self.opButton(ops[k]) }
+		case .facePlayer:
+			if let m = t.mob { m.dir = pb.x >= m.b.x ? 1 : -1 }
+		case .hurtPlayer:
+			let d: Double = clampD(arg(0), 0, maxDmg)
+			if d > 0 {
+				var info = DamageInfo(amount: d, type: .magic, source: t.mob.map { DamageSource.mob($0, faction(of: $0)) } ?? .environment)
+				info.originX = pos.0
+				info.originY = pos.1
+				info.key = newID()
+				_ = hurtPlayer(info)
 			}
-		}
-	}
-
-	func opButton(_ op: LEOp) -> some View {
-		Button(action: { self.pick(ReporterPicker.make(op)) }) {
-			Text(verbatim: LReporters.name(op)).font(.pixel(11, .bold)).foregroundColor(Color.black)
-				.frame(maxWidth: .infinity, minHeight: 44)
-				.background(Color(ui: 0x9AE070))
-				.cornerRadius(10)
-		}
-		.buttonStyle(.plain)
-	}
-
-	static func make(_ op: LEOp) -> LExpr {
-		var e = LExpr(op: op)
-		for _ in 0..<LReporters.arity(op) { e.args.append(LExpr(0)) }
-		if op == .param { e.v = 1 }
-		if op == .nearby { e.v = 6 }
-		if op == .random {
-			e.args = [LExpr(1), LExpr(10)]
-		}
-		if op == .inDim { e.s = "overworld" }
-		if op == .inBiome { e.v = Double(Biome.plains.rawValue) }
-		return e
-	}
-}
-
-/// The Mod Test tools' LOGIC tab: what is running, the variables, the log, messages to send, and the
-/// step debugger (pause every script, then run them one step at a time)
-struct LogicDebugView: View {
-	@ObservedObject var game: Game
-	@ObservedObject var hud: HUDSignal
-	@State var rev: Int = 0
-
-	var body: some View {
-		let rt: LogicRT = ModRuntime.shared.logic
-		let none: Bool = rt.isEmpty
-		return VStack(alignment: .leading, spacing: 8) {
-			if none { Text("This world's mods have no scripts.").font(.pixel(12)).foregroundColor(ModUI.dim) }
-			controls
-			counts
-			running
-			variables
-			messages
-			logLines
-		}
-	}
-
-	var controls: some View {
-		let vm: LogicVM = game.logic
-		let paused: Bool = vm.paused
-		let runTitle: String = paused ? "RUN" : "PAUSE"
-		let runCol: Color = paused ? ModUI.accent : Color(ui: 0x8A6A2A)
-		return HStack(spacing: 8) {
-			SmallButton(title: runTitle, color: runCol) { self.pause() }
-			if paused { SmallButton(title: "STEP", color: ModUI.blue) { self.step() } }
-			SmallButton(title: "WORLD START AGAIN", color: ModUI.blue) { self.restart() }
-			SmallButton(title: "REFRESH", color: Color(ui: 0x555555)) { self.rev += 1 }
-		}
-	}
-
-	func pause() {
-		game.logicPauseToggle()
-		rev += 1
-	}
-
-	func step() {
-		game.logicStepOnce()
-		rev += 1
-	}
-
-	func restart() {
-		game.logic.started = false
-		rev += 1
-	}
-
-	var counts: some View {
-		let vm: LogicVM = game.logic
-		let line: String = joinText("Started ", String(vm.ran), " times \u{00B7} problems ", String(vm.errors))
-		let head: String = joinText("RUNNING (", String(vm.threads.count), ")")
-		return VStack(alignment: .leading, spacing: 4) {
-			Text(verbatim: line).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-			Text(verbatim: head).font(.pixel(12, .bold)).foregroundColor(ModUI.gold)
-		}
-	}
-
-	var running: some View {
-		let lines: [String] = game.logic.threads.map { LogicDebugView.threadLine($0) }
-		return ForEach(0..<lines.count, id: \.self) { i in
-			Text(verbatim: lines[i]).font(.pixel(11, .semibold)).foregroundColor(Color.white)
-		}
-	}
-
-	static func threadLine(_ t: LThread) -> String {
-		let wait: String = t.waitT > 0 ? String(format: " \u{00B7} waiting %.1f s", t.waitT) : ""
-		let who: String = t.hasMob ? " \u{00B7} creature" : ""
-		return joinText(t.whereText, wait, who)
-	}
-
-	var variables: some View {
-		let keys: [String] = game.logicVars.keys.sorted()
-		let lines: [String] = keys.map { k in joinText(k, " = ", String(format: "%.2f", self.game.logicVars[k] ?? 0)) }
-		return VStack(alignment: .leading, spacing: 4) {
-			if !lines.isEmpty {
-				Text("VARIABLES").font(.pixel(12, .bold)).foregroundColor(ModUI.gold)
-				ForEach(0..<lines.count, id: \.self) { i in
-					Text(verbatim: lines[i]).font(.pixel(11, .semibold)).foregroundColor(Color.white)
+		case .healPlayer:
+			let h: Double = clampD(arg(0), 0, maxDmg)
+			if h > 0 && !dead { heal(h) }
+		case .hurtSelf:
+			if let m = t.mob {
+				let d: Double = clampD(arg(0), 0, maxDmg * 4)
+				if d > 0 { hurtMob(m, d, 0, 0, false) }
+			}
+		case .healSelf:
+			if let m = t.mob, m.hp > 0 { m.hp = min(m.maxHP, m.hp + clampD(arg(0), 0, maxDmg * 4)) }
+		case .hurtNearby:
+			let r: Double = clampD(n.a, 1, 8)
+			let d: Double = clampD(arg(0), 0, maxDmg)
+			if d > 0 {
+				var info = DamageInfo(amount: d, type: .magic, source: .player)
+				info.key = newID()
+				info.originX = pos.0
+				info.originY = pos.1
+				for m in mobsNear(pos.0 - r, pos.0 + r) where m.hp > 0 && !m.removed && !m.tame && m !== t.mob {
+					if abs(m.b.cy - pos.1) <= r + m.b.h * 0.5 { applyMobDamage(m, info) }
 				}
 			}
-		}
-	}
-
-	var messages: some View {
-		let msgs: [String] = Array(Set(ModRuntime.shared.logic.listeners(.custom).map { $0.def.evText })).sorted()
-		return VStack(alignment: .leading, spacing: 4) {
-			if !msgs.isEmpty {
-				Text("SEND A MESSAGE").font(.pixel(12, .bold)).foregroundColor(ModUI.gold)
-				HStack(spacing: 6) {
-					ForEach(msgs, id: \.self) { m in self.messageButton(m) }
-				}
-			}
-		}
-	}
-
-	func messageButton(_ m: String) -> some View {
-		let title: String = m.isEmpty ? "(unnamed)" : m
-		return SmallButton(title: title, color: Color(ui: 0x8A6A2A)) {
-			self.game.fireLogic(.custom, text: m)
-			self.rev += 1
-		}
-	}
-
-	var logLines: some View {
-		let log: [String] = Array(game.logic.log.suffix(30).reversed())
-		return VStack(alignment: .leading, spacing: 2) {
-			Text("LOG (newest first)").font(.pixel(12, .bold)).foregroundColor(ModUI.gold)
-			ForEach(0..<log.count, id: \.self) { i in
-				Text(verbatim: log[i]).font(.pixel(10, .semibold)).foregroundColor(Color.white.opacity(0.85))
-			}
-		}
-	}
-}
-
-// MARK: - Mod Creator: rules, weather, vehicles and the look of the screens
-
-/// The WORLD tab: the rules of the game, what a new world starts with, and the Overworld's weather
-struct WorldRulesView: View {
-	@ObservedObject var s: ModSession
-	@State var picking: Bool = false
-
-	var body: some View {
-		VStack(alignment: .leading, spacing: 10) {
-			Text("Change how the game plays in the worlds this mod is in. Each rule stays the game's own until you change it; when two mods change the same rule, the one lower in the mod list wins.")
-				.font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-			rulesSection
-			startSection
-			WeatherRulesEditor(s: s)
-		}
-		.modCover(s, picking ? 1 : nil) { self.itemPicker }
-	}
-
-	var rulesSection: some View {
-		ModSection(title: "RULES OF THE GAME") {
-			ForEach(GameRule.allCases, id: \.self) { (r: GameRule) in self.ruleRow(r) }
-		}
-	}
-
-	func ruleRow(_ r: GameRule) -> some View {
-		let sp: GameRule.Spec = r.spec
-		let v: Double? = s.mod.rules[sp.id]
-		let set: Bool = v != nil
-		let shown: String = WorldRulesView.valueText(sp, v ?? sp.def)
-		let label: String = set ? shown : joinText("game's: ", shown)
-		return VStack(alignment: .leading, spacing: 3) {
-			HStack(spacing: 8) {
-				Text(verbatim: sp.name).font(.pixel(13, .bold)).foregroundColor(Color.white)
-				Spacer(minLength: 0)
-				Text(verbatim: label).font(.pixel(12)).foregroundColor(set ? ModUI.gold : ModUI.dim)
-				SmallButton(title: set ? "GAME'S" : "CHANGE", color: set ? ModUI.red : ModUI.blue) { self.toggleRule(sp) }
-			}
-			Text(verbatim: sp.help).font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
-			if set { ruleControl(sp) }
-		}
-		.padding(.vertical, 3)
-	}
-
-	@ViewBuilder
-	func ruleControl(_ sp: GameRule.Spec) -> some View {
-		if sp.unit == "on" {
-			ModToggle(label: sp.name, isOn: onBind(sp))
-		} else {
-			Slider(value: ruleBind(sp), in: sp.lo...sp.hi, step: sp.step).frame(minHeight: 34)
-		}
-	}
-
-	static func valueText(_ sp: GameRule.Spec, _ v: Double) -> String {
-		switch sp.unit {
-		case "on": return v >= 0.5 ? "ON" : "OFF"
-		case "x": return String(format: "x%.1f", v)
-		case "min": return String(format: "%.0f min", v)
-		default: return String(format: "%.0f", v)
-		}
-	}
-
-	func toggleRule(_ sp: GameRule.Spec) {
-		if s.mod.rules[sp.id] != nil { s.mod.rules[sp.id] = nil } else { s.mod.rules[sp.id] = sp.def }
-		s.touch()
-	}
-
-	func ruleBind(_ sp: GameRule.Spec) -> Binding<Double> {
-		let ses: ModSession = s
-		let id: String = sp.id
-		let d: Double = sp.def
-		return Binding<Double>(get: { ses.mod.rules[id] ?? d }, set: { (v: Double) in
-			ses.mod.rules[id] = v
-			ses.touch()
-		})
-	}
-
-	func onBind(_ sp: GameRule.Spec) -> Binding<Bool> {
-		let base: Binding<Double> = ruleBind(sp)
-		return Binding<Bool>(get: { base.wrappedValue >= 0.5 }, set: { (on: Bool) in base.wrappedValue = on ? 1 : 0 })
-	}
-
-	var startSection: some View {
-		let can: Bool = s.mod.startItems.count < ModWorldLimits.startItems
-		return ModSection(title: "A NEW WORLD STARTS WITH", help: "Put in the bag of every new world (not in creative), beside the game's four torches.") {
-			ForEach(0..<s.mod.startItems.count, id: \.self) { (i: Int) in self.startRow(i) }
-			if can { SmallButton(title: "+ ADD AN ITEM", color: ModUI.accent) { self.picking = true } }
-		}
-	}
-
-	func startRow(_ i: Int) -> some View {
-		let c: ModCost = s.mod.startItems[i]
-		let name: String = ModPreview.name(c.item, s.catalog)
-		return HStack(spacing: 8) {
-			ModPreview.icon(c.item, s.catalog).resizable().interpolation(.none).frame(width: 32, height: 32)
-			Text(verbatim: name).font(.pixel(13)).foregroundColor(Color.white).lineLimit(1)
-			Spacer(minLength: 0)
-			SmallButton(title: "-", color: ModUI.blue) { self.addCount(i, c.n >= 20 ? -10 : -1) }
-			Text(verbatim: String(c.n)).font(.pixel(14)).foregroundColor(ModUI.gold).frame(minWidth: 34)
-			SmallButton(title: "+", color: ModUI.blue) { self.addCount(i, c.n >= 10 ? 10 : 1) }
-			SmallButton(title: "\u{2715}", color: ModUI.red) { self.removeStart(i) }
-		}
-	}
-
-	func addCount(_ i: Int, _ d: Int) {
-		if i < 0 || i >= s.mod.startItems.count { return }
-		s.mod.startItems[i].n = clampI(s.mod.startItems[i].n + d, 1, 999)
-		s.touch()
-	}
-
-	func removeStart(_ i: Int) {
-		if i < 0 || i >= s.mod.startItems.count { return }
-		s.mod.startItems.remove(at: i)
-		s.touch()
-	}
-
-	var itemPicker: some View {
-		ItemPickerView(catalog: s.catalog, title: "A NEW WORLD STARTS WITH...", pick: { (it: Item) in
-			self.s.mod.startItems.append(ModCost(it, 1))
-			self.s.touch()
-			self.picking = false
-		}, cancel: { self.picking = false })
-	}
-}
-
-/// The Overworld's weather as the mod has it: how often each kind comes, how strong and how long
-struct WeatherRulesEditor: View {
-	@ObservedObject var s: ModSession
-
-	var body: some View {
-		let on: Bool = s.mod.weather != nil
-		return ModSection(title: "THE OVERWORLD'S WEATHER", help: "How often each kind of weather comes (1: as the game, 0: never), how hard it rains and blows, and how long each spell lasts. The weather switches in Settings still apply.") {
-			ModToggle(label: "Change the weather", help: on ? "This mod's weather is used" : "The game's weather", isOn: onBind)
-			if on { controls }
-		}
-	}
-
-	var controls: some View {
-		VStack(alignment: .leading, spacing: 6) {
-			ForEach(WeatherKind.allCases, id: \.self) { (k: WeatherKind) in
-				StatSlider(label: k.name, value: self.chanceBind(k), range: 0.0...5.0, step: 0.25, format: "x%.2f")
-			}
-			StatSlider(label: "Rain and snow", value: numBind(\ModWeather.rain), range: 0.0...3.0, step: 0.1, format: "x%.1f")
-			StatSlider(label: "Wind", value: numBind(\ModWeather.wind), range: 0.0...3.0, step: 0.1, format: "x%.1f")
-			StatSlider(label: "How long spells last", value: numBind(\ModWeather.length), range: 0.25...6.0, step: 0.25, format: "x%.2f")
-			ModColorRow(label: "Colour of the rain", color: rainBind)
-			SmallButton(title: "THE GAME'S RAIN COLOUR") { self.edit { (w: inout ModWeather) in w.rainColor = 0 } }
-		}
-	}
-
-	func edit(_ f: (inout ModWeather) -> Void) {
-		var w: ModWeather = s.mod.weather ?? ModWeather()
-		f(&w)
-		s.mod.weather = w
-		s.touch()
-	}
-
-	var onBind: Binding<Bool> {
-		let ses: ModSession = s
-		return Binding<Bool>(get: { ses.mod.weather != nil }, set: { (on: Bool) in
-			ses.mod.weather = on ? (ses.mod.weather ?? ModWeather()) : nil
-			ses.touch()
-		})
-	}
-
-	func chanceBind(_ k: WeatherKind) -> Binding<Double> {
-		let ses: ModSession = s
-		return Binding<Double>(get: { ses.mod.weather?.chanceOf(k) ?? 1 }, set: { (v: Double) in
-			var w: ModWeather = ses.mod.weather ?? ModWeather()
-			while w.chance.count < WeatherKind.allCases.count { w.chance.append(1) }
-			w.chance[k.rawValue] = v
-			ses.mod.weather = w
-			ses.touch()
-		})
-	}
-
-	func numBind(_ kp: WritableKeyPath<ModWeather, Double>) -> Binding<Double> {
-		let ses: ModSession = s
-		return Binding<Double>(get: { (ses.mod.weather ?? ModWeather())[keyPath: kp] }, set: { (v: Double) in
-			var w: ModWeather = ses.mod.weather ?? ModWeather()
-			w[keyPath: kp] = v
-			ses.mod.weather = w
-			ses.touch()
-		})
-	}
-
-	var rainBind: Binding<UInt32> {
-		let ses: ModSession = s
-		return Binding<UInt32>(get: { ses.mod.weather?.rainColor ?? 0 }, set: { (v: UInt32) in
-			var w: ModWeather = ses.mod.weather ?? ModWeather()
-			w.rainColor = v
-			ses.mod.weather = w
-			ses.touch()
-		})
-	}
-}
-
-extension BlockEditorView {
-	/// As building material, and on power lines
-	var buildSection: some View {
-		let p: ModBlock = block
-		let auto: BlockPhys = blockPhysFrom(TileDef(name: p.name, hard: p.hardness, solid: p.collision == .solid))
-		let weightNote: String = String(format: "0 = worked out from its hardness (%.1f, holds %.0f)", auto.weight, auto.carry)
-		return VStack(spacing: 10) {
-			ModSection(title: "AS BUILDING MATERIAL", help: weightNote) {
-				StatSlider(label: "Weight (stone is 2.5)", value: b(\.weight, 0), range: 0.0...(s.mod.sandbox ? 40 : 12), step: 0.1, format: "%.1f")
-				StatSlider(label: "Weight it holds up", value: b(\.carry, 0), range: 0.0...(s.mod.sandbox ? 4000 : 400), step: 5, format: "%.0f")
-				ModToggle(label: "Falls like sand", help: "With nothing under it, it drops and lands", isOn: b(\.falls, false))
-			}
-			ModSection(title: "ON POWER LINES", help: p.powerRole.help) {
-				ChoiceRows(options: ModPowerRole.allCases.map { $0.name }, selected: powerBind, columns: 3)
-				if p.powerRole != .none && p.powerRole != .signal {
-					StatSlider(label: "Strength (sparks a second)", value: b(\.powerAmt, 4), range: 0.1...(s.mod.sandbox ? 200 : 40), step: 0.1, format: "%.1f")
-				}
-			}
-		}
-	}
-
-	var powerBind: Binding<Int> {
-		let base: Binding<ModPowerRole> = b(\.powerRole, .none)
-		return Binding<Int>(get: { base.wrappedValue.rawValue }, set: { base.wrappedValue = ModPowerRole(rawValue: $0) ?? .none })
-	}
-}
-
-/// The VEHICLES tab: whole vehicles, each also an item (its kit) that builds it
-struct VehicleListView: View {
-	@ObservedObject var s: ModSession
-	var open: (String) -> Void
-
-	var body: some View {
-		let can: Bool = s.mod.vehicles.count < ModWorldLimits.vehicles
-		return VStack(alignment: .leading, spacing: 8) {
-			Text("A vehicle kept in the mod is built from its kit: an item your recipes make. Use the kit on open ground (or water, for a boat) and the vehicle is there to drive. Paint it part by part here, or build it in a TEST world and keep it with SAVE VEHICLE on the TEST panel.")
-				.font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-			if can { PixelButton(title: "+ NEW VEHICLE", color: ModUI.accent) { self.add() } }
-			ForEach(s.mod.vehicles) { (v: ModVehicle) in self.row(v) }
-		}
-	}
-
-	func row(_ v: ModVehicle) -> some View {
-		let pic: Image = pixImage(ModRuntime.shared.vehicleIconBuf(v))
-		let line: String = joinText(String(v.cells.count), " parts", v.water ? " · a boat" : "")
-		return ModRow(image: pic, title: v.name, sub: line, open: { self.open(v.id) }, copy: { self.copy(v) },
-					  delete: { self.s.mod.vehicles.removeAll { $0.id == v.id }; self.s.touch() },
-					  off: s.mod.off.contains(v.id), toggle: { self.toggleOff(v.id) })
-	}
-
-	func add() {
-		var v = ModVehicle()
-		v.id = s.mod.freshID("veh")
-		v.name = joinText("Vehicle ", String(s.mod.vehicles.count + 1))
-		v.cells = [ModVehicleCell(1, 0, .seat), ModVehicleCell(2, 0, .steering), ModVehicleCell(0, 1, .fuelTank), ModVehicleCell(1, 1, .frame),
-				   ModVehicleCell(2, 1, .frame), ModVehicleCell(3, 1, .engine), ModVehicleCell(0, 2, .wheel), ModVehicleCell(3, 2, .wheel)]
-		s.mod.vehicles.append(v)
-		s.touch()
-		open(v.id)
-	}
-
-	func copy(_ v: ModVehicle) {
-		if s.mod.vehicles.count >= ModWorldLimits.vehicles { return }
-		var c: ModVehicle = v
-		c.id = s.mod.freshID("veh")
-		c.name = joinText(v.name, " copy")
-		s.mod.vehicles.append(c)
-		s.touch()
-	}
-
-	func toggleOff(_ id: String) {
-		if s.mod.off.contains(id) { s.mod.off.removeAll { $0 == id } } else { s.mod.off.append(id) }
-		s.touch()
-	}
-}
-
-/// Editing one vehicle: its name, whether it is a boat, its fuel, and its parts painted on a grid
-struct VehicleEditorView: View {
-	@ObservedObject var s: ModSession
-	let id: String
-	@State var brush: Int = 0
-	@State var block: String = ""
-	@State var picking: Bool = false
-
-	func b<T>(_ kp: WritableKeyPath<ModVehicle, T>, _ d: T) -> Binding<T> { return s.bind(\ModPack.vehicles, id, kp, d) }
-	var veh: ModVehicle { return s.mod.vehicles.first { $0.id == id } ?? ModVehicle() }
-
-	/// what the brush can paint: every part but a plain block, then a block, then nothing
-	static let parts: [PartType] = PartType.allCases.filter { $0 != .block }
-	static var brushNames: [String] { return parts.map { $0.name.uppercased() } + ["BLOCK", "ERASE"] }
-
-	var body: some View {
-		let v: ModVehicle = veh
-		return VStack(spacing: 10) {
-			ModSection(title: v.name.uppercased(), help: "Its kit is an item: give it a recipe on the RECIPES tab.") {
-				ModTextField(label: "Name", text: b(\.name, ""), placeholder: "Sky Hauler")
-				ModTextField(label: "Description", text: b(\.desc, ""), placeholder: "Optional")
-				ModToggle(label: "A boat", help: "Put down on water instead of on the ground", isOn: b(\.water, false))
-				StatSlider(label: "Fuel it comes with", value: b(\.fuel, 40), range: 0.0...400.0, step: 5, format: "%.0f")
-			}
-			ModSection(title: "PARTS", help: brushHelp) {
-				ChoiceRows(options: VehicleEditorView.brushNames, selected: $brush, columns: 5)
-				if brush == VehicleEditorView.parts.count { blockChoice }
-				grid(v)
-				Text(verbatim: joinText(String(v.cells.count), " of ", String(ModVehicle.maxCells), " cells")).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-				SmallButton(title: "CLEAR", color: ModUI.red) { self.b(\.cells, []).wrappedValue = [] }
-			}
-			ModSection(title: "ICON", help: "Blank: drawn from its parts.") {
-				PixelEditorView(pixels: b(\.icon, ModPixels(w: 12, h: 12)), maxSide: 220, outlineDefault: true)
-			}
-		}
-		.modCover(s, picking ? 1 : nil) { self.blockPicker }
-	}
-
-	var brushHelp: String {
-		if brush < VehicleEditorView.parts.count { return joinText("Tap or drag to place: ", VehicleEditorView.parts[brush].name, ". Wheels go at the bottom, a seat or cockpit is where the driver sits.") }
-		if brush == VehicleEditorView.parts.count { return "Tap or drag to place the chosen block (a mod block that works as a vehicle part works as one)." }
-		return "Tap or drag to take parts away."
-	}
-
-	var blockChoice: some View {
-		let label: String = block.isEmpty ? "No block chosen" : blockName(block)
-		return HStack(spacing: 8) {
-			Text(verbatim: label).font(.pixel(12)).foregroundColor(Color.white)
-			Spacer(minLength: 0)
-			SmallButton(title: "CHOOSE A BLOCK...", color: ModUI.blue) { self.picking = true }
-		}
-	}
-
-	func blockName(_ k: String) -> String {
-		if k.hasPrefix("tile:"), let n = Int(k.dropFirst(5)), let t = Tile(rawValue: UInt8(clampI(n, 0, 255))) { return t.name }
-		return s.catalog.names[k] ?? k
-	}
-
-	var blockPicker: some View {
-		ItemPickerView(catalog: s.catalog, title: "BUILD WITH...", blocksOnly: true, pick: { (it: Item) in
-			switch it {
-			case .block(let t): self.block = joinText("tile:", String(t.rawValue))
-			case .custom(let k): self.block = k
-			default: break
-			}
-			self.picking = false
-		}, cancel: { self.picking = false })
-	}
-
-	func grid(_ v: ModVehicle) -> some View {
-		let n: Int = ModVehicle.maxSize
-		let cell: CGFloat = 13
-		let side: CGFloat = cell * CGFloat(n)
-		var colours: [Int: UInt32] = [:]
-		for c in v.cells { colours[c.y * n + c.x] = ModRuntime.shared.vehicleCellColor(c) }
-		return Canvas { ctx, size in
-			for y in 0..<n {
-				for x in 0..<n {
-					let r: CGRect = CGRect(x: CGFloat(x) * cell, y: CGFloat(y) * cell, width: cell - 1, height: cell - 1)
-					let col: UInt32 = colours[y * n + x] ?? 0x1A2030
-					ctx.fill(Path(r), with: .color(Color(hex: col)))
-				}
-			}
-		}
-		.frame(width: side, height: side)
-		.gesture(DragGesture(minimumDistance: 0).onChanged { (g: DragGesture.Value) in self.paint(g.location, cell) })
-	}
-
-	func paint(_ p: CGPoint, _ cell: CGFloat) {
-		let x: Int = Int(floor(p.x / cell))
-		let y: Int = Int(floor(p.y / cell))
-		let n: Int = ModVehicle.maxSize
-		if x < 0 || y < 0 || x >= n || y >= n { return }
-		var cells: [ModVehicleCell] = veh.cells
-		let had: Int? = cells.firstIndex { $0.x == x && $0.y == y }
-		let partCount: Int = VehicleEditorView.parts.count
-		if brush > partCount {
-			guard let i = had else { return }
-			cells.remove(at: i)
-		} else {
-			var c = ModVehicleCell(x, y, .frame)
-			if brush < partCount {
-				c.part = VehicleEditorView.parts[brush].rawValue
-			} else {
-				if block.isEmpty { return }
-				c.block = block
-			}
-			if let i = had {
-				if cells[i] == c { return }
-				cells[i] = c
-			} else {
-				if cells.count >= ModVehicle.maxCells { return }
-				cells.append(c)
-			}
-		}
-		b(\.cells, []).wrappedValue = cells
-	}
-}
-
-extension ModTestPanel {
-	/// In a TEST world: keeps the vehicle the player drives (or stands by) in the mod as a design
-	func saveVehicle() -> String {
-		let mid: String = game.testMod
-		guard !mid.isEmpty, var p = ModStore.pack(mid) else { return "Only in a TEST world." }
-		guard let v = game.inVehicle ?? game.nearestVehicle(3) else { return "Stand by a vehicle (or drive one) first." }
-		if p.vehicles.count >= ModWorldLimits.vehicles { return joinText(p.name, " already holds the most vehicles a mod can.") }
-		var mv: ModVehicle = game.vehicleDesign(v)
-		mv.id = p.freshID("veh")
-		mv.name = joinText("Vehicle ", String(p.vehicles.count + 1))
-		p.vehicles.append(mv)
-		return ModStore.save(p) ? joinText("Saved as \u{201C}", mv.name, "\u{201D} in ", p.name, ": give its kit a recipe in the Mod Creator.") : "The mod could not be saved."
-	}
-}
-
-/// The LOOK tab: how the game's screens look while this mod is on (the theme of the last mod in the
-/// list that has one is used, on the title screen too)
-struct ThemeEditorView: View {
-	@ObservedObject var s: ModSession
-
-	var body: some View {
-		let on: Bool = s.mod.theme != nil
-		return VStack(alignment: .leading, spacing: 10) {
-			Text("Change the colours of the game's screens and buttons, the letters, how round the buttons are, the title screen, and the size and sides of the touch controls. It shows once the mod is switched on, from the title screen.")
-				.font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-			ModToggle(label: "Change how the game looks", help: on ? "This mod's look" : "The game's own look", isOn: onBind)
-			if on { sections }
-		}
-	}
-
-	var sections: some View {
-		let t: ModTheme = s.mod.theme ?? ModTheme()
-		return VStack(alignment: .leading, spacing: 10) {
-			ThemePreview(theme: t)
-			ModSection(title: "COLOURS", help: "Each takes the place of the game's colour for that part of every screen (other shades follow it).") {
-				ForEach(ThemeRole.allCases, id: \.self) { (r: ThemeRole) in self.roleRow(r) }
-				StatSlider(label: "How much everything else leans to the tint", value: numBind(\ModTheme.tintAmt), range: 0.0...1.0, step: 0.05, format: "%.2f")
-			}
-			ModSection(title: "LETTERS AND BUTTONS") {
-				ChoiceRows(options: ModTheme.fonts, selected: intBind(\ModTheme.font), columns: 4)
-				StatSlider(label: "Rounded corners", value: numBind(\ModTheme.corner), range: 0.0...16.0, step: 1, format: "%.0f")
-				ModColorRow(label: "Outline", color: colorBind(\ModTheme.outline))
-			}
-			ModSection(title: "TITLE SCREEN", help: "Blank: the game's own title and the sky behind it.") {
-				ModTextField(label: "Title", text: textBind(\ModTheme.title), placeholder: "PIXEL REALM")
-				ModTextField(label: "Words under it", text: textBind(\ModTheme.subtitle), placeholder: "A new splash line each time")
-				PixelEditorView(pixels: backBind, maxSide: 300, outlineDefault: false)
-				HStack(spacing: 8) {
-					SmallButton(title: "PAINT A BACKGROUND", color: ModUI.blue) { self.backBind.wrappedValue = ModPixels(w: 48, h: 27) }
-					SmallButton(title: "NO PICTURE", color: ModUI.red) { self.backBind.wrappedValue = ModPixels(w: 1, h: 1) }
-				}
-			}
-			ModSection(title: "TOUCH CONTROLS") {
-				StatSlider(label: "Size", value: numBind(\ModTheme.hudScale), range: 0.6...1.5, step: 0.05, format: "x%.2f")
-				StatSlider(label: "How solid", value: numBind(\ModTheme.hudAlpha), range: 0.3...1.0, step: 0.05, format: "%.2f")
-				ModToggle(label: "Swap sides", help: "Attack stick and JUMP on the left, the walking stick on the right", isOn: boolBind(\ModTheme.swapSides))
-			}
-		}
-	}
-
-	func roleRow(_ r: ThemeRole) -> some View {
-		let c: UInt32 = (s.mod.theme ?? ModTheme()).color(r)
-		return VStack(alignment: .leading, spacing: 4) {
-			ModColorRow(label: c == 0 ? joinText(r.name, " (the game's)") : r.name, color: roleBind(r))
-			if c != 0 { SmallButton(title: "THE GAME'S", color: ModUI.red) { self.edit { (t: inout ModTheme) in t.colors[r.rawValue] = 0 } } }
-		}
-	}
-
-	func edit(_ f: (inout ModTheme) -> Void) {
-		var t: ModTheme = s.mod.theme ?? ModTheme()
-		while t.colors.count < ThemeRole.allCases.count { t.colors.append(0) }
-		f(&t)
-		s.mod.theme = t
-		s.touch()
-	}
-
-	var onBind: Binding<Bool> {
-		let ses: ModSession = s
-		return Binding<Bool>(get: { ses.mod.theme != nil }, set: { (on: Bool) in
-			ses.mod.theme = on ? (ses.mod.theme ?? ModTheme()) : nil
-			ses.touch()
-		})
-	}
-
-	func roleBind(_ r: ThemeRole) -> Binding<UInt32> {
-		let ses: ModSession = s
-		return Binding<UInt32>(get: { (ses.mod.theme ?? ModTheme()).color(r) }, set: { (v: UInt32) in
-			var t: ModTheme = ses.mod.theme ?? ModTheme()
-			while t.colors.count < ThemeRole.allCases.count { t.colors.append(0) }
-			t.colors[r.rawValue] = v
-			ses.mod.theme = t
-			ses.touch()
-		})
-	}
-
-	func field<T>(_ kp: WritableKeyPath<ModTheme, T>) -> Binding<T> {
-		let ses: ModSession = s
-		return Binding<T>(get: { (ses.mod.theme ?? ModTheme())[keyPath: kp] }, set: { (v: T) in
-			var t: ModTheme = ses.mod.theme ?? ModTheme()
-			t[keyPath: kp] = v
-			ses.mod.theme = t
-			ses.touch()
-		})
-	}
-
-	func numBind(_ kp: WritableKeyPath<ModTheme, Double>) -> Binding<Double> { return field(kp) }
-	func intBind(_ kp: WritableKeyPath<ModTheme, Int>) -> Binding<Int> { return field(kp) }
-	func textBind(_ kp: WritableKeyPath<ModTheme, String>) -> Binding<String> { return field(kp) }
-	func boolBind(_ kp: WritableKeyPath<ModTheme, Bool>) -> Binding<Bool> { return field(kp) }
-	func colorBind(_ kp: WritableKeyPath<ModTheme, UInt32>) -> Binding<UInt32> { return field(kp) }
-	var backBind: Binding<ModPixels> { return field(\ModTheme.background) }
-}
-
-/// A few buttons and a title in a theme's colours (drawn from the theme itself, before it is switched on)
-struct ThemePreview: View {
-	let theme: ModTheme
-
-	func col(_ r: ThemeRole) -> Color {
-		let c: UInt32 = theme.color(r)
-		return Color(hex: c != 0 ? c : r.gameColor)
-	}
-
-	var body: some View {
-		let design: Font.Design = [Font.Design.monospaced, .rounded, .serif, .default][clampI(theme.font, 0, 3)]
-		let r: CGFloat = CGFloat(theme.corner)
-		let title: String = theme.title.isEmpty ? "PIXEL REALM" : theme.title
-		return VStack(spacing: 8) {
-			Text(verbatim: title).font(.system(size: 22, weight: .black, design: design)).foregroundColor(col(.titles))
-			HStack(spacing: 6) {
-				sample("PLAY", col(.accept), r, design)
-				sample("BAG", col(.buttons), r, design)
-				sample("INFO", col(.info), r, design)
-				sample("QUIT", col(.danger), r, design)
-			}
-		}
-		.padding(10)
-		.frame(maxWidth: .infinity)
-		.background(RoundedRectangle(cornerRadius: r).fill(col(.panels)))
-	}
-
-	func sample(_ t: String, _ c: Color, _ r: CGFloat, _ d: Font.Design) -> some View {
-		return Text(verbatim: t)
-			.font(.system(size: 13, weight: .heavy, design: d))
-			.foregroundColor(Color.white)
-			.padding(.horizontal, 10)
-			.padding(.vertical, 8)
-			.background(RoundedRectangle(cornerRadius: r).fill(c))
-			.overlay(RoundedRectangle(cornerRadius: r).stroke(Color(hex: theme.outline), lineWidth: 2))
-	}
-}
-
-// ===== u06_root =====
-
-// MARK: - Keyboard (hardware keyboards on iPad)
-
-struct KeyInput: ViewModifier {
-	let game: Game
-	@FocusState var focused: Bool
-
-	func body(content: Content) -> some View {
-		if #available(iOS 17.0, macOS 14.0, *) {
-			content
-				.focusable()
-				.focused($focused)
-				.focusEffectDisabled()
-				.onAppear { focused = true }
-				.onKeyPress(phases: [.down, .up]) { press in handle(press) }
-		} else {
-			content
-		}
-	}
-
-	@available(iOS 17.0, macOS 14.0, *)
-	func handle(_ press: KeyPress) -> KeyPress.Result {
-		let isDown: Bool = press.phase != .up
-		if press.key == .leftArrow { game.keyL = isDown; return .handled }
-		if press.key == .rightArrow { game.keyR = isDown; return .handled }
-		if press.key == .upArrow || press.key == .space { game.jumpHeld = isDown; return .handled }
-		if press.key == .downArrow { game.downHeld = isDown; return .handled }
-		if press.key == .escape {
-			if isDown { game.paused.toggle() }
-			return .handled
-		}
-		if press.key == .tab {
-			if isDown { game.showDebug.toggle() }
-			return .handled
-		}
-		let c: String = press.characters.lowercased()
-		switch c {
-		case "a": game.keyL = isDown
-		case "d": game.keyR = isDown
-		case "w": game.jumpHeld = isDown
-		case "s": game.downHeld = isDown
-		case "f": if isDown { actState.held = true } else { actState.stickReleased() }
-		case "e":
-			if isDown {
-				if game.showInventory {
-					game.returnCarried()
-					game.openChest = nil
-					game.craftStation = .hand
-					game.showInventory = false
+		case .explode:
+			let src: DamageSource = t.mob.map { DamageSource.mob($0, faction(of: $0)) } ?? .environment
+			explode(pos.0, pos.1, radius: clampD(n.a, 1, 4), power: clampD(n.b, 1, 20), source: src, breakBlocks: false)
+		case .fireShot:
+			logicShot(t, n, pos)
+		case .summon:
+			let rt: ModRuntime = ModRuntime.shared
+			let count: Int = clampI(Int(n.a), 1, 4)
+			for k in 0..<count {
+				let x: Double = pos.0 + (k % 2 == 0 ? 1.0 : -1.0) * (1.5 + Double(k / 2) * 1.2)
+				if let slot = rt.mobSlot[n.s], let r = rt.mob(slot) {
+					if let y = roomNear(x, pos.1 + 1.0, r.mdef.w, r.mdef.h) { addCustomMob(slot, x, y) }
+				} else if let kind = MobKind.allCases.first(where: { $0 != .custom && $0 != .villager && mobDef($0).name == n.s }) {
+					if let y = roomNear(x, pos.1 + 1.0, mobDef(kind).w, mobDef(kind).h) { _ = addMob(kind, x, y) }
 				} else {
-					game.showInventory = true
+					logic.note(joinText(t.prog.name, ": the creature to call is missing; skipped."))
+					break
 				}
 			}
-		case "m": if isDown && (game.gotMap || game.inv.total(.gadget(.treasureMap)) > 0) { game.showMap.toggle() }
-		case "j": if isDown { game.showJournal.toggle() }
-		case "r": if isDown { game.startReload() }
-		case "q": if isDown { game.cycleWeapon() }
-		case "x": if isDown { game.dismount() }
-		case "=", "+": if isDown { game.tilePx = clampI(game.tilePx + 8, 16, 56); game.bumpHUD() }
-		case "-": if isDown { game.tilePx = clampI(game.tilePx - 8, 16, 56); game.bumpHUD() }
-		case "1", "2", "3", "4", "5", "6", "7", "8", "9":
-			if isDown, let n = Int(c) { game.setSel(n - 1) }
-		case "0":
-			if isDown { game.setSel(9) }
-		default:
-			return .ignored
-		}
-		return .handled
-	}
-}
-
-// MARK: - Game screen
-
-final class LoopClock: @unchecked Sendable {
-	var last: Double = 0
-	var skip: Bool = false
-	var pending: Double = 0
-	var fpsN: Int = 0
-}
-
-/// The world picture. It only redraws when the game steps (it watches the frame ticker, not the whole game).
-struct WorldLayer: View {
-	let game: Game
-	@ObservedObject var ticker: FrameTicker
-	var body: some View {
-		Canvas(opaque: true) { ctx, size in
-			WorldLayer.render(&ctx, size, game)
-		}
-	}
-
-	static func render(_ ctx: inout GraphicsContext, _ size: CGSize, _ g: Game) {
-		g.viewW = Double(size.width)
-		g.viewH = Double(size.height)
-		WorldRenderer.draw(&ctx, size, g)
-	}
-}
-
-struct GameView: View {
-	@ObservedObject var game: Game
-	var quit: () -> Void
-	/// swaps in a fresh world (the Mod Test's reset)
-	var restart: ((Game) -> Void)? = nil
-	@State var dragging: Bool = false
-	@State var clock: LoopClock = LoopClock()
-	let timer = Timer.publish(every: 1.0 / 60.0, on: .main, in: .common).autoconnect()
-
-	var body: some View {
-		ZStack {
-			worldLayer
-			if !game.showInventory && !game.showMap && !game.showJournal && !game.showWeather && !game.showPower && !game.showCapture && !game.showModTest && !game.showInfuse && !game.showExo && !game.dead {
-				HUDView(game: game, hud: game.hud)
-			}
-			if game.showInfuse {
-				Color.black.opacity(0.45).ignoresSafeArea()
-				GeometryReader { geo in
-					InfusionPanel(game: game, hud: game.hud)
-						.scaleEffect(min(1.0, min(geo.size.width / 960.0, geo.size.height / 640.0)))
-						.frame(width: geo.size.width, height: geo.size.height)
-				}
-			}
-			if game.showExo {
-				Color.black.opacity(0.45).ignoresSafeArea()
-				// no scroll view (it would fight with dragging): it scales to fit instead
-				GeometryReader { geo in
-					ExoAssemblyPanel(game: game, hud: game.hud)
-						.scaleEffect(min(1.0, min(geo.size.width / 1010.0, geo.size.height / 560.0)))
-						.frame(width: geo.size.width, height: geo.size.height)
-				}
-			}
-			if game.showModTest {
-				Color.black.opacity(0.45).ignoresSafeArea()
-				ModTestPanel(game: game, hud: game.hud, reset: { resetTest() }, exit: quit)
-			}
-			if game.capturing && !game.showCapture && !game.paused { CaptureBar(game: game, hud: game.hud) }
-			if game.showCapture {
-				Color.black.opacity(0.45).ignoresSafeArea()
-				CapturePanel(game: game)
-			}
-			if game.showWeather {
-				Color.black.opacity(0.4).ignoresSafeArea()
-				ScrollView {
-					WeatherPanel(game: game, hud: game.hud)
-				}
-			}
-			if game.showPower {
-				Color.black.opacity(0.4).ignoresSafeArea()
-				ScrollView {
-					PowerPanel(game: game, hud: game.hud)
-				}
-			}
-			if game.showInventory {
-				Color.black.opacity(0.35).ignoresSafeArea()
-				// no scroll view around the panel (it would fight with dragging); it scales to fit instead
-				GeometryReader { geo in
-					InventoryPanel(game: game, hud: game.hud)
-						.scaleEffect(min(1.0, min(geo.size.width / 1000.0, geo.size.height / 600.0)))
-						.frame(width: geo.size.width, height: geo.size.height)
-				}
-			}
-			if game.showMap {
-				Color.black.opacity(0.45).ignoresSafeArea()
-				ScrollView {
-					MapPanel(game: game, hud: game.hud)
-				}
-			}
-			if game.showJournal {
-				Color.black.opacity(0.45).ignoresSafeArea()
-				JournalPanel(game: game, hud: game.hud)
-			}
-			if game.showDebug && !game.showInventory && !game.showMap {
-				HStack {
-					Spacer()
-					DebugPanel(game: game, hud: game.hud)
-						.frame(width: 300)
-						.padding(.top, 54)
-						.padding(.bottom, 8)
-						.padding(.trailing, 8)
-				}
-			}
-			if game.paused { PauseView(game: game, hud: game.hud, quit: quit) }
-			if game.dead { DeathView(game: game, hud: game.hud, quit: quit) }
-		}
-		.background(Color.black)
-		.onReceive(timer) { _ in step() }
-		.onAppear { Sound.shared.start() }
-		.modifier(KeyInput(game: game))
-	}
-
-	/// A fresh test world for the mod being tested (read again from the store)
-	func resetTest() {
-		guard let p = ModStore.pack(game.testMod), let r = restart else { return }
-		let ng: Game = ModTest.makeWorld(p, settings: game.settings)
-		ng.tilePx = game.tilePx
-		ng.say("The test world starts again.", 2.5)
-		r(ng)
-	}
-
-	var worldLayer: some View {
-		WorldLayer(game: game, ticker: game.ticker)
-			.ignoresSafeArea()
-			.contentShape(Rectangle())
-			.gesture(worldGesture)
-	}
-
-	var worldGesture: some Gesture {
-		DragGesture(minimumDistance: 0)
-			.onChanged { v in touchMoved(v.location) }
-			.onEnded { _ in touchEnded() }
-	}
-
-	func touchMoved(_ p: CGPoint) {
-		let w: (Double, Double) = toWorld(p)
-		if !dragging {
-			dragging = true
-			game.pointerDown(w.0, w.1)
-		} else {
-			game.pointerMove(w.0, w.1)
-		}
-	}
-
-	func touchEnded() {
-		dragging = false
-		game.pointerUp()
-	}
-
-	func toWorld(_ p: CGPoint) -> (Double, Double) {
-		let tp: Double = Double(game.tilePx)
-		let wT: Double = game.viewW / tp
-		let hT: Double = game.viewH / tp
-		let left: Double = floor((game.camX - wT * 0.5) * 8.0) / 8.0
-		let top: Double = floor((game.camY - hT * 0.5) * 8.0) / 8.0
-		let px: Double = Double(p.x)
-		let py: Double = Double(p.y)
-		let wx: Double = left + px / tp
-		let wy: Double = top + py / tp
-		return (wx, wy)
-	}
-
-	/// One game step. Runs from a 60 Hz timer; in 30 fps mode every second tick is merged into the next.
-	func step() {
-		let now: Double = Date().timeIntervalSinceReferenceDate
-		var dt: Double = now - clock.last
-		if clock.last == 0 || dt > 0.1 { dt = 1.0 / 60.0 }
-		clock.last = now
-		game.updateInputGate()
-		if game.paused { return }
-		if !game.settings.fps60 {
-			clock.skip.toggle()
-			if clock.skip {
-				clock.pending += dt
+		case .giveEffect:
+			guard let kind = ModEffectKind(rawValue: clampI(Int(n.a), 0, ModEffectKind.allCases.count - 1)) else { return }
+			let amt: Double = kind.amountRange.clamp(n.b, sb)
+			applyEffects([ModEffect(kind, amt, ModRange.seconds.clamp(n.c, sb))])
+		case .placeBlock:
+			guard let tile = ModGround.resolve(n.s, ModRuntime.shared), tile != .air else {
+				logic.note(joinText(t.prog.name, ": the block to place is missing; skipped."))
 				return
 			}
-			dt += clock.pending
-			clock.pending = 0
+			let x: Int = Int(floor(pos.0)) + clampI(Int(n.a), -8, 8)
+			let y: Int = Int(floor(pos.1)) - clampI(Int(n.b), -8, 8)
+			let cur: Tile = world.tile(x, y)
+			if !(cur == .air || cur.liquid || cur.isPlant) { return }
+			if tile.solid && pb.right > Double(x) + 0.02 && pb.left < Double(x + 1) - 0.02 && pb.y > Double(y) + 0.02 && pb.top < Double(y + 1) - 0.02 { return }
+			world.set(x, y, tile)
+		case .breakBlock:
+			let x: Int = Int(floor(pos.0)) + clampI(Int(n.a), -8, 8)
+			let y: Int = Int(floor(pos.1)) - clampI(Int(n.b), -8, 8)
+			let cur: Tile = world.tile(x, y)
+			if cur == .air || cur.liquid || cur == .bedrock || cur.hardness >= 99 || cur == .chest || cur.isPower { return }
+			if cur == .portalFrame || cur == .portalOff || cur == .portalOn { return }
+			breakTile(x, y, false)
+		case .setTime:
+			timeOfDay = clampD(n.a, 0, 0.999)
+			light.valid = false
+		case .giveItem:
+			if let it = n.item { giveItem(it, clampI(Int(n.a), 1, 64)) }
+		case .takeItem:
+			if let it = n.item {
+				let k: Int = min(inv.total(it), clampI(Int(n.a), 1, 64))
+				if k > 0 { _ = inv.remove(it, k) }
+				bumpHUD()
+			}
+		case .enterPhase:
+			if let m = t.mob, let r = ModRuntime.shared.mob(m.cslot) {
+				let k: Int = clampI(Int(n.a), 1, max(1, r.def.phases.count)) - 1
+				if k < r.def.phases.count && k + 1 > m.mphase { enterPhase(m, r, k, quiet: false) }
+			}
+		case .ifThen, .ifElse, .repeatN, .whileDo, .forever, .wait, .stop, .runGroup:
+			break
 		}
-		game.applyActButton()
-		game.tick(dt)
-		game.ticker.frame &+= 1
 	}
-}
 
-// MARK: - Root
-
-/// Saves when the app goes to the background (uses the iOS 17 onChange form when available)
-struct PhaseWatcher: ViewModifier {
-	let phase: ScenePhase
-	let changed: (ScenePhase) -> Void
-
-	func body(content: Content) -> some View {
-		if #available(iOS 17.0, macOS 14.0, *) {
-			content.onChange(of: phase) { _, newPhase in changed(newPhase) }
+	/// A scripted shot at the player: a mod's own shot, or one of the game's
+	func logicShot(_ t: LThread, _ n: LNode, _ pos: (Double, Double)) {
+		var live: Int = 0
+		for p in projectiles where p.mod >= 0 || p.owner >= 0 { live += 1 }
+		if live >= ModLimits.maxShotsLive { return }
+		let speed: Double = clampD(n.a, 4, 30)
+		var dx: Double = pb.x - pos.0
+		var dy: Double = (pb.y - pb.h * 0.5) - pos.1
+		let len: Double = max(0.001, sqrt(dx * dx + dy * dy))
+		dx /= len
+		dy /= len
+		var kind: ProjKind = .fireball
+		let gk: Int = clampI(Int(n.b), 0, ModGameShots.kinds.count - 1)
+		if let k = ProjKind(rawValue: ModGameShots.kinds[gk]) { kind = k }
+		var p = Projectile(kind: kind, x: pos.0 + dx * 0.8, y: pos.1 + dy * 0.8, vx: dx * speed, vy: dy * speed, dmg: clampD(n.c, 0, 30), fromPlayer: false, gravity: 0)
+		p.life = 4.0
+		p.uid = newID()
+		if let m = t.mob {
+			p.owner = m.id
+			p.source = .mob(m, faction(of: m))
 		} else {
-			content.onChange(of: phase) { newPhase in changed(newPhase) }
+			p.source = .environment
+		}
+		if !n.s.isEmpty, let si = ModRuntime.shared.shotIndex[n.s], si < ModRuntime.shared.shots.count {
+			let s: ModProjectile = ModRuntime.shared.shots[si]
+			p.kind = .spit
+			p.mod = si
+			p.gravity = s.gravity
+			p.life = s.life
+			p.w = s.size
+			p.pierce = s.pierce
+		}
+		projectiles.append(p)
+	}
+
+	// MARK: the Mod Test debugger
+
+	func logicPauseToggle() {
+		logic.paused.toggle()
+		logic.note(logic.paused ? "Paused: scripts wait for STEP." : "Running again.")
+	}
+
+	func logicStepOnce() {
+		logic.stepOnce = true
+		runLogic(0)
+	}
+}
+
+extension ModValidator {
+	/// Logic Studio scripts: their number, their blocks' numbers and names, and blocks that can't work
+	/// where they are (a creature's command in a world script) reported in plain words
+	static func checkScripts(_ p: inout ModPack, _ mn: String, _ sb: Bool, _ known: [String: String], _ r: inout ModReport) {
+		if p.scripts.count > LLimits.maxScripts {
+			r.add(1, mn, "Logic Studio", joinText("Only ", String(LLimits.maxScripts), " scripts fit in one mod; the rest were left out."))
+			p.scripts = Array(p.scripts.prefix(LLimits.maxScripts))
+		}
+		p.variables = Array(Set(p.variables.map { String($0.prefix(20)).trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty })).sorted()
+		if p.variables.count > LLimits.maxVariables { p.variables = Array(p.variables.prefix(LLimits.maxVariables)) }
+		var used: Set<String> = Set(p.blocks.map { $0.id } + p.items.map { $0.id } + p.mobs.map { $0.id } + p.infusions.map { $0.id } + p.dims.map { $0.id })
+		let groups: Set<String> = Set(p.scripts.filter { $0.event == .group }.map { p.key($0.id) })
+		let vars: Set<String> = Set(p.variables)
+		let ownMobs: Set<String> = Set(p.mobs.map { p.key($0.id) })
+		let ownItems: Set<String> = Set(p.items.map { p.key($0.id) } + p.infusions.map { p.key($0.id) })
+		let ownBlocks: Set<String> = Set(p.blocks.map { p.key($0.id) })
+		let ownShots: Set<String> = Set(p.projectiles.map { p.key($0.id) })
+		let gameNames: Set<String> = Set(MobKind.allCases.filter { $0 != .custom && $0 != .villager }.map { mobDef($0).name })
+		for i in p.scripts.indices {
+			var s: ModScript = p.scripts[i]
+			if s.id.isEmpty || used.contains(s.id) { s.id = joinText("sc", String(i + 1), "x", String(used.count)) }
+			used.insert(s.id)
+			if s.name.trimmingCharacters(in: .whitespaces).isEmpty { s.name = "Script" }
+			s.name = String(s.name.prefix(32))
+			let place: String = joinText("Script \u{201C}", s.name, "\u{201D}")
+			s.ev = clampD(s.ev.isFinite ? s.ev : 5, s.event == .phase ? 1 : 0.25, s.event == .phase ? 6 : 600)
+			s.evText = String(s.evText.prefix(32))
+			s.params = Array(s.params.prefix(3).map { String($0.prefix(16)) })
+			// what it belongs to must be this mod's own
+			switch s.event.subject {
+			case 1:
+				if !ownMobs.contains(s.target) {
+					r.add(1, mn, place, "It belongs to a creature that does not exist; it is switched off.")
+					s.enabled = false
+				}
+			case 2:
+				if !ownItems.contains(s.target) {
+					r.add(1, mn, place, "It belongs to an item that does not exist; it is switched off.")
+					s.enabled = false
+				}
+			case 3:
+				if !ownBlocks.contains(s.target) {
+					r.add(1, mn, place, "It belongs to a block that does not exist; it is switched off.")
+					s.enabled = false
+				}
+			default:
+				s.target = ""
+			}
+			var count: Int = 0
+			var notes: Set<String> = []
+			let creature: Bool = s.event.subject == 1 || s.event == .group
+			func fixExpr(_ e: inout LExpr, _ depth: Int) {
+				if depth > 6 {
+					e = LExpr(0)
+					notes.insert("Values were put inside one another too deeply; the deepest became 0.")
+					return
+				}
+				if !e.v.isFinite { e.v = 0 }
+				e.s = String(e.s.prefix(40))
+				let ar: Int = LReporters.arity(e.op)
+				if e.args.count > ar { e.args = Array(e.args.prefix(ar)) }
+				while e.args.count < ar { e.args.append(LExpr(0)) }
+				switch e.op {
+				case .variable:
+					if !vars.contains(e.s) {
+						notes.insert("A variable it reads does not exist; it reads 0.")
+						e = LExpr(0)
+					}
+				case .param: e.v = clampD(e.v.rounded(), 1, 3)
+				case .itemCount:
+					if let it = e.item, case .custom(let k) = it, !ownItems.contains(k) && known[k] != "item" { e.item = nil }
+				case .nearby: e.v = clampD(e.v, 1, 30)
+				default: break
+				}
+				if LReporters.needsCreature(e.op) && !creature { notes.insert("It reads a creature's health, but it isn't a creature's script; that reads 0.") }
+				for k in e.args.indices { fixExpr(&e.args[k], depth + 1) }
+			}
+			func fixList(_ list: inout [LNode], _ depth: Int) {
+				var keep: [LNode] = []
+				for var n in list {
+					count += 1
+					if count > LLimits.maxBlocks {
+						notes.insert(joinText("Only ", String(LLimits.maxBlocks), " blocks fit in one script; the rest were left out."))
+						break
+					}
+					if depth > 12 {
+						notes.insert("Blocks were put inside one another too deeply; the deepest were left out.")
+						continue
+					}
+					let sp: LSpec = LSpec.of(n.op)
+					for f in sp.fields where f.kind == .number || f.kind == .choice {
+						let hi: Double = f.kind == .choice ? Double(choiceCount(f.list) - 1) : f.hi
+						if f.slot == 0 { n.a = clampD(n.a.isFinite ? n.a : f.def, f.lo, hi) }
+						if f.slot == 1 { n.b = clampD(n.b.isFinite ? n.b : f.def, f.lo, hi) }
+						if f.slot == 2 { n.c = clampD(n.c.isFinite ? n.c : f.def, f.lo, hi) }
+					}
+					n.s = String(n.s.prefix(80))
+					for k in n.args.indices { fixExpr(&n.args[k], 0) }
+					if sp.creature && !creature { notes.insert(joinText("\u{201C}", sp.title, "\u{201D} needs a creature; in this script it does nothing.")) }
+					switch n.op {
+					case .setVar, .changeVar:
+						if !vars.contains(n.s) {
+							notes.insert("It sets a variable that does not exist; that block does nothing.")
+							n.s = ""
+						}
+					case .runGroup:
+						if !groups.contains(n.s) {
+							notes.insert("It runs a group that does not exist; that block does nothing.")
+							n.s = ""
+						}
+					case .summon:
+						if !gameNames.contains(n.s) && !ownMobs.contains(n.s) && known[n.s] != "mob" {
+							notes.insert("It calls a creature that does not exist; that block does nothing.")
+							n.s = ""
+						}
+					case .placeBlock:
+						var ok: Bool = ownBlocks.contains(n.s) || known[n.s] == "block"
+						if n.s.hasPrefix("tile:"), let v = Int(n.s.dropFirst(5)), v > 0 && v <= 255, let t = Tile(rawValue: UInt8(v)), !t.isMod, t != .bedrock, t != .portalOn, t != .portalOff, t != .portalFrame { ok = true }
+						if !ok {
+							notes.insert("It places a block that does not exist; that block does nothing.")
+							n.s = ""
+						}
+					case .fireShot:
+						if !n.s.isEmpty && !ownShots.contains(n.s) && known[n.s] != "shot" { n.s = "" }
+					case .giveItem, .takeItem:
+						if let it = n.item, case .custom(let k) = it, !ownItems.contains(k) && known[k] != "item" {
+							notes.insert("It gives or takes an item that does not exist; that block does nothing.")
+							n.item = nil
+						}
+					case .broadcast:
+						n.s = String(n.s.prefix(32))
+					default: break
+					}
+					if sp.inside == 0 {
+						n.body = []
+						n.alt = []
+					} else {
+						fixList(&n.body, depth + 1)
+						if sp.inside == 2 { fixList(&n.alt, depth + 1) } else { n.alt = [] }
+					}
+					if n.op == .forever || n.op == .whileDo {
+						if !LValidate.waits(n.body) { notes.insert("A loop that goes on has no \u{201C}wait\u{201D} inside: the game stops it after 10 seconds.") }
+					}
+					keep.append(n)
+				}
+				list = keep
+			}
+			fixList(&s.blocks, 0)
+			for n in notes.sorted() { r.add(1, mn, place, n) }
+			p.scripts[i] = s
+		}
+	}
+
+	static func choiceCount(_ list: Int) -> Int {
+		switch list {
+		case 0: return LReporters.sounds.count
+		case 1: return ModEffectKind.allCases.count
+		default: return ModGameShots.kinds.count
 		}
 	}
 }
 
-struct RootView: View {
-	@State var game: Game? = nil
-	@State var settings: Settings = SettingsStore.load()
-	/// back to the Mod Creator after a test world
-	@State var reopenMods: Bool = false
-	@Environment(\.scenePhase) var scenePhase
+enum LValidate {
+	/// whether a list of blocks waits somewhere (so a loop around it gives the game room)
+	static func waits(_ l: [LNode]) -> Bool {
+		for n in l {
+			if n.op == .wait || n.op == .runGroup { return true }
+			if waits(n.body) || waits(n.alt) { return true }
+		}
+		return false
+	}
+}
 
-	var body: some View {
-		ZStack {
-			if let g = game {
-				GameView(game: g, quit: { leave() }, restart: { ng in game = ng })
-			} else {
-				MenuView(settings: $settings, openMods: reopenMods) { g in
-					game = g
+/// The content keys inside scripts: renamed with their mod, and counted as dependencies
+enum LKeys {
+	static func rekey(_ s0: ModScript, _ fixKey: (String) -> String, _ fixItem: (Item) -> Item) -> ModScript {
+		var s: ModScript = s0
+		s.target = fixKey(s.target)
+		if s.event == .enterDim { s.evText = fixKey(s.evText) }
+		func fixE(_ e: inout LExpr) {
+			if let it = e.item { e.item = fixItem(it) }
+			if e.op == .inDim && e.s != "overworld" && e.s != "umbral" { e.s = fixKey(e.s) }
+			for k in e.args.indices { fixE(&e.args[k]) }
+		}
+		func fixL(_ l: inout [LNode]) {
+			for i in l.indices {
+				switch l[i].op {
+				case .summon, .placeBlock, .fireShot, .runGroup: l[i].s = fixKey(l[i].s)
+				default: break
+				}
+				if let it = l[i].item { l[i].item = fixItem(it) }
+				for k in l[i].args.indices { fixE(&l[i].args[k]) }
+				fixL(&l[i].body)
+				fixL(&l[i].alt)
+			}
+		}
+		fixL(&s.blocks)
+		return s
+	}
+
+	static func uses(_ s: ModScript, _ add: (String) -> Void, _ addItem: (Item?) -> Void) {
+		func useE(_ e: LExpr) {
+			addItem(e.item)
+			if e.op == .inDim && e.s.contains(":") { add(e.s) }
+			for a in e.args { useE(a) }
+		}
+		func useL(_ l: [LNode]) {
+			for n in l {
+				switch n.op {
+				case .summon, .placeBlock, .fireShot, .runGroup:
+					if n.s.contains(":") && !n.s.hasPrefix("tile:") { add(n.s) }
+				default: break
+				}
+				addItem(n.item)
+				for a in n.args { useE(a) }
+				useL(n.body)
+				useL(n.alt)
+			}
+		}
+		useL(s.blocks)
+	}
+}
+
+/// A mod block's key from its tile in this world ("mod:id"; the open or lit half of a pair counts as it)
+func modBlockKey(_ t: Tile) -> String? {
+	if !t.isMod { return nil }
+	let i: Int = Int(t.rawValue) - Int(Tile.modBase)
+	let keys: [String?] = ModRuntime.shared.slotKey
+	if i < 0 || i >= keys.count { return nil }
+	guard let k = keys[i] else { return nil }
+	if k.hasSuffix("#alt") { return String(k.dropLast(4)) }
+	return k
+}
+
+extension Game {
+	/// A tap on one of the mods' blocks that a script listens for (the tap goes to the script)
+	func tryLogicTap() -> Bool {
+		let tx: Int = Int(floor(aimX))
+		let ty: Int = Int(floor(aimY))
+		let t: Tile = world.tile(tx, ty)
+		guard t.isMod, let k = modBlockKey(t), inReach(Double(tx) + 0.5, Double(ty) + 0.5) else { return false }
+		if !logicRT.listeners(.blockTapped).contains(where: { $0.def.target == k }) { return false }
+		fireLogic(.blockTapped, x: tx, y: ty, block: true, key: k)
+		return true
+	}
+}
+
+// MARK: - Rules, weather, machines, vehicles and looks in mods
+
+/// A rule of the game a mod can change. A mod keeps it as a number under the rule's id (ModPack.rules);
+/// a rule it leaves out stays the game's own. When the world's mods set the same rule, the one lowest
+/// in the load order wins (ModRuntime.rules). The name, range and help of each are text (specText), in
+/// the order of the cases.
+enum GameRule: Int, CaseIterable {
+	case day, gravity, health, hunger, healing, hurt, hit, mining, monsters, animals, falls, walk, jump, nights, deathDrop
+
+	struct Spec {
+		var id: String
+		var name: String
+		var unit: String
+		var lo: Double
+		var hi: Double
+		var def: Double
+		var step: Double
+		var help: String
+	}
+
+	static let specs: [Spec] = parseSpecs(specText)
+	var spec: Spec { return rawValue < GameRule.specs.count ? GameRule.specs[rawValue] : Spec(id: "", name: "", unit: "", lo: 0, hi: 1, def: 1, step: 0.1, help: "") }
+
+	static func byID(_ id: String) -> GameRule? {
+		for r in GameRule.allCases where r.spec.id == id { return r }
+		return nil
+	}
+
+	static func parseSpecs(_ s: String) -> [Spec] {
+		var out: [Spec] = []
+		for line in s.split(separator: "\n") {
+			let f: [String] = line.components(separatedBy: "|")
+			if f.count < 8 { continue }
+			out.append(Spec(id: f[0], name: f[1], unit: f[2], lo: Double(f[3]) ?? 0, hi: Double(f[4]) ?? 1, def: Double(f[5]) ?? 1, step: Double(f[6]) ?? 0.1, help: f[7]))
+		}
+		return out
+	}
+
+	/// id|name|unit|lowest|highest|the game's|step|what it does
+	static let specText: String = """
+		day|Day length|min|2|120|12|1|How many minutes a whole day and night take.
+		gravity|Gravity|x|0.2|3|1|0.1|How hard everything falls: the player, creatures, loose blocks and vehicles (low gravity: higher jumps, gentler falls).
+		health|Player health|pts|4|200|20|2|The player's full health (still shown as ten hearts).
+		hunger|Hunger|x|0|5|1|0.1|How fast the player gets hungry (0: never).
+		healing|Healing|x|0|5|1|0.1|How fast health comes back on a full stomach (0: only food and potions heal).
+		hurt|Damage taken|x|0|5|1|0.1|How hard everything hits the player (0: nothing can hurt them).
+		hit|Damage dealt|x|0.1|10|1|0.1|How hard the player hits creatures.
+		mining|Mining speed|x|0.1|10|1|0.1|How fast blocks break under the player's tools and hands.
+		monsters|Monsters|x|0|5|1|0.1|How many night monsters may be about at once (0: none come).
+		animals|Animals|x|0|5|1|0.1|How many animals and fish may be about at once.
+		falls|Fall damage|x|0|5|1|0.1|How much a hard landing hurts (0: falls never hurt).
+		walk|Walking speed|x|0.3|3|1|0.1|How fast the player walks and runs.
+		jump|Jump height|x|0.3|3|1|0.1|How high the player jumps.
+		nights|Night light|x|0|2.5|1|0.1|How bright nights are (0: pitch dark under the stars; 2.5: as light as day).
+		deathDrop|Drop items on death|on|0|1|0|1|On: everything in the bag falls where the player dies and waits there. Off: the player keeps it (the game's way).
+		"""
+}
+
+/// The Overworld's weather as a mod has it: how often each kind comes (1: as the game, 0: never), how
+/// strong rain, snow and wind are, how long spells last, and the colour of the rain
+struct ModWeather: Codable, Equatable {
+	var chance: [Double] = [Double](repeating: 1, count: WeatherKind.allCases.count)
+	var rain: Double = 1
+	var wind: Double = 1
+	var length: Double = 1
+	/// 0: the game's
+	var rainColor: UInt32 = 0
+
+	init() {}
+
+	init(from decoder: Decoder) throws {
+		let c = try decoder.container(keyedBy: CodingKeys.self)
+		chance = c.val(.chance, [Double](repeating: 1, count: WeatherKind.allCases.count))
+		rain = c.val(.rain, 1)
+		wind = c.val(.wind, 1)
+		length = c.val(.length, 1)
+		rainColor = c.val(.rainColor, 0)
+	}
+
+	mutating func clamp() {
+		var ch: [Double] = []
+		for k in WeatherKind.allCases {
+			let v: Double = k.rawValue < chance.count ? chance[k.rawValue] : 1
+			ch.append(clampD(v.isFinite ? v : 1, 0, 10))
+		}
+		chance = ch
+		rain = clampD(rain.isFinite ? rain : 1, 0, 3)
+		wind = clampD(wind.isFinite ? wind : 1, 0, 3)
+		length = clampD(length.isFinite ? length : 1, 0.25, 6)
+		rainColor &= 0xFFFFFF
+	}
+
+	func chanceOf(_ k: WeatherKind) -> Double { return k.rawValue < chance.count ? chance[k.rawValue] : 1 }
+}
+
+/// What a mod block does on Sparkworks power lines (cases are only ever appended)
+enum ModPowerRole: Int, Codable, CaseIterable {
+	case none, generator, solar, battery, lamp, signal
+	var name: String {
+		switch self {
+		case .none: return "No power"
+		case .generator: return "Generator"
+		case .solar: return "Solar generator"
+		case .battery: return "Battery"
+		case .lamp: return "Powered lamp"
+		case .signal: return "Signal light"
+		}
+	}
+	var help: String {
+		switch self {
+		case .none: return "It has nothing to do with power."
+		case .generator: return "Makes its strength in sparks a second, day and night (a fuel generator makes 12)."
+		case .solar: return "Makes up to its strength in sparks a second under the open sky by day, less under cloud (a solar panel makes 4)."
+		case .battery: return "Stores 150 times its strength in sparks and passes 2.5 times its strength a second (a battery: strength 4)."
+		case .lamp: return "Lights up while it has power (and its pulse wire is on, if it has one), using its strength in sparks a second. Give it a lit picture: set its function to Light switch."
+		case .signal: return "Lights up while the pulse wire on it is on. Give it a lit picture: set its function to Light switch."
+		}
+	}
+	/// the game's role it plays on the networks
+	var role: PowerRole {
+		switch self {
+		case .none: return .none
+		case .generator, .solar: return .generator
+		case .battery: return .storage
+		case .lamp: return .machine
+		case .signal: return .indicator
+		}
+	}
+}
+
+/// One cell of a vehicle kept in a mod: where it is (x right, y down) and what it is: a game part, or
+/// a block (a game block "tile:<n>" or one of a mod's blocks by key)
+struct ModVehicleCell: Codable, Equatable {
+	var x: Int = 0
+	var y: Int = 0
+	var part: Int = PartType.frame.rawValue
+	var block: String = ""
+
+	init() {}
+	init(_ x: Int, _ y: Int, _ p: PartType, _ b: String = "") {
+		self.x = x
+		self.y = y
+		part = p.rawValue
+		block = b
+	}
+
+	init(from decoder: Decoder) throws {
+		let c = try decoder.container(keyedBy: CodingKeys.self)
+		x = c.val(.x, 0)
+		y = c.val(.y, 0)
+		part = c.val(.part, PartType.frame.rawValue)
+		block = c.val(.block, "")
+	}
+
+	var partType: PartType { return PartType(rawValue: part) ?? .frame }
+}
+
+/// A whole vehicle kept in a mod: its cells, and the item that builds it (made by the mod's recipes;
+/// used on open ground, or on water for a boat, it puts the vehicle there)
+struct ModVehicle: Codable, Identifiable, Equatable {
+	var id: String = ""
+	var name: String = "New Vehicle"
+	var desc: String = ""
+	var cells: [ModVehicleCell] = []
+	/// its item's icon (blank: drawn from its cells)
+	var icon: ModPixels = ModPixels(w: 12, h: 12)
+	/// put on water, like a boat
+	var water: Bool = false
+	/// fuel it comes with
+	var fuel: Double = 40
+
+	init() {}
+
+	init(from decoder: Decoder) throws {
+		let c = try decoder.container(keyedBy: CodingKeys.self)
+		var skip: Int = 0
+		id = c.val(.id, "")
+		name = c.val(.name, "Vehicle")
+		desc = c.val(.desc, "")
+		cells = c.list(.cells, &skip)
+		icon = c.val(.icon, ModPixels(w: 12, h: 12))
+		water = c.val(.water, false)
+		fuel = c.val(.fuel, 40)
+	}
+
+	static let maxCells: Int = 160
+	static let maxSize: Int = 24
+}
+
+enum ModWorldLimits {
+	static let startItems: Int = 12
+	static let vehicles: Int = 12
+}
+
+extension ModValidator {
+	/// A mod's rules, start items, weather and vehicles kept in range: rules the game knows held to
+	/// their ranges, items that exist, vehicles of parts and blocks that exist and fit a 24 x 24 grid
+	static func checkWorldRules(_ p: inout ModPack, _ mn: String, _ sb: Bool, _ known: [String: String], _ r: inout ModReport) {
+		var kept: [String: Double] = [:]
+		for (k, v) in p.rules {
+			guard let g = GameRule.byID(k) else {
+				r.add(1, mn, "Rules", joinText("The game has no rule \u{201C}", k, "\u{201D}; it was left out."))
+				continue
+			}
+			let s: GameRule.Spec = g.spec
+			kept[k] = clampD(v.isFinite ? v : s.def, s.lo, s.hi)
+		}
+		p.rules = kept
+		let ownItems: Set<String> = Set(p.items.map { p.key($0.id) } + p.suitParts.map { p.key($0.id) } + p.vehicles.map { p.key($0.id) })
+		func real(_ it: Item) -> Bool {
+			if case .custom(let k) = it { return ownItems.contains(k) || known[k] == "item" }
+			return true
+		}
+		if p.startItems.count > ModWorldLimits.startItems { p.startItems = Array(p.startItems.prefix(ModWorldLimits.startItems)) }
+		var items: [ModCost] = []
+		for var s in p.startItems {
+			if !real(s.item) {
+				r.add(1, mn, "Start items", "One of them does not exist; it was left out.")
+				continue
+			}
+			s.n = clampI(s.n, 1, 999)
+			items.append(s)
+		}
+		p.startItems = items
+		if var w = p.weather {
+			w.clamp()
+			p.weather = w
+		}
+		if var t = p.theme {
+			t.clamp()
+			p.theme = t
+		}
+		if p.vehicles.count > ModWorldLimits.vehicles {
+			r.add(1, mn, "Mod", joinText("Only ", String(ModWorldLimits.vehicles), " vehicles fit in one mod; the rest were left out."))
+			p.vehicles = Array(p.vehicles.prefix(ModWorldLimits.vehicles))
+		}
+		let blocks: Set<String> = Set(p.blocks.map { p.key($0.id) })
+		var used: Set<String> = Set(p.blocks.map { $0.id } + p.items.map { $0.id } + p.mobs.map { $0.id } + p.dims.map { $0.id } + p.suitParts.map { $0.id })
+		for i in p.vehicles.indices {
+			var v: ModVehicle = p.vehicles[i]
+			if v.id.isEmpty || used.contains(v.id) { v.id = joinText("veh", String(i + 1), "x", String(used.count)) }
+			used.insert(v.id)
+			let place: String = joinText("Vehicle \u{201C}", v.name, "\u{201D}")
+			if v.name.trimmingCharacters(in: .whitespaces).isEmpty { v.name = "Vehicle" }
+			v.name = String(v.name.prefix(24))
+			v.desc = String(v.desc.prefix(120))
+			v.fuel = clampD(v.fuel.isFinite ? v.fuel : 40, 0, 400)
+			if !v.icon.valid || v.icon.w > 32 || v.icon.h > 32 { v.icon = ModPixels(w: 12, h: 12) }
+			var seen: Set<Int> = []
+			var cells: [ModVehicleCell] = []
+			for var c in v.cells.prefix(ModVehicle.maxCells) {
+				c.x = clampI(c.x, 0, ModVehicle.maxSize - 1)
+				c.y = clampI(c.y, 0, ModVehicle.maxSize - 1)
+				if PartType(rawValue: c.part) == nil { c.part = PartType.frame.rawValue }
+				if !c.block.isEmpty && !c.block.hasPrefix("tile:") && !blocks.contains(c.block) && known[c.block] != "block" {
+					c.block = ""
+					c.part = PartType.frame.rawValue
+				}
+				if c.block.hasPrefix("tile:") {
+					let n: Int = Int(c.block.dropFirst(5)) ?? -1
+					if n <= 0 || n > 255 || Tile(rawValue: UInt8(n)) == nil || Tile(rawValue: UInt8(n))?.isMod == true { c.block = "tile:" + String(Tile.planks.rawValue) }
+				}
+				let key: Int = c.y * 100 + c.x
+				if seen.contains(key) { continue }
+				seen.insert(key)
+				cells.append(c)
+			}
+			v.cells = cells
+			if v.cells.isEmpty { r.add(0, mn, place, "It has no cells yet.") }
+			p.vehicles[i] = v
+		}
+	}
+}
+
+extension ModRuntime {
+	/// A rule as the world's mods set it (the game's own when none does)
+	func rule(_ g: GameRule) -> Double {
+		return g.rawValue < rules.count ? rules[g.rawValue] : g.spec.def
+	}
+
+	/// The mods' rules, start items, weather, block physics and power, and vehicles, ready for play
+	func buildWorldRules() {
+		rules = GameRule.specs.map { $0.def }
+		for p in packs {
+			for (k, v) in p.rules {
+				if let g = GameRule.byID(k), g.rawValue < rules.count { rules[g.rawValue] = v }
+			}
+			for s in p.startItems { startItems.append(Stack(item: resolve(s.item), count: s.n)) }
+			if let w = p.weather { weather = w }
+			if let t = p.theme { theme = t }
+			for v in p.vehicles where !disabled.contains(p.key(v.id)) {
+				var mv: ModVehicle = v
+				for i in mv.cells.indices where !mv.cells[i].block.isEmpty && !mv.cells[i].block.hasPrefix("tile:") {
+					// a mod block that is not in this world becomes a frame
+					if tileForKey[mv.cells[i].block] == nil {
+						mv.cells[i].block = ""
+						mv.cells[i].part = PartType.frame.rawValue
+					}
+				}
+				vehicles[p.key(v.id)] = mv
+			}
+		}
+		// mod blocks that fall, seat, put to bed or work on power lines
+		for i in 0..<ModLimits.blockSlots {
+			guard let b = slotDef[i] else { continue }
+			let t: UInt8 = UInt8(Int(Tile.mod00.rawValue) + i)
+			if slotTreeBase[i] != nil { continue }
+			if b.falls { fallTiles.insert(t) }
+			if b.function == .seat { seatTiles.insert(t) }
+			if b.function == .bed { bedTiles.insert(t) }
+			if b.powerRole != .none { powerTiles[t] = b.powerRole }
+		}
+	}
+
+	/// The power role of a mod block (none for anything else)
+	func powerRoleOf(_ t: Tile) -> ModPowerRole {
+		if !t.isMod { return .none }
+		return powerTiles[t.rawValue] ?? .none
+	}
+
+	/// A mod vehicle's item: held and used, it builds the vehicle
+	func vehicleItem(_ p: ModPack, _ v: ModVehicle) -> ModItem {
+		var it = ModItem()
+		it.id = v.id
+		it.name = v.name
+		it.desc = v.desc.isEmpty ? "A vehicle kit: use it on open ground (a boat: on water) to build the vehicle." : v.desc
+		it.kind = .special
+		it.stack = 1
+		it.rarity = 2
+		if !v.icon.isBlank { it.icon = v.icon } else { it.icon = ModPixels(buf: vehicleIconBuf(v)) }
+		return it
+	}
+
+	/// A small picture of a vehicle from its cells
+	func vehicleIconBuf(_ v: ModVehicle) -> PixelBuf {
+		var buf = PixelBuf(w: 12, h: 12)
+		if v.cells.isEmpty { return buf }
+		var w: Int = 1
+		var h: Int = 1
+		for c in v.cells {
+			w = max(w, c.x + 1)
+			h = max(h, c.y + 1)
+		}
+		let s: Int = max(1, min(12 / w, 12 / h))
+		let ox: Int = (12 - w * s) / 2
+		let oy: Int = 12 - h * s
+		for c in v.cells {
+			let col: UInt32 = vehicleCellColor(c)
+			for yy in 0..<s {
+				for xx in 0..<s {
+					let px: Int = ox + c.x * s + xx
+					let py: Int = oy + c.y * s + yy
+					if px >= 0 && py >= 0 && px < 12 && py < 12 { buf.px[py * 12 + px] = 0xFF000000 | col }
 				}
 			}
 		}
-		.preferredColorScheme(.dark)
-		.modifier(PhaseWatcher(phase: scenePhase, changed: phaseChanged))
+		return buf
 	}
 
-	func phaseChanged(_ phase: ScenePhase) {
-		if phase != .active, let g = game {
-			_ = g.saveNow()
-			var s: Settings = g.settings
-			s.tilePx = g.tilePx
-			SettingsStore.save(s)
+	func vehicleCellColor(_ c: ModVehicleCell) -> UInt32 {
+		if c.block.hasPrefix("tile:"), let n = Int(c.block.dropFirst(5)), let t = Tile(rawValue: UInt8(clampI(n, 0, 255))) {
+			return t.def.colors.first ?? 0x8A8A8A
 		}
-	}
-
-	func leave() {
-		if let g = game {
-			_ = g.saveNow()
-			// everything changed in game (toggles, camera, zoom) carries back to the menu and is persisted
-			settings = g.settings
-			settings.tilePx = g.tilePx
-			SettingsStore.save(settings)
-			if g.mode == .hardcore && g.hardcoreOver { SaveStore.delete(g.slot) }
-			reopenMods = !g.testMod.isEmpty
-		}
-		actState.stickReleased()
-		// the weather and engine loops are only kept up by the world's frames: stop them with it
-		Sound.shared.silenceLoops()
-		game = nil
-		ModRuntime.deactivate()
+		if !c.block.isEmpty, let t = tileForKey[c.block] { return t.def.colors.first ?? 0x8A8A8A }
+		return partSwatch(c.partType)
 	}
 }
 
-@main
-struct PixelRealmApp: App {
-	var body: some Scene {
-		WindowGroup {
-			RootView()
+/// A colour that stands for a vehicle part in small pictures and the vehicle editor
+func partSwatch(_ p: PartType) -> UInt32 {
+	switch p {
+	case .wheel, .track: return 0x2A2A2E
+	case .engine, .jet: return 0x8A5A3A
+	case .seat, .cockpit, .steering: return 0x3A6AA8
+	case .wing, .elevator: return 0xC8C8D0
+	case .rotor, .tailRotor, .airProp, .propeller, .paddle: return 0xE8D8A0
+	case .envelope: return 0xE8E0D0
+	case .hull: return 0x8F6732
+	case .armor, .cannon, .autoGun: return 0x5A6270
+	case .fuelTank: return 0xC03A3A
+	default: return 0x9AA4B0
+	}
+}
+
+extension Game {
+	/// The player's full health as the world's mods have it (the game's 20 without them)
+	func applyHealthRule(newWorld: Bool) {
+		let h: Double = ModRuntime.shared.rule(.health)
+		if maxHP != h || newWorld {
+			maxHP = h
+			hp = newWorld ? h : min(max(hp, 1), h)
 		}
+	}
+
+	/// What the world's mods give a new world (not in creative)
+	func giveStartItems() {
+		if mode == .creative { return }
+		for s in ModRuntime.shared.startItems { _ = inv.add(s.item, s.count) }
+	}
+
+	/// With the mods' "drop items on death" rule: the bag (and the carried stack) falls where the
+	/// player died, held back until they come for it
+	func dropBagOnDeath() {
+		if mode == .creative || ModRuntime.shared.rule(.deathDrop) < 0.5 { return }
+		var spilled: [Stack] = []
+		if let c = carry { spilled.append(c) }
+		carry = nil
+		for i in inv.slots.indices {
+			if let s = inv.slots[i] { spilled.append(s) }
+			inv.slots[i] = nil
+		}
+		for (k, s) in spilled.enumerated() {
+			let a: Double = Double(k) * 0.7
+			spawnDrop(s, pb.x, pb.y - 0.8, cos(a) * 2.0, -3.0 - Double(k % 3), heldBack: true)
+		}
+	}
+
+	/// Puts a mod's vehicle down at the aim from its kit item
+	func placeModVehicle(_ key: String) {
+		guard let mv = ModRuntime.shared.vehicles[key], !mv.cells.isEmpty else {
+			say("This vehicle's mod is not installed.", 1.5)
+			return
+		}
+		if !inReach(aimX, aimY) {
+			say("Tap closer to you to place it.", 1.5)
+			return
+		}
+		var w: Int = 1
+		var h: Int = 1
+		for c in mv.cells {
+			w = max(w, c.x + 1)
+			h = max(h, c.y + 1)
+		}
+		guard let spot = vehicleSpot(w, h, mv.water) else {
+			say(mv.water ? "Not enough room here. Find open water." : "Not enough room here. Find open, flat ground.", 2.5)
+			return
+		}
+		let first: PartType = mv.cells[0].partType
+		let v: Vehicle = Vehicle(id: newID(), first: first, x: 0, y: 0)
+		v.parts.removeAll()
+		for c in mv.cells {
+			let cell: PartCell = PartCell(dx: c.x, dy: c.y)
+			if c.block.isEmpty {
+				v.parts[cell] = c.partType
+				continue
+			}
+			var t: Tile = .planks
+			if c.block.hasPrefix("tile:") {
+				t = Tile(rawValue: UInt8(clampI(Int(c.block.dropFirst(5)) ?? 0, 0, 255))) ?? .planks
+			} else if let mt = ModRuntime.shared.tileForKey[c.block] {
+				t = mt
+			}
+			// a mod block working as a part keeps its part; anything else is a plain block
+			if let role = ModRuntime.shared.blockDef(t)?.vehRole.part { v.parts[cell] = role } else { v.parts[cell] = .block }
+			v.blocks[cell] = t
+		}
+		v.recompute(keepAnchor: false)
+		v.placeBox(left: Double(spot.0), bottom: Double(spot.1 + 1))
+		if v.engines > 0 || v.jets > 0 || v.burners > 0 { v.fuel = min(v.fuelCapacity, mv.fuel) }
+		vehicles.append(v)
+		if !isCreative { inv.removeAt(sel, 1) }
+		useCD = 0.3
+		swingT = 0.15
+		spawnParticles(v.b.x, v.b.y - v.b.h * 0.5, 0xFFF0A0, 10, 3.0, 0.5, 6)
+		say(joinText(mv.name, " placed! Walk up to it and press DRIVE."), 3.0)
+		bumpHUD()
+	}
+
+	/// A place for a w x h vehicle near the aim: open air for its box, and under it solid ground (or
+	/// water, for a boat); the left column and the row of its bottom
+	func vehicleSpot(_ w: Int, _ h: Int, _ water: Bool) -> (Int, Int)? {
+		let ax: Int = Int(floor(aimX))
+		let ay: Int = Int(floor(aimY))
+		for off in [0, -1, 1, -2, 2, -3, 3] {
+			let left: Int = ax - w / 2 + off
+			for dy in -3...6 {
+				let bottom: Int = ay + dy
+				var ok: Bool = true
+				for x in left..<(left + w) {
+					// open air for its box (a boat sits on the water, not in it)
+					for y in (bottom - h + 1)...bottom where world.solid(x, y) || world.tile(x, y).liquid {
+						ok = false
+						break
+					}
+					if !ok { break }
+					let under: Tile = world.tile(x, bottom + 1)
+					if water ? under != .water : !(under.solid || under.isPlatform) {
+						if x == left || x == left + w - 1 { ok = false }
+					}
+				}
+				if ok { return (left, bottom) }
+			}
+		}
+		return nil
+	}
+
+	/// Makes a mod vehicle design from a vehicle in the world (for saving it to a mod from a test world)
+	func vehicleDesign(_ v: Vehicle) -> ModVehicle {
+		var mv = ModVehicle()
+		mv.name = "My Vehicle"
+		var minX: Int = Int.max
+		var minY: Int = Int.max
+		for c in v.parts.keys {
+			minX = min(minX, c.dx)
+			minY = min(minY, c.dy)
+		}
+		let keys: [PartCell] = v.parts.keys.sorted { $0.dy != $1.dy ? $0.dy < $1.dy : $0.dx < $1.dx }
+		for c in keys {
+			guard let p = v.parts[c] else { continue }
+			var cell = ModVehicleCell(c.dx - minX, c.dy - minY, p)
+			if let t = v.blocks[c] {
+				if t.isMod { cell.block = ModRuntime.shared.slotKey[Int(t.rawValue) - Int(Tile.mod00.rawValue)] ?? "" } else { cell.block = "tile:" + String(t.rawValue) }
+				if cell.block.isEmpty { cell.part = PartType.frame.rawValue }
+			}
+			mv.cells.append(cell)
+		}
+		mv.water = v.parts.values.contains(.hull)
+		mv.fuel = min(400, v.fuel)
+		return mv
+	}
+}
+
+/// The parts of the game's screens a theme colours (cases are only ever appended)
+enum ThemeRole: Int, Codable, CaseIterable {
+	case buttons, panels, accept, danger, info, titles, tint
+	var name: String {
+		switch self {
+		case .buttons: return "Buttons"
+		case .panels: return "Panels and cards"
+		case .accept: return "Go and accept buttons"
+		case .danger: return "Danger and close buttons"
+		case .info: return "Information buttons"
+		case .titles: return "Titles"
+		case .tint: return "Everything else (tint)"
+		}
+	}
+	/// the game's own colours this role replaces
+	var gameColors: [UInt32] {
+		switch self {
+		case .buttons: return [0x555555, 0x6B6B6B, 0x4A4A50, 0x444444, 0x3A3A3A]
+		case .panels: return [0x2C2C30, 0x2E2E2E, 0x3A3A40]
+		case .accept: return [0x4E8A3E, 0x2A6A2A, 0x4E6A3E]
+		case .danger: return [0xA03030, 0xC02020, 0x8A3A3A]
+		case .info: return [0x3E6FAA, 0x5A7A9A, 0x4E6A8A, 0x2E8A8A]
+		case .titles: return [0xFFE066, 0xFFE070, 0xFFE080]
+		case .tint: return []
+		}
+	}
+	/// what the role shows in the editor before it is changed
+	var gameColor: UInt32 { return gameColors.first ?? 0x8A8A8A }
+}
+
+/// How the game's screens look with a mod: colours by role (0: the game's), the style of the letters,
+/// how round buttons and panels are, the title screen's words and picture, and the HUD's size, how
+/// see-through it is and which side the controls are on
+struct ModTheme: Codable, Equatable {
+	var colors: [UInt32] = [UInt32](repeating: 0, count: ThemeRole.allCases.count)
+	/// how strongly every other colour leans to the tint colour (0...1)
+	var tintAmt: Double = 0
+	/// letters: 0 blocky (the game's), 1 rounded, 2 serif, 3 plain
+	var font: Int = 0
+	/// 0: square pixel boxes (the game's) ... 16
+	var corner: Double = 0
+	/// the outline of buttons and panels (0: black)
+	var outline: UInt32 = 0
+	var title: String = ""
+	var subtitle: String = ""
+	/// the title screen's background (blank: the game's sky)
+	var background: ModPixels = ModPixels(w: 1, h: 1)
+	var hudScale: Double = 1
+	var hudAlpha: Double = 1
+	/// the attack stick and action buttons on the left, the walking stick on the right
+	var swapSides: Bool = false
+
+	init() {}
+
+	init(from decoder: Decoder) throws {
+		let c = try decoder.container(keyedBy: CodingKeys.self)
+		colors = c.val(.colors, [UInt32](repeating: 0, count: ThemeRole.allCases.count))
+		tintAmt = c.val(.tintAmt, 0)
+		font = c.val(.font, 0)
+		corner = c.val(.corner, 0)
+		outline = c.val(.outline, 0)
+		title = c.val(.title, "")
+		subtitle = c.val(.subtitle, "")
+		background = c.val(.background, ModPixels(w: 1, h: 1))
+		hudScale = c.val(.hudScale, 1)
+		hudAlpha = c.val(.hudAlpha, 1)
+		swapSides = c.val(.swapSides, false)
+	}
+
+	static let fonts: [String] = ["Blocky", "Rounded", "Serif", "Plain"]
+
+	func color(_ r: ThemeRole) -> UInt32 { return r.rawValue < colors.count ? colors[r.rawValue] : 0 }
+
+	mutating func clamp() {
+		var cs: [UInt32] = []
+		for r in ThemeRole.allCases { cs.append(color(r) & 0xFFFFFF) }
+		colors = cs
+		tintAmt = clampD(tintAmt.isFinite ? tintAmt : 0, 0, 1)
+		font = clampI(font, 0, ModTheme.fonts.count - 1)
+		corner = clampD(corner.isFinite ? corner : 0, 0, 16)
+		outline &= 0xFFFFFF
+		title = String(title.prefix(32))
+		subtitle = String(subtitle.prefix(60))
+		if !background.valid || background.w > 96 || background.h > 96 { background = ModPixels(w: 1, h: 1) }
+		hudScale = clampD(hudScale.isFinite ? hudScale : 1, 0.6, 1.5)
+		hudAlpha = clampD(hudAlpha.isFinite ? hudAlpha : 1, 0.3, 1)
+	}
+}
+
+// ===== u01_art =====
+
+// MARK: - Art store (converts the procedural PixelBufs into SwiftUI images)
+
+extension Color {
+	init(hex: UInt32, alpha: Double = 1.0) {
+		let ir: UInt32 = (hex >> 16) & 255
+		let ig: UInt32 = (hex >> 8) & 255
+		let ib: UInt32 = hex & 255
+		let r: Double = Double(ir) / 255.0
+		let g: Double = Double(ig) / 255.0
+		let b: Double = Double(ib) / 255.0
+		self.init(.sRGB, red: r, green: g, blue: b, opacity: alpha)
+	}
+}
+
+/// Fast path: pixels are already premultiplied ARGB words (0xAARRGGBB). No per-pixel work.
+func makeCGImagePremul(_ px: [UInt32], _ w: Int, _ h: Int) -> CGImage? {
+	if w <= 0 || h <= 0 || px.count < w * h { return nil }
+	let data: Data = px.withUnsafeBufferPointer { bp in Data(buffer: bp) }
+	guard let provider = CGDataProvider(data: data as CFData) else { return nil }
+	let raw: UInt32 = CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.premultipliedFirst.rawValue
+	let info: CGBitmapInfo = CGBitmapInfo(rawValue: raw)
+	return CGImage(width: w, height: h, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: w * 4,
+				   space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: info,
+				   provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
+}
+
+/// Pixels are non-premultiplied ARGB (what the art generators produce)
+func makeCGImage(_ px: [UInt32], _ w: Int, _ h: Int) -> CGImage? {
+	var p: [UInt32] = px
+	premultiplyARGB(&p)
+	return makeCGImagePremul(p, w, h)
+}
+
+func pixImage(_ b: PixelBuf) -> Image {
+	if let cg = makeCGImage(b.px, b.w, b.h) {
+		return Image(decorative: cg, scale: 1.0).interpolation(.none)
+	}
+	return Image(systemName: "questionmark")
+}
+
+/// A set of animation frames for one creature, with the metrics needed to stand it on the ground.
+struct SpriteSet {
+	var right: [Image]
+	var left: [Image]
+	var hurtR: [Image]
+	var hurtL: [Image]
+	var w: Int
+	var h: Int
+	var footRow: Int      // art pixel row of the bottom of the feet
+	var centerCol: Double // art pixel column of the body centre (facing right)
+	var scale: Double     // tiles per art pixel
+	var anim: CreatureAnim = CreatureAnim()
+
+	func frame(_ i: Int, left lf: Bool, hurt: Bool) -> Image {
+		let n: Int = max(1, right.count)
+		let k: Int = ((i % n) + n) % n
+		if hurt { return lf ? hurtL[k] : hurtR[k] }
+		return lf ? left[k] : right[k]
+	}
+}
+
+func opaqueBounds(_ b: PixelBuf) -> (Int, Int, Int, Int) {
+	var x0: Int = b.w
+	var x1: Int = -1
+	var y0: Int = b.h
+	var y1: Int = -1
+	for y in 0..<b.h {
+		for x in 0..<b.w where (b.px[y * b.w + x] >> 24) != 0 {
+			if x < x0 { x0 = x }
+			if x > x1 { x1 = x }
+			if y < y0 { y0 = y }
+			if y > y1 { y1 = y }
+		}
+	}
+	if x1 < 0 { return (0, 0, b.w - 1, b.h - 1) }
+	return (x0, y0, x1, y1)
+}
+
+func makeSpriteSet(_ frames: [PixelBuf], hitH: Double, fixedScale: Double? = nil, anim: CreatureAnim = CreatureAnim(), foot footRow: Int? = nil, cx: Double? = nil) -> SpriteSet {
+	let f0: PixelBuf = frames.isEmpty ? PixelBuf(w: 1, h: 1) : frames[0]
+	let bb: (Int, Int, Int, Int) = opaqueBounds(f0)
+	let opaqueH: Double = Double(bb.3 - bb.1 + 1)
+	var sc: Double = 0.125
+	if let f = fixedScale { sc = f } else {
+		sc = clampD(hitH * 1.12 / max(1.0, opaqueH), 0.05, 0.125)
+	}
+	var r: [Image] = []
+	var l: [Image] = []
+	var hr: [Image] = []
+	var hl: [Image] = []
+	for f in frames {
+		r.append(pixImage(f))
+		l.append(pixImage(f.flipped()))
+		// hit frames flash white (reads clearly on every creature, and is not a red full-body tint)
+		let t: PixelBuf = f.whiteFlash()
+		hr.append(pixImage(t))
+		hl.append(pixImage(t.flipped()))
+	}
+	// the outline under the soles sits on the ground line; a hand-drawn creature says where its soles
+	// and its middle are (a long tail or a raised arm must not move the body off its place)
+	let foot: Int = footRow ?? bb.3
+	let cc: Double = cx ?? Double(bb.0 + bb.2 + 1) * 0.5
+	return SpriteSet(right: r, left: l, hurtR: hr, hurtL: hl, w: f0.w, h: f0.h, footRow: foot, centerCol: cc, scale: sc, anim: anim)
+}
+
+// MARK: - Suits drawn piece by piece
+
+/// A picture three times finer, every pixel a 3 x 3 block
+func upscale3(_ b: PixelBuf) -> PixelBuf {
+	let u: Int = suitUnit
+	var o = PixelBuf(w: b.w * u, h: b.h * u)
+	for y in 0..<b.h {
+		for x in 0..<b.w {
+			let c: UInt32 = b.px[y * b.w + x]
+			if c == 0 { continue }
+			for yy in 0..<u {
+				let row: Int = (y * u + yy) * o.w + x * u
+				for xx in 0..<u { o.px[row + xx] = c }
+			}
+		}
+	}
+	return o
+}
+
+/// Lays a suit's working pieces over one frame of the figure drawn three times finer (`frame`: 0
+/// standing, 1-2 walking, 3 winding up, 4 striking, 5 blocking, 6 shooting). Each piece moves with its
+/// part of the body, shows its colour with lit and shaded edges and its part's marks, and cracks as it
+/// wears; broken pieces are gone. `pick` (a piece id) is drawn brighter. A dark line is drawn round
+/// what sticks out past the body.
+func paintSuitPieces(_ cv: inout PixelBuf, _ d: SuitDesign, frame: Int, pick: Int = -1) {
+	let ox: Double = Double(humanOX * suitUnit)
+	var mine: [Bool] = [Bool](repeating: false, count: cv.w * cv.h)
+	let order: [Int] = d.pieces.indices.sorted { (a: Int, b: Int) -> Bool in
+		let la: Int = d.pieces[a].bone.layer
+		let lb: Int = d.pieces[b].bone.layer
+		return la != lb ? la < lb : a < b
+	}
+	for i in order {
+		let p: SuitPiece = d.pieces[i]
+		if p.broken { continue }
+		let mv: BoneMove = BoneMove.of(p.bone, frame)
+		// the piece's box in the frame, roomy enough for any turn
+		let c: (Double, Double) = mv.apply(p.x, p.y)
+		let r: Double = sqrt(p.w * p.w + p.h * p.h) * 0.5 + 1.0
+		let x0: Int = max(0, Int(floor(c.0 + ox - r)))
+		let x1: Int = min(cv.w - 1, Int(ceil(c.0 + ox + r)))
+		let y0: Int = max(0, Int(floor(c.1 - r)))
+		let y1: Int = min(cv.h - 1, Int(ceil(c.1 + r)))
+		if x1 < x0 || y1 < y0 { continue }
+		let ww: Int = x1 - x0 + 1
+		let hh: Int = y1 - y0 + 1
+		// which pixels it covers (tested back on the body standing still)
+		var on: [Bool] = [Bool](repeating: false, count: ww * hh)
+		let back: BoneMove = BoneMove(dx: -mv.dx, dy: -mv.dy, turn: 0, px: 0, py: 0)
+		for yy in 0..<hh {
+			for xx in 0..<ww {
+				var bx: Double = Double(x0 + xx) + 0.5 - ox
+				var by: Double = Double(y0 + yy) + 0.5
+				let s: (Double, Double) = back.apply(bx, by)
+				bx = s.0
+				by = s.1
+				if mv.turn != 0 {
+					let cs: Double = cos(-mv.turn)
+					let sn: Double = sin(-mv.turn)
+					let rx: Double = bx - mv.px
+					let ry: Double = by - mv.py
+					bx = mv.px + rx * cs - ry * sn
+					by = mv.py + rx * sn + ry * cs
+				}
+				if p.covers(bx, by) { on[yy * ww + xx] = true }
+			}
+		}
+		var base: UInt32 = suitColor(p)
+		if p.id == pick { base = mixRGB(base, 0xFFFFFF, 0.35) }
+		let accent: UInt32 = suitAccent(p)
+		for yy in 0..<hh {
+			for xx in 0..<ww where on[yy * ww + xx] {
+				let up: Bool = yy > 0 && on[(yy - 1) * ww + xx]
+				let down: Bool = yy < hh - 1 && on[(yy + 1) * ww + xx]
+				let left: Bool = xx > 0 && on[yy * ww + xx - 1]
+				let right: Bool = xx < ww - 1 && on[yy * ww + xx + 1]
+				var col: UInt32 = base
+				if !up || !left { col = shadeRGB(base, 1.22) }
+				if !down || !right { col = shadeRGB(base, 0.68) }
+				let gx: Int = x0 + xx
+				let gy: Int = y0 + yy
+				// cracks as it wears
+				if p.dmg > 0.3 {
+					let hsh: Double = hash2(gx * 7 + p.id, gy * 13, 9091)
+					if hsh < (p.dmg - 0.25) * 0.5 { col = shadeRGB(col, 0.45) }
+				}
+				cv.px[gy * cv.w + gx] = 0xFF000000 | col
+				mine[gy * cv.w + gx] = true
+			}
+		}
+		// its marks: a core glows at its heart, a working part shows its colour at its working end
+		if accent != 0 {
+			let a: Double = (p.rot + mv.turn * 180.0 / Double.pi) * Double.pi / 180.0
+			let tip: (Double, Double)
+			if p.kind == .core {
+				tip = (c.0, c.1)
+			} else {
+				tip = (c.0 + cos(a) * p.w * 0.32, c.1 + sin(a) * p.w * 0.32)
+			}
+			let tx: Int = Int(floor(tip.0 + ox))
+			let ty: Int = Int(floor(tip.1))
+			for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+				let px: Int = tx + dx - 1
+				let py: Int = ty + dy - 1
+				if px < 0 || py < 0 || px >= cv.w || py >= cv.h { continue }
+				if mine[py * cv.w + px] { cv.px[py * cv.w + px] = 0xFF000000 | accent }
+			}
+		}
+	}
+	// a dark edge round the pieces where they stand against nothing
+	var edge: [Int] = []
+	for y in 0..<cv.h {
+		for x in 0..<cv.w where cv.px[y * cv.w + x] == 0 {
+			var near: Bool = false
+			for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+				let nx: Int = x + dx
+				let ny: Int = y + dy
+				if nx >= 0 && ny >= 0 && nx < cv.w && ny < cv.h && mine[ny * cv.w + nx] { near = true }
+			}
+			if near { edge.append(y * cv.w + x) }
+		}
+	}
+	for k in edge { cv.px[k] = 0xFF1A1410 }
+}
+
+/// The mark a working part shows (0: none): a core's glow, a jet's flame, a lamp, a lens
+func suitAccent(_ p: SuitPiece) -> UInt32 {
+	if p.kind == .core, let c = p.core { return shadeRGB(c.color, 1.4) }
+	guard p.kind == .module, let m = p.module else { return 0 }
+	switch m {
+	case .hover: return 0xFF9A3A
+	case .lamp: return 0xFFF4C0
+	case .laser: return 0xFF4A6A
+	case .turret, .cannon: return 0x1E2028
+	case .solar: return 0x2A4A8A
+	case .magnet: return 0xD83A3A
+	case .battery: return 0x8AE85A
+	case .barrier: return 0xC07CFF
+	case .gauntlet: return 0xFFF07A
+	default: return shadeRGB(m.color, 1.3)
+	}
+}
+
+/// The player's frames with a suit on: the figure drawn three times finer with the suit's pieces over
+/// it, frame by frame
+func suitFrames(_ plain: [PixelBuf], _ d: SuitDesign, pick: Int = -1) -> [PixelBuf] {
+	var out: [PixelBuf] = []
+	for (f, b) in plain.enumerated() {
+		var cv: PixelBuf = upscale3(b)
+		paintSuitPieces(&cv, d, frame: f, pick: pick)
+		out.append(cv)
+	}
+	return out
+}
+
+/// Pictures of suit designs for the Assembly Station (drawn again only when the design changes)
+final class SuitPictures: @unchecked Sendable {
+	static let shared: SuitPictures = SuitPictures()
+	var cache: [Int: Image] = [:]
+	let plain: [PixelBuf] = humanoidFrames(playerStyle(hairIdx: 0, scarfIdx: 0, head: nil, chest: nil, legs: nil))
+
+	/// the design worn by a plain figure, in one frame, with a piece shown picked
+	func image(_ d: SuitDesign, _ frame: Int, _ pick: Int) -> Image {
+		var h: Hasher = Hasher()
+		h.combine(d)
+		h.combine(frame)
+		h.combine(pick)
+		let key: Int = h.finalize()
+		if let i = cache[key] { return i }
+		let f: Int = clampI(frame, 0, plain.count - 1)
+		var cv: PixelBuf = upscale3(plain[f])
+		paintSuitPieces(&cv, d, frame: f, pick: pick)
+		let img: Image = pixImage(cv)
+		if cache.count > 48 { cache.removeAll() }
+		cache[key] = img
+		return img
+	}
+}
+
+func heartBuf(_ full: Bool) -> PixelBuf {
+	let rows: [String] = [".rr.rr..", "rRrrrrr.", "rRrrrrr.", "rrrrrrr.", ".rrrrr..", "..rrr...", "...r....", "........"]
+	let col: UInt32 = full ? 0xE02828 : 0x3A2A2A
+	let hi: UInt32 = full ? 0xFF9090 : 0x5A4A4A
+	var b: PixelBuf = bufFromRows(rows, ["r": col, "R": hi])
+	b = padBuf(b)
+	b.outline(0x101010)
+	return b
+}
+
+func foodBuf(_ full: Bool) -> PixelBuf {
+	let rows: [String] = ["....bb..", "...bmm..", "..mmmm..", ".mmMmm..", ".mmmm...", "bmmm....", "bb......", "........"]
+	let m: UInt32 = full ? 0xC0703A : 0x3A2E26
+	let mh: UInt32 = full ? 0xE8A070 : 0x4A3E36
+	let bo: UInt32 = full ? 0xF0E8D8 : 0x50504C
+	var b: PixelBuf = bufFromRows(rows, ["m": m, "M": mh, "b": bo])
+	b = padBuf(b)
+	b.outline(0x101010)
+	return b
+}
+
+func bubbleBuf() -> PixelBuf {
+	let rows: [String] = ["..bbb...", ".bWbbb..", "bWbbbbb.", "bbbbbbb.", "bbbbbbb.", ".bbbbb..", "..bbb...", "........"]
+	var b: PixelBuf = bufFromRows(rows, ["b": 0x6AB8FF, "W": 0xFFFFFF])
+	b = padBuf(b)
+	b.outline(0x102040)
+	return b
+}
+
+func shieldBuf() -> PixelBuf {
+	let rows: [String] = ["sssssss.", "sSSSSSs.", "sSssSSs.", "sSSSSSs.", ".sSSSs..", ".sSSSs..", "..sss...", "........"]
+	var b: PixelBuf = bufFromRows(rows, ["s": 0x9AA0AA, "S": 0xC8D0DA])
+	b = padBuf(b)
+	b.outline(0x101010)
+	return b
+}
+
+func padBuf(_ b: PixelBuf) -> PixelBuf {
+	var o = PixelBuf(w: b.w + 2, h: b.h + 2)
+	o.blit(b, 1, 1)
+	return o
+}
+
+// MARK: - The player's look
+
+/// The marker colours of the player's drawing (tools/art/creatures/player.py, MARK): the game swaps
+/// each set, light to deep, for the chosen colour's tones. Keep them the same as the drawing's.
+enum PlayerInk {
+	static let hair: [UInt32] = [0xF00001, 0xF00002, 0xF00003, 0xF00004]
+	static let shirt: [UInt32] = [0x00F001, 0x00F002, 0x00F003, 0x00F004]
+	static let pants: [UInt32] = [0x0000F1, 0x0000F2, 0x0000F3, 0x0000F4]
+	static let shoe: [UInt32] = [0xF0F001, 0xF0F002, 0xF0F003, 0xF0F004]
+	static let scarf: [UInt32] = [0x00F0F1, 0x00F0F2, 0x00F0F3, 0x00F0F4]
+	static let helm: [UInt32] = [0xF000F1, 0xF000F2, 0xF000F3, 0xF000F4]
+	/// the shoes' own colour (leg armour makes them a darker shade of its metal)
+	static let shoeColor: UInt32 = 0x24242E
+}
+
+/// Four tones of a colour, as the drawings shade with (`ramp` in tools/art/artlib.py): a warm light,
+/// the colour, a shadow and a deep shadow that both lean cool
+func artRamp(_ c: UInt32, light: UInt32 = 0xFFF0C8, dark: UInt32 = 0x241A38) -> [UInt32] {
+	let s1: UInt32 = mixRGB(mixRGB(c, 0x000000, 0.22), dark, 0.18)
+	let s2: UInt32 = mixRGB(mixRGB(c, 0x000000, 0.42), dark, 0.30)
+	return [mixRGB(c, light, 0.28), c, s1, s2]
+}
+
+/// A chosen colour's tones through the game's grade, ready to swap for a set of markers
+func lookRamp(_ c: UInt32) -> [UInt32] {
+	return artRamp(c).map { artGrade($0) }
+}
+
+/// A picture with some colours swapped for others (exact matches only)
+func swapColors(_ b: PixelBuf, _ map: [UInt32: UInt32]) -> PixelBuf {
+	if map.isEmpty { return b }
+	var o: PixelBuf = b
+	for i in 0..<o.px.count {
+		let c: UInt32 = o.px[i]
+		if (c >> 24) == 0 { continue }
+		if let n = map[c & 0xFFFFFF] { o.px[i] = (c & 0xFF000000) | n }
+	}
+	return o
+}
+
+/// What the player chose to look like (Settings), and the armour worn over it
+struct PlayerLookChoice {
+	var hair: Int = 0
+	var hairStyle: Int = 0
+	var shirt: Int = 0
+	var shirtStyle: Int = 0
+	var pants: Int = 0
+	var pantsStyle: Int = 0
+	var scarf: Int = 0
+	var head: Tier? = nil
+	var chest: Tier? = nil
+	var legs: Tier? = nil
+
+	init(_ s: Settings, head: Tier? = nil, chest: Tier? = nil, legs: Tier? = nil) {
+		hair = clampI(s.hair, 0, hairChoices.count - 1)
+		hairStyle = clampI(s.hairStyle, 0, hairStyleNames.count - 1)
+		shirt = clampI(s.shirtColor, 0, shirtChoices.count - 1)
+		shirtStyle = clampI(s.shirtStyle, 0, shirtStyleNames.count - 1)
+		pants = clampI(s.pantsColor, 0, pantsChoices.count - 1)
+		pantsStyle = clampI(s.pantsStyle, 0, pantsStyleNames.count - 1)
+		scarf = clampI(s.scarf, 0, scarfChoices.count - 1)
+		self.head = head
+		self.chest = chest
+		self.legs = legs
+	}
+
+	/// One number for the whole choice (the sprite caches are keyed by it)
+	var key: Int {
+		let looks: Int = (((((hair * 8 + hairStyle) * 16 + shirt) * 8 + shirtStyle) * 16 + pants) * 8 + pantsStyle) * 8 + scarf
+		let worn: Int = ((head?.rawValue ?? 15) * 16 + (chest?.rawValue ?? 15)) * 16 + (legs?.rawValue ?? 15)
+		return looks &* 4096 &+ worn
+	}
+}
+
+/// The colour armour of a tier is drawn in
+func armorLookColor(_ t: Tier) -> UInt32 {
+	return t == .wood ? 0x9A5A2A : t.color
+}
+
+/// The player's frames: the bare figure with the chosen trousers, shirt, scarf and hair laid over it
+/// (each a drawing of only what it changes), then every marker swapped for the chosen colour's
+/// tones. Armour takes the place of the clothes: a chest piece is a long-sleeved top of its metal,
+/// leg pieces are trousers of it (with darker boots), a helmet goes over the hair.
+func playerFrames(_ c: PlayerLookChoice) -> [PixelBuf] {
+	var frames: [PixelBuf] = CreatureSheet.frames("player")
+	if frames.isEmpty { return frames }
+	var map: [UInt32: UInt32] = [:]
+	func tone(_ markers: [UInt32], _ col: UInt32) {
+		let r: [UInt32] = lookRamp(col)
+		for i in 0..<min(markers.count, r.count) { map[markers[i]] = r[i] }
+	}
+	func lay(_ name: String) {
+		let over: [PixelBuf] = CreatureSheet.frames(name)
+		for i in 0..<min(frames.count, over.count) { frames[i].blit(over[i], 0, 0) }
+	}
+	var pantsStyle: Int = c.pantsStyle
+	var pantsCol: UInt32 = pantsChoices[c.pants]
+	var shoeCol: UInt32 = PlayerInk.shoeColor
+	if let t = c.legs {
+		pantsStyle = 0
+		pantsCol = shadeRGB(armorLookColor(t), 0.85)
+		shoeCol = shadeRGB(armorLookColor(t), 0.6)
+	}
+	var shirtStyle: Int = c.shirtStyle
+	var shirtCol: UInt32 = shirtChoices[c.shirt]
+	if let t = c.chest {
+		shirtStyle = 1
+		shirtCol = armorLookColor(t)
+	}
+	lay(joinText("player_pants_", String(pantsStyle)))
+	lay(joinText("player_shirt_", String(shirtStyle)))
+	if c.scarf != 0 { lay("player_scarf") }
+	lay(joinText("player_hair_", String(c.hairStyle)))
+	if c.head != nil { lay("player_helm") }
+	tone(PlayerInk.pants, pantsCol)
+	tone(PlayerInk.shoe, shoeCol)
+	tone(PlayerInk.shirt, shirtCol)
+	tone(PlayerInk.hair, hairChoices[c.hair])
+	if c.scarf != 0 { tone(PlayerInk.scarf, scarfChoices[c.scarf]) }
+	if let t = c.head { tone(PlayerInk.helm, armorLookColor(t)) }
+	return frames.map { swapColors($0, map) }
+}
+
+/// The player's look for a choice of clothes and armour
+func playerLook(_ c: PlayerLookChoice) -> CreatureLook {
+	guard let a = CreatureSheet.arts["player"] else {
+		let st: HumanStyle = playerStyle(hairIdx: c.hair, scarfIdx: c.scarf, head: c.head, chest: c.chest, legs: c.legs)
+		return CreatureLook(frames: humanoidFrames(st), anim: CreatureAnim(), scale: creatureScale)
+	}
+	return CreatureLook(frames: playerFrames(c), anim: CreatureSheet.anim(a), scale: fineScale, foot: a.foot + 1, cx: a.cx, fine: true)
+}
+
+final class Art: @unchecked Sendable {
+	static let shared: Art = Art()
+
+	var tiles: [Image] = []
+	var tileBufs: [PixelBuf] = []
+	var walls: [PixelBuf] = []
+	var heartFull: Image
+	var heartEmpty: Image
+	var foodFull: Image
+	var foodEmpty: Image
+	var bubble: Image
+	var shieldIcon: Image
+	var boat: Image
+	var boatL: Image
+	var parts: [Image] = []
+	private var icons: [Item: Image] = [:]
+	/// weather symbols (see weatherIcon)
+	var wxIcons: [Int: Image] = [:]
+	var mobSets: [Int: SpriteSet] = [:]
+	/// sprites of custom creatures, by slot (rebuilt when the mods change)
+	var modMobSets: [Int: SpriteSet] = [:]
+	private var playerSets: [Int: SpriteSet] = [:]
+	var crack: [Image] = []
+
+	init() {
+		let painter: SectionPainter = SectionPainter.shared
+		tileBufs = painter.tileBufs
+		var ti: [Image] = []
+		for b in painter.tileBufs { ti.append(pixImage(b)) }
+		tiles = ti
+		// dark backdrop walls, indexed by backdrop kind - 1
+		walls = painter.wallBufs
+		heartFull = pixImage(heartBuf(true))
+		heartEmpty = pixImage(heartBuf(false))
+		foodFull = pixImage(foodBuf(true))
+		foodEmpty = pixImage(foodBuf(false))
+		bubble = pixImage(bubbleBuf())
+		shieldIcon = pixImage(shieldBuf())
+		let bt: PixelBuf = gradeBuf(spritePirateBoat())
+		boat = pixImage(bt)
+		boatL = pixImage(bt.flipped())
+		var ps: [Image] = []
+		for p in PartType.allCases { ps.append(pixImage(gradeBuf(partBuf(p)))) }
+		parts = ps
+		var cr: [Image] = []
+		for stage in 0..<5 {
+			var b = PixelBuf(w: 8, h: 8)
+			var rng = RNG(UInt64(stage + 3))
+			let n: Int = 3 + stage * 4
+			for _ in 0..<n { b.set(rng.int(8), rng.int(8), 0x101010) }
+			if stage >= 2 { b.line(1, 2, 6, 5, 0x101010) }
+			if stage >= 3 { b.line(5, 0, 2, 7, 0x101010) }
+			cr.append(pixImage(b))
+		}
+		crack = cr
+	}
+
+	func tile(_ t: Tile) -> Image { return tiles[Int(t.rawValue)] }
+
+	/// After a world's mods change: new pictures for the reserved tiles, and forget every cached icon
+	/// and sprite of custom content
+	func refreshModArt() {
+		let painter: SectionPainter = SectionPainter.shared
+		let base: Int = Int(Tile.modBase)
+		for i in 0..<ModLimits.blockSlots where base + i < tiles.count && base + i < painter.tileBufs.count {
+			tiles[base + i] = pixImage(painter.tileBufs[base + i])
+			tileBufs[base + i] = painter.tileBufs[base + i]
+		}
+		var keep: [Item: Image] = [:]
+		for (k, v) in icons {
+			switch k {
+			case .custom: continue
+			case .block(let t): if t.isMod { continue }
+			default: break
+			}
+			keep[k] = v
+		}
+		icons = keep
+		modMobSets.removeAll()
+		// game creatures a mod repaints (or stops repainting) are drawn afresh
+		mobSets.removeAll()
+	}
+
+	func icon(_ it: Item) -> Image {
+		if let i = icons[it] { return i }
+		var b: PixelBuf = itemBuf(it)
+		switch it {
+		case .block, .custom: break
+		default: b = gradeBuf(b)
+		}
+		let img: Image = pixImage(b)
+		icons[it] = img
+		return img
+	}
+
+	func playerSet(_ g: Game) -> SpriteSet {
+		let key: Int = g.armorKey
+		if let s = playerSets[key] { return s }
+		let a = g.armorPieces()
+		var s: SpriteSet
+		if g.suit.worn && !g.suit.d.pieces.isEmpty {
+			// a suit is built on the older figure, drawn three times finer: it stands where it always does
+			let st: HumanStyle = playerStyle(hairIdx: g.settings.hair, scarfIdx: g.settings.scarf, head: a.0, chest: a.1, legs: a.2)
+			let plain: [PixelBuf] = humanoidFrames(st)
+			s = makeSpriteSet(suitFrames(plain, g.suit.d).map { gradeBuf($0) }, hitH: 1.8, fixedScale: 0.125 / Double(suitUnit))
+			let bb: (Int, Int, Int, Int) = opaqueBounds(plain[0])
+			s.footRow = bb.3 * suitUnit
+			s.centerCol = Double(bb.0 + bb.2 + 1) * 0.5 * Double(suitUnit)
+		} else {
+			s = lookSpriteSet(playerLook(PlayerLookChoice(g.settings, head: a.0, chest: a.1, legs: a.2)), hitH: 1.8)
+		}
+		if playerSets.count > 24 { playerSets.removeAll() }
+		playerSets[key] = s
+		return s
+	}
+
+	/// The player as chosen on the character screen: from the front and from the side
+	func previewPlayer(_ s: Settings) -> (Image, Image) {
+		let l: CreatureLook = playerLook(PlayerLookChoice(s))
+		let i: Int = l.anim.pose("front", 0)
+		let front: Image = pixImage(l.frames[min(i, l.frames.count - 1)])
+		let side: Image = pixImage(l.frames[0])
+		return (front, side)
+	}
+
+	func mobSet(_ m: Mob) -> SpriteSet {
+		if m.kind == .custom { return customMobSet(m.cslot, m.mphase) }
+		var variant: Int = 0
+		switch m.kind {
+		case .zombie: variant = m.variant
+		case .sheep: variant = m.sheared ? 1 : 0
+		case .wolf: variant = m.tame ? 1 : 0
+		default: variant = 0
+		}
+		let key: Int = m.kind.rawValue * 16 + variant
+		if let s = mobSets[key] { return s }
+		let s: SpriteSet = buildMobSet(m.kind, variant)
+		mobSets[key] = s
+		return s
+	}
+
+	func buildMobSet(_ k: MobKind, _ v: Int) -> SpriteSet {
+		if let fr = OverrideRT.shared.creatureArt(k, v) {
+			// a mod's repainted sprite, timed like the drawing it was painted over: the hand-drawn one,
+			// or the older one for repaints made before the creature was redrawn
+			let look: CreatureLook = creatureLook(k, v)
+			if look.fine && OverrideRT.shared.mobFine[k.rawValue] == true {
+				return makeSpriteSet(fr, hitH: mobDef(k).h, fixedScale: look.scale, anim: look.anim)
+			}
+			return makeSpriteSet(fr, hitH: mobDef(k).h, fixedScale: creatureScale, anim: olderCreatureArt(k, v).1)
+		}
+		return creatureSpriteSet(k, v)
+	}
+
+	/// A custom creature's sprites (made once per world; refreshModArt clears them)
+	func customMobSet(_ slot: Int) -> SpriteSet {
+		if let s = modMobSets[slot] { return s }
+		guard let r = ModRuntime.shared.mob(slot) else { return creaturePreview(.zombie) }
+		let s: SpriteSet = modMobSpriteSet(r.def)
+		modMobSets[slot] = s
+		return s
+	}
+
+	/// A game creature's sprites (the Mod Creator's body picker)
+	func creaturePreview(_ k: MobKind) -> SpriteSet {
+		let key: Int = k.rawValue * 16
+		if let s = mobSets[key] { return s }
+		let s: SpriteSet = buildMobSet(k, 0)
+		mobSets[key] = s
+		return s
+	}
+}
+
+/// True for creatures drawn with the shared humanoid frames
+
+
+
+
+// MARK: - Sound: every effect is synthesised at first use (no audio files), short and soft, in one style
+
+enum SoundID: Int, CaseIterable {
+	case digStone, digDirt, digWood, digSand, digCrystal, digLeaves
+	case breakStone, breakDirt, breakWood, breakCrystal
+	case place, pickup, craft, chestOpen, door
+	case swing, hit, hurt, bow, arrowHit, gun, explosion, land, eat, splash
+	case discovery, warn, roar, portal, tap
+	/// combat (appended): a knife's flick, a heavy blow, a thrust, a critical hit, several foes at once,
+	/// crossbow, sling, blunderbuss, lightning, a fire flask, a dazed foe, a weapon swap, a rare find
+	case swingLight, swingHeavy, thrust, crit, multiHit, crossbow, sling, blunderbuss, zap, flask, daze, swap, rareLoot
+	/// weather (appended): a close thunderclap, far-off rolling thunder, the crackle before a strike,
+	/// an alert chime, a hailstone's tick
+	case thunderNear, thunderFar, strikeWarn, weatherAlert, hailTick
+	/// alchemy and the suit (appended): a sip, a flask breaking, an infusion taking hold, a suit closing
+	case drink, potionBreak, infuse, suitUp
+}
+
+enum LoopID: Int, CaseIterable {
+	case engine, drill, rain, wind
+	/// weather beds (appended): a heavy downpour, a howling gale, hail on everything, a tornado's roar,
+	/// a storm siren
+	case heavyRain, gale, hail, tornado, siren
+}
+
+/// The sound a block makes when dug or broken
+func soundMaterial(_ t: Tile) -> Int {
+	if isLeafTile(t) || t.isPlant || t == .cobweb { return 5 }
+	switch t {
+	case .glass, .ice, .glowCrystal, .crystalOre, .diamond: return 4
+	case .sand: return 3
+	default: break
+	}
+	switch toolClass(t) {
+	case .axe: return 2
+	case .shovel, .hoe: return 1
+	case .pickaxe: return 0
+	}
+}
+
+/// Small additive synthesiser: tones with pitch sweeps, filtered noise and plucked strings, each with an
+/// attack and an exponential decay, mixed and normalised
+struct Synth {
+	static let rate: Double = 22050
+	var out: [Float]
+	var seed: UInt64
+
+	init(_ seconds: Double, seed: UInt64) {
+		out = [Float](repeating: 0, count: max(1, Int(seconds * Synth.rate)))
+		self.seed = seed &* 2862933555777941757 &+ 3037000493
+	}
+
+	static func env(_ t: Double, _ attack: Double, _ decay: Double) -> Double {
+		return t < attack ? t / max(attack, 0.0001) : exp(-(t - attack) / max(decay, 0.0001))
+	}
+
+	/// wave: 0 sine, 1 triangle, 2 saw, 3 soft square
+	mutating func tone(_ f0: Double, _ f1: Double, _ dur: Double, _ attack: Double, _ decay: Double, _ amp: Double, wave: Int = 0, at: Double = 0, vibrato: Double = 0) {
+		let n0: Int = Int(at * Synth.rate)
+		let n: Int = min(out.count - n0, Int(dur * Synth.rate))
+		if n <= 0 { return }
+		var ph: Double = 0
+		for i in 0..<n {
+			let t: Double = Double(i) / Synth.rate
+			let k: Double = t / max(dur, 0.0001)
+			var f: Double = f0 + (f1 - f0) * k
+			if vibrato > 0 { f *= 1.0 + 0.012 * sin(t * vibrato * 2.0 * Double.pi) }
+			ph += f / Synth.rate
+			let x: Double = ph - floor(ph)
+			var v: Double
+			switch wave {
+			case 1: v = 4.0 * abs(x - 0.5) - 1.0
+			case 2: v = 2.0 * x - 1.0
+			case 3: v = tanh(sin(x * 2.0 * Double.pi) * 3.0)
+			default: v = sin(x * 2.0 * Double.pi)
+			}
+			out[n0 + i] += Float(v * amp * Synth.env(t, attack, decay))
+		}
+	}
+
+	mutating func rnd() -> Double {
+		seed = seed &* 6364136223846793005 &+ 1442695040888963407
+		return Double((seed >> 33) & 0xFFFFFF) / Double(0xFFFFFF) * 2.0 - 1.0
+	}
+
+	/// noise through a one-pole low-pass (lp) and high-pass (hp); lp can sweep to lp1
+	mutating func noise(_ dur: Double, _ attack: Double, _ decay: Double, _ amp: Double, lp: Double, hp: Double, lp1: Double = -1, at: Double = 0) {
+		let n0: Int = Int(at * Synth.rate)
+		let n: Int = min(out.count - n0, Int(dur * Synth.rate))
+		if n <= 0 { return }
+		var low: Double = 0
+		var low2: Double = 0
+		let ah: Double = 1.0 - exp(-2.0 * Double.pi * hp / Synth.rate)
+		for i in 0..<n {
+			let t: Double = Double(i) / Synth.rate
+			let cut: Double = lp1 > 0 ? lp + (lp1 - lp) * (t / dur) : lp
+			let al: Double = 1.0 - exp(-2.0 * Double.pi * cut / Synth.rate)
+			low += al * (rnd() - low)
+			low2 += ah * (low - low2)
+			out[n0 + i] += Float((low - low2) * amp * 2.2 * Synth.env(t, attack, decay))
+		}
+	}
+
+	/// a plucked string (Karplus-Strong)
+	mutating func pluck(_ f: Double, _ dur: Double, _ amp: Double, at: Double = 0) {
+		let period: Int = max(2, Int(Synth.rate / f))
+		var ring: [Double] = (0..<period).map { _ in rnd() }
+		let n0: Int = Int(at * Synth.rate)
+		let n: Int = min(out.count - n0, Int(dur * Synth.rate))
+		if n <= 0 { return }
+		var k: Int = 0
+		for i in 0..<n {
+			let a: Double = ring[k]
+			let b: Double = ring[(k + 1) % period]
+			ring[k] = (a + b) * 0.497
+			out[n0 + i] += Float(a * amp)
+			k = (k + 1) % period
+		}
+	}
+
+	/// peak-normalise and fade the ends so nothing clicks
+	mutating func finish(_ peak: Float) {
+		var m: Float = 0
+		for v in out { m = max(m, abs(v)) }
+		let g: Float = m > 0 ? peak / m : 0
+		let fade: Int = min(out.count / 2, 66)
+		for i in 0..<out.count {
+			var v: Float = out[i] * g
+			if i < fade { v *= Float(i) / Float(fade) }
+			if i > out.count - 1 - fade { v *= Float(out.count - 1 - i) / Float(fade) }
+			out[i] = v
+		}
+	}
+}
+
+enum SoundBank {
+	static func effect(_ id: SoundID, _ variant: Int) -> [Float] {
+		let p: Double = [0.94, 1.0, 1.06][variant % 3]
+		let seed: UInt64 = UInt64(id.rawValue * 31 + variant + 1)
+		var s: Synth
+		var peak: Float = 0.75
+		switch id {
+		case .digStone, .breakStone:
+			let big: Bool = id == .breakStone
+			s = Synth(big ? 0.22 : 0.08, seed: seed)
+			s.noise(big ? 0.2 : 0.06, 0.002, big ? 0.06 : 0.02, 0.6, lp: 6000, hp: 1500)
+			s.tone(900 * p, 700 * p, 0.06, 0.001, 0.015, 0.3)
+			if big { s.noise(0.18, 0.01, 0.06, 0.4, lp: 1500, hp: 200, at: 0.03) }
+		case .digDirt, .breakDirt:
+			let big: Bool = id == .breakDirt
+			s = Synth(big ? 0.2 : 0.09, seed: seed)
+			s.noise(big ? 0.18 : 0.08, 0.003, big ? 0.06 : 0.03, 0.8, lp: 900, hp: 80)
+			s.tone(140 * p, 90 * p, 0.08, 0.002, 0.03, 0.4)
+		case .digWood, .breakWood:
+			let big: Bool = id == .breakWood
+			s = Synth(big ? 0.25 : 0.09, seed: seed)
+			s.tone(320 * p, 300 * p, 0.08, 0.001, 0.025, 0.6, wave: 1)
+			s.tone(640 * p, 600 * p, 0.06, 0.001, 0.015, 0.25)
+			s.noise(0.03, 0.001, 0.01, 0.3, lp: 3000, hp: 400)
+			if big { s.tone(240 * p, 200 * p, 0.2, 0.002, 0.06, 0.5, wave: 1, at: 0.04); s.noise(0.15, 0.01, 0.05, 0.3, lp: 1200, hp: 150, at: 0.05) }
+		case .digSand:
+			s = Synth(0.1, seed: seed)
+			s.noise(0.09, 0.005, 0.04, 0.6, lp: 2500, hp: 300)
+		case .digCrystal, .breakCrystal:
+			let big: Bool = id == .breakCrystal
+			s = Synth(big ? 0.45 : 0.3, seed: seed)
+			s.tone(1500 * p, 1500 * p, 0.3, 0.002, 0.12, 0.4)
+			s.tone(2310 * p, 2300 * p, 0.25, 0.002, 0.08, 0.25)
+			s.noise(0.02, 0.001, 0.006, 0.2, lp: 8000, hp: 2000)
+			if big { for k in 0..<4 { s.tone((1800 + Double(k) * 420) * p, 1700 * p, 0.2, 0.002, 0.06, 0.18, at: 0.03 * Double(k)) } }
+			peak = 0.55
+		case .digLeaves:
+			s = Synth(0.08, seed: seed)
+			s.noise(0.07, 0.01, 0.025, 0.35, lp: 4000, hp: 1200)
+			peak = 0.4
+		case .place:
+			s = Synth(0.09, seed: seed)
+			s.tone(200 * p, 120 * p, 0.08, 0.002, 0.025, 0.7)
+			s.noise(0.04, 0.001, 0.012, 0.3, lp: 1200, hp: 100)
+		case .pickup:
+			s = Synth(0.14, seed: seed)
+			s.tone(660 * p, 660 * p, 0.06, 0.002, 0.03, 0.4, wave: 1)
+			s.tone(990 * p, 990 * p, 0.08, 0.002, 0.04, 0.35, wave: 1, at: 0.05)
+			peak = 0.4
+		case .craft:
+			s = Synth(0.4, seed: seed)
+			s.tone(1180 * p, 1180 * p, 0.35, 0.001, 0.1, 0.4)
+			s.tone(1770 * p, 1770 * p, 0.3, 0.001, 0.06, 0.3)
+			s.tone(2900 * p, 2900 * p, 0.2, 0.001, 0.03, 0.15)
+			s.noise(0.02, 0.001, 0.005, 0.3, lp: 7000, hp: 1500)
+			peak = 0.5
+		case .chestOpen:
+			s = Synth(0.3, seed: seed)
+			s.tone(150 * p, 130 * p, 0.26, 0.02, 0.12, 0.4, wave: 1, vibrato: 18)
+			s.tone(95 * p, 80 * p, 0.08, 0.002, 0.03, 0.4, at: 0.2)
+			peak = 0.5
+		case .door:
+			s = Synth(0.12, seed: seed)
+			s.tone(240 * p, 180 * p, 0.08, 0.001, 0.025, 0.6, wave: 1)
+			s.noise(0.05, 0.001, 0.015, 0.4, lp: 2000, hp: 150)
+		case .swing:
+			s = Synth(0.16, seed: seed)
+			s.noise(0.15, 0.04, 0.05, 0.4, lp: 700 * p, hp: 250, lp1: 3200 * p)
+			peak = 0.35
+		case .hit:
+			s = Synth(0.12, seed: seed)
+			s.noise(0.08, 0.001, 0.025, 0.7, lp: 1800, hp: 100)
+			s.tone(120 * p, 70 * p, 0.1, 0.001, 0.04, 0.8)
+		case .hurt:
+			s = Synth(0.2, seed: seed)
+			s.tone(230 * p, 150 * p, 0.17, 0.005, 0.07, 0.5, wave: 1)
+			s.noise(0.08, 0.002, 0.03, 0.3, lp: 1200, hp: 100)
+		case .bow:
+			s = Synth(0.3, seed: seed)
+			s.pluck(196 * p, 0.28, 0.6)
+			s.noise(0.03, 0.001, 0.01, 0.2, lp: 3000, hp: 600)
+			peak = 0.5
+		case .arrowHit:
+			s = Synth(0.08, seed: seed)
+			s.noise(0.04, 0.001, 0.012, 0.5, lp: 2500, hp: 300)
+			s.tone(260 * p, 200 * p, 0.05, 0.001, 0.02, 0.4, wave: 1)
+			peak = 0.45
+		case .gun:
+			s = Synth(0.16, seed: seed)
+			s.noise(0.12, 0.001, 0.035, 0.9, lp: 7000, hp: 200)
+			s.tone(90 * p, 50 * p, 0.12, 0.001, 0.05, 0.7)
+			peak = 0.7
+		case .explosion:
+			s = Synth(1.0, seed: seed)
+			s.noise(0.95, 0.003, 0.28, 1.0, lp: 700 * p, hp: 20)
+			s.tone(60 * p, 35 * p, 0.8, 0.003, 0.3, 0.8)
+			peak = 0.85
+		case .land:
+			s = Synth(0.09, seed: seed)
+			s.noise(0.07, 0.002, 0.025, 0.7, lp: 600, hp: 40)
+			s.tone(90 * p, 60 * p, 0.06, 0.001, 0.025, 0.4)
+			peak = 0.5
+		case .eat:
+			s = Synth(0.3, seed: seed)
+			for k in 0..<3 { s.noise(0.05, 0.002, 0.015, 0.4, lp: 2500, hp: 500, at: Double(k) * 0.09) }
+			peak = 0.4
+		case .splash:
+			s = Synth(0.3, seed: seed)
+			s.noise(0.28, 0.005, 0.1, 0.6, lp: 3000, hp: 400)
+			peak = 0.45
+		case .discovery:
+			s = Synth(0.75, seed: seed)
+			for (k, f) in [523.0, 659.0, 784.0, 1047.0].enumerated() { s.tone(f, f, 0.4, 0.004, 0.16, 0.3, wave: 1, at: Double(k) * 0.09) }
+			peak = 0.45
+		case .warn:
+			s = Synth(0.5, seed: seed)
+			s.tone(110, 165, 0.45, 0.05, 0.25, 0.35, wave: 3)
+			peak = 0.4
+		case .roar:
+			s = Synth(1.1, seed: seed)
+			s.noise(1.0, 0.08, 0.4, 0.8, lp: 500, hp: 40)
+			s.tone(75 * p, 55 * p, 1.0, 0.06, 0.4, 0.5, wave: 2, vibrato: 7)
+			peak = 0.7
+		case .portal:
+			s = Synth(1.0, seed: seed)
+			for f in [440.0, 660.0, 880.0] { s.tone(f, f * 1.02, 0.9, 0.15, 0.4, 0.25, vibrato: 5) }
+			peak = 0.45
+		case .tap:
+			s = Synth(0.04, seed: seed)
+			s.tone(1400, 1300, 0.03, 0.001, 0.008, 0.3)
+			peak = 0.25
+		case .swingLight:
+			s = Synth(0.1, seed: seed)
+			s.noise(0.09, 0.01, 0.025, 0.4, lp: 1800 * p, hp: 700, lp1: 6000 * p)
+			peak = 0.3
+		case .swingHeavy:
+			s = Synth(0.3, seed: seed)
+			s.noise(0.28, 0.06, 0.08, 0.6, lp: 300 * p, hp: 60, lp1: 1400 * p)
+			s.tone(95 * p, 60 * p, 0.25, 0.04, 0.08, 0.4)
+			peak = 0.45
+		case .thrust:
+			s = Synth(0.12, seed: seed)
+			s.noise(0.1, 0.005, 0.03, 0.5, lp: 2500 * p, hp: 500, lp1: 7000 * p)
+			s.tone(500 * p, 900 * p, 0.05, 0.002, 0.02, 0.15)
+			peak = 0.35
+		case .crit:
+			s = Synth(0.25, seed: seed)
+			s.noise(0.08, 0.001, 0.025, 0.7, lp: 2400, hp: 100)
+			s.tone(130 * p, 70 * p, 0.12, 0.001, 0.045, 0.8)
+			s.tone(1480 * p, 1320 * p, 0.2, 0.001, 0.07, 0.3)
+			s.tone(2220 * p, 2000 * p, 0.14, 0.001, 0.04, 0.15)
+			peak = 0.75
+		case .multiHit:
+			s = Synth(0.3, seed: seed)
+			s.tone(660 * p, 660 * p, 0.12, 0.002, 0.05, 0.35, wave: 1)
+			s.tone(990 * p, 990 * p, 0.16, 0.002, 0.07, 0.35, wave: 1, at: 0.07)
+			peak = 0.45
+		case .crossbow:
+			s = Synth(0.24, seed: seed)
+			s.pluck(110 * p, 0.2, 0.7)
+			s.noise(0.03, 0.001, 0.008, 0.5, lp: 4000, hp: 800)
+			s.tone(180 * p, 120 * p, 0.06, 0.001, 0.02, 0.4, wave: 1, at: 0.01)
+			peak = 0.55
+		case .sling:
+			s = Synth(0.26, seed: seed)
+			s.noise(0.2, 0.02, 0.06, 0.35, lp: 900 * p, hp: 200, lp1: 2600 * p)
+			for i in 0..<s.out.count { s.out[i] *= Float(0.6 + 0.4 * sin(Double(i) / Synth.rate * 38.0 * 2.0 * Double.pi)) }
+			s.noise(0.05, 0.001, 0.015, 0.4, lp: 3500, hp: 600, at: 0.18)
+			peak = 0.4
+		case .blunderbuss:
+			s = Synth(0.5, seed: seed)
+			s.noise(0.45, 0.001, 0.12, 1.0, lp: 4500 * p, hp: 60, lp1: 900)
+			s.tone(70 * p, 32 * p, 0.4, 0.001, 0.14, 0.9)
+			peak = 0.85
+		case .zap:
+			s = Synth(0.3, seed: seed)
+			for k in 0..<5 { s.noise(0.03, 0.001, 0.01, 0.6, lp: 9000, hp: 2200, at: Double(k) * 0.045) }
+			s.tone(1900 * p, 420 * p, 0.25, 0.001, 0.08, 0.35, wave: 2)
+			peak = 0.6
+		case .flask:
+			s = Synth(0.6, seed: seed)
+			s.noise(0.06, 0.001, 0.02, 0.6, lp: 9000, hp: 3000)
+			for k in 0..<3 { s.tone((2600 + Double(k) * 700) * p, 2400 * p, 0.08, 0.001, 0.03, 0.15, at: 0.01 * Double(k)) }
+			s.noise(0.5, 0.08, 0.2, 0.7, lp: 400, hp: 60, lp1: 1600, at: 0.04)
+			peak = 0.6
+		case .daze:
+			s = Synth(0.35, seed: seed)
+			for (k, f) in [1500.0, 1900.0, 1700.0].enumerated() { s.tone(f * p, f * 1.05 * p, 0.08, 0.004, 0.03, 0.25, at: Double(k) * 0.09) }
+			peak = 0.3
+		case .swap:
+			s = Synth(0.1, seed: seed)
+			s.tone(900 * p, 850 * p, 0.04, 0.001, 0.012, 0.35, wave: 1)
+			s.tone(1300 * p, 1250 * p, 0.04, 0.001, 0.012, 0.3, wave: 1, at: 0.045)
+			s.noise(0.02, 0.001, 0.006, 0.2, lp: 6000, hp: 1500)
+			peak = 0.3
+		case .rareLoot:
+			s = Synth(0.9, seed: seed)
+			for (k, f) in [784.0, 988.0, 1175.0, 1568.0, 1976.0].enumerated() { s.tone(f, f, 0.45, 0.003, 0.18, 0.28, wave: 1, at: Double(k) * 0.07) }
+			for k in 0..<6 { s.tone(3000 + Double(k) * 310, 2900, 0.1, 0.001, 0.04, 0.08, at: 0.35 + Double(k) * 0.05) }
+			peak = 0.5
+		case .thunderNear:
+			// a sharp crack, then the long rumble rolling away under it
+			s = Synth(2.4, seed: seed)
+			s.noise(0.09, 0.001, 0.03, 1.0, lp: 9000, hp: 900)
+			s.noise(0.25, 0.004, 0.09, 0.8, lp: 2600 * p, hp: 120, at: 0.02)
+			s.noise(2.3, 0.03, 0.75, 0.9, lp: 420 * p, hp: 25, lp1: 160, at: 0.05)
+			s.noise(1.2, 0.05, 0.35, 0.5, lp: 300 * p, hp: 25, at: 0.6 + 0.2 * Double(variant))
+			s.tone(48 * p, 34 * p, 1.6, 0.02, 0.6, 0.35)
+			peak = 0.9
+		case .thunderFar:
+			// rolls of low rumble, no crack (the high notes are lost on the way)
+			s = Synth(3.0, seed: seed)
+			s.noise(2.6, 0.25, 0.9, 0.7, lp: 260 * p, hp: 22, lp1: 140)
+			s.noise(1.0, 0.1, 0.35, 0.55, lp: 220 * p, hp: 22, at: 0.5 + 0.3 * Double(variant))
+			s.noise(1.0, 0.1, 0.35, 0.45, lp: 200 * p, hp: 22, at: 1.4)
+			s.tone(40 * p, 30 * p, 2.4, 0.3, 0.8, 0.25)
+			peak = 0.6
+		case .strikeWarn:
+			// the buzz and crackle in the air just before a strike
+			s = Synth(0.7, seed: seed)
+			for k in 0..<9 { s.noise(0.035, 0.001, 0.012, 0.45 + 0.05 * Double(k), lp: 9000, hp: 2600, at: Double(k) * 0.07) }
+			s.tone(120 * p, 180 * p, 0.65, 0.2, 0.3, 0.2, wave: 2, vibrato: 30)
+			peak = 0.5
+		case .weatherAlert:
+			s = Synth(0.9, seed: seed)
+			s.tone(880, 880, 0.3, 0.005, 0.12, 0.35, wave: 1)
+			s.tone(660, 660, 0.4, 0.005, 0.18, 0.35, wave: 1, at: 0.28)
+			s.tone(880, 880, 0.3, 0.005, 0.12, 0.25, wave: 1, at: 0.56)
+			peak = 0.45
+		case .hailTick:
+			s = Synth(0.05, seed: seed)
+			s.noise(0.03, 0.0005, 0.008, 0.6, lp: 9000, hp: 2500)
+			s.tone(2600 * p, 2400 * p, 0.02, 0.0005, 0.006, 0.3)
+			peak = 0.3
+		case .drink:
+			// three soft gulps
+			s = Synth(0.5, seed: seed)
+			for k in 0..<3 { s.tone(320 * p, 220 * p, 0.09, 0.01, 0.04, 0.35, wave: 0, at: Double(k) * 0.14) }
+			s.noise(0.4, 0.02, 0.15, 0.12, lp: 900, hp: 200)
+			peak = 0.4
+		case .potionBreak:
+			// glass, then a hiss
+			s = Synth(0.55, seed: seed)
+			s.noise(0.05, 0.0008, 0.015, 0.7, lp: 9500, hp: 3500)
+			for k in 0..<4 { s.tone((2900 + Double(k) * 520) * p, 2500 * p, 0.07, 0.001, 0.025, 0.14, at: 0.008 * Double(k)) }
+			s.noise(0.45, 0.04, 0.16, 0.45, lp: 2600, hp: 500, at: 0.05)
+			peak = 0.55
+		case .infuse:
+			// a rising shimmer
+			s = Synth(0.8, seed: seed)
+			for (k, f) in [440.0, 554.0, 659.0, 880.0].enumerated() { s.tone(f * p, f * 1.01 * p, 0.45, 0.04, 0.2, 0.22, wave: 1, at: Double(k) * 0.08, vibrato: 6) }
+			peak = 0.45
+		case .suitUp:
+			// servos and a latch
+			s = Synth(0.45, seed: seed)
+			s.tone(180 * p, 420 * p, 0.25, 0.01, 0.1, 0.3, wave: 3)
+			s.noise(0.06, 0.001, 0.02, 0.6, lp: 4000, hp: 800, at: 0.28)
+			s.tone(1200 * p, 1100 * p, 0.05, 0.001, 0.02, 0.25, at: 0.3)
+			peak = 0.45
+		}
+		s.finish(peak)
+		return s.out
+	}
+
+	/// Seamless loops: whole numbers of cycles per loop, and noise cross-faded into its own start
+	static func loop(_ id: LoopID) -> [Float] {
+		var s: Synth
+		switch id {
+		case .engine:
+			s = Synth(1.0, seed: 101)
+			s.tone(55, 55, 1.0, 0.0001, 1000, 0.5, wave: 2)
+			s.tone(110, 110, 1.0, 0.0001, 1000, 0.25, wave: 3)
+			for i in 0..<s.out.count { s.out[i] *= Float(0.75 + 0.25 * sin(Double(i) / Synth.rate * 9.0 * 2.0 * Double.pi)) }
+		case .drill:
+			s = Synth(1.0, seed: 102)
+			s.tone(180, 180, 1.0, 0.0001, 1000, 0.4, wave: 3)
+			s.noise(1.0, 0.0001, 1000, 0.2, lp: 2000, hp: 300)
+			for i in 0..<s.out.count { s.out[i] *= Float(0.7 + 0.3 * sin(Double(i) / Synth.rate * 30.0 * 2.0 * Double.pi)) }
+		case .rain:
+			s = Synth(2.2, seed: 103)
+			s.noise(2.2, 0.0001, 1000, 0.6, lp: 3000, hp: 500)
+		case .wind:
+			s = Synth(3.2, seed: 104)
+			s.noise(3.2, 0.0001, 1000, 0.6, lp: 300, hp: 40)
+			for i in 0..<s.out.count { s.out[i] *= Float(0.6 + 0.4 * sin(Double(i) / Synth.rate / 3.0 * 2.0 * Double.pi)) }
+		case .heavyRain:
+			// denser and deeper than light rain, with slow surges
+			s = Synth(3.0, seed: 105)
+			s.noise(3.0, 0.0001, 1000, 0.7, lp: 1800, hp: 120)
+			s.noise(3.0, 0.0001, 1000, 0.3, lp: 5000, hp: 1500)
+			for i in 0..<s.out.count { s.out[i] *= Float(0.8 + 0.2 * sin(Double(i) / Synth.rate / 1.4 * 2.0 * Double.pi)) }
+		case .gale:
+			// a howl: band-limited noise whose loudness rises and falls in gusts
+			s = Synth(4.2, seed: 106)
+			s.noise(4.2, 0.0001, 1000, 0.6, lp: 900, hp: 250)
+			s.noise(4.2, 0.0001, 1000, 0.4, lp: 260, hp: 60)
+			for i in 0..<s.out.count {
+				let t: Double = Double(i) / Synth.rate
+				s.out[i] *= Float(0.55 + 0.3 * sin(t / 2.0 * 2.0 * Double.pi) + 0.15 * sin(t / 0.5 * 2.0 * Double.pi))
+			}
+		case .hail:
+			// countless small stones ticking on everything
+			s = Synth(2.2, seed: 107)
+			s.noise(2.2, 0.0001, 1000, 0.15, lp: 6000, hp: 1800)
+			var k: Int = 0
+			while k < 110 {
+				let at: Double = s.rnd() * 0.5 + 0.5
+				s.noise(0.02, 0.0005, 0.006, 0.6, lp: 9000, hp: 2400, at: at * 2.0)
+				k += 1
+			}
+		case .tornado:
+			// a deep, steady roar like a train that does not pass
+			s = Synth(3.4, seed: 108)
+			s.noise(3.4, 0.0001, 1000, 0.8, lp: 180, hp: 25)
+			s.noise(3.4, 0.0001, 1000, 0.3, lp: 700, hp: 200)
+			for i in 0..<s.out.count { s.out[i] *= Float(0.75 + 0.25 * sin(Double(i) / Synth.rate / 0.85 * 2.0 * Double.pi)) }
+		case .siren:
+			// a siren's slow rise and fall: the pitch's swing averages out over the loop, so the wave
+			// ends exactly where it began
+			s = Synth(4.0, seed: 109)
+			var ph: Double = 0
+			for i in 0..<s.out.count {
+				let t: Double = Double(i) / Synth.rate
+				let f: Double = 640.0 + 220.0 * sin(t / 4.0 * 2.0 * Double.pi)
+				ph += f / Synth.rate
+				let x: Double = ph - floor(ph)
+				s.out[i] = Float(tanh(sin(x * 2.0 * Double.pi) * 2.0) * 0.5)
+			}
+		}
+		if id == .siren {
+			// the siren's wave already joins up end to start: no fades, which would dip at the seam
+			var m: Float = 0
+			for v in s.out { m = max(m, abs(v)) }
+			if m > 0 { for i in 0..<s.out.count { s.out[i] *= 0.6 / m } }
+		} else {
+			s.finish(0.6)
+		}
+		if id == .rain || id == .wind || id == .heavyRain || id == .gale || id == .hail || id == .tornado {
+			// fold the extra 0.2 s back over the start so the loop point is seamless
+			let tail: Int = Int(0.2 * Synth.rate)
+			let n: Int = s.out.count - tail
+			for i in 0..<tail {
+				let k: Float = Float(i) / Float(tail)
+				s.out[i] = s.out[i] * k + s.out[n + i] * (1 - k)
+			}
+			s.out.removeLast(tail)
+		}
+		return s.out
+	}
+}
+
+/// Plays the effects: a small pool of voices (the oldest is cut off when all are busy), a minimum gap
+/// between repeats of the same effect, and four looping beds whose volume follows the game.
+final class Sound {
+	static let shared: Sound = Sound()
+	private let engine: AVAudioEngine = AVAudioEngine()
+	private var format: AVAudioFormat? = nil
+	private var voices: [AVAudioPlayerNode] = []
+	private var loopNodes: [AVAudioPlayerNode] = []
+	private var buffers: [Int: [AVAudioPCMBuffer]] = [:]
+	private var lastPlay: [Int: Double] = [:]
+	private var nextVoice: Int = 0
+	private(set) var running: Bool = false
+	private var started: Bool = false
+	var enabled: Bool = true
+	var sfxVolume: Float = 0.7
+	var ambienceVolume: Float = 0.5
+
+	/// Call once the game is on screen
+	func start() {
+		if started { return }
+		started = true
+		#if os(iOS)
+		// ambient: mixes with the player's own music and respects the silent switch
+		try? AVAudioSession.sharedInstance().setCategory(.ambient, mode: .default, options: [.mixWithOthers])
+		try? AVAudioSession.sharedInstance().setActive(true)
+		#endif
+		guard let fmt = AVAudioFormat(standardFormatWithSampleRate: Synth.rate, channels: 1) else { return }
+		format = fmt
+		for _ in 0..<8 {
+			let n = AVAudioPlayerNode()
+			engine.attach(n)
+			engine.connect(n, to: engine.mainMixerNode, format: fmt)
+			voices.append(n)
+		}
+		for _ in LoopID.allCases {
+			let n = AVAudioPlayerNode()
+			engine.attach(n)
+			engine.connect(n, to: engine.mainMixerNode, format: fmt)
+			n.volume = 0
+			loopNodes.append(n)
+		}
+		engine.prepare()
+		do { try engine.start() } catch { return }
+		running = true
+		for v in voices { v.play() }
+		for l in LoopID.allCases {
+			let n: AVAudioPlayerNode = loopNodes[l.rawValue]
+			if let b = makeBuffer(SoundBank.loop(l)) {
+				n.scheduleBuffer(b, at: nil, options: .loops, completionHandler: nil)
+				n.play()
+			}
+		}
+	}
+
+	private func makeBuffer(_ samples: [Float]) -> AVAudioPCMBuffer? {
+		guard let fmt = format, let b = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: AVAudioFrameCount(samples.count)) else { return nil }
+		b.frameLength = AVAudioFrameCount(samples.count)
+		if let ch = b.floatChannelData {
+			for i in 0..<samples.count { ch[0][i] = samples[i] }
+		}
+		return b
+	}
+
+	static func minGap(_ id: SoundID) -> Double {
+		switch id {
+		case .pickup, .tap: return 0.05
+		case .digStone, .digDirt, .digWood, .digSand, .digCrystal, .digLeaves: return 0.09
+		case .hit, .arrowHit: return 0.06
+		case .land, .place, .door: return 0.08
+		case .warn: return 0.35
+		case .roar, .portal, .discovery, .explosion, .rareLoot: return 0.25
+		case .thunderNear: return 0.3
+		case .thunderFar: return 0.5
+		case .strikeWarn: return 0.6
+		case .weatherAlert: return 2.0
+		case .hailTick: return 0.07
+		case .crit, .multiHit, .swingLight: return 0.05
+		case .daze, .flask: return 0.15
+		default: return 0.04
+		}
+	}
+
+	func play(_ id: SoundID, _ volume: Double = 1.0) {
+		guard running && enabled && sfxVolume > 0 && volume > 0.02 else { return }
+		let now: Double = Date().timeIntervalSinceReferenceDate
+		if let t = lastPlay[id.rawValue], now - t < Sound.minGap(id) { return }
+		lastPlay[id.rawValue] = now
+		if buffers[id.rawValue] == nil {
+			var list: [AVAudioPCMBuffer] = []
+			for v in 0..<3 { if let b = makeBuffer(SoundBank.effect(id, v)) { list.append(b) } }
+			buffers[id.rawValue] = list
+		}
+		guard let list = buffers[id.rawValue], !list.isEmpty else { return }
+		let b: AVAudioPCMBuffer = list[Int.random(in: 0..<list.count)]
+		let v: AVAudioPlayerNode = voices[nextVoice]
+		nextVoice = (nextVoice + 1) % voices.count
+		v.volume = Float(min(1.0, volume)) * sfxVolume
+		v.scheduleBuffer(b, at: nil, options: .interrupts, completionHandler: nil)
+		if !v.isPlaying { v.play() }
+	}
+
+	/// Silences every loop at once: leaving a world (nothing sets their volumes any more after that)
+	func silenceLoops() {
+		for n in loopNodes { n.volume = 0 }
+	}
+
+	func setLoop(_ id: LoopID, _ volume: Double) {
+		guard running else { return }
+		let target: Float = enabled ? Float(max(0, min(1, volume))) * ambienceVolume : 0
+		let n: AVAudioPlayerNode = loopNodes[id.rawValue]
+		// ease toward the target so loops fade in and out instead of popping
+		n.volume += (target - n.volume) * 0.15
+	}
+}
+
+extension Game {
+	/// A sound effect; world events further than ~32 blocks from the player are not heard
+	func sfx(_ id: SoundID, at x: Double? = nil, _ volume: Double = 1.0) {
+		var v: Double = volume
+		if let wx = x { v *= max(0, 1.0 - abs(wx - pb.x) / 32.0) }
+		Sound.shared.play(id, v)
+	}
+
+	func digSound(_ t: Tile, broke: Bool) {
+		let m: Int = soundMaterial(t)
+		let id: SoundID
+		switch m {
+		case 0: id = broke ? .breakStone : .digStone
+		case 1: id = broke ? .breakDirt : .digDirt
+		case 2: id = broke ? .breakWood : .digWood
+		case 3: id = broke ? .breakDirt : .digSand
+		case 4: id = broke ? .breakCrystal : .digCrystal
+		default: id = .digLeaves
+		}
+		sfx(id, broke ? 0.9 : 0.6)
+	}
+
+	/// Once a frame: settings into the mixer, and the looping beds (engine, drill, rain, wind)
+	func updateAudio() {
+		let snd: Sound = Sound.shared
+		snd.enabled = settings.soundOn
+		snd.sfxVolume = Float(settings.sfxVolume)
+		snd.ambienceVolume = Float(settings.ambienceVolume)
+		if !snd.running { return }
+		var engineV: Double = 0
+		var drillV: Double = 0
+		if let v = inVehicle, v.engines > 0, v.fuel > 0 || isCreative {
+			engineV = 0.3 + 0.5 * abs(v.throttle)
+			if v.drilling { drillV = 0.7 }
+		}
+		snd.setLoop(.engine, engineV)
+		snd.setLoop(.drill, drillV)
+		// the weather beds, layered: light and heavy rain, wind and gale, hail, a tornado, a siren. They
+		// all run from the start and only their volumes move, so nothing restarts or clicks. Under a roof
+		// the rain and wind are muffled rather than cut.
+		let L: LocalWeather = wxHere
+		let ow: Bool = world.dim == .overworld && settings.weatherOn
+		let muffle: Double = shelterLevel == 0 ? 1.0 : (shelterLevel == 1 ? 0.55 : (shelterLevel == 2 ? 0.3 : 0.08))
+		let rainV: Double = ow && !L.snow ? L.precip : 0
+		snd.setLoop(.rain, min(1.0, rainV * 1.1) * muffle)
+		snd.setLoop(.heavyRain, clampD((rainV - 0.45) * 1.6, 0, 1) * muffle)
+		let aw: Double = ow ? abs(L.wind) : 0
+		let high: Double = world.dim == .overworld && shelterLevel == 0 && pb.y < 80 ? 0.35 : 0
+		snd.setLoop(.wind, world.dim == .umbral ? 0.6 : max(high, clampD(aw / 10.0, 0, 0.8) * muffle))
+		snd.setLoop(.gale, clampD((aw - 8.0) / 8.0, 0, 1) * muffle)
+		snd.setLoop(.hail, ow ? clampD(L.hail * 1.2, 0, 1) * muffle : 0)
+		var roar: Double = 0
+		if ow, let e = weather.tornado { roar = clampD(1.0 - abs(e.x - pb.x) / 90.0, 0, 1) * e.funnel * max(muffle, 0.4) }
+		snd.setLoop(.tornado, roar)
+		snd.setLoop(.siren, sirenLevel * 0.7)
+	}
+}
+
+
+// MARK: - Weather: one simulation for the whole overworld
+// The weather is a single saved simulation (WeatherSim), stepped once a frame by the game clock. It
+// holds the state over the region (clear, rain, a storm...), the plan of what comes next (the forecast
+// devices read it directly), amounts that ease toward whatever the state and the settings allow (cloud,
+// rain, wind, lightning, hail, cold) and the two rare events (a tornado, a hurricane). What a place
+// actually gets is worked out from that and the place itself: storm cells drift over the land with the
+// wind (a noise field in world space, so it is the same whichever chunks happen to be loaded), deserts
+// stay dry, cold country gets snow and the coast takes the brunt of a hurricane. Nothing keeps a timer
+// of its own: rain, lightning, hail, cold and the weather devices all read the simulation.
+
+enum WeatherKind: Int, Codable, CaseIterable {
+	case clear, partlyCloudy, overcast, lightRain, heavyRain, thunderstorm, strongWind, windstorm, hailstorm, snowfall, blizzard, tornado, hurricane
+
+	var name: String {
+		switch self {
+		case .clear: return "Clear"
+		case .partlyCloudy: return "Partly cloudy"
+		case .overcast: return "Overcast"
+		case .lightRain: return "Light rain"
+		case .heavyRain: return "Heavy rain"
+		case .thunderstorm: return "Thunderstorm"
+		case .strongWind: return "Strong wind"
+		case .windstorm: return "Windstorm"
+		case .hailstorm: return "Hailstorm"
+		case .snowfall: return "Snowfall"
+		case .blizzard: return "Blizzard"
+		case .tornado: return "Tornado"
+		case .hurricane: return "Hurricane"
+		}
+	}
+
+	var severe: Bool {
+		switch self {
+		case .thunderstorm, .windstorm, .hailstorm, .blizzard, .tornado, .hurricane: return true
+		default: return false
+		}
+	}
+
+
+	/// What a spell of it brings at full strength (before the settings and the place are applied)
+	var profile: WeatherProfile {
+		switch self {
+		case .clear: return WeatherProfile(cloud: 0.04, wind: 1.2, gust: 0.25)
+		case .partlyCloudy: return WeatherProfile(cloud: 0.35, wind: 2.4, gust: 0.35)
+		case .overcast: return WeatherProfile(cloud: 0.72, wind: 3.0, gust: 0.35)
+		case .lightRain: return WeatherProfile(cloud: 0.78, precip: 0.38, wind: 3.0, gust: 0.4, cover: 0.55)
+		case .heavyRain: return WeatherProfile(cloud: 0.9, precip: 0.85, wind: 5.0, gust: 0.5, cover: 0.8)
+		case .thunderstorm: return WeatherProfile(cloud: 1.0, precip: 0.9, wind: 7.0, gust: 0.7, thunder: 6.0, cover: 0.75)
+		case .strongWind: return WeatherProfile(cloud: 0.4, wind: 9.0, gust: 0.6, cover: 0.3)
+		case .windstorm: return WeatherProfile(cloud: 0.7, precip: 0.15, wind: 14.0, gust: 0.8, cover: 0.4)
+		case .hailstorm: return WeatherProfile(cloud: 0.95, precip: 0.55, wind: 6.0, gust: 0.6, thunder: 2.0, hail: 1.0, cover: 0.6)
+		case .snowfall: return WeatherProfile(cloud: 0.8, precip: 0.6, wind: 2.5, gust: 0.4, cover: 0.85, chill: 0.2)
+		case .blizzard: return WeatherProfile(cloud: 1.0, precip: 1.0, wind: 13.0, gust: 0.7, cover: 1.0, chill: 1.0)
+		case .tornado: return WeatherProfile(cloud: 1.0, precip: 0.75, wind: 8.0, gust: 0.8, thunder: 5.0, hail: 0.25, cover: 0.7)
+		case .hurricane: return WeatherProfile(cloud: 1.0, precip: 1.0, wind: 15.0, gust: 0.8, thunder: 2.0, cover: 1.0)
+		}
+	}
+
+	/// How long a spell of it lasts, in seconds of play (a day is 720)
+	var spell: ClosedRange<Double> {
+		switch self {
+		case .clear: return 180...420
+		case .partlyCloudy: return 150...300
+		case .overcast: return 120...240
+		case .lightRain: return 90...200
+		case .heavyRain: return 70...150
+		case .thunderstorm: return 80...150
+		case .strongWind: return 70...140
+		case .windstorm: return 60...110
+		case .hailstorm: return 35...70
+		case .snowfall: return 120...240
+		case .blizzard: return 80...150
+		case .tornado: return 95...120
+		case .hurricane: return 330...440
+		}
+	}
+}
+
+struct WeatherProfile {
+	var cloud: Double = 0
+	var precip: Double = 0
+	/// typical air speed over open ground, in blocks per second
+	var wind: Double = 0
+	/// how far the wind gusts above and below that (0 steady ... 1 wild)
+	var gust: Double = 0
+	/// lightning strikes per minute over the land around the player
+	var thunder: Double = 0
+	var hail: Double = 0
+	/// how much of the land the rain covers at once (0 scattered showers ... 1 everywhere)
+	var cover: Double = 0
+	/// how much colder it makes the land
+	var chill: Double = 0
+}
+
+struct WeatherStep: Codable {
+	var kind: WeatherKind
+	var dur: Double
+}
+
+/// A tornado: it forms far off (the warning), touches down and crosses the land with the wind, then
+/// ropes out. Its strength never changes on the way, so its danger can be judged from afar.
+struct TornadoEvent: Codable {
+	var x: Double
+	/// which way it travels (-1 west, 1 east) and how fast
+	var dir: Double
+	var speed: Double
+	/// 0 forming (the warning), 1 on the ground, 2 roping out
+	var phase: Int = 0
+	var t: Double = 0
+	var warnDur: Double
+	var groundDur: Double
+	var strength: Double
+	var wander: Double
+	/// blocks it has torn loose so far (it stops tearing at a limit)
+	var broken: Int = 0
+	var uid: Int = 0
+	/// closest it came to the player (for the journal)
+	var closest: Double = 1e9
+
+	static let ropeDur: Double = 8.0
+
+	/// 0...1: how much of a funnel there is (grows while forming, thins as it ropes out)
+	var funnel: Double {
+		switch phase {
+		case 0: return clampD((t - warnDur + 12.0) / 12.0, 0, 1) * 0.55
+		case 1: return min(1.0, 0.55 + t / 4.0)
+		default: return max(0, 1.0 - t / TornadoEvent.ropeDur)
+		}
+	}
+	/// how hard it blows and tears (0 while it is only forming)
+	var force: Double {
+		switch phase {
+		case 0: return 0
+		case 1: return strength * min(1.0, t / 4.0)
+		default: return strength * max(0, 1.0 - t / TornadoEvent.ropeDur)
+		}
+	}
+}
+
+enum HurricaneStage: Int, Codable, CaseIterable {
+	case approaching, intensifying, peak, eye, backside, weakening, clearing
+
+	var name: String {
+		switch self {
+		case .approaching: return "approaching"
+		case .intensifying: return "intensifying"
+		case .peak: return "at its height"
+		case .eye: return "the eye is passing"
+		case .backside: return "back wall of the storm"
+		case .weakening: return "weakening"
+		case .clearing: return "clearing"
+		}
+	}
+	/// how hard it blows in this stage (0...1 of its strength)
+	var force: Double {
+		switch self {
+		case .approaching: return 0.35
+		case .intensifying: return 0.7
+		case .peak: return 1.0
+		case .eye: return 0.12
+		case .backside: return 0.95
+		case .weakening: return 0.55
+		case .clearing: return 0.2
+		}
+	}
+	/// share of the whole storm's length
+	var share: Double {
+		switch self {
+		case .approaching: return 0.26
+		case .intensifying: return 0.15
+		case .peak: return 0.13
+		case .eye: return 0.05
+		case .backside: return 0.12
+		case .weakening: return 0.15
+		case .clearing: return 0.14
+		}
+	}
+}
+
+/// A hurricane comes in off the sea in stages, blowing onshore until the eye passes and offshore
+/// after it. It is felt hardest at the coast and fades inland.
+struct HurricaneEvent: Codable {
+	var stage: HurricaneStage = .approaching
+	var t: Double = 0
+	var total: Double
+	/// the side the sea (and the storm) is on: -1 west, 1 east
+	var side: Double
+	/// where it comes ashore
+	var coastX: Double
+	var strength: Double
+	/// eased 0...1 force now
+	var force: Double = 0
+	var broken: Int = 0
+	var closest: Double = 1e9
+
+	var stageDur: Double { return total * stage.share }
+	/// seconds from now until the end of each stage, then the time it is over
+	func timeLeft() -> Double {
+		var left: Double = stageDur - t
+		var k: Int = stage.rawValue + 1
+		while k < HurricaneStage.allCases.count {
+			left += total * HurricaneStage.allCases[k].share
+			k += 1
+		}
+		return max(0, left)
+	}
+}
+
+/// Wet ground and lying snow over a 48-block stretch of land
+struct GroundCell: Codable {
+	var wet: Double = 0
+	var snow: Double = 0
+	var t: Double = 0
+}
+
+struct SurgeCell: Codable, Hashable {
+	var x: Int
+	var y: Int
+}
+
+/// A storm the player lived through, for the journal
+struct StormRecord: Codable {
+	var kind: Int
+	var day: Int
+	var note: String
+}
+
+struct WeatherSim: Codable {
+	var kind: WeatherKind = .clear
+	var stateT: Double = 0
+	var stateDur: Double = 300
+	/// what comes after the present spell, in order (kept four steps long)
+	var plan: [WeatherStep] = []
+	/// smoothed amounts (see WeatherProfile); wind is signed, positive blowing east
+	var cloud: Double = 0.04
+	var precip: Double = 0
+	var wind: Double = 1.0
+	var gust: Double = 0.25
+	var thunder: Double = 0
+	var hail: Double = 0
+	var chill: Double = 0
+	var cover: Double = 0
+	/// which way the wind is set to blow (-1 / 1); it may turn round between spells
+	var windDir: Double = 1
+	/// how far the storm cells and the clouds have drifted with the wind, in blocks
+	var drift: Double = 0
+	var cloudDrift: Double = 0
+	/// weather clock: seconds of play since the simulation began
+	var t: Double = 0
+	var rngS: UInt64 = 0x51ED_2701
+	/// a second stream for what the weather does (where bolts fall, what the wind tears loose), so
+	/// those never change what the weather itself does next
+	var fxS: UInt64 = 0xFACE_0FF5
+	/// severe weather (and tornadoes and hurricanes, more rarely still) may not begin before these
+	/// times: each severe spell is followed by a calm (a new world starts with one)
+	var calmUntil: Double = 600
+	var tornadoUntil: Double = 1200
+	var hurricaneUntil: Double = 1800
+	var bigHail: Bool = false
+	var tornado: TornadoEvent? = nil
+	var hurricane: HurricaneEvent? = nil
+	var cells: [Int: GroundCell] = [:]
+	/// what weather devices hold (rain collectors, turbines), by place
+	var store: [String: Double] = [:]
+	/// sea water a storm surge pushed ashore, taken away again when the storm passes
+	var surge: [SurgeCell] = []
+	/// the settings the plan was made under (a change makes it again)
+	var planSig: Int = -1
+	/// whether the master switch was on last frame
+	var wasOn: Bool = true
+
+	init() {}
+
+	enum CodingKeys: String, CodingKey {
+		case kind, stateT, stateDur, plan, cloud, precip, wind, gust, thunder, hail, chill, cover, windDir, drift, cloudDrift, t, rngS, fxS
+		case calmUntil, tornadoUntil, hurricaneUntil, bigHail, tornado, hurricane, cells, store, surge, planSig, wasOn
+	}
+
+	/// Missing or damaged fields fall back to their defaults, so a weather record never stops a world
+	/// from loading
+	init(from decoder: Decoder) throws {
+		let c = try decoder.container(keyedBy: CodingKeys.self)
+		kind = (try? c.decodeIfPresent(WeatherKind.self, forKey: .kind)) ?? .clear
+		stateT = (try? c.decodeIfPresent(Double.self, forKey: .stateT)) ?? 0
+		stateDur = (try? c.decodeIfPresent(Double.self, forKey: .stateDur)) ?? 300
+		plan = (try? c.decodeIfPresent([WeatherStep].self, forKey: .plan)) ?? []
+		cloud = (try? c.decodeIfPresent(Double.self, forKey: .cloud)) ?? 0.04
+		precip = (try? c.decodeIfPresent(Double.self, forKey: .precip)) ?? 0
+		wind = (try? c.decodeIfPresent(Double.self, forKey: .wind)) ?? 1.0
+		gust = (try? c.decodeIfPresent(Double.self, forKey: .gust)) ?? 0.25
+		thunder = (try? c.decodeIfPresent(Double.self, forKey: .thunder)) ?? 0
+		hail = (try? c.decodeIfPresent(Double.self, forKey: .hail)) ?? 0
+		chill = (try? c.decodeIfPresent(Double.self, forKey: .chill)) ?? 0
+		cover = (try? c.decodeIfPresent(Double.self, forKey: .cover)) ?? 0
+		windDir = (try? c.decodeIfPresent(Double.self, forKey: .windDir)) ?? 1
+		drift = (try? c.decodeIfPresent(Double.self, forKey: .drift)) ?? 0
+		cloudDrift = (try? c.decodeIfPresent(Double.self, forKey: .cloudDrift)) ?? 0
+		t = (try? c.decodeIfPresent(Double.self, forKey: .t)) ?? 0
+		rngS = (try? c.decodeIfPresent(UInt64.self, forKey: .rngS)) ?? 0x51ED_2701
+		fxS = (try? c.decodeIfPresent(UInt64.self, forKey: .fxS)) ?? 0xFACE_0FF5
+		calmUntil = (try? c.decodeIfPresent(Double.self, forKey: .calmUntil)) ?? 600
+		tornadoUntil = (try? c.decodeIfPresent(Double.self, forKey: .tornadoUntil)) ?? 1200
+		hurricaneUntil = (try? c.decodeIfPresent(Double.self, forKey: .hurricaneUntil)) ?? 1800
+		bigHail = (try? c.decodeIfPresent(Bool.self, forKey: .bigHail)) ?? false
+		tornado = (try? c.decodeIfPresent(TornadoEvent.self, forKey: .tornado)) ?? nil
+		hurricane = (try? c.decodeIfPresent(HurricaneEvent.self, forKey: .hurricane)) ?? nil
+		cells = (try? c.decodeIfPresent([Int: GroundCell].self, forKey: .cells)) ?? [:]
+		store = (try? c.decodeIfPresent([String: Double].self, forKey: .store)) ?? [:]
+		surge = (try? c.decodeIfPresent([SurgeCell].self, forKey: .surge)) ?? []
+		planSig = (try? c.decodeIfPresent(Int.self, forKey: .planSig)) ?? -1
+		wasOn = (try? c.decodeIfPresent(Bool.self, forKey: .wasOn)) ?? true
+		// a record from a broken save must not leave the simulation stuck
+		if !stateDur.isFinite || stateDur <= 0 { stateDur = 120 }
+		if !stateT.isFinite || stateT < 0 { stateT = 0 }
+		if !wind.isFinite { wind = 1 }
+	}
+
+	/// The simulation's own random numbers (saved with it, so a reloaded world carries on the same way)
+	mutating func rand() -> Double {
+		rngS = rngS &+ 0x9E3779B97F4A7C15
+		var z: UInt64 = rngS
+		z = (z ^ (z >> 30)) &* 0xBF58476D1CE4E5B9
+		z = (z ^ (z >> 27)) &* 0x94D049BB133111EB
+		z = z ^ (z >> 31)
+		return Double(z >> 11) / 9007199254740992.0
+	}
+
+	mutating func pick(_ r: ClosedRange<Double>) -> Double {
+		let u: Double = rand()
+		return r.lowerBound + (r.upperBound - r.lowerBound) * u
+	}
+
+	/// The effects' stream (see fxS)
+	mutating func fx() -> Double {
+		fxS = fxS &+ 0x9E3779B97F4A7C15
+		var z: UInt64 = fxS
+		z = (z ^ (z >> 30)) &* 0xBF58476D1CE4E5B9
+		z = (z ^ (z >> 27)) &* 0x94D049BB133111EB
+		z = z ^ (z >> 31)
+		return Double(z >> 11) / 9007199254740992.0
+	}
+
+	mutating func fxPick(_ r: ClosedRange<Double>) -> Double {
+		let u: Double = fx()
+		return r.lowerBound + (r.upperBound - r.lowerBound) * u
+	}
+}
+
+/// The weather at one place, after the storm cells, the land and the height have had their say
+struct LocalWeather {
+	var cloud: Double = 0
+	/// how hard it is falling here (0...1)
+	var precip: Double = 0
+	var snow: Bool = false
+	/// signed air speed (blocks per second), gusts included
+	var wind: Double = 0
+	var thunder: Double = 0
+	var hail: Double = 0
+	/// 0 warm ... 1 bitter (snow falls from 0.5)
+	var chill: Double = 0
+	var hot: Bool = false
+	/// how much the air is thick with rain or snow (0 clear ... 1 a whiteout)
+	var fog: Double = 0
+	var wet: Double = 0
+	var snowCover: Double = 0
+	/// 0...1: how hard a tornado or hurricane is felt here
+	var tornado: Double = 0
+	var hurricane: Double = 0
+}
+
+/// Where the weather is judged when picking what comes next
+struct WeatherContext {
+	var cold: Bool = false
+	var dry: Bool = false
+	var tornadoCountry: Bool = false
+	/// the sea is that way (-1 west, 1 east) and near enough for a hurricane; 0 when too far inland
+	var seaSide: Double = 0
+	var coastX: Double = 0
+}
+
+/// Walks forward through the present spell and the plan, keeping track of when severe weather may
+/// next begin (the planner and the simulation use the same rules, so the forecast holds)
+struct PlanCursor {
+	var T: Double
+	var calm: Double
+	var tor: Double
+	var hur: Double
+	var last: WeatherKind
+
+	mutating func note(_ k: WeatherKind, _ end: Double, _ gaps: (Double, Double, Double)) {
+		if k.severe { calm = max(calm, end + gaps.0) }
+		if k == .tornado { tor = max(tor, end + gaps.1) }
+		if k == .hurricane { hur = max(hur, end + gaps.2) }
+		last = k
+		T = end
+	}
+}
+
+/// A bolt of lightning on screen: the main channel, a few forks, and how long it shows
+struct LightningBolt {
+	var pts: [(Double, Double)]
+	var forks: [[(Double, Double)]]
+	var life: Double
+	var maxLife: Double
+}
+
+/// A strike about to land near the player: shown and heard first, so it can be dodged
+struct StrikeMark {
+	var x: Double
+	var y: Double
+	var t: Double
+	var total: Double
+}
+
+struct PendingThunder {
+	var t: Double
+	var vol: Double
+	var near: Bool
+}
+
+/// One hailstone of the small pool the hail is drawn from (it bounces once, then breaks)
+struct HailStone {
+	var x: Double = 0
+	var y: Double = 0
+	var vx: Double = 0
+	var vy: Double = 0
+	var bounces: Int = 0
+	var size: Double = 0.12
+	var on: Bool = false
+}
+
+struct ForecastLine {
+	var kind: WeatherKind
+	var startsIn: Double
+	var dur: Double
+}
+
+// MARK: - Weather simulation: states, the plan, smoothing and the weather at a place
+
+/// how wet a biome's weather is (deserts mostly stay dry under passing storms)
+func biomeWetness(_ b: Biome) -> Double {
+	switch b {
+	case .desert: return 0.1
+	case .savanna: return 0.5
+	case .jungle: return 1.15
+	case .swamp: return 1.1
+	default: return 1.0
+	}
+}
+
+/// width of the strips of land that remember wet ground and lying snow
+let groundCellW: Double = 48.0
+
+extension Game {
+	/// Calm kept between severe spells, and the longer gaps between tornadoes and between hurricanes,
+	/// by the frequency setting
+	func weatherGaps() -> (Double, Double, Double) {
+		switch settings.severeFrequency {
+		case 0: return (900, 3600, 5400)
+		case 2: return (150, 600, 900)
+		default: return (420, 1800, 2700)
+		}
+	}
+
+	/// How much more (or less) often severe weather is picked when it may come
+	func severeWeight() -> Double {
+		switch settings.severeFrequency {
+		case 0: return 0.4
+		case 2: return 2.2
+		default: return 1.0
+		}
+	}
+
+	var weatherIntensity: Double { return clampD(settings.weatherIntensity, 0.25, 1.5) }
+
+	func weatherAllowed(_ k: WeatherKind) -> Bool {
+		let s: Settings = settings
+		switch k {
+		case .lightRain, .heavyRain, .snowfall: return s.allowRain
+		case .thunderstorm: return s.allowThunder
+		case .strongWind, .windstorm: return s.allowWind
+		case .hailstorm: return s.allowHail
+		case .blizzard: return s.allowBlizzard
+		case .tornado: return s.allowTornado
+		case .hurricane: return s.allowHurricane
+		default: return true
+		}
+	}
+
+	/// The settings the forecast depends on; when they change the plan is made again
+	func planSignature() -> Int {
+		let s: Settings = settings
+		var k: Int = s.severeFrequency
+		let flags: [Bool] = [s.allowRain, s.allowThunder, s.allowWind, s.allowTornado, s.allowHurricane, s.allowBlizzard, s.allowHail]
+		for f in flags { k = k * 2 + (f ? 1 : 0) }
+		return k
+	}
+
+	/// What a state brings once the switched-off kinds of weather are taken out and the intensity is
+	/// applied. Blizzards and hurricanes bring their own snow, rain and wind (their switches decide).
+	func allowedProfile(_ k: WeatherKind) -> WeatherProfile {
+		let s: Settings = settings
+		if !s.weatherOn { return WeatherProfile() }
+		var kk: WeatherKind = k
+		if kk == .blizzard && !s.allowBlizzard { kk = .snowfall }
+		if kk == .hurricane && !s.allowHurricane { kk = .windstorm }
+		if kk == .tornado && !s.allowTornado { kk = .thunderstorm }
+		var p: WeatherProfile = kk.profile
+		let own: Bool = kk == .blizzard || kk == .hurricane
+		if !s.allowRain && !own { p.precip = 0 }
+		if !s.allowWind && !own {
+			p.wind = 0
+			p.gust = 0
+		}
+		if !s.allowThunder { p.thunder = 0 }
+		if !s.allowHail { p.hail = 0 }
+		let I: Double = weatherIntensity
+		let mw: ModWeather? = ModRuntime.shared.weather
+		p.precip = min(1.0, p.precip * I * (mw?.rain ?? 1))
+		p.wind *= I * (mw?.wind ?? 1)
+		p.thunder *= I
+		p.hail = min(1.0, p.hail * I)
+		return p
+	}
+
+	/// Where the weather is judged: the player in the overworld, or where they left it
+	var weatherX: Double { return world.dim == .overworld ? pb.x : wxHomeX }
+
+	func weatherContext() -> WeatherContext {
+		var c = WeatherContext()
+		let x: Int = Int(floor(weatherX))
+		let col: Col = gen.col(x)
+		let b: Biome = col.biome
+		c.cold = b == .tundra || (b == .mountain && col.h < 84)
+		c.dry = b == .desert
+		c.tornadoCountry = b == .plains || b == .savanna || b == .forest || b == .swamp || b == .desert
+		if let sea = seaNear(x) {
+			c.seaSide = sea.0
+			c.coastX = sea.1
+		}
+		return c
+	}
+
+	/// The nearest open sea within 280 blocks: which side it is on, and where its shore is
+	func seaNear(_ x: Int) -> (Double, Double)? {
+		let key: Int = floorDiv(x, 32)
+		if let c = coastCache[key] { return c.0 == 0 ? nil : c }
+		var found: (Double, Double) = (0, 0)
+		var d: Int = 0
+		while d <= 280 {
+			if gen.col(x + d).biome == .ocean { found = (1, Double(x + d)); break }
+			if gen.col(x - d).biome == .ocean { found = (-1, Double(x - d)); break }
+			d += 8
+		}
+		if coastCache.count > 256 { coastCache.removeAll() }
+		coastCache[key] = found
+		return found.0 == 0 ? nil : found
+	}
+
+	// MARK: the plan (the forecast is read straight from it)
+
+	/// Where the present spell and the plan end, and when severe weather may next begin after them
+	func planCursor() -> PlanCursor {
+		let gaps: (Double, Double, Double) = weatherGaps()
+		var cur = PlanCursor(T: weather.t, calm: weather.calmUntil, tor: weather.tornadoUntil, hur: weather.hurricaneUntil, last: weather.kind)
+		cur.note(weather.kind, weather.t + max(0, weather.stateDur - weather.stateT), gaps)
+		for s in weather.plan { cur.note(s.kind, cur.T + s.dur, gaps) }
+		return cur
+	}
+
+	func fillPlan() {
+		if weather.plan.count >= 4 { return }
+		let ctx: WeatherContext = weatherContext()
+		let gaps: (Double, Double, Double) = weatherGaps()
+		var cur: PlanCursor = planCursor()
+		while weather.plan.count < 4 {
+			let step: WeatherStep = planStep(cur, ctx)
+			weather.plan.append(step)
+			cur.note(step.kind, cur.T + step.dur, gaps)
+		}
+	}
+
+	/// Picks the spell that follows `cur.last`, beginning at `cur.T`. Weather moves to its neighbours
+	/// (clear to cloud to rain to storm and back), so it changes gradually; severe spells may only
+	/// begin once the calm after the last one is over, and a thunderstorm may grow hail or spin up a
+	/// tornado as part of the same storm.
+	func planStep(_ cur: PlanCursor, _ ctx: WeatherContext) -> WeatherStep {
+		let s: Settings = settings
+		let fw: Double = severeWeight()
+		let sev: Double = cur.T >= cur.calm ? fw : 0
+		var opts: [(WeatherKind, Double)] = []
+		let modWx: ModWeather? = ModRuntime.shared.weather
+		func add(_ k: WeatherKind, _ w: Double) {
+			let m: Double = modWx?.chanceOf(k) ?? 1
+			if w > 0 && m > 0 && weatherAllowed(k) { opts.append((k, w * m)) }
+		}
+		let rain: WeatherKind = ctx.cold ? .snowfall : .lightRain
+		let heavy: WeatherKind = ctx.cold ? .snowfall : .heavyRain
+		let hurricaneOK: Bool = ctx.seaSide != 0 && !ctx.cold && cur.T >= cur.hur
+		// with rain switched off the wet spells drop out; storms can still come, dry
+		let dryFill: Double = s.allowRain ? 0 : 3.0
+		switch cur.last {
+		case .clear:
+			add(.clear, 2.2)
+			add(.partlyCloudy, 4.0)
+			add(.strongWind, ctx.dry ? 1.2 : 0.5)
+		case .partlyCloudy:
+			add(.clear, 3.0)
+			add(.partlyCloudy, 1.2)
+			add(.overcast, 3.0)
+			add(.strongWind, 0.6)
+		case .overcast:
+			add(.partlyCloudy, 2.5)
+			add(.overcast, 0.6)
+			add(rain, ctx.dry ? 0.7 : 3.0)
+			add(heavy, ctx.dry ? 0.2 : 0.7)
+			add(.windstorm, 0.35 * sev)
+			if !ctx.cold { add(.hailstorm, 0.25 * sev) }
+			if !s.allowRain && !ctx.cold { add(.thunderstorm, 0.6 * sev) }
+			if hurricaneOK { add(.hurricane, 0.22 * sev) }
+		case .lightRain:
+			add(.overcast, 2.0)
+			add(.lightRain, 1.0)
+			add(.heavyRain, 2.4)
+		case .heavyRain:
+			add(.lightRain, 2.6)
+			add(.heavyRain, 0.6)
+			if !ctx.cold { add(.thunderstorm, 1.6 * sev) }
+		case .thunderstorm:
+			add(.heavyRain, 3.0)
+			add(.overcast, dryFill)
+			add(.hailstorm, 0.5 * fw)
+			if ctx.tornadoCountry && cur.T >= cur.tor { add(.tornado, 0.45 * fw) }
+		case .strongWind:
+			add(.partlyCloudy, 2.4)
+			add(.clear, 1.0)
+			add(.strongWind, 0.6)
+			add(.windstorm, 0.8 * sev)
+			if hurricaneOK { add(.hurricane, 0.12 * sev) }
+		case .windstorm:
+			add(.strongWind, 2.5)
+			add(.overcast, 1.5)
+		case .hailstorm:
+			add(.heavyRain, 2.5)
+			add(.lightRain, 1.0)
+			add(.overcast, dryFill)
+		case .snowfall:
+			add(.overcast, 2.4)
+			add(.snowfall, 1.0)
+			if ctx.cold { add(.blizzard, 0.9 * sev) }
+		case .blizzard:
+			add(.snowfall, 3.0)
+			add(.overcast, dryFill)
+		case .tornado, .hurricane:
+			add(.heavyRain, 2.0)
+			add(.lightRain, 1.0)
+			add(.overcast, s.allowRain ? 0.3 : 3.0)
+		}
+		if opts.isEmpty, let mw = modWx {
+			// a mod that rules out every usual next spell: any kind it allows comes straight in
+			for k in WeatherKind.allCases where mw.chanceOf(k) > 0 && weatherAllowed(k) && (!k.severe || sev > 0) { opts.append((k, mw.chanceOf(k))) }
+		}
+		if opts.isEmpty { opts.append((.partlyCloudy, 1.0)) }
+		var total: Double = 0
+		for o in opts { total += o.1 }
+		var r: Double = weather.rand() * total
+		var k: WeatherKind = opts[opts.count - 1].0
+		for o in opts {
+			if r < o.1 {
+				k = o.0
+				break
+			}
+			r -= o.1
+		}
+		let dur: Double = weather.pick(k.spell) * (modWx?.length ?? 1)
+		return WeatherStep(kind: k, dur: dur)
+	}
+
+	/// The present spell is over: the next one in the plan begins (and the plan is topped up)
+	func advanceWeather() {
+		let prev: WeatherKind = weather.kind
+		let gaps: (Double, Double, Double) = weatherGaps()
+		if prev.severe { weather.calmUntil = max(weather.calmUntil, weather.t + gaps.0) }
+		if prev == .tornado { weather.tornadoUntil = max(weather.tornadoUntil, weather.t + gaps.1) }
+		if prev == .hurricane { weather.hurricaneUntil = max(weather.hurricaneUntil, weather.t + gaps.2) }
+		// a severe spell the player was out in goes in the journal (tornadoes and hurricanes keep their own)
+		if prev.severe && prev != .tornado && prev != .hurricane && stormFelt && world.dim == .overworld {
+			recordStorm(prev, weatherLabel(prev, snow: wxHere.snow).lowercased() == prev.name.lowercased() ? "weathered it" : weatherLabel(prev, snow: wxHere.snow).lowercased())
+		}
+		stormFelt = false
+		if weather.plan.isEmpty { fillPlan() }
+		var step: WeatherStep = weather.plan.removeFirst()
+		let ctx: WeatherContext = weatherContext()
+		// the land may have changed under the forecast (the player travelled): no hurricane far from
+		// the sea, no tornado in the mountains or the snow
+		if step.kind == .hurricane && ctx.seaSide == 0 { step.kind = settings.allowWind ? .windstorm : .overcast }
+		if step.kind == .tornado && !ctx.tornadoCountry { step.kind = settings.allowThunder ? .thunderstorm : .heavyRain }
+		weather.kind = step.kind
+		weather.stateT = 0
+		weather.stateDur = step.dur
+		// calm spells can bring the wind round
+		if (step.kind == .clear || step.kind == .partlyCloudy) && weather.rand() < 0.35 { weather.windDir = -weather.windDir }
+		switch step.kind {
+		case .tornado: spawnTornado()
+		case .hurricane: spawnHurricane(ctx)
+		case .hailstorm:
+			weather.bigHail = weather.rand() < 0.15
+			hailBroken = 0
+		default: break
+		}
+		fillPlan()
+		announceWeather(prev, step.kind)
+	}
+
+	/// Weather switched off: everything it was doing stops at once and leaves nothing behind (storm
+	/// surge water is taken away as its ground loads; see updateSurge)
+	func weatherShutdown() {
+		weather.wasOn = false
+		weather.tornado = nil
+		weather.hurricane = nil
+		weather.kind = .clear
+		weather.stateT = 0
+		weather.stateDur = 120
+		weather.plan.removeAll()
+		weather.cloud = 0
+		weather.precip = 0
+		weather.wind = 0
+		weather.gust = 0
+		weather.thunder = 0
+		weather.hail = 0
+		weather.chill = 0
+		weather.cover = 0
+		weather.cells.removeAll()
+		clearWeatherFX()
+		// fires lightning started go out with it
+		fireZones.removeAll { $0.env }
+	}
+
+	/// The short-lived things weather puts in the world: bolts, thunder still on its way, a strike
+	/// about to land, hailstones, alerts and the forces on the player
+	func clearWeatherFX() {
+		bolts.removeAll()
+		thunderQueue.removeAll()
+		strikeMark = nil
+		strikeAcc = 0
+		skyFlash = 0
+		for i in 0..<hailPool.count { hailPool[i].on = false }
+		hailAcc = 0
+		wxBanner = ""
+		wxBannerLevel = 0
+		wxWalk = 0
+		wxAirDrift = 0
+		wxRest = 0
+		wxAccelX = 0
+		wxAccelY = 0
+		wxSlip = 0
+		wxSlow = 1
+		weatherRain = 0
+		weatherSnow = false
+		wxHere = LocalWeather()
+		tornadoAcc = 0
+		hurricaneAcc = 0
+	}
+
+	/// Weather switched back on: it starts fair, with a calm before anything severe
+	func weatherRestart() {
+		weather.wasOn = true
+		weather.kind = .clear
+		weather.stateT = 0
+		weather.stateDur = weather.pick(60...120)
+		weather.calmUntil = max(weather.calmUntil, weather.t + 300)
+		weather.plan.removeAll()
+		weather.planSig = planSignature()
+		fillPlan()
+	}
+
+	func easeTo(_ v: Double, _ to: Double, _ tau: Double, _ dt: Double) -> Double {
+		let k: Double = 1.0 - exp(-dt / max(0.05, tau))
+		return v + (to - v) * k
+	}
+
+	/// One step of the simulation (the regional state; what that means at a place is weatherAt)
+	func stepWeatherSim(_ dt: Double) {
+		if world.dim == .overworld { wxHomeX = pb.x }
+		if !settings.weatherOn {
+			if weather.wasOn { weatherShutdown() }
+			// the scenery clouds still drift by as they always have
+			weather.cloudDrift += CloudField.wind * dt
+			return
+		}
+		if !weather.wasOn { weatherRestart() }
+		weather.t += dt
+		let sig: Int = planSignature()
+		if sig != weather.planSig {
+			weather.planSig = sig
+			weather.plan.removeAll()
+			// an event whose switch went off ends at once
+			if weather.tornado != nil && !settings.allowTornado { endTornado(survived: false) }
+			if weather.hurricane != nil && !settings.allowHurricane { endHurricane(survived: false) }
+			fillPlan()
+		}
+		weather.stateT += dt
+		let held: Bool = weather.tornado != nil || weather.hurricane != nil
+		if weather.stateT >= weather.stateDur && !held { advanceWeather() }
+		if weather.plan.count < 4 { fillPlan() }
+		// ease toward what the state brings; anything switched off fades out within a second
+		var p: WeatherProfile = allowedProfile(weather.kind)
+		let raw: WeatherProfile = weather.kind.profile
+		if let h = weather.hurricane {
+			p.wind *= h.force
+			p.precip *= clampD(h.force * 1.2, 0.2, 1.0)
+			p.cloud = 0.55 + 0.45 * min(1.0, h.force * 1.6)
+			p.thunder *= h.force
+		}
+		func tau(_ target: Double, _ rv: Double, _ normal: Double) -> Double {
+			return (target <= 0.0001 && rv > 0.0001) ? 0.8 : normal
+		}
+		weather.cloud = easeTo(weather.cloud, p.cloud, 20, dt)
+		weather.precip = easeTo(weather.precip, p.precip, tau(p.precip, raw.precip, 14), dt)
+		weather.thunder = easeTo(weather.thunder, p.thunder, tau(p.thunder, raw.thunder, 8), dt)
+		weather.hail = easeTo(weather.hail, p.hail, tau(p.hail, raw.hail, 6), dt)
+		weather.chill = easeTo(weather.chill, p.chill, 25, dt)
+		weather.cover = easeTo(weather.cover, p.cover, 18, dt)
+		weather.gust = easeTo(weather.gust, p.gust, 10, dt)
+		// the wind eases through calm when it turns round, never flipping in a frame
+		if let h = weather.hurricane {
+			// onshore until the eye has passed, offshore after it
+			weather.windDir = h.stage.rawValue <= HurricaneStage.eye.rawValue ? -h.side : h.side
+		}
+		let wt: Double = p.wind * weather.windDir
+		weather.wind = easeTo(weather.wind, wt, tau(abs(wt), raw.wind, 9), dt)
+		weather.drift += weather.wind * 0.55 * dt
+		weather.cloudDrift += (weather.wind * 0.16 + (abs(weather.wind) < 0.05 ? CloudField.wind : 0)) * dt
+	}
+
+	// MARK: the weather at a place
+
+	/// How much of the land at x a storm cell covers just now (0 a dry gap ... 1 under the storm).
+	/// The cells are a noise field in world space that drifts with the wind.
+	func coverAt(_ x: Double) -> Double {
+		let c: Double = weather.cover
+		if c >= 0.99 { return 1 }
+		if c <= 0.001 { return 0 }
+		let n: Double = fbm1((x - weather.drift) / 170.0, gen.seed &+ 0x57A2, 2)
+		let thr: Double = 1.0 - c - 0.11
+		return smooth(clampD((n - thr) / 0.22, 0, 1))
+	}
+
+	/// The wind's gusting right now (the same everywhere; it rises and falls over a few seconds)
+	func gustNow() -> Double {
+		let g: Double = weather.gust
+		if g <= 0.001 { return 1 }
+		let n: Double = fbm1(weather.t * 0.23, gen.seed &+ 0x6057, 3)
+		return clampD(1.0 + (n - 0.5) * 2.0 * g, 0.35, 1.6)
+	}
+
+	/// How cold it is: the land, the height, the night and the weather (snow falls from 0.5)
+	func chillAt(_ y: Double, _ col: Col) -> Double {
+		var c: Double
+		switch col.biome {
+		case .tundra: c = 0.75
+		case .mountain: c = col.h < 84 ? 0.62 : 0.3
+		case .desert, .savanna, .jungle: c = 0.0
+		case .ocean: c = 0.2
+		default: c = 0.18
+		}
+		if y < 76 { c += (76.0 - y) / 50.0 }
+		let hot: Bool = col.biome == .desert || col.biome == .savanna || col.biome == .jungle
+		if isNight && !hot { c += 0.12 }
+		c += weather.chill * 0.4 + weather.precip * 0.05
+		return clampD(c, 0, 1.2)
+	}
+
+	/// The weather at a place. Only reads the simulation and the world's (deterministic) biomes, so a
+	/// place has the same weather whichever chunks are loaded.
+	func weatherAt(_ x: Double, _ y: Double) -> LocalWeather {
+		var L = LocalWeather()
+		if let d = customDim, settings.weatherOn { return customWeather(d, x, y) }
+		if world.dim != .overworld || !settings.weatherOn { return L }
+		let ix: Int = Int(floor(x))
+		let col: Col = gen.col(ix)
+		let cov: Double = coverAt(x)
+		// blended from one column to the next, so rain changes gradually over a biome border
+		let wa: Double = landWetness(ix)
+		let wetF: Double = wa + (landWetness(ix + 1) - wa) * (x - Double(ix))
+		L.chill = chillAt(y, col)
+		L.snow = L.chill >= 0.5
+		L.hot = col.biome == .desert || col.biome == .savanna || col.biome == .jungle
+		L.precip = clampD(weather.precip * cov * wetF, 0, 1)
+		L.cloud = weather.cloud * (0.6 + 0.4 * cov)
+		L.thunder = weather.thunder * cov
+		// up in the cold, hail falls as snow
+		L.hail = L.snow ? 0 : weather.hail * cov
+		L.wind = weather.wind * gustNow()
+		if let e = weather.tornado {
+			let d: Double = abs(x - e.x)
+			L.tornado = e.funnel * clampD(1.0 - (d - 4.0) / 40.0, 0, 1)
+			L.cloud = max(L.cloud, min(1.0, 0.25 + e.funnel * clampD(1.0 - d / 120.0, 0, 1)))
+		}
+		if let h = weather.hurricane {
+			let f: Double = hurricaneReach(x, h)
+			L.hurricane = h.force * f
+			L.wind *= 0.3 + 0.7 * f
+			L.precip *= 0.5 + 0.5 * f
+		}
+		let blow: Double = clampD(abs(L.wind) / 14.0, 0, 1)
+		L.fog = L.snow ? L.precip * (0.25 + 0.6 * blow) : L.precip * 0.3
+		L.wet = groundValue(x, false)
+		L.snowCover = groundValue(x, true)
+		return L
+	}
+
+	/// How readily rain falls at column x: its biome's wetness, with the land 14 columns either side
+	func landWetness(_ x: Int) -> Double {
+		let w0: Double = biomeWetness(gen.col(x - 14).biome)
+		let w1: Double = biomeWetness(gen.col(x).biome)
+		let w2: Double = biomeWetness(gen.col(x + 14).biome)
+		return (w0 + w1 * 2.0 + w2) * 0.25
+	}
+
+	/// How hard a hurricane is felt at x: fully over the sea and at the coast, fading inland
+	func hurricaneReach(_ x: Double, _ h: HurricaneEvent) -> Double {
+		let inland: Double = (h.coastX - x) * h.side
+		return clampD(1.0 - (inland - 40.0) / 300.0, 0.25, 1.0)
+	}
+
+	/// Wet ground or lying snow at x (interpolated between the strips' centres)
+	func groundValue(_ x: Double, _ snow: Bool) -> Double {
+		let f: Double = x / groundCellW - 0.5
+		let c0: Int = Int(floor(f))
+		let u: Double = f - Double(c0)
+		let a: GroundCell? = weather.cells[c0]
+		let b: GroundCell? = weather.cells[c0 + 1]
+		let va: Double = snow ? (a?.snow ?? 0) : (a?.wet ?? 0)
+		let vb: Double = snow ? (b?.snow ?? 0) : (b?.wet ?? 0)
+		return va + (vb - va) * u
+	}
+
+	/// Rain soaks the ground and snow lies on it, strip by strip around the player; strips the player
+	/// has been away from catch up as if the weather had been fair meanwhile (cheap, and close enough)
+	func updateGroundCells(_ dt: Double) {
+		wxCellT += dt
+		if wxCellT < 0.5 { return }
+		let step: Double = wxCellT
+		wxCellT = 0
+		// the strips are the Overworld's ground: another dimension's weather never lies on them
+		if !settings.weatherOn || world.dim != .overworld { return }
+		let c0: Int = Int(floor(weatherX / groundCellW))
+		for c in (c0 - 4)...(c0 + 4) {
+			let cx: Double = (Double(c) + 0.5) * groundCellW
+			var cell: GroundCell = weather.cells[c] ?? GroundCell(wet: 0, snow: 0, t: weather.t)
+			let away: Double = max(0, weather.t - cell.t - step)
+			let surf: Double = Double(gen.col(Int(cx)).h)
+			let L: LocalWeather = weatherAt(cx, surf)
+			if away > 0 {
+				cell.wet *= exp(-away / 150.0)
+				if L.chill < 0.5 { cell.snow *= exp(-away / 300.0) }
+			}
+			if L.precip > 0.03 && !L.snow {
+				cell.wet = min(1.0, cell.wet + L.precip * step / 35.0)
+			} else {
+				let dryT: Double = L.hot ? 60 : (weather.cloud > 0.6 ? 220 : 110)
+				cell.wet = max(0, cell.wet - step / dryT)
+			}
+			if L.snow && L.precip > 0.03 {
+				cell.snow = min(1.0, cell.snow + L.precip * step / 50.0)
+			} else if L.chill < 0.45 {
+				let melt: Double = L.precip > 0.05 ? 50 : 140
+				cell.snow = max(0, cell.snow - step / melt)
+			}
+			cell.t = weather.t
+			weather.cells[c] = cell
+		}
+		if weather.cells.count > 40 {
+			weather.cells = weather.cells.filter { abs($0.key - c0) <= 12 || $0.value.wet > 0.02 || $0.value.snow > 0.02 }
+		}
+	}
+
+	// MARK: words for it: names, the forecast, pressure, alerts
+
+	/// The name of a spell as it will actually be felt: with some kinds of weather switched off, a
+	/// thunderstorm may be dry or a blizzard plain snow; up in the cold, rain is snow
+	func weatherLabel(_ k: WeatherKind, snow: Bool) -> String {
+		let s: Settings = settings
+		if !s.weatherOn { return "No weather" }
+		let p: WeatherProfile = allowedProfile(k)
+		switch k {
+		case .lightRain: return p.precip <= 0 ? "Overcast" : (snow ? "Light snow" : "Light rain")
+		case .heavyRain: return p.precip <= 0 ? "Overcast" : (snow ? "Heavy snow" : "Heavy rain")
+		case .snowfall: return p.precip <= 0 ? "Overcast" : (snow ? "Snowfall" : "Cold rain")
+		case .thunderstorm:
+			if p.thunder <= 0 { return p.precip > 0 ? (snow ? "Heavy snow" : "Heavy rain") : "Overcast" }
+			return p.precip > 0 ? "Thunderstorm" : "Dry thunderstorm"
+		case .hailstorm:
+			if p.hail <= 0 { return p.thunder > 0 ? "Thunderstorm" : (p.precip > 0 ? "Heavy rain" : "Overcast") }
+			return weather.bigHail && k == weather.kind ? "Large hail" : "Hailstorm"
+		case .strongWind: return p.wind <= 0.01 ? "Partly cloudy" : "Strong wind"
+		case .windstorm: return p.wind <= 0.01 ? "Overcast" : "Windstorm"
+		case .blizzard: return s.allowBlizzard ? (snow ? "Blizzard" : "Gale and cold rain") : weatherLabel(.snowfall, snow: snow)
+		case .tornado: return s.allowTornado ? "Tornado" : weatherLabel(.thunderstorm, snow: snow)
+		case .hurricane: return s.allowHurricane ? "Hurricane" : weatherLabel(.windstorm, snow: snow)
+		default: return k.name
+		}
+	}
+
+	/// What the weather is doing where the player is, in a few words
+	var weatherHereLabel: String {
+		if world.dim != .overworld { return "" }
+		if !settings.weatherOn { return "" }
+		let L: LocalWeather = wxHere
+		var name: String = weatherLabel(weather.kind, snow: L.snow)
+		// a storm cell that has not reached here yet (or has passed) shows as such
+		let p: WeatherProfile = allowedProfile(weather.kind)
+		if p.precip > 0.2 && L.precip < 0.05 && weather.kind != .tornado && weather.kind != .hurricane { name = joinText(name, " nearby") }
+		return name
+	}
+
+	/// The present spell, then the plan: what comes, when, and for how long
+	func forecast() -> [ForecastLine] {
+		var out: [ForecastLine] = []
+		var t: Double = max(0, weather.stateDur - weather.stateT)
+		if let h = weather.hurricane { t = max(t, h.timeLeft()) }
+		out.append(ForecastLine(kind: weather.kind, startsIn: 0, dur: t))
+		for s in weather.plan {
+			out.append(ForecastLine(kind: s.kind, startsIn: t, dur: s.dur))
+			t += s.dur
+		}
+		return out
+	}
+
+	/// Air pressure (hPa) from the simulation: low under storms, lowest near a hurricane's eye
+	func pressureNow() -> Double {
+		var p: Double = 1018.0 - 12.0 * weather.cloud - 9.0 * weather.precip - 0.8 * abs(weather.wind)
+		if let h = weather.hurricane {
+			let core: Double = h.stage == .eye ? 1.15 : h.force
+			p -= 42.0 * core * h.strength * hurricaneReach(weatherX, h)
+		}
+		if let e = weather.tornado { p -= 8.0 * e.funnel }
+		return p
+	}
+
+	/// The pressure the next spell will settle at (for the barometer's trend)
+	func pressureNext() -> Double {
+		let k: WeatherKind = weather.plan.first?.kind ?? weather.kind
+		let p: WeatherProfile = allowedProfile(k)
+		var v: Double = 1018.0 - 12.0 * p.cloud - 9.0 * p.precip - 0.8 * p.wind
+		if k == .hurricane && settings.allowHurricane { v -= 40 }
+		if k == .tornado && settings.allowTornado { v -= 8 }
+		return v
+	}
+
+	/// A line in the message box when the weather turns (only for changes worth knowing about)
+	func announceWeather(_ prev: WeatherKind, _ k: WeatherKind) {
+		if !settings.weatherAlerts || world.dim != .overworld { return }
+		let p: WeatherProfile = allowedProfile(k)
+		let snow: Bool = wxHere.snow
+		var line: String = ""
+		switch k {
+		case .lightRain:
+			if prev != .heavyRain && p.precip > 0 { line = snow ? "Snow is beginning to fall." : "It's starting to rain." }
+		case .heavyRain:
+			if prev == .lightRain && p.precip > 0 { line = snow ? "The snow is getting heavier." : "The rain is getting heavier." }
+		case .thunderstorm:
+			if p.thunder > 0 { line = "A thunderstorm is rolling in. Lightning finds high, open ground." }
+		case .strongWind:
+			if (prev == .clear || prev == .partlyCloudy) && p.wind > 0 { line = "The wind is picking up." }
+		case .windstorm:
+			if p.wind > 0 { line = "Windstorm! Strong gusts will push you around." }
+		case .hailstorm:
+			if p.hail > 0 { line = weather.bigHail ? "Large hail! Get under a roof." : "Hail is falling." }
+		case .snowfall:
+			if p.precip > 0 && prev != .blizzard { line = snow ? "Snow is falling." : "A cold rain is falling." }
+		case .blizzard:
+			if settings.allowBlizzard { line = "A blizzard is blowing in. Find shelter and warmth." }
+		case .clear, .partlyCloudy:
+			if prev.severe || prev == .heavyRain { line = "The weather is clearing." }
+		default:
+			break
+		}
+		if !line.isEmpty {
+			say(line, 3.5)
+			if k.severe { sfx(.weatherAlert, 0.6) }
+		}
+	}
+
+	/// The warning strip under the top bar while something dangerous is going on
+	func updateWeatherBanner() {
+		var text: String = ""
+		var level: Int = 0
+		let on: Bool = settings.weatherOn && world.dim == .overworld
+		if on, let e = weather.tornado {
+			let d: Double = e.x - pb.x
+			let side: String = d > 0 ? "east" : "west"
+			let dist: String = String(Int(abs(d).rounded()))
+			switch e.phase {
+			case 0:
+				let left: Int = Int(max(0, e.warnDur - e.t).rounded())
+				text = joinText("TORNADO WARNING · forming ", dist, " blocks ", side, " · take shelter (", String(left), " s)")
+				level = 2
+			case 1:
+				text = joinText("TORNADO ON THE GROUND · ", dist, " blocks ", side, " · moving ", e.dir > 0 ? "east" : "west")
+				level = 2
+			default:
+				text = "The tornado is lifting"
+				level = 1
+			}
+		} else if on, let h = weather.hurricane {
+			text = joinText("HURRICANE · ", h.stage.name)
+			level = (h.stage == .approaching || h.stage == .clearing || h.stage == .eye) ? 1 : 2
+		} else if on && strikeMark != nil {
+			text = "LIGHTNING IS ABOUT TO STRIKE NEAR YOU · move or take cover"
+			level = 2
+		} else if on && weather.kind == .blizzard && settings.allowBlizzard && wxHere.snow {
+			text = "BLIZZARD · stay sheltered and keep warm"
+			level = 1
+		} else if on && weather.kind == .hailstorm && weather.bigHail && wxHere.hail > 0.1 {
+			text = "LARGE HAIL · get under a roof"
+			level = 1
+		} else if on && weather.kind == .thunderstorm && wxHere.thunder > 0.5 {
+			text = "Thunderstorm · keep off high, open ground"
+			level = 1
+		} else if bodyCold > 0.45 && on {
+			text = "Freezing · find a fire, shelter or warm clothes"
+			level = 1
+		}
+		if !settings.weatherAlerts {
+			text = ""
+			level = 0
+		}
+		wxBanner = text
+		wxBannerLevel = level
+	}
+}
+
+// MARK: - Weather in the world: lightning, hail, cold, the wind's push, tornadoes and hurricanes
+
+/// How readily wind tears a block loose (0: never). The ground itself, stone and anything built to
+/// stand up to storms never goes; plants, leaves and light building blocks go first.
+func windBreak(_ t: Tile) -> Double {
+	if isLeafTile(t) { return 0.85 }
+	if isLogTile(t) { return 0.18 }
+	switch t {
+	case .tallGrass, .flowerR, .flowerY, .deadBush, .reed, .mushroom: return 0.9
+	case .wheat1, .wheat2, .wheat3, .carrot1, .carrot2, .carrot3: return 0.55
+	case .torch, .cobweb: return 0.8
+	case .hay: return 0.6
+	case .glass: return 0.5
+	case .cactus: return 0.3
+	case .platform, .ladder: return 0.45
+	case .planks: return 0.3
+	case .doorClosed, .doorOpen: return 0.25
+	case .logBlock, .jungleLogBlock, .palmLogBlock, .birchLogBlock: return 0.15
+	case .workbench, .lantern, .crate: return 0.2
+	case .crackedBrick: return 0.08
+	case .brick, .mossBrick, .amethystBlock: return 0.02
+	default: return 0
+	}
+}
+
+/// Things lightning can set alight
+func isFlammable(_ t: Tile) -> Bool {
+	if isLeafTile(t) || isLogTile(t) { return true }
+	switch t {
+	case .tallGrass, .flowerR, .flowerY, .deadBush, .reed, .hay, .planks, .platform, .ladder, .dryGrass, .logBlock, .jungleLogBlock, .palmLogBlock, .birchLogBlock, .workbench, .crate, .cactus:
+		return true
+	default:
+		return false
+	}
+}
+
+/// How much a shot of each kind is carried by the wind (heavy and fast shots hardly at all)
+func windCatch(_ k: ProjKind) -> Double {
+	switch k {
+	case .arrow: return 0.22
+	case .quarrel, .bolt: return 0.15
+	case .pebble, .spit: return 0.25
+	case .bomb, .flask: return 0.3
+	case .fireball: return 0.12
+	case .rock, .shard: return 0.08
+	case .pellet, .shell: return 0.05
+	case .bullet, .shock: return 0
+	}
+}
+
+/// Light creatures the wind carries along
+func isWindBlown(_ k: MobKind) -> Bool {
+	switch k {
+	case .crow, .bat, .chicken: return true
+	default: return false
+	}
+}
+
+extension Game {
+	/// How much of the open weather reaches someone at a given level of shelter
+	func shelterExposure(_ level: Int) -> Double {
+		switch level {
+		case 0: return 1.0
+		case 1: return 0.55
+		default: return 0
+		}
+	}
+
+	/// True when rain falls on the head of a body standing at (x, feet y) with the given height
+	func rainReaches(_ x: Double, _ feetY: Double, _ h: Double) -> Bool {
+		if world.dim != .overworld { return false }
+		let tx: Int = Int(floor(x))
+		return Int(floor(feetY - h)) < world.rainTop(tx)
+	}
+
+	/// 0 out in the open, 1 under a roof, 2 indoors (a roof and walls on both sides), 3 underground or
+	/// in a reinforced storm shelter
+	func shelterAt(_ x: Double, _ feetY: Double) -> Int {
+		if world.dim != .overworld { return 3 }
+		let tx: Int = Int(floor(x))
+		let head: Int = Int(floor(feetY - 1.6))
+		if head < world.rainTop(tx) { return 0 }
+		var reinforced: Bool = false
+		// count the solid cover overhead (four blocks or more is underground)
+		var solidAbove: Int = 0
+		var y: Int = head - 1
+		var n: Int = 0
+		while n < 24 && y > 0 {
+			let t: Tile = world.tile(tx, y)
+			if t.solid {
+				solidAbove += 1
+				if isStormproof(t) { reinforced = true }
+			}
+			y -= 1
+			n += 1
+		}
+		if solidAbove >= 4 && !reinforced { return 3 }
+		// walls on both sides, at head or body height
+		func wall(_ dir: Int) -> Bool {
+			var k: Int = 1
+			while k <= 8 {
+				let a: Tile = world.tile(tx + dir * k, head)
+				let b: Tile = world.tile(tx + dir * k, head + 1)
+				if a.solid || b.solid {
+					if isStormproof(a) || isStormproof(b) { reinforced = true }
+					return true
+				}
+				k += 1
+			}
+			return false
+		}
+		let left: Bool = wall(-1)
+		let right: Bool = wall(1)
+		if left && right { return reinforced ? 3 : 2 }
+		return 1
+	}
+
+	// MARK: lightning
+
+	func updateLightning(_ dt: Double) {
+		if !bolts.isEmpty {
+			for i in 0..<bolts.count { bolts[i].life -= dt }
+			bolts.removeAll { $0.life <= 0 }
+		}
+		if skyFlash > 0 { skyFlash = max(0, skyFlash - dt * (settings.reduceFlashes ? 0.9 : 2.6)) }
+		if playerStrikeCD > 0 { playerStrikeCD -= dt }
+		if !thunderQueue.isEmpty {
+			for i in 0..<thunderQueue.count { thunderQueue[i].t -= dt }
+			for q in thunderQueue where q.t <= 0 { Sound.shared.play(q.near ? .thunderNear : .thunderFar, q.vol) }
+			thunderQueue.removeAll { $0.t <= 0 }
+		}
+		let on: Bool = settings.weatherOn && settings.allowThunder && world.dim == .overworld
+		if var m = strikeMark {
+			if !on {
+				strikeMark = nil
+			} else {
+				m.t -= dt
+				if m.t <= 0 {
+					strikeMark = nil
+					lightningStrike(m.x, m.y, rod: false)
+				} else {
+					strikeMark = m
+					if frameNo % 6 == 0 { spawnParticles(m.x + Double.random(in: -0.6...0.6), m.y - 0.3, 0xCFE4FF, 1, 2.0, 0.3, -4) }
+				}
+			}
+		}
+		if !on || weather.thunder < 0.01 {
+			strikeAcc = 0
+			return
+		}
+		strikeAcc += dt * weather.thunder / 60.0
+		if strikeAcc >= 1.0 {
+			strikeAcc = weather.fxPick(-0.4...0.2)
+			pickStrike()
+		}
+	}
+
+	/// Where the next bolt goes. Most land away from the player and some only light up the clouds;
+	/// one landing near the player is marked first, and the next one near them waits a good while
+	/// (lightning never singles a player out).
+	func pickStrike() {
+		let px: Double = pb.x
+		var x: Double = px + weather.fxPick(-75...75)
+		if coverAt(x) < 0.3 || weather.fx() < 0.3 {
+			cloudFlash(x)
+			return
+		}
+		if abs(x - px) < 12 && playerStrikeCD > 0 {
+			x = px + (x >= px ? 1.0 : -1.0) * weather.fxPick(16...40)
+		}
+		guard let spot = strikeSpot(x) else {
+			cloudFlash(x)
+			return
+		}
+		if spot.2 {
+			lightningStrike(spot.0, spot.1, rod: true)
+			return
+		}
+		if abs(spot.0 - px) < 12 {
+			// where it actually comes down decides: near the player again so soon, it stays in the cloud
+			if playerStrikeCD > 0 {
+				cloudFlash(spot.0)
+				return
+			}
+			playerStrikeCD = 45
+			strikeMark = StrikeMark(x: spot.0, y: spot.1, t: 1.5, total: 1.5)
+			sfx(.strikeWarn, 0.8)
+			return
+		}
+		lightningStrike(spot.0, spot.1, rod: false)
+	}
+
+	/// Lightning that stays in the cloud: a soft flicker and far-off thunder
+	func cloudFlash(_ x: Double) {
+		let d: Double = abs(x - pb.x)
+		let k: Double = clampD(1.0 - d / 160.0, 0.2, 1.0)
+		skyFlash = max(skyFlash, (settings.reduceFlashes ? 0.05 : 0.2) * k)
+		thunderQueue.append(PendingThunder(t: 0.6 + d / 45.0, vol: 0.35 * k, near: false))
+	}
+
+	/// Where a bolt aimed at x comes down: a lightning rod in reach takes it, otherwise the highest
+	/// exposed point close by (a tree top, a roof, a hill). Returns (x, top y, taken by a rod).
+	func strikeSpot(_ x: Double) -> (Double, Double, Bool)? {
+		if let r = rodCovering(x) { return (Double(r.x) + 0.5, Double(r.y), true) }
+		var best: Int = Int.max
+		let x0: Int = Int(floor(x))
+		var bx: Int = x0
+		for k in -3...3 {
+			let cx: Int = x0 + k
+			if !world.isLoaded(cx) { continue }
+			let top: Int = world.rainTop(cx)
+			if top < best {
+				best = top
+				bx = cx
+			}
+		}
+		if best == Int.max || best >= world.H - 2 { return nil }
+		// the highest point may lie within a rod's reach even if the aim did not
+		if let r = rodCovering(Double(bx) + 0.5) { return (Double(r.x) + 0.5, Double(r.y), true) }
+		return (Double(bx) + 0.5, Double(best), false)
+	}
+
+	func lightningStrike(_ x: Double, _ y: Double, rod: Bool) {
+		let soft: Bool = settings.reduceFlashes
+		makeBolt(x, y)
+		stormEssenceAt(x, y, rod: rod)
+		skyFlash = max(skyFlash, soft ? 0.12 : 0.55)
+		addLightFlash(x, y - 0.5, peak: soft ? 11 : 15, dur: soft ? 0.7 : 0.35, radius: 1.4, color: 0xC8DCFF)
+		// thunder: at once up close, later the further off it was (light is quick, sound is slow)
+		let d: Double = abs(x - pb.x) + abs(y - pb.y) * 0.3
+		let vol: Double = clampD(1.15 - d / 140.0, 0.12, 1.0)
+		if d < 14 {
+			Sound.shared.play(.thunderNear, vol)
+		} else {
+			thunderQueue.append(PendingThunder(t: d / 45.0, vol: vol, near: d < 40))
+		}
+		spawnParticles(x, y - 0.2, 0xE8F0FF, 8, 6.0, 0.35, 10)
+		if d < 24 { addShake(0.35) }
+		if rod {
+			// the rod carries it safely into the ground
+			spawnParticles(x, y + 0.2, 0xFFE8A0, 10, 4.0, 0.4, 14)
+			return
+		}
+		let I: Double = weatherIntensity
+		if settings.weatherHurtsPlayer && !dead && abs(pb.x - x) < 1.8 && pb.y > y - 0.5 && pb.top < y + 0.6 {
+			var info = DamageInfo(amount: 7.0 * I, type: .shock, source: .environment)
+			info.originX = x
+			info.knock = 7
+			info.key = newID()
+			if hurtPlayer(info) && settings.weatherAlerts { say("Struck by lightning!", 1.5) }
+		}
+		if settings.weatherHurtsCreatures {
+			for m in mobsNear(x - 3, x + 3) where m.hp > 0 && !m.removed {
+				if abs(m.b.x - x) < 2.0 && m.b.y > y - 0.5 && m.b.top < y + 0.6 {
+					var info = DamageInfo(amount: 12.0 * I, type: .shock, source: .environment)
+					info.originX = x
+					info.knock = 5
+					info.key = newID()
+					applyMobDamage(m, info)
+				}
+			}
+		}
+		if settings.weatherHurtsBlocks { lightningFire(Int(floor(x)), Int(floor(y))) }
+	}
+
+	/// A jagged bolt from the cloud base down to the strike, with a few forks
+	func makeBolt(_ x: Double, _ y: Double) {
+		let top: Double = min(y - 24.0, camY - viewTilesH * 0.5 - 3.0)
+		var pts: [(Double, Double)] = []
+		var cx: Double = x + weather.fxPick(-4...4)
+		let n: Int = max(6, Int((y - top) / 1.6))
+		for i in 0...n {
+			let f: Double = Double(i) / Double(n)
+			let cy: Double = top + (y - top) * f
+			cx += weather.fxPick(-0.9...0.9)
+			cx += (x - cx) * f * 0.35
+			if i == n { cx = x }
+			pts.append((cx, cy))
+		}
+		var forks: [[(Double, Double)]] = []
+		let nf: Int = 1 + Int(weather.fx() * 3.0)
+		for _ in 0..<nf {
+			let k: Int = clampI(Int(weather.fxPick(0.15...0.6) * Double(n)), 1, n - 1)
+			var fx: Double = pts[k].0
+			var fy: Double = pts[k].1
+			let side: Double = weather.fx() < 0.5 ? -1.0 : 1.0
+			var f: [(Double, Double)] = [(fx, fy)]
+			let len: Int = 3 + Int(weather.fx() * 4.0)
+			for _ in 0..<len {
+				fx += side * weather.fxPick(0.4...1.3)
+				fy += weather.fxPick(0.8...1.6)
+				f.append((fx, fy))
+			}
+			forks.append(f)
+		}
+		if bolts.count >= 4 { bolts.removeFirst() }
+		bolts.append(LightningBolt(pts: pts, forks: forks, life: 0.32, maxLife: 0.32))
+	}
+
+	/// A strike on something that burns: leaves and plants go up, and a short fire burns where it hit
+	/// (it dies sooner in the rain)
+	func lightningFire(_ tx: Int, _ ty: Int) {
+		let t: Tile = world.tile(tx, ty)
+		if !isFlammable(t) { return }
+		if isLeafTile(t) || t.isPlant || t == .hay { breakTile(tx, ty, false, dropChance: 0.3) }
+		let rain: Double = weatherAt(Double(tx) + 0.5, Double(ty)).precip
+		let ground: Int = world.groundBelow(tx, ty)
+		if fireZones.count >= 6 { fireZones.removeFirst() }
+		var z = FireZone(x: Double(tx) + 0.5, y: Double(ground), r: 1.6, t: max(1.5, 6.0 - 4.5 * rain), uid: newID())
+		z.tick = 0.35
+		z.env = true
+		fireZones.append(z)
+		spawnParticles(Double(tx) + 0.5, Double(ty), 0xFF8030, 10, 4.0, 0.6, -3)
+	}
+
+	// MARK: hail
+
+	func updateHail(_ dt: Double) {
+		let on: Bool = settings.weatherOn && settings.allowHail && world.dim == .overworld
+		let h: Double = on ? wxHere.hail : 0
+		if hailPool.isEmpty { hailPool = [HailStone](repeating: HailStone(), count: 56) }
+		let density: Double = clampD(settings.weatherParticles, 0.2, 1.0)
+		if h > 0.02 {
+			hailAcc += dt * h * 70.0 * density
+			let halfW: Double = viewTilesW * 0.5 + 3.0
+			let topY: Double = camY - viewTilesH * 0.5 - 1.0
+			while hailAcc >= 1.0 {
+				hailAcc -= 1.0
+				guard let i = hailPool.firstIndex(where: { !$0.on }) else {
+					hailAcc = 0
+					break
+				}
+				var s = HailStone()
+				s.on = true
+				s.x = camX + Double.random(in: -halfW...halfW)
+				s.y = topY - Double.random(in: 0...3)
+				s.vy = Double.random(in: 18...24)
+				s.vx = wxHere.wind * 0.25
+				s.size = weather.bigHail ? Double.random(in: 0.18...0.26) : Double.random(in: 0.09...0.14)
+				hailPool[i] = s
+			}
+		} else {
+			hailAcc = 0
+		}
+		let bottom: Double = camY + viewTilesH * 0.5 + 2.0
+		for i in 0..<hailPool.count where hailPool[i].on {
+			var s: HailStone = hailPool[i]
+			s.vy = min(s.vy + 30.0 * dt, 26)
+			s.vx += (wxHere.wind * 0.25 - s.vx) * min(1.0, dt * 2.0)
+			s.x += s.vx * dt
+			s.y += s.vy * dt
+			let tx: Int = Int(floor(s.x))
+			let ty: Int = Int(floor(s.y))
+			if s.vy > 0 && ty >= world.rainTop(tx) && Tile.rainStopTable[world.tile(tx, ty).idx] {
+				if s.bounces == 0 {
+					// a bounce off whatever it hit, then it breaks
+					s.y = Double(ty) - 0.02
+					s.vy = -s.vy * 0.32
+					s.vx += Double.random(in: -2.5...2.5)
+					s.bounces = 1
+					if abs(s.x - pb.x) < 6 && frameNo % 3 == 0 { sfx(.hailTick, 0.25) }
+				} else {
+					s.on = false
+					if particles.count < 120 && abs(s.x - pb.x) < 20 { spawnParticles(s.x, s.y, 0xE8F4FF, 2, 2.0, 0.25, 22) }
+				}
+			}
+			if s.y > bottom { s.on = false }
+			hailPool[i] = s
+		}
+		if h < 0.05 { return }
+		// what hail does: large stones sting whoever is out in it; crops, flowers and glass suffer
+		hailHitT -= dt
+		if hailHitT > 0 { return }
+		hailHitT = weather.bigHail ? 1.6 : 2.4
+		let I: Double = weatherIntensity
+		if weather.bigHail && h > 0.3 {
+			if settings.weatherHurtsPlayer && !dead && rainReaches(pb.x, pb.y, pb.h) {
+				// a helmet turns most of the stones
+				let helmet: Bool = inv.armor[0] != nil || suitHelmet
+				if !helmet || Double.random(in: 0...1) < 0.35 {
+					var info = DamageInfo(amount: 1.0 * I * (1.0 - armorInf.stormCut) * (suitHas(.seal) ? 0.5 : 1.0), type: .impact, source: .environment)
+					info.originX = pb.x
+					info.key = newID()
+					_ = hurtPlayer(info)
+				}
+			}
+			if settings.weatherHurtsCreatures {
+				for m in mobsNear(pb.x - 30, pb.x + 30) where m.hp > 0 && !m.removed && !m.isBoss && m.kind != .fish {
+					if Double.random(in: 0...1) < 0.3 && rainReaches(m.b.x, m.b.y, m.b.h) {
+						var info = DamageInfo(amount: 1.0 * I, type: .impact, source: .environment)
+						info.originX = m.b.x
+						info.key = newID()
+						applyMobDamage(m, info)
+					}
+				}
+			}
+		}
+		if settings.weatherHurtsBlocks { hailDamage(h) }
+	}
+
+	/// Hail beats down crops a stage, shreds flowers and (large hail) breaks glass left open to the
+	/// sky. A roof over anything protects it, and only a few panes go in one storm.
+	func hailDamage(_ h: Double) {
+		for _ in 0..<3 {
+			let tx: Int = Int(floor(pb.x)) + Int.random(in: -30...30)
+			if !world.isLoaded(tx) { continue }
+			let ty: Int = world.rainTop(tx)
+			// the first thing the hail hits, or a crop or plant standing on it
+			var y: Int = ty
+			var t: Tile = world.tile(tx, y)
+			let above: Tile = world.tile(tx, y - 1)
+			if above.isPlant {
+				y -= 1
+				t = above
+			}
+			let r: Double = Double.random(in: 0...1)
+			switch t {
+			case .wheat3: if r < 0.4 * h { world.set(tx, y, .wheat2) }
+			case .wheat2: if r < 0.3 * h { world.set(tx, y, .wheat1) }
+			case .carrot3: if r < 0.4 * h { world.set(tx, y, .carrot2) }
+			case .carrot2: if r < 0.3 * h { world.set(tx, y, .carrot1) }
+			case .tallGrass, .flowerR, .flowerY:
+				if r < 0.25 * h { breakTile(tx, y, false, dropChance: 0.5) }
+			case .glass:
+				if weather.bigHail && hailBroken < 6 && r < 0.15 * h {
+					hailBroken += 1
+					breakTile(tx, y, false, dropChance: 0)
+					sfx(.breakCrystal, at: Double(tx), 0.6)
+				}
+			default:
+				break
+			}
+		}
+	}
+
+	// MARK: cold
+
+	/// Heat from fires, furnaces, lamps and heaters close by (0...1)
+	func heatNear() -> Double {
+		let px: Int = Int(floor(pb.x))
+		let py: Int = Int(floor(pb.y - 1.0))
+		var best: Double = 0
+		for dy in -3...3 {
+			for dx in -5...5 {
+				let t: Tile = world.tile(px + dx, py + dy)
+				var heat: Double = 0
+				switch t {
+				case .campfire, .heater: heat = 1.0
+				case .furnace: heat = 0.7
+				case .lantern: heat = 0.3
+				case .torch: heat = 0.2
+				case .lava: heat = 0.8
+				default: break
+				}
+				if heat > 0 {
+					let d: Double = sqrt(Double(dx * dx + dy * dy))
+					best = max(best, heat * clampD(1.0 - d / 6.5, 0, 1))
+				}
+			}
+		}
+		return best
+	}
+
+	/// Cold country in bad weather draws the warmth out of a player who is out in it; shelter, heat
+	/// and warm clothes keep it in. Far gone, the cold slows them and then starts to hurt (never to
+	/// the death outside hardcore, like hunger).
+	func updateCold(_ dt: Double) {
+		warmthT -= dt
+		if warmthT <= 0 {
+			warmthT = 0.5
+			warmthNear = heatNear()
+			shelterLevel = shelterAt(pb.x, pb.y)
+		}
+		let L: LocalWeather = wxHere
+		var loss: Double = 0
+		if settings.weatherOn && world.dim == .overworld && mode != .creative && !dead {
+			let cold: Double = clampD((L.chill - 0.5) * 2.0, 0, 1)
+			if cold > 0 {
+				loss = cold * (0.55 + 0.45 * clampD(abs(L.wind) / 12.0, 0, 1)) + L.precip * 0.15 * cold
+				switch shelterLevel {
+				case 1: loss *= 0.6
+				case 2: loss *= 0.25
+				case 3: loss *= 0.05
+				default: break
+				}
+				if wearing(.winterCoat) { loss *= 0.35 }
+				if wearing(.snowBoots) { loss *= 0.8 }
+				if pb.inWater { loss += 0.6 * cold }
+				loss *= coldGuard()
+			}
+		}
+		let gain: Double = warmthNear * 0.12 + (loss <= 0.001 ? 0.05 : 0)
+		// bare in a full blizzard a player freezes in about half a minute; a coat triples that
+		bodyCold = clampD(bodyCold + (loss * 0.03 - gain) * dt, 0, 1)
+		if !settings.weatherOn { bodyCold = max(0, bodyCold - dt * 0.2) }
+		var slow: Double = 1.0 - 0.3 * clampD((bodyCold - 0.5) * 2.0, 0, 1)
+		// deep snow drags at the feet (snow boots stay on top of it)
+		if settings.weatherOn && pb.onGround && L.snowCover > 0.5 && shelterLevel == 0 && !wearing(.snowBoots) {
+			slow *= 1.0 - 0.15 * clampD((L.snowCover - 0.5) * 2.0, 0, 1)
+		}
+		wxSlow = slow
+		if bodyCold > 0.4 && !coldWarned {
+			coldWarned = true
+			if settings.weatherAlerts { say("You're getting cold. Get out of the wind, near a fire, or into warm clothes.", 3.5) }
+		}
+		if bodyCold < 0.2 { coldWarned = false }
+		if bodyCold >= 0.97 && settings.weatherHurtsPlayer && settings.weatherOn {
+			coldHurtT += dt
+			if coldHurtT >= 4.0 {
+				coldHurtT = 0
+				if hp > 1 || mode == .hardcore {
+					damagePlayer(1, from: pb.x, knock: 0, ignoreArmor: true)
+					floatText("Freezing", pb.x, pb.y - pb.h - 0.6, 0xA8D8FF)
+				}
+			}
+		} else {
+			coldHurtT = 0
+		}
+	}
+
+	// MARK: the wind's push
+
+	/// The wind's (and a tornado's) hold on the player this frame: how it shifts walking, drifting in
+	/// the air and standing still, how slippery the ground is, and a tornado's pull. Every part of it
+	/// is bounded, and all of it is zero with the weather off.
+	func updateWeatherForces(_ dt: Double) {
+		wxWalk = 0
+		wxAirDrift = 0
+		wxRest = 0
+		wxAccelX = 0
+		wxAccelY = 0
+		wxSlip = 0
+		if flingT > 0 { flingT -= dt }
+		if !settings.weatherOn || world.dim != .overworld || inVehicle != nil || mounted != nil || flying || noclip || dead { return }
+		let expo: Double = shelterExposure(shelterLevel)
+		// a breeze (under 3 blocks a second) moves nobody: calm weather leaves movement exactly as it was
+		let raw: Double = wxHere.wind
+		let w: Double = (raw > 0 ? 1.0 : -1.0) * max(0, abs(raw) - 3.0) * expo
+		wxWalk = w * 0.1
+		wxAirDrift = w * 0.3
+		// a player standing still braces against the wind; only hurricane-force gusts shuffle them
+		// along, slowly (at most 0.8 blocks a second), so nobody is blown across the map
+		if abs(w) > 18.0 { wxRest = clampD((w - (w > 0 ? 18.0 : -18.0)) * 0.15, -0.8, 0.8) }
+		if pb.onGround && expo > 0.5 {
+			var slip: Double = clampD((wxHere.snowCover - 0.35) * 1.4, 0, 0.6)
+			if wxHere.chill > 0.7 && wxHere.snowCover > 0.2 { slip = max(slip, 0.35) }
+			if wxHere.precip > 0.4 && !wxHere.snow { slip = max(slip, 0.2 * wxHere.wet) }
+			if wearing(.snowBoots) { slip *= 0.15 }
+			wxSlip = slip
+		}
+		let tf: (Double, Double, Double) = tornadoField(pb.x, pb.y - pb.h * 0.5)
+		if tf.2 > 0 {
+			let k: Double = shelterLevel >= 3 ? 0 : (shelterLevel == 2 ? 0.3 : (shelterLevel == 1 ? 0.6 : 1.0))
+			if k > 0 {
+				wxAccelX = clampD((tf.0 - pb.vx) * 3.5, -40, 40) * k
+				if tf.1 < -1.0 {
+					let lift: Double = clampD(-tf.1 / 12.0, 0, 1)
+					wxAccelY = (-gravityG * 1.05 * lift + clampD((tf.1 - pb.vy) * 2.5, -30, 30)) * k
+					if wxAccelY < -8 { flingT = 2.5 }
+				}
+			}
+		}
+	}
+
+	/// Light things in the open drift with the wind: shots in flight, items on the ground, small
+	/// birds and bats
+	func updateWindOnThings(_ dt: Double) {
+		if !settings.weatherOn || world.dim != .overworld { return }
+		let w: Double = wxHere.wind
+		if abs(w) < 2.5 { return }
+		for i in 0..<projectiles.count {
+			let k: Double = windCatch(projectiles[i].kind)
+			if k <= 0 || projectiles[i].stuck > 0 { continue }
+			let px: Double = projectiles[i].x
+			if projectiles[i].y >= Double(world.skyTop(Int(floor(px)))) { continue }
+			projectiles[i].vx += w * k * dt
+		}
+		if abs(w) > 7.0 {
+			for i in 0..<drops.count {
+				let d: DropItem = drops[i]
+				if d.y >= Double(world.skyTop(Int(floor(d.x)))) { continue }
+				drops[i].vx = clampD(d.vx + (w * 0.45 - d.vx) * min(1.0, 0.8 * dt), -6, 6)
+			}
+		}
+		for m in mobsNear(pb.x - 40, pb.x + 40) where isWindBlown(m.kind) && m.hp > 0 && !m.removed {
+			if m.b.y >= Double(world.skyTop(Int(floor(m.b.x)))) { continue }
+			m.b.vx = clampD(m.b.vx + w * 0.35 * dt, -9, 9)
+		}
+		// rough water tosses boats about
+		let rough: Double = max(wxHere.hurricane, abs(w) > 9.0 ? (abs(w) - 9.0) / 10.0 : 0)
+		if rough > 0.05 {
+			for v in vehicles where v.isBoat && v.submerged > 0.05 && abs(v.px - pb.x) < 80 {
+				v.asleep = false
+				v.sleepT = 0
+				let ph: Double = sin(weather.t * 1.7 + v.px * 0.3)
+				v.vy = clampD(v.vy + ph * 10.0 * rough * dt, -6, 6)
+				v.vx = clampD(v.vx + w * 0.15 * rough * dt, -10, 10)
+				v.angVel = clampD(v.angVel + cos(weather.t * 1.3 + v.px * 0.2) * 1.4 * rough * dt, -1.5, 1.5)
+			}
+			// at a hurricane's height an open boat is swamped now and then
+			if let v = inVehicle, v.isBoat, wxHere.hurricane > 0.7, settings.weatherHurtsPlayer {
+				swampT += dt
+				if swampT > 9.0 {
+					swampT = 0
+					if weather.fx() < 0.35 {
+						dismount()
+						pb.vy = -6
+						sfx(.splash, 0.9)
+						if settings.weatherAlerts { say("A wave swamps the boat and throws you into the sea!", 2.5) }
+					}
+				}
+			} else {
+				swampT = 0
+			}
+		}
+	}
+
+	// MARK: tornadoes
+
+	func spawnTornado() {
+		let dir: Double = weather.windDir
+		let warn: Double = weather.pick(30...40)
+		let ground: Double = max(30, weather.stateDur - warn - TornadoEvent.ropeDur)
+		let dist: Double = weather.pick(85...110)
+		let px: Double = weatherX
+		let e = TornadoEvent(x: px - dir * dist, dir: dir, speed: weather.pick(2.6...3.4), warnDur: warn, groundDur: ground, strength: weather.pick(0.55...1.0), wander: weather.rand() * 6.283, uid: newID())
+		weather.tornado = e
+		tornadoAcc = 0
+		if settings.weatherAlerts && world.dim == .overworld {
+			say(joinText("Tornado warning! A funnel is forming to the ", dir > 0 ? "west" : "east", ". Get underground or into a shelter."), 4.5)
+			sfx(.weatherAlert, 0.9)
+		}
+	}
+
+	func endTornado(survived: Bool) {
+		guard let e = weather.tornado else { return }
+		weather.tornado = nil
+		tornadoAcc = 0
+		if weather.kind == .tornado { weather.stateT = max(weather.stateT, weather.stateDur) }
+		if survived && e.closest < 120 {
+			let d: Int = Int(e.closest.rounded())
+			recordStorm(.tornado, e.closest < 30 ? joinText("passed within ", String(d), " blocks of you") : joinText("seen ", String(d), " blocks away"))
+			if settings.weatherAlerts && world.dim == .overworld { say("The tornado has lifted. Look around for anything it scattered.", 3.5) }
+		}
+	}
+
+	func updateTornado(_ dt: Double) {
+		guard var e = weather.tornado else { return }
+		e.t += dt
+		switch e.phase {
+		case 0:
+			e.x += e.dir * 0.8 * dt
+			if e.t >= e.warnDur {
+				e.phase = 1
+				e.t = 0
+				if settings.weatherAlerts && world.dim == .overworld {
+					say("A tornado has touched down!", 3.0)
+					sfx(.weatherAlert, 0.9)
+				}
+			}
+		case 1:
+			e.x += (e.dir * e.speed + sin(e.wander + e.t * 0.35) * 1.3) * dt
+			if e.t >= e.groundDur {
+				e.phase = 2
+				e.t = 0
+			}
+		default:
+			e.x += e.dir * e.speed * 0.6 * dt
+			if e.t >= TornadoEvent.ropeDur {
+				weather.tornado = e
+				endTornado(survived: true)
+				return
+			}
+		}
+		if world.dim == .overworld { e.closest = min(e.closest, abs(e.x - pb.x)) }
+		weather.tornado = e
+		// only near the player is it simulated in detail (beyond that it only moves)
+		if world.dim == .overworld && abs(e.x - pb.x) < 100 && world.isLoaded(Int(floor(e.x))) {
+			tornadoGround = Double(world.surfaceY(Int(floor(e.x))))
+			tornadoEffects(dt)
+		}
+	}
+
+	/// The air a tornado moves at a point: drawn in toward the funnel, lifted near it and swirled about
+	/// it, strongest at the edge of its core and fading with distance; at the top of the funnel things
+	/// are thrown outward. Returns (vx, vy, nearness 0...1). Speeds never exceed 16 blocks a second.
+	func tornadoField(_ x: Double, _ y: Double) -> (Double, Double, Double) {
+		guard let e = weather.tornado, world.dim == .overworld, settings.weatherOn else { return (0, 0, 0) }
+		let f: Double = e.force * weatherIntensity
+		if f <= 0.01 { return (0, 0, 0) }
+		let dx: Double = x - e.x
+		let ad: Double = abs(dx)
+		let reach: Double = 24.0
+		if ad > reach { return (0, 0, 0) }
+		let core: Double = 3.2
+		let height: Double = tornadoGround - y
+		let near: Double = ad < core ? 1.0 : pow(max(0, (reach - ad) / (reach - core)), 1.6)
+		let s: Double = dx >= 0 ? 1.0 : -1.0
+		var vx: Double = -s * 9.0 * near * f
+		if ad < core * 1.8 { vx += sin(weather.t * 4.2 + y * 0.7) * 7.0 * f }
+		var vy: Double = 0
+		if ad < core * 2.2 {
+			let lift: Double = height < 18 ? 1.0 : max(0, 1.0 - (height - 18.0) / 6.0)
+			vy = -12.0 * f * lift * (ad < core ? 1.0 : 0.6)
+			if height >= 18 { vx = s * 10.0 * f }
+		}
+		let mag: Double = sqrt(vx * vx + vy * vy)
+		if mag > 16.0 {
+			vx *= 16.0 / mag
+			vy *= 16.0 / mag
+		}
+		return (vx, vy, near)
+	}
+
+	/// What a tornado near the player does: it draws in and flings creatures, items, shots and
+	/// vehicles, its debris hurts, and it tears loose plants, leaves and light building blocks (up to a
+	/// limit; never the ground). Shelter keeps the player out of most of it.
+	func tornadoEffects(_ dt: Double) {
+		guard let e = weather.tornado else { return }
+		let f: Double = e.force
+		if f <= 0.01 { return }
+		let I: Double = weatherIntensity
+		for m in mobsNear(e.x - 24, e.x + 24) where m.hp > 0 && !m.removed && !m.isBoss && m.kind != .fish {
+			let tf: (Double, Double, Double) = tornadoField(m.b.x, m.b.y - m.b.h * 0.5)
+			if tf.2 <= 0 { continue }
+			if !rainReaches(m.b.x, m.b.y, m.b.h) && shelterAt(m.b.x, m.b.y) >= 2 { continue }
+			let light: Double = 1.0 / (1.0 + m.b.w * m.b.h * 0.6)
+			m.b.vx = clampD(m.b.vx + clampD((tf.0 - m.b.vx) * 3.0, -40, 40) * light * dt, -16, 16)
+			if tf.1 < -1.0 {
+				m.b.vy = clampD(m.b.vy + (-gravityG * 1.05 + clampD((tf.1 - m.b.vy) * 2.5, -30, 30)) * light * dt, -14, 26)
+				m.b.onGround = false
+			}
+			if !settings.weatherHurtsCreatures { m.fallPeak = 0 }
+			if settings.weatherHurtsCreatures && abs(m.b.x - e.x) < 4.5 {
+				var info = DamageInfo(amount: 2.0 * f * I, type: .impact, source: .environment)
+				info.originX = e.x
+				info.key = e.uid
+				info.cooldown = 1.4
+				applyMobDamage(m, info)
+			}
+		}
+		for i in 0..<drops.count where abs(drops[i].x - e.x) < 24 {
+			let tf: (Double, Double, Double) = tornadoField(drops[i].x, drops[i].y)
+			if tf.2 <= 0 { continue }
+			drops[i].vx = clampD(drops[i].vx + (tf.0 - drops[i].vx) * 2.0 * dt, -14, 14)
+			if tf.1 < -1.0 { drops[i].vy = clampD(drops[i].vy + (tf.1 - drops[i].vy) * 2.5 * dt - gravityG * 0.8 * dt, -12, 18) }
+		}
+		for i in 0..<projectiles.count where abs(projectiles[i].x - e.x) < 24 && projectiles[i].stuck <= 0 {
+			let tf: (Double, Double, Double) = tornadoField(projectiles[i].x, projectiles[i].y)
+			projectiles[i].vx += tf.0 * 0.6 * dt
+			projectiles[i].vy += tf.1 * 0.6 * dt
+		}
+		for v in vehicles where abs(v.px - e.x) < 24 {
+			let tf: (Double, Double, Double) = tornadoField(v.px, v.py)
+			if tf.2 <= 0 { continue }
+			let heavy: Double = 1.0 / max(1.0, v.mass * 0.15)
+			v.asleep = false
+			v.sleepT = 0
+			v.vx = clampD(v.vx + clampD((tf.0 - v.vx) * 0.8, -12, 12) * heavy * dt, -12, 12)
+			v.angVel = clampD(v.angVel + tf.0 * 0.05 * heavy * dt, -2, 2)
+		}
+		// its debris
+		if settings.weatherHurtsPlayer && !dead && abs(pb.x - e.x) < 4.5 && shelterLevel < 2 {
+			wxDebrisT -= dt
+			if wxDebrisT <= 0 {
+				wxDebrisT = 1.4
+				var info = DamageInfo(amount: 2.0 * f * I, type: .impact, source: .environment)
+				info.originX = e.x
+				info.knock = 3
+				info.key = newID()
+				_ = hurtPlayer(info)
+			}
+		}
+		// the dust and wreckage thrown up at its foot
+		if particles.count < 140 && abs(e.x - pb.x) < 50 && frameNo % 2 == 0 {
+			let col: UInt32 = [0x8A7A60, 0x6A5A44, 0x5E8A4A, 0x9A8A70][frameNo % 4]
+			spawnParticles(e.x + Double.random(in: -3...3), tornadoGround - 0.3, col, 2, 7.0, 0.8, 8)
+		}
+		if settings.weatherHurtsBlocks && e.broken < 90 {
+			tornadoAcc += dt * 7.0 * f * I
+			var broken: Int = e.broken
+			while tornadoAcc >= 1.0 && broken < 90 {
+				tornadoAcc -= 1.0
+				let hit: Bool = weather.fx() < 0.7 ? tearAt(e.x + weather.fxPick(-4.8...4.8), f) : tearFace(e.x, e.dir, f)
+				if hit { broken += 1 }
+			}
+			weather.tornado?.broken = broken
+		} else {
+			tornadoAcc = 0
+		}
+	}
+
+	/// Tears one block loose at column x, working down from the first thing the wind reaches (plants
+	/// and leaves give way; a solid roof or the ground stops it)
+	@discardableResult
+	func tearAt(_ x: Double, _ f: Double) -> Bool {
+		let tx: Int = Int(floor(x))
+		if !world.isLoaded(tx) { return false }
+		var y: Int = max(1, world.rainTop(tx) - 1)
+		var n: Int = 0
+		while n < 4 {
+			let t: Tile = world.tile(tx, y)
+			if t == .air {
+				y += 1
+				n += 1
+				continue
+			}
+			if weather.fx() < windBreak(t) * f {
+				let c: UInt32 = t.def.colors.first ?? 0x8A7A60
+				stormTear(tx, y, weather.wind >= 0 ? 1.0 : -1.0)
+				spawnParticles(Double(tx) + 0.5, Double(y) + 0.5, c, 4, 7.0, 0.7, 6)
+				return true
+			}
+			if t.solid { return false }
+			y += 1
+			n += 1
+		}
+		return false
+	}
+
+	/// Tears loose the first block the wind meets coming from `fromDir` at a random height near the
+	/// surface around x: walls take the wind side-on (a closed storm shutter or a stone wall in front
+	/// of a window keeps the glass whole)
+	@discardableResult
+	func tearFace(_ x: Double, _ fromDir: Double, _ f: Double) -> Bool {
+		let cx: Int = Int(floor(x + weather.fxPick(-6...6)))
+		if !world.isLoaded(cx) { return false }
+		let ground: Int = world.surfaceY(cx)
+		let y: Int = ground - 1 - Int(weather.fx() * 7.0)
+		let step: Int = fromDir > 0 ? 1 : -1
+		var tx: Int = cx - step * 12
+		var k: Int = 0
+		while k < 24 {
+			let t: Tile = world.tile(tx, y)
+			if t != .air && !t.liquid {
+				if weather.fx() < windBreak(t) * f {
+					stormTear(tx, y, fromDir)
+					return true
+				}
+				return false
+			}
+			tx += step
+			k += 1
+		}
+		return false
+	}
+
+	// MARK: hurricanes
+
+	func spawnHurricane(_ ctx: WeatherContext) {
+		let side: Double = ctx.seaSide != 0 ? ctx.seaSide : 1
+		let h = HurricaneEvent(total: weather.stateDur, side: side, coastX: ctx.coastX, strength: weather.pick(0.7...1.0))
+		weather.hurricane = h
+		hurricaneAcc = 0
+		if settings.weatherAlerts && world.dim == .overworld {
+			say(joinText("Hurricane warning: a hurricane is coming in off the sea to the ", side > 0 ? "east" : "west", ". Close your shutters, then get to high ground or a shelter."), 5.0)
+			sfx(.weatherAlert, 0.9)
+		}
+	}
+
+	func endHurricane(survived: Bool) {
+		guard let h = weather.hurricane else { return }
+		weather.hurricane = nil
+		hurricaneAcc = 0
+		if weather.kind == .hurricane { weather.stateT = max(weather.stateT, weather.stateDur) }
+		if survived && h.closest < 400 {
+			recordStorm(.hurricane, h.closest < 80 ? "rode it out on the coast" : "felt it inland")
+		}
+	}
+
+	func updateHurricane(_ dt: Double) {
+		guard var h = weather.hurricane else { return }
+		h.t += dt
+		if h.t >= h.stageDur {
+			h.t = 0
+			if h.stage == .clearing {
+				weather.hurricane = h
+				endHurricane(survived: true)
+				if settings.weatherAlerts && world.dim == .overworld { say("The hurricane has passed. The sea is going back down.", 3.5) }
+				return
+			}
+			h.stage = HurricaneStage(rawValue: h.stage.rawValue + 1) ?? .clearing
+			if settings.weatherAlerts && world.dim == .overworld {
+				var line: String = ""
+				switch h.stage {
+				case .intensifying: line = "The hurricane is strengthening. The sea is rising."
+				case .peak: line = "The hurricane is at its height!"
+				case .eye: line = "The eye of the hurricane: a sudden calm. The far wall is coming, and the wind will turn."
+				case .backside: line = "The wind is back, from the other side!"
+				case .weakening: line = "The hurricane is weakening."
+				case .clearing: line = "The hurricane is moving on."
+				default: break
+				}
+				if !line.isEmpty { say(line, 3.5) }
+			}
+		}
+		h.force = easeTo(h.force, h.stage.force * h.strength, 8, dt)
+		if world.dim == .overworld { h.closest = min(h.closest, abs(pb.x - h.coastX)) }
+		weather.hurricane = h
+		if world.dim != .overworld { return }
+		let reach: Double = hurricaneReach(pb.x, h)
+		if settings.weatherHurtsBlocks && h.broken < 60 && h.force > 0.6 && reach > 0.4 {
+			hurricaneAcc += dt * 1.2 * h.force * reach * weatherIntensity
+			var broken: Int = h.broken
+			while hurricaneAcc >= 1.0 && broken < 60 {
+				hurricaneAcc -= 1.0
+				let x: Double = pb.x + weather.fxPick(-40...40)
+				let fromDir: Double = weather.wind >= 0 ? 1 : -1
+				let hit: Bool = weather.fx() < 0.5 ? tearAt(x, h.force * 0.6) : tearFace(x, fromDir, h.force * 0.6)
+				if hit { broken += 1 }
+			}
+			weather.hurricane?.broken = broken
+		} else {
+			hurricaneAcc = 0
+		}
+	}
+
+	// MARK: storm surge
+
+	/// At a hurricane's height the sea climbs a block or two up the shore near the player (sandbags
+	/// hold it back). Every flooded spot is remembered, and saved, until the water has been taken
+	/// away again once the storm eases; that also happens if the weather is switched off.
+	func updateSurge(_ dt: Double) {
+		surgeT -= dt
+		if surgeT > 0 { return }
+		surgeT = 0.5
+		var rising: Bool = false
+		var level: Int = WorldGen.sea - 1
+		if settings.weatherOn && settings.allowHurricane && settings.weatherHurtsBlocks, let h = weather.hurricane, world.dim == .overworld {
+			if h.stage == .peak || h.stage == .backside || h.stage == .intensifying {
+				rising = true
+				if h.stage == .peak || h.stage == .backside { level = WorldGen.sea - 2 }
+			}
+			if rising && weather.surge.count < 90 && abs(h.coastX - pb.x) < 140 { floodShore(h, level) }
+		}
+		if rising || weather.surge.isEmpty { return }
+		// ebbing: a few spots at a time, wherever the ground is loaded (the rest waits for it)
+		var keep: [SurgeCell] = []
+		var drained: Int = 0
+		for c in weather.surge {
+			if world.dim == .overworld && drained < 12 && world.isLoaded(c.x) {
+				if world.tile(c.x, c.y) == .water { world.set(c.x, c.y, .air) }
+				drained += 1
+				continue
+			}
+			keep.append(c)
+		}
+		weather.surge = keep
+	}
+
+	/// Floods the low shore next to the sea, one strip of columns at a time
+	func floodShore(_ h: HurricaneEvent, _ level: Int) {
+		let inland: Int = h.side > 0 ? -1 : 1
+		let sea: Int = WorldGen.sea
+		// walk in from the open sea to the first column whose surface row is not sea water
+		var x: Int = Int(floor(h.coastX)) - inland * 8
+		var k: Int = 0
+		while k < 60 && world.isLoaded(x) && world.tile(x, sea) == .water {
+			x += inland
+			k += 1
+		}
+		if !world.isLoaded(x) || k >= 60 { return }
+		var added: Int = 0
+		var col: Int = 0
+		while col < 30 && added < 8 && weather.surge.count < 90 {
+			let cx: Int = x + inland * col
+			if !world.isLoaded(cx) { return }
+			var y: Int = level
+			var blocked: Bool = false
+			while y < sea {
+				let t: Tile = world.tile(cx, y)
+				if t == .sandbag { blocked = true; break }
+				if t == .air {
+					world.set(cx, y, .water)
+					weather.surge.append(SurgeCell(x: cx, y: y))
+					added += 1
+				}
+				y += 1
+			}
+			// the surge stops at higher ground or at a sandbag wall
+			if blocked || world.tile(cx, level).solid { return }
+			col += 1
+		}
+	}
+
+	// MARK: everything, once a frame
+
+	func updateWeather(_ dt: Double) {
+		if landT > 0 { landT -= dt }
+		if pb.inWater && !wasInWater && pb.vy > 4.0 {
+			sfx(.splash, clampD(pb.vy / 14.0, 0.3, 1.0))
+			spawnParticles(pb.x, pb.y - 0.4, 0xB8D8F8, 8, 3.5, 0.45, 14)
+		}
+		wasInWater = pb.inWater
+		stepWeatherSim(dt)
+		wxHere = weatherAt(pb.x, pb.y - pb.h)
+		weatherRain = wxHere.precip
+		weatherSnow = wxHere.snow
+		updateGroundCells(dt)
+		updateTornado(dt)
+		updateHurricane(dt)
+		updateSurge(dt)
+		updateLightning(dt)
+		updateHail(dt)
+		updateCold(dt)
+		updateWeatherForces(dt)
+		updateWindOnThings(dt)
+		updateWeatherDevices(dt)
+		updateWeatherBanner()
+		wxNoteT -= dt
+		if wxNoteT <= 0 {
+			wxNoteT = 1.0
+			checkWeatherNotes()
+			let L: LocalWeather = wxHere
+			if L.precip > 0.3 || abs(L.wind) > 8 || L.thunder > 0.5 || L.hail > 0.2 { stormFelt = true }
+		}
+		// rain puts out a burning player standing in it
+		if weatherRain > 0.5 && !weatherSnow && playerBurn > 0 && rainReaches(pb.x, pb.y, pb.h) { playerBurn = 0 }
+	}
+
+	/// How hard it is raining at x (cheap: for checks made for many creatures)
+	func precipAt(_ x: Double) -> Double {
+		if world.dim != .overworld || !settings.weatherOn || weather.precip < 0.01 { return 0 }
+		return weather.precip * coverAt(x) * biomeWetness(gen.col(Int(floor(x))).biome)
+	}
+
+	/// Keeps a storm the player lived through in the journal
+	func recordStorm(_ k: WeatherKind, _ note: String) {
+		var list: [StormRecord] = journal.storms ?? []
+		list.append(StormRecord(kind: k.rawValue, day: dayCount, note: note))
+		if list.count > 40 { list.removeFirst(list.count - 40) }
+		journal.storms = list
+	}
+}
+
+// MARK: - Weather on screen: storm skies, rain and snow, hail, wind, the funnel, lightning, waves
+// Everything here is drawn from the simulation and a hash of each drop's index (no per-particle
+// state), batched into one path per colour; only hailstones come from a small pool.
+
+/// Small pixel-art weather symbols for the HUD and the station's screen
+func weatherIconBuf(_ k: WeatherKind, _ snow: Bool) -> PixelBuf {
+	var b = PixelBuf(w: 12, h: 12)
+	let cloudL: UInt32 = 0xE8EEF4
+	let cloudD: UInt32 = 0x8A929E
+	let cloudS: UInt32 = 0x5A606C
+	func cloud(_ c: UInt32, _ y: Int) {
+		b.ellipse(4.5, Double(y) + 0.5, 2.6, 2.0, c)
+		b.ellipse(7.5, Double(y) - 0.5, 3.0, 2.6, c)
+		b.rect(2, y, 8, 2, c)
+	}
+	func drops(_ c: UInt32, _ n: Int) {
+		for i in 0..<n {
+			let x: Int = 2 + (i * 3) % 9
+			let y: Int = 8 + (i % 2)
+			b.set(x, y, c)
+			b.set(x - 1, y + 2, c)
+		}
+	}
+	func flakes() {
+		for (x, y) in [(2, 9), (5, 10), (8, 9), (10, 11), (4, 11)] {
+			b.set(x, y, 0xFFFFFF)
+		}
+	}
+	switch k {
+	case .clear:
+		b.ellipse(6, 6, 3.0, 3.0, 0xFFD84A)
+		b.ellipse(5.5, 5.5, 1.6, 1.6, 0xFFF2A0)
+		for (x, y) in [(6, 0), (6, 11), (0, 6), (11, 6), (2, 2), (9, 2), (2, 9), (9, 9)] { b.set(x, y, 0xFFD84A) }
+	case .partlyCloudy:
+		b.ellipse(4, 4, 2.6, 2.6, 0xFFD84A)
+		cloud(cloudL, 7)
+	case .overcast:
+		cloud(cloudD, 5)
+		cloud(cloudL, 7)
+	case .lightRain, .snowfall:
+		cloud(cloudD, 4)
+		if snow || k == .snowfall { flakes() } else { drops(0x7AB0F0, 3) }
+	case .heavyRain:
+		cloud(cloudS, 4)
+		if snow { flakes() } else { drops(0x5A98F0, 6) }
+	case .thunderstorm:
+		cloud(cloudS, 4)
+		b.line(7, 6, 5, 9, 0xFFE060)
+		b.line(5, 9, 7, 9, 0xFFE060)
+		b.line(7, 9, 5, 11, 0xFFE060)
+		drops(0x5A98F0, 2)
+	case .strongWind, .windstorm:
+		b.line(1, 3, 8, 3, 0xE8EEF4)
+		b.line(8, 3, 9, 2, 0xE8EEF4)
+		b.line(0, 6, 10, 6, 0xE8EEF4)
+		b.line(10, 6, 11, 5, 0xE8EEF4)
+		b.line(2, 9, 7, 9, 0xE8EEF4)
+		if k == .windstorm { b.set(9, 9, 0x8A6A3A); b.set(4, 11, 0x5E8A4A) }
+	case .hailstorm:
+		cloud(cloudS, 4)
+		for (x, y) in [(3, 8), (6, 10), (9, 8), (4, 11)] { b.rect(x, y, 2, 1, 0xF4FAFF) }
+	case .blizzard:
+		cloud(cloudD, 3)
+		flakes()
+		b.line(0, 8, 6, 8, 0xC8D8E8)
+	case .tornado:
+		b.rect(1, 0, 10, 2, cloudS)
+		b.rect(3, 2, 7, 2, 0x6E727B)
+		b.rect(4, 4, 5, 2, 0x55585F)
+		b.rect(5, 6, 3, 2, 0x6E727B)
+		b.rect(5, 8, 2, 2, 0x55585F)
+		b.rect(4, 10, 2, 1, 0x8A7A60)
+	case .hurricane:
+		b.ellipse(6, 6, 4.6, 4.6, 0x8A929E)
+		b.ellipse(6, 6, 3.0, 3.0, 0xE8EEF4)
+		b.ellipse(6, 6, 1.2, 1.2, 0x3A70C8)
+		b.line(6, 1, 10, 2, 0xE8EEF4)
+		b.line(6, 11, 2, 10, 0xE8EEF4)
+	}
+	b.outline(0x1A1410)
+	return b
+}
+
+extension Art {
+	func weatherIcon(_ k: WeatherKind, _ snow: Bool) -> Image {
+		let key: Int = k.rawValue * 2 + (snow ? 1 : 0)
+		if let i = wxIcons[key] { return i }
+		let img: Image = pixImage(weatherIconBuf(k, snow))
+		wxIcons[key] = img
+		return img
+	}
+}
+
+extension WorldRenderer {
+	/// The sky's share of the weather: cloud cover and storm darkness, stars and sun hidden, the
+	/// glow of lightning, and a hurricane's wall of cloud coming in off the sea
+	static func drawSkyWeather(_ ctx: inout GraphicsContext, _ W: Double, _ H: Double, _ g: Game, _ v: View2D, _ day: Double) {
+		let L: LocalWeather = g.wxHere
+		let full: CGRect = mkRect(0, 0, W, H)
+		let cl: Double = L.cloud
+		if cl > 0.05 { fillRect(&ctx, full, Color(hex: 0x66707C, alpha: 0.7 * cl * max(0.3, day))) }
+		let storm: Double = clampD((cl - 0.65) * 2.5, 0, 1) * (0.5 + 0.5 * L.precip)
+		if storm > 0.02 { fillRect(&ctx, full, Color(hex: 0x262C36, alpha: 0.42 * storm * max(0.4, day))) }
+		if L.snow && L.precip > 0.4 { fillRect(&ctx, full, Color(hex: 0xD8E0EA, alpha: 0.3 * L.precip * day)) }
+	}
+
+	/// The weather on the horizon: a hurricane's wall of cloud coming in off the sea
+	static func drawSkyWeatherFront(_ ctx: inout GraphicsContext, _ W: Double, _ H: Double, _ g: Game) {
+		if let h = g.weather.hurricane, h.stage.rawValue <= HurricaneStage.intensifying.rawValue {
+			drawStormWall(&ctx, W, H, g, h)
+		}
+	}
+
+	/// A towering wall of dark cloud on the sea-side horizon, growing as a hurricane comes in, with
+	/// curtains of rain hanging under it
+	static func drawStormWall(_ ctx: inout GraphicsContext, _ W: Double, _ H: Double, _ g: Game, _ h: HurricaneEvent) {
+		var prog: Double = clampD(h.t / max(1, h.stageDur), 0, 1)
+		if h.stage == .intensifying { prog = 1.0 + prog }
+		let width: Double = W * (0.22 + 0.3 * prog)
+		let east: Bool = h.side > 0
+		let step: Double = 8.0
+		var wall: Path = Path()
+		var shafts: Path = Path()
+		var sx: Double = 0
+		while sx < width {
+			let x: Double = east ? W - sx - step : sx
+			let n: Double = fbm1(sx / 60.0 + g.weather.t * 0.05, 4411, 3)
+			// the wall rises toward the open sea, its top billowing
+			let rise: Double = 0.35 + 0.5 * pow(1.0 - sx / width, 0.6) + 0.12 * n
+			let top: Double = floor(H * (0.7 - rise * 0.75) / 4.0) * 4.0
+			let base: Double = H * 0.7
+			wall.addRect(mkRect(x, top, step + 1.0, base - top))
+			if hash2(Int(sx / step), 3, 91) < 0.5 { shafts.addRect(mkRect(x + 2, base, 3, H * 0.2)) }
+			sx += step
+		}
+		ctx.fill(wall, with: .color(Color(hex: 0x2E333C, alpha: 0.88)))
+		ctx.fill(shafts, with: .color(Color(hex: 0x4A5464, alpha: 0.35)))
+	}
+
+	/// Lying snow (deeper where the wind drifts it), wet ground and puddles on the open surfaces in
+	/// view. Drawn over the terrain and under everything else, so the light map shades it like the ground.
+	static func drawGroundWeather(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
+		if g.world.dim != .overworld || !g.settings.weatherOn { return }
+		if g.weather.cells.isEmpty { return }
+		let x0: Int = Int(floor(v.left)) - 1
+		let x1: Int = Int(ceil(v.left + v.wTiles)) + 1
+		let tp: Double = v.tp
+		var snowP: Path = Path()
+		var wetP: Path = Path()
+		var pudP: Path = Path()
+		var anySnow: Bool = false
+		var anyWet: Bool = false
+		var wetSum: Double = 0
+		var wetN: Double = 0
+		let lee: Double = g.weather.wind >= 0 ? 1 : -1
+		let raining: Bool = g.wxHere.precip > 0.1 && !g.wxHere.snow
+		var ripples: Path = Path()
+		for x in x0...x1 {
+			let top: Int = g.world.rainTop(x)
+			if top <= 0 || top >= g.world.H - 2 { continue }
+			let wy: Double = Double(top)
+			if wy < v.top - 1 || wy > v.top + v.hTiles + 1 { continue }
+			let t: Tile = g.world.tile(x, top)
+			if t.liquid { continue }
+			let wx: Double = Double(x) + 0.5
+			let sc: Double = g.groundValue(wx, true)
+			let wet: Double = g.groundValue(wx, false)
+			let sx: Double = v.sx(Double(x))
+			let sy: Double = v.sy(wy)
+			if sc > 0.05 {
+				let h0: Double = hash2(x, 41, 3)
+				let dr: Double = 0.5 + 0.5 * sin(Double(x) * 0.37 * lee)
+				let hh: Double = tp * min(0.45, sc * (0.12 + 0.22 * h0 + 0.15 * dr))
+				let snapH: Double = max(2.0, floor(hh / 2.0) * 2.0)
+				snowP.addRect(mkRect(sx, sy - snapH + 2.0, tp + 0.5, snapH))
+				anySnow = true
+			}
+			if wet > 0.08 && t.solid && !isLeafTile(t) && sc < 0.3 {
+				wetP.addRect(mkRect(sx, sy, tp + 0.5, max(2.0, tp * 0.14)))
+				wetSum += wet
+				wetN += 1
+				anyWet = true
+				let level: Bool = g.world.rainTop(x - 1) == top && g.world.rainTop(x + 1) == top
+				if wet > 0.35 && t != .sand && level && hash2(x, 43, 5) < (wet - 0.3) * 0.9 {
+					pudP.addRect(mkRect(sx + 1.0, sy - 2.0, tp - 2.0, 4.0))
+					if raining && hash2(x, Int(g.clock * 3.0), 47) < 0.5 {
+						let rx: Double = sx + tp * (0.2 + 0.6 * hash2(x, Int(g.clock * 3.0), 48))
+						ripples.addRect(mkRect(rx - 2.0, sy - 3.0, 4.0, 1.0))
+					}
+				}
+			}
+		}
+		if anyWet {
+			let a: Double = 0.22 * clampD(wetSum / max(1, wetN), 0, 1)
+			ctx.fill(wetP, with: .color(Color(hex: 0x10203A, alpha: a)))
+			ctx.fill(pudP, with: .color(Color(hex: 0x6A9AD0, alpha: 0.62)))
+			ctx.fill(ripples, with: .color(Color(hex: 0xD8ECFF, alpha: 0.7)))
+		}
+		if anySnow { ctx.fill(snowP, with: .color(Color(hex: 0xF4F8FF, alpha: 0.95))) }
+	}
+
+	/// Rain and snow falling in world space, slanted and carried by the wind and stopping on the first
+	/// thing in their way; splashes where rain lands; hail from the pool; blown dust and grass bent
+	/// over in the wind
+	static func drawPrecip(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
+		if (g.world.dim != .overworld && g.customDim == nil) || !g.settings.weatherOn { return }
+		let dens: Double = clampD(g.settings.weatherParticles, 0.2, 1.0)
+		let tp: Double = v.tp
+		let bands: Int = 8
+		var amt: [Double] = [Double](repeating: 0, count: bands)
+		var cold: [Bool] = [Bool](repeating: false, count: bands)
+		var anyP: Double = 0
+		let midY: Double = v.top + v.hTiles * 0.5
+		for b in 0..<bands {
+			let x: Double = v.left + v.wTiles * (Double(b) + 0.5) / Double(bands)
+			let L: LocalWeather = g.weatherAt(x, midY)
+			amt[b] = L.precip
+			cold[b] = L.snow
+			anyP = max(anyP, L.precip)
+		}
+		let wind: Double = g.wxHere.wind
+		let clock: Double = g.clock
+		if anyP > 0.02 {
+			let n: Int = Int(300.0 * dens)
+			let span: Double = v.hTiles + 6.0
+			let cell: Double = v.wTiles + 8.0
+			let x0: Double = v.left - 4.0
+			var rain: Path = Path()
+			var heavy: Path = Path()
+			var snow: Path = Path()
+			var streak: Path = Path()
+			for i in 0..<n {
+				let fx: Double = hash2(i, 11, 77)
+				let fy: Double = hash2(i, 12, 77)
+				let fz: Double = hash2(i, 13, 77)
+				let fw: Double = hash2(i, 14, 77)
+				// which band it falls in decides whether it falls at all (storm cells have edges)
+				let guess: Double = x0 + fx * cell
+				let bi: Int = clampI(Int((guess - v.left) / v.wTiles * Double(bands)), 0, bands - 1)
+				let a: Double = amt[bi]
+				if fw > a { continue }
+				let isSnow: Bool = cold[bi]
+				let speed: Double = isSnow ? 2.6 + fz * 1.6 : 19.0 + fz * 7.0
+				let vx: Double = isSnow ? wind * 0.85 : wind * 0.75
+				let fallen: Double = (fy * span + clock * speed).truncatingRemainder(dividingBy: span)
+				let wy: Double = v.top - 3.0 + fallen
+				var raw: Double = fx * cell + vx * (fallen / speed)
+				if isSnow { raw += sin(clock * 1.3 + Double(i)) * 0.5 }
+				let rel: Double = raw.truncatingRemainder(dividingBy: cell)
+				let wx: Double = x0 + (rel < 0 ? rel + cell : rel)
+				if wy >= Double(g.world.rainTop(Int(floor(wx)))) { continue }
+				let sx: Double = v.sx(wx)
+				let sy: Double = v.sy(wy)
+				if isSnow {
+					if abs(vx) > 7.0 {
+						let l: Double = tp * 0.45
+						streak.move(to: mkPoint(sx, sy))
+						streak.addLine(to: mkPoint(sx - (vx > 0 ? l : -l), sy - l * 0.25))
+					} else {
+						let s: Double = fz > 0.7 ? 3.0 : 2.0
+						snow.addRect(mkRect(sx, sy, s, s))
+					}
+				} else {
+					let len: Double = (a > 0.6 ? 0.75 : 0.5) * tp
+					let dx: Double = vx / speed * len
+					if a > 0.6 && fz < 0.5 {
+						heavy.move(to: mkPoint(sx, sy))
+						heavy.addLine(to: mkPoint(sx - dx, sy - len))
+					} else {
+						rain.move(to: mkPoint(sx, sy))
+						rain.addLine(to: mkPoint(sx - dx, sy - len))
+					}
+				}
+			}
+			// a mod's rain colour (the Overworld's), else the game's
+			let rc: UInt32 = g.world.dim == .overworld ? (ModRuntime.shared.weather?.rainColor ?? 0) : 0
+			ctx.stroke(rain, with: .color(Color(hex: rc != 0 ? rc : 0xA8C8F0, alpha: 0.45)), lineWidth: 1.5)
+			ctx.stroke(heavy, with: .color(Color(hex: rc != 0 ? shadeRGB(rc, 0.9) : 0x9CBCE4, alpha: 0.55)), lineWidth: 2.0)
+			ctx.fill(snow, with: .color(Color.white.opacity(0.85)))
+			ctx.stroke(streak, with: .color(Color.white.opacity(0.7)), lineWidth: 2.0)
+			drawSplashes(&ctx, g, v, amt, cold)
+		}
+		drawHail(&ctx, g, v)
+		drawWindFX(&ctx, g, v)
+	}
+
+	/// Little crowns of spray where rain is landing on open ground
+	static func drawSplashes(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D, _ amt: [Double], _ cold: [Bool]) {
+		let x0: Int = Int(floor(v.left))
+		let x1: Int = Int(ceil(v.left + v.wTiles))
+		let bands: Int = amt.count
+		let tick: Int = Int(g.clock * 7.0)
+		var p: Path = Path()
+		var x: Int = x0
+		while x <= x1 {
+			let bi: Int = clampI(Int((Double(x) - v.left) / v.wTiles * Double(bands)), 0, bands - 1)
+			let a: Double = amt[bi]
+			if a > 0.05 && !cold[bi] && hash2(x, tick, 9) < a * 0.3 {
+				let top: Int = g.world.rainTop(x)
+				let wy: Double = Double(top)
+				if top > 0 && v.visible(Double(x), wy, 1) && !g.world.tile(x, top).liquid {
+					let ph: Double = (g.clock * 7.0).truncatingRemainder(dividingBy: 1.0)
+					let sx: Double = v.sx(Double(x) + 0.2 + 0.6 * hash2(x, tick, 10))
+					let sy: Double = v.sy(wy)
+					let up: Double = 3.0 + 4.0 * ph
+					p.addRect(mkRect(sx - 3.0 - ph * 2.0, sy - up, 2, 2))
+					p.addRect(mkRect(sx + 1.0 + ph * 2.0, sy - up, 2, 2))
+				}
+			}
+			x += 1
+		}
+		ctx.fill(p, with: .color(Color(hex: 0xC8DCF4, alpha: 0.6)))
+	}
+
+	static func drawHail(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
+		if g.hailPool.isEmpty { return }
+		var p: Path = Path()
+		var any: Bool = false
+		for s in g.hailPool where s.on {
+			if !v.visible(s.x, s.y, 1) { continue }
+			let r: Double = max(2.0, s.size * v.tp)
+			p.addRect(mkRect(v.sx(s.x) - r * 0.5, v.sy(s.y) - r * 0.5, r, r))
+			any = true
+		}
+		if !any { return }
+		ctx.fill(p, with: .color(Color(hex: 0xF0F8FF, alpha: 0.95)))
+		ctx.stroke(p, with: .color(Color(hex: 0x9AB0C8, alpha: 0.6)), lineWidth: 1)
+	}
+
+	/// Streaks of blown air (dust in dry country) and the grass bending over in the wind
+	static func drawWindFX(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
+		let wind: Double = g.wxHere.wind
+		let aw: Double = abs(wind)
+		if aw < 2.5 { return }
+		let tp: Double = v.tp
+		let dens: Double = clampD(g.settings.weatherParticles, 0.2, 1.0)
+		if aw > 5.0 {
+			let n: Int = min(48, Int((aw - 5.0) * 4.0 * dens))
+			let cell: Double = v.wTiles + 8.0
+			let x0: Double = v.left - 4.0
+			let dry: Bool = g.biomeHere == .desert || g.biomeHere == .savanna
+			var p: Path = Path()
+			for i in 0..<n {
+				let fx: Double = hash2(i, 21, 55)
+				let fy: Double = hash2(i, 22, 55)
+				let fz: Double = hash2(i, 23, 55)
+				let raw: Double = (fx * cell + g.clock * wind * (1.1 + fz)).truncatingRemainder(dividingBy: cell)
+				let wx: Double = x0 + (raw < 0 ? raw + cell : raw)
+				let wy: Double = v.top + fy * v.hTiles
+				if wy >= Double(g.world.rainTop(Int(floor(wx)))) { continue }
+				let l: Double = tp * (0.8 + 1.2 * fz) * min(1.6, aw / 10.0)
+				let sx: Double = v.sx(wx)
+				let sy: Double = floor(v.sy(wy))
+				p.addRect(mkRect(wind > 0 ? sx - l : sx, sy, l, dry ? 2 : 1))
+			}
+			ctx.fill(p, with: .color(dry ? Color(hex: 0xD8C890, alpha: 0.4) : Color.white.opacity(0.22)))
+		}
+		// grass bent over by the wind on open ground near the surface
+		let x0: Int = Int(floor(v.left))
+		let x1: Int = Int(ceil(v.left + v.wTiles))
+		let lean: Double = clampD(wind / 14.0, -1, 1) * 0.3
+		var blades: Path = Path()
+		var any: Bool = false
+		for x in x0...x1 {
+			let top: Int = g.world.rainTop(x)
+			if top <= 0 || !v.visible(Double(x), Double(top), 1) { continue }
+			let t: Tile = g.world.tile(x, top)
+			if t != .grass && t != .dryGrass && t != .jungleGrass && t != .mossGrass { continue }
+			let sx: Double = v.sx(Double(x))
+			let sy: Double = v.sy(Double(top))
+			for k in 0..<2 {
+				let bx: Double = sx + tp * (0.25 + 0.5 * Double(k))
+				let sway: Double = (lean + sin(g.clock * 3.1 + Double(x) * 0.9 + Double(k)) * 0.06 * g.weather.gust) * tp
+				blades.move(to: mkPoint(bx, sy + 1.0))
+				blades.addLine(to: mkPoint(bx + sway, sy - tp * 0.26))
+				any = true
+			}
+		}
+		if any { ctx.stroke(blades, with: .color(Color(hex: 0x6EB848, alpha: 0.9)), lineWidth: max(1.5, tp * 0.07)) }
+	}
+
+	/// The tornado: a swaying funnel of grey bands that turn as they rise, debris flung round it and
+	/// a skirt of dust at its foot. While forming it only reaches part of the way down.
+	static func drawTornado(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
+		guard let e = g.weather.tornado, g.world.dim == .overworld, g.settings.weatherOn else { return }
+		let fn: Double = e.funnel
+		if fn <= 0.02 { return }
+		let ground: Double = g.tornadoGround > 0 ? g.tornadoGround : Double(g.world.surfaceY(Int(floor(e.x))))
+		let cloudBase: Double = ground - 32.0
+		if !v.visible(e.x, ground - 22.0, 40) { return }
+		let tp: Double = v.tp
+		let px: Double = tp / 8.0
+		let reach: Double = e.phase == 0 ? cloudBase + (ground - cloudBase) * min(1.0, fn / 0.55) * 0.75 : ground
+		var dark: Path = Path()
+		var light: Path = Path()
+		var y: Double = cloudBase
+		let bandH: Double = 0.5
+		while y < reach {
+			let hf: Double = (ground - y) / (ground - cloudBase)
+			let w: Double = (0.6 + 6.8 * pow(hf, 1.35)) * (0.5 + 0.5 * fn)
+			let sway: Double = sin(g.clock * 1.6 + hf * 3.0) * (0.4 + hf * 1.6)
+			let cx: Double = e.x + sway
+			let sx: Double = floor(v.sx(cx - w) / px) * px
+			let ex: Double = floor(v.sx(cx + w) / px) * px
+			let sy: Double = floor(v.sy(y) / px) * px
+			let stripe: Int = Int(floor(hf * 30.0 - g.clock * 5.0)) & 3
+			let r: CGRect = mkRect(sx, sy, max(px, ex - sx), bandH * tp + 1.0)
+			if stripe == 0 { light.addRect(r) } else { dark.addRect(r) }
+			y += bandH
+		}
+		let a: Double = min(1.0, fn * 1.2)
+		ctx.fill(dark, with: .color(Color(hex: 0x40434A, alpha: 0.95 * a)))
+		ctx.fill(light, with: .color(Color(hex: 0x5E626B, alpha: 0.95 * a)))
+		if e.phase == 0 { return }
+		// debris whirling round it, and dust at the foot
+		var deb: Path = Path()
+		var leaf: Path = Path()
+		for i in 0..<30 {
+			let hf: Double = hash2(i, 61, 7) * 0.7
+			let wy: Double = ground - hf * (ground - cloudBase)
+			let w: Double = (0.6 + 6.8 * pow(hf, 1.35)) * 1.2 + 0.7
+			let ang: Double = g.clock * (3.0 + hash2(i, 62, 7) * 2.0) + Double(i) * 1.7
+			let wx: Double = e.x + cos(ang) * w + sin(g.clock * 1.6 + hf * 3.0) * (0.4 + hf * 1.6)
+			let s: Double = max(2.0, tp * (0.12 + 0.12 * hash2(i, 63, 7)))
+			let r: CGRect = mkRect(v.sx(wx), v.sy(wy), s, s)
+			if i % 3 == 0 { leaf.addRect(r) } else { deb.addRect(r) }
+		}
+		ctx.fill(deb, with: .color(Color(hex: 0x6A5A44, alpha: 0.9 * a)))
+		ctx.fill(leaf, with: .color(Color(hex: 0x4E7A3A, alpha: 0.9 * a)))
+		var dust: Path = Path()
+		for k in 0..<5 {
+			let off: Double = (Double(k) - 2.0) * 1.6 + sin(g.clock * 2.0 + Double(k)) * 0.5
+			let rw: Double = (2.2 + hash2(k, 64, 7) * 1.4) * tp
+			let rh: Double = rw * 0.45
+			dust.addEllipse(in: mkRect(v.sx(e.x + off) - rw * 0.5, v.sy(ground) - rh * 0.9, rw, rh))
+		}
+		ctx.fill(dust, with: .color(Color(hex: 0x8A7A60, alpha: 0.45 * a)))
+	}
+
+	/// Storm waves along the open sea's surface (a hurricane or a strong wind), with foam on the crests
+	static func drawWaves(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
+		if g.world.dim != .overworld || !g.settings.weatherOn { return }
+		let aw: Double = abs(g.weather.wind)
+		let rough: Double = max(g.wxHere.hurricane, clampD((aw - 6.0) / 10.0, 0, 1) * 0.6)
+		if rough < 0.05 { return }
+		let sea: Int = WorldGen.sea
+		if Double(sea) < v.top - 3.0 || Double(sea) > v.top + v.hTiles + 3.0 { return }
+		let tp: Double = v.tp
+		let dir: Double = g.weather.wind >= 0 ? 1 : -1
+		var body: Path = Path()
+		var foam: Path = Path()
+		let x0: Int = Int(floor(v.left))
+		let x1: Int = Int(ceil(v.left + v.wTiles))
+		for x in x0...x1 {
+			// the water's surface at sea level, or a block or two above it where a surge has come in
+			var top: Int = -1
+			for y in (sea - 2)...sea where g.world.tile(x, y) == .water && g.world.tile(x, y - 1) == .air {
+				top = y
+				break
+			}
+			if top < 0 { continue }
+			let sy: Double = v.sy(Double(top))
+			let ph: Double = Double(x) * 0.42 - g.clock * 2.6 * dir
+			let s: Double = sin(ph)
+			let hgt: Double = floor(rough * 1.6 * (0.55 + 0.45 * s) * tp / 2.0) * 2.0
+			let sx: Double = v.sx(Double(x))
+			body.addRect(mkRect(sx, sy - hgt, tp + 0.5, hgt))
+			if s > 0.55 { foam.addRect(mkRect(sx, sy - hgt - 2.0, tp + 0.5, 3.0)) }
+		}
+		ctx.fill(body, with: .color(Color(hex: artGrade(0x3B6FC8), alpha: 0.78)))
+		ctx.fill(foam, with: .color(Color.white.opacity(0.75)))
+	}
+
+	/// Lightning (drawn over the darkness, so it lights up the night) and the warning glow where a
+	/// strike is about to land
+	static func drawBolts(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
+		let tp: Double = v.tp
+		if let m = g.strikeMark {
+			let k: Double = clampD(1.0 - m.t / max(0.01, m.total), 0, 1)
+			let pulse: Double = 0.5 + 0.5 * sin(g.clock * 18.0)
+			let a: Double = (0.25 + 0.5 * k) * (g.settings.reduceFlashes ? 0.7 : (0.6 + 0.4 * pulse))
+			let cx: Double = v.sx(m.x)
+			let cy: Double = v.sy(m.y)
+			fillRect(&ctx, mkRect(cx - tp * 0.15, cy - tp * 6.0, tp * 0.3, tp * 6.0), Color(hex: 0xCFE4FF, alpha: a * 0.35))
+			fillOval(&ctx, mkRect(cx - tp * 1.2, cy - tp * 0.4, tp * 2.4, tp * 0.8), Color(hex: 0xCFE4FF, alpha: a * 0.6))
+		}
+		if g.bolts.isEmpty { return }
+		let soft: Bool = g.settings.reduceFlashes
+		for b in g.bolts {
+			let k: Double = clampD(b.life / b.maxLife, 0, 1)
+			// a double flicker (steady when flashes are turned down)
+			let flick: Double = soft ? 0.8 : ((b.life > b.maxLife * 0.55 || b.life < b.maxLife * 0.3) ? 1.0 : 0.45)
+			var main: Path = Path()
+			for (i, p) in b.pts.enumerated() {
+				let pt: CGPoint = mkPoint(v.sx(p.0), v.sy(p.1))
+				if i == 0 { main.move(to: pt) } else { main.addLine(to: pt) }
+			}
+			var forks: Path = Path()
+			for f in b.forks {
+				for (i, p) in f.enumerated() {
+					let pt: CGPoint = mkPoint(v.sx(p.0), v.sy(p.1))
+					if i == 0 { forks.move(to: pt) } else { forks.addLine(to: pt) }
+				}
+			}
+			ctx.stroke(main, with: .color(Color(hex: 0x9EC0FF, alpha: 0.35 * k * flick)), lineWidth: max(4.0, tp * 0.45))
+			ctx.stroke(main, with: .color(Color.white.opacity(k * flick)), lineWidth: 2.5)
+			ctx.stroke(forks, with: .color(Color(hex: 0xDDE8FF, alpha: 0.8 * k * flick)), lineWidth: 1.5)
+		}
+	}
+
+	/// The air itself: a whiteout in a blizzard, grey murk in heavy rain, the dark under a tornado,
+	/// frost creeping in at the edges when the player is freezing, and lightning's flash
+	static func drawWeatherOverlay(_ ctx: inout GraphicsContext, _ W: Double, _ H: Double, _ g: Game, _ v: View2D) {
+		if g.world.dim != .overworld { return }
+		let L: LocalWeather = g.wxHere
+		let full: CGRect = mkRect(0, 0, W, H)
+		// heavy cloud dims the daylight evenly over everything (a storm by day is dark)
+		let dim: Double = clampD((L.cloud - 0.55) * 2.2, 0, 1) * g.dayFactor
+		if g.settings.weatherOn && dim > 0.02 { fillRect(&ctx, full, Color(hex: 0x0A0E16, alpha: 0.22 * dim)) }
+		if g.settings.weatherOn && g.shelterLevel <= 1 {
+			if L.fog > 0.02 {
+				if L.snow {
+					fillRect(&ctx, full, Color(hex: 0xDDE5EE, alpha: min(0.55, L.fog * 0.6)))
+				} else {
+					fillRect(&ctx, full, Color(hex: 0x7A8696, alpha: min(0.25, L.fog * 0.35)))
+				}
+			}
+			if L.tornado > 0.05 { fillRect(&ctx, full, Color(hex: 0x1E2228, alpha: 0.22 * L.tornado)) }
+			// blowing dust in dry country
+			let aw: Double = abs(L.wind)
+			let b: Biome = g.biomeHere
+			if aw > 6 && (b == .desert || b == .savanna) {
+				fillRect(&ctx, full, Color(hex: 0xD2B47A, alpha: 0.3 * clampD((aw - 6.0) / 8.0, 0, 1) * max(0.35, g.dayFactor)))
+			}
+		}
+		if g.bodyCold > 0.3 { edgeVignette(&ctx, W, H, 0xCFEFFF, (g.bodyCold - 0.3) * 0.7) }
+		if g.skyFlash > 0.01 {
+			let inside: Double = g.shelterLevel >= 3 ? 0.3 : 1.0
+			let a: Double = g.skyFlash * (g.settings.reduceFlashes ? 0.25 : 0.38) * inside
+			fillRect(&ctx, full, Color(hex: 0xEEF4FF, alpha: a))
+		}
+	}
+}
+
+// MARK: - Weather devices: station, siren, lightning rod, turbine, rain barrels, vane, heater
+// Every device reads the simulation itself (a station's forecast is the simulation's own plan, a vane
+// points where the wind actually blows, a barrel fills with the rain that actually falls on it). Their
+// places come from a per-chunk list that is rebuilt only when the chunk changes.
+
+struct DeviceSpot {
+	var x: Int
+	var y: Int
+	var t: Tile
+}
+
+/// Blocks built to stand up to storms: the wind never moves them, and walls or a roof of them make a
+/// storm shelter
+func isStormproof(_ t: Tile) -> Bool {
+	switch t {
+	case .stormBrick, .sandbag, .shutterClosed, .shingles: return true
+	default: return false
+	}
+}
+
+func isWeatherDevice(_ t: Tile) -> Bool {
+	switch t {
+	case .weatherStation, .dopplerStation, .stormSiren, .lightningRod, .windTurbine, .rainBarrel, .rainCistern, .weatherVane: return true
+	default: return false
+	}
+}
+
+/// How far a lightning rod draws strikes (blocks to either side)
+let rodReach: Double = 14.0
+/// How far a turbine's charge reaches a Doppler station
+let turbineReach: Double = 10.0
+
+extension World {
+	/// Re-reads a chunk's weather facts if it has changed since: per column, the row rain first stops
+	/// at (anything solid, glass, leaves, platforms, water), and where its weather devices are
+	func weatherScan(_ c: Chunk) {
+		if c.wxRev == c.rev && c.wxTop.count == chunkW { return }
+		c.wxRev = c.rev
+		if c.wxTop.count != chunkW { c.wxTop = [Int](repeating: c.H, count: chunkW) }
+		c.wxDev.removeAll(keepingCapacity: true)
+		let H: Int = c.H
+		for lx in 0..<chunkW {
+			let base: Int = lx * H
+			var top: Int = H
+			var y: Int = 0
+			while y < H {
+				let raw: Int = Int(c.tiles[base + y])
+				if raw != 0 {
+					if top == H && Tile.rainStopTable[raw] { top = y }
+					if Tile.deviceTable[raw] { c.wxDev.append(DeviceSpot(x: c.x0 + lx, y: y, t: Tile.make(UInt8(raw)))) }
+				}
+				y += 1
+			}
+			c.wxTop[lx] = c.hasSky ? top : 0
+		}
+	}
+
+	/// The first row rain (or hail, or lightning) stops at in column x; 0 where nothing is loaded
+	func rainTop(_ x: Int) -> Int {
+		let cx: Int = floorDiv(x, chunkW)
+		guard let c = chunk(cx) else { return 0 }
+		weatherScan(c)
+		return c.wxTop[x - cx * chunkW]
+	}
+
+	/// Weather devices of the given kinds between columns x0 and x1 (loaded chunks only)
+	func devices(_ x0: Int, _ x1: Int, _ kinds: [Tile]) -> [DeviceSpot] {
+		var out: [DeviceSpot] = []
+		let c0: Int = floorDiv(x0, chunkW)
+		let c1: Int = floorDiv(x1, chunkW)
+		if c1 < c0 { return out }
+		for cx in c0...c1 {
+			guard let c = chunks[cx] else { continue }
+			weatherScan(c)
+			for d in c.wxDev where d.x >= x0 && d.x <= x1 && kinds.contains(d.t) { out.append(d) }
+		}
+		return out
+	}
+}
+
+/// What a weather station's screen shows, a line at a time
+struct StationLine {
+	var kind: WeatherKind?
+	var snow: Bool = false
+	var text: String
+	var sub: String = ""
+	var color: UInt32 = 0xE8F0E8
+}
+
+func roughWhen(_ s: Double) -> String {
+	if s < 90 { return "soon" }
+	if s < 300 { return "in a few minutes" }
+	if s < 600 { return "later on" }
+	return "much later"
+}
+
+func minutesText(_ s: Double) -> String {
+	let m: Int = Int((s / 60.0).rounded())
+	if m <= 0 { return "under a minute" }
+	return m == 1 ? "about 1 min" : joinText("about ", String(m), " min")
+}
+
+func windWords(_ w: Double) -> String {
+	let a: Double = abs(w)
+	let from: String = w > 0 ? "west" : "east"
+	let speed: String = String(Int(a.rounded()))
+	var how: String = "calm"
+	if a >= 13 { how = "gale" } else if a >= 8 { how = "strong" } else if a >= 4 { how = "breezy" } else if a >= 1.5 { how = "light" }
+	if a < 0.8 { return "Calm" }
+	return joinText("Wind ", speed, " blocks/s from the ", from, " (", how, ")")
+}
+
+extension Game {
+	/// The nearest lightning rod whose reach covers column x
+	func rodCovering(_ x: Double) -> DeviceSpot? {
+		let ix: Int = Int(floor(x))
+		let r: Int = Int(rodReach)
+		var best: DeviceSpot? = nil
+		var bd: Int = Int.max
+		for d in world.devices(ix - r, ix + r, [.lightningRod]) {
+			let dd: Int = abs(d.x - ix)
+			// a rod buried under a roof is no use: it has to stand in the open
+			if d.y >= world.rainTop(d.x) && d.y > 0 { continue }
+			if dd < bd {
+				bd = dd
+				best = d
+			}
+		}
+		return best
+	}
+
+	func deviceKey(_ d: DeviceSpot) -> String { return joinText(String(d.x), ",", String(d.y)) }
+
+	/// Rain barrels fill with the rain that falls on them, turbines store the wind's energy (and run
+	/// Doppler stations near them), and sirens sound when a storm worth warning of is near
+	func updateWeatherDevices(_ dt: Double) {
+		wxDevT -= dt
+		if wxDevT > 0 { return }
+		let step: Double = 0.5 - wxDevT
+		wxDevT = 0.5
+		sirenLevel = 0
+		if world.dim != .overworld { return }
+		let px: Int = Int(floor(pb.x))
+		let list: [DeviceSpot] = world.devices(px - 96, px + 96, [.rainBarrel, .rainCistern, .windTurbine, .stormSiren, .dopplerStation])
+		if list.isEmpty { return }
+		let warn: Bool = settings.weatherOn && sirenWorthy()
+		for d in list {
+			let k: String = deviceKey(d)
+			switch d.t {
+			case .rainBarrel, .rainCistern:
+				let cap: Double = d.t == .rainBarrel ? 8 : 32
+				let open: Bool = d.y < world.rainTop(d.x)
+				let L: LocalWeather = weatherAt(Double(d.x) + 0.5, Double(d.y))
+				if open && L.precip > 0.02 {
+					let rate: Double = (L.snow ? 0.012 : 0.04) * (d.t == .rainCistern ? 2.0 : 1.0)
+					weather.store[k] = min(cap, (weather.store[k] ?? 0) + L.precip * rate * step)
+				}
+			case .windTurbine:
+				let open: Bool = d.y - 1 < world.rainTop(d.x) || world.tile(d.x, d.y - 1) == .air
+				if open && settings.weatherOn {
+					// like a real turbine it needs some wind before it turns (2 blocks a second)
+					let w: Double = abs(weatherAt(Double(d.x) + 0.5, Double(d.y)).wind)
+					weather.store[k] = min(100, (weather.store[k] ?? 0) + max(0, w - 2.0) * 0.35 * step)
+				}
+			case .dopplerStation:
+				// the radar draws a little charge from a turbine close by
+				if let t = poweringTurbine(d) {
+					let tk: String = deviceKey(t)
+					weather.store[tk] = max(0, (weather.store[tk] ?? 0) - 0.1 * step)
+				}
+			case .stormSiren:
+				// sounds by itself for a dangerous storm, or whenever a pulse wire through it is on
+				if warn || pulseOnAt(d.x, d.y) {
+					let dist: Double = abs(Double(d.x) - pb.x)
+					sirenLevel = max(sirenLevel, clampD(1.0 - dist / 64.0, 0, 1))
+				}
+			default:
+				break
+			}
+		}
+	}
+
+	/// Storms a siren sounds for: a tornado forming or on the ground, a hurricane, a blizzard
+	func sirenWorthy() -> Bool {
+		if let e = weather.tornado, e.phase < 2, abs(e.x - pb.x) < 200 { return true }
+		if let h = weather.hurricane, h.stage != .clearing { return true }
+		if weather.kind == .blizzard && settings.allowBlizzard && wxHere.snow { return true }
+		return false
+	}
+
+	/// A turbine with charge to spare close enough to run a Doppler station
+	func poweringTurbine(_ d: DeviceSpot) -> DeviceSpot? {
+		let r: Int = Int(turbineReach)
+		for t in world.devices(d.x - r, d.x + r, [.windTurbine]) where abs(t.y - d.y) <= r {
+			if (weather.store[deviceKey(t)] ?? 0) > 2 { return t }
+		}
+		return nil
+	}
+
+	/// Tapping a weather device
+	func useWeatherDevice(_ tx: Int, _ ty: Int, _ t: Tile) {
+		let d = DeviceSpot(x: tx, y: ty, t: t)
+		let k: String = deviceKey(d)
+		switch t {
+		case .weatherStation, .dopplerStation:
+			stationAt = d
+			showWeather = true
+			sfx(.tap, 0.6)
+			bumpHUD()
+		case .stormSiren:
+			let on: Bool = settings.weatherOn && sirenWorthy()
+			say(on ? "The siren is sounding: a dangerous storm is near. Take shelter!" : "Storm siren: it sounds by itself when a tornado, hurricane or blizzard comes near.", 3.0)
+		case .lightningRod:
+			let open: Bool = ty < world.rainTop(tx)
+			say(open ? "Lightning rod: strikes within 14 blocks either side come down here, harmlessly." : "This rod is under cover. A lightning rod only works out in the open, on top of things.", 3.0)
+		case .windTurbine:
+			let charge: Double = weather.store[k] ?? 0
+			if let st = heldStack, case .gun(.stormRod) = st.item, charge >= 50 {
+				var n: Int = 0
+				for i in 0..<inv.slots.count {
+					if var s = inv.slots[i], case .gun(.stormRod) = s.item, s.extra < GunType.stormRod.magazine {
+						s.extra = GunType.stormRod.magazine
+						inv.slots[i] = s
+						n += 1
+					}
+				}
+				if n > 0 {
+					weather.store[k] = charge - 50
+					sfx(.zap, 0.6)
+					say("The turbine's charge fills your storm rod.", 2.0)
+					bumpHUD()
+					return
+				}
+			}
+			let w: Double = abs(weatherAt(Double(tx) + 0.5, Double(ty)).wind)
+			say(joinText("Wind turbine: ", String(Int(charge.rounded())), "% charged (", w > 0.5 ? joinText("turning at ", String(Int(w.rounded())), " blocks/s of wind") : "becalmed", "). Runs a Doppler station within 10 blocks; tap it holding a storm rod to recharge the rod."), 3.5)
+		case .rainBarrel, .rainCistern:
+			let cap: Double = t == .rainBarrel ? 8 : 32
+			let have: Double = weather.store[k] ?? 0
+			if have >= 1.0 {
+				weather.store[k] = have - 1.0
+				giveItem(.gadget(.waterFlask), 1)
+				sfx(.splash, 0.5)
+				say(joinText("You fill a flask. ", String(Int(have - 1.0)), " of ", String(Int(cap)), " left."), 2.0)
+			} else {
+				say(joinText(t == .rainBarrel ? "Rain barrel" : "Rain cistern", ": ", String(format: "%.1f", have), " of ", String(Int(cap)), ". It fills when rain falls on it."), 2.5)
+			}
+		case .weatherVane:
+			let w: Double = weatherAt(Double(tx) + 0.5, Double(ty)).wind
+			say(joinText("Weather vane: ", windWords(w), "."), 2.5)
+		case .shutterClosed, .shutterOpen:
+			world.set(tx, ty, t == .shutterClosed ? .shutterOpen : .shutterClosed)
+			sfx(.door, 0.6)
+			light.valid = false
+		case .heater:
+			say("Heater: keeps you warm when you stand close to it, without the smoke of a fire.", 2.5)
+		default:
+			break
+		}
+	}
+
+	/// What the station that was tapped shows (a Doppler station near a charged turbine shows more,
+	/// and more exactly)
+	func stationReport() -> [StationLine] {
+		var out: [StationLine] = []
+		guard let st = stationAt else { return out }
+		let doppler: Bool = st.t == .dopplerStation
+		let powered: Bool = doppler && poweringTurbine(st) != nil
+		if !settings.weatherOn {
+			out.append(StationLine(kind: .clear, text: "The weather is switched off", sub: "Turn it on in Settings (WEATHER) to see forecasts."))
+			return out
+		}
+		let L: LocalWeather = weatherAt(Double(st.x) + 0.5, Double(st.y))
+		let fc: [ForecastLine] = forecast()
+		let now: ForecastLine = fc[0]
+		out.append(StationLine(kind: weather.kind, snow: L.snow, text: joinText("Now: ", weatherLabel(weather.kind, snow: L.snow)), sub: joinText(powered ? minutesText(now.dur) : roughWhen(now.dur), " more"), color: 0xFFFFFF))
+		let p: Double = pressureNow()
+		let trend: Double = pressureNext() - p
+		let tr: String = trend < -6 ? "falling fast" : (trend < -2 ? "falling" : (trend > 2 ? "rising" : "steady"))
+		let temp: String = L.chill > 0.8 ? "freezing" : (L.chill > 0.5 ? "cold" : (L.chill > 0.25 ? "cool" : (L.hot ? "hot" : "mild")))
+		out.append(StationLine(text: windWords(L.wind), sub: joinText("Pressure ", String(Int(p.rounded())), " hPa, ", tr, " · ", temp)))
+		// warnings from the simulation's events
+		if let e = weather.tornado {
+			let d: Double = e.x - pb.x
+			var line: String = joinText(e.phase == 0 ? "TORNADO FORMING " : "TORNADO ", String(Int(abs(d).rounded())), " blocks ", d > 0 ? "east" : "west")
+			var sub: String = joinText("Moving ", e.dir > 0 ? "east" : "west")
+			if powered {
+				let coming: Bool = (d > 0) != (e.dir > 0)
+				if coming && e.phase <= 1 {
+					let eta: Double = abs(d) / max(0.5, e.speed) + (e.phase == 0 ? max(0, e.warnDur - e.t) : 0)
+					sub = joinText(sub, " · reaches you in ", minutesText(eta))
+				} else {
+					sub = joinText(sub, " · moving away from you")
+				}
+				line = joinText(line, String(format: " · strength %d", Int((e.strength * 5.0).rounded())))
+			}
+			out.append(StationLine(kind: .tornado, text: line, sub: sub, color: 0xFF7060))
+		}
+		if let h = weather.hurricane {
+			let sub: String = powered ? joinText("Over in ", minutesText(h.timeLeft()), " · sea to the ", h.side > 0 ? "east" : "west") : "Stay off the coast and out of boats"
+			out.append(StationLine(kind: .hurricane, text: joinText("HURRICANE: ", h.stage.name), sub: sub, color: 0xFF7060))
+		}
+		if doppler && !powered { out.append(StationLine(text: "Radar unpowered", sub: "Put a charged wind turbine within 10 blocks for the full forecast", color: 0xFFC060)) }
+		// the rain that is on its way (radar)
+		if powered && L.precip < 0.05 && weather.precip > 0.15 {
+			let up: Double = weather.wind >= 0 ? -1 : 1
+			var dx: Double = 8
+			while dx <= 240 {
+				if coverAt(pb.x + up * dx) > 0.4 {
+					let speed: Double = max(0.3, abs(weather.wind) * 0.55)
+					out.append(StationLine(text: joinText("Rain ", String(Int(dx)), " blocks upwind"), sub: joinText("Reaches you in ", minutesText(dx / speed))))
+					break
+				}
+				dx += 8
+			}
+		}
+		// the plan
+		let n: Int = powered ? fc.count : min(3, fc.count)
+		if n > 1 {
+			for i in 1..<n {
+				let f: ForecastLine = fc[i]
+				let when: String = powered ? joinText("In ", minutesText(f.startsIn), ", for ", minutesText(f.dur)) : roughWhen(f.startsIn).capitalized
+				let warnCol: UInt32 = f.kind.severe ? 0xFFB060 : 0xE8F0E8
+				out.append(StationLine(kind: f.kind, snow: L.snow, text: weatherLabel(f.kind, snow: L.snow), sub: when, color: warnCol))
+			}
+		}
+		// devices close by
+		let rods: Int = world.devices(st.x - 40, st.x + 40, [.lightningRod]).count
+		let sirens: Int = world.devices(st.x - 64, st.x + 64, [.stormSiren]).count
+		out.append(StationLine(text: joinText("Lightning rods nearby: ", String(rods), " · sirens: ", String(sirens)), sub: doppler ? "Doppler station" : "Weather station (craft a Doppler station for exact times)"))
+		return out
+	}
+
+	/// A barometer in hand: less than a station tells, but always with you
+	func barometerReading() -> String {
+		if !settings.weatherOn { return "Barometer: steady (no weather)" }
+		let p: Double = pressureNow()
+		let trend: Double = pressureNext() - p
+		var look: String = "fair"
+		if trend < -6 || p < 995 { look = "storm likely" } else if trend < -2 { look = "unsettled" } else if trend > 2 { look = "clearing" }
+		let arrow: String = trend < -2 ? "▼" : (trend > 2 ? "▲" : "▶")
+		return joinText("Barometer ", String(Int(p.rounded())), " hPa ", arrow, " ", look)
+	}
+
+	/// Pouring a water flask: a crop grows a stage, a fire goes out, a burning player is doused
+	func useWaterFlask(_ pressed: Bool) {
+		if !pressed || useCD > 0 { return }
+		let tx: Int = Int(floor(aimX))
+		let ty: Int = Int(floor(aimY))
+		func spend() {
+			if !isCreative { inv.removeAt(sel, 1) }
+			useCD = 0.4
+			swingT = 0.18
+			sfx(.splash, 0.5)
+			spawnParticles(aimX, aimY, 0x8DBBFF, 8, 2.5, 0.4, 14)
+			bumpHUD()
+		}
+		if inReach(aimX, aimY) {
+			let t: Tile = world.tile(tx, ty)
+			var grown: Tile? = nil
+			switch t {
+			case .wheat1: grown = .wheat2
+			case .wheat2: grown = .wheat3
+			case .carrot1: grown = .carrot2
+			case .carrot2: grown = .carrot3
+			default: break
+			}
+			if let g = grown {
+				world.set(tx, ty, g)
+				spend()
+				return
+			}
+			if let i = fireZones.firstIndex(where: { abs($0.x - aimX) < $0.r + 0.6 && abs($0.y - aimY) < 2.5 }) {
+				fireZones.remove(at: i)
+				spawnParticles(aimX, aimY, 0xC8C8C8, 10, 2.0, 0.8, -3)
+				spend()
+				return
+			}
+		}
+		if playerBurn > 0 {
+			playerBurn = 0
+			spend()
+			return
+		}
+		say("Pour it on a young crop to help it grow, or on a fire to put it out.", 2.0)
+	}
+}
+
+extension WorldRenderer {
+	/// The moving parts of weather devices in view: turbine blades turning with the wind, the vane
+	/// pointing downwind, a siren's beacon, the water in a barrel, a station's blinking screen
+	static func drawWeatherDevices(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
+		if g.world.dim != .overworld { return }
+		let x0: Int = Int(floor(v.left)) - 2
+		let x1: Int = Int(ceil(v.left + v.wTiles)) + 2
+		let list: [DeviceSpot] = g.world.devices(x0, x1, [.windTurbine, .weatherVane, .stormSiren, .rainBarrel, .rainCistern, .weatherStation, .dopplerStation])
+		if list.isEmpty { return }
+		let tp: Double = v.tp
+		var blades: Path = Path()
+		var vane: Path = Path()
+		var water: Path = Path()
+		var glow: Path = Path()
+		var beacon: Path = Path()
+		for d in list {
+			if !v.visible(Double(d.x), Double(d.y), 3) { continue }
+			let cx: Double = v.sx(Double(d.x) + 0.5)
+			let top: Double = v.sy(Double(d.y))
+			switch d.t {
+			case .windTurbine:
+				// three blades round the hub, turning with the local wind
+				let w: Double = g.settings.weatherOn ? g.weatherAt(Double(d.x) + 0.5, Double(d.y)).wind : 0
+				let ang: Double = g.clock * clampD(w * 0.6, -9, 9)
+				let hx: Double = cx
+				let hy: Double = top + tp * 0.18
+				let len: Double = tp * 0.95
+				for k in 0..<3 {
+					let a: Double = ang + Double(k) * 2.0944
+					blades.move(to: mkPoint(hx, hy))
+					blades.addLine(to: mkPoint(hx + cos(a) * len, hy + sin(a) * len))
+				}
+			case .weatherVane:
+				let w: Double = g.settings.weatherOn ? g.weatherAt(Double(d.x) + 0.5, Double(d.y)).wind : 0
+				let s: Double = w >= 0 ? 1.0 : -1.0
+				let wob: Double = sin(g.clock * 5.0) * min(0.15, abs(w) * 0.01)
+				let y: Double = top + tp * 0.22
+				vane.move(to: mkPoint(cx - s * tp * 0.45, y + wob * tp))
+				vane.addLine(to: mkPoint(cx + s * tp * 0.45, y - wob * tp))
+				vane.move(to: mkPoint(cx + s * tp * 0.45, y))
+				vane.addLine(to: mkPoint(cx + s * tp * 0.25, y - tp * 0.15))
+				vane.move(to: mkPoint(cx + s * tp * 0.45, y))
+				vane.addLine(to: mkPoint(cx + s * tp * 0.25, y + tp * 0.15))
+			case .stormSiren:
+				if g.sirenLevel > 0.01 || (g.settings.weatherOn && g.sirenWorthy()) {
+					let on: Bool = Int(g.clock * 3.0) % 2 == 0
+					if on { beacon.addEllipse(in: mkRect(cx - tp * 0.7, top - tp * 0.5, tp * 1.4, tp * 1.0)) }
+				}
+			case .rainBarrel, .rainCistern:
+				let cap: Double = d.t == .rainBarrel ? 8 : 32
+				let f: Double = clampD((g.weather.store[g.deviceKey(d)] ?? 0) / cap, 0, 1)
+				if f > 0.02 {
+					let inner: Double = tp * 0.7
+					let h: Double = max(2.0, tp * 0.75 * f)
+					water.addRect(mkRect(cx - inner * 0.5, top + tp - h - tp * 0.05, inner, h))
+				}
+			case .weatherStation, .dopplerStation:
+				if Int(g.clock * 1.5) % 3 != 0 { glow.addRect(mkRect(cx - tp * 0.32, top + tp * 0.55, tp * 0.64, tp * 0.2)) }
+			default:
+				break
+			}
+		}
+		ctx.stroke(blades, with: .color(Color(hex: 0xF0F2F4)), lineWidth: max(2.0, tp * 0.12))
+		ctx.stroke(vane, with: .color(Color(hex: 0xD2793A)), lineWidth: max(1.5, tp * 0.08))
+		ctx.fill(water, with: .color(Color(hex: 0x3B7BE0, alpha: 0.85)))
+		ctx.fill(glow, with: .color(Color(hex: 0x70F0B0, alpha: 0.5)))
+		ctx.fill(beacon, with: .color(Color(hex: 0xFF3020, alpha: 0.45)))
+	}
+}
+
+// MARK: - Weather settings, the station's screen, the journal's weather pages
+
+/// Weather options, shared by the main settings screen and the pause menu. Every kind of weather
+/// has its own switch; the first switch turns all of it off at once.
+struct WeatherSettingsSection: View {
+	@Binding var settings: Settings
+	var onChange: () -> Void = {}
+
+	func label(_ s: String, _ v: String) -> some View {
+		Text(verbatim: joinText(s, ": ", v)).font(.pixel(12, .bold))
+	}
+
+	var freqName: String {
+		switch settings.severeFrequency {
+		case 0: return "rare"
+		case 2: return "frequent"
+		default: return "normal"
+		}
+	}
+
+	func freqButton(_ i: Int, _ title: String) -> some View {
+		SmallButton(title: title, color: settings.severeFrequency == i ? Color(hex: 0x4E8A3E) : Color(hex: 0x555555)) {
+			settings.severeFrequency = i
+			onChange()
+		}
+	}
+
+	var body: some View {
+		VStack(alignment: .leading, spacing: 6) {
+			Text("WEATHER").font(.pixel(15)).foregroundColor(Color(hex: 0xFFE066))
+			Toggle("Weather (all of it)", isOn: $settings.weatherOn)
+			if settings.weatherOn {
+				Toggle("Rain and snow", isOn: $settings.allowRain)
+				Toggle("Thunderstorms and lightning", isOn: $settings.allowThunder)
+				Toggle("Wind", isOn: $settings.allowWind)
+				Toggle("Hail", isOn: $settings.allowHail)
+				Toggle("Blizzards", isOn: $settings.allowBlizzard)
+				Toggle("Tornadoes", isOn: $settings.allowTornado)
+				Toggle("Hurricanes (near the sea)", isOn: $settings.allowHurricane)
+				Text("WEATHER DAMAGE").font(.pixel(12)).foregroundColor(Color(hex: 0xFFE066))
+				Toggle("Hurts the player", isOn: $settings.weatherHurtsPlayer)
+				Toggle("Damages blocks and buildings", isOn: $settings.weatherHurtsBlocks)
+				Toggle("Hurts creatures", isOn: $settings.weatherHurtsCreatures)
+				label("Intensity", joinText(String(Int((settings.weatherIntensity * 100.0).rounded())), "%"))
+				Slider(value: $settings.weatherIntensity, in: 0.25...1.5, step: 0.05)
+				label("Severe weather", freqName)
+				HStack(spacing: 6) {
+					freqButton(0, "RARE")
+					freqButton(1, "NORMAL")
+					freqButton(2, "FREQUENT")
+				}
+				Toggle("Weather alerts and warnings", isOn: $settings.weatherAlerts)
+				label("Rain, snow and hail drawn", joinText(String(Int((settings.weatherParticles * 100.0).rounded())), "%"))
+				Slider(value: $settings.weatherParticles, in: 0.2...1.0, step: 0.05)
+				Toggle("Gentler lightning flashes", isOn: $settings.reduceFlashes)
+			}
+			SmallButton(title: "RESET WEATHER DEFAULTS") {
+				settings.resetWeather()
+				onChange()
+			}
+		}
+		.font(.pixel(13, .bold))
+		.foregroundColor(Color.white)
+	}
+}
+
+/// How dangerous nights are, and when wiring is drawn
+struct NightSettingsSection: View {
+	@Binding var settings: Settings
+
+	func choice(_ title: String, _ on: Bool, _ act: @escaping () -> Void) -> some View {
+		SmallButton(title: title, color: on ? Color(hex: 0x4E8A3E) : Color(hex: 0x555555), action: act)
+	}
+
+	var body: some View {
+		VStack(alignment: .leading, spacing: 6) {
+			Text("NIGHTS").font(.pixel(15)).foregroundColor(Color(hex: 0xFFE066))
+			Text("How many monsters come out at night, and how quickly").font(.pixel(11, .semibold))
+			HStack(spacing: 6) {
+				choice("CALM", settings.nightDanger == 0) { settings.nightDanger = 0 }
+				choice("NORMAL", settings.nightDanger == 1) { settings.nightDanger = 1 }
+				choice("DEADLY", settings.nightDanger == 2) { settings.nightDanger = 2 }
+			}
+			Text("POWER WIRING").font(.pixel(15)).foregroundColor(Color(hex: 0xFFE066))
+			HStack(spacing: 6) {
+				choice("WHEN BUILDING", settings.showWires == 0) { settings.showWires = 0 }
+				choice("ALWAYS", settings.showWires == 1) { settings.showWires = 1 }
+				choice("FAINT", settings.showWires == 2) { settings.showWires = 2 }
+			}
+			buildingPart
+		}
+		.font(.pixel(13, .bold))
+		.foregroundColor(Color.white)
+	}
+
+	var buildingPart: some View {
+		VStack(alignment: .leading, spacing: 6) {
+			Text("BUILDINGS").font(.pixel(15)).foregroundColor(Color(hex: 0xFFE066))
+			Toggle("Structural physics", isOn: $settings.structural)
+			Text("Blocks you build need support: each holds up so much weight and reaches out so far (shown in its info). Too far out or too heavy, it cracks and falls. The land itself never falls.").font(.pixel(11, .semibold))
+			Toggle("Vehicle damage", isOn: $settings.vehicleDamage)
+			Text("Shots, blasts and crashes damage vehicles: parts crack and break off. Hold an iron bar and tap a part to mend it.").font(.pixel(11, .semibold))
+		}
+	}
+}
+
+/// A weather station's screen, read live from the simulation
+struct WeatherPanel: View {
+	@ObservedObject var game: Game
+	@ObservedObject var hud: HUDSignal
+	var body: some View {
+		let lines: [StationLine] = game.stationReport()
+		let title: String = game.stationAt?.t == .dopplerStation ? "DOPPLER STATION" : "WEATHER STATION"
+		return VStack(alignment: .leading, spacing: 8) {
+			HStack {
+				Text(verbatim: title).font(.pixel(17)).foregroundColor(Color(hex: 0x70F0B0))
+				Spacer()
+				SmallButton(title: "CLOSE", color: Color(hex: 0xA03030)) {
+					game.showWeather = false
+					game.bumpHUD()
+				}
+			}
+			ForEach(0..<lines.count, id: \.self) { i in
+				HStack(alignment: .top, spacing: 8) {
+					if let k = lines[i].kind {
+						Art.shared.weatherIcon(k, lines[i].snow).resizable().frame(width: 24, height: 24)
+					} else {
+						Color.clear.frame(width: 24, height: 24)
+					}
+					VStack(alignment: .leading, spacing: 1) {
+						Text(verbatim: lines[i].text).font(.pixel(13)).foregroundColor(Color(hex: lines[i].color))
+						if !lines[i].sub.isEmpty {
+							Text(verbatim: lines[i].sub).font(.pixel(11, .semibold)).foregroundColor(Color(hex: 0xA8C8B8))
+						}
+					}
+				}
+			}
+		}
+		.padding(16)
+		.background(PixelBox(color: Color(hex: 0x14201C)).opacity(0.96))
+		.frame(maxWidth: 560)
+		.padding(16)
+	}
+}
+
+/// The weather a player has lived through, and the notes they have made about it
+struct WeatherJournalPage: View {
+	let game: Game
+	let ink: Color
+	var body: some View {
+		let storms: [StormRecord] = game.journal.storms ?? []
+		let notes: [String] = game.journal.lore.filter { $0.hasPrefix("wx.") }
+		return VStack(alignment: .leading, spacing: 8) {
+			Text("STORMS WEATHERED").font(.pixel(13)).foregroundColor(ink)
+			if storms.isEmpty {
+				Text("None yet. Severe weather is rare; a weather station shows what is coming.").font(.pixel(12, .semibold)).foregroundColor(ink)
+			}
+			ForEach(0..<storms.count, id: \.self) { i in
+				let s: StormRecord = storms[storms.count - 1 - i]
+				let name: String = (WeatherKind(rawValue: s.kind) ?? .thunderstorm).name
+				HStack {
+					Text(verbatim: name).font(.pixel(12)).foregroundColor(ink)
+					Text(verbatim: s.note).font(.pixel(11, .semibold)).foregroundColor(Color(hex: 0x6A4A2A))
+					Spacer()
+					Text(verbatim: joinText("day ", String(s.day))).font(.pixel(11, .semibold)).foregroundColor(Color(hex: 0x6A4A2A))
+				}
+			}
+			Text("WEATHER NOTES").font(.pixel(13)).foregroundColor(ink).padding(.top, 6)
+			if notes.isEmpty {
+				Text("What you learn about lightning, wind, hail and storms is written down here as you meet them.").font(.pixel(12, .semibold)).foregroundColor(ink)
+			}
+			ForEach(0..<notes.count, id: \.self) { i in
+				VStack(alignment: .leading, spacing: 2) {
+					Text(verbatim: loreEntry(notes[i]).0).font(.pixel(12)).foregroundColor(ink)
+					Text(verbatim: loreEntry(notes[i]).1).font(.pixel(11, .semibold)).foregroundColor(Color(hex: 0x5A3A1A))
+				}
+			}
+		}
+	}
+}
+
+extension Game {
+	/// Writes a weather note into the journal the first time the player meets that kind of weather
+	func learnWeather(_ key: String) {
+		if journal.lore.contains(key) { return }
+		journal.lore.append(key)
+		if settings.weatherAlerts { floatText("New note in your journal", pb.x, pb.y - pb.h - 1.0, 0xE8D8A0) }
+	}
+
+	/// Notes worth writing down from what is happening now (checked about once a second)
+	func checkWeatherNotes() {
+		if !settings.weatherOn || world.dim != .overworld { return }
+		let L: LocalWeather = wxHere
+		if let e = weather.tornado, e.phase >= 1, abs(e.x - pb.x) < 120 { learnWeather("wx.tornado") }
+		if L.hurricane > 0.3 { learnWeather("wx.hurricane") }
+		if weather.kind == .blizzard && settings.allowBlizzard && L.snow && L.precip > 0.4 { learnWeather("wx.blizzard") }
+		if L.hail > 0.2 { learnWeather("wx.hail") }
+		if abs(L.wind) > 9 { learnWeather("wx.wind") }
+		if L.thunder > 1.0 { learnWeather("wx.lightning") }
+		if bodyCold > 0.5 { learnWeather("wx.cold") }
+	}
+
+	/// Debug: make a kind of weather begin now (an event starts with its usual warning)
+	func debugForceWeather(_ k: WeatherKind) {
+		if !settings.weatherOn {
+			say("Weather is switched off in Settings.", 2.0)
+			return
+		}
+		weather.tornado = nil
+		weather.hurricane = nil
+		weather.kind = k
+		weather.stateT = 0
+		weather.stateDur = weather.pick(k.spell)
+		weather.plan.removeAll()
+		clearWeatherFX()
+		if k == .tornado {
+			if settings.allowTornado { spawnTornado() } else { say("Tornadoes are switched off in Settings.", 2.0) }
+		}
+		if k == .hurricane {
+			if settings.allowHurricane {
+				var ctx: WeatherContext = weatherContext()
+				// debug storms come in anywhere: with no sea in reach, the "coast" is put to the east
+				if ctx.seaSide == 0 {
+					ctx.seaSide = 1
+					ctx.coastX = pb.x + 60
+				}
+				spawnHurricane(ctx)
+			} else {
+				say("Hurricanes are switched off in Settings.", 2.0)
+			}
+		}
+		if k == .hailstorm { weather.bigHail = true }
+		// the amounts jump most of the way there, so the change can be seen at once
+		let p: WeatherProfile = allowedProfile(k)
+		weather.cloud = p.cloud
+		weather.precip = p.precip * 0.8
+		weather.cover = max(p.cover, 0.6)
+		weather.thunder = p.thunder
+		weather.hail = p.hail
+		weather.chill = p.chill
+		weather.wind = p.wind * weather.windDir
+		fillPlan()
+		say(joinText("Weather: ", weatherLabel(k, snow: wxHere.snow)), 1.5)
+	}
+
+	/// Counts the monsters that hold a place right now (the same count the spawner uses)
+	func monstersAbout() -> Int {
+		var n: Int = 0
+		for m in mobs where m.hp > 0 && !m.removed && m.def.hostile && !m.kind.isPredator && !m.tame && !m.persistent && !m.isBoss && m.boat < 0 && m.lair == 0 {
+			if abs(m.b.x - pb.x) <= 72 && abs(m.b.y - pb.y) <= 56 { n += 1 }
+		}
+		return n
+	}
+
+	func spawnDebugLines() -> [String] {
+		var out: [String] = []
+		let place: String = world.dim == .umbral ? "umbral" : (Int(pb.y) - gen.col(Int(floor(pb.x))).h > 18 ? "cave" : "surface")
+		let cap: Int = monsterCap(place == "surface" ? .surface : .cave)
+		out.append(joinText(isNight ? "Night" : "Day", "  ", place, "  monsters ", String(monstersAbout()), " / ", String(cap), String(format: "  next in %.1fs", max(0, monsterSpawnCD))))
+		if !spawnLast.isEmpty { out.append(joinText("Last attempt: ", spawnLast)) }
+		let top: [(String, Int)] = spawnLog.sorted { $0.value > $1.value }.prefix(6).map { ($0.key, $0.value) }
+		for t in top { out.append(joinText("  ", t.0, " ×", String(t.1))) }
+		return out
+	}
+
+	/// Debug: makes it night and runs forty spawn attempts at once (the pacing between monsters is
+	/// skipped), then reports what came out and what stopped the rest
+	func debugSpawnTest() {
+		if world.dim == .overworld { debugSetTime(0.62) }
+		spawnLog = [:]
+		let before: Set<Int> = Set(mobs.map { $0.id })
+		for _ in 0..<40 {
+			spawnTimer = 0
+			monsterSpawnCD = 0
+			updateSpawning(0.0)
+		}
+		var made: [String: Int] = [:]
+		for m in mobs where !before.contains(m.id) && m.def.hostile { made[m.def.name, default: 0] += 1 }
+		let list: String = made.isEmpty ? "no monsters" : made.sorted { $0.value > $1.value }.map { joinText(String($0.value), " ", $0.key) }.joined(separator: ", ")
+		say(joinText("Spawn test: ", list), 4.0)
+		bumpHUD()
+	}
+
+	func debugStrikeNearby() {
+		if !settings.weatherOn || !settings.allowThunder {
+			say("Lightning is switched off in Settings.", 2.0)
+			return
+		}
+		let x: Double = pb.x + Double(facing) * 6.0
+		if let s = strikeSpot(x) { lightningStrike(s.0, s.1, rod: s.2) }
+	}
+
+	var weatherDebugLine: String {
+		let k: WeatherKind = weather.kind
+		let left: Int = Int(max(0, weather.stateDur - weather.stateT))
+		let next: String = weather.plan.first?.kind.name ?? "-"
+		return joinText(k.name, " ", String(left), "s → ", next, String(format: "  rain %.2f wind %.1f cl %.2f", weather.precip, weather.wind, weather.cloud))
+	}
+}
+
+// MARK: - Ambient life
+
+extension WorldRenderer {
+	/// Fireflies over grass on clear nights; embers drifting up through the Umbral Realm. Drawn after
+	/// the lighting so they glow in the dark. A handful of shapes, no particles.
+	static func drawAmbientLife(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
+		if g.world.dim == .umbral {
+			var path: Path = Path()
+			for i in 0..<24 {
+				let fx: Double = hash2(i, 31, 13)
+				let rise: Double = 1.2 + hash2(i, 32, 13) * 1.6
+				let span: Double = v.hTiles + 4.0
+				let wy: Double = v.top + span - 2.0 - (hash2(i, 33, 13) * span + g.clock * rise).truncatingRemainder(dividingBy: span)
+				let wx: Double = v.left + fx * v.wTiles + sin(g.clock * 0.8 + Double(i) * 1.9) * 0.8
+				let s: Double = i % 5 == 0 ? 3.0 : 2.0
+				path.addRect(mkRect(v.sx(wx), v.sy(wy), s, s))
+			}
+			ctx.fill(path, with: .color(Color(hex: 0xFF9A4A, alpha: 0.55)))
+			return
+		}
+		let tp: Double = v.tp
+		for f in fireflySpots(g, v) {
+			let x: Double = v.sx(f.0)
+			let y: Double = v.sy(f.1)
+			let blink: Double = f.2
+			fillOval(&ctx, mkRect(x - tp * 0.22, y - tp * 0.22, tp * 0.44, tp * 0.44), Color(hex: 0xE8FF8A, alpha: 0.18 * blink))
+			fillRect(&ctx, mkRect(x - 1.5, y - 1.5, 3, 3), Color(hex: 0xF4FFC0, alpha: 0.9 * blink))
+		}
+	}
+
+	/// Where the fireflies are now (x and y in blocks, and how bright): at most one for every 6 columns,
+	/// each at a place of its own in the world (it drifts a little around it, but never follows the
+	/// player), over grass on clear nights in the overworld
+	static func fireflySpots(_ g: Game, _ v: View2D) -> [(Double, Double, Double)] {
+		var out: [(Double, Double, Double)] = []
+		if g.dayFactor > 0.3 || g.weatherRain > 0.5 || g.world.dim != .overworld { return out }
+		let c0: Int = Int(floor(v.left / 6.0)) - 1
+		let c1: Int = Int(floor((v.left + v.wTiles) / 6.0)) + 1
+		for cell in c0...max(c0, c1) {
+			if hash2(cell, 20, 9) > 0.55 { continue }
+			let i: Int = cell
+			let wx: Double = Double(cell) * 6.0 + hash2(cell, 21, 9) * 6.0 + sin(g.clock * 0.4 + Double(i)) * 1.2
+			let ix: Int = Int(floor(wx))
+			let b: Biome = g.gen.col(ix).biome
+			if !(b == .forest || b == .plains || b == .swamp || b == .jungle) { continue }
+			let ground: Double = Double(g.world.surfaceY(ix))
+			let wy: Double = ground - 1.0 - hash2(i, 22, 9) * 4.0 + sin(g.clock * 0.7 + Double(i) * 1.7) * 0.6
+			if wy >= Double(g.world.skyTop(ix)) || !v.visible(wx, wy, 1) { continue }
+			let blink: Double = 0.5 + 0.5 * sin(g.clock * 2.2 + Double(i) * 1.3)
+			if blink < 0.25 { continue }
+			out.append((wx, wy, blink))
+		}
+		return out
+	}
+}
+
+// MARK: - Journal: places found, what they tell, and goals worth chasing
+
+struct JournalPlace: Codable {
+	var key: String
+	var name: String
+	var x: Int
+	var day: Int
+	var dim: Int
+}
+
+/// What the player has found and learned. Saved with the world (older saves start with an empty one).
+struct Journal: Codable {
+	var places: [JournalPlace] = []
+	/// lore entries unlocked, in the order they were found
+	var lore: [String] = []
+	var relics: Int = 0
+	/// names of things the player has crafted (for the goals list)
+	var crafted: [String] = []
+	/// storms lived through (nil in journals saved before the weather)
+	var storms: [StormRecord]? = nil
+
+	func has(_ key: String) -> Bool { return places.contains { $0.key == key } }
+	func hasKind(_ prefix: String) -> Bool { return places.contains { $0.key.hasPrefix(prefix) } }
+	func count(_ prefix: String) -> Int { return places.filter { $0.key.hasPrefix(prefix) }.count }
+}
+
+/// The story each kind of place tells, a line or two each
+func loreEntry(_ key: String) -> (String, String) {
+	switch key {
+	case "ruin.house": return ("A Ruined House", "A cellar ladder, a cold hearth, a child's carving of a bear above the door. Whoever lived here left in a hurry, and went down rather than out.")
+	case "ruin.tower": return ("A Ruined Tower", "The watch log's last entry: 'Lights under the hill again. Nobody goes down there now.'")
+	case "ruin.fort": return ("An Old Fort", "Every arrowhead in these walls points outward and down. Whatever they fought came up out of the caves.")
+	case "ruin.camp": return ("An Abandoned Camp", "Bedrolls for four, supplies for one. The tracks lead toward the mountains and do not come back.")
+	case "ruin.overgrown": return ("An Overgrown Ruin", "Roots have split a shrine stone. Its carving shows a door torn open in the sky, and a hooded figure standing in it.")
+	case "ruin.bunker": return ("A Buried Bunker", "Iron doors, rusted from the inside. Someone hoarded powder and shot for a war that never reached them.")
+	case "mine": return ("An Old Mine", "A tally scratched into a support beam stops at forty-one. Under it, in a different hand: 'The rock sings this deep.'")
+	case "grotto": return ("A Crystal Grotto", "The crystals hum when you stand still. Something set them here, and something keeps them.")
+	case "lair.bear": return ("The Bear's Den", "Claw marks ring the stones. The great bear sleeps on a seal it was set to guard, and the key to that seal sleeps with it.")
+	case "lair.rex": return ("The Bone Nest", "Ribs older than the hills. Whatever crowned itself with these bones still nests among them.")
+	case "portal": return ("The Sealed Gate", "A chamber built around a door, deep under the earth, and a key-shaped hollow worn smooth by many hands.")
+	case "umbral": return ("The Umbral Realm", "No sky, no sun, only ash and ember. The rift hums behind you. It is not the only door that was opened.")
+	case "citadel": return ("The Warden's Citadel", "Carved over the gate: HERE THE WARDEN KEEPS THE DOOR, HOLLOW SINCE THE RIFT TORE OPEN.")
+	case "sentinel": return ("The Sentinel", "It came apart into shards that still glow. It was not alive, but it was waiting, and it was told what to guard.")
+	case "warden": return ("The Hollow Warden", "There was nothing inside the armour. Its heart is warm and beats slowly. A rift forge could bind it into something worn.")
+	case "wx.lightning": return ("Notes on Lightning", "It strikes the highest thing near it: a tree top, a roof, a hill. There is a moment first, when the air crackles and your hair stands up. A copper rod standing high takes every strike within fourteen blocks safely into the ground.")
+	case "wx.wind": return ("Notes on Wind", "A strong wind carries arrows and loose things with it and leans on you as you walk. A vane shows where it blows from; a turbine stores it up.")
+	case "wx.hail": return ("Notes on Hail", "Most hail only bruises crops and flowers. Now and then it falls as big as eggs: then glass breaks and bare heads ache. A roof, or a helmet, is enough.")
+	case "wx.blizzard": return ("Notes on Blizzards", "It is the wind on you that does the harm. A fire or a heater, a roof and walls, a good coat: any of them buys time. Snow boots keep you on your feet.")
+	case "wx.cold": return ("Notes on the Cold", "Cold country, high ground and night all draw the warmth out of you, the wind and wet most of all. Stand by a fire to get it back.")
+	case "wx.tornado": return ("Notes on Tornadoes", "They grow out of the worst thunderstorms and travel with the wind. Underground, or behind reinforced walls, you will hear it pass and little more. Out in the open it will pick you up.")
+	case "wx.hurricane": return ("Notes on Hurricanes", "They come off the sea in walls of wind and rain. The calm in the middle is the eye; then the wind comes back from the other side. Sandbags hold back the sea, shutters save the windows.")
+	default: return ("", "")
+	}
+}
+
+struct JournalAim {
+	var title: String
+	var hint: String
+	var done: Bool
+}
+
+extension Game {
+	/// Goals the world offers, in roughly the order they open up. None is required; each says how to
+	/// get going on it.
+	func journalAims() -> [JournalAim] {
+		let j: Journal = journal
+		let bear: Bool = defeated.contains { $0 >= 0 && $0 < 1_000_000 }
+		let rexDown: Bool = defeated.contains { $0 >= 1_000_000 && $0 < 2_000_000 }
+		let sentinel: Bool = defeated.contains { $0 >= 6_000_000 && $0 < 8_000_000 }
+		let sigil: Bool = j.crafted.contains(Gear.wardenSigil.name) || wearing(.wardenSigil) || inv.total(.gear(.wardenSigil)) > 0
+		return [
+			JournalAim(title: "Set up a workbench", hint: "Eight planks. Chop a tree with your hands or an axe, then make planks from the logs.", done: j.crafted.contains("Workbench")),
+			JournalAim(title: "Forge iron on an anvil", hint: "Smelt iron ore in a furnace, then build an anvil (6 iron bars, 4 stone) at the workbench.", done: j.crafted.contains("Anvil")),
+			JournalAim(title: "Explore an old mine", hint: "Look for a timber headframe over a covered shaft. The treasure map marks them.", done: j.hasKind("mine:")),
+			JournalAim(title: "Find a crystal grotto", hint: "Deep underground, sometimes with a cave mouth leading down.", done: j.hasKind("grotto:")),
+			JournalAim(title: "Defeat Ursavor", hint: "The great bear's den holds the Portal Key.", done: bear),
+			JournalAim(title: "Open the sealed gate", hint: "The Portal Key opens the rift chamber far below the surface. The treasure map narrows it down.", done: portalOpened),
+			JournalAim(title: "Defeat Tyrannax", hint: "Something nests among enormous bones in the jungle.", done: rexDown),
+			JournalAim(title: "Silence a Crystal Sentinel", hint: "Each grotto has a guardian. Its shards are worth the fight.", done: sentinel),
+			JournalAim(title: "Reach the Warden's citadel", hint: "In the Umbral Realm, several hundred blocks from the rift.", done: j.has("citadel")),
+			JournalAim(title: "Defeat the Hollow Warden", hint: "Watch the ground: its strikes are marked before they land.", done: defeated.contains(WorldGen.wardenKey)),
+			JournalAim(title: "Forge the Warden's Sigil", hint: "The Warden's heart, 4 voidium bars and 4 crystal shards at a rift forge.", done: sigil),
+			JournalAim(title: "Recover relic fragments (\(min(j.relics, 10))/10)", hint: "Found in ruins, mines, grottos and with the bosses.", done: j.relics >= 10),
+		]
+	}
+
+	func discover(_ key: String, _ name: String, _ x: Int, lore: String) {
+		if journal.has(key) { return }
+		journal.places.append(JournalPlace(key: key, name: name, x: x, day: dayCount, dim: world.dim.rawValue))
+		var line: String = "Discovered: " + name + "."
+		if !lore.isEmpty && !journal.lore.contains(lore) {
+			journal.lore.append(lore)
+			line += " (New journal entry)"
+		}
+		say(line, 3.5)
+		sfx(.discovery, 0.8)
+		spawnParticles(pb.x, pb.y - pb.h - 0.4, 0xFFE070, 10, 2.5, 0.8, -3)
+		bumpHUD()
+	}
+
+	func addLore(_ key: String) {
+		if !journal.lore.contains(key) { journal.lore.append(key) }
+	}
+
+	/// Checks twice a second whether the player has walked into a place worth noting
+	func updateDiscoveries(_ dt: Double) {
+		discoverT -= dt
+		if discoverT > 0 || dead { return }
+		discoverT = 0.5
+		let px: Int = Int(floor(pb.x))
+		let py: Double = pb.y
+		if world.dim == .umbral {
+			if !journal.has("umbral") { discover("umbral", "The Umbral Realm", px, lore: "umbral") }
+			if let c = gen.citadel, abs(px - c.x) < 42 && abs(py - Double(c.floor)) < 14 {
+				discover("citadel", "The Warden's Citadel", c.x, lore: "citadel")
+			}
+			return
+		}
+		if world.dim != .overworld { return }
+		for r in gen.rareSites(overlapping: px - 20, px + 20) where abs(px - r.x) < 14 && abs(py - Double(gen.col(r.x).h)) < 14 {
+			let k: String = "\(r.kind)"
+			discover("ruin:\(r.cell)", rareName(r.kind), r.x, lore: "ruin." + k)
+		}
+		for m in gen.mineSites(overlapping: px - 6, px + 6) where px >= m.x - 3 && px <= m.x + 5 && py > Double(m.ground - 6) && py < Double(m.bottom + 2) {
+			discover("mine:\(m.cell)", "Old Mine", m.x, lore: "mine")
+		}
+		for gs in gen.grottoSites(overlapping: px - 2, px + 2) where abs(px - gs.x) < gs.rx && abs(py - Double(gs.floorY)) < Double(gs.ry + 2) {
+			discover("grotto:\(gs.cell)", "Crystal Grotto", gs.x, lore: "grotto")
+		}
+		for L in gen.lairCenters(near: px) where abs(px - L.cx) < 40 {
+			discover("lair:\(L.kind):\(L.k)", L.kind == .bear ? "The Bear's Den" : "The Bone Nest", L.cx, lore: L.kind == .bear ? "lair.bear" : "lair.rex")
+		}
+		if abs(px - gen.portalX) < 12 && abs(py - Double(gen.portalY)) < 10 {
+			discover("portal", "The Sealed Gate", gen.portalX, lore: "portal")
+		}
+	}
+}
+
+// MARK: - Animal life: herds, rest, water, predators and prey
+
+/// Animals that predators hunt
+func isPrey(_ k: MobKind) -> Bool {
+	switch k {
+	case .pig, .cow, .sheep, .chicken, .giraffe, .frog: return true
+	default: return false
+	}
+}
+
+extension Game {
+	/// Herding, sleeping at night, walking to water to drink and running from hunting predators. It
+	/// looks around about once a second (not every frame) and uses the creature grid for neighbours.
+	/// Returns true when it moved the animal this frame (the caller then skips plain wandering).
+	func animalLife(_ m: Mob, _ dt: Double) -> Bool {
+		if m.poseT > 0 { m.poseT -= dt }
+		if m.drinkT > 0 { m.drinkT -= dt }
+		m.thinkT -= dt
+		if m.thinkT <= 0 {
+			m.thinkT = Double.random(in: 0.8...1.4)
+			// a hunting predator close by: run
+			for o in mobsNear(m.b.x - 10, m.b.x + 10) where o.hp > 0 && o !== m && o.preyID != 0 && !o.tame {
+				if abs(o.b.x - m.b.x) < 10 && abs(o.b.y - m.b.y) < 4 {
+					m.t2 = 3.0
+					m.tx = o.b.x
+					m.goal = 0
+					return false
+				}
+			}
+			// in a downpour, hail or a gale, animals out in the open head for cover (a tree, a roof)
+			if m.goal == 0 && world.dim == .overworld && settings.weatherOn && abs(m.b.x - pb.x) < 60 {
+				let bad: Bool = precipAt(m.b.x) > 0.55 || wxHere.hail > 0.2 || abs(wxHere.wind) > 11 || weather.tornado != nil
+				if bad && rainReaches(m.b.x, m.b.y, m.b.h), let cx = coverNear(m, 14) {
+					m.goal = 3
+					m.goalX = cx
+				}
+			}
+			// the herd and the water hole wait for daylight; at night animals settle where they are
+			if m.goal == 0 && !(isNight && world.dim == .overworld) {
+				if m.drinkT <= 0 && Double.random(in: 0...1) < 0.15, let wx = waterNear(m, 12) {
+					m.goal = 1
+					m.goalX = wx
+				} else if Double.random(in: 0...1) < 0.3 {
+					// drift back toward the rest of the herd
+					var sum: Double = 0
+					var n: Int = 0
+					for o in mobsNear(m.b.x - 18, m.b.x + 18) where o.kind == m.kind && o !== m && o.hp > 0 && !o.tame {
+						sum += o.b.x
+						n += 1
+					}
+					if n > 0 {
+						let cx: Double = sum / Double(n)
+						if abs(cx - m.b.x) > 7 { m.goal = 2; m.goalX = cx }
+					}
+				}
+			}
+		}
+		if m.goal != 0 {
+			let dx: Double = m.goalX - m.b.x
+			if (abs(dx) < 1.2 && m.goal != 3) || abs(dx) < 0.5 || (m.goal == 2 && abs(dx) < 4) {
+				if m.goal == 3 {
+					// sheltering: stand still under cover a while
+					m.poseT = 6.0
+					m.st = 0
+				}
+				if m.goal == 1 {
+					// drinking: head down for a few seconds
+					m.drinkT = Double.random(in: 25...45)
+					m.poseT = 3.0
+					m.st = 0
+					m.t1 = 3.2
+				}
+				m.goal = 0
+			} else {
+				m.dir = dx > 0 ? 1 : -1
+				// the water itself reads as a drop just before the edge; that is where it was going
+				let edge: Bool = m.goal == 1 && abs(dx) < 2.5
+				if (cliffAhead(m, m.dir) && !edge) || (m.b.hitWall && !m.b.onGround) {
+					m.goal = 0
+				} else {
+					accelX(m, Double(m.dir) * m.def.speed * 0.6, 14, dt)
+					if m.b.hitWall && m.b.onGround { m.b.vy = -m.def.jump }
+					return true
+				}
+			}
+		}
+		if m.poseT > 0 {
+			accelX(m, 0, 18, dt)
+			return true
+		}
+		// at night farm animals mostly settle down and sleep
+		if isNight && world.dim == .overworld && m.kind != .frog {
+			if m.st == 1 && Double.random(in: 0...1) < 0.02 { m.st = 0; m.t1 = Double.random(in: 4...9) }
+			if m.st == 0 {
+				m.t1 -= dt
+				if m.t1 <= 0 { m.st = 1; m.t1 = Double.random(in: 0.8...1.6); m.dir = Bool.random() ? 1 : -1 }
+				accelX(m, 0, 18, dt)
+				return true
+			}
+		}
+		return false
+	}
+
+	/// The nearest column with cover overhead (leaves, a roof) at about the animal's own level
+	func coverNear(_ m: Mob, _ r: Int) -> Double? {
+		let x0: Int = Int(floor(m.b.x))
+		let feet: Double = m.b.y
+		var k: Int = 1
+		while k <= r {
+			for side in [1, -1] {
+				let x: Int = x0 + side * k
+				if !rainReaches(Double(x) + 0.5, feet, m.b.h) && world.groundBelow(x, Int(floor(feet)) - 1) <= Int(floor(feet)) + 1 {
+					// a step further in, if that is covered too, so the whole body is under it
+					let deeper: Int = x + side
+					if !rainReaches(Double(deeper) + 0.5, feet, m.b.h) { return Double(deeper) + 0.5 }
+					return Double(x) + 0.5
+				}
+			}
+			k += 1
+		}
+		return nil
+	}
+
+	/// The nearest surface water within reach, as the column to stand at beside it
+	func waterNear(_ m: Mob, _ r: Int) -> Double? {
+		let x0: Int = Int(floor(m.b.x))
+		let gy: Int = Int(floor(m.b.y))
+		var k: Int = 1
+		while k <= r {
+			for side in [1, -1] {
+				let x: Int = x0 + side * k
+				for dy in -2...2 where world.tile(x, gy + dy) == .water {
+					return Double(x - side) + 0.5
+				}
+			}
+			k += 2
+		}
+		return nil
+	}
+
+	/// Predators (wolves at night, big cats and bears any time the player isn't their target) run down
+	/// prey nearby, bite it, and rest after a kill. Returns true while it has prey to chase.
+	func hunt(_ m: Mob, _ dt: Double, _ allowed: Bool) -> Bool {
+		if m.poseT > 0 {
+			// resting after a meal
+			m.poseT -= dt
+			accelX(m, 0, 18, dt)
+			return true
+		}
+		var prey: Mob? = nil
+		if m.preyID != 0 {
+			if let o = m.prey, o.id == m.preyID, o.hp > 0, !o.removed { prey = o }
+			if prey == nil {
+				// the prey is gone: rest, and stay sated for a while
+				m.preyID = 0
+				m.poseT = 4.0
+				m.drinkT = 60.0
+				return true
+			}
+		}
+		m.thinkT -= dt
+		if prey == nil && allowed && m.thinkT <= 0 {
+			m.thinkT = Double.random(in: 1.5...3.0)
+			var bd: Double = 14
+			for o in mobsNear(m.b.x - 14, m.b.x + 14) where isPrey(o.kind) && o.hp > 0 && !o.tame && abs(o.b.y - m.b.y) < 4 {
+				let d: Double = abs(o.b.x - m.b.x)
+				if d < bd { bd = d; prey = o }
+			}
+			if let p = prey { m.preyID = p.id; m.prey = p }
+		}
+		guard let p = prey else { return false }
+		if !allowed || abs(p.b.x - m.b.x) > 26 { m.preyID = 0; return false }
+		chase(m, p.b.x, 1.05, dt)
+		if m.kind == .wolf && m.b.onGround && abs(p.b.x - m.b.x) < 4 && Double.random(in: 0...1) < 0.03 { m.b.vy = -11; m.b.vx = Double(m.dir) * 7 }
+		if m.cd <= 0 && abs(p.b.x - m.b.x) < m.b.w * 0.5 + p.b.w * 0.5 + 0.4 && abs(p.b.y - m.b.y) < 1.4 {
+			m.cd = 0.9
+			m.atkT = Mob.atkDur
+			hurtMob(p, m.def.dmg, Double(m.dir), 5, false)
+			// the herd scatters
+			for o in mobsNear(p.b.x - 10, p.b.x + 10) where o.kind == p.kind && o.hp > 0 { o.t2 = 3.0; o.tx = m.b.x }
+		}
+		return true
+	}
+}
+
+// MARK: - Telegraphed attacks and the newer creatures' behaviour
+
+/// Ground an attack is about to strike. Drawn as a pulsing warning that fills from the bottom as the
+/// moment comes, so every telegraphed blow reads the same way and can be stepped out of.
+struct DangerZone {
+	var x0: Double
+	var y0: Double
+	var x1: Double
+	var y1: Double
+	/// seconds until the strike, and the whole wind-up
+	var t: Double
+	var dur: Double
+	var color: UInt32
+}
+
+enum WardenAtk: Int {
+	case none, sweep, bolts, blink, pillars, summon
+}
+
+extension WorldGen {
+	/// the Hollow Warden's entry in the list of defeated bosses
+	static let wardenKey: Int = 9_000_001
+	/// a grotto's Crystal Sentinel in that list
+	static func sentinelKey(_ cell: Int) -> Int { return 7_000_000 + cell }
+}
+
+extension Game {
+	func warn(_ x0: Double, _ y0: Double, _ x1: Double, _ y1: Double, _ dur: Double, _ color: UInt32 = 0xFF3A2A) {
+		if dangerZones.count >= 24 { dangerZones.removeFirst() }
+		sfx(.warn, at: (x0 + x1) * 0.5, 0.6)
+		dangerZones.append(DangerZone(x0: min(x0, x1), y0: min(y0, y1), x1: max(x0, x1), y1: max(y0, y1), t: dur, dur: max(0.05, dur), color: color))
+	}
+
+	func updateDangerZones(_ dt: Double) {
+		if dangerZones.isEmpty { return }
+		for i in dangerZones.indices { dangerZones[i].t -= dt }
+		dangerZones.removeAll { $0.t <= 0 }
+	}
+
+	/// A creature's blow over a box; targets are pushed away from the creature
+	func mobAttackBox(_ m: Mob, _ x0: Double, _ y0: Double, _ x1: Double, _ y1: Double, dmg: Double, knock: Double, type: DamageType = .melee) {
+		var info = DamageInfo(amount: dmg, type: type, source: .mob(m, faction(of: m)))
+		info.knock = knock
+		info.originX = m.b.x
+		info.originY = m.b.cy
+		info.key = newID()
+		damageBox(min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1), info)
+	}
+
+	// MARK: cave crawler: fast, crouches and pounces
+
+	func updateCrawler(_ m: Mob, _ dt: Double, _ aggro: Bool, _ dist: Double, _ dyP: Double) {
+		let d: MobDef = m.def
+		switch m.st {
+		case 3:
+			// a short crouch before the pounce
+			m.t3 -= dt
+			accelX(m, 0, 50, dt)
+			m.dir = pb.x >= m.b.x ? 1 : -1
+			if m.t3 <= 0 {
+				m.st = 4
+				m.t3 = 0.7
+				m.cd = 0
+				m.b.vy = -8.5
+				m.b.vx = Double(m.dir) * 10.5
+				m.atkT = Mob.atkDur
+			}
+		case 4:
+			m.t3 -= dt
+			contactHurt(m, d.dmg * 1.3)
+			if (m.b.onGround && m.t3 < 0.55) || m.t3 <= 0 {
+				m.st = 0
+				m.cd = 1.3
+			}
+		default:
+			if aggro {
+				chase(m, m.aimX, 1.0, dt)
+				// scrambles up ledges
+				if m.b.hitWall && m.b.onGround { m.b.vy = -11.5 }
+				if m.ai == .chase && m.b.onGround && m.cd <= 0 && dist > 1.8 && dist < 4.6 && abs(dyP) < 2.0 {
+					m.st = 3
+					m.t3 = 0.28
+				}
+				if m.ai == .chase { contactHurt(m, d.dmg) }
+			} else {
+				wander(m, dt, 0.6)
+			}
+		}
+		stepMob(m, dt)
+	}
+
+	// MARK: stone golem: slow, armoured, slams the ground and throws rocks
+
+	func updateGolem(_ m: Mob, _ dt: Double, _ aggro: Bool, _ dist: Double, _ dyP: Double) {
+		let d: MobDef = m.def
+		switch m.st {
+		case 3:
+			// fists raised: the slam lands where the warning shows
+			m.t3 -= dt
+			accelX(m, 0, 40, dt)
+			if m.t3 <= 0 {
+				m.st = 4
+				m.t3 = 0.35
+				let x0: Double = m.dir > 0 ? m.b.x - 0.6 : m.b.x - 3.9
+				let x1: Double = m.dir > 0 ? m.b.x + 3.9 : m.b.x + 0.6
+				mobAttackBox(m, x0, m.b.y - 2.4, x1, m.b.y + 0.1, dmg: d.dmg, knock: 10)
+				m.atkT = Mob.atkDur
+				addShake(dist < 10 ? 0.2 : 0.06)
+				spawnParticles(m.b.x + Double(m.dir) * 2.2, m.b.y - 0.1, 0x8A8680, 10, 4.0, 0.5, 14)
+			}
+		case 4:
+			m.t3 -= dt
+			accelX(m, 0, 40, dt)
+			if m.t3 <= 0 { m.st = 0; m.cd = 1.6 }
+		case 5:
+			// a boulder held overhead
+			m.t3 -= dt
+			accelX(m, 0, 40, dt)
+			m.dir = pb.x >= m.b.x ? 1 : -1
+			if m.t3 <= 0 {
+				throwRock(m)
+				m.st = 4
+				m.t3 = 0.3
+				m.cd = 2.8
+			}
+		default:
+			if aggro {
+				chase(m, m.aimX, 1.0, dt)
+				if m.ai == .chase && m.cd <= 0 && m.b.onGround {
+					if dist < 3.3 && abs(dyP) < 2.4 {
+						m.st = 3
+						m.t3 = 0.75
+						m.dir = pb.x >= m.b.x ? 1 : -1
+						let x0: Double = m.dir > 0 ? m.b.x - 0.6 : m.b.x - 3.9
+						let x1: Double = m.dir > 0 ? m.b.x + 3.9 : m.b.x + 0.6
+						warn(x0, m.b.y - 2.4, x1, m.b.y, 0.75, 0xFF8A2A)
+					} else if dist > 4.5 && dist < 11 && Double.random(in: 0...(m.blockedT > 0 ? 0.3 : 1.0)) < 0.02
+								&& world.lineClear(m.b.x, m.b.top - 1.5, pb.x, pb.y - pb.h * 0.6) {
+						// lobbed, so it clears a low wall: thrown over anything it can see over
+						m.st = 5
+						m.t3 = 0.6
+					}
+				}
+				if m.ai == .chase { contactHurt(m, d.dmg * 0.5) }
+			} else {
+				wander(m, dt, 0.35)
+			}
+		}
+		stepMob(m, dt, stepUp: 1.0)
+	}
+
+	/// A lobbed boulder, aimed so its arc comes down on the player
+	func throwRock(_ m: Mob) {
+		let ox: Double = m.b.x + Double(m.dir) * 0.6
+		let oy: Double = m.b.top + 0.2
+		let dx: Double = pb.x - ox
+		let t: Double = clampD(abs(dx) / 9.0, 0.5, 1.3)
+		let grav: Double = 22.0
+		let vx: Double = dx / t
+		let vy: Double = ((pb.y - 0.8) - oy - 0.5 * grav * t * t) / t
+		var p = Projectile(kind: .rock, x: ox, y: oy, vx: vx, vy: vy, dmg: m.def.dmg * 0.8, fromPlayer: false, gravity: grav)
+		p.w = 0.6
+		p.life = 3.0
+		p.owner = m.id
+		p.source = .mob(m, faction(of: m))
+		p.uid = newID()
+		projectiles.append(p)
+		m.atkT = Mob.atkDur
+	}
+
+	// MARK: skeleton archer: keeps its distance and shoots arced arrows
+
+	func updateArcher(_ m: Mob, _ dt: Double, _ aggro: Bool, _ dist: Double, _ dyP: Double) {
+		switch m.st {
+		case 3:
+			// the draw: a clear moment to close in or take cover
+			m.t3 -= dt
+			accelX(m, 0, 40, dt)
+			m.dir = pb.x >= m.b.x ? 1 : -1
+			if m.t3 <= 0 {
+				if clearShot(m) {
+					shootArrowAtPlayer(m)
+					m.st = 6
+					m.t3 = 0.25
+				} else if m.t3 < -0.8 {
+					// the target went behind cover: the draw is let down, and next time it climbs for a
+					// better spot (see think)
+					m.st = 0
+					m.cd = 0.4
+					m.blockedT += 0.6
+				}
+			}
+		case 6:
+			m.t3 -= dt
+			accelX(m, 0, 40, dt)
+			if m.t3 <= 0 { m.st = 0; m.cd = Double.random(in: 1.4...2.2) }
+		default:
+			if aggro {
+				// keeps its distance from the moment it notices the player; shoots once it is fighting
+				let sees: Bool = m.sees && (m.ai == .chase || m.ai == .alert)
+				if dist < 5.0 && sees {
+					// too close: back off, hopping away now and then
+					flee(m, pb.x, dt, 1.1)
+					if m.b.onGround && Double.random(in: 0...1) < 0.025 { m.b.vy = -10; m.b.vx = Double(m.dir) * 5.5 }
+				} else if dist > 12.0 || !sees || m.blockedT > 0.5 || !m.b.onGround {
+					chase(m, m.aimX, 0.9, dt)
+				} else {
+					accelX(m, 0, 20, dt)
+					m.dir = pb.x >= m.b.x ? 1 : -1
+				}
+				if m.ai == .chase && m.cd <= 0 && sees && m.b.onGround && dist >= 3.0 && dist < 18 && abs(dyP) < 10 {
+					m.st = 3
+					m.t3 = 0.6
+				}
+			} else {
+				wander(m, dt, 0.4)
+			}
+		}
+		stepMob(m, dt)
+	}
+
+	/// A clear line from where a shot leaves to the player's chest, checked at the moment of release
+	func clearShot(_ m: Mob) -> Bool {
+		let ox: Double = m.b.x + Double(m.dir) * 0.6
+		return world.lineClear(ox, shotY(m), pb.x, shotAimY(m))
+	}
+
+	/// Where a creature's shot leaves (its shoulder) and the part of the player it aims for: the chest,
+	/// or the head when only the head shows over cover
+	func shotY(_ m: Mob) -> Double { return m.b.top + 0.45 }
+
+	func shotAimY(_ m: Mob) -> Double {
+		let ox: Double = m.b.x + Double(m.dir) * 0.6
+		let chest: Double = pb.y - pb.h * 0.55
+		if world.lineClear(ox, shotY(m), pb.x, chest) { return chest }
+		return pb.top + 0.25
+	}
+
+	func shootArrowAtPlayer(_ m: Mob) {
+		let ox: Double = m.b.x + Double(m.dir) * 0.6
+		let oy: Double = shotY(m)
+		let tx: Double = pb.x + pb.vx * 0.2
+		let ty: Double = shotAimY(m)
+		let grav: Double = 15.0
+		let dx: Double = tx - ox
+		let dy: Double = ty - oy
+		let flight: Double = max(0.15, sqrt(dx * dx + dy * dy) / 19.0)
+		var p = Projectile(kind: .arrow, x: ox, y: oy, vx: dx / flight, vy: dy / flight - 0.5 * grav * flight, dmg: m.def.dmg, fromPlayer: false, gravity: grav)
+		p.life = 3.0
+		p.w = 0.22
+		p.owner = m.id
+		p.source = .mob(m, faction(of: m))
+		p.uid = newID()
+		projectiles.append(p)
+	}
+
+	// MARK: mimic: a chest that bites
+
+	func updateMimic(_ m: Mob, _ dt: Double, _ aggro: Bool, _ dist: Double, _ dyP: Double) {
+		let d: MobDef = m.def
+		m.t1 -= dt
+		m.angry = aggro
+		if m.st == 3 {
+			// jaws wide before the lunge
+			m.t3 -= dt
+			accelX(m, 0, 30, dt)
+			if m.t3 <= 0 {
+				m.st = 4
+				m.t3 = 0.6
+				m.cd = 0
+				m.b.vy = -9.5
+				m.b.vx = Double(m.dir) * 9.0
+				m.atkT = Mob.atkDur
+			}
+		} else if m.st == 4 {
+			m.t3 -= dt
+			if abs(dyP) < 1.4 { contactHurt(m, d.dmg * 1.2) }
+			if (m.b.onGround && m.t3 < 0.45) || m.t3 <= 0 {
+				m.st = 0
+				m.cd = m.hp < m.maxHP * 0.4 ? 0.7 : 1.1
+			}
+		} else if aggro {
+			m.dir = pb.x >= m.b.x ? 1 : -1
+			if m.b.onGround {
+				m.b.vx *= 0.8
+				if m.cd <= 0 && dist < 5.0 && abs(dyP) < 2.2 {
+					m.st = 3
+					m.t3 = 0.3
+				} else if m.t1 <= 0 {
+					m.b.vy = -8.0
+					m.b.vx = Double(m.dir) * 5.0
+					m.t1 = 0.45
+				}
+			}
+			if abs(dyP) < 1.4 { contactHurt(m, d.dmg * 0.6) }
+		} else {
+			// sits still and passes for a chest again
+			accelX(m, 0, 20, dt)
+		}
+		stepMob(m, dt)
+	}
+
+	/// Some unopened chests underground in newer worlds are mimics: opening one wakes it instead
+	func tryMimic(_ x: Int, _ y: Int) -> Bool {
+		if world.dim != .overworld || gen.genVersion < 3 { return false }
+		if y < WorldGen.sea + 20 { return false }
+		// opened before, or placed by the player
+		if world.chests[world.chestKey(x, y)] != nil { return false }
+		if hash2(x, y, gen.seed &+ 909) >= 0.08 { return false }
+		// a grotto's altar chest has its own guardian
+		for s in gen.grottoSites(overlapping: x - 2, x + 2) where abs(x - s.x) <= 1 && abs(y - (s.floorY - 2)) <= 1 { return false }
+		let loot: [Stack] = world.removeChest(x, y)
+		world.set(x, y, .air)
+		let m: Mob = addMob(.mimic, Double(x) + 0.5, Double(y) + 1.0)
+		m.loot = loot
+		m.persistent = true
+		m.homeX = Double(x) + 0.5
+		m.homeY = Double(y) + 1.0
+		m.dir = pb.x >= m.b.x ? 1 : -1
+		m.st = 3
+		m.t3 = 0.45
+		m.angry = true
+		addShake(0.12)
+		spawnParticles(m.b.x, m.b.y - 0.5, 0xB98A4E, 8, 4.0, 0.4, 12)
+		say("The chest was a Mimic!", 2.5)
+		return true
+	}
+
+	// MARK: crystal sentinel: the grotto's guardian
+
+	func updateGuardians() {
+		let px: Int = Int(floor(pb.x))
+		for s in gen.grottoSites(overlapping: px - 60, px + 60) {
+			let key: Int = WorldGen.sentinelKey(s.cell)
+			if defeated.contains(key) { continue }
+			var existing: Mob? = nil
+			for m in mobs where m.kind == .sentinel && m.lair == key && m.hp > 0 { existing = m }
+			let dx: Double = abs(Double(s.x) + 0.5 - pb.x)
+			let dy: Double = abs(Double(s.floorY) - pb.y)
+			if existing == nil {
+				if dx < Double(s.rx) + 1 && dy < Double(s.ry) + 3 && !dead && world.isLoaded(s.x) {
+					let m: Mob = addMob(.sentinel, Double(s.x) + 0.5, Double(s.floorY) - 3.0)
+					m.lair = key
+					m.homeX = Double(s.x) + 0.5
+					m.homeY = Double(s.floorY)
+					m.persistent = true
+					m.phase = 1
+					m.t1 = 1.5
+					m.dir = pb.x >= m.b.x ? 1 : -1
+					say("A Crystal Sentinel wakes to guard the grotto!", 3.0)
+				}
+			} else if let e = existing, dx > 90 || dy > 60 {
+				// leaving resets the fight
+				e.hp = 0
+				e.removed = true
+			}
+		}
+	}
+
+	func updateSentinel(_ m: Mob, _ dt: Double) {
+		let floorY: Double = m.homeY
+		let toP: Double = pb.x - m.b.x
+		let dist: Double = abs(toP)
+		let dyP: Double = (pb.y - pb.h * 0.5) - m.b.cy
+		m.anim += dt * 2.5
+		if m.phase < 2 && m.hp < m.maxHP * 0.55 && m.st != 1 {
+			m.phase = 2
+			say("The Crystal Sentinel flares with light!", 2.5)
+			spawnParticles(m.b.x, m.b.cy, 0xD8FFFA, 24, 6.0, 0.7, 0)
+		}
+		var tx: Double = m.b.x
+		var ty: Double = floorY - 2.8 + sin(clock * 1.7 + Double(m.id % 7)) * 0.5
+		switch m.st {
+		case 1:
+			m.t2 -= dt
+			m.tele = m.t2
+			// dropping to the player's level before a dash
+			if m.atk == 3 { ty = m.ty }
+			if m.t2 <= 0 { m.tele = 0; executeSentinel(m) }
+		case 2:
+			m.t2 -= dt
+			if m.t2 <= 0 { m.st = 0; m.t1 = m.phase == 2 ? Double.random(in: 0.9...1.4) : Double.random(in: 1.4...2.2) }
+		case 5:
+			// dashing straight through
+			m.t2 -= dt
+			m.b.vx = Double(m.dir) * 15.0
+			m.b.vy = (m.ty - m.b.y) * 2.0
+			if abs(dyP) < 1.8 { contactHurt(m, m.def.dmg * 1.3) }
+			world.moveBody(&m.b, dt, stepUp: 0, dropThrough: false, decks: [])
+			if m.t2 <= 0 || m.b.hitWall || abs(m.b.x - m.homeX) > 24 {
+				m.st = 2
+				m.t2 = 0.6
+				m.b.vx *= 0.3
+			}
+			return
+		default:
+			m.dir = toP >= 0 ? 1 : -1
+			if dead {
+				tx = m.homeX
+			} else {
+				// keeps a few blocks off the player
+				tx = pb.x - Double(m.dir) * 4.5
+			}
+			m.t1 -= dt
+			if m.t1 <= 0 && !dead && dist < 28 { chooseSentinelAttack(m, dist) }
+		}
+		tx = clampD(tx, m.homeX - 20, m.homeX + 20)
+		let sp: Double = m.def.speed * (m.phase == 2 ? 1.25 : 1.0)
+		m.b.vx += (clampD((tx - m.b.x) * 1.8, -sp, sp) - m.b.vx) * min(1.0, dt * 3.0)
+		m.b.vy += (clampD((ty - m.b.y) * 2.0, -sp * 1.5, sp * 1.5) - m.b.vy) * min(1.0, dt * 3.0)
+		world.moveBody(&m.b, dt, stepUp: 0, dropThrough: false, decks: [])
+		if !dead && abs(dyP) < 1.6 { contactHurt(m, m.def.dmg * 0.5) }
+	}
+
+	func chooseSentinelAttack(_ m: Mob, _ dist: Double) {
+		let r: Double = Double.random(in: 0...1)
+		let fy: Double = m.homeY
+		m.dir = pb.x >= m.b.x ? 1 : -1
+		if m.phase == 2 && r < 0.4 {
+			// crystal spikes burst from the floor around the player
+			m.atk = 2
+			m.t2 = 0.95
+			var xs: [Double] = []
+			for k in -1...1 {
+				let sx: Double = clampD(pb.x + Double(k) * 3.0 + Double.random(in: -0.5...0.5), m.homeX - 24, m.homeX + 24)
+				xs.append(sx)
+				warn(sx - 0.7, fy - 3.0, sx + 0.7, fy, 0.95, 0x5AF0F0)
+			}
+			m.spots = xs
+		} else if r < 0.72 || dist > 9 {
+			// a fan of shards
+			m.atk = 1
+			m.t2 = 0.6
+		} else {
+			// a dash along the player's level
+			m.atk = 3
+			m.t2 = 0.6
+			m.ty = pb.y - 0.1
+			warn(m.b.x, m.ty - 2.1, m.b.x + Double(m.dir) * 14.0, m.ty, 0.6, 0x5AF0F0)
+		}
+		m.st = 1
+	}
+
+	func executeSentinel(_ m: Mob) {
+		let fy: Double = m.homeY
+		switch m.atk {
+		case 2:
+			for sx in m.spots {
+				mobAttackBox(m, sx - 0.7, fy - 3.0, sx + 0.7, fy + 0.1, dmg: 14, knock: 6, type: .impact)
+				spawnParticles(sx, fy - 0.5, 0x8AF0E8, 8, 5.0, 0.5, 6)
+			}
+			m.spots = []
+			addShake(0.12)
+			m.st = 2
+			m.t2 = 0.6
+		case 3:
+			m.st = 5
+			m.t2 = 0.75
+			m.atkT = Mob.atkDur
+		default:
+			let n: Int = m.phase == 2 ? 5 : 3
+			let ox: Double = m.b.x + Double(m.dir) * 0.8
+			let oy: Double = m.b.cy
+			let aim: Double = atan2((pb.y - pb.h * 0.55) - oy, pb.x - ox)
+			for k in 0..<n {
+				let a: Double = aim + (Double(k) - Double(n - 1) * 0.5) * 0.17
+				var p = Projectile(kind: .shard, x: ox, y: oy, vx: cos(a) * 13.0, vy: sin(a) * 13.0, dmg: 9, fromPlayer: false, gravity: 0)
+				p.life = 3.0
+				p.w = 0.25
+				p.owner = m.id
+				p.source = .mob(m, faction(of: m))
+				p.uid = newID()
+				projectiles.append(p)
+			}
+			m.atkT = Mob.atkDur
+			spawnParticles(ox, oy, 0xD8FFFA, 6, 3.0, 0.25, 0)
+			m.st = 2
+			m.t2 = 0.5
+		}
+	}
+
+	func onGuardianDefeated(_ m: Mob) {
+		if m.lair != 0 { defeated.insert(m.lair) }
+		dangerZones.removeAll()
+		addShake(m.kind == .warden ? 0.6 : 0.35)
+		spawnParticles(m.b.x, m.b.cy, m.kind == .warden ? 0xD8A8FF : 0x8AF0E8, 36, 8.0, 1.1, 6)
+		addLore(m.kind == .warden ? "warden" : "sentinel")
+		if m.kind == .warden {
+			say("The Hollow Warden falls. Its heart still beats - a rift forge could bind it into a sigil.", 7.0)
+		} else {
+			say("The Crystal Sentinel shatters. The grotto is yours.", 4.5)
+		}
+	}
+
+	// MARK: the Hollow Warden
+
+	func updateWardenSpawn() {
+		guard let c = gen.citadel else { return }
+		let key: Int = WorldGen.wardenKey
+		if defeated.contains(key) { return }
+		var existing: Mob? = nil
+		for m in mobs where m.kind == .warden && m.hp > 0 { existing = m }
+		let dx: Double = abs(Double(c.x) + 0.5 - pb.x)
+		let dy: Double = abs(Double(c.floor) - pb.y)
+		if existing == nil {
+			if dx < 30 && dy < 16 && !dead && world.isLoaded(c.throneX) {
+				let m: Mob = addMob(.warden, Double(c.throneX) + 0.5, Double(c.floor) - 0.4)
+				m.lair = key
+				m.homeX = Double(c.x) + 0.5
+				m.homeY = Double(c.floor)
+				m.persistent = true
+				m.phase = 1
+				m.t1 = 2.0
+				m.dir = pb.x >= m.b.x ? 1 : -1
+				say("The Hollow Warden rises from its throne.", 4.0)
+				sfx(.roar, at: m.b.x, 1.0)
+			}
+		} else if let e = existing, dx > 140 {
+			e.hp = 0
+			e.removed = true
+			dangerZones.removeAll()
+		}
+	}
+
+	func updateWarden(_ m: Mob, _ dt: Double) {
+		let floorY: Double = m.homeY
+		let toP: Double = pb.x - m.b.x
+		let dist: Double = abs(toP)
+		let dirP: Int = toP >= 0 ? 1 : -1
+		m.anim += dt * 2.0
+		let hpf: Double = m.hp / m.maxHP
+		let want: Int = hpf > 0.66 ? 1 : (hpf > 0.33 ? 2 : 3)
+		if want > m.phase && (m.st == 0 || m.st == 2) {
+			m.phase = want
+			m.st = 1
+			m.atk = WardenAtk.summon.rawValue
+			m.t2 = 1.3
+			m.spots = []
+			say(want == 2 ? "The Hollow Warden calls up its servants!" : "The Warden's lights burn white. The floor trembles.", 3.0)
+			addShake(0.3)
+		}
+		let quick: Double = m.phase == 3 ? 0.72 : (m.phase == 2 ? 0.86 : 1.0)
+		var tx: Double = m.b.x
+		let ty: Double = floorY - 0.4 + sin(clock * 1.4) * 0.25
+		switch m.st {
+		case 1:
+			m.t2 -= dt
+			m.tele = m.t2
+			if m.t2 <= 0 { m.tele = 0; executeWarden(m) }
+		case 2:
+			m.t2 -= dt
+			if m.t2 <= 0 { m.st = 0; m.t1 = Double.random(in: 1.0...1.7) * quick }
+		case 3:
+			// bolts, one after another
+			m.t2 -= dt
+			m.dir = dirP
+			if m.t2 <= 0 {
+				fireWardenBolt(m)
+				m.t3 -= 1
+				if m.t3 <= 0 { m.st = 2; m.t2 = 0.5 } else { m.t2 = m.phase == 1 ? 0.2 : 0.15 }
+			}
+		default:
+			m.dir = dirP
+			if dead { tx = m.homeX } else if dist > 4.2 { tx = pb.x - Double(dirP) * 3.6 } else if dist < 2.2 { tx = pb.x - Double(dirP) * 3.0 }
+			m.t1 -= dt
+			if m.t1 <= 0 && !dead && dist < 44 { chooseWardenAttack(m, dist) }
+		}
+		tx = clampD(tx, m.homeX - 37, m.homeX + 37)
+		let sp: Double = m.def.speed * (m.phase == 1 ? 1.0 : (m.phase == 2 ? 1.2 : 1.4))
+		m.b.vx += (clampD((tx - m.b.x) * 2.0, -sp, sp) - m.b.vx) * min(1.0, dt * 4.0)
+		m.b.vy += ((ty - m.b.y) * 3.0 - m.b.vy) * min(1.0, dt * 4.0)
+		world.moveBody(&m.b, dt, stepUp: 0, dropThrough: false, decks: [])
+		if !dead && dist < m.b.w * 0.5 + 0.5 && abs((pb.y - pb.h * 0.5) - m.b.cy) < 2.6 { contactHurt(m, 10) }
+	}
+
+	func startWardenSweep(_ m: Mob, _ tele: Double) {
+		m.atk = WardenAtk.sweep.rawValue
+		m.t2 = tele
+		let reach: Double = 7.0
+		let x0: Double = m.dir > 0 ? m.b.x - 0.8 : m.b.x - reach
+		let x1: Double = m.dir > 0 ? m.b.x + reach : m.b.x + 0.8
+		m.tx = x0
+		m.ty = x1
+		warn(x0, m.homeY - 3.6, x1, m.homeY, tele)
+		m.st = 1
+	}
+
+	func chooseWardenAttack(_ m: Mob, _ dist: Double) {
+		var r: Double = Double.random(in: 0...1)
+		let fy: Double = m.homeY
+		m.dir = pb.x >= m.b.x ? 1 : -1
+		// variety: in the last phase the void pillars come at least every third attack, and no attack
+		// is used three times running
+		if m.phase == 3 && m.sinceSignature >= 2 { r = 0 }
+		if m.repeatN >= 2 && m.lastAtk == WardenAtk.bolts.rawValue && dist >= 7.5 { r = m.phase >= 2 ? 0.4 : 0.0 }
+		if m.phase == 3 && r < 0.35 {
+			// void pillars erupt in a row across the hall
+			m.atk = WardenAtk.pillars.rawValue
+			m.t2 = 1.0
+			var xs: [Double] = []
+			for k in -2...2 {
+				let sx: Double = clampD(pb.x + Double(k) * 4.0, m.homeX - 38, m.homeX + 38)
+				xs.append(sx)
+				warn(sx - 0.8, fy - 8.0, sx + 0.8, fy, 1.0, 0xB060FF)
+			}
+			m.spots = xs
+			m.st = 1
+		} else if m.phase >= 2 && r < 0.62 && dist > 4.5 {
+			// vanishes and reappears on the far side of the player
+			m.atk = WardenAtk.blink.rawValue
+			m.t2 = 0.7
+			let side: Double = pb.x >= m.b.x ? 1.0 : -1.0
+			let dest: Double = clampD(pb.x + side * 3.2, m.homeX - 36, m.homeX + 36)
+			m.tx = dest
+			warn(dest - 1.6, fy - 4.6, dest + 1.6, fy, 0.7, 0xB060FF)
+			m.st = 1
+		} else if dist < 7.5 {
+			startWardenSweep(m, m.phase == 3 ? 0.6 : 0.8)
+		} else {
+			m.atk = WardenAtk.bolts.rawValue
+			m.t2 = 0.55
+			m.st = 1
+		}
+	}
+
+	func executeWarden(_ m: Mob) {
+		let fy: Double = m.homeY
+		if m.atk != WardenAtk.summon.rawValue {
+			m.repeatN = m.atk == m.lastAtk ? m.repeatN + 1 : 1
+			m.lastAtk = m.atk
+			m.sinceSignature = m.atk == WardenAtk.pillars.rawValue ? 0 : m.sinceSignature + 1
+		}
+		switch WardenAtk(rawValue: m.atk) ?? .none {
+		case .sweep:
+			mobAttackBox(m, m.tx, fy - 3.6, m.ty, fy + 0.1, dmg: m.def.dmg, knock: 12)
+			m.atkT = 0.45
+			addShake(0.16)
+			spawnParticles((m.tx + m.ty) * 0.5, fy - 1.0, 0xC8C8E0, 10, 6.0, 0.3, 4)
+			m.st = 2
+			m.t2 = 0.55
+		case .bolts:
+			m.st = 3
+			m.t3 = Double(m.phase == 1 ? 3 : 4)
+			m.t2 = 0
+		case .blink:
+			spawnParticles(m.b.x, m.b.cy, 0x8A4AE0, 16, 4.0, 0.6, -2)
+			m.b.x = m.tx
+			m.b.vx = 0
+			spawnParticles(m.b.x, m.b.cy, 0xD8A8FF, 16, 4.0, 0.6, -2)
+			m.dir = pb.x >= m.b.x ? 1 : -1
+			startWardenSweep(m, 0.42)
+		case .pillars:
+			for sx in m.spots {
+				mobAttackBox(m, sx - 0.8, fy - 8.0, sx + 0.8, fy + 0.1, dmg: 20, knock: 9, type: .impact)
+				for k in 0..<4 { spawnParticles(sx, fy - Double(k) * 2.0, 0xB070FF, 3, 2.5, 0.5, -6) }
+			}
+			m.spots = []
+			addShake(0.22)
+			m.st = 2
+			m.t2 = 0.8
+		case .summon:
+			for side in [-1.0, 1.0] {
+				let sx: Double = m.homeX + side * 28.0
+				_ = addMob(.imp, sx, fy - 0.05)
+				spawnParticles(sx, fy - 1.0, 0x8A4AE0, 14, 4.0, 0.6, -3)
+			}
+			m.st = 2
+			m.t2 = 0.6
+		case .none:
+			m.st = 0
+		}
+	}
+
+	func fireWardenBolt(_ m: Mob) {
+		let ox: Double = m.b.x + Double(m.dir) * 1.6
+		let oy: Double = m.b.y - 2.6
+		let aim: Double = atan2((pb.y - pb.h * 0.55) - oy, pb.x - ox)
+		// the last phase throws each bolt as a fan of three
+		let fan: [Double] = m.phase == 3 ? [-0.2, 0, 0.2] : [Double.random(in: -0.06...0.06)]
+		for off in fan {
+			let a: Double = aim + off
+			var p = Projectile(kind: .bolt, x: ox, y: oy, vx: cos(a) * 12.0, vy: sin(a) * 12.0, dmg: 13, fromPlayer: false, gravity: 0)
+			p.life = 3.5
+			p.w = 0.4
+			p.owner = m.id
+			p.source = .mob(m, faction(of: m))
+			p.uid = newID()
+			projectiles.append(p)
+		}
+		m.atkT = Mob.atkDur
+		spawnParticles(ox, oy, 0xD8A8FF, 4, 2.0, 0.25, 0)
+	}
+}
+
+func isHumanoid(_ k: MobKind) -> Bool {
+	switch k {
+	case .zombie, .skeleton, .pirate, .pirateGunner, .pirateCaptain, .imp, .archer: return true
+	default: return false
 	}
 }

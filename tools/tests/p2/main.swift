@@ -968,10 +968,11 @@ do {
     let under = (101...106).map { gl.light.level(px, $0).0 }
     let beside = (101...106).map { gl.light.level(px + 3, $0).0 }
     check(zip(under, beside).allSatisfy { $0.0 >= $0.1 - 1 }, "under a cactus the ground is lit like the ground beside it (sky light \(under) vs \(beside))")
-    // settings saved before sound existed load with sound on
+    // settings saved before sound existed load with sound on (and keep what they had; the look starts
+    // afresh, since it was saved before the hair and clothing styles: see the art suite)
     let old = #"{"hair":2,"tilePx":32}"#
     let st = try! JSONDecoder().decode(Settings.self, from: old.data(using: .utf8)!)
-    check(st.soundOn && near(st.sfxVolume, 0.7, 0.001) && st.hair == 2, "older settings load with sound on at the default volumes")
+    check(st.soundOn && near(st.sfxVolume, 0.7, 0.001) && st.tilePx == 32, "older settings load with sound on at the default volumes")
 }
 print("")
 print(fails == 0 ? "ALL \(passes) TESTS PASSED" : "\(fails) FAILED, \(passes) passed")

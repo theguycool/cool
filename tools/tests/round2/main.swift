@@ -282,9 +282,19 @@ do {
         // every frame index the renderer can ask for exists
         // walkers use frames 0-2; swimmers, fliers and hoppers only their own frames
         var need = a.cycle.isEmpty && !a.hop ? 2 : 0
-        if isHumanoid(k) { need = 6 }
-        if k == .bearBoss { need = 3 }
-        if k == .rex { need = 2 }
+        let look = creatureLook(k, v)
+        if look.fine {
+            // a hand-drawn creature names its poses: every one of them, and its walk, must be there
+            need = 0
+            for w in a.walk { need = max(need, w) }
+            for (_, f) in a.poses { need = max(need, f) }
+            if abs(set.scale - 1.0 / 16.0) > 1e-9 { badFrames.append("\(k)/\(v): hand-drawn but not at 16 pixels a block") }
+        } else {
+            if isHumanoid(k) { need = 6 }
+            if abs(set.scale - 0.125) > 1e-9 { badFrames.append("\(k)/\(v): an older drawing not at 8 pixels a block") }
+        }
+        if k == .bearBoss { need = max(need, 3) }
+        if k == .rex { need = max(need, 2) }
         if a.attack >= 0 { need = max(need, a.attack) }
         if a.idleAlt >= 0 { need = max(need, a.idleAlt) }
         for c in a.cycle { need = max(need, c) }
@@ -292,7 +302,7 @@ do {
         if n <= need { badFrames.append("\(k)/\(v): \(n) frames, needs \(need + 1)") }
     }
     let buildMs = (perfNow() - t0) * 1000
-    check(scales == [0.125], "all \(variants.count) creatures and variants share one pixel scale (8 art pixels per block, like terrain and the player): \(scales.sorted())")
+    check(scales.isSubset(of: [0.125, 0.0625]), "all \(variants.count) creatures and variants are drawn at their drawing's pixel size (16 art pixels a block for the hand-drawn ones, 8 for the older ones still to be redrawn): \(scales.sorted())")
     check(badFrames.isEmpty, "every frame the renderer can pick exists \(badFrames)")
     check(buildMs < 4000, String(format: "building every creature's frames takes %.0f ms (once per kind, on first sight)", buildMs))
     // outlines are a darkened version of the colour they border (the old art used one near-black for
@@ -321,7 +331,8 @@ do {
         }
     }
     let meanOutline = sumMean / max(1, nMean)
-    check(darkest > 10 && meanOutline > 35, String(format: "outlines are tinted, never pure black: average outline luminance %.0f (old fixed outline 25), darkest %.0f", meanOutline, darkest))
+    // (the hand-drawn creatures use a very dark shade of each creature's own colour, as the reference sheets do)
+    check(darkest > 10 && meanOutline > 20, String(format: "outlines are tinted, never pure black: average outline luminance %.0f (old fixed outline 25), darkest %.0f", meanOutline, darkest))
     check(allOutlineColours.count > 60, "outlines take the colour of what they border (\(allOutlineColours.count) different outline colours across all creatures; the old art used one)")
     check(maxColours <= 48, "restrained palettes: at most \(maxColours) colours in any frame (bosses included)")
     t0 = perfNow()
@@ -373,7 +384,7 @@ do {
     while clock < 30 {
         cow.b.vx = 0; cow.b.onGround = true
         let f = WorldRenderer.mobFrame(cow, cset, clock)
-        if f == 3 { graze += 1 } else if f == 0 { idle += 1 }
+        if f == cset.anim.idleAlt { graze += 1 } else if f == 0 { idle += 1 }
         clock += 0.05
     }
     check(graze > 0 && idle > graze, "a standing cow grazes part of the time (\(graze) grazing vs \(idle) idle samples)")

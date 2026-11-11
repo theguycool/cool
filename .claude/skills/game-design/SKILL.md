@@ -63,7 +63,7 @@ or the commit message) before building.
 
 `docs/design-plan.md` applies this method to PixelRealm: what the game already does well, the gaps,
 and a list of steps in order of value for effort. Read it before proposing a new step, keep it up to
-date when a step lands, and respect the project's rules in `CLAUDE.md` (four parts, build memory,
+date when a step lands, and respect the project's rules in `CLAUDE.md` (six parts, build memory,
 saved enums append-only, mods as data only).
 
 ## Studying talks and videos

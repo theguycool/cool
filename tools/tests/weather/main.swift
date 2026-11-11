@@ -203,9 +203,10 @@ do {
     st.weatherOn = false; st.allowHail = false; st.weatherIntensity = 0.5; st.severeFrequency = 2; st.reduceFlashes = true; st.weatherParticles = 0.4
     let back = try! JSONDecoder().decode(Settings.self, from: JSONEncoder().encode(st))
     check(!back.weatherOn && !back.allowHail && back.weatherIntensity == 0.5 && back.severeFrequency == 2 && back.reduceFlashes && back.weatherParticles == 0.4, "weather settings are saved and read back")
-    let oldJSON = "{\"hair\":1,\"soundOn\":true}".data(using: .utf8)!
+    let oldJSON = "{\"hair\":1,\"soundOn\":false}".data(using: .utf8)!
     let o = try! JSONDecoder().decode(Settings.self, from: oldJSON)
-    check(o.weatherOn && o.allowTornado && o.weatherIntensity == 1.0 && o.severeFrequency == 1 && o.hair == 1, "a settings file from before the weather gets the weather defaults")
+    // (what was there is kept, the sound switch here; the look starts afresh, see the art suite)
+    check(o.weatherOn && o.allowTornado && o.weatherIntensity == 1.0 && o.severeFrequency == 1 && !o.soundOn, "a settings file from before the weather gets the weather defaults")
 }
 do {
     func settled(_ k: WeatherKind, _ edit: (inout Settings) -> Void) -> Game {

@@ -238,7 +238,9 @@ do {
     check(ore.isMod && lampOff.isMod && lampOn.isMod && ore != lampOff && lampOff != lampOn, "each custom block gets its own reserved tile number (a lamp gets two: off and lit)")
     check(ore.name == "Ruby Ore" && ore.solid && ore.opaque && abs(ore.hardness - 3) < 0.001 && Tile.tierTable[ore.idx] == 4 && toolClass(ore) == .pickaxe,
           "the tile tables take the block's name, collision, hardness, tier and tool")
-    check(SectionPainter.shared.tilePx[ore.idx * 64 + 9] == 0xFFC02040 && Art.shared.tileBufs[ore.idx].px[9] == 0xFFC02040, "the block's own pixel art is what the world draws")
+    // the block's 8 x 8 art is drawn with every pixel doubled: its pixel (1, 1) is at (2, 2) of the 16 x 16 picture
+    let artAt: Int = 2 * tileArtPx + 2
+    check(SectionPainter.shared.tilePx[ore.idx * 4 * tileArtPx * tileArtPx + artAt] == 0xFFC02040 && Art.shared.tileBufs[ore.idx].px[artAt] == 0xFFC02040, "the block's own pixel art is what the world draws")
     let bx = Int(g.pb.x) + 2
     g.world.set(bx, 99, ore)
     check(g.world.tile(bx, 99) == ore, "a custom block can be placed in the world (stored like any tile)")

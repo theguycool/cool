@@ -372,7 +372,7 @@ do {
         let a = tileBuf(ores[i]).px, b = tileBuf(ores[j]).px
         minDiff = min(minDiff, zip(a, b).filter { $0 != $1 }.count)
     } }
-    check(minDiff >= 10, "every ore has its own look (any two differ in at least \(minDiff) of 64 pixels)")
+    check(minDiff >= 10, "every ore has its own look (any two differ in at least \(minDiff) of \(tileArtPx * tileArtPx) pixels)")
 }
 do {
     // mined with the right pickaxe they drop their ore; the wrong one says so

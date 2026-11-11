@@ -122,7 +122,7 @@ do {
     ModRuntime.activate([pk], world: nil)
     if let t = ModRuntime.shared.tileForKey["tint:gl"] {
         let raw: Int = Int(t.rawValue)
-        check(SectionPainter.shared.tileKind[raw] == 2 && (SectionPainter.shared.tilePx[raw * 64] >> 24) == 0x80, "the land painter draws a half see-through block as see-through")
+        check(SectionPainter.shared.tileKind[raw] == 2 && (SectionPainter.shared.tilePx[raw * 4 * tileArtPx * tileArtPx] >> 24) == 0x80, "the land painter draws a half see-through block as see-through")
     } else {
         check(false, "the land painter draws a half see-through block as see-through")
     }

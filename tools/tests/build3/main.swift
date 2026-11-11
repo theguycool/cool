@@ -93,8 +93,9 @@ do {
     let lx: Int = px + 2 - ch.x0
     let ly: Int = 98 - (98 / 16) * 16
     var drawn: Int = 0
-    for yy in 0..<8 { for xx in 0..<8 where (paint[(ly * 8 + yy) * 128 + lx * 8 + xx] >> 24) != 0 { drawn += 1 } }
-    check(drawn == 64, "and it is drawn ( \(drawn) of 64 pixels of the wall's cell painted)")
+    let T: Int = tileArtPx
+    for yy in 0..<T { for xx in 0..<T where (paint[(ly * T + yy) * (chunkW * T) + lx * T + xx] >> 24) != 0 { drawn += 1 } }
+    check(drawn == T * T, "and it is drawn ( \(drawn) of \(T * T) pixels of the wall's cell painted)")
     check(wallName(wall) == "Planks Wall", "it is called \(wallName(wall))")
     g.toggleWallMode()
     use(g, px + 3, 99)

@@ -1,9 +1,10 @@
 # PixelRealm
 
-A 2D sandbox survival game for iPad, written in SwiftUI and run in Swift Playgrounds. The game is four
-files, `PixelRealm1.swift` to `PixelRealm4.swift` (about 62,500 lines in all, indented with tabs). The
+A 2D sandbox survival game for iPad, written in SwiftUI and run in Swift Playgrounds. The game is six
+files, `PixelRealm1.swift` to `PixelRealm6.swift` (about 64,300 lines in all, indented with tabs). The
 user pastes each into its own file of one Swift Playgrounds app. It was one file until the user asked
-for four; deliver all four, and treat them as one program (Swift doesn't care which file holds what).
+for four, then six; deliver all six, and treat them as one program (Swift doesn't care which file holds
+what).
 
 **The iPad has to be able to build it.** As one file, the Mod Creator+ version built here but would not
 start on the iPad, with no error shown, even with lighter screens and tab indents (1.93 MB). The last
@@ -31,6 +32,12 @@ confirmed). `tools/buildcost.sh` measures both ways:
   infusions to part 2 and the Mod Creator's first screen pieces to part 3: 478, 482, 482 and 479 MB,
   113 s in all; as one job 92 s and 1,228 MB. The user confirmed steps 5a, 5b and 5c build and run
   on the iPad, so four parts of up to about 482 MB per job are known to work.
+- Six parts (the art redraw, 2.51 MB, 64,263 lines): the user asked for six files. As four parts this
+  version measured 483 to 484 MB per job. A job's peak follows how much SwiftUI is in its own part
+  more than its size: cut evenly by size, the part with the Mod Creator+ screens needed 485 MB and the
+  one holding the art text 346 MB. Levelled (the art text to part 1, `p33_vehicles` to part 2, the
+  Mod Creator screens with the other screens in part 5): 360, 374, 395, 394, 399 and 382 MB, 143 s in
+  all; as one job 117 s and 1,225 MB. Not yet confirmed on the iPad.
 - A job's peak can jump by 30 MB or more after a small edit (taking the recipe lines out of one
   function once raised part 2 from 473 to 509 MB), so a few MB either way is noise; measure again
   after moving code.
@@ -46,17 +53,18 @@ compiles and runs headless on Linux. If `/opt/pixelrealm` is missing, run `tools
 - `tools/typecheck.sh`: about 39 s. Run it after every batch of edits.
 - The swift-lsp plugin (if loaded) checks a file as it is edited: `compile_flags.txt` points
   sourcekit-lsp at the stand-ins, and setup.sh installs it. It sees one part at a time, so names
-  from the other parts show as missing; `tools/typecheck.sh` (all four parts together) is the check
+  from the other parts show as missing; `tools/typecheck.sh` (all six parts together) is the check
   of record.
 - `tools/run-tests.sh [suite ...]`: builds and runs suites from `tools/tests`, four at a time (all
   of them take several minutes). Pass only the suites you touched while iterating, and run them all
   before committing. Full output is in `/tmp/pixelrealm-build/<suite>/out.log`.
-- `tools/shots.sh power|weather|sky|cloudsheet|stick|alchemy|modplus|building|vehicles|mod5|suit5|mod5c [folder]`: PNG screenshots from the game's own renderer (`sky`: clouds by day, dusk, night and storm; `cloudsheet`: every cloud template; `stick`: the combat stick's dial; `alchemy`: mutated creatures, the worn suit, the new stations, and a sheet of the new icons and suit pictures; `modplus`: two custom dimensions and a boss in a phase; `building`: a furnished house with stairs and a lift, a blast throwing blocks, a beam under strain; `vehicles`: every new kit parked, a plane, helicopter and airship flying, a tank firing at a wrecked truck, a ship built from blocks with the assembler, a plane mid-turn; `mod5`: every tree design shape under a mod's sun with rays, the same land at night under a pictured moon, the Overworld under a mod's sun, a lit cavern dimension, a repainted zombie; `suit5`: a sheet of suit designs in their poses, a turret firing with a plate broken off, jet flight with a wing, a laser and a cannon shell; `mod5c`: a mod's vehicle built from its kit, mod blocks on a power line and falling, rain in a mod's colour, a custom dimension's blizzard).
+- `tools/shots.sh power|weather|sky|cloudsheet|stick|alchemy|modplus|building|vehicles|mod5|suit5|mod5c|art [folder]`: PNG screenshots from the game's own renderer (`sky`: clouds by day, dusk, night and storm; `cloudsheet`: every cloud template; `stick`: the combat stick's dial; `alchemy`: mutated creatures, the worn suit, the new stations, and a sheet of the new icons and suit pictures; `modplus`: two custom dimensions and a boss in a phase; `building`: a furnished house with stairs and a lift, a blast throwing blocks, a beam under strain; `vehicles`: every new kit parked, a plane, helicopter and airship flying, a tank firing at a wrecked truck, a ship built from blocks with the assembler, a plane mid-turn; `mod5`: every tree design shape under a mod's sun with rays, the same land at night under a pictured moon, the Overworld under a mod's sun, a lit cavern dimension, a repainted zombie; `suit5`: a sheet of suit designs in their poses, a turret firing with a plate broken off, jet flight with a wing, a laser and a cannon shell; `mod5c`: a mod's vehicle built from its kit, mod blocks on a power line and falling, rain in a mod's colour, a custom dimension's blizzard; `art`: the hand-drawn creatures and blocks in the world at the size an iPad shows them: a meadow by day, monsters at night, a cave with every ore, the bears and the elephant, the pirates and the deep monsters, the three bosses).
+- `tools/art.sh preview|pack|check|game|compare`: the hand-drawn art (see **Art** below and `tools/art/README.md`): PNG sheets of the drawings, writing them into the game, and before/after sheets.
 - `tools/bench.sh`: chunk generation, painting, lighting and tick timings (debug build; compare
   with `GAME_SRC=<old file> tools/bench.sh`).
 - `tools/buildcost.sh`: the game's size, and the time and peak memory of a debug build like the
   iPad's, as one job and as one job per file (a few minutes). Run it after adding a lot of code.
-- The tools read the four parts (`pr_game_files` in `tools/env.sh`). `GAME_SRC` can name another
+- The tools read the six parts (`pr_game_files` in `tools/env.sh`). `GAME_SRC` can name another
   version: an older one-file game, or a folder holding its parts. Test programs build the parts as
   one job (`-wmo`) with `@main` removed.
 
@@ -89,6 +97,12 @@ of it saved in the mod and read from older mods), `aero` (vehicles of
 every kind: the plane, helicopter, airship, tank and truck kits flown and driven, designs too heavy to
 fly, turning in flight, blocks built onto vehicles, rafts that float or sink by their blocks, the
 assembler, shots, blasts and crashes, wrecks, mending, the autopilot, saves, a mod block as a part),
+`art` (the hand-drawn art: the packed pictures read back whole, every creature hand-drawn with its
+look and poses and the frame for each thing it does (pirates, golem, sentinel, the bosses), sprites
+standing on their soles and fitting their hit boxes, the player's hair, shirt and trouser styles and
+colours, scarf and armour, no marker colour ever left showing, the frame for each thing the player
+does, 16-pixel blocks and their mirrored variants, the land painter's edges, a mod's repaint keeping
+the size of the drawing it was painted over),
 and `det` and `det2` (world generation fingerprints for generator versions 1 to 4).
 
 What the stand-ins can't tell you:
@@ -122,7 +136,10 @@ What the stand-ins can't tell you:
   `SuitShape`, `SuitKind`, `ModPowerRole`, `ThemeRole`, `ModBlockFunction` (seat, bed appended), `GameRule`
   (its lines in `GameRule.specText` follow the cases), `Dimension` (custom0-2 were appended),
   `PartType` (vehicle parts: `block` and the aircraft parts were appended), `ProjKind`
-  and the like) only get new cases appended at the end. Never reorder or remove cases. New `SaveData` fields are optional; new `Settings`
+  and the like) only get new cases appended at the end. Never reorder or remove cases. `hairChoices`,
+  `scarfChoices`, `shirtChoices`, `pantsChoices` and the style lists (`hairStyleNames`,
+  `shirtStyleNames`, `pantsStyleNames`, each style with its drawing `player_hair_<n>` and so on) are
+  lists a saved choice points into: only add at the end (scarf colour 0 is "none"). New `SaveData` fields are optional; new `Settings`
   fields are decoded with `decodeIfPresent` and a default.
 - **Infusions live on the stack** (`Stack.inf`). Code that moves an item between bag, chest, carried and
   dropped must keep the whole `Stack`, or pass `inf:` to `Inventory.add`; infused items never merge.
@@ -136,8 +153,9 @@ What the stand-ins can't tell you:
   versions 1 to 4 still generate them (`WorldGen.hasVillages`) so saved worlds keep matching, but
   nothing in the game uses villagers, trades or village goals any more (`MobKind.villager` stays only
   for saved numbering).
-- **A new tile needs:** an appended case, a line in `Tile.defText` (read by `Tile.makeDef`), 8x8 art
-  as a line in `TileArt.text` (read by `customTileRows`; the stairs are drawn in code), and,
+- **A new tile needs:** an appended case, a line in `Tile.defText` (read by `Tile.makeDef`), art
+  (a 16x16 drawing in `tools/art/tiles`, then `tools/art.sh pack`; the older way, 8x8 art as a line in
+  `TileArt.text` read by `customTileRows`, still works and is drawn doubled), and,
   as relevant, `needsSupport`, `toolClass`, `isInteractive`/`interact`, and the exclusions in
   `creativeItems` for on/off variants, and a line in `blockPhysOf` (its weight, carry and reach).
   New tiles go after `liftCar` (the last one; all after the 64 mod tiles); `Tile.isMod` is a range
@@ -165,6 +183,27 @@ What the stand-ins can't tell you:
   vehicle part (`ModBlock.vehRole`, `vehMass`, `vehPower`; `ModVehicleRole` is append-only). `ModCollision`
   is append-only too (`climbable`, `sticky`, `decor` were appended). Tests never touch the real mod folder or saves: set `ModStore.overrideDir` and
   use `makeSave()` with a JSON round trip.
+- **Art.** Creatures, the player and blocks are drawn by hand at 16 art pixels a block, after the
+  user's reference sheets (dark outlines, three or four tones a material, light from the upper left,
+  a face that reads). The drawings are Python files in `tools/art` (parts as rows of letters, laid
+  over each other into frames); `tools/art.sh pack` writes them as text into `ArtSheet`
+  (`a01_artsheet`, at the end of part 1), between the `<art:creatures>` and `<art:tiles>` markers.
+  Never edit that text by hand, and run `tools/art.sh check` before committing. Every creature is
+  hand-drawn; the older pictures made in code (`p05*`, 8 pixels a block) stay for mods that repainted
+  over them (`ModOverride.fine` false): `creatureLook(kind, variant)` gives either, with its own pixel
+  size, soles and frame roles, so use it (or `lookSpriteSet`) rather than assuming a size or frame
+  numbers. Poses are by name (`CreatureAnim.pose("strike", 4)`: the hand-drawn frame, or the older
+  fixed number): windup, strike, block, shoot, fire, throw, charge, cast, rear, front; walks go
+  through `CreatureAnim.walkFrame`. Every colour drawn goes through the grade (`grade` in
+  `tools/art/artlib.py`, `artGrade` in the game; keep `GRADE_SAT` and `GRADE_VAL` alike), which takes
+  the candy brightness off strong colours (the user found the old colours too bright). The player is
+  drawn in layers (`player.py`: the bare figure, and one drawing for each hair, shirt and trouser
+  style, the scarf and the helmet, in the marker colours listed in `PlayerInk`, which must match) and
+  dressed by `playerFrames(PlayerLookChoice)`; the pirates are drawn on the same figure (`player.side`
+  with `extra`). Blocks: `tileBuf` is always 16x16 (`tileArtPx`); older 8x8 art and mod blocks' art
+  are doubled by `fitTileArt`. Still on older art: about 170 blocks (machines, furniture), item icons,
+  vehicle parts, the suit (built on the older figure, see `playerSet`), mod block art (8x8). See
+  `tools/art/README.md` for how to draw and the look to keep.
 - **Comments** are plain-language doc comments explaining what something does in the game. Match the
   surrounding style. Each part starts with the same header and imports; keep them alike.
 - Commit and push to the branch the session names. Never put model names in commits.
@@ -172,11 +211,11 @@ What the stand-ins can't tell you:
 ## Map of the parts
 
 Sections start with `// ===== <name> =====` (grep for them). They are spread over the parts in order:
-part 1 `p01_util` to `p16c_damage`; part 2 `p16b_bosses` to `p31c_blockphys`, then the start of `p32_modplus`
-(game content changes, versions, ore controls, sprite tools, custom infusions); part 3 the rest of
-`p32_modplus` (from boss phases, with the rules, weather, machines, vehicles and themes of step 5c at its
-end), `u01_art` to `u05_menu`, `p33_vehicles`, then the start of `u07_mods` (`ModSession`, `ModUI` and the
-first shared editor pieces); part 4 the rest of `u07_mods`, `u08_alchemy`, `u09_modplus`, `u06_root`. New code goes into
+part 1 `p01_util` to `p12_phys`, then `a01_artsheet` (the hand-drawn pictures as text, and their
+readers); part 2 `p13a_mobdefs` to `p26_vehicle_ux`, then `p33_vehicles`; part 3 `p27_power` to
+`p31c_blockphys`; part 4 `p32_modplus` and `u01_art` (the art store, the player's look, sound, the
+weather simulation, ambient and animal life, the journal, telegraphed attacks); part 5 `u02_render` to
+`u05_menu`, then `u07_mods`; part 6 `u08_alchemy`, `u09_modplus`, `u06_root`. New code goes into
 the section it belongs to. A `private` or `fileprivate` name can only be used in its own part, so
 anything used across parts is internal (no modifier).
 
@@ -207,6 +246,26 @@ the Mod Test LOGIC tab, the sun and moon editor, the tree design editor), `u06_r
 
 ## Systems in brief
 
+- **Art (a01_artsheet, p05*, u01_art).** `ArtSheet.creatureText` and `tileText` hold the hand-drawn
+  pictures (run-length text; a creature is a header line and `+` lines of frames). `CreatureSheet`
+  parses once and unpacks a creature's frames when first asked; `TileSheet` gives the 16x16 blocks and
+  how each may be flipped. `creatureLook` picks the drawing or the older code-made picture
+  (`olderCreatureArt`), `Art.mobSet` caches sprite sets by kind and variant, `mobFrame` picks the
+  frame by state. The player: `playerFrames` lays the chosen trouser, shirt, scarf, hair and helmet
+  drawings on the bare figure and swaps the `PlayerInk` markers for graded ramps of the chosen colours
+  (`lookRamp`); armour takes the place of the shirt and trousers in its metal; `PlayerLookChoice.key`
+  names the sprite set; the CHARACTER screen (`CharacterView`) picks styles and colours and shows the
+  figure from the front and the side (`previewPlayer`). Settings saved before the styles start the
+  look afresh. After standing still (`Game.restT`) the sprite turns to its `front` frame; a worn suit
+  is still built on the older figure. Land: `SectionPainter` keeps four pictures
+  of each block (as drawn, mirrored, turned over, both), picks one by position where the block
+  allows it, and draws a lit top and dark lines where solid ground meets open space (also across
+  chunk edges: `World.set` and `loadChunk` mark the neighbour's sections). Leaf blocks are plain on
+  purpose, with gaps where the sky shows; where they meet the air the painter adds tufts that stick
+  out (`LeafTufts`, `paintTufts`), and leaves drift down from canopies and broken leaf blocks
+  (`LeafFlake`, `updateLeafFall`, `dropLeaf`, drawn by `drawLeafFall`). A section picture is
+  256x256 pixels; `RenderCache` keeps about 200. A mod's repaint of a game creature says which
+  drawing it was painted over (`ModOverride.fine`) and keeps that drawing's size and frame order.
 - **Sky.** `drawSky` paints gradient, stars, sun and moon, then the clouds (`drawClouds`), all behind
   the terrain. There are no background hills. Clouds are `CloudField.layers` (four layers: far, middle,
   near, storm deck), each a row of cells holding nothing, a cloud or a formation; the templates are
@@ -419,5 +478,5 @@ proposing a new step, and update it when a step lands.
 ## Working with the user
 
 The user works on an iPad and reads results in the Claude app. Keep reports plain and short. Send
-files with SendUserFile. When delivering the game, attach all four parts, `PixelRealm1.swift` to
-`PixelRealm4.swift`, and say which changed.
+files with SendUserFile. When delivering the game, attach all six parts, `PixelRealm1.swift` to
+`PixelRealm6.swift`, and say which changed.

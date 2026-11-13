@@ -658,6 +658,12 @@ final class Vehicle {
 	var boost: [PartCell: Double] = [:]
 	/// the engines' power (a mod engine can be stronger or weaker than the game's)
 	var enginePower: Double = 0
+	/// what each cell is to somebody walking on the vehicle (see Vehicle.walkKind), over the cells' box
+	var walkGrid: [UInt8] = []
+	var gridW: Int = 0
+	var gridH: Int = 0
+	/// how far its furthest corner is from its centre of mass (blocks)
+	var radius: Double = 1
 
 	init(id: Int, first: PartType, x: Double, y: Double) {
 		self.id = id
@@ -781,6 +787,13 @@ final class Vehicle {
 			inert += cellMass(c, t) * (ox * ox + oy * oy + 1.0 / 6.0)
 		}
 		inertia = max(0.2, inert)
+		var far: Double = 0.5
+		for (c, _) in parts {
+			let ox: Double = abs(Double(c.dx) + 0.5 - comX) + 0.5
+			let oy: Double = abs(Double(c.dy) + 0.5 - comY) + 0.5
+			far = max(far, sqrt(ox * ox + oy * oy))
+		}
+		radius = far
 		findFacings()
 		boost.removeAll()
 		for (c, b) in blocks where b.isMod && parts[c] != .block {
@@ -799,6 +812,7 @@ final class Vehicle {
 			else { drillDir[c] = (0, -1) }
 		}
 		drillWork = drillWork.filter { parts[$0.key] != nil }
+		buildWalkGrid()
 		if let a = anchor, parts[a] != nil {
 			// put the anchor cell back where it was
 			let ox: Double = Double(a.dx) + 0.5 - comX
@@ -1616,6 +1630,8 @@ final class Game: ObservableObject, @unchecked Sendable {
 	var fadeT: Double = 0
 	var mounted: Mob? = nil
 	var inVehicle: Vehicle? = nil
+	/// the places a vehicle touches the land in the physics step being worked out (kept to save making a list each step)
+	var vContacts: [VContact] = []
 	/// the ON VEHICLE switch: blocks in hand are built onto the nearest vehicle instead of the world
 	var vehicleBuild: Bool = false
 	/// fuel tanks that burst this frame (they go off next frame, so one blast cannot run into itself)
@@ -1812,7 +1828,7 @@ extension Game {
 		updateInputGate()
 		mobGrid.rebuild(mobs)
 		updateLifts(dt)
-		decksCache = (ships.isEmpty && vehicles.isEmpty && lifts.isEmpty) ? [] : buildDecks()
+		decksCache = (ships.isEmpty && lifts.isEmpty) ? [] : buildDecks()
 		updatePointerTimers(dt)
 		updateInputEdges()
 		updatePlayer(dt)
@@ -1837,6 +1853,8 @@ extension Game {
 		}
 		updateDrops(dt)
 		if !pauseVehicles { updateVehicles(dt) }
+		// everybody aboard a vehicle is where it now has them
+		syncRiders()
 		if !pauseMobs { updateShips(dt) }
 		if !pauseWorldTicks { updateWorldTicks(dt) }
 		updatePortal(dt)
@@ -1974,7 +1992,7 @@ extension Game {
 			// while climbing with no sideways input the body settles onto the rungs
 			if ix == 0 && (climbUp || climbDown) { tx = (Double(lc) + 0.5 - pb.x) * 8.0 }
 			pb.vx += (tx - pb.vx) * min(1.0, dt * 14.0)
-			world.moveBody(&pb, dt, stepUp: 1.0, dropThrough: climbDown, decks: allDecks())
+			moveThing(&pb, dt, stepUp: 1.0, dropThrough: climbDown, decks: allDecks(), mass: playerMass, falls: false)
 			coyote = 0.11
 			jumpBuf = 0
 			fallPeak = 0
@@ -2033,7 +2051,7 @@ extension Game {
 		let decks: [Deck] = allDecks()
 		let wasAir: Bool = !pb.onGround
 		let peak: Double = pb.vy
-		world.moveBody(&pb, dt, stepUp: 1.0, dropThrough: dropT > 0, decks: decks)
+		moveThing(&pb, dt, stepUp: 1.0, dropThrough: dropT > 0, decks: decks, mass: playerMass, falls: !swimming)
 		if pb.deck >= 0 && pb.deck < decks.count {
 			let dk: Deck = decks[pb.deck]
 			pb.x += dk.vx * dt
@@ -2258,6 +2276,7 @@ extension Game {
 		pb.y = spawnY
 		pb.vx = 0
 		pb.vy = 0
+		pb.ride = 0
 		invuln = 3.0
 		fallPeak = 0
 		world.loadAround(centerX: Int(spawnX), radius: 3)
@@ -2275,10 +2294,22 @@ extension Game {
 	/// (eased so turning around does not jerk the view), and frame-rate independent exponential smoothing.
 	func updateCamera(_ dt: Double) {
 		let st: Settings = settings
+		// Carried by a vehicle (driving it, or standing on it), the view is carried along with it, so
+		// the smoothing below only ever has the player's own movement to follow. Without this the view
+		// fell further behind the faster a vehicle went, and at a few hundred blocks a second lost it.
+		var carrier: Vehicle? = inVehicle
+		if carrier == nil && pb.ride != 0 { carrier = vehicleByID(pb.ride) }
+		if let cv = carrier {
+			let pv: (Double, Double) = cv.pointVel(pb.x, pb.y)
+			camX += pv.0 * dt
+			camTX += pv.0 * dt
+			camY += pv.1 * dt
+			camTY += pv.1 * dt
+		}
 		// look ahead: further when driving fast, eased in and out
 		var leadTarget: Double = 0
 		if st.camLookAhead && !st.camDirect {
-			if let v = inVehicle {
+			if let v = carrier {
 				leadTarget = clampD(v.vx * 0.35, -6.0, 6.0)
 			} else if abs(pb.vx) > 1.0 {
 				leadTarget = Double(facing) * 1.6
@@ -4026,8 +4057,11 @@ extension Game {
 		dx /= len
 		dy /= len
 		let speed: Double = st.minSpeed + (st.maxSpeed - st.minSpeed) * charge
-		// a little of the archer's own motion carries into the arrow, so shots on the run still land
-		return (ox + dx * 0.4, oy + dy * 0.4, dx * speed + pb.vx * 0.3, dy * speed + min(0, pb.vy) * 0.2)
+		// a little of the archer's own motion carries into the arrow, so shots on the run still land;
+		// all of the speed of a vehicle that carries the archer does (the arrow was going that fast already)
+		let cv: (Double, Double) = carrierVel()
+		let own: Double = inVehicle == nil ? pb.vx : 0
+		return (ox + dx * 0.4, oy + dy * 0.4, dx * speed + own * 0.3 + cv.0, dy * speed + min(0, inVehicle == nil ? pb.vy : 0) * 0.2 + cv.1)
 	}
 
 	func fireArrow(_ charge: Double) {
@@ -5051,10 +5085,6 @@ extension Game {
 			let dy: Double = s.deckY(sea)
 			out.append(Deck(x0: s.x - PirateShip.deckHalf, x1: s.x + PirateShip.deckHalf - 0.1, y: dy, vx: s.speed * Double(s.dir), id: s.id))
 		}
-		// a parked vehicle you can stand on (only while it is roughly level)
-		for v in vehicles where !v.rider && v.upright {
-			out.append(Deck(x0: v.b.x - v.b.w * 0.5, x1: v.b.x + v.b.w * 0.5, y: v.b.y - v.b.h, vx: v.vx, id: 1_000_000 + v.id))
-		}
 		// lift cars
 		for l in lifts { out.append(Deck(x0: l.x0, x1: l.x1, y: l.y, vx: 0, id: l.deckID)) }
 		return out
@@ -5095,7 +5125,7 @@ extension Game {
 			m.b.vx *= sm
 			if d.flying { m.b.vy *= sm }
 		}
-		world.moveBody(&m.b, dt, stepUp: d.flying ? 0 : stepUp, dropThrough: false, decks: decksCache)
+		moveThing(&m.b, dt, stepUp: d.flying ? 0 : stepUp, dropThrough: false, decks: decksCache, mass: mobMass(m), falls: !d.flying && !m.b.inWater)
 		if sm < 0.999 {
 			m.b.vx /= sm
 			if d.flying { m.b.vy /= sm }
@@ -6561,6 +6591,10 @@ extension Game {
 			var b = Body(x: d.x, y: d.y, w: 0.3, h: 0.3)
 			b.vx = d.vx
 			b.vy = d.vy
+			b.ride = d.ride
+			b.rlx = d.rlx
+			b.rly = d.rly
+			b.onGround = d.onGround
 			let px: Double = pb.x
 			let py: Double = pb.y - pb.h * 0.5
 			let dx: Double = px - d.x
@@ -6579,10 +6613,12 @@ extension Game {
 				b.vx *= (1.0 - min(1.0, dt * (d.onGround ? 6.0 : 0.6)))
 			}
 			if magnet {
+				// drawn to the player through the air, whatever it was lying on
+				if b.ride != 0 { b.ride = 0 }
 				b.x += b.vx * dt
 				b.y += b.vy * dt
 			} else {
-				world.moveBody(&b, dt, stepUp: 0, dropThrough: false, decks: decksCache)
+				moveThing(&b, dt, stepUp: 0, dropThrough: false, decks: decksCache, mass: 0)
 				if b.inWater { b.vy = min(b.vy, 1.5); b.vx *= 0.9 }
 			}
 			d.x = b.x
@@ -6590,6 +6626,9 @@ extension Game {
 			d.vx = b.vx
 			d.vy = b.vy
 			d.onGround = b.onGround
+			d.ride = b.ride
+			d.rlx = b.rlx
+			d.rly = b.rly
 			if !dead && d.pickDelay <= 0 && !d.heldBack && dist < 0.9 {
 				let left: Int = inv.add(d.stack.item, d.stack.count, extra: d.stack.extra, inf: d.stack.inf)
 				if left < d.stack.count {
@@ -7943,6 +7982,24 @@ func partDisplacement(_ p: PartType) -> Double {
 /// the same at 30 and 60 frames per second.
 let vehicleStep: Double = 1.0 / 120.0
 
+/// One place a vehicle touches the land in a physics step: where (from its centre of mass), which way
+/// the surface faces, how hard a push there turns and moves it, how fast it must be leaving the surface
+/// afterwards (its bounce), its grip, and the pushes given so far along the surface's face and along it
+struct VContact {
+	var rx: Double
+	var ry: Double
+	var nx: Double
+	var ny: Double
+	var rn: Double
+	var kn: Double
+	var rt: Double
+	var kt: Double
+	var want: Double
+	var mu: Double
+	var jn: Double = 0
+	var jt: Double = 0
+}
+
 /// Per-frame contact summary gathered over the fixed steps
 struct VStepStats {
 	var anyHits: Int = 0
@@ -7965,6 +8022,9 @@ extension Game {
 		if vehicles.contains(where: { $0.parts.isEmpty }) { vehicles.removeAll { $0.parts.isEmpty } }
 		Perf.shared.physMs = Perf.smooth(Perf.shared.physMs, perfNow() - t0)
 	}
+
+	/// What the player weighs on whatever they stand on (a vehicle frame is 1)
+	var playerMass: Double { return Phys.playerMass }
 
 	func seatCell(_ v: Vehicle) -> PartCell? {
 		for (c, t) in v.parts where t == .seat || t == .cockpit { return c }
@@ -8079,7 +8139,7 @@ extension Game {
 
 	func stepVehicle(_ v: Vehicle, _ dt: Double) {
 		if !vehicleAreaLoaded(v) { return }
-		let throttle: Double = v.rider || v.auto == 2 ? v.throttle : 0
+		let throttle: Double = v.rider || v.auto != 0 ? v.throttle : 0
 		let airBusy: Bool = v.aero && (abs(v.pitch) > 0.05 || v.heat > 0.02 || v.collective > 0.02 || v.turnT > 0)
 		if v.asleep && abs(throttle) < 0.05 && !v.drilling && !airBusy {
 			// resting vehicles cost nothing until something wakes them
@@ -8094,14 +8154,24 @@ extension Game {
 		var stats = VStepStats()
 		var k: Int = 0
 		while k < n {
-			// split a step when moving fast, so no sample moves more than ~0.2 blocks at once
-			let fast: Double = v.speed + abs(v.angVel) * 3.0
-			let split: Int = fast * vehicleStep > 0.2 ? 2 : 1
+			// Nothing may move further than Phys.maxStep between collision checks, however fast it goes:
+			// the step is split as often as the speed needs. With no land or water anywhere it could
+			// reach in this step there is nothing to check against, and one step does (open sky is free).
+			let fast: Double = v.speed + abs(v.angVel) * v.radius
+			let travel: Double = fast * vehicleStep
+			var split: Int = 1
+			var open: Bool = false
+			if travel > Phys.maxStep * 0.5 || v.contacts == 0 {
+				let r: Double = travel + 1.0
+				open = world.boxOpen(v.b.left - r, v.b.top - r, v.b.right + r, v.b.y + r)
+				if !open { split = min(Phys.maxSplit, max(1, Int(ceil(travel / Phys.maxStep)))) }
+			}
 			var s: Int = 0
 			while s < split {
-				vehicleSubstep(v, vehicleStep / Double(split), samples, throttle, &stats)
+				vehicleSubstep(v, vehicleStep / Double(split), samples, throttle, &stats, open: open)
 				s += 1
 			}
+			if split > 1 || open { v.updateBox() }
 			k += 1
 		}
 		for r in stats.rammed where world.tile(r.0, r.1).solid {
@@ -8150,7 +8220,7 @@ extension Game {
 
 	/// One fixed physics step: gravity, buoyancy and water drag per part, propulsion, contacts with
 	/// impulses and friction, positional correction, stability assists
-	func vehicleSubstep(_ v: Vehicle, _ h: Double, _ samples: [VSample], _ throttle: Double, _ stats: inout VStepStats) {
+	func vehicleSubstep(_ v: Vehicle, _ h: Double, _ samples: [VSample], _ throttle: Double, _ stats: inout VStepStats, open: Bool = false) {
 		let steerOK: Bool = v.hasSeat && v.hasSteering
 		let hasFuel: Bool = v.fuel > 0 || isCreative
 		let invM: Double = 1.0 / v.mass
@@ -8165,6 +8235,7 @@ extension Game {
 		var hullN: Int = 0
 		var nearWater: Bool = false
 		for (cell, t) in v.parts {
+			if open { break }
 			let lx: Double = Double(cell.dx) + 0.5 - v.comX
 			let ly: Double = Double(cell.dy) + 0.5 - v.comY
 			let wx: Double = v.px + lx * c - ly * s
@@ -8182,7 +8253,8 @@ extension Game {
 			let ry: Double = wy - v.py
 			let pvx: Double = v.vx - v.angVel * ry
 			let pvy: Double = v.vy + v.angVel * rx
-			let fx: Double = -pvx * (0.35 + 0.3 * disp) * f
+			// (a share of the water's drag grows with the square of the speed: what holds a fast boat back)
+			let fx: Double = -pvx * (0.35 + 0.3 * disp + Drive.waterDrag * disp * abs(pvx)) * f
 			let fy: Double = -gravityG * disp * f - pvy * 4.5 * disp * f
 			v.vx += fx * invM * h
 			v.vy += fy * invM * h
@@ -8203,14 +8275,14 @@ extension Game {
 		// boat propulsion along the water (horizontal, so a tilted hull cannot dive or climb on thrust).
 		// A boat grounded at the edge of the water can still push itself back off.
 		if steerOK && abs(throttle) > 0.1 && v.buoyancy > 0 && (sub > 0 || (nearWater && stats.anyHits > 0)) {
+			// a propeller pushes with the engines' power (so its push falls as the boat gains speed); a
+			// paddle's stroke only goes so fast. What a boat reaches is where that meets the water's drag.
 			var thrust: Double = 0
-			var vmax: Double = 0
+			let going: Double = v.vx * throttle > 0 ? abs(v.vx) : 0
 			if v.engines > 0 && v.propellers > 0 && hasFuel {
-				thrust = Double(v.engines) * 16.0
-				vmax = min(10.0, 5.0 + 2.0 * Double(v.engines))
+				thrust = min(Double(v.engines) * 16.0, Double(v.engines) * Drive.propPower / max(going, 0.1))
 			} else if v.paddles > 0 {
-				thrust = Double(v.paddles) * 5.5
-				vmax = 3.4
+				thrust = Double(v.paddles) * 9.0 * max(0, 1.0 - going / Drive.paddleStroke)
 			}
 			if sub <= 0 { thrust *= 0.45 }
 			// touching the bottom: thrust fades as the hull comes out of the water, so a boat runs
@@ -8219,7 +8291,7 @@ extension Game {
 				let landward: Bool = submergedFraction(v.px + Double(throttle > 0 ? 1 : -1) * (v.b.w * 0.5 + 0.5), v.py) <= 0
 				if landward { thrust *= clampD((hullDepth - 0.12) / 0.25, 0, 1) }
 			}
-			if !(abs(v.vx) > vmax && v.vx * throttle > 0) { v.vx += thrust * throttle * invM * h }
+			v.vx += thrust * throttle * invM * h
 		}
 		// lift, drag and thrust in the air, part by part (wings, rotors, balloons, propellers, jets)
 		if v.aero { airForces(v, h, throttle) }
@@ -8239,7 +8311,9 @@ extension Game {
 		var outRight: Double = 0
 		var stepWheel: Int = 0
 		var hits: Int = 0
+		vContacts.removeAll(keepingCapacity: true)
 		for smp in samples {
+			if open { break }
 			let lx: Double = smp.lx - v.comX
 			let ly: Double = smp.ly - v.comY
 			let rx: Double = lx * c2 - ly * s2
@@ -8269,40 +8343,66 @@ extension Game {
 				let pc: PartCell = PartCell(dx: smp.cx, dy: smp.cy)
 				stats.crash[pc] = max(stats.crash[pc] ?? 0, -vn - crashAt)
 			}
-			if vn < 0 {
-				let rn: Double = rx * ny - ry * nx
-				let kn: Double = invM + rn * rn * invI
-				let jn: Double = -(1.0 + 0.04) * vn / kn
-				v.vx += jn * nx * invM
-				v.vy += jn * ny * invM
-				v.angVel += rn * jn * invI
-				// friction along the surface; wheels roll unless braking, hulls slide on sand and stone
-				let tx: Double = -ny
-				let ty: Double = nx
-				let pvx2: Double = v.vx - v.angVel * ry
-				let pvy2: Double = v.vy + v.angVel * rx
-				let vt: Double = pvx2 * tx + pvy2 * ty
-				let rt: Double = rx * ty - ry * tx
-				let kt: Double = invM + rt * rt * invI
-				// a boat's parts slide on sand and stone, very easily while it is still partly afloat (so it
-				// eases off a beach under its own power); car bodies grip
-				var mu: Double = smp.hull ? (sub > 0 ? 0.05 : 0.22) : 0.7
-				if smp.wheel {
-					// an aircraft's wheels roll free on the throttle and brake without it
-					let braking: Bool = abs(throttle) < 0.1 || (throttle * vt < 0 && !v.aero)
-					mu = braking ? (v.rider ? 0.9 : 0.25) : (v.aero ? 0.02 : 0.06)
-					if smp.track { mu = braking ? (v.rider ? 1.1 : 0.4) : 0.14 }
-				}
-				var jt: Double = -vt / kt
-				let lim: Double = mu * jn
-				jt = clampD(jt, -lim, lim)
-				v.vx += jt * tx * invM
-				v.vy += jt * ty * invM
-				v.angVel += rt * jt * invI
+			// what it touches: ice grips far less than stone, hay gives a little back
+			let ground: BlockPhys = blockPhys(world.tile(Int(floor(wx)), Int(floor(wy))))
+			let rn: Double = rx * ny - ry * nx
+			let tx: Double = -ny
+			let ty: Double = nx
+			let rt: Double = rx * ty - ry * tx
+			let vt: Double = pvx * tx + pvy * ty
+			// friction along the surface; wheels roll unless braking, hulls slide on sand and stone.
+			// A boat's parts slide on sand and stone, very easily while it is still partly afloat (so it
+			// eases off a beach under its own power); car bodies grip
+			var mu: Double = smp.hull ? (sub > 0 ? 0.05 : 0.22) : 0.7
+			if smp.wheel {
+				// an aircraft's wheels roll free on the throttle and brake without it
+				let braking: Bool = abs(throttle) < 0.1 || (throttle * vt < 0 && !v.aero)
+				mu = braking ? (v.rider ? 0.9 : 0.25) : (v.aero ? 0.02 : 0.06)
+				if smp.track { mu = braking ? (v.rider ? 1.1 : 0.4) : 0.14 }
 			}
+			let leave: Double = vn < 0 ? -max(0.04, ground.bounce) * vn : 0
+			vContacts.append(VContact(rx: rx, ry: ry, nx: nx, ny: ny, rn: rn, kn: invM + rn * rn * invI, rt: rt, kt: invM + rt * rt * invI, want: leave, mu: mu * ground.grip))
 			let d: Double = min(0.12, max(0, depth - 0.01))
 			if ny < -0.5 { outUp = max(outUp, d) } else if ny > 0.5 { outDown = max(outDown, d) }
 			else if nx < -0.5 { outLeft = max(outLeft, d) } else { outRight = max(outRight, d) }
+		}
+		// The blows at every place it touches, worked out together: each is given what stops it going
+		// into the surface there (and the little the surface gives back), then friction up to its grip,
+		// and the round is gone through a few times so that what one place gives is taken into account
+		// at the others. (One pass, as it used to be, gave a block landing flat far too much at its first
+		// corner: it bounced high and spun, differently every time.)
+		if !vContacts.isEmpty {
+			var round: Int = 0
+			while round < 4 {
+				var i: Int = 0
+				while i < vContacts.count {
+					var k: VContact = vContacts[i]
+					let vn: Double = (v.vx - v.angVel * k.ry) * k.nx + (v.vy + v.angVel * k.rx) * k.ny
+					let jn0: Double = k.jn
+					k.jn = max(0, jn0 + (k.want - vn) / k.kn)
+					let dn: Double = k.jn - jn0
+					if dn != 0 {
+						v.vx += dn * k.nx * invM
+						v.vy += dn * k.ny * invM
+						v.angVel += k.rn * dn * invI
+					}
+					let tx: Double = -k.ny
+					let ty: Double = k.nx
+					let vt: Double = (v.vx - v.angVel * k.ry) * tx + (v.vy + v.angVel * k.rx) * ty
+					let lim: Double = k.mu * k.jn
+					let jt0: Double = k.jt
+					k.jt = clampD(jt0 - vt / k.kt, -lim, lim)
+					let dtn: Double = k.jt - jt0
+					if dtn != 0 {
+						v.vx += dtn * tx * invM
+						v.vy += dtn * ty * invM
+						v.angVel += k.rt * dtn * invI
+					}
+					vContacts[i] = k
+					i += 1
+				}
+				round += 1
+			}
 		}
 		v.px += (outRight - outLeft) * 0.8
 		v.py += (outDown - outUp) * 0.8
@@ -8320,16 +8420,29 @@ extension Game {
 		if stepWheel > 0 && v.canDriveOnLand && steerOK && hasFuel && abs(throttle) > 0.1 && abs(wrapped) < 1.0 && v.rotors == 0 {
 			// tracks are slow but pull like nothing else
 			let trackShare: Double = Double(v.tracks) / Double(max(1, v.wheels))
-			let vmax: Double = min(17.0, 6.5 + 3.0 * Double(v.engines)) * (1.0 - 0.45 * trackShare)
 			let along: Double = v.vx * c2 + v.vy * s2
-			if !(abs(along) > vmax && along * throttle > 0) {
-				// heavier builds accelerate and climb slower; more engines help, and offroad wheels pull
-				// harder (their extra weight is the price)
-				let grip: Double = 1.0 + 0.7 * Double(v.offroadWheels) / Double(max(1, v.wheels)) + 1.4 * trackShare
-				let power: Double = v.enginePower * 135.0 * grip * min(1.0, Double(stepWheel) / 4.0 + 0.5) * groundShare(v)
-				v.vx += c2 * power * throttle * invM * h
-				v.vy += s2 * power * throttle * invM * h
-			}
+			// heavier builds accelerate and climb slower; more engines help, and offroad wheels pull
+			// harder (their extra weight is the price)
+			let grip: Double = 1.0 + 0.7 * Double(v.offroadWheels) / Double(max(1, v.wheels)) + 1.4 * trackShare
+			let share: Double = groundShare(v)
+			var push: Double = v.enginePower * 135.0 * grip * min(1.0, Double(stepWheel) / 4.0 + 0.5) * share
+			// An engine gives so much power, so the push it can give falls as the speed rises (power is
+			// push times speed), and the wheels, the gearing and the weight on them take a share that
+			// grows with the speed. There is no top speed built in: a vehicle reaches the speed where
+			// the two meet, so more engines or less weight is faster.
+			let going: Double = along * throttle > 0 ? abs(along) : 0
+			if going > 0.1 { push = min(push, v.enginePower * Drive.power * share / going) }
+			let loss: Double = Drive.loss * (1.0 + Drive.lossPerMass * v.mass) * (1.0 + Drive.trackLoss * trackShare) * along * share
+			let f: Double = push * throttle - loss
+			v.vx += c2 * f * invM * h
+			v.vy += s2 * f * invM * h
+		}
+		if !v.aero {
+			// the air against a vehicle with no wings (aircraft work theirs out part by part): it grows
+			// with the square of the speed, on the faces that meet it
+			let rho: Double = airDensity(v.py)
+			v.vx -= Aero.kDrag * rho * Double(v.gridH) * v.vx * abs(v.vx) * invM * h
+			v.vy -= Aero.kDrag * rho * Double(v.gridW) * v.vy * abs(v.vy) * invM * h
 		}
 		if hits == 0 && sub <= 0 && v.wheels > 0 && !v.aero {
 			// airborne wheeled vehicles slowly level out and shed spin (arcade suspension: driving off a
@@ -8345,10 +8458,16 @@ extension Game {
 		// a little rolling drag and air resistance
 		v.vx *= (1.0 - min(1.0, 0.05 * h))
 		v.angVel *= (1.0 - min(1.0, (hits > 0 ? 1.2 : 0.3) * h))
-		// stability limits
-		v.vx = clampD(v.vx, -30, 30)
-		v.vy = clampD(v.vy, -30, 30)
-		v.angVel = clampD(v.angVel, -12, 12)
+		// No limit on speed or spin: the sub-steps above keep fast things from passing through the land.
+		// Only numbers that are no longer numbers are put right (they would spread to everything).
+		if !(v.vx.isFinite && v.vy.isFinite && v.angVel.isFinite && v.px.isFinite && v.py.isFinite && v.angle.isFinite) {
+			v.vx = 0
+			v.vy = 0
+			v.angVel = 0
+			if !v.px.isFinite { v.px = v.b.x }
+			if !v.py.isFinite { v.py = v.b.y - v.b.h * 0.5 }
+			if !v.angle.isFinite { v.angle = 0 }
+		}
 	}
 
 	/// Vehicles shove each other apart instead of overlapping
@@ -8387,12 +8506,19 @@ extension Game {
 		if sp < 4.0 { return }
 		let src: DamageSource = v.rider ? .player : .environment
 		let nudge: Double = 0.15
-		for m in mobsNear(v.b.left - 1, v.b.right + 1) {
-			if m.hp <= 0 || m.tame { continue }
-			if m.b.right < v.b.left - nudge || m.b.left > v.b.right + nudge || m.b.y < v.b.top || m.b.top > v.b.y { continue }
+		// (the way it came this frame: at a few hundred blocks a second that is several blocks)
+		let backX: Double = sp * dt > 0.6 ? v.vx * dt : 0
+		let backY: Double = sp * dt > 0.6 ? v.vy * dt : 0
+		let sweptL: Double = v.b.left - max(0, backX)
+		let sweptR: Double = v.b.right - min(0, backX)
+		let sweptT: Double = v.b.top - max(0, backY)
+		let sweptB: Double = v.b.y - min(0, backY)
+		for m in mobsNear(sweptL - 1, sweptR + 1) {
+			if m.hp <= 0 || m.tame || m.b.ride == v.id { continue }
+			if m.b.right < sweptL - nudge || m.b.left > sweptR + nudge || m.b.y < sweptT || m.b.top > sweptB { continue }
 			// must actually touch a part, not just the box
 			let cell: PartCell = v.cellAt(m.b.x, m.b.cy)
-			var touching: Bool = v.parts[cell] != nil
+			var touching: Bool = v.parts[cell] != nil || backX != 0 || backY != 0
 			if !touching {
 				for (c, _) in v.parts {
 					let cc: (Double, Double) = v.cellCenter(c)
@@ -8407,13 +8533,13 @@ extension Game {
 			info.key = 7_000_000 + v.id
 			info.cooldown = 0.7
 			if applyMobDamage(m, info) {
-				// the creature's weight slows the vehicle
-				let mm: Double = m.def.w * m.def.h * 0.8
-				v.vx *= v.mass / (v.mass + mm * 0.5)
+				// the creature's weight slows the vehicle (when the vehicle's cells push it along, that
+				// push already takes it: see meetVehicles; this is for a blow in passing at high speed)
+				if backX != 0 || backY != 0 { v.vx *= v.mass / (v.mass + mobMass(m) * 0.5) }
 				addShake(0.12)
 			}
 		}
-		if !v.rider && !dead && inVehicle !== v {
+		if !v.rider && !dead && inVehicle !== v && pb.ride != v.id {
 			if pb.right > v.b.left && pb.left < v.b.right && pb.y > v.b.top && pb.top < v.b.y {
 				var info = DamageInfo(amount: (sp - 3.0) * (1.0 + v.mass * 0.3), type: .impact, source: .environment)
 				info.knock = 9.0
@@ -8522,9 +8648,41 @@ extension Game {
 				v.angVel = (remainder(v.angle, 2.0 * Double.pi) > 0 ? -1.0 : 1.0) * 6.0
 				v.asleep = false
 				say("Heave! Flipping the vehicle back over.", 1.5)
-			} else if v.speed < 2.5 {
-				dismount()
+			} else {
+				leaveSeat(v)
 			}
+		}
+	}
+
+	/// Getting up from the seat. With a floor under the seat the player stands up where they sat, at any
+	/// speed, and can walk about the vehicle while it carries on (the autopilot keeps its hands on the
+	/// controls; without one the engines idle). With nothing to stand on they hop out as before, which
+	/// only a slow vehicle allows.
+	func leaveSeat(_ v: Vehicle) {
+		if let c = seatCell(v) {
+			let floorK: UInt8 = v.walkAt(c.dx, c.dy + 1)
+			let headK: UInt8 = v.walkAt(c.dx, c.dy - 1)
+			if floorK != cellOpen && headK != cellSolid {
+				v.rider = false
+				if v.auto == 0 {
+					v.throttle = 0
+					v.pitch = 0
+				}
+				inVehicle = nil
+				boardFrame(&pb, v, Double(c.dx) + 0.5, Double(c.dy) + 1.0)
+				pb.onGround = true
+				fallPeak = 0
+				if v.speed > 2.5 { say(v.auto != 0 ? "You stand up. The autopilot flies on." : "You stand up. Nobody is at the controls.", 2.5) }
+				bumpHUD()
+				return
+			}
+		}
+		if v.speed < 2.5 {
+			dismount()
+		} else if v.contacts == 0 && v.submerged <= 0.02 {
+			say("Nothing to stand on here. Put a floor under the seat to walk about in flight.", 3.0)
+		} else {
+			say("Slow down to get out (or put a floor under the seat).", 2.5)
 		}
 	}
 
@@ -8599,6 +8757,7 @@ extension Game {
 		}
 		if mounted != nil { dismount() }
 		inVehicle = v
+		pb.ride = 0
 		v.rider = true
 		v.asleep = false
 		v.holdY = v.py
@@ -11579,6 +11738,22 @@ enum Aero {
 	static let turnTime: Double = 1.4
 }
 
+/// The numbers of wheels, tracks and water propellers
+enum Drive {
+	/// what one engine gives its wheels (push times speed): above about 8 blocks a second its push falls
+	static let power: Double = 1415.0
+	/// what the wheels and gearing take, per block a second of speed; a little more for every unit of
+	/// weight on them; tracks take a good deal more
+	static let loss: Double = 10.0
+	static let lossPerMass: Double = 0.028
+	static let trackLoss: Double = 0.8
+	/// what one engine gives a water propeller, how fast a paddle's stroke goes (blocks a second), and
+	/// the share of the water's drag that grows with the square of the speed
+	static let propPower: Double = 130.0
+	static let paddleStroke: Double = 9.0
+	static let waterDrag: Double = 0.002
+}
+
 /// Air thins with height: full below the hills, about half at the top of the sky
 func airDensity(_ y: Double) -> Double {
 	let top: Double = Double(WorldGen.sea) - 60.0
@@ -11945,7 +12120,7 @@ extension Game {
 	/// Once a frame: blade pitch and burner heat follow the stick (hands off, they hold the height), the
 	/// elevator trim settles, and the nose end is worked out from the way the vehicle moves
 	func flightControls(_ v: Vehicle, _ dt: Double) {
-		let piloted: Bool = (v.rider || v.auto == 2) && v.hasSeat && v.hasSteering
+		let piloted: Bool = (v.rider || v.auto != 0) && v.hasSeat && v.hasSteering
 		let airborne: Bool = v.contacts == 0 && v.submerged <= 0.02
 		let along: Double = v.vx * v.cosA + v.vy * v.sinA
 		if abs(along) > 3.0 { v.fwd = along > 0 ? 1 : -1 }
@@ -12008,8 +12183,8 @@ extension Game {
 		var use: Double = 0
 		let thr: Double = abs(v.throttle)
 		if v.rotors > 0 && v.collective > 0.05 && thr <= 0.1 { use += Double(v.engines) * (0.4 + 0.6 * v.collective) }
-		if v.jets > 0 && thr > 0.05 && (v.rider || v.auto == 2) { use += Double(v.jets) * 2.5 * thr }
-		if v.burners > 0 && v.heat > 0.05 && (v.rider || v.auto == 2) { use += Double(v.burners) * 0.6 * v.heat }
+		if v.jets > 0 && thr > 0.05 && (v.rider || v.auto != 0) { use += Double(v.jets) * 2.5 * thr }
+		if v.burners > 0 && v.heat > 0.05 && (v.rider || v.auto != 0) { use += Double(v.burners) * 0.6 * v.heat }
 		v.fuel = max(0, v.fuel - use * dt)
 	}
 }
@@ -12025,14 +12200,14 @@ extension Game {
 		if v.hitT > 0 { v.hitT -= dt }
 		if v.aero {
 			v.windX = world.dim == .overworld && settings.weatherOn ? weatherAt(v.px, v.py).wind * 0.6 : 0
-			if v.auto == 2 && !v.rider { autopilotSteer(v, 0, 0, dt) }
+			if v.auto != 0 && !v.rider { autopilotSteer(v, 0, 0, dt) }
 			flightControls(v, dt)
 			airFuel(v, dt)
 			if v.rotors > 0 { rotorBlades(v, dt) }
 			let spin: Double = v.rotors > 0 ? v.collective : min(1.0, abs(v.throttle))
 			if v.rotors + v.airProps + v.tailRotors > 0 && airPower(v).0 + airPower(v).1 > 0 { v.propRot += dt * (4.0 + 26.0 * spin) }
 			v.airspeed = sqrt((v.vx - v.windX) * (v.vx - v.windX) + v.vy * v.vy)
-		} else if v.auto == 2 && !v.rider {
+		} else if v.auto != 0 && !v.rider {
 			autopilotSteer(v, 0, 0, dt)
 		}
 		if v.turnT > 0 { stepTurn(v, dt) }
@@ -12411,8 +12586,8 @@ extension Game {
 		if v.rotors > 0 { return "Flying. Stick up and down: climb and sink (let go to hover). Left and right: tilt and fly that way." }
 		if v.burners > 0 && v.envelopes > 0 { return "Ballooning. Stick up: heat the balloon and rise; down: let it cool and sink. Left and right: the propellers." }
 		if v.wings > 0 { return "Flying. Left and right: the throttle. Up and down: pitch the nose (gather speed on the ground, then pull up). TURN turns round." }
-		if v.tracks > 0 { return "Driving a tracked vehicle: slow, but it climbs anything. Jump to get out when stopped." }
-		return "Driving. Hold the stick to move; in the air it tilts the vehicle. Jump to get out when stopped."
+		if v.tracks > 0 { return "Driving a tracked vehicle: slow, but it climbs anything. Jump to get up from the seat." }
+		return "Driving. Hold the stick to move; in the air it tilts the vehicle. Jump to get up from the seat."
 	}
 }
 
@@ -12485,6 +12660,7 @@ extension Game {
 		}
 		let cx: Double = v.px
 		let cy: Double = v.py
+		mirrorRiders(v, sx)
 		v.parts = np
 		v.blocks = nb
 		v.dmg = nd
@@ -12723,7 +12899,7 @@ extension Game {
 		v.holdY = v.py
 		v.holdVX = v.vx
 		if next == 2 { v.routeAt = nearestWaypoint(v) }
-		let names: [String] = ["Autopilot off.", "Autopilot: cruise. It holds your speed and height; steer any time.", "Autopilot: route. It drives your marked points round and round, even if you get out."]
+		let names: [String] = ["Autopilot off.", "Autopilot: cruise. It holds your speed and height, even if you get up and walk about.", "Autopilot: route. It drives your marked points round and round, even if you get out."]
 		say(names[next], 3.0)
 		bumpHUD()
 	}

@@ -2442,6 +2442,10 @@ struct ModBlock: Codable, Identifiable, Equatable {
 	var weight: Double = 0
 	var carry: Double = 0
 	var falls: Bool = false
+	/// what it is like to touch: how well wheels, hulls and feet grip it (1: stone; ice is 0.12) and how
+	/// much of a blow it gives back (0: none, 1: all of it)
+	var grip: Double = 1.0
+	var bounce: Double = 0.0
 	/// on Sparkworks power lines: what it does, and how strong it is at it
 	var powerRole: ModPowerRole = .none
 	var powerAmt: Double = 4
@@ -2476,6 +2480,8 @@ struct ModBlock: Codable, Identifiable, Equatable {
 		weight = c.val(.weight, 0)
 		carry = c.val(.carry, 0)
 		falls = c.val(.falls, false)
+		grip = c.val(.grip, 1.0)
+		bounce = c.val(.bounce, 0.0)
 		powerRole = c.val(.powerRole, .none)
 		powerAmt = c.val(.powerAmt, 4)
 	}
@@ -4019,6 +4025,8 @@ enum ModValidator {
 			b.vehPower = clampD(b.vehPower.isFinite ? b.vehPower : 1, 0.25, sb ? 10 : 4)
 			b.weight = clampD(b.weight.isFinite ? b.weight : 0, 0, sb ? 40 : 12)
 			b.carry = clampD(b.carry.isFinite ? b.carry : 0, 0, sb ? 4000 : 400)
+			b.grip = clampD(b.grip.isFinite ? b.grip : 1, 0.02, sb ? 4 : 2)
+			b.bounce = clampD(b.bounce.isFinite ? b.bounce : 0, 0, sb ? 1.2 : 0.9)
 			b.powerAmt = clampD(b.powerAmt.isFinite ? b.powerAmt : 4, 0.1, sb ? 200 : 40)
 			if b.text.count > 200 { b.text = String(b.text.prefix(200)) }
 			if let d = b.drop, !exists(d) {
@@ -9842,7 +9850,7 @@ extension Game {
 
 	/// A shot from the suit: the player's own
 	func suitShoot(_ kind: ProjKind, _ o: (Double, Double), _ a: Double, _ speed: Double, _ dmg: Double, _ knock: Double) {
-		var q = Projectile(kind: kind, x: o.0 + cos(a) * 0.4, y: o.1 + sin(a) * 0.4, vx: cos(a) * speed + pb.vx * 0.5, vy: sin(a) * speed, dmg: dmg, fromPlayer: true, gravity: kind == .shell ? 14 : 2)
+		var q = Projectile(kind: kind, x: o.0 + cos(a) * 0.4, y: o.1 + sin(a) * 0.4, vx: cos(a) * speed + (inVehicle == nil ? pb.vx : 0) * 0.5 + carrierVel().0, vy: sin(a) * speed + carrierVel().1, dmg: dmg, fromPlayer: true, gravity: kind == .shell ? 14 : 2)
 		q.life = kind == .shell ? 4.0 : 1.2
 		q.w = kind == .shell ? 0.3 : 0.12
 		q.source = .player
@@ -11307,6 +11315,10 @@ struct BlockPhys {
 	var weight: Double
 	var carry: Double
 	var span: Int
+	/// how well wheels, hulls and feet grip it (1: stone and soil; ice far less)
+	var grip: Double = 1.0
+	/// how much of a blow it gives back (0: none; hay a little)
+	var bounce: Double = 0.0
 }
 
 enum BlockPhysTable {
@@ -11315,6 +11327,23 @@ enum BlockPhysTable {
 
 /// The material numbers of the game's own blocks (mod blocks are worked out from their hardness)
 func blockPhysOf(_ t: Tile) -> BlockPhys {
+	var p: BlockPhys = blockWeights(t)
+	switch t {
+	case .ice: p.grip = 0.12
+	case .snow: p.grip = 0.6
+	case .mud: p.grip = 0.7
+	case .sand: p.grip = 0.85
+	case .glass, .obsidian: p.grip = 0.75
+	case .sandbag: p.grip = 1.15
+	case .hay: p.grip = 0.9; p.bounce = 0.3
+	case .crate, .planks, .platform: p.bounce = 0.08
+	default: break
+	}
+	return p
+}
+
+/// Weight, carry and reach of the game's own blocks
+func blockWeights(_ t: Tile) -> BlockPhys {
 	switch t {
 	case .air, .water, .lava: return BlockPhys(weight: 0, carry: 0, span: 0)
 	case .bedrock: return BlockPhys(weight: 20, carry: 9999, span: 9)
@@ -11386,6 +11415,8 @@ func blockPhys(_ t: Tile) -> BlockPhys {
 		if let b = ModRuntime.shared.blockDef(t) {
 			if b.weight > 0 { p.weight = b.weight }
 			if b.carry > 0 { p.carry = b.carry }
+			p.grip = b.grip
+			p.bounce = b.bounce
 		}
 		return p
 	}

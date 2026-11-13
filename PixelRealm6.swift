@@ -7201,6 +7201,8 @@ extension BlockEditorView {
 				StatSlider(label: "Weight (stone is 2.5)", value: b(\.weight, 0), range: 0.0...(s.mod.sandbox ? 40 : 12), step: 0.1, format: "%.1f")
 				StatSlider(label: "Weight it holds up", value: b(\.carry, 0), range: 0.0...(s.mod.sandbox ? 4000 : 400), step: 5, format: "%.0f")
 				ModToggle(label: "Falls like sand", help: "With nothing under it, it drops and lands", isOn: b(\.falls, false))
+				StatSlider(label: "Grip (stone is 1, ice 0.12)", value: b(\.grip, 1.0), range: 0.02...(s.mod.sandbox ? 4.0 : 2.0), step: 0.02, format: "%.2f")
+				StatSlider(label: "Bounce (0 none, hay 0.3)", value: b(\.bounce, 0.0), range: 0.0...(s.mod.sandbox ? 1.2 : 0.9), step: 0.05, format: "%.2f")
 			}
 			ModSection(title: "ON POWER LINES", help: p.powerRole.help) {
 				ChoiceRows(options: ModPowerRole.allCases.map { $0.name }, selected: powerBind, columns: 3)

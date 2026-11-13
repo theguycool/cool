@@ -434,6 +434,8 @@ enum Tile: UInt8, CaseIterable, Codable {
 	static var opaqueTable: [Bool] = Tile.allCases.map { Tile.makeDef($0).opaque }
 	static var lightTable: [Int] = Tile.allCases.map { Tile.makeDef($0).light }
 	static var liquidTable: [Bool] = Tile.allCases.map { Tile.makeDef($0).liquid }
+	/// what a vehicle can meet: anything solid, any liquid
+	static var meetTable: [Bool] = Tile.allCases.map { Tile.makeDef($0).solid || Tile.makeDef($0).liquid }
 	static var hurtTable: [Bool] = Tile.allCases.map { Tile.makeDef($0).hurt }
 	static var platformTable: [Bool] = Tile.allCases.map { Tile.makeDef($0).platform }
 	static var plantTable: [Bool] = Tile.allCases.map { Tile.makeDef($0).plant }
@@ -462,6 +464,7 @@ enum Tile: UInt8, CaseIterable, Codable {
 		if !t.isMod || i >= defTable.count { return }
 		defTable[i] = d
 		solidTable[i] = d.solid
+		meetTable[i] = d.solid
 		opaqueTable[i] = d.opaque
 		lightTable[i] = d.light
 		liquidTable[i] = false
@@ -10239,6 +10242,11 @@ struct Body {
 	var inLava: Bool = false
 	var deck: Int = -1
 	var wasOnGround: Bool = false
+	/// the vehicle whose frame the body is in (0: the land's) and its feet there, in the vehicle's own
+	/// cell coordinates; vx and vy are then measured against the vehicle, along its axes (see p12b_frames)
+	var ride: Int = 0
+	var rlx: Double = 0
+	var rly: Double = 0
 
 	init(x: Double, y: Double, w: Double, h: Double) {
 		self.x = x
@@ -10309,6 +10317,16 @@ extension World {
 		let ty1: Int = Int(floor(y1 - 0.0001))
 		if tx1 < tx0 || ty1 < ty0 { return false }
 		return scanBox(tx0, ty0, tx1, ty1, Tile.solidTable) >= 0
+	}
+
+	/// Nothing in the box for a vehicle to meet: no solid block and no liquid
+	func boxOpen(_ x0: Double, _ y0: Double, _ x1: Double, _ y1: Double) -> Bool {
+		let tx0: Int = Int(floor(x0))
+		let tx1: Int = Int(floor(x1 - 0.0001))
+		let ty0: Int = Int(floor(y0))
+		let ty1: Int = Int(floor(y1 - 0.0001))
+		if tx1 < tx0 || ty1 < ty0 { return true }
+		return scanBox(tx0, ty0, tx1, ty1, Tile.meetTable) < 0
 	}
 
 	func boxHurts(_ x0: Double, _ y0: Double, _ x1: Double, _ y1: Double) -> Tile? {
@@ -10663,6 +10681,10 @@ struct DropItem {
 	var onGround: Bool = false
 	/// thrown away by the player: it is not picked up again until the player has walked off from it
 	var heldBack: Bool = false
+	/// lying on a vehicle: which one, and where in its cells (see Body.ride)
+	var ride: Int = 0
+	var rlx: Double = 0
+	var rly: Double = 0
 }
 
 struct Particle {
@@ -10697,6 +10719,571 @@ struct FloatText {
 	var text: String
 	var life: Double
 	var color: UInt32
+}
+
+// ===== p12b_frames =====
+
+// MARK: - Frames: bodies on and inside vehicles
+// A body (the player, a creature, a dropped item) is in one frame at a time: the land's, or a vehicle's.
+// In a vehicle's frame its place is kept in the vehicle's own cell coordinates and it moves among the
+// vehicle's cells as if they were land: solid cells are floors, walls and ceilings, wings and balloon
+// tops are floors to land on from above. Its place in the world is worked out from the vehicle each
+// frame, so it is carried exactly however fast the vehicle goes, climbs or turns, with no drift.
+// The frame changes by contact. Coming down onto a cell puts a body aboard; stepping onto the ground
+// or leaving the vehicle's surroundings puts it back on the land, keeping the speed it had. A body on
+// the land that a vehicle's cells reach is pushed out of them (and pushes back with its weight), and a
+// rider the land gets in the way of is left behind. Servo sections will be frames too.
+
+/// What a vehicle cell is to somebody walking on it
+let cellOpen: UInt8 = 0
+let cellSolid: UInt8 = 1
+let cellPlatform: UInt8 = 2
+
+/// Shared numbers of the physics
+enum Phys {
+	/// how far anything may move between collision checks (blocks)
+	static let maxStep: Double = 0.2
+	/// a floor tilted further than this cannot be stood on (radians): bodies slide down it
+	static let steep: Double = 0.7
+	/// how far round a vehicle's cells a body in the air is still in its frame: beside, below, above
+	static let besideReach: Double = 1.0
+	static let belowReach: Double = 1.0
+	static let aboveReach: Double = 9.0
+	/// the player's mass (a vehicle frame is 1, a block of stone 2.5)
+	static let playerMass: Double = 0.9
+	/// the most sub-steps one fixed step of a vehicle is split into near the land (at 120 steps a
+	/// second this covers 4,800 blocks a second; beyond that the steps grow, the count does not)
+	static let maxSplit: Int = 200
+
+	/// What two masses meeting head on give each other: the change in the first one's velocity along
+	/// the line between them (the second gets the opposite, scaled by the masses)
+	static func exchange(_ m1: Double, _ v1: Double, _ m2: Double, _ v2: Double, bounce: Double) -> Double {
+		let tot: Double = m1 + m2
+		if tot <= 0 { return 0 }
+		return -(1.0 + bounce) * (v1 - v2) * m2 / tot
+	}
+}
+
+/// How heavy a creature is for its size: stone golems are dense, birds, bones and ghosts light
+func mobDensity(_ k: MobKind) -> Double {
+	switch k {
+	case .golem, .sentinel: return 1.6
+	case .elephant, .rex, .bearBoss, .bear, .grizzly, .polarBear: return 0.8
+	case .skeleton, .wraith, .bat, .cinderBat, .crow, .chicken, .warden: return 0.3
+	case .slime, .emberSlime: return 0.45
+	default: return 0.55
+	}
+}
+
+/// How much a creature of a kind weighs at its usual size (a vehicle frame is 1, the player 0.9)
+func mobMass(_ k: MobKind) -> Double {
+	let d: MobDef = mobDef(k)
+	return max(0.05, d.w * d.h * mobDensity(k))
+}
+
+/// How much this creature weighs (a mutated one is as much heavier as it is bigger)
+func mobMass(_ m: Mob) -> Double {
+	return max(0.05, m.b.w * m.b.h * mobDensity(m.kind))
+}
+
+extension Vehicle {
+	/// What a part is to somebody walking on the vehicle. A block is what it is on the land; frames,
+	/// hulls, engines, tanks, crates and armour are solid; wings, tails and balloon tops are stood on;
+	/// seats, wheels, lamps, propellers and guns are walked past.
+	static func walkKind(_ t: PartType, _ b: Tile?) -> UInt8 {
+		if t == .block {
+			guard let tile = b else { return cellSolid }
+			if tile.solid { return cellSolid }
+			if tile.isPlatform || stairSide(tile) != 0 { return cellPlatform }
+			return cellOpen
+		}
+		switch t {
+		case .frame, .hull, .engine, .fuelTank, .cargo, .armor, .jet, .burner, .cannon, .drill, .diamondDrill, .voidDrill: return cellSolid
+		case .wing, .elevator, .envelope: return cellPlatform
+		default: return cellOpen
+		}
+	}
+
+	/// The walk kinds of every cell, over the cells' box (worked out again whenever the parts change)
+	func buildWalkGrid() {
+		gridW = max(1, maxX - minX + 1)
+		gridH = max(1, maxY - minY + 1)
+		var g: [UInt8] = [UInt8](repeating: 0, count: gridW * gridH)
+		for (c, t) in parts {
+			let x: Int = c.dx - minX
+			let y: Int = c.dy - minY
+			if x < 0 || y < 0 || x >= gridW || y >= gridH { continue }
+			g[y * gridW + x] = Vehicle.walkKind(t, blocks[c])
+		}
+		walkGrid = g
+	}
+
+	@inline(__always) func walkAt(_ dx: Int, _ dy: Int) -> UInt8 {
+		let x: Int = dx - minX
+		let y: Int = dy - minY
+		if x < 0 || y < 0 || x >= gridW || y >= gridH { return 0 }
+		return walkGrid[y * gridW + x]
+	}
+
+	/// Whether a box in cell coordinates overlaps a solid cell
+	func boxSolidCells(_ x0: Double, _ y0: Double, _ x1: Double, _ y1: Double) -> Bool {
+		let tx0: Int = Int(floor(x0))
+		let tx1: Int = Int(floor(x1 - 0.0001))
+		let ty0: Int = Int(floor(y0))
+		let ty1: Int = Int(floor(y1 - 0.0001))
+		if tx1 < tx0 || ty1 < ty0 { return false }
+		if tx1 < minX || tx0 > maxX || ty1 < minY || ty0 > maxY { return false }
+		var ty: Int = ty0
+		while ty <= ty1 {
+			var tx: Int = tx0
+			while tx <= tx1 {
+				if walkAt(tx, ty) == cellSolid { return true }
+				tx += 1
+			}
+			ty += 1
+		}
+		return false
+	}
+
+	/// How fast the vehicle is moving at a point of the world (its own speed and its turning)
+	func pointVel(_ wx: Double, _ wy: Double) -> (Double, Double) {
+		return (vx - angVel * (wy - py), vy + angVel * (wx - px))
+	}
+
+	/// A push on the vehicle at a point of the world (an impulse: mass times change of speed)
+	func push(_ wx: Double, _ wy: Double, _ jx: Double, _ jy: Double) {
+		let rx: Double = wx - px
+		let ry: Double = wy - py
+		vx += jx / mass
+		vy += jy / mass
+		angVel += (rx * jy - ry * jx) / inertia
+	}
+
+	/// Whether a body's box (feet at lx, ly in cell coordinates) is still in the vehicle's surroundings
+	func around(_ lx: Double, _ ly: Double, _ hw: Double, _ h: Double) -> Bool {
+		if lx + hw < Double(minX) - Phys.besideReach || lx - hw > Double(maxX + 1) + Phys.besideReach { return false }
+		if ly - h > Double(maxY + 1) + Phys.belowReach || ly < Double(minY) - Phys.aboveReach { return false }
+		return true
+	}
+}
+
+extension Game {
+	func vehicleByID(_ id: Int) -> Vehicle? {
+		for v in vehicles where v.id == id { return v }
+		return nil
+	}
+
+	/// Moves a body for one frame in the frame it is in. `falls`: gravity is acting on it (not a flier,
+	/// not somebody on a ladder), so a tilted floor pulls it along; `mass` is what it weighs.
+	func moveThing(_ b: inout Body, _ dt: Double, stepUp: Double, dropThrough: Bool, decks: [Deck], mass: Double, falls: Bool = true) {
+		if vehicles.isEmpty {
+			b.ride = 0
+			world.moveBody(&b, dt, stepUp: stepUp, dropThrough: dropThrough, decks: decks)
+			return
+		}
+		if b.ride != 0 {
+			if let v = vehicleByID(b.ride), !v.parts.isEmpty {
+				// Something else may have moved it since the vehicle last placed it: a knock that shifts it a
+				// little is kept (its place aboard follows); a jump to somewhere else (a respawn, a
+				// doorway to another place, a seat) takes it off the vehicle.
+				let l: (Double, Double) = v.toLocal(b.x, b.y)
+				let ex: Double = l.0 - b.rlx
+				let ey: Double = l.1 - b.rly
+				let off: Double = ex * ex + ey * ey
+				if off <= 0.25 {
+					if off > 1e-12 {
+						b.rlx = l.0
+						b.rly = l.1
+					}
+					rideStep(&b, v, dt, stepUp: stepUp, dropThrough: dropThrough, mass: mass, falls: falls)
+					return
+				}
+			}
+			b.ride = 0
+		}
+		world.moveBody(&b, dt, stepUp: stepUp, dropThrough: dropThrough, decks: decks)
+		meetVehicles(&b, dt, dropThrough: dropThrough, mass: mass)
+	}
+
+	/// One frame for a body aboard a vehicle: it moves among the vehicle's cells, the land stops it where
+	/// the land is in its way, and it weighs on the vehicle where it stands
+	func rideStep(_ b: inout Body, _ v: Vehicle, _ dt: Double, stepUp: Double, dropThrough: Bool, mass: Double, falls: Bool) {
+		let a: Double = remainder(v.angle, 2.0 * Double.pi)
+		let ca: Double = cos(a)
+		let sa: Double = sin(a)
+		let steepNow: Bool = abs(a) > Phys.steep
+		if falls && abs(a) > 0.02 {
+			// the caller pulled it straight down its own y axis; on a tilted vehicle part of that pull
+			// runs along the floor (held by its footing unless the floor is too steep)
+			b.vy -= gravityG * (1.0 - ca) * dt
+			if !b.onGround || steepNow { b.vx += gravityG * sa * dt }
+		}
+		let hw: Double = b.w * 0.5
+		let lx0: Double = b.rlx
+		let ly0: Double = b.rly
+		var lb: Body = b
+		lb.x = lx0
+		lb.y = ly0
+		moveInCells(&lb, v, dt, stepUp: stepUp, dropThrough: dropThrough)
+		if steepNow { lb.onGround = false }
+		// the land: is it in the way of where that puts the body?
+		var lx: Double = lb.x
+		var ly: Double = lb.y
+		var w: (Double, Double) = v.toWorld(lx, ly)
+		if landBlocks(w.0, w.1, hw, b.h) {
+			let wx: (Double, Double) = v.toWorld(lx0, ly)
+			let wy: (Double, Double) = v.toWorld(lx, ly0)
+			if !landBlocks(wx.0, wx.1, hw, b.h) {
+				// a wall of the land beside the vehicle
+				lx = lx0
+				lb.vx = 0
+				lb.hitWall = true
+				w = wx
+			} else if !landBlocks(wy.0, wy.1, hw, b.h) {
+				ly = ly0
+				w = wy
+				if lb.vy >= 0 {
+					// it has come down onto the land: off the vehicle, standing on the block it met
+					let post: (Double, Double) = v.toWorld(lx, lb.y)
+					b.x = w.0
+					b.y = min(w.1, floor(post.1 - 0.02))
+					if landBlocks(b.x, b.y, hw, b.h) { b.y = w.1 }
+					b.vx = lb.vx
+					b.vy = 0
+					b.onGround = true
+					b.hitWall = lb.hitWall
+					leaveFrame(&b, v)
+					return
+				}
+				lb.vy = 0
+				lb.hitCeil = true
+			} else {
+				lx = lx0
+				ly = ly0
+				lb.vx = 0
+				lb.vy = 0
+				w = v.toWorld(lx, ly)
+			}
+		}
+		b.vx = lb.vx
+		b.vy = lb.vy
+		b.onGround = lb.onGround
+		b.wasOnGround = lb.wasOnGround
+		b.hitWall = lb.hitWall
+		b.hitCeil = lb.hitCeil
+		b.deck = -1
+		b.rlx = lx
+		b.rly = ly
+		b.x = w.0
+		b.y = w.1
+		let lf: (Double, Double) = world.liquidFractions(b.x - hw, b.y - b.h, b.x + hw, b.y)
+		b.inWater = lf.0 > 0.35
+		b.inLava = lf.1 > 0.2
+		if !v.around(lx, ly, hw, b.h) {
+			leaveFrame(&b, v)
+			return
+		}
+		// its weight rests on the vehicle where it stands (a vehicle at rest is not woken by somebody
+		// standing still on it)
+		if b.onGround && mass > 0 {
+			if v.asleep {
+				if abs(b.vx) > 0.5 && mass > v.mass * 0.08 { v.asleep = false }
+			} else {
+				v.push(b.x, b.y, 0, mass * gravityG * dt)
+			}
+		}
+	}
+
+	/// Whether the land is in the way of a body standing at a place in the world
+	func landBlocks(_ x: Double, _ y: Double, _ hw: Double, _ h: Double) -> Bool {
+		return world.boxSolid(x - hw + 0.02, y - h + 0.02, x + hw - 0.02, y - 0.02)
+	}
+
+	/// Moves a body among a vehicle's cells for one frame (its x, y are in cell coordinates here): the same
+	/// rules as on the land, with whole cells for blocks and wings for platforms
+	func moveInCells(_ b: inout Body, _ v: Vehicle, _ dt: Double, stepUp: Double, dropThrough: Bool) {
+		b.wasOnGround = b.onGround
+		b.hitWall = false
+		b.hitCeil = false
+		b.onGround = false
+		b.deck = -1
+		let speed: Double = max(abs(b.vx), abs(b.vy))
+		let steps: Int = max(1, Int(ceil(speed * dt / 0.3)))
+		let sdt: Double = dt / Double(steps)
+		let hw: Double = b.w * 0.5
+		if v.boxSolidCells(b.x - hw + 0.02, b.y - b.h + 0.02, b.x + hw - 0.02, b.y - 0.02) { escapeCells(&b, v, 0, 0) }
+		for _ in 0..<steps {
+			if b.vx != 0 {
+				let nx: Double = b.x + b.vx * sdt
+				if !v.boxSolidCells(nx - hw, b.y - b.h + 0.001, nx + hw, b.y - 0.001) {
+					b.x = nx
+				} else {
+					var done: Bool = false
+					if (b.wasOnGround || b.onGround) && stepUp > 0 {
+						var lift: Double = 1.0
+						while lift <= stepUp + 0.001 && !done {
+							if !v.boxSolidCells(nx - hw, b.y - lift - b.h + 0.001, nx + hw, b.y - lift - 0.001) {
+								b.x = nx
+								b.y -= lift
+								done = true
+							}
+							lift += 1.0
+						}
+					}
+					if !done {
+						b.hitWall = true
+						b.vx = 0
+					}
+				}
+			}
+			let prevY: Double = b.y
+			let ny: Double = b.y + b.vy * sdt
+			if b.vy >= 0 {
+				var landed: Bool = false
+				var landY: Double = ny
+				if v.boxSolidCells(b.x - hw, ny - b.h + 0.001, b.x + hw, ny + 0.0005) {
+					landY = floor(ny + 0.0005)
+					if landY < prevY - 0.0001 { landY = prevY }
+					landed = true
+				} else if !dropThrough {
+					let row: Int = Int(floor(ny + 0.0005))
+					if prevY <= Double(row) + 0.001 && ny >= Double(row) - 0.0001 {
+						let tx0: Int = Int(floor(b.x - hw))
+						let tx1: Int = Int(floor(b.x + hw - 0.0001))
+						var tx: Int = tx0
+						while tx <= tx1 {
+							if v.walkAt(tx, row) == cellPlatform {
+								landed = true
+								landY = Double(row)
+							}
+							tx += 1
+						}
+					}
+				}
+				if landed {
+					b.y = landY
+					b.vy = 0
+					b.onGround = true
+				} else {
+					b.y = ny
+				}
+			} else if v.boxSolidCells(b.x - hw, ny - b.h, b.x + hw, ny - 0.001) {
+				b.y = floor(ny - b.h) + 1.0 + b.h
+				b.vy = 0
+				b.hitCeil = true
+			} else {
+				b.y = ny
+			}
+		}
+	}
+
+	/// A body inside solid cells is moved out the nearest way that is open (the way it came from first
+	/// when two are as near). Returns the way it went: 0 none, 1 left, 2 right, 3 up, 4 down.
+	@discardableResult
+	func escapeCells(_ b: inout Body, _ v: Vehicle, _ rvx: Double, _ rvy: Double) -> Int {
+		let hw: Double = b.w * 0.5
+		var best: Double = 9
+		var way: Int = 0
+		// the ways out, the one against its own motion tried first
+		var order: [Int] = [3, 1, 2, 4]
+		if abs(rvx) > abs(rvy) { order = rvx > 0 ? [1, 3, 2, 4] : [2, 3, 1, 4] } else if rvy < 0 { order = [4, 1, 2, 3] }
+		for k in order {
+			let dx: Double = k == 1 ? -1.0 : (k == 2 ? 1.0 : 0.0)
+			let dy: Double = k == 3 ? -1.0 : (k == 4 ? 1.0 : 0.0)
+			var d: Double = 0.05
+			while d < best - 0.001 && d <= 2.5 {
+				let x: Double = b.x + dx * d
+				let y: Double = b.y + dy * d
+				if !v.boxSolidCells(x - hw + 0.02, y - b.h + 0.02, x + hw - 0.02, y - 0.02) {
+					let w: (Double, Double) = v.toWorld(x, y)
+					if !landBlocks(w.0, w.1, hw, b.h) {
+						best = d
+						way = k
+					}
+					break
+				}
+				d += 0.05
+			}
+		}
+		if way == 0 { return 0 }
+		b.x += (way == 1 ? -best : (way == 2 ? best : 0))
+		b.y += (way == 3 ? -best : (way == 4 ? best : 0))
+		return way
+	}
+
+	/// Back to the land's frame: the body keeps going as fast as the vehicle carried it, plus its own motion
+	func leaveFrame(_ b: inout Body, _ v: Vehicle) {
+		let pv: (Double, Double) = v.pointVel(b.x, b.y)
+		let c: Double = v.cosA
+		let s: Double = v.sinA
+		let wx: Double = b.vx * c - b.vy * s
+		let wy: Double = b.vx * s + b.vy * c
+		b.vx = pv.0 + wx
+		b.vy = pv.1 + wy
+		b.ride = 0
+		settleOnLand(&b)
+	}
+
+	/// A body handed back to the land with its feet a hair inside the top of a block stands on that
+	/// block (the land's own physics only ever puts feet on a block's top, never just under it)
+	func settleOnLand(_ b: inout Body) {
+		let f: Double = b.y - floor(b.y)
+		if f <= 0 || f > 0.03 { return }
+		let hw: Double = b.w * 0.5
+		if world.boxSolid(b.x - hw + 0.02, b.y - f, b.x + hw - 0.02, b.y) { b.y = floor(b.y) }
+	}
+
+	/// Puts a body aboard a vehicle at a place in its cells, at rest against it
+	func boardFrame(_ b: inout Body, _ v: Vehicle, _ lx: Double, _ ly: Double) {
+		b.ride = v.id
+		b.rlx = lx
+		b.rly = ly
+		b.vx = 0
+		b.vy = 0
+		let w: (Double, Double) = v.toWorld(lx, ly)
+		b.x = w.0
+		b.y = w.1
+	}
+
+	/// A body on the land that has just moved, against the vehicles near it: coming down onto a cell
+	/// puts it aboard; cells that reach into it push it out, and it pushes back with its weight
+	func meetVehicles(_ b: inout Body, _ dt: Double, dropThrough: Bool, mass: Double) {
+		let hw: Double = b.w * 0.5
+		for v in vehicles {
+			if v.parts.isEmpty { continue }
+			if b.x + hw < v.b.left - 0.6 || b.x - hw > v.b.right + 0.6 || b.y < v.b.top - 0.6 || b.y - b.h > v.b.y + 0.6 { continue }
+			let c: Double = v.cosA
+			let s: Double = v.sinA
+			let l: (Double, Double) = v.toLocal(b.x, b.y)
+			// its velocity as the vehicle sees it there, along the vehicle's axes
+			let pv: (Double, Double) = v.pointVel(b.x, b.y)
+			let dvx: Double = b.vx - pv.0
+			let dvy: Double = b.vy - pv.1
+			var rvx: Double = dvx * c + dvy * s
+			var rvy: Double = -dvx * s + dvy * c
+			let tilt: Double = abs(remainder(v.angle, 2.0 * Double.pi))
+			// 1. coming down onto the top of a cell
+			if rvy >= -0.01 && tilt < 1.2 {
+				let prevLy: Double = l.1 - rvy * dt
+				var row: Int = Int(ceil(prevLy - 0.06))
+				let last: Int = min(Int(floor(l.1 + 0.0005)), row + 12)
+				let tx0: Int = Int(floor(l.0 - hw))
+				let tx1: Int = Int(floor(l.0 + hw - 0.0001))
+				var landRow: Int? = nil
+				while row <= last && landRow == nil {
+					var tx: Int = tx0
+					while tx <= tx1 {
+						let k: UInt8 = v.walkAt(tx, row)
+						let above: UInt8 = v.walkAt(tx, row - 1)
+						if (k == cellSolid && above != cellSolid) || (k == cellPlatform && !dropThrough) { landRow = row }
+						tx += 1
+					}
+					row += 1
+				}
+				if let r = landRow, !v.boxSolidCells(l.0 - hw + 0.02, Double(r) - b.h + 0.02, l.0 + hw - 0.02, Double(r) - 0.02) {
+					// what it lands with goes into the vehicle
+					if mass > 0 && rvy > 0.5 {
+						v.push(b.x, b.y, -s * mass * rvy, c * mass * rvy)
+						v.asleep = false
+					}
+					b.ride = v.id
+					b.rlx = l.0
+					b.rly = Double(r)
+					b.vx = rvx
+					b.vy = 0
+					b.onGround = true
+					let w: (Double, Double) = v.toWorld(b.rlx, b.rly)
+					b.x = w.0
+					b.y = w.1
+					return
+				}
+			}
+			// 2. solid cells reaching into it
+			if v.boxSolidCells(l.0 - hw + 0.02, l.1 - b.h + 0.02, l.0 + hw - 0.02, l.1 - 0.02) {
+				var lb: Body = b
+				lb.x = l.0
+				lb.y = l.1
+				let way: Int = escapeCells(&lb, v, rvx, rvy)
+				if way == 0 { continue }
+				let w: (Double, Double) = v.toWorld(lb.x, lb.y)
+				b.x = w.0
+				b.y = w.1
+				// it no longer moves into the vehicle; what it lost goes into the vehicle
+				var lost: (Double, Double) = (0, 0)
+				if (way == 1 && rvx > 0) || (way == 2 && rvx < 0) { lost.0 = rvx; rvx = 0 }
+				if (way == 3 && rvy > 0) || (way == 4 && rvy < 0) { lost.1 = rvy; rvy = 0 }
+				b.vx = pv.0 + rvx * c - rvy * s
+				b.vy = pv.1 + rvx * s + rvy * c
+				if way == 1 || way == 2 { b.hitWall = true }
+				if mass > 0 && (lost.0 != 0 || lost.1 != 0) {
+					v.push(b.x, b.y - b.h * 0.5, (lost.0 * c - lost.1 * s) * mass, (lost.0 * s + lost.1 * c) * mass)
+					if abs(lost.0) + abs(lost.1) > 0.5 { v.asleep = false }
+				}
+				return
+			}
+		}
+	}
+
+	/// After the vehicles have moved: everything aboard is where its vehicle now has it. A rider the land
+	/// is in the way of stays behind, stopped.
+	func syncRiders() {
+		syncRider(&pb)
+		for m in mobs where m.b.ride != 0 { syncRider(&m.b) }
+		if !drops.isEmpty {
+			for i in drops.indices where drops[i].ride != 0 {
+				guard let v = vehicleByID(drops[i].ride), !v.parts.isEmpty else { drops[i].ride = 0; continue }
+				let w: (Double, Double) = v.toWorld(drops[i].rlx, drops[i].rly)
+				if world.boxSolid(w.0 - 0.1, w.1 - 0.25, w.0 + 0.1, w.1 - 0.05) { drops[i].ride = 0; drops[i].vx = 0; drops[i].vy = 0; continue }
+				drops[i].x = w.0
+				drops[i].y = w.1
+			}
+		}
+	}
+
+	func syncRider(_ b: inout Body) {
+		if b.ride == 0 { return }
+		guard let v = vehicleByID(b.ride), !v.parts.isEmpty else {
+			b.ride = 0
+			return
+		}
+		let w: (Double, Double) = v.toWorld(b.rlx, b.rly)
+		if landBlocks(w.0, w.1, b.w * 0.5, b.h) {
+			b.ride = 0
+			b.vx = 0
+			b.vy = 0
+			settleOnLand(&b)
+			return
+		}
+		b.x = w.0
+		b.y = w.1
+	}
+
+	/// Everybody aboard a vehicle that is turned to face the other way is turned with it
+	func mirrorRiders(_ v: Vehicle, _ sx: Int) {
+		let flip: Double = Double(sx + 1)
+		if pb.ride == v.id { pb.rlx = flip - pb.rlx; pb.vx = -pb.vx }
+		for m in mobs where m.b.ride == v.id {
+			m.b.rlx = flip - m.b.rlx
+			m.b.vx = -m.b.vx
+		}
+		for i in drops.indices where drops[i].ride == v.id { drops[i].rlx = flip - drops[i].rlx }
+	}
+
+	/// How fast whatever carries the player is going where they are: a vehicle they drive or stand on
+	func carrierVel() -> (Double, Double) {
+		if let v = inVehicle { return v.pointVel(pb.x, pb.y) }
+		if pb.ride != 0, let v = vehicleByID(pb.ride) { return v.pointVel(pb.x, pb.y) }
+		return (0, 0)
+	}
+
+	/// How fast a body is really going in the world (aboard a vehicle its own vx, vy are measured against it)
+	func worldVel(_ b: Body) -> (Double, Double) {
+		if b.ride != 0, let v = vehicleByID(b.ride) {
+			let pv: (Double, Double) = v.pointVel(b.x, b.y)
+			return (pv.0 + b.vx * v.cosA - b.vy * v.sinA, pv.1 + b.vx * v.sinA + b.vy * v.cosA)
+		}
+		return (b.vx, b.vy)
+	}
 }
 
 // ===== a01_artsheet =====

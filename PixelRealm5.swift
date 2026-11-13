@@ -1420,7 +1420,7 @@ enum WorldRenderer {
 			}
 		case .jet:
 			let k: Double = abs(veh.throttle)
-			if k > 0.08 && (veh.rider || veh.auto == 2) {
+			if k > 0.08 && (veh.rider || veh.auto != 0) {
 				let flick: Double = 0.75 + 0.25 * sin(clock * 40.0 + Double(cell.dx))
 				let len: Double = w * (0.4 + 0.9 * k) * flick
 				fillOval(&c, mkRect(w * 0.45, -w * 0.22, len, w * 0.44), Color(hex: 0xFF8A30, alpha: 0.8))

@@ -510,6 +510,10 @@ struct VehicleSave: Codable {
 	var ballast: Double? = nil
 	/// its couplings to other vehicles (a train)
 	var links: [VLink]? = nil
+	/// its joints, the section it hangs from, and its walk
+	var joints: [VJoint]? = nil
+	var parent: Int? = nil
+	var gait: Double? = nil
 }
 
 /// Displaced volume per part (how much it floats)
@@ -725,6 +729,18 @@ final class Vehicle {
 	var links: [VLink] = []
 	/// a moment after being uncoupled by hand, before its couplers link again
 	var noCoupleT: Double = 0
+	/// its joints to the sections built on beyond them, the section it hangs from (0: none), and how far
+	/// round its walk is (a mech)
+	var joints: [VJoint] = []
+	var parentID: Int = 0
+	var gait: Double = 0
+	/// a machine section's places on the land from its last step, worked out again with its joints
+	/// (not saved)
+	var heldContacts: [VContact] = []
+	/// how far into its stride a mech's legs swing (rises as it walks, falls back as it stops) and the
+	/// way it last walked (not saved)
+	var gaitAmp: Double = 0
+	var gaitDir: Double = 1
 	/// its collision samples, kept until it changes
 	var sampleCache: [VSample] = []
 	var sampleKey: Int = -1
@@ -844,6 +860,7 @@ final class Vehicle {
 		}
 		aero = wings + elevators + airProps + jets + rotors + envelopes + airBrakes + stabilizers > 0
 		tilt = tilt.filter { parts[$0.key] != nil }
+		joints = joints.filter { parts[$0.cell] != nil }
 		hullAir = hullAir.filter { parts[$0.key] == nil || Vehicle.walkKind(parts[$0.key]!, blocks[$0.key]) != cellSolid }
 		// back walls weigh a little where they are
 		for (c, k) in walls {
@@ -1140,6 +1157,9 @@ final class Vehicle {
 		if let c = seatAt { s.seat = [c.dx, c.dy] }
 		if ballast > 0.001 { s.ballast = ballast }
 		if !links.isEmpty { s.links = links }
+		if !joints.isEmpty { s.joints = joints }
+		if parentID != 0 { s.parent = parentID }
+		if gait != 0 { s.gait = gait }
 		if !walls.isEmpty { s.walls = walls.map { [$0.key.dx, $0.key.dy, Int($0.value)] } }
 		return s
 	}
@@ -1163,6 +1183,8 @@ final class Vehicle {
 		if let c = s.seat, c.count == 2 { v.seatAt = PartCell(dx: c[0], dy: c[1]) }
 		v.ballast = clampD(s.ballast ?? 0, 0, 1)
 		v.links = s.links ?? []
+		v.parentID = s.parent ?? 0
+		v.gait = s.gait ?? 0
 		for w in s.walls ?? [] where w.count == 3 && w[2] > 0 && w[2] < 256 { v.walls[PartCell(dx: w[0], dy: w[1])] = UInt8(w[2]) }
 		v.recompute(keepAnchor: false)
 		if let r = s.rot {
@@ -1178,6 +1200,7 @@ final class Vehicle {
 		v.fuel = s.fuel
 		v.dir = s.dir
 		v.kit = s.kit ?? -1
+		v.joints = (s.joints ?? []).filter { v.parts[$0.cell] != nil }
 		return v
 	}
 }
@@ -1593,6 +1616,10 @@ final class Game: ObservableObject, @unchecked Sendable {
 	var seat: IntPair? = nil
 	/// a chair or sofa built on a vehicle the player sits on (the vehicle is the one they ride)
 	var seatAboard: PartCell? = nil
+	/// the buttons A, B and C for joints, while held; the joint being set up (its panel is open)
+	var jointButtons: [Bool] = [false, false, false]
+	var jointEdit: JointRef? = nil
+	@Published var showJoint: Bool = false
 	/// doors on vehicles the player opened by walking into them
 	var vehicleDoors: [VehicleDoor] = []
 	/// the lift cars of this dimension, and those left in the others
@@ -4541,6 +4568,7 @@ extension Game {
 			liftIfBuried(v, c)
 			v.parts[c] = p
 			v.recompute(keepAnchor: true)
+			splitJointSections(v)
 			if !isCreative { inv.removeAt(sel, 1) }
 			useCD = 0.2
 			swingT = 0.15
@@ -4999,6 +5027,7 @@ extension Game {
 	/// a walk or a jump could carry on by itself once the panel closes.
 	func releaseAllInput() {
 		suitFireHeld = false
+		jointButtons = [false, false, false]
 		actState.stickReleased()
 		actState.was = false
 		stick = 0
@@ -5019,7 +5048,7 @@ extension Game {
 
 	/// Once a frame: releases the controls when something covers them
 	func updateInputGate() {
-		let blocked: Bool = paused || showInventory || showMap || showJournal || showWeather || showPower || showCapture || showModTest || showInfuse || showExo || dead
+		let blocked: Bool = paused || showInventory || showMap || showJournal || showWeather || showPower || showCapture || showModTest || showInfuse || showExo || showJoint || dead
 		if blocked && !inputBlocked { releaseAllInput() }
 		inputBlocked = blocked
 	}
@@ -8146,6 +8175,7 @@ struct VSample {
 /// lot. Parts without displacement (the old model) made engines and propellers drag boats under.
 func partDisplacement(_ p: PartType) -> Double {
 	switch p {
+	case .hinge, .servo, .piston: return 0.5
 	case .railWheel: return 0.5
 	case .coupler: return 0.3
 	case .bigWheel: return 3.0
@@ -8266,6 +8296,10 @@ final class VRun {
 	var stats: VStepStats = VStepStats()
 	/// the other vehicles near enough to meet it this frame
 	var near: [Vehicle] = []
+	/// where it was at the start of the frame (a machine's sections judge stillness by how far they went)
+	let x0: Double
+	let y0: Double
+	let a0: Double
 
 	init(_ v: Vehicle, _ samples: [VSample], _ throttle: Double, _ airBusy: Bool, _ n: Int) {
 		self.v = v
@@ -8273,12 +8307,16 @@ final class VRun {
 		self.throttle = throttle
 		self.airBusy = airBusy
 		self.n = n
+		self.x0 = v.px
+		self.y0 = v.py
+		self.a0 = v.angle
 	}
 }
 
 extension Game {
 	func updateVehicles(_ dt: Double) {
 		let t0: Double = perfNow()
+		jointControls(dt)
 		stepVehicles(vehicles, dt)
 		formCouplings(dt)
 		// weapons, the autopilot, turns and damage (also for a vehicle at rest)
@@ -8464,9 +8502,11 @@ extension Game {
 		for r in runs { most = max(most, r.n) }
 		var k: Int = 0
 		let linked: Bool = vehicles.contains { !$0.links.isEmpty }
+		let jointed: Bool = vehicles.contains { !$0.joints.isEmpty }
 		while k < most {
 			for r in runs where k < r.n { vehicleFixedStep(r) }
 			if linked { solveCouplings(vehicleStep) }
+			if jointed { solveJoints(vehicleStep) }
 			k += 1
 		}
 		for r in runs { r.v.inStep = false }
@@ -8497,6 +8537,8 @@ extension Game {
 			// sleeps while that one does)
 			var held: Bool = world.boxSolid(v.b.left + 0.05, v.b.y + 0.02, v.b.right - 0.05, v.b.y + 0.2) || v.submerged > 0
 			if v.restOn != 0 { held = vehicleByID(v.restOn)?.asleep ?? false }
+			// (a section of a machine is held by the one it hangs from)
+			if v.parentID != 0 { held = vehicleByID(v.parentID)?.asleep ?? false }
 			if held { return nil }
 		}
 		v.asleep = false
@@ -8584,8 +8626,16 @@ extension Game {
 		if v.drills > 0 { runDrills(v, dt) }
 		vehicleImpacts(v, dt)
 		// resting (on the ground, or floating calmly): let it sleep so it stops costing time and cannot jitter
-		let calm: Bool = v.speed < 0.08 && abs(v.angVel) < 0.03 && abs(throttle) < 0.05 && !v.drilling && !airBusy
-		if calm && (v.contacts > 0 || v.submerged > 0) {
+		var calm: Bool = v.speed < 0.08 && abs(v.angVel) < 0.03 && abs(throttle) < 0.05 && !v.drilling && !airBusy
+		if v.parentID != 0 || !v.joints.isEmpty {
+			// (a section's joints leave it a little speed each step that its next step takes away again:
+			// what counts is how far it really went this frame)
+			let went: Double = hypot(v.px - r.x0, v.py - r.y0) / max(dt, 1e-6)
+			let turned: Double = abs(v.angle - r.a0) / max(dt, 1e-6)
+			calm = went < 0.08 && turned < 0.03 && abs(throttle) < 0.05 && !v.drilling && !airBusy
+		}
+		// (a section of a machine is held up by the one it hangs from: the machine rests as one)
+		if calm && (v.contacts > 0 || v.submerged > 0 || v.parentID != 0) {
 			v.sleepT += dt
 			if v.sleepT > (v.submerged > 0 ? 1.5 : 0.6) { v.asleep = true; v.vx = 0; v.vy = 0; v.angVel = 0 }
 		} else {
@@ -8813,6 +8863,12 @@ extension Game {
 				round += 1
 			}
 		}
+		// (a machine's sections keep theirs: the joints are worked out with them, so a servo's turning
+		// push on a section standing on the ground is held by its grip, not slid along)
+		if v.parentID != 0 || !v.joints.isEmpty {
+			v.heldContacts.removeAll(keepingCapacity: true)
+			for k in vContacts where k.oInvM == 0 { v.heldContacts.append(k) }
+		}
 		v.px += (outRight - outLeft) * 0.8
 		v.py += (outDown - outUp) * 0.8
 		if meet.hits > 0 { settleVehicleMeet(v, meet) }
@@ -8904,8 +8960,11 @@ extension Game {
 		let s: Double = v.sinA
 		let invM: Double = 1.0 / v.mass
 		let invI: Double = 1.0 / v.inertia
+		let mine: Int = v.parentID != 0 || !v.joints.isEmpty ? machineRoot(v).id : -1
 		for o in near {
 			if o.parts.isEmpty { continue }
+			// (the sections of one jointed machine pass each other: the joints hold them)
+			if mine >= 0 && (o.parentID != 0 || !o.joints.isEmpty) && machineRoot(o).id == mine { continue }
 			let gx: Double = o.px - v.px
 			let gy: Double = o.py - v.py
 			let reach: Double = v.radius + o.radius + 0.3
@@ -9297,6 +9356,12 @@ extension Game {
 		}
 		if repairVehiclePart(v, c) { return }
 		if useVehicleBlock(v, c) { return }
+		if let t = v.parts[c], t == .hinge || t == .servo || t == .piston, v.joints.contains(where: { $0.cell == c }), inVehicle == nil {
+			jointEdit = JointRef(vid: v.id, cell: c)
+			showJoint = true
+			bumpHUD()
+			return
+		}
 		if v.parts[c] == .coupler && v.links.contains(where: { $0.cell == c }) {
 			uncouple(v, c)
 			say("Uncoupled.", 1.2)
@@ -11990,6 +12055,7 @@ func cellDisplacement(_ v: Vehicle, _ c: PartCell, _ t: PartType) -> Double {
 /// How much damage a part takes before it breaks off
 func partHP(_ t: PartType) -> Double {
 	switch t {
+	case .hinge, .servo, .piston: return 35
 	case .bigWheel: return 70
 	case .railWheel, .coupler: return 30
 	case .ballast: return 40
@@ -12810,6 +12876,10 @@ extension Game {
 
 	func turnVehicle() {
 		guard let v = inVehicle, v.turnT == 0 else { return }
+		if !v.joints.isEmpty || v.parentID != 0 {
+			say("A machine with joints can't turn round: drive it the other way.", 2.0)
+			return
+		}
 		let flying: Bool = v.aero && v.contacts == 0 && v.submerged <= 0.02 && v.speed > 3.0
 		if flying {
 			v.turnT = 0.001
@@ -12945,6 +13015,7 @@ extension Game {
 		v.parts[c] = part
 		v.blocks[c] = t
 		v.recompute(keepAnchor: true)
+		splitJointSections(v)
 		v.kit = -1
 		if t == .chest || t == .cabinet || t == .wardrobe { world.setChestItems(cargoSpot(v, c).x, cargoSpot(v, c).y, []) }
 		if !isCreative { inv.removeAt(sel, 1) }

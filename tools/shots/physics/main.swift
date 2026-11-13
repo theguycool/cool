@@ -306,3 +306,65 @@ do {
     look(g, Double(cx) - 2.5, 94.0)
     render(g, "08_big_wheels")
 }
+
+// 9 (phase 5): a mech on two legs walking across the meadow, mid-stride, the player in its cockpit
+do {
+    let g = world()
+    let cx = Int(g.pb.x)
+    tree(g, cx + 14, 6); tree(g, cx - 18, 5)
+    var cells: [(Int, Int, PartType, Tile?)] = []
+    for x in 0..<5 { cells.append((x, 0, .frame, nil)) }
+    cells.append((2, -1, .cockpit, nil)); cells.append((1, -1, .engine, nil)); cells.append((3, -1, .block, .glass))
+    cells.append((0, -1, .block, .brick)); cells.append((4, -1, .block, .brick))
+    for lx in [0, 4] {
+        cells.append((lx, 1, .servo, nil)); cells.append((lx, 2, .frame, nil)); cells.append((lx, 3, .servo, nil))
+        cells.append((lx, 4, .frame, nil)); cells.append((lx, 5, .block, .brick))
+    }
+    let mech = vehicle(g, cells, left: Double(cx) - 12.0, bottom: 100)
+    g.splitJointSections(mech)
+    g.autoMech(mech)
+    g.inVehicle = mech; mech.rider = true
+    var t = 0.0
+    while t < 2.3 { g.stick = 1; g.tick(dt60); g.hunger = 20; t += dt60 }
+    g.stick = 0
+    g.pauseVehicles = true
+    look(g, mech.px + 1.0, 93.0)
+    render(g, "09_mech")
+}
+
+// 10 (phase 5): a crane truck: a mast on a servo and a boom on a second servo raised to the sky; beside
+// it a piston has pushed a platform up with a crate on it
+do {
+    let g = world()
+    let cx = Int(g.pb.x)
+    var cells: [(Int, Int, PartType, Tile?)] = []
+    for x in 0..<6 { cells.append((x, 0, .frame, nil)) }
+    cells.append((0, 1, .wheel, nil)); cells.append((5, 1, .wheel, nil)); cells.append((2, 1, .wheel, nil))
+    cells.append((5, -1, .cockpit, nil)); cells.append((4, -1, .engine, nil))
+    // the mast and its boom
+    cells.append((1, -1, .servo, nil)); cells.append((1, -2, .frame, nil)); cells.append((1, -3, .frame, nil)); cells.append((1, -4, .servo, nil))
+    for x in 2..<7 { cells.append((x, -4, .frame, nil)) }
+    let crane = vehicle(g, cells, left: Double(cx) - 12.0, bottom: 100)
+    g.splitJointSections(crane)
+    if let mast = crane.joints.first.flatMap({ g.vehicleByID($0.child) }), !mast.joints.isEmpty {
+        mast.joints[0].target = -0.6
+        mast.joints[0].lo = -1.2
+    }
+    // the piston lift
+    var lift: [(Int, Int, PartType, Tile?)] = []
+    for x in 0..<3 { for y in 0..<2 { lift.append((x, y, .block, .stone)) } }
+    lift.append((1, -1, .piston, nil)); lift.append((1, -2, .block, .planks))
+    for x in -1...3 { lift.append((x, -3, .block, .planks)) }
+    let base = vehicle(g, lift, left: Double(cx) + 2.0, bottom: 100)
+    g.splitJointSections(base)
+    if !base.joints.isEmpty { base.joints[0].target = 2.5; base.joints[0].hi = 3.0 }
+    let platTop: Double = 100.0 - 2.0 - 3.0
+    let box = vehicle(g, [(0, 0, .block, .chest), (1, 0, .block, .planks), (0, -1, .block, .planks), (1, -1, .block, .planks)], left: Double(cx) + 3.0, bottom: platTop)
+    _ = box
+    var t = 0.0
+    while t < 3.0 { g.updateVehicles(dt60); g.syncRiders(); t += dt60 }
+    g.pauseVehicles = true
+    g.pb.x = Double(cx) - 1.5; g.pb.y = 100
+    look(g, Double(cx) - 2.0, 92.0)
+    render(g, "10_crane_and_lift")
+}

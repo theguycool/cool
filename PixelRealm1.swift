@@ -1410,8 +1410,14 @@ enum PartType: Int, Codable, CaseIterable {
 	/// appended (big vehicles and rails): a flanged wheel that rolls almost freely on rails, a coupler that
 	/// links two vehicles into a train, and a wheel three cells across
 	case railWheel, coupler, bigWheel
+	/// appended (joints and mechs): a free hinge, a servo that turns what is built beyond it, and a piston
+	/// that pushes it out and pulls it back
+	case hinge, servo, piston
 	var name: String {
 		switch self {
+		case .hinge: return "Hinge"
+		case .servo: return "Servo"
+		case .piston: return "Piston"
 		case .railWheel: return "Rail Wheel"
 		case .coupler: return "Coupler"
 		case .bigWheel: return "Big Wheel"
@@ -1490,6 +1496,9 @@ enum PartType: Int, Codable, CaseIterable {
 		case .railWheel: return 0.7
 		case .coupler: return 0.4
 		case .bigWheel: return 3.2
+		case .hinge: return 0.6
+		case .servo: return 1.2
+		case .piston: return 1.4
 		}
 	}
 
@@ -1522,6 +1531,9 @@ enum PartType: Int, Codable, CaseIterable {
 		case .railWheel: return "Rolls almost freely along rails (and drags on anything else). Ore carts and trains run on them."
 		case .coupler: return "Links up with another vehicle's coupler when they touch: a train. Tap it to uncouple."
 		case .bigWheel: return "A wheel three cells across: climbs over steps a small wheel stops at. Takes a free space three by three."
+		case .hinge: return "What is built on beyond it swings freely about it: a section of its own (a flap, a door, a loose arm)."
+		case .servo: return "Turns what is built beyond it, as the stick, a button or a walk tells it. Tap it to set it up."
+		case .piston: return "Pushes what is built beyond it out and pulls it back (up to four blocks). Tap it to set it up."
 		case .block: return "A block built onto a vehicle."
 		default: return "Vehicle part"
 		}
@@ -2885,6 +2897,9 @@ extension RecipeBook {
 		add(.part(.coupler), 1, [(.mat(.ironBar), 2), (.mat(.string), 1)], .anvil, .vehicle)
 		add(.part(.bigWheel), 1, [(.mat(.ironBar), 4), (.mat(.leather), 3), (.mat(.fur), 1)], .tinker, .vehicle)
 		add(.block(.oreCart), 1, [(.mat(.ironBar), 4), (planks, 2)], .anvil, .vehicle)
+		add(.part(.hinge), 1, [(.mat(.ironBar), 2)], .anvil, .vehicle)
+		add(.part(.servo), 1, [(.mat(.ironBar), 3), (.mat(.copperBar), 3), (.mat(.goldBar), 1)], .tinker, .vehicle)
+		add(.part(.piston), 1, [(.mat(.ironBar), 4), (.mat(.copperBar), 2)], .tinker, .vehicle)
 	}
 }
 
@@ -5484,6 +5499,18 @@ func partBuf(_ p: PartType) -> PixelBuf {
 		// a buffer beam with a hook and a link
 		b.rect(0, 2, 3, 4, 0x5A5E66); b.rect(0, 2, 3, 1, 0x8A8E96); b.rect(3, 3, 3, 2, 0x3A3E46)
 		b.ellipse(6.5, 4, 1.6, 1.6, 0x2A2E36); b.set(6, 4, 0x8A8E96); b.set(7, 4, 0x8A8E96)
+	case .hinge:
+		// two leaves round a pin
+		b.rect(0, 2, 3, 4, 0x8A8E96); b.rect(5, 2, 3, 4, 0x8A8E96); b.rect(3, 1, 2, 6, 0x5A5E66)
+		b.set(4, 3, 0xC8CCD4); b.set(4, 4, 0xC8CCD4); b.set(1, 3, 0x3A3E46); b.set(6, 4, 0x3A3E46)
+	case .servo:
+		// a motor housing with its output disc and a yellow mark
+		b.rect(0, 1, 8, 6, 0x4A5060); b.rect(0, 1, 8, 1, 0x6A7080); b.ellipse(4, 4, 2.6, 2.6, 0x9AA0AC)
+		b.ellipse(4, 4, 1.2, 1.2, 0x3A3E46); b.set(4, 2, 0xE8C040); b.set(1, 6, 0xC84A3A)
+	case .piston:
+		// a cylinder with its rod sticking out to the right
+		b.rect(0, 2, 5, 4, 0x5A6470); b.rect(0, 2, 5, 1, 0x7A8490); b.rect(5, 3, 3, 2, 0xC8CCD4); b.rect(7, 2, 1, 4, 0x8A8E96)
+		b.set(1, 4, 0x3A3E46)
 	case .bigWheel:
 		// drawn three cells across: a tyre with heavy tread and a spoked hub
 		b.ellipse(4, 4, 4, 4, 0x1E1E22); b.ellipse(4, 4, 3.2, 3.2, 0x2E2E34); b.ellipse(4, 4, 2.2, 2.2, 0x9A9AA4)
@@ -10914,7 +10941,7 @@ extension Vehicle {
 			return cellOpen
 		}
 		switch t {
-		case .frame, .hull, .engine, .fuelTank, .cargo, .armor, .jet, .burner, .cannon, .drill, .diamondDrill, .voidDrill, .ballast, .coupler: return cellSolid
+		case .frame, .hull, .engine, .fuelTank, .cargo, .armor, .jet, .burner, .cannon, .drill, .diamondDrill, .voidDrill, .ballast, .coupler, .hinge, .servo, .piston: return cellSolid
 		case .wing, .elevator, .envelope, .flap, .airBrake, .stabilizer: return cellPlatform
 		default: return cellOpen
 		}

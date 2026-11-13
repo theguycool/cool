@@ -10,6 +10,843 @@ import AVFoundation
 import UIKit
 #endif
 
+// ===== p34_joints =====
+
+// MARK: - Joints, servos and mechs
+// A machine with moving parts is several sections, each a vehicle of its own (a rigid body), joined at
+// hinges, servos and pistons. A joint part is built into a section; whatever is built on beyond it (the
+// side away from the seat, or the smaller side) becomes a section of its own, joined there. The joints
+// are worked out with the contacts, a few times each step: a hinge or servo keeps the two sections
+// together at its middle and lets them turn; a servo also turns them toward where it is told, as fast
+// and as hard as it can; a piston keeps them lined up and pushes the outer one out or pulls it back.
+// What moves a joint is set on it (tap it): the stick, one of the buttons A, B and C on the screen, or a
+// walk. A machine with walking joints (a mech) swings its hips and bends its knees in step as the
+// stick says, and its feet on the ground carry it along.
+
+/// Which joint a panel is setting up: the section it is built into, and its cell
+struct JointRef {
+	var vid: Int
+	var cell: PartCell
+}
+
+/// A joint between a section and the one beyond it (the parent keeps it)
+struct VJoint: Codable {
+	/// the joint part's cell in the parent, and the section beyond it
+	var cell: PartCell
+	var child: Int
+	/// the point they turn about, in the parent's cells and in the child's
+	var pa: [Double]
+	var pb: [Double]
+	/// 0 hinge, 1 servo, 2 piston
+	var kind: Int
+	/// the child's turn against the parent when it was built (a hinge or servo measures from there)
+	var base: Double
+	/// a piston's direction in the parent's cells
+	var axis: [Double]
+	/// how far it may go: an angle either way (radians) or how far a piston reaches out (blocks)
+	var lo: Double
+	var hi: Double
+	/// how fast it moves (radians or blocks a second) and how hard (1: a servo's own strength)
+	var speed: Double
+	var strength: Double
+	/// what moves it (JointInput's number), turned the other way round if asked
+	var input: Int
+	var invert: Bool
+	/// for a walk: the part it plays (JointRole's number) and which leg it is in
+	var role: Int
+	var leg: Int
+	/// where it is being taken
+	var target: Double
+}
+
+/// What moves a joint
+enum JointInput: Int, CaseIterable {
+	case none, stickUpDown, stickLeftRight, buttonA, buttonB, buttonC, walk
+	var name: String {
+		switch self {
+		case .none: return "Nothing (holds)"
+		case .stickUpDown: return "Stick up/down"
+		case .stickLeftRight: return "Stick left/right"
+		case .buttonA: return "Button A"
+		case .buttonB: return "Button B"
+		case .buttonC: return "Button C"
+		case .walk: return "Walking"
+		}
+	}
+}
+
+/// The part a joint plays in a mech's walk
+enum JointRole: Int, CaseIterable {
+	case none, hip, knee, shoulder, elbow, neck, tail
+	var name: String {
+		switch self {
+		case .none: return "None"
+		case .hip: return "Hip"
+		case .knee: return "Knee"
+		case .shoulder: return "Shoulder"
+		case .elbow: return "Elbow"
+		case .neck: return "Neck"
+		case .tail: return "Tail"
+		}
+	}
+}
+
+/// The numbers of joints
+enum Joints {
+	/// a servo's strength (the most it turns with, per strength), a piston's (the most it pushes with)
+	static let torque: Double = 900.0
+	static let force: Double = 900.0
+	/// how firmly a joint holds its sections together (of the gap closed each step) and how many times
+	/// the joints are worked out each step
+	static let firm: Double = 0.25
+	static let rounds: Int = 6
+	/// a gap at a joint up to this is left to the joint's pull; past it the sections are moved together
+	static let slack: Double = 0.02
+	/// how fast a mech's walk goes round (a step a second at full stick), how fast it walks, and how
+	/// quickly its feet bring it up to that speed
+	static let gaitRate: Double = 5.0
+	static let walkSpeed: Double = 3.2
+	static let walkGrip: Double = 6.0
+	/// how fast a walking machine may be turned back toward upright (radians a second, each second),
+	/// and how quickly it is brought there
+	static let balance: Double = 10.0
+	static let level: Double = 5.0
+	/// a joint's reach from the middle each way at most
+	static let maxAngle: Double = 3.0
+	static let maxReach: Double = 4.0
+}
+
+extension Game {
+	// MARK: building
+
+	/// After a section changes: every joint part with a side built beyond it that is not yet a section of
+	/// its own splits that side off and joins it there
+	func splitJointSections(_ v: Vehicle) {
+		var guardCount: Int = 0
+		var again: Bool = true
+		while again && guardCount < 8 {
+			again = false
+			guardCount += 1
+			for (c, t) in v.parts where t == .hinge || t == .servo || t == .piston {
+				if v.joints.contains(where: { $0.cell == c }) { continue }
+				if splitAt(v, c, t) {
+					again = true
+					break
+				}
+			}
+		}
+	}
+
+	/// Splits off what is beyond a joint part (true when it did)
+	func splitAt(_ v: Vehicle, _ j: PartCell, _ t: PartType) -> Bool {
+		let near: [PartCell] = [PartCell(dx: j.dx + 1, dy: j.dy), PartCell(dx: j.dx - 1, dy: j.dy), PartCell(dx: j.dx, dy: j.dy + 1), PartCell(dx: j.dx, dy: j.dy - 1)]
+		var sides: [Set<PartCell>] = []
+		for n in near where v.parts[n] != nil {
+			if sides.contains(where: { $0.contains(n) }) { continue }
+			var seen: Set<PartCell> = [n]
+			var stack: [PartCell] = [n]
+			while let cur = stack.popLast() {
+				let next: [PartCell] = [PartCell(dx: cur.dx + 1, dy: cur.dy), PartCell(dx: cur.dx - 1, dy: cur.dy), PartCell(dx: cur.dx, dy: cur.dy + 1), PartCell(dx: cur.dx, dy: cur.dy - 1)]
+				for k in next where k != j && v.parts[k] != nil && !seen.contains(k) {
+					seen.insert(k)
+					stack.append(k)
+				}
+			}
+			sides.append(seen)
+		}
+		if sides.count < 2 { return false }
+		// the side that goes: not the one joined to the section it hangs from, nor the one with the seat;
+		// else the lighter (a lift's heavy base stays, its platform moves)
+		let keep: PartCell? = jointAnchor(v) ?? seatCell(v)
+		var weights: [Double] = []
+		for side in sides {
+			var m: Double = 0
+			for c in side { if let t = v.parts[c] { m += v.cellMass(c, t) } }
+			weights.append(m)
+		}
+		var outIdx: Int = -1
+		for (i, side) in sides.enumerated() {
+			if let st = keep, side.contains(st) { continue }
+			if outIdx < 0 || weights[i] < weights[outIdx] - 1e-9 { outIdx = i }
+		}
+		if outIdx < 0 { return false }
+		let out: Set<PartCell> = sides[outIdx]
+		// (a big part beyond it goes whole, or the split waits)
+		for c in out { if let m = v.spanOf[c], !out.contains(m) { return false } }
+		// joints built into the side that goes go with it, and what hangs from them hangs from it
+		var moved: [VJoint] = []
+		for jt in v.joints where out.contains(jt.cell) { moved.append(jt) }
+		v.joints.removeAll { (jt: VJoint) in out.contains(jt.cell) }
+		let b: Vehicle = Vehicle(id: newID(), first: .frame, x: 0, y: 0)
+		b.parts.removeAll()
+		for c in out {
+			b.parts[c] = v.parts[c]
+			if let k = v.blocks[c] { b.blocks[c] = k }
+			if let d = v.dmg[c] { b.dmg[c] = d }
+			if let w = v.walls[c] { b.walls[c] = w }
+			if let m = v.spanOf[c] { b.spanOf[c] = m }
+			if let k = v.tilt[c] { b.tilt[c] = k }
+			v.parts[c] = nil
+			v.blocks[c] = nil
+			v.dmg[c] = nil
+			v.walls[c] = nil
+			v.spanOf[c] = nil
+		}
+		b.fuel = 0
+		b.recompute(keepAnchor: false)
+		b.angle = v.angle
+		let at: (Double, Double) = v.toWorld(b.comX, b.comY)
+		b.px = at.0
+		b.py = at.1
+		b.vx = v.vx
+		b.vy = v.vy
+		b.angVel = v.angVel
+		b.updateBox()
+		v.recompute(keepAnchor: true)
+		// the side it joins on: the neighbour of the joint part in the new section
+		var dir: (Double, Double) = (1, 0)
+		for n in near where out.contains(n) { dir = (Double(n.dx - j.dx), Double(n.dy - j.dy)) }
+		let mid: [Double] = [Double(j.dx) + 0.5, Double(j.dy) + 0.5]
+		let kind: Int = t == .hinge ? 0 : (t == .servo ? 1 : 2)
+		let lo: Double = kind == 2 ? 0 : -1.2
+		let hi: Double = kind == 2 ? 3.0 : 1.2
+		let jt: VJoint = VJoint(cell: j, child: b.id, pa: mid, pb: mid, kind: kind, base: 0, axis: [dir.0, dir.1], lo: lo, hi: hi, speed: kind == 2 ? 2.0 : 1.6, strength: 1.0, input: 0, invert: false, role: 0, leg: 0, target: 0)
+		v.joints.append(jt)
+		b.parentID = v.id
+		// (the new section's cells lie where they did in this one, so a moved joint's points and turn hold)
+		for mj in moved {
+			b.joints.append(mj)
+			if let c = vehicleByID(mj.child) { c.parentID = b.id }
+		}
+		vehicles.append(b)
+		v.asleep = false
+		b.asleep = false
+		// (joint parts inside the new section split it further: a knee below a hip)
+		splitJointSections(b)
+		return true
+	}
+
+	/// Where a section is joined to the one it hangs from: its own cell beside that joint part
+	func jointAnchor(_ v: Vehicle) -> PartCell? {
+		guard v.parentID != 0, let p = vehicleByID(v.parentID), let j = p.joints.first(where: { $0.child == v.id }) else { return nil }
+		let c: PartCell = j.cell
+		let near: [PartCell] = [PartCell(dx: c.dx + 1, dy: c.dy), PartCell(dx: c.dx - 1, dy: c.dy), PartCell(dx: c.dx, dy: c.dy + 1), PartCell(dx: c.dx, dy: c.dy - 1)]
+		for n in near where v.parts[n] != nil { return n }
+		return nil
+	}
+
+	/// Every section of a machine, from the top one down
+	func machineSections(_ root: Vehicle) -> [Vehicle] {
+		var parts: [Vehicle] = [root]
+		var k: Int = 0
+		while k < parts.count && k < 40 {
+			for j in parts[k].joints {
+				if let c = vehicleByID(j.child), !parts.contains(where: { $0 === c }) { parts.append(c) }
+			}
+			k += 1
+		}
+		return parts
+	}
+
+	/// The section at the top of a jointed machine (where the controls are)
+	func machineRoot(_ v: Vehicle) -> Vehicle {
+		var cur: Vehicle = v
+		var n: Int = 0
+		while cur.parentID != 0 && n < 16, let p = vehicleByID(cur.parentID) {
+			cur = p
+			n += 1
+		}
+		return cur
+	}
+
+	// MARK: controls
+
+	/// Once a frame, before the vehicles move: each joint's target from what drives it (the stick and the
+	/// buttons of whoever drives the machine, or its walk), and a mech's feet carrying it along
+	func jointControls(_ dt: Double) {
+		// a section whose parent no longer holds it (its joint part gone with a change) is free
+		for c in vehicles where c.parentID != 0 {
+			let held: Bool = vehicleByID(c.parentID)?.joints.contains(where: { $0.child == c.id }) ?? false
+			if !held { c.parentID = 0 }
+		}
+		var any: Bool = false
+		for v in vehicles where !v.joints.isEmpty { any = true; break }
+		if !any { return }
+		// a section whose joint part is gone (broken off or taken away) goes free, and so does a joint
+		// whose section is gone
+		for v in vehicles where !v.joints.isEmpty {
+			for (i, j) in v.joints.enumerated().reversed() {
+				let part: PartType? = v.parts[j.cell]
+				let still: Bool = part == .hinge || part == .servo || part == .piston
+				guard let c = vehicleByID(j.child), c.parentID == v.id, still else {
+					if let c = vehicleByID(j.child), c.parentID == v.id { c.parentID = 0 }
+					v.joints.remove(at: i)
+					continue
+				}
+			}
+		}
+		for root in vehicles where root.parentID == 0 && !root.joints.isEmpty {
+			machineControls(root, dt)
+		}
+	}
+
+	/// One machine's frame: its sections wake and step together, its joints take their targets from
+	/// whoever drives it (in any of its seats), and its walk goes on
+	func machineControls(_ root: Vehicle, _ dt: Double) {
+		let all: [Vehicle] = machineSections(root)
+		// (a joint between a section that moves and one that does not would come apart)
+		if all.contains(where: { !$0.asleep }) {
+			for p in all {
+				p.asleep = false
+				p.physAccum = root.physAccum
+			}
+		}
+		// they go to rest together too: none is let rest before all have been still a while
+		if !all.allSatisfy({ (p: Vehicle) in p.sleepT >= 0.45 }) {
+			for p in all where p.sleepT > 0.45 { p.sleepT = 0.45 }
+		}
+		let drv: Vehicle? = all.first { (p: Vehicle) in p.rider || p.auto != 0 }
+		let sx: Double = drv?.throttle ?? 0
+		let sy: Double = drv?.pitch ?? 0
+		var walking: Bool = false
+		var moved: Bool = false
+		for v in all {
+			for i in v.joints.indices {
+				var j: VJoint = v.joints[i]
+				let was: Double = j.target
+				let dir: Double = j.invert ? -1.0 : 1.0
+				let input: JointInput = JointInput(rawValue: j.input) ?? .none
+				switch input {
+				case .none:
+					break
+				case .stickUpDown:
+					j.target += sy * dir * stickSense(j, true) * j.speed * dt
+				case .stickLeftRight:
+					j.target += sx * dir * stickSense(j, false) * j.speed * dt
+				case .buttonA, .buttonB, .buttonC:
+					let held: Bool = drv != nil && jointButtons[j.input - JointInput.buttonA.rawValue]
+					let want: Double = held != j.invert ? j.hi : j.lo
+					j.target += clampD(want - j.target, -j.speed * dt, j.speed * dt)
+				case .walk:
+					walking = true
+					j.target = gaitTarget(root, j)
+				}
+				j.target = clampD(j.target, j.lo, j.hi)
+				if abs(j.target - was) > 1e-6 { moved = true }
+				v.joints[i] = j
+			}
+		}
+		// a joint told to move wakes the machine
+		if moved {
+			for p in all {
+				p.asleep = false
+				p.sleepT = 0
+			}
+		}
+		if walking {
+			if abs(sx) > 0.1 {
+				root.gait += sx * Joints.gaitRate * dt
+				root.gaitDir = sx > 0 ? 1.0 : -1.0
+			}
+			let want: Double = abs(sx) > 0.1 ? 1.0 : 0.0
+			root.gaitAmp += clampD(want - root.gaitAmp, -2.0 * dt, 2.0 * dt)
+			if let d = drv { walkMachine(root, all, d.throttle, dt) }
+		}
+	}
+
+	/// Which way a joint goes for the stick pushed up (or right): what sticks out beside it goes up, what
+	/// stands on it or hangs from it goes right; a piston pushes out
+	func stickSense(_ j: VJoint, _ upDown: Bool) -> Double {
+		if j.kind == 2 { return 1.0 }
+		if upDown { return abs(j.axis[0]) > 0.5 ? -j.axis[0] : 1.0 }
+		return abs(j.axis[1]) > 0.5 ? -j.axis[1] : 1.0
+	}
+
+	/// Where a walking joint is in its stride: hips swing to and fro, knees bend while the leg swings
+	/// forward (so the foot clears the ground) and are straight while it pushes back; legs take turns
+	/// (each leg half a stride after the other). Standing, the legs come back straight.
+	func gaitTarget(_ root: Vehicle, _ j: VJoint) -> Double {
+		let ph: Double = root.gait + Double(j.leg) * Double.pi
+		let mid: Double = (j.lo + j.hi) * 0.5
+		let amp: Double = (j.hi - j.lo) * 0.5 * root.gaitAmp
+		let role: JointRole = JointRole(rawValue: j.role) ?? .none
+		let dir: Double = j.invert ? -1.0 : 1.0
+		switch role {
+		case .hip, .shoulder:
+			// (a hip turning the leg clockwise puts the foot back)
+			return mid + amp * sin(ph) * dir
+		case .knee, .elbow:
+			// the hip swings the foot forward while the hip's angle falls: then the knee bends
+			let swing: Double = -cos(ph) * root.gaitDir
+			let straight: Double = j.invert ? j.hi : j.lo
+			let bent: Double = j.invert ? j.lo : j.hi
+			return straight + (bent - straight) * max(0, swing) * root.gaitAmp
+		case .tail, .neck:
+			return mid + amp * 0.4 * sin(ph * 2.0)
+		case .none:
+			return mid
+		}
+	}
+
+	/// A mech's feet carry it: while the stick says walk and some of its walking sections touch the
+	/// ground, the machine is brought toward its walking speed (the legs' swing is what is seen; the
+	/// grip of the feet on the ground is what moves it)
+	func walkMachine(_ root: Vehicle, _ parts: [Vehicle], _ throttle: Double, _ dt: Double) {
+		var legs: Int = 0
+		var down: Int = 0
+		for p in parts {
+			for j in p.joints where j.input == JointInput.walk.rawValue {
+				guard let c = vehicleByID(j.child) else { continue }
+				legs += 1
+				if c.contacts > 0 { down += 1 }
+			}
+		}
+		if legs == 0 || down == 0 { return }
+		balanceMachine(root, parts, dt)
+		// (let go, the feet bring it to a stop just as smoothly: planted at speed, it would trip)
+		let walking: Bool = abs(throttle) >= 0.1
+		if !walking && abs(root.vx) < 0.05 { return }
+		let want: Double = walking ? throttle * Joints.walkSpeed : 0
+		let share: Double = min(1.0, Double(down) / Double(max(1, legs)) * 2.0)
+		let dv: Double = (want - root.vx) * min(1.0, Joints.walkGrip * dt) * share
+		for p in parts {
+			p.vx += dv
+			p.asleep = false
+		}
+	}
+
+
+	/// A walking machine with a driver keeps its body upright, as the driver leans (a two-legged mech
+	/// stands on one foot while the other swings): the whole machine is turned back toward level, no
+	/// faster than Joints.balance allows
+	func balanceMachine(_ root: Vehicle, _ parts: [Vehicle], _ dt: Double) {
+		var m: Double = 0
+		var cx: Double = 0
+		var cy: Double = 0
+		for p in parts {
+			m += p.mass
+			cx += p.px * p.mass
+			cy += p.py * p.mass
+		}
+		if m <= 0 { return }
+		cx /= m
+		cy /= m
+		let tilt: Double = remainder(root.angle, 2.0 * Double.pi)
+		// (upright and still enough: left alone)
+		if abs(tilt) < 0.02 && abs(root.angVel) < 0.05 { return }
+		let want: Double = clampD(-tilt * Joints.level, -2.0, 2.0)
+		let dw: Double = clampD(want - root.angVel, -Joints.balance * dt, Joints.balance * dt)
+		if abs(dw) < 1e-6 { return }
+		for p in parts {
+			p.angVel += dw
+			p.vx -= dw * (p.py - cy)
+			p.vy += dw * (p.px - cx)
+			p.asleep = false
+		}
+	}
+
+	// MARK: the joints at work
+
+	/// Every joint, worked out together a few times (called between the vehicles' fixed steps)
+	func solveJoints(_ h: Double) {
+		var round: Int = 0
+		while round < Joints.rounds {
+			for a in vehicles where !a.joints.isEmpty {
+				for j in a.joints {
+					// (a machine at rest is left alone: what is not being stepped would gather pushes)
+					guard let b = vehicleByID(j.child), a.inStep || b.inStep else { continue }
+					if j.kind == 2 { pistonStep(a, b, j, h, round == 0) } else { pivotStep(a, b, j, h, round == 0) }
+				}
+			}
+			// and where the sections stand on the land, their footing again with what the joints did (not a
+			// mech's in mid-stride: its feet are carried along by its walk)
+			for v in vehicles where v.inStep && !v.heldContacts.isEmpty && (v.parentID != 0 || !v.joints.isEmpty) {
+				if v.parentID != 0 && machineRoot(v).gaitAmp > 0.01 { continue }
+				if v.parentID == 0 && v.gaitAmp > 0.01 { continue }
+				footingPass(v)
+			}
+			round += 1
+		}
+		// what gap is left is closed by moving the sections themselves most of the way (a joint driven
+		// hard against the land opens a little each step; this keeps it from showing)
+		for a in vehicles where !a.joints.isEmpty {
+			for j in a.joints {
+				guard let b = vehicleByID(j.child), a.inStep || b.inStep else { continue }
+				closeJointGap(a, b, j)
+			}
+		}
+	}
+
+	/// One more pass over the places a section stands on the land (kept from its last step): each place
+	/// stops it going into the ground and holds it by its grip, adding to what that place already gave
+	func footingPass(_ v: Vehicle) {
+		let invM: Double = 1.0 / v.mass
+		let invI: Double = 1.0 / v.inertia
+		var i: Int = 0
+		while i < v.heldContacts.count {
+			var k: VContact = v.heldContacts[i]
+			let vn: Double = (v.vx - v.angVel * k.ry) * k.nx + (v.vy + v.angVel * k.rx) * k.ny
+			let jn0: Double = k.jn
+			k.jn = max(0, jn0 + (k.want - vn) / k.kn)
+			let dn: Double = k.jn - jn0
+			v.vx += dn * k.nx * invM
+			v.vy += dn * k.ny * invM
+			v.angVel += k.rn * dn * invI
+			let tx: Double = -k.ny
+			let ty: Double = k.nx
+			let vt: Double = (v.vx - v.angVel * k.ry) * tx + (v.vy + v.angVel * k.rx) * ty
+			let lim: Double = k.mu * k.jn
+			let jt0: Double = k.jt
+			k.jt = clampD(jt0 - vt / k.kt, -lim, lim)
+			let dtn: Double = k.jt - jt0
+			v.vx += dtn * tx * invM
+			v.vy += dtn * ty * invM
+			v.angVel += k.rt * dtn * invI
+			v.heldContacts[i] = k
+			i += 1
+		}
+	}
+
+	/// Moves two joined sections toward each other (the lighter one more) to close most of the gap at a
+	/// pivot, or a piston's drift off its line
+	func closeJointGap(_ a: Vehicle, _ b: Vehicle, _ j: VJoint) {
+		let pa: (Double, Double) = a.toWorld(j.pa[0], j.pa[1])
+		let pb: (Double, Double) = b.toWorld(j.pb[0], j.pb[1])
+		var gx: Double = pb.0 - pa.0
+		var gy: Double = pb.1 - pa.1
+		if j.kind == 2 {
+			// (a piston only off its line: along it is its reach)
+			let ux: Double = j.axis[0] * a.cosA - j.axis[1] * a.sinA
+			let uy: Double = j.axis[0] * a.sinA + j.axis[1] * a.cosA
+			let along: Double = gx * ux + gy * uy
+			gx -= along * ux
+			gy -= along * uy
+		}
+		// (only a real gap: a small one is closed by the joint's pull, which the ground's grip can hold
+		// against; moving a section at rest by hand would creep it along the ground)
+		let len: Double = sqrt(gx * gx + gy * gy)
+		if len < Joints.slack { return }
+		let part: Double = (len - Joints.slack) / len
+		gx *= part
+		gy *= part
+		let ia: Double = 1.0 / a.mass
+		let ib: Double = 1.0 / b.mass
+		let wa: Double = ia / (ia + ib) * 0.6
+		let wb: Double = ib / (ia + ib) * 0.6
+		a.px += gx * wa
+		a.py += gy * wa
+		b.px -= gx * wb
+		b.py -= gy * wb
+		a.updateBox()
+		b.updateBox()
+	}
+
+	/// A hinge or servo: the two sections held together at the pivot, free to turn; a servo turns them
+	/// toward its target. (The turn is worked out first and the pivot last, so each round ends with the
+	/// two held together: a servo's last hard turn would otherwise open the pivot for a step.)
+	func pivotStep(_ a: Vehicle, _ b: Vehicle, _ j: VJoint, _ h: Double, _ drive: Bool) {
+		let ia: Double = 1.0 / a.mass
+		let ib: Double = 1.0 / b.mass
+		let iia: Double = 1.0 / a.inertia
+		let iib: Double = 1.0 / b.inertia
+		// turning: a servo drives toward its target; a hinge only stops at its limits (with a little friction)
+		let rel: Double = remainder(b.angle - a.angle - j.base, 2.0 * Double.pi)
+		let w: Double = b.angVel - a.angVel
+		let kk: Double = iia + iib
+		if kk > 0 {
+			var want: Double = w
+			var most: Double = Double.infinity
+			if j.kind == 1 {
+				want = clampD((j.target - rel) * 8.0, -j.speed, j.speed)
+				most = Joints.torque * j.strength * h
+				if abs(j.target - rel) > 0.01 && drive {
+					a.asleep = false
+					b.asleep = false
+				}
+			} else {
+				want = w * 0.96
+				if rel < j.lo { want = max(w, (j.lo - rel) * 4.0) } else if rel > j.hi { want = min(w, (j.hi - rel) * 4.0) }
+			}
+			let lam: Double = clampD((want - w) / kk, -most, most)
+			a.angVel -= lam * iia
+			b.angVel += lam * iib
+		}
+		// the pivot: the speed of the pivot on each made the same, and the gap between them closed
+		let pa: (Double, Double) = a.toWorld(j.pa[0], j.pa[1])
+		let pb: (Double, Double) = b.toWorld(j.pb[0], j.pb[1])
+		let rax: Double = pa.0 - a.px
+		let ray: Double = pa.1 - a.py
+		let rbx: Double = pb.0 - b.px
+		let rby: Double = pb.1 - b.py
+		let va: (Double, Double) = (a.vx - a.angVel * ray, a.vy + a.angVel * rax)
+		let vb: (Double, Double) = (b.vx - b.angVel * rby, b.vy + b.angVel * rbx)
+		let cx: Double = pb.0 - pa.0
+		let cy: Double = pb.1 - pa.1
+		let k11: Double = ia + ib + iia * ray * ray + iib * rby * rby
+		let k12: Double = -iia * rax * ray - iib * rbx * rby
+		let k22: Double = ia + ib + iia * rax * rax + iib * rbx * rbx
+		let det: Double = k11 * k22 - k12 * k12
+		if abs(det) > 1e-12 {
+			let rx: Double = -((vb.0 - va.0) + Joints.firm * cx / h)
+			let ry: Double = -((vb.1 - va.1) + Joints.firm * cy / h)
+			let lx: Double = (k22 * rx - k12 * ry) / det
+			let ly: Double = (k11 * ry - k12 * rx) / det
+			a.vx -= lx * ia
+			a.vy -= ly * ia
+			a.angVel -= (rax * ly - ray * lx) * iia
+			b.vx += lx * ib
+			b.vy += ly * ib
+			b.angVel += (rbx * ly - rby * lx) * iib
+		}
+	}
+
+	/// A piston: the outer section is pushed out or pulled back toward the target; the two keep their
+	/// turn and stay on its line (worked out last, so each round ends with them lined up)
+	func pistonStep(_ a: Vehicle, _ b: Vehicle, _ j: VJoint, _ h: Double, _ drive: Bool) {
+		let iia: Double = 1.0 / a.inertia
+		let iib: Double = 1.0 / b.inertia
+		let c: Double = a.cosA
+		let s: Double = a.sinA
+		let ux: Double = j.axis[0] * c - j.axis[1] * s
+		let uy: Double = j.axis[0] * s + j.axis[1] * c
+		// along it: toward the target, as hard as it can push
+		var pa: (Double, Double) = a.toWorld(j.pa[0], j.pa[1])
+		var pb: (Double, Double) = b.toWorld(j.pb[0], j.pb[1])
+		let e: Double = (pb.0 - pa.0) * ux + (pb.1 - pa.1) * uy
+		var want: Double = clampD((j.target - e) * 8.0, -j.speed, j.speed)
+		if e < j.lo { want = max(want, (j.lo - e) * 4.0) } else if e > j.hi { want = min(want, (j.hi - e) * 4.0) }
+		if abs(j.target - e) > 0.01 && drive {
+			a.asleep = false
+			b.asleep = false
+		}
+		pushAlong(a, b, ux, uy, pa.0 - a.px, pa.1 - a.py, pb.0 - b.px, pb.1 - b.py, want, Joints.force * j.strength * h)
+		// the same turn
+		let rel: Double = remainder(b.angle - a.angle - j.base, 2.0 * Double.pi)
+		let kk: Double = iia + iib
+		if kk > 0 {
+			let lam: Double = (-(b.angVel - a.angVel) - Joints.firm * rel / h) / kk
+			a.angVel -= lam * iia
+			b.angVel += lam * iib
+		}
+		// across the line: held on it
+		pa = a.toWorld(j.pa[0], j.pa[1])
+		pb = b.toWorld(j.pb[0], j.pb[1])
+		let nx: Double = -uy
+		let ny: Double = ux
+		let off: Double = (pb.0 - pa.0) * nx + (pb.1 - pa.1) * ny
+		pushAlong(a, b, nx, ny, pa.0 - a.px, pa.1 - a.py, pb.0 - b.px, pb.1 - b.py, -Joints.firm * off / h, Double.infinity)
+	}
+
+	/// One push between two sections along a direction, so that B moves away from A at `want` along it
+	/// there (no harder than `most`)
+	func pushAlong(_ a: Vehicle, _ b: Vehicle, _ nx: Double, _ ny: Double, _ rax: Double, _ ray: Double, _ rbx: Double, _ rby: Double, _ want: Double, _ most: Double) {
+		let ia: Double = 1.0 / a.mass
+		let ib: Double = 1.0 / b.mass
+		let iia: Double = 1.0 / a.inertia
+		let iib: Double = 1.0 / b.inertia
+		let rna: Double = rax * ny - ray * nx
+		let rnb: Double = rbx * ny - rby * nx
+		let k: Double = ia + ib + rna * rna * iia + rnb * rnb * iib
+		if k <= 0 { return }
+		let va: Double = (a.vx - a.angVel * ray) * nx + (a.vy + a.angVel * rax) * ny
+		let vb: Double = (b.vx - b.angVel * rby) * nx + (b.vy + b.angVel * rbx) * ny
+		let lam: Double = clampD((want - (vb - va)) / k, -most, most)
+		a.vx -= lam * nx * ia
+		a.vy -= lam * ny * ia
+		a.angVel -= rna * lam * iia
+		b.vx += lam * nx * ib
+		b.vy += lam * ny * ib
+		b.angVel += rnb * lam * iib
+	}
+
+	// MARK: setting joints up
+
+	/// Sets up every joint of a machine as a mech: joints whose section hangs below are hips, the joints
+	/// below those knees; legs take turns by where they are along the body; all of them walk
+	func autoMech(_ v: Vehicle) {
+		let root: Vehicle = machineRoot(v)
+		var hips: [VJoint] = []
+		for j in root.joints {
+			guard let c = vehicleByID(j.child) else { continue }
+			if c.b.cy > root.b.cy { hips.append(j) }
+		}
+		// (from one end of the body to the other, so neighbouring legs take turns)
+		hips.sort { (p: VJoint, q: VJoint) in p.cell.dx < q.cell.dx }
+		var legIndex: Int = 0
+		for j in hips { legIndex = setLeg(root, j, legIndex) }
+	}
+
+	/// Makes a joint (and the joints below it) one leg; returns the next leg's number
+	func setLeg(_ parent: Vehicle, _ j0: VJoint, _ leg: Int) -> Int {
+		guard let i = parent.joints.firstIndex(where: { $0.cell == j0.cell }) else { return leg }
+		parent.joints[i].role = JointRole.hip.rawValue
+		parent.joints[i].input = JointInput.walk.rawValue
+		parent.joints[i].leg = leg % 2
+		if parent.joints[i].kind != 1 { return leg + 1 }
+		parent.joints[i].lo = -0.45
+		parent.joints[i].hi = 0.45
+		if let c = vehicleByID(j0.child) {
+			for (k, kj) in c.joints.enumerated() where kj.kind == 1 {
+				c.joints[k].role = JointRole.knee.rawValue
+				c.joints[k].input = JointInput.walk.rawValue
+				c.joints[k].leg = leg % 2
+				c.joints[k].lo = 0
+				c.joints[k].hi = 0.7
+			}
+		}
+		return leg + 1
+	}
+}
+
+/// Setting up a joint (tap a hinge, servo or piston on a machine): what moves it, how far each way, how
+/// fast and how hard, and the part it plays in a walk. AUTO MECH sets up the whole machine to walk.
+struct JointPanel: View {
+	@ObservedObject var game: Game
+	@ObservedObject var hud: HUDSignal
+
+	var body: some View {
+		VStack(spacing: 8) {
+			topBar
+			ScrollView { content }
+		}
+		.foregroundColor(Color(ui: 0xFFFFFF))
+		.padding(14)
+		.background(PixelBox(color: Color(ui: 0x2C2834)).opacity(0.97))
+		.frame(maxWidth: 660)
+		.padding(10)
+	}
+
+	var owner: Vehicle? {
+		guard let r = game.jointEdit else { return nil }
+		return game.vehicleByID(r.vid)
+	}
+
+	var index: Int? {
+		guard let r = game.jointEdit, let v = owner else { return nil }
+		return v.joints.firstIndex { $0.cell == r.cell }
+	}
+
+	var joint: VJoint? {
+		guard let v = owner, let i = index else { return nil }
+		return v.joints[i]
+	}
+
+	var title: String {
+		guard let j = joint else { return "JOINT" }
+		return j.kind == 0 ? "HINGE" : (j.kind == 1 ? "SERVO" : "PISTON")
+	}
+
+	var topBar: some View {
+		HStack {
+			Text(verbatim: title).font(.pixel(20)).foregroundColor(Color(ui: 0xE8C040))
+			Spacer()
+			SmallButton(title: "AUTO MECH", color: Color(ui: 0x5A4A8A)) { autoMech() }
+			SmallButton(title: "DONE", color: Color(ui: 0x3A6A3A)) { close() }
+		}
+	}
+
+	@ViewBuilder
+	var content: some View {
+		if let j = joint {
+			VStack(alignment: .leading, spacing: 8) {
+				Text(verbatim: helpLine(j)).font(.pixel(11, .semibold)).foregroundColor(Color(ui: 0xB8B0C8))
+				if j.kind != 0 { driveSection(j) }
+				limitSection(j)
+				if j.kind == 1 { walkSection }
+			}
+		} else {
+			Text("This joint is gone.").font(.pixel(13)).foregroundColor(Color(ui: 0xFFE070))
+		}
+	}
+
+	func helpLine(_ j: VJoint) -> String {
+		if j.kind == 0 { return "A hinge lets what is beyond it swing freely between its limits." }
+		if j.kind == 2 { return "A piston pushes what is beyond it out and pulls it back, between its limits (in blocks)." }
+		return "A servo turns what is beyond it toward where it is told, between its limits (in degrees)."
+	}
+
+	func driveSection(_ j: VJoint) -> some View {
+		VStack(alignment: .leading, spacing: 6) {
+			Text("Moved by").font(.pixel(13, .bold))
+			ChoiceRows(options: JointInput.allCases.map { $0.name }, selected: intBind(\VJoint.input), columns: 3)
+			ModToggle(label: "The other way round", help: "Swaps which way the stick or button moves it", isOn: boolBind(\VJoint.invert))
+			if j.kind == 2 {
+				StatSlider(label: "Speed (blocks a second)", value: numBind(\VJoint.speed), range: 0.2...6.0, step: 0.1, format: "%.1f")
+			} else {
+				StatSlider(label: "Speed (degrees a second)", value: degBind(\VJoint.speed), range: 10.0...360.0, step: 5, format: "%.0f")
+			}
+			StatSlider(label: "Strength (1: its own)", value: numBind(\VJoint.strength), range: 0.2...5.0, step: 0.1, format: "%.1f")
+		}
+	}
+
+	func limitSection(_ j: VJoint) -> some View {
+		VStack(alignment: .leading, spacing: 6) {
+			Text("How far").font(.pixel(13, .bold))
+			if j.kind == 2 {
+				StatSlider(label: "Pulled back to (blocks)", value: numBind(\VJoint.lo), range: 0.0...Joints.maxReach, step: 0.1, format: "%.1f")
+				StatSlider(label: "Pushed out to (blocks)", value: numBind(\VJoint.hi), range: 0.0...Joints.maxReach, step: 0.1, format: "%.1f")
+			} else {
+				StatSlider(label: "One way (degrees)", value: degBind(\VJoint.lo), range: -170.0...0.0, step: 5, format: "%.0f")
+				StatSlider(label: "The other way (degrees)", value: degBind(\VJoint.hi), range: 0.0...170.0, step: 5, format: "%.0f")
+			}
+		}
+	}
+
+	var walkSection: some View {
+		VStack(alignment: .leading, spacing: 6) {
+			Text("In a walk (when moved by Walking)").font(.pixel(13, .bold))
+			ChoiceRows(options: JointRole.allCases.map { $0.name }, selected: intBind(\VJoint.role), columns: 4)
+			ChoiceRows(options: ["Leg 1", "Leg 2"], selected: intBind(\VJoint.leg), columns: 2)
+		}
+	}
+
+	// MARK: bindings into the joint
+
+	func update(_ f: (inout VJoint) -> Void) {
+		guard let v = owner, let i = index else { return }
+		var j: VJoint = v.joints[i]
+		f(&j)
+		if j.lo > j.hi { j.lo = j.hi }
+		j.target = clampD(j.target, j.lo, j.hi)
+		v.joints[i] = j
+		v.asleep = false
+		game.bumpHUD()
+	}
+
+	func intBind(_ kp: WritableKeyPath<VJoint, Int>) -> Binding<Int> {
+		let me: JointPanel = self
+		return Binding<Int>(get: { me.joint?[keyPath: kp] ?? 0 }, set: { (n: Int) in me.update { $0[keyPath: kp] = n } })
+	}
+
+	func boolBind(_ kp: WritableKeyPath<VJoint, Bool>) -> Binding<Bool> {
+		let me: JointPanel = self
+		return Binding<Bool>(get: { me.joint?[keyPath: kp] ?? false }, set: { (b: Bool) in me.update { $0[keyPath: kp] = b } })
+	}
+
+	func numBind(_ kp: WritableKeyPath<VJoint, Double>) -> Binding<Double> {
+		let me: JointPanel = self
+		return Binding<Double>(get: { me.joint?[keyPath: kp] ?? 0 }, set: { (x: Double) in me.update { $0[keyPath: kp] = x } })
+	}
+
+	func degBind(_ kp: WritableKeyPath<VJoint, Double>) -> Binding<Double> {
+		let me: JointPanel = self
+		return Binding<Double>(get: { (me.joint?[keyPath: kp] ?? 0) * 180.0 / Double.pi }, set: { (x: Double) in me.update { $0[keyPath: kp] = x * Double.pi / 180.0 } })
+	}
+
+	func autoMech() {
+		guard let v = owner else { return }
+		game.autoMech(v)
+		game.say("Set up to walk: hips swing, knees bend, the legs take turns. Drive it with the stick.", 3.0)
+		game.bumpHUD()
+	}
+
+	func close() {
+		game.showJoint = false
+		game.jointEdit = nil
+		game.bumpHUD()
+	}
+}
+
 // ===== u08_alchemy =====
 
 // MARK: - HUD: effects and suit energy
@@ -7690,7 +8527,7 @@ struct GameView: View {
 	var body: some View {
 		ZStack {
 			worldLayer
-			if !game.showInventory && !game.showMap && !game.showJournal && !game.showWeather && !game.showPower && !game.showCapture && !game.showModTest && !game.showInfuse && !game.showExo && !game.dead {
+			if !game.showInventory && !game.showMap && !game.showJournal && !game.showWeather && !game.showPower && !game.showCapture && !game.showModTest && !game.showInfuse && !game.showExo && !game.showJoint && !game.dead {
 				HUDView(game: game, hud: game.hud)
 			}
 			if game.showInfuse {
@@ -7713,6 +8550,10 @@ struct GameView: View {
 			if game.showModTest {
 				Color.black.opacity(0.45).ignoresSafeArea()
 				ModTestPanel(game: game, hud: game.hud, reset: { resetTest() }, exit: quit)
+			}
+			if game.showJoint {
+				Color.black.opacity(0.45).ignoresSafeArea()
+				JointPanel(game: game, hud: game.hud)
 			}
 			if game.capturing && !game.showCapture && !game.paused { CaptureBar(game: game, hud: game.hud) }
 			if game.showCapture {

@@ -44,7 +44,9 @@ confirmed). `tools/buildcost.sh` measures both ways:
   (2.62 MB, 67,073 lines) first measured 421 MB in part 2; the land painter (`p24_painter`) and the
   hull air moved to part 1: 388, 411, 398, 394, 403 and 384 MB, 110 s in all; as one job 97 s and
   1,279 MB. Phase 4 (2.64 MB, 67,536 lines, most of it `p31d_rails` at the end of part 3): 388, 413,
-  402, 395, 403 and 384 MB, 134 s in all; as one job 110 s and 1,285 MB.
+  402, 395, 403 and 384 MB, 134 s in all; as one job 110 s and 1,285 MB. Phase 5 (2.68 MB, 68,505
+  lines, most of it `p34_joints` at the start of part 6): 389, 416, 402, 395, 405 and 397 MB, 135 s in
+  all; as one job 107 s and 1,280 MB.
 - A job's peak can jump by 30 MB or more after a small edit (taking the recipe lines out of one
   function once raised part 2 from 473 to 509 MB), so a few MB either way is noise; measure again
   after moving code.
@@ -69,7 +71,8 @@ compiles and runs headless on Linux. If `/opt/pixelrealm` is missing, run `tools
 house that flies under a balloon, riders on a flatbed truck's deck, a plane and a crate parked on a
 wheeled deck, a house on wheels with back walls, a door, a ladder, a bed and furniture, water poured
 off a ledge filling a basin, a submarine under the sea with a dry cabin, a train of an engine and two
-ore carts on stepped rails, a truck on big wheels at a step).
+ore carts on stepped rails, a truck on big wheels at a step, a two-legged mech mid-stride, a crane truck
+and a piston lift).
 - `tools/art.sh preview|pack|check|game|compare`: the hand-drawn art (see **Art** below and `tools/art/README.md`): PNG sheets of the drawings, writing them into the game, and before/after sheets.
 - `tools/bench.sh`: chunk generation, painting, lighting and tick timings (debug build; compare
   with `GAME_SRC=<old file> tools/bench.sh`).
@@ -130,6 +133,11 @@ diving and rising with a dry cabin; tilted wings, flaps, air brakes, tailplanes;
 `phys4` (phase 4: rail wheels coasting on rails and dragging off them, the ore cart on a rail and down a
 stepped track, a train coupled, pulled, pushed, saved, walked through and uncoupled; big wheels put on,
 climbing a step small wheels stop at, saved, taken off whole; a ship of 424 cells and its cost a frame),
+`phys5` (phase 5: what is built beyond a hinge, servo or piston split off as a section, also built in
+steps or all at once; a hinge swinging to its limit; a servo on button A and B and the stick, holding a
+stone, swung hard and fast, through its own base; a machine resting as one and woken by a button; a
+piston lifting a platform with a crate; a crane mast on a truck driven along; the joint taken away;
+saved joints; a two-legged mech set up by AUTO MECH walking both ways, stopping and standing),
 and `det` and `det2` (world generation fingerprints for generator versions 1 to 4).
 
 What the stand-ins can't tell you:
@@ -163,7 +171,7 @@ What the stand-ins can't tell you:
   `SuitShape`, `SuitKind`, `ModPowerRole`, `ThemeRole`, `ModBlockFunction` (seat, bed appended), `GameRule`
   (its lines in `GameRule.specText` follow the cases), `Dimension` (custom0-2 were appended),
   `PartType` (vehicle parts: `block`, the aircraft parts, then flap, airBrake, stabilizer, ballast,
-  railWheel, coupler, bigWheel were appended), `ModCollision` (liquid appended), `ProjKind`
+  railWheel, coupler, bigWheel, hinge, servo, piston were appended), `ModCollision` (liquid appended), `ProjKind`
   and the like) only get new cases appended at the end. Never reorder or remove cases. `hairChoices`,
   `scarfChoices`, `shirtChoices`, `pantsChoices` and the style lists (`hairStyleNames`,
   `shirtStyleNames`, `pantsStyleNames`, each style with its drawing `player_hair_<n>` and so on) are
@@ -254,7 +262,7 @@ inside hulls), `p24_painter`, then `a01_artsheet`
 (the hand-drawn pictures as text, and their readers); part 2 `p13a_mobdefs` to `p26_vehicle_ux` (without `p24`), then `p33_vehicles`; part 3 `p27_power` to
 `p31c_blockphys`, `p31d_rails`; part 4 `p32_modplus` and `u01_art` (the art store, the player's look, sound, the
 weather simulation, ambient and animal life, the journal, telegraphed attacks); part 5 `u02_render` to
-`u05_menu`, then `u07_mods`; part 6 `u08_alchemy`, `u09_modplus`, `u06_root`. New code goes into
+`u05_menu`, then `u07_mods`; part 6 `p34_joints`, `u08_alchemy`, `u09_modplus`, `u06_root`. New code goes into
 the section it belongs to. A `private` or `fileprivate` name can only be used in its own part, so
 anything used across parts is internal (no modifier).
 
@@ -268,7 +276,8 @@ the bucket), `p13a_mobdefs` (MobKind, MobDef, spawn rules, Mob),
 (pointer, `interact`), `p14d_tools` (item use, mining, placing), `p15a_mobai` (`updateMobs`,
 `think`, the per-kind AIs), `p15b_spawn` (`updateSpawning`), `p16*` (combat, damage, bosses), `p17`
 (vehicles, ships), `p18` (portal, map), `p19_save` (`SaveData`, `makeSave`, `Game.load`), `p20`–`p26`
-(helpers, walls, doors, HUD logic), `p27_power` (Sparkworks), `p28_mods` (Mod Creator: data,
+(helpers, walls, doors, HUD logic), `p34_joints` (hinges, servos, pistons: sections, joints, controls,
+mechs, the JOINT panel), `p27_power` (Sparkworks), `p28_mods` (Mod Creator: data,
 store, checks, runtime, custom creature AI, structures and capture, test tools), `p32_modplus` (Mod Creator+: changes
 to game content, ore controls, sprite tools, custom infusions, boss phases and summoning, custom dimensions with
 their suns, moons and tree designs, the Logic Studio), `p29_alchemy` (rarity, potions, effects on creatures, smoke,
@@ -405,6 +414,16 @@ the Mod Test LOGIC tab, the sun and moon editor, the tree design editor), `u06_r
   both vehicles, `formCouplings` after the vehicles move, `solveCouplings` between fixed steps,
   `uncouple`), the big wheel (`partSpan`, `Vehicle.spanOf`, `attachBigWheel`; `cutAway` takes a big part
   whole). Collision samples are cached per vehicle (`sampleCache`, keyed by `artRev`).
+- **Joints and mechs (p34_joints).** See docs/physics-plan.md, phase 5. What is built beyond a hinge,
+  servo or piston is its own `Vehicle` (a section), its `parentID` the section it hangs from, which
+  keeps a `VJoint` (cell, child, pivot in both, kind, limits, speed, strength, input, role, leg,
+  target); `splitJointSections` after any build. `jointControls` (first in `updateVehicles`) frees
+  orphans and runs `machineControls` per machine (wake and step together, targets from the driver's
+  stick and `jointButtons`, the walk, `walkMachine`, `balanceMachine`); `solveJoints` between fixed
+  steps (`pivotStep`, `pistonStep`, the footing of sections on the land, `closeJointGap`).
+  `machineRoot`, `machineSections`. The JOINT panel (`JointPanel`, `showJoint`, `jointEdit`) opens on a
+  tap of a joint part; A, B and C show while driving a machine (`jointButtonRow`). Tests that move a
+  machine by hand call `updateVehicles`, never step one section alone.
 - **Speed and contact (p17, p33).** No clamps. `stepVehicle`: sub-steps by speed, the open-sky path.
   `vehicleSubstep` gathers `VContact`s and gives their blows together over four rounds (normal push
   held at zero or more, friction within `mu` times it, bounce and grip from the block touched:

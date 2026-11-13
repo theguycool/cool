@@ -155,11 +155,38 @@ The user's parts 1 to 16 are all covered. The order is theirs with three changes
 - Not done: switches between tracks (in a side view tracks only cross at different heights),
   passenger aircraft and carriers as ready-made kits (they can be built from parts).
 
-### Phase 5: mechanical systems
-- Sections joined by hinges, pivots, pistons and telescopes, driven by servos with range, speed and
-  strength; each section is a frame and collides.
-- Mechs: free building, an optional mode to name head, torso, arms, legs and joints, a walk worked
-  out from them, every number adjustable; on-screen buttons the player adds and assigns.
+### Phase 5: mechanical systems (done)
+- Three new parts: the hinge (swings free between its limits), the servo (turns to where it is told,
+  as fast and as hard as set) and the piston (pushes out and pulls back in a straight line, up to four
+  blocks). What is built beyond one becomes a section of its own (`splitJointSections`, `splitAt`): a
+  separate rigid body (a `Vehicle`) that the section it hangs from keeps a `VJoint` to (`parentID` on
+  the child). The side that stays is the one joined to the section above, else the one with the seat,
+  else the heavier; joints built into the side that goes go with it, so a leg built all at once splits
+  into thigh and shin whatever order its cells are looked at in.
+- Joints are worked out between the fixed steps with the couplers (`solveJoints`): a few rounds of
+  each joint's turn (servo motor up to `Joints.torque` times its strength, hinge limits) then its pivot
+  (both sections made to move the same there, and its gap closed); a piston's push along its line,
+  then its turn and line held. Where a section stands on the land its footing is worked out again in
+  the same rounds (`heldContacts`, `footingPass`), or a servo's turning push slid a resting base along
+  the ground. A gap over `Joints.slack` is closed by moving the sections (`closeJointGap`).
+- A machine's sections wake, step (the same fixed steps) and rest together; a section counts as held
+  up by the one it hangs from, and stillness is judged by how far it really went in a frame. Sections
+  of one machine never meet each other (`meetVehicleCells` skips them); everything else they meet.
+- What moves a joint is set on it (tap it): nothing, the stick up/down or left/right (an arm sticking
+  out sideways goes up with the stick), the buttons A, B and C on the screen (held: to one end, let
+  go: back), or a walk. Speed, strength and both limits are sliders on the JOINT panel.
+- Mechs: AUTO MECH makes the joints under the body hips and the joints below them knees, legs
+  taking turns from one end of the body to the other; the walk (`gaitTarget`) swings hips and bends
+  knees as the leg comes forward, fading in and out as the stick is pushed and let go. A walking
+  machine's feet carry it toward `Joints.walkSpeed` (the swing is what is seen; the push is shared by
+  all its sections, so it does not tip it) and brake it when the stick is let go; while it walks its
+  feet slide rather than plant. With a driver, its body is kept upright (`balanceMachine`), so a mech
+  can walk on two legs.
+- Saved: joints, `parent`, `gait` in `VehicleSave`; vehicle ids are kept across saves.
+- Not done: naming head, torso and arms as body parts (roles are on joints: hip, knee, shoulder,
+  elbow, neck, tail); the walk's speed and stride are not settable; three fixed buttons, not buttons
+  the player adds; a section's own engines and wheels drive only when the driver's seat is in it (a
+  trailer section is pulled); a machine cannot TURN round.
 
 ### Phase 6: automation and attachments
 - Autopilot for every kind of vehicle, working far from the player; remote controls paired to a
@@ -186,7 +213,7 @@ The user's parts 1 to 16 are all covered. The order is theirs with three changes
 
 ## Limits to keep honest about
 - The world is a side view. Roll, yaw and banking do not exist; a "turn" mirrors the vehicle.
-- A vehicle is rigid until phase 5; it cannot bend, only break.
+- A vehicle is rigid; since phase 5 a machine bends at its joints, each section rigid.
 - Riders are held to their vehicle's frame while in the air inside it (a jump in an accelerating
   aircraft lands where it started). This is deliberate: the user asked that nobody slides off
   because a vehicle moves.

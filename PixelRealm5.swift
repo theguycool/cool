@@ -1378,6 +1378,8 @@ enum WorldRenderer {
 				if veh.drilling { jitter = sin(veh.drillRot * 3.0) * tp * 0.03 }
 			}
 			if (t == .airProp || t == .jet || t == .tailRotor), let f = veh.face[cell], f.0 < 0 { flip = true }
+			// (a piston points the way it pushes)
+			if t == .piston, let j = veh.joints.first(where: { $0.cell == cell }) { rot += atan2(j.axis[1], j.axis[0]) }
 			c.rotate(by: Angle(radians: rot))
 			if flip { c.scaleBy(x: -1, y: 1) }
 			let w: Double = tp * 1.02 * Double(partSpan(t))
@@ -1406,6 +1408,24 @@ enum WorldRenderer {
 		if cracked { ctx.stroke(cracks, with: .color(Color.black.opacity(0.7)), lineWidth: 1.5) }
 		if veh.cannons + veh.guns > 0 { drawBarrels(&ctx, v, veh, squash, cx) }
 		if !veh.links.isEmpty { drawCouplings(&ctx, g, v, veh) }
+		if !veh.joints.isEmpty { drawPistonRods(&ctx, g, v, veh) }
+	}
+
+	/// A piston's rod, from its head out to the section it pushes, as long as it is pushed out
+	static func drawPistonRods(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D, _ veh: Vehicle) {
+		for j in veh.joints where j.kind == 2 {
+			guard let o = g.vehicleByID(j.child) else { continue }
+			let ux: Double = j.axis[0]
+			let uy: Double = j.axis[1]
+			let a: (Double, Double) = veh.toWorld(j.pa[0] + ux * 0.45, j.pa[1] + uy * 0.45)
+			let b: (Double, Double) = o.toWorld(j.pb[0] + ux * 0.5, j.pb[1] + uy * 0.5)
+			let dx: Double = b.0 - a.0
+			let dy: Double = b.1 - a.1
+			if dx * dx + dy * dy < 0.0025 { continue }
+			strokeLine(&ctx, v.sx(a.0), v.sy(a.1), v.sx(b.0), v.sy(b.1), Color(hex: 0x1E1E24), v.tp * 0.34)
+			strokeLine(&ctx, v.sx(a.0), v.sy(a.1), v.sx(b.0), v.sy(b.1), Color(hex: 0x9AA0AA), v.tp * 0.22)
+			strokeLine(&ctx, v.sx(a.0), v.sy(a.1), v.sx(b.0), v.sy(b.1), Color(hex: 0xC8CCD4), v.tp * 0.07)
+		}
 	}
 
 	/// A big wheel, round at any size: a treaded tyre, the rim and four spokes (the context is already
@@ -2905,12 +2925,22 @@ struct HUDView: View {
 	@ViewBuilder
 	var vehicleButtons: some View {
 		SmallButton(title: "TURN", color: Color(ui: 0x3A6AA8)) { game.turnVehicle() }
+		if let v = game.inVehicle, !v.joints.isEmpty { jointButtonRow }
 		if let v = game.inVehicle, v.autopilots > 0 {
 			SmallButton(title: "AUTO", color: v.auto == 0 ? Color(ui: 0x5A5A64) : Color(ui: 0x2E8A5A)) { game.cycleAutopilot() }
 			SmallButton(title: "MARK", color: Color(ui: 0x6A5A2A)) { game.markWaypoint() }
 			if !v.route.isEmpty {
 				SmallButton(title: "CLEAR", color: Color(ui: 0x7A3A3A)) { game.clearRoute() }
 			}
+		}
+	}
+
+	/// The joints' buttons A, B and C (held), shown while driving a machine with joints
+	var jointButtonRow: some View {
+		HStack(spacing: 6) {
+			HoldButton(label: "A", size: 46, color: Color(ui: 0x6A4A8A)) { (down: Bool) in game.jointButtons[0] = down }
+			HoldButton(label: "B", size: 46, color: Color(ui: 0x4A6A8A)) { (down: Bool) in game.jointButtons[1] = down }
+			HoldButton(label: "C", size: 46, color: Color(ui: 0x4A8A5A)) { (down: Bool) in game.jointButtons[2] = down }
 		}
 	}
 
@@ -8261,7 +8291,7 @@ enum VehicleArt {
 	/// Parts that look the same whatever the vehicle does (wheels, propellers and drills turn)
 	static func still(_ t: PartType) -> Bool {
 		switch t {
-		case .wheel, .offroadWheel, .propeller, .drill, .diamondDrill, .voidDrill, .railWheel, .bigWheel: return false
+		case .wheel, .offroadWheel, .propeller, .drill, .diamondDrill, .voidDrill, .railWheel, .bigWheel, .piston: return false
 		default: return true
 		}
 	}

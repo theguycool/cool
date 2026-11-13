@@ -39,7 +39,8 @@ confirmed). `tools/buildcost.sh` measures both ways:
   Mod Creator screens with the other screens in part 5): 360, 374, 395, 394, 399 and 382 MB, 143 s in
   all; as one job 117 s and 1,225 MB. Not yet confirmed on the iPad. Physics phase 1 (2.54 MB, 65,059
   lines, most of it `p12b_frames` in part 1 and the contact solver in part 2): 367, 376, 395, 394,
-  400 and 382 MB, 118 s in all; as one job 97 s and 1,217 MB.
+  400 and 382 MB, 118 s in all; as one job 97 s and 1,217 MB. Physics phase 2 (2.58 MB, 66,092
+  lines): 374, 385, 396, 394, 402 and 382 MB, 119 s in all; as one job 101 s and 1,226 MB.
 - A job's peak can jump by 30 MB or more after a small edit (taking the recipe lines out of one
   function once raised part 2 from 473 to 509 MB), so a few MB either way is noise; measure again
   after moving code.
@@ -61,7 +62,8 @@ compiles and runs headless on Linux. If `/opt/pixelrealm` is missing, run `tools
   of them take several minutes). Pass only the suites you touched while iterating, and run them all
   before committing. Full output is in `/tmp/pixelrealm-build/<suite>/out.log`.
 - `tools/shots.sh power|weather|sky|cloudsheet|stick|alchemy|modplus|building|vehicles|mod5|suit5|mod5c|art|physics [folder]`: PNG screenshots from the game's own renderer (`sky`: clouds by day, dusk, night and storm; `cloudsheet`: every cloud template; `stick`: the combat stick's dial; `alchemy`: mutated creatures, the worn suit, the new stations, and a sheet of the new icons and suit pictures; `modplus`: two custom dimensions and a boss in a phase; `building`: a furnished house with stairs and a lift, a blast throwing blocks, a beam under strain; `vehicles`: every new kit parked, a plane, helicopter and airship flying, a tank firing at a wrecked truck, a ship built from blocks with the assembler, a plane mid-turn; `mod5`: every tree design shape under a mod's sun with rays, the same land at night under a pictured moon, the Overworld under a mod's sun, a lit cavern dimension, a repainted zombie; `suit5`: a sheet of suit designs in their poses, a turret firing with a plate broken off, jet flight with a wing, a laser and a cannon shell; `mod5c`: a mod's vehicle built from its kit, mod blocks on a power line and falling, rain in a mod's colour, a custom dimension's blizzard; `art`: the hand-drawn creatures and blocks in the world at the size an iPad shows them: a meadow by day, monsters at night, a cave with every ore, the bears and the elephant, the pirates and the deep monsters, the three bosses; `physics`: the player and a pig standing inside a
-house that flies under a balloon, riders on a flatbed truck's deck).
+house that flies under a balloon, riders on a flatbed truck's deck, a plane and a crate parked on a
+wheeled deck, a house on wheels with back walls, a door, a ladder, a bed and furniture).
 - `tools/art.sh preview|pack|check|game|compare`: the hand-drawn art (see **Art** below and `tools/art/README.md`): PNG sheets of the drawings, writing them into the game, and before/after sheets.
 - `tools/bench.sh`: chunk generation, painting, lighting and tick timings (debug build; compare
   with `GAME_SRC=<old file> tools/bench.sh`).
@@ -110,7 +112,12 @@ the size of the drawing it was painted over),
 and inside vehicles that move, climb, turn and tilt; creatures and dropped items riding; walls and
 undersides; being pushed; getting up from the seat at speed with the autopilot carrying on; saved
 aboard; a rider scraped off by the land; no speed clamps and what sets top speed; 500 blocks a second
-against a wall; weight on rafts; pushing; grip and bounce, also in mods; odd builds),
+against a wall; weight on rafts; pushing; grip and bounce, also in mods; odd builds), `phys2` (phase 2:
+vehicles meeting vehicles: landing on a deck in any order, pushing by mass, head on at speed, riding a
+truck's bed, a plane landing on a moving deck, resting and waking together, a rider meeting another
+vehicle; parts anywhere: wheels on any side, rotors by their room, boxed-in jets, steering away from
+the seat; several seats; doors, ladders, stairs, chairs, beds, stations and back walls aboard, saved
+and assembled; the cached picture),
 and `det` and `det2` (world generation fingerprints for generator versions 1 to 4).
 
 What the stand-ins can't tell you:
@@ -241,7 +248,7 @@ The sections:
 `p01_util`, `p02_tiles` (Tile, defs, art), `p03_items`, `p04_recipes` (RecipeBook), `p05*` (creature
 sprites), `p06_worldgen`, `p07_chunk`, `p08*` (villages, ruins), `p09_umbral`, `p10_world` (World,
 chunks, `set`), `p11_light`, `p12_phys`, `p12b_frames` (`Phys`, `mobMass`, `moveThing`, `rideStep`,
-`moveInCells`, `meetVehicles`, `syncRiders`), `p13a_mobdefs` (MobKind, MobDef, spawn rules, Mob),
+`moveInCells`, `meetVehicles`, `syncRiders`, the insides of vehicles), `p13a_mobdefs` (MobKind, MobDef, spawn rules, Mob),
 `p13b_vehicles`, `p14a_game` (Game state, Settings), `p14b_player` (`tick`, the frame), `p14c_input`
 (pointer, `interact`), `p14d_tools` (item use, mining, placing), `p15a_mobai` (`updateMobs`,
 `think`, the per-kind AIs), `p15b_spawn` (`updateSpawning`), `p16*` (combat, damage, bosses), `p17`
@@ -349,6 +356,26 @@ the Mod Test LOGIC tab, the sun and moon editor, the tree design editor), `u06_r
   autopilot, cruise or route, keeps the controls; `v.rider || v.auto != 0`); without one they hop out
   only when slow. `mirrorRiders` turns riders with a TURN. The view is carried with the vehicle
   (`updateCamera`). Creature AI still looks at the land's tiles, so creatures aboard mostly stand.
+- **Vehicles meeting vehicles (p17).** `stepVehicles` steps every vehicle together (`VRun`: start, fixed
+  steps in lockstep, finish); `stepVehicle(v)` steps one (others are pushed as if at rest).
+  `meetVehicleCells` turns a vehicle's samples inside another's cells (`Vehicle.meetGrid`: every part
+  solid, wheels round, blocks as on the land) into `VContact`s with `other` set, solved with the
+  land's and pushing both; `settleVehicleMeet` moves them apart (half from each side, since each meets
+  the other's samples). `restOn`/`leanOn`: what it rests on (sleeps while that sleeps; woken with it;
+  carried round by `mirrorVehicle`). Riders meet other vehicles in `rideStep` (`vehicleInWay`,
+  `meetOtherVehicle`).
+- **Parts anywhere (p17, p33).** `attachProblem` only asks for a free cell that touches (and room in
+  the land). `findBoxedParts`: thrusters, guns and drills with no open side (`boxed`) do nothing,
+  rotors lift by `rotorRoom`, `openProps`/`openPaddles`/`openTails`; `partNote` says so. Wheels drive
+  upright as before, otherwise along what they touch (`wheelsAlongContacts`, `Drive.tyreGrip`).
+  Several seats: `seatAt` (the seat tapped; `seatCell`).
+- **Insides of vehicles (p12b_frames).** `vehicleBlock`, ladders (`ladderSpot`, `ladderIn`), doors
+  (`vehicleDoorTouch`, `updateVehicleDoors`, `setVehicleDoor`; ON VEHICLE builds a door two cells high),
+  `sitAboard`/`stayInSeatAboard` (`Game.seatAboard`), `sleepAboard`, `stationAboard` (in `stationNear`),
+  back walls (`Vehicle.walls`, `attachWallToVehicle`, `removeVehicleWall`, `vehicleWallMass`, saved in
+  `VehicleSave.walls`, carried by the assembler). Stairs are solid cells aboard (stepped up). A big
+  vehicle (24 cells) or one with walls is drawn from `VehicleArt.picture` (cached on the vehicle by
+  `artRev` and `Art.gen`); wheels, propellers and drills are drawn over it.
 - **Speed and contact (p17, p33).** No clamps. `stepVehicle`: sub-steps by speed, the open-sky path.
   `vehicleSubstep` gathers `VContact`s and gives their blows together over four rounds (normal push
   held at zero or more, friction within `mu` times it, bounce and grip from the block touched:

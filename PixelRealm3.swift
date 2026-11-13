@@ -6807,7 +6807,7 @@ extension Game {
 		for dy in -4...3 {
 			for dx in -5...5 where world.tile(px + dx, py + dy) == t { return true }
 		}
-		return false
+		return stationAboard(t)
 	}
 
 	/// Survival rules in the test world: hunger, damage and using things up (off: creative)

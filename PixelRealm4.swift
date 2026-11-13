@@ -6409,6 +6409,9 @@ final class Art: @unchecked Sendable {
 	var boat: Image
 	var boatL: Image
 	var parts: [Image] = []
+	/// the parts' pictures as pixels (for vehicles drawn from one picture), and a count of art changes
+	var partBufs: [PixelBuf] = []
+	var gen: Int = 0
 	private var icons: [Item: Image] = [:]
 	/// weather symbols (see weatherIcon)
 	var wxIcons: [Int: Image] = [:]
@@ -6436,8 +6439,14 @@ final class Art: @unchecked Sendable {
 		boat = pixImage(bt)
 		boatL = pixImage(bt.flipped())
 		var ps: [Image] = []
-		for p in PartType.allCases { ps.append(pixImage(gradeBuf(partBuf(p)))) }
+		var pb: [PixelBuf] = []
+		for p in PartType.allCases {
+			let b: PixelBuf = gradeBuf(partBuf(p))
+			pb.append(b)
+			ps.append(pixImage(b))
+		}
 		parts = ps
+		partBufs = pb
 		var cr: [Image] = []
 		for stage in 0..<5 {
 			var b = PixelBuf(w: 8, h: 8)
@@ -6456,6 +6465,7 @@ final class Art: @unchecked Sendable {
 	/// After a world's mods change: new pictures for the reserved tiles, and forget every cached icon
 	/// and sprite of custom content
 	func refreshModArt() {
+		gen &+= 1
 		let painter: SectionPainter = SectionPainter.shared
 		let base: Int = Int(Tile.modBase)
 		for i in 0..<ModLimits.blockSlots where base + i < tiles.count && base + i < painter.tileBufs.count {

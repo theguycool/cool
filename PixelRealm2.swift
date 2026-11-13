@@ -499,6 +499,9 @@ struct VehicleSave: Codable {
 	/// the autopilot's mode and route (nil: off, none)
 	var auto: Int? = nil
 	var route: [VWaypoint]? = nil
+	/// the driver's seat (dx, dy) and the back walls (dx, dy, wall), when there are any
+	var seat: [Int]? = nil
+	var walls: [[Int]]? = nil
 }
 
 /// Displaced volume per part (how much it floats)
@@ -664,6 +667,34 @@ final class Vehicle {
 	var gridH: Int = 0
 	/// how far its furthest corner is from its centre of mass (blocks)
 	var radius: Double = 1
+	/// what each cell is to another vehicle meeting it (solid, stood on from above, or nothing)
+	var meetGrid: [UInt8] = []
+	/// being stepped in this frame's physics (it moves when pushed); the vehicle it rests on (0: none)
+	var inStep: Bool = false
+	var restOn: Int = 0
+	/// what other vehicles met of it in this frame (their samples in its cells), and one that it rests
+	/// on that found it so
+	var touched: Int = 0
+	var leanOn: Int = 0
+	/// the seat the driver sat down in (with several seats)
+	var seatAt: PartCell? = nil
+	/// back walls behind cells, inside the vehicle's box (the same numbers as the land's walls)
+	var walls: [PartCell: UInt8] = [:]
+	/// counts every change to how it looks (its cached picture is redrawn when this moves on), and that
+	/// picture (see VehicleArt)
+	var artRev: Int = 0
+	var artImage: Image? = nil
+	var artKey: Int = -1
+	/// thrusters, guns and drills with no open side to work from (they wait for one)
+	var boxed: Set<PartCell> = []
+	/// how much room each rotor's blades have (1: all of it; parts in the row above take some), and
+	/// the rotors' lift in all (in rotors)
+	var rotorRoom: [PartCell: Double] = [:]
+	var rotorLift: Double = 0
+	/// the propellers, paddles and tail rotors that are free to push
+	var openProps: Int = 0
+	var openPaddles: Int = 0
+	var openTails: Int = 0
 
 	init(id: Int, first: PartType, x: Double, y: Double) {
 		self.id = id
@@ -775,6 +806,13 @@ final class Vehicle {
 			countPart(t)
 		}
 		aero = wings + elevators + airProps + jets + rotors + envelopes > 0
+		// back walls weigh a little where they are
+		for (c, k) in walls {
+			let wm: Double = vehicleWallMass(k)
+			mass += wm
+			mx += wm * (Double(c.dx) + 0.5)
+			my += wm * (Double(c.dy) + 0.5)
+		}
 		minX = x0; maxX = x1; minY = y0; maxY = y1
 		mass = max(0.3, mass)
 		comX = mx / mass
@@ -795,6 +833,7 @@ final class Vehicle {
 		}
 		radius = far
 		findFacings()
+		findBoxedParts()
 		boost.removeAll()
 		for (c, b) in blocks where b.isMod && parts[c] != .block {
 			if let d = ModRuntime.shared.blockDef(b) { boost[c] = d.vehPower }
@@ -878,6 +917,43 @@ final class Vehicle {
 			else if t == .cannon || t == .autoGun { f = u ? (0, -1) : (d ? (0, 1) : (away, 0)) }
 			if (t == .cannon || t == .autoGun) && u && !(r || l) { f = (0, -1) }
 			face[c] = f
+		}
+	}
+
+	/// Parts that need room to work: a thruster needs one end open (left or right), a gun any side, a
+	/// drill a side or its underside; a rotor lifts by how much of its blades' row (two cells either side
+	/// above it) is clear
+	func findBoxedParts() {
+		boxed.removeAll()
+		rotorRoom.removeAll()
+		rotorLift = 0
+		openProps = 0
+		openPaddles = 0
+		openTails = 0
+		for (c, t) in parts {
+			let r: Bool = parts[PartCell(dx: c.dx + 1, dy: c.dy)] == nil
+			let l: Bool = parts[PartCell(dx: c.dx - 1, dy: c.dy)] == nil
+			let u: Bool = parts[PartCell(dx: c.dx, dy: c.dy - 1)] == nil
+			let d: Bool = parts[PartCell(dx: c.dx, dy: c.dy + 1)] == nil
+			switch t {
+			case .propeller, .paddle, .airProp, .jet, .tailRotor:
+				if !(r || l) { boxed.insert(c); continue }
+				if t == .propeller { openProps += 1 }
+				if t == .paddle { openPaddles += 1 }
+				if t == .tailRotor { openTails += 1 }
+			case .cannon, .autoGun:
+				if !(r || l || u || d) { boxed.insert(c) }
+			case .drill, .diamondDrill, .voidDrill:
+				if !(r || l || d || u) { boxed.insert(c) }
+			case .rotor:
+				var free: Int = 0
+				for k in -2...2 where parts[PartCell(dx: c.dx + k, dy: c.dy - 1)] == nil { free += 1 }
+				let room: Double = Double(free) / 5.0
+				rotorRoom[c] = room
+				rotorLift += room
+			default:
+				break
+			}
 		}
 	}
 
@@ -1000,6 +1076,8 @@ final class Vehicle {
 		var s = VehicleSave(id: id, parts: ps, x: px, y: py, fuel: fuel, dir: dir, kit: kit, rot: angle)
 		if auto != 0 { s.auto = auto }
 		if !route.isEmpty { s.route = route }
+		if let c = seatAt { s.seat = [c.dx, c.dy] }
+		if !walls.isEmpty { s.walls = walls.map { [$0.key.dx, $0.key.dy, Int($0.value)] } }
 		return s
 	}
 
@@ -1017,6 +1095,8 @@ final class Vehicle {
 		if v.parts.isEmpty { v.parts[PartCell(dx: 0, dy: 0)] = .frame }
 		v.auto = s.auto ?? 0
 		v.route = s.route ?? []
+		if let c = s.seat, c.count == 2 { v.seatAt = PartCell(dx: c[0], dy: c[1]) }
+		for w in s.walls ?? [] where w.count == 3 && w[2] > 0 && w[2] < 256 { v.walls[PartCell(dx: w[0], dy: w[1])] = UInt8(w[2]) }
 		v.recompute(keepAnchor: false)
 		if let r = s.rot {
 			v.px = s.x
@@ -1444,6 +1524,10 @@ final class Game: ObservableObject, @unchecked Sendable {
 	var handEmptied: Bool = false
 	/// the chair or sofa the player is sitting on
 	var seat: IntPair? = nil
+	/// a chair or sofa built on a vehicle the player sits on (the vehicle is the one they ride)
+	var seatAboard: PartCell? = nil
+	/// doors on vehicles the player opened by walking into them
+	var vehicleDoors: [VehicleDoor] = []
 	/// the lift cars of this dimension, and those left in the others
 	var lifts: [Lift] = []
 	var liftStash: [[Lift]] = [[Lift]](repeating: [], count: dimCount)
@@ -1939,6 +2023,10 @@ extension Game {
 			lastVy = 0
 			return
 		}
+		if seatAboard != nil && stayInSeatAboard(ix, jumpPressed) {
+			lastVy = 0
+			return
+		}
 		var runMax: Double = 7.4 * speedMult * ModRuntime.shared.rule(.walk) * (wearing(.swiftBoots) ? 1.18 : 1.0) * wxSlow * (1.0 + effects.value(.speed) / 100.0) * (1.0 + armorInf.speed) * suitSpeedMul
 		// heavy weapons commit you to the blow: slower on your feet while it lasts
 		if swingT > 0 || strikeT > 0, let it = heldItem, it.isMeleeWeapon { runMax *= it.melee.moveScale }
@@ -1983,14 +2071,14 @@ extension Game {
 		if vaultT > 0 { vaultT -= dt }
 		let swimming: Bool = (inWater || inLava) && vaultT <= 0
 		// ladders: while the body overlaps one the player climbs (jump or up to climb, down to descend)
-		if !swimming, let lc = ladderColumn() {
+		if !swimming, let lc = ladderSpot() {
 			let climbUp: Bool = jumpHeld || stickY < -0.45
 			let climbDown: Bool = downHeld || stickY > 0.45
 			let vyT: Double = climbUp ? -5.2 : (climbDown ? 5.2 : 0.0)
 			pb.vy += (vyT - pb.vy) * min(1.0, dt * 16.0)
 			var tx: Double = ix * runMax * 0.7
 			// while climbing with no sideways input the body settles onto the rungs
-			if ix == 0 && (climbUp || climbDown) { tx = (Double(lc) + 0.5 - pb.x) * 8.0 }
+			if ix == 0 && (climbUp || climbDown) { tx = (lc - (pb.ride != 0 ? pb.rlx : pb.x)) * 8.0 }
 			pb.vx += (tx - pb.vx) * min(1.0, dt * 14.0)
 			moveThing(&pb, dt, stepUp: 1.0, dropThrough: climbDown, decks: allDecks(), mass: playerMass, falls: false)
 			coyote = 0.11
@@ -2058,6 +2146,8 @@ extension Game {
 		}
 		doorTouch(ix)
 		updateWalkDoors(dt)
+		vehicleDoorTouch(ix)
+		updateVehicleDoors(dt)
 		if !pb.onGround && pb.vy > 0 { fallPeak = max(fallPeak, pb.vy) }
 		if pb.onGround && wasAir {
 			if fallPeak > 20.0 && !swimming && mode != .creative && !godMode {
@@ -2792,6 +2882,16 @@ extension Game {
 			// pick in the vehicle's own (rotated) grid
 			let c: PartCell = v.cellAt(wx, wy)
 			if v.parts[c] != nil { return (v, c) }
+		}
+		return nil
+	}
+
+	/// A vehicle cell with a back wall under a point (in its box)
+	func vehicleWallAtPoint(_ wx: Double, _ wy: Double) -> (Vehicle, PartCell)? {
+		for v in vehicles where !v.walls.isEmpty {
+			if wx < v.b.left - 0.2 || wx > v.b.right + 0.2 || wy < v.b.top - 0.2 || wy > v.b.y + 0.2 { continue }
+			let c: PartCell = v.cellAt(wx, wy)
+			if v.walls[c] != nil { return (v, c) }
 		}
 		return nil
 	}
@@ -3923,7 +4023,9 @@ extension Game {
 		if placeCD > 0 { return }
 		let tx: Int = Int(floor(aimX))
 		let ty: Int = Int(floor(aimY))
+		if vehicleBuild && wallMode && canBeWall(t.placedForm) && attachWallToVehicle(t.placedForm) { return }
 		if t == .doorClosed || t == .doorOpen {
+			if vehicleBuild && attachDoorToVehicle() { return }
 			if placeDoor(tx, ty) {
 				if !isCreative { inv.removeAt(sel, 1) }
 				placeCD = 0.25
@@ -4269,7 +4371,9 @@ extension Game {
 				spawnParticles(m.b.x, m.b.cy, 0xF0F0F0, 8, 3.0, 0.5, 8)
 			}
 		case .wrench:
-			if pressed, useCD <= 0, let (v, c) = vehicleAtPoint(aimX, aimY), inReach(aimX, aimY) {
+			if pressed, useCD <= 0, inReach(aimX, aimY), let (v, c) = vehicleWallAtPoint(aimX, aimY), removeVehicleWall(v, c) {
+				useCD = 0.3
+			} else if pressed, useCD <= 0, let (v, c) = vehicleAtPoint(aimX, aimY), inReach(aimX, aimY) {
 				removeVehiclePart(v, c)
 				useCD = 0.3
 			}
@@ -4353,6 +4457,8 @@ extension Game {
 			if check.ready && !wasReady {
 				let kind: String = check.title.lowercased()
 				say("Your \(kind) is ready! Stand next to it and press DRIVE.", 3.5)
+			} else if let note = partNote(v, c, p) {
+				say(note, 3.0)
 			}
 			bumpHUD()
 			return
@@ -7998,6 +8104,18 @@ struct VContact {
 	var mu: Double
 	var jn: Double = 0
 	var jt: Double = 0
+	/// a wheel's contact, and the grip of what it touches (for driving along it)
+	var wheel: Bool = false
+	var grip: Double = 1
+	/// another vehicle it touches (nil: the land): where the place is from that one's centre of mass, how
+	/// hard a push there turns it, and how easily it moves (0 while it is at rest or not being stepped)
+	var other: Vehicle? = nil
+	var ox: Double = 0
+	var oy: Double = 0
+	var on: Double = 0
+	var ot: Double = 0
+	var oInvM: Double = 0
+	var oInvI: Double = 0
 }
 
 /// Per-frame contact summary gathered over the fixed steps
@@ -8009,13 +8127,60 @@ struct VStepStats {
 	var rammed: [(Int, Int)] = []
 	/// the hardest hit each part took (speed into the ground beyond what it shrugs off)
 	var crash: [PartCell: Double] = [:]
+	/// hard hits on other vehicles' cells (their id, the cell, the speed beyond a landing)
+	var crashOther: [(Int, PartCell, Double)] = []
+	/// the vehicle it last stood on (0: none)
+	var restOn: Int = 0
+}
+
+/// How far a vehicle met by another in one step is to be moved out of it (the most each way)
+struct VPush {
+	let o: Vehicle
+	var right: Double = 0
+	var left: Double = 0
+	var down: Double = 0
+	var up: Double = 0
+}
+
+/// What a vehicle met of the other vehicles in one step
+struct VMeet {
+	var hits: Int = 0
+	/// its wheels standing on another vehicle, and the one most of them stand on (it takes the
+	/// push back when they drive)
+	var wheelsUnder: Int = 0
+	var wheelOn: Vehicle? = nil
+	var wheelOnN: Int = 0
+	var right: Double = 0
+	var left: Double = 0
+	var down: Double = 0
+	var up: Double = 0
+	var pushes: [VPush] = []
+}
+
+/// One vehicle's frame of physics while all of them are stepped together
+final class VRun {
+	let v: Vehicle
+	let samples: [VSample]
+	let throttle: Double
+	let airBusy: Bool
+	let n: Int
+	var stats: VStepStats = VStepStats()
+	/// the other vehicles near enough to meet it this frame
+	var near: [Vehicle] = []
+
+	init(_ v: Vehicle, _ samples: [VSample], _ throttle: Double, _ airBusy: Bool, _ n: Int) {
+		self.v = v
+		self.samples = samples
+		self.throttle = throttle
+		self.airBusy = airBusy
+		self.n = n
+	}
 }
 
 extension Game {
 	func updateVehicles(_ dt: Double) {
 		let t0: Double = perfNow()
-		for v in vehicles { stepVehicle(v, dt) }
-		separateVehicles()
+		stepVehicles(vehicles, dt)
 		// weapons, the autopilot, turns and damage (also for a vehicle at rest)
 		for v in vehicles { vehicleExtras(v, dt) }
 		flushVehicleBlasts()
@@ -8026,9 +8191,15 @@ extension Game {
 	/// What the player weighs on whatever they stand on (a vehicle frame is 1)
 	var playerMass: Double { return Phys.playerMass }
 
+	/// The seat the driver sits in: the one they got in by, or else the first (topmost, then leftmost)
 	func seatCell(_ v: Vehicle) -> PartCell? {
-		for (c, t) in v.parts where t == .seat || t == .cockpit { return c }
-		return nil
+		if let c = v.seatAt, let t = v.parts[c], t == .seat || t == .cockpit { return c }
+		var best: PartCell? = nil
+		for (c, t) in v.parts where t == .seat || t == .cockpit {
+			if let b = best, b.dy < c.dy || (b.dy == c.dy && b.dx < c.dx) { continue }
+			best = c
+		}
+		return best
 	}
 
 	/// Collision samples: the four corners and edge midpoints of square parts; a ring for wheels.
@@ -8137,13 +8308,68 @@ extension Game {
 		return true
 	}
 
+	/// One vehicle's frame of physics (the others it meets are pushed, but not stepped)
 	func stepVehicle(_ v: Vehicle, _ dt: Double) {
-		if !vehicleAreaLoaded(v) { return }
+		stepVehicles([v], dt)
+	}
+
+	/// Every vehicle's physics for one frame, in step with each other: fixed step k of every vehicle is
+	/// done before step k + 1 of any, so vehicles that meet push each other at the same moment. Each one
+	/// still splits its own steps as finely as its speed (and how fast it closes on the others) needs.
+	func stepVehicles(_ list: [Vehicle], _ dt: Double) {
+		var runs: [VRun] = []
+		var resting: [Vehicle] = []
+		for v in list {
+			if let r = startVehicleFrame(v, dt) { runs.append(r) } else if v.asleep && v.restOn != 0 { resting.append(v) }
+		}
+		// a vehicle at rest on another that moves now wakes with it (it is carried, or slides off)
+		for v in resting {
+			guard let o = vehicleByID(v.restOn), runs.contains(where: { $0.v === o }) else { continue }
+			v.asleep = false
+			v.sleepT = 0
+			if let r = startVehicleFrame(v, dt) { runs.append(r) }
+		}
+		if runs.isEmpty { return }
+		for r in runs { r.v.inStep = true }
+		if vehicles.count > 1 {
+			for r in runs { r.near = vehiclesNear(r.v, dt) }
+		}
+		var most: Int = 0
+		for r in runs { most = max(most, r.n) }
+		var k: Int = 0
+		while k < most {
+			for r in runs where k < r.n { vehicleFixedStep(r) }
+			k += 1
+		}
+		for r in runs { r.v.inStep = false }
+		for r in runs { finishVehicleFrame(r, dt) }
+	}
+
+	/// The other vehicles a vehicle could meet this frame (boxes within what both can travel)
+	func vehiclesNear(_ v: Vehicle, _ dt: Double) -> [Vehicle] {
+		var out: [Vehicle] = []
+		let t: Double = min(dt, 0.1)
+		let mine: Double = (v.speed + abs(v.angVel) * v.radius) * t + 0.6
+		for o in vehicles where o !== v && !o.parts.isEmpty {
+			let r: Double = mine + (o.speed + abs(o.angVel) * o.radius) * t
+			if o.b.right < v.b.left - r || o.b.left > v.b.right + r || o.b.y < v.b.top - r || o.b.top > v.b.y + r { continue }
+			out.append(o)
+		}
+		return out
+	}
+
+	/// Before a vehicle's fixed steps: whether it moves at all this frame (a vehicle at rest stays at rest
+	/// until something wakes it), and how many fixed steps it takes
+	func startVehicleFrame(_ v: Vehicle, _ dt: Double) -> VRun? {
+		if !vehicleAreaLoaded(v) { return nil }
 		let throttle: Double = v.rider || v.auto != 0 ? v.throttle : 0
 		let airBusy: Bool = v.aero && (abs(v.pitch) > 0.05 || v.heat > 0.02 || v.collective > 0.02 || v.turnT > 0)
 		if v.asleep && abs(throttle) < 0.05 && !v.drilling && !airBusy {
-			// resting vehicles cost nothing until something wakes them
-			if world.boxSolid(v.b.left + 0.05, v.b.y + 0.02, v.b.right - 0.05, v.b.y + 0.2) || v.submerged > 0 { return }
+			// resting vehicles cost nothing until something wakes them (one resting on another vehicle
+			// sleeps while that one does)
+			var held: Bool = world.boxSolid(v.b.left + 0.05, v.b.y + 0.02, v.b.right - 0.05, v.b.y + 0.2) || v.submerged > 0
+			if v.restOn != 0 { held = vehicleByID(v.restOn)?.asleep ?? false }
+			if held { return nil }
 		}
 		v.asleep = false
 		let samples: [VSample] = vehicleSamples(v)
@@ -8151,40 +8377,65 @@ extension Game {
 		v.physAccum += min(dt, 0.1)
 		var n: Int = Int(v.physAccum / vehicleStep)
 		if n > 12 { n = 12; v.physAccum = 0 } else { v.physAccum -= Double(n) * vehicleStep }
-		var stats = VStepStats()
-		var k: Int = 0
-		while k < n {
-			// Nothing may move further than Phys.maxStep between collision checks, however fast it goes:
-			// the step is split as often as the speed needs. With no land or water anywhere it could
-			// reach in this step there is nothing to check against, and one step does (open sky is free).
-			let fast: Double = v.speed + abs(v.angVel) * v.radius
-			let travel: Double = fast * vehicleStep
-			var split: Int = 1
-			var open: Bool = false
-			if travel > Phys.maxStep * 0.5 || v.contacts == 0 {
-				let r: Double = travel + 1.0
-				open = world.boxOpen(v.b.left - r, v.b.top - r, v.b.right + r, v.b.y + r)
-				if !open { split = min(Phys.maxSplit, max(1, Int(ceil(travel / Phys.maxStep)))) }
-			}
-			var s: Int = 0
-			while s < split {
-				vehicleSubstep(v, vehicleStep / Double(split), samples, throttle, &stats, open: open)
-				s += 1
-			}
-			if split > 1 || open { v.updateBox() }
-			k += 1
+		return VRun(v, samples, throttle, airBusy, n)
+	}
+
+	/// One fixed step of a vehicle, split as often as its speed needs
+	func vehicleFixedStep(_ r: VRun) {
+		let v: Vehicle = r.v
+		// Nothing may move further than Phys.maxStep between collision checks, however fast it goes:
+		// the step is split as often as the speed needs. With no land or water anywhere it could
+		// reach in this step there is nothing to check against, and one step does (open sky is free).
+		let fast: Double = v.speed + abs(v.angVel) * v.radius
+		let travel: Double = fast * vehicleStep
+		var split: Int = 1
+		var open: Bool = false
+		if travel > Phys.maxStep * 0.5 || v.contacts == 0 {
+			let rr: Double = travel + 1.0
+			open = world.boxOpen(v.b.left - rr, v.b.top - rr, v.b.right + rr, v.b.y + rr)
+			if !open { split = min(Phys.maxSplit, max(1, Int(ceil(travel / Phys.maxStep)))) }
 		}
-		for r in stats.rammed where world.tile(r.0, r.1).solid {
-			breakTile(r.0, r.1, v.rider)
+		if !r.near.isEmpty {
+			// another vehicle is near: as fine as the two close on each other
+			var other: Double = 0
+			for o in r.near { other = max(other, o.speed + abs(o.angVel) * o.radius) }
+			let closing: Double = (fast + other) * vehicleStep
+			split = max(split, min(Phys.maxSplit, max(1, Int(ceil(closing / Phys.maxStep)))))
+		}
+		var s: Int = 0
+		while s < split {
+			vehicleSubstep(v, vehicleStep / Double(split), r.samples, r.throttle, &r.stats, open: open, near: r.near)
+			s += 1
+		}
+		if split > 1 || open || !r.near.isEmpty { v.updateBox() }
+	}
+
+	/// After a vehicle's fixed steps: blocks it rammed, what it touched, crashes, fuel, exhaust, drills,
+	/// creatures it hit, and whether it can rest now
+	func finishVehicleFrame(_ r: VRun, _ dt: Double) {
+		let v: Vehicle = r.v
+		let throttle: Double = r.throttle
+		let airBusy: Bool = r.airBusy
+		let n: Int = r.n
+		let stats: VStepStats = r.stats
+		for rm in stats.rammed where world.tile(rm.0, rm.1).solid {
+			breakTile(rm.0, rm.1, v.rider)
 			addShake(0.25)
 			v.vx *= 0.6
 		}
 		if n > 0 {
 			v.wheelContacts = stats.wheelHits
-			v.contacts = stats.anyHits
+			// (what other vehicles met of it counts as touching too)
+			v.contacts = stats.anyHits + v.touched
 			v.submerged = stats.wet / Double(n)
+			v.restOn = stats.restOn != 0 ? stats.restOn : v.leanOn
 		}
+		v.touched = 0
+		v.leanOn = 0
 		if !stats.crash.isEmpty { crashDamage(v, stats.crash) }
+		for hit in stats.crashOther {
+			if let o = vehicleByID(hit.0) { crashDamage(o, [hit.1: hit.2]) }
+		}
 		// fuel and exhaust
 		let burning: Bool = v.engines > 0 && v.fuel > 0 && abs(throttle) > 0.1
 		if burning && !isCreative {
@@ -8220,7 +8471,7 @@ extension Game {
 
 	/// One fixed physics step: gravity, buoyancy and water drag per part, propulsion, contacts with
 	/// impulses and friction, positional correction, stability assists
-	func vehicleSubstep(_ v: Vehicle, _ h: Double, _ samples: [VSample], _ throttle: Double, _ stats: inout VStepStats, open: Bool = false) {
+	func vehicleSubstep(_ v: Vehicle, _ h: Double, _ samples: [VSample], _ throttle: Double, _ stats: inout VStepStats, open: Bool = false, near: [Vehicle] = []) {
 		let steerOK: Bool = v.hasSeat && v.hasSteering
 		let hasFuel: Bool = v.fuel > 0 || isCreative
 		let invM: Double = 1.0 / v.mass
@@ -8279,10 +8530,10 @@ extension Game {
 			// paddle's stroke only goes so fast. What a boat reaches is where that meets the water's drag.
 			var thrust: Double = 0
 			let going: Double = v.vx * throttle > 0 ? abs(v.vx) : 0
-			if v.engines > 0 && v.propellers > 0 && hasFuel {
+			if v.engines > 0 && v.openProps > 0 && hasFuel {
 				thrust = min(Double(v.engines) * 16.0, Double(v.engines) * Drive.propPower / max(going, 0.1))
-			} else if v.paddles > 0 {
-				thrust = Double(v.paddles) * 9.0 * max(0, 1.0 - going / Drive.paddleStroke)
+			} else if v.openPaddles > 0 {
+				thrust = Double(v.openPaddles) * 9.0 * max(0, 1.0 - going / Drive.paddleStroke)
 			}
 			if sub <= 0 { thrust *= 0.45 }
 			// touching the bottom: thrust fades as the hull comes out of the water, so a boat runs
@@ -8361,11 +8612,17 @@ extension Game {
 				if smp.track { mu = braking ? (v.rider ? 1.1 : 0.4) : 0.14 }
 			}
 			let leave: Double = vn < 0 ? -max(0.04, ground.bounce) * vn : 0
-			vContacts.append(VContact(rx: rx, ry: ry, nx: nx, ny: ny, rn: rn, kn: invM + rn * rn * invI, rt: rt, kt: invM + rt * rt * invI, want: leave, mu: mu * ground.grip))
+			var kc: VContact = VContact(rx: rx, ry: ry, nx: nx, ny: ny, rn: rn, kn: invM + rn * rn * invI, rt: rt, kt: invM + rt * rt * invI, want: leave, mu: mu * ground.grip)
+			kc.wheel = smp.wheel
+			kc.grip = ground.grip
+			vContacts.append(kc)
 			let d: Double = min(0.12, max(0, depth - 0.01))
 			if ny < -0.5 { outUp = max(outUp, d) } else if ny > 0.5 { outDown = max(outDown, d) }
 			else if nx < -0.5 { outLeft = max(outLeft, d) } else { outRight = max(outRight, d) }
 		}
+		// other vehicles' cells it is inside: contacts that push both
+		var meet: VMeet = VMeet()
+		if !near.isEmpty { meetVehicleCells(v, samples, near, throttle, sub, &meet, &stats) }
 		// The blows at every place it touches, worked out together: each is given what stops it going
 		// into the surface there (and the little the surface gives back), then friction up to its grip,
 		// and the round is gone through a few times so that what one place gives is taken into account
@@ -8377,7 +8634,10 @@ extension Game {
 				var i: Int = 0
 				while i < vContacts.count {
 					var k: VContact = vContacts[i]
-					let vn: Double = (v.vx - v.angVel * k.ry) * k.nx + (v.vy + v.angVel * k.rx) * k.ny
+					// (against another vehicle: the speed of one place against the other, and both pushed)
+					let o: Vehicle? = k.oInvM > 0 ? k.other : nil
+					var vn: Double = (v.vx - v.angVel * k.ry) * k.nx + (v.vy + v.angVel * k.rx) * k.ny
+					if let ov = o { vn -= (ov.vx - ov.angVel * k.oy) * k.nx + (ov.vy + ov.angVel * k.ox) * k.ny }
 					let jn0: Double = k.jn
 					k.jn = max(0, jn0 + (k.want - vn) / k.kn)
 					let dn: Double = k.jn - jn0
@@ -8385,10 +8645,16 @@ extension Game {
 						v.vx += dn * k.nx * invM
 						v.vy += dn * k.ny * invM
 						v.angVel += k.rn * dn * invI
+						if let ov = o {
+							ov.vx -= dn * k.nx * k.oInvM
+							ov.vy -= dn * k.ny * k.oInvM
+							ov.angVel -= k.on * dn * k.oInvI
+						}
 					}
 					let tx: Double = -k.ny
 					let ty: Double = k.nx
-					let vt: Double = (v.vx - v.angVel * k.ry) * tx + (v.vy + v.angVel * k.rx) * ty
+					var vt: Double = (v.vx - v.angVel * k.ry) * tx + (v.vy + v.angVel * k.rx) * ty
+					if let ov = o { vt -= (ov.vx - ov.angVel * k.oy) * tx + (ov.vy + ov.angVel * k.ox) * ty }
 					let lim: Double = k.mu * k.jn
 					let jt0: Double = k.jt
 					k.jt = clampD(jt0 - vt / k.kt, -lim, lim)
@@ -8397,6 +8663,11 @@ extension Game {
 						v.vx += dtn * tx * invM
 						v.vy += dtn * ty * invM
 						v.angVel += k.rt * dtn * invI
+						if let ov = o {
+							ov.vx -= dtn * tx * k.oInvM
+							ov.vy -= dtn * ty * k.oInvM
+							ov.angVel -= k.ot * dtn * k.oInvI
+						}
 					}
 					vContacts[i] = k
 					i += 1
@@ -8406,6 +8677,9 @@ extension Game {
 		}
 		v.px += (outRight - outLeft) * 0.8
 		v.py += (outDown - outUp) * 0.8
+		if meet.hits > 0 { settleVehicleMeet(v, meet) }
+		hits += meet.hits
+		stepWheel += meet.wheelsUnder
 		stats.anyHits += hits
 		stats.wheelHits = max(stats.wheelHits, stepWheel)
 		let wrapped: Double = remainder(v.angle, 2.0 * Double.pi)
@@ -8436,6 +8710,16 @@ extension Game {
 			let f: Double = push * throttle - loss
 			v.vx += c2 * f * invM * h
 			v.vy += s2 * f * invM * h
+			// wheels driving on another vehicle push it back as hard
+			if let o = meet.wheelOn, o.inStep && !o.asleep {
+				let part: Double = Double(meet.wheelOnN) / Double(max(1, stepWheel))
+				o.vx -= c2 * f * part / o.mass * h
+				o.vy -= s2 * f * part / o.mass * h
+			}
+		} else if v.canDriveOnLand && steerOK && hasFuel && abs(throttle) > 0.1 && v.rotors == 0 {
+			// not upright, or the wheels touch something beside or above it: each wheel that touches
+			// pushes along what it touches, as hard as its grip there lets it
+			wheelsAlongContacts(v, throttle, h)
 		}
 		if !v.aero {
 			// the air against a vehicle with no wings (aircraft work theirs out part by part): it grows
@@ -8470,32 +8754,185 @@ extension Game {
 		}
 	}
 
-	/// Vehicles shove each other apart instead of overlapping
-	func separateVehicles() {
-		if vehicles.count < 2 { return }
-		for i in 0..<vehicles.count {
-			for j in (i + 1)..<vehicles.count {
-				let a: Vehicle = vehicles[i]
-				let b: Vehicle = vehicles[j]
-				let ox: Double = min(a.b.right, b.b.right) - max(a.b.left, b.b.left)
-				let oy: Double = min(a.b.y, b.b.y) - max(a.b.top, b.b.top)
-				if ox <= 0 || oy <= 0 { continue }
-				let dirx: Double = a.b.x < b.b.x ? -1.0 : 1.0
-				let tot: Double = a.mass + b.mass
-				let push: Double = min(ox, 0.3)
-				a.px += dirx * push * (b.mass / tot)
-				b.px -= dirx * push * (a.mass / tot)
-				let rel: Double = (a.vx - b.vx) * -dirx
-				if rel < 0 {
-					// exchange momentum along x
-					let j: Double = rel * a.mass * b.mass / tot * 1.1
-					a.vx += dirx * j / a.mass * -1.0
-					b.vx -= dirx * j / b.mass * -1.0
+	/// Where a vehicle's collision samples are inside another vehicle's cells. Each becomes a contact
+	/// that pushes both, by their masses, the way out of the other's nearest open face: a plane comes to
+	/// rest on a carrier's deck and is carried by it (its grip there), a tank pushes a car, two cars that
+	/// meet head on trade their speed. A vehicle at rest (or not moving this frame) is pushed against as
+	/// if it were the land, and is woken by a hard enough blow.
+	func meetVehicleCells(_ v: Vehicle, _ samples: [VSample], _ near: [Vehicle], _ throttle: Double, _ sub: Double, _ meet: inout VMeet, _ stats: inout VStepStats) {
+		let c: Double = v.cosA
+		let s: Double = v.sinA
+		let invM: Double = 1.0 / v.mass
+		let invI: Double = 1.0 / v.inertia
+		for o in near {
+			if o.parts.isEmpty { continue }
+			let gx: Double = o.px - v.px
+			let gy: Double = o.py - v.py
+			let reach: Double = v.radius + o.radius + 0.3
+			if gx * gx + gy * gy > reach * reach { continue }
+			let oDyn: Bool = o.inStep && !o.asleep
+			let oInvM: Double = oDyn ? 1.0 / o.mass : 0
+			let oInvI: Double = oDyn ? 1.0 / o.inertia : 0
+			let oc: Double = o.cosA
+			let os: Double = o.sinA
+			// how much of the way out each one takes (all of it against one at rest)
+			let mine: Double = oDyn ? o.mass / (v.mass + o.mass) : 1.0
+			var push: VPush = VPush(o: o)
+			var underHere: Int = 0
+			for smp in samples {
+				let lx: Double = smp.lx - v.comX
+				let ly: Double = smp.ly - v.comY
+				let rx: Double = lx * c - ly * s
+				let ry: Double = lx * s + ly * c
+				let dx: Double = v.px + rx - o.px
+				let dy: Double = v.py + ry - o.py
+				let ol: Double = dx * oc + dy * os + o.comX
+				let om: Double = -dx * os + dy * oc + o.comY
+				let cx: Int = Int(floor(ol))
+				let cy: Int = Int(floor(om))
+				let kind: UInt8 = o.meetAt(cx, cy)
+				if kind == cellOpen { continue }
+				guard let pen = cellPenetration(o, cx, cy, ol - Double(cx), om - Double(cy), kind, smp.ramp) else { continue }
+				let nx: Double = pen.1 * oc - pen.2 * os
+				let ny: Double = pen.1 * os + pen.2 * oc
+				let pvx: Double = v.vx - v.angVel * ry - (oDyn ? o.vx - o.angVel * dy : 0)
+				let pvy: Double = v.vy + v.angVel * rx - (oDyn ? o.vy + o.angVel * dx : 0)
+				let vn: Double = pvx * nx + pvy * ny
+				// a crash breaks the parts that meet, on both
+				let crashAt: Double = smp.wheel ? vehicleCrashSpeed + 5.0 : vehicleCrashSpeed
+				if vn < -crashAt {
+					let pc: PartCell = PartCell(dx: smp.cx, dy: smp.cy)
+					stats.crash[pc] = max(stats.crash[pc] ?? 0, -vn - crashAt)
+					stats.crashOther.append((o.id, PartCell(dx: cx, dy: cy), (-vn - crashAt) * min(1.0, v.mass / o.mass)))
 				}
-				a.asleep = false
-				b.asleep = false
-				a.updateBox()
-				b.updateBox()
+				let here: BlockPhys = o.blocks[PartCell(dx: cx, dy: cy)].map { blockPhys($0) } ?? BlockPhys(weight: 1, carry: 1, span: 1)
+				var mu: Double = smp.hull ? (sub > 0 ? 0.05 : 0.22) : 0.7
+				if smp.wheel {
+					let braking: Bool = abs(throttle) < 0.1
+					mu = braking ? (v.rider ? 0.9 : 0.25) : (v.aero ? 0.02 : 0.06)
+					if smp.track { mu = braking ? (v.rider ? 1.1 : 0.4) : 0.14 }
+				}
+				let rn: Double = rx * ny - ry * nx
+				let on: Double = dx * ny - dy * nx
+				let tx: Double = -ny
+				let ty: Double = nx
+				let rt: Double = rx * ty - ry * tx
+				let ot: Double = dx * ty - dy * tx
+				let kn: Double = invM + rn * rn * invI + oInvM + on * on * oInvI
+				let kt: Double = invM + rt * rt * invI + oInvM + ot * ot * oInvI
+				let leave: Double = vn < 0 ? -max(0.04, here.bounce) * vn : 0
+				var k: VContact = VContact(rx: rx, ry: ry, nx: nx, ny: ny, rn: rn, kn: kn, rt: rt, kt: kt, want: leave, mu: mu * here.grip)
+				k.wheel = smp.wheel
+				k.grip = here.grip
+				k.other = o
+				k.ox = dx
+				k.oy = dy
+				k.on = on
+				k.ot = ot
+				k.oInvM = oInvM
+				k.oInvI = oInvI
+				vContacts.append(k)
+				meet.hits += 1
+				o.touched += 1
+				if ny < -0.5 {
+					stats.restOn = o.id
+					if smp.wheel { meet.wheelsUnder += 1; underHere += 1 }
+				} else if ny > 0.5 {
+					// it is under the other one: that one rests on it
+					o.leanOn = v.id
+				}
+				// out of each other: this one by its share, the other by the rest
+				let d: Double = min(0.12, max(0, pen.0 - 0.01))
+				let a: Double = d * mine
+				let b: Double = d - a
+				if nx > 0 { meet.right = max(meet.right, nx * a) } else { meet.left = max(meet.left, -nx * a) }
+				if ny > 0 { meet.down = max(meet.down, ny * a) } else { meet.up = max(meet.up, -ny * a) }
+				if oDyn && b > 0 {
+					if nx > 0 { push.left = max(push.left, nx * b) } else { push.right = max(push.right, -nx * b) }
+					if ny > 0 { push.up = max(push.up, ny * b) } else { push.down = max(push.down, -ny * b) }
+				}
+			}
+			if oDyn && (push.right + push.left + push.up + push.down) > 0 { meet.pushes.append(push) }
+			if underHere > meet.wheelOnN {
+				meet.wheelOn = o
+				meet.wheelOnN = underHere
+			}
+		}
+	}
+
+	/// How far a point is inside a vehicle's cell (fx, fy: where in the cell, 0...1) and which way is
+	/// out, in that vehicle's own frame: the nearest face with no solid cell beyond it. A cell stood on
+	/// from above only (a platform) is met near its top. For wheels and hull bottoms the top corner of a
+	/// cell with open space above acts as a slope, as on the land (a car drives up onto a flatbed).
+	func cellPenetration(_ o: Vehicle, _ cx: Int, _ cy: Int, _ fx: Double, _ fy: Double, _ kind: UInt8, _ ramp: Bool) -> (Double, Double, Double)? {
+		if kind == cellRound {
+			// a wheel: out from its middle
+			let ex: Double = fx - 0.5
+			let ey: Double = fy - 0.5
+			let d: Double = sqrt(ex * ex + ey * ey)
+			if d >= 0.47 { return nil }
+			if d < 1e-6 { return (0.47, 0, -1) }
+			return (0.47 - d, ex / d, ey / d)
+		}
+		let topOpen: Bool = o.meetAt(cx, cy - 1) != cellSolid
+		if kind == cellPlatform { return topOpen && fy < 0.3 ? (fy, 0, -1) : nil }
+		let leftOpen: Bool = o.meetAt(cx - 1, cy) != cellSolid
+		let rightOpen: Bool = o.meetAt(cx + 1, cy) != cellSolid
+		if ramp && topOpen && fy < 0.8 {
+			if leftOpen && fx < fy { return (fy * 0.75, -0.6, -0.8) }
+			if rightOpen && 1.0 - fx < fy { return (fy * 0.75, 0.6, -0.8) }
+			return (fy, 0, -1)
+		}
+		if topOpen && fy < 0.3 { return (fy, 0, -1) }
+		var best: Double = 9
+		var nx: Double = 0
+		var ny: Double = -1
+		if topOpen { best = fy }
+		if leftOpen && fx < best { best = fx; nx = -1; ny = 0 }
+		if rightOpen && 1.0 - fx < best { best = 1.0 - fx; nx = 1; ny = 0 }
+		if o.meetAt(cx, cy + 1) != cellSolid && 1.0 - fy < best { best = 1.0 - fy; nx = 0; ny = 1 }
+		if best > 8 { return nil }
+		return (best, nx, ny)
+	}
+
+	/// Moves two vehicles that overlap out of each other, each by its share (from meetVehicleCells),
+	/// and wakes one at rest that was hit hard
+	func settleVehicleMeet(_ v: Vehicle, _ meet: VMeet) {
+		// (each vehicle also meets the other's samples, so each pair is settled from both sides: half each)
+		v.px += (meet.right - meet.left) * 0.5
+		v.py += (meet.down - meet.up) * 0.5
+		for p in meet.pushes {
+			p.o.px += (p.right - p.left) * 0.5
+			p.o.py += (p.down - p.up) * 0.5
+		}
+		for k in vContacts where k.oInvM == 0 {
+			guard let o = k.other, o.asleep else { continue }
+			if k.jn / o.mass > 0.25 {
+				o.asleep = false
+				o.sleepT = 0
+			}
+		}
+	}
+
+	/// Wheels driving along whatever they touch (a wall the vehicle leans on, the ground when it lies on
+	/// its side or roof): the engines' push is shared between the wheels that touch, each giving no more
+	/// than its grip there allows. Upright on the ground the drive above is used instead.
+	func wheelsAlongContacts(_ v: Vehicle, _ throttle: Double, _ h: Double) {
+		var n: Int = 0
+		for k in vContacts where k.wheel && k.jn > 0 { n += 1 }
+		if n == 0 { return }
+		let push: Double = v.enginePower * 135.0 * groundShare(v) * throttle / Double(n)
+		let invM: Double = 1.0 / v.mass
+		for k in vContacts where k.wheel && k.jn > 0 {
+			let tx: Double = -k.ny
+			let ty: Double = k.nx
+			let lim: Double = Drive.tyreGrip * k.grip * k.jn
+			let j: Double = clampD(push * h, -lim, lim)
+			v.vx += tx * j * invM
+			v.vy += ty * j * invM
+			if let o = k.other, k.oInvM > 0 {
+				o.vx -= tx * j * k.oInvM
+				o.vy -= ty * j * k.oInvM
 			}
 		}
 	}
@@ -8560,7 +8997,7 @@ extension Game {
 		v.drilling = false
 		if !powered { v.drillWork.removeAll(); return }
 		v.drillRot += dt * 25.0
-		for (cell, d) in v.drillDir {
+		for (cell, d) in v.drillDir where !v.boxed.contains(cell) {
 			guard let pt = v.parts[cell] else { continue }
 			let pw: (Int, Double) = drillPower(pt)
 			let tip: (Double, Double) = v.toWorld(Double(cell.dx) + 0.5 + Double(d.0) * 0.85, Double(cell.dy) + 0.5 + Double(d.1) * 0.85)
@@ -8719,8 +9156,9 @@ extension Game {
 			}
 		}
 		if repairVehiclePart(v, c) { return }
+		if useVehicleBlock(v, c) { return }
 		if let t = v.parts[c], t == .seat || t == .steering || t == .cockpit {
-			mountVehicle(v)
+			mountVehicle(v, at: t == .steering ? nil : c)
 			return
 		}
 		if v.parts[c] != nil && vehicleStores(v, c) {
@@ -8743,19 +9181,23 @@ extension Game {
 		}
 		if v.aero { say(joinText(info, ". ", vehicleCheck(v).hint), 3.5); return }
 		if !v.hasSeat { info += ". Needs a seat." }
-		else if !v.hasSteering { info += ". Needs a steering wheel next to the seat." }
+		else if !v.hasSteering { info += ". Needs a steering wheel." }
 		else if v.buoyancy > 0 && !v.canSail && v.wheels < 2 { info += ". Add engine + propeller (or a paddle)." }
 		else if v.wheels >= 2 && v.engines == 0 { info += ". Add an engine." }
 		else { info += ". Tap the seat to drive." }
 		say(info, 3.5)
 	}
 
-	func mountVehicle(_ v: Vehicle) {
+	/// Gets in to drive: in the seat tapped (with several seats), or the one sat in last
+	func mountVehicle(_ v: Vehicle, at seatTapped: PartCell? = nil) {
 		if !v.hasSeat || !v.hasSteering {
-			say(v.hasSeat ? "Add a steering wheel next to the seat." : "Add a seat or a cockpit first.", 2.5)
+			say(v.hasSeat ? "Add a steering wheel (anywhere on it)." : "Add a seat or a cockpit first.", 2.5)
 			return
 		}
 		if mounted != nil { dismount() }
+		if let c = seatTapped { v.seatAt = c }
+		seat = nil
+		seatAboard = nil
 		inVehicle = v
 		pb.ride = 0
 		v.rider = true
@@ -11476,22 +11918,30 @@ extension Game {
 	func attachProblem(_ v: Vehicle, _ c: PartCell, _ p: PartType) -> String? {
 		if v.parts[c] != nil { return "That spot is taken." }
 		if !v.hasNeighbor(c) { return "Parts must touch the vehicle." }
-		if isWheelPart(p) {
-			if v.parts[PartCell(dx: c.dx, dy: c.dy - 1)] == nil { return "Wheels go directly under another part." }
-			if v.parts[PartCell(dx: c.dx, dy: c.dy + 1)] != nil { return "Wheels must be on the bottom." }
-		}
-		if p == .steering && !v.canAttach(c, p) { return "The steering wheel goes right next to the seat." }
-		if (p == .propeller || p == .paddle || p == .airProp || p == .jet || p == .tailRotor) && !v.canAttach(c, p) { return "That goes on an end of the vehicle (open to one side)." }
-		if p == .rotor && !v.canAttach(c, p) { return "A rotor goes on top, with nothing above it or beside its blades." }
-		if (p == .cannon || p == .autoGun) && !v.canAttach(c, p) { return "A gun needs an open side to fire from." }
-		for k in -2...2 where v.parts[PartCell(dx: c.dx + k, dy: c.dy + 1)] == .rotor { return "That is where the rotor blades turn." }
-		if !v.canAttach(c, p) { return "Can't attach that there." }
+		// any part goes anywhere it touches: how well it works there is physics (see partNote)
 		let wp: (Double, Double) = v.cellPos(c)
 		if world.boxSolid(wp.0 + 0.02, wp.1 + 0.02, wp.0 + 0.98, wp.1 + 0.98) {
 			// a part under a vehicle that sits on the ground: lift the vehicle one block to make room
 			if c.dy > v.maxY && canLift(v, c) { return nil }
 			return "Something is in the way."
 		}
+		return nil
+	}
+
+	/// How a part will work where it has just been put, when that is not the usual way (said after
+	/// attaching it; nil when there is nothing to say)
+	func partNote(_ v: Vehicle, _ c: PartCell, _ p: PartType) -> String? {
+		if p == .rotor {
+			let room: Double = v.rotorRoom[c] ?? 1.0
+			if room < 0.99 { return joinText("Its blades have ", String(Int((room * 100).rounded())), "% of their room: it lifts that much.") }
+		}
+		if v.boxed.contains(c) {
+			if isDrill(p) { return "Boxed in: it bores once one side is open." }
+			if p == .cannon || p == .autoGun { return "Boxed in: it fires once one side is open." }
+			return "Boxed in on both sides: it pushes once one side is open."
+		}
+		if isWheelPart(p) && v.parts[PartCell(dx: c.dx, dy: c.dy + 1)] != nil { return "A wheel drives wherever it touches the ground (or a wall)." }
+		if p == .steering, let seat = seatCell(v), abs(seat.dx - c.dx) + abs(seat.dy - c.dy) > 1 { return "It steers from any seat on the vehicle." }
 		return nil
 	}
 
@@ -11752,6 +12202,8 @@ enum Drive {
 	static let propPower: Double = 130.0
 	static let paddleStroke: Double = 9.0
 	static let waterDrag: Double = 0.002
+	/// how hard a tyre can push along what it touches, for each unit it is pressed against it
+	static let tyreGrip: Double = 1.0
 }
 
 /// Air thins with height: full below the hills, about half at the top of the sky
@@ -11894,7 +12346,7 @@ extension Game {
 	/// The most the rotors can lift (force) here, at full blade pitch
 	func rotorMax(_ v: Vehicle, anyway: Bool = false) -> Double {
 		let p: (Double, Double) = airPower(v, anyway: anyway)
-		return Aero.rotorLift * p.1 * Double(v.rotors) * (0.35 + 0.65 * airDensity(v.py))
+		return Aero.rotorLift * p.1 * v.rotorLift * (0.35 + 0.65 * airDensity(v.py))
 	}
 
 	/// The most the balloons can lift (force) here, at full heat
@@ -11979,7 +12431,7 @@ extension Game {
 				fby = d.1
 				switch t {
 				case .airProp:
-					if power.0 > 0 && abs(thr) > 0.05 {
+					if power.0 > 0 && abs(thr) > 0.05 && !v.boxed.contains(cell) {
 						// along the vehicle's axis either way (the blades reverse at half strength)
 						let eff: Double = max(0, 1.0 - abs(bx) / Aero.propVmax)
 						let w: Double = thr > 0 ? thr : thr * 0.5
@@ -11988,7 +12440,7 @@ extension Game {
 						thrust += abs(f)
 					}
 				case .jet:
-					if canFly && abs(thr) > 0.05 {
+					if canFly && abs(thr) > 0.05 && !v.boxed.contains(cell) {
 						// it pushes away from its exhaust; pulled back, its reverser brakes at a third
 						let dirX: Double = -Double((v.face[cell] ?? (-1, 0)).0)
 						let along: Double = thr * dirX
@@ -11999,8 +12451,10 @@ extension Game {
 					}
 				case .rotor:
 					if rotorF > 0 {
-						fby -= rotorF * k
-						lift += rotorF * k
+						// (blades with parts in their way lift by the room they have)
+						let room: Double = v.rotorRoom[cell] ?? 1.0
+						fby -= rotorF * k * room
+						lift += rotorF * k * room
 						// the disc drags against air going across it
 						fbx += Aero.rotorDrag * rho * bx * abs(bx) * min(1.0, v.collective * 1.5)
 					}
@@ -12105,7 +12559,7 @@ extension Game {
 	/// that way). A single rotor needs a tail rotor for this; without one its torque swings the
 	/// helicopter round and it can hardly be steered. Two rotors turn opposite ways and need none.
 	func cyclic(_ v: Vehicle, _ thr: Double, _ h: Double) {
-		let steady: Bool = v.tailRotors > 0 || v.rotors >= 2
+		let steady: Bool = v.openTails > 0 || v.rotors >= 2
 		// the stick tilts it; hands off it leans against its drift and comes to a hover
 		var target: Double = clampD(thr, -1, 1) * Aero.cyclicTilt
 		if abs(thr) < 0.1 { target = clampD(-v.vx * Aero.hoverHold, -Aero.cyclicTilt, Aero.cyclicTilt) }
@@ -12475,7 +12929,7 @@ extension Game {
 			let rate: Double = (t == .cannon ? 3.0 : 6.0) * dt
 			let na: Double = cur + clampD(turn, -rate, rate)
 			v.aimAng[c] = na
-			if firing && (v.gunCD[c] ?? 0) <= 0 && abs(remainder(want - na, 2.0 * Double.pi)) < 0.35 {
+			if firing && (v.gunCD[c] ?? 0) <= 0 && abs(remainder(want - na, 2.0 * Double.pi)) < 0.35 && !v.boxed.contains(c) {
 				fireVehicleGun(v, c, t, na, o)
 			}
 		}
@@ -12627,6 +13081,7 @@ extension Game {
 			v.turned = true
 			_ = mirrorVehicle(v, check: false)
 			v.vx = -v.vx * 0.92
+			for o in vehicles where o !== v && o.restOn == v.id { o.vx = v.vx; o.vy = v.vy }
 		}
 		if v.turnT >= 1.0 { v.turnT = 0 }
 	}
@@ -12634,7 +13089,7 @@ extension Game {
 	/// Mirrors a vehicle left to right about its centre of mass (it then faces the other way). With
 	/// `check`, only if the mirrored vehicle fits where it is. Stores keep what they hold.
 	@discardableResult
-	func mirrorVehicle(_ v: Vehicle, check: Bool) -> Bool {
+	func mirrorVehicle(_ v: Vehicle, check: Bool, depth: Int = 0) -> Bool {
 		let sx: Int = v.minX + v.maxX
 		if check {
 			for (c, _) in v.parts {
@@ -12661,6 +13116,13 @@ extension Game {
 		let cx: Double = v.px
 		let cy: Double = v.py
 		mirrorRiders(v, sx)
+		// vehicles resting on it (a plane parked on a carrier) are turned round with it
+		let carried: [Vehicle] = depth > 2 ? [] : vehicles.filter { $0 !== v && $0.restOn == v.id }
+		let carriedAt: [(Double, Double)] = carried.map { v.toLocal($0.px, $0.py) }
+		var nw: [PartCell: UInt8] = [:]
+		for (c, k) in v.walls { nw[PartCell(dx: sx - c.dx, dy: c.dy)] = k }
+		v.walls = nw
+		if let st = v.seatAt { v.seatAt = PartCell(dx: sx - st.dx, dy: st.dy) }
 		v.parts = np
 		v.blocks = nb
 		v.dmg = nd
@@ -12678,6 +13140,16 @@ extension Game {
 		v.asleep = false
 		v.updateBox()
 		for m in moved { world.setChestItems(m.0.x, m.0.y, m.1) }
+		for (i, o) in carried.enumerated() {
+			let l: (Double, Double) = carriedAt[i]
+			_ = mirrorVehicle(o, check: false, depth: depth + 1)
+			let w: (Double, Double) = v.toWorld(Double(sx + 1) - l.0, l.1)
+			o.px = w.0
+			o.py = w.1
+			o.vx = v.vx
+			o.vy = v.vy
+			o.updateBox()
+		}
 		return true
 	}
 
@@ -12686,7 +13158,7 @@ extension Game {
 	/// The ON VEHICLE switch shows while a block is in hand near a vehicle
 	var canBuildOnVehicle: Bool {
 		guard inVehicle == nil, !dead, let it = heldItem, case .block(let t) = it else { return false }
-		if t == .doorClosed || t == .doorOpen || t == .liftCar || t == .sapling || t.isPlant { return false }
+		if t == .liftCar || t == .sapling || t.isPlant { return false }
 		return nearestVehicle(8) != nil
 	}
 
@@ -12721,6 +13193,31 @@ extension Game {
 		if !isCreative { inv.removeAt(sel, 1) }
 		sfx(.place, 0.6)
 		placeCD = 0.16
+		swingT = 0.14
+		bumpHUD()
+		return true
+	}
+
+	/// Builds a door onto a vehicle at the aim point: two cells high where the cell above is free (one
+	/// otherwise). True when the tap was for a vehicle.
+	func attachDoorToVehicle() -> Bool {
+		guard let (v, c) = vehicleCellAtAim() else { return nearestVehicle(8) != nil }
+		if placeCD > 0 { return true }
+		placeCD = 0.25
+		if let problem = attachProblem(v, c, .block) {
+			say(problem, 2.0)
+			return true
+		}
+		v.parts[c] = .block
+		v.blocks[c] = .doorClosed
+		let up: PartCell = PartCell(dx: c.dx, dy: c.dy - 1)
+		let down: PartCell = PartCell(dx: c.dx, dy: c.dy + 1)
+		if v.parts[up] == nil { v.parts[up] = .block; v.blocks[up] = .doorClosed }
+		else if v.parts[down] == nil { v.parts[down] = .block; v.blocks[down] = .doorClosed }
+		v.recompute(keepAnchor: true)
+		v.kit = -1
+		if !isCreative { inv.removeAt(sel, 1) }
+		sfx(.place, 0.6)
 		swingT = 0.14
 		bumpHUD()
 		return true
@@ -12822,6 +13319,29 @@ extension Game {
 				stores.append((c, world.removeChest(p.x, p.y)))
 			}
 		}
+		// the back walls of the structure go with it: behind its blocks, and behind the open cells
+		// inside it (between its blocks in the same row)
+		var inBlocks: Set<IntPair> = Set(cells)
+		var walls: [(PartCell, UInt8)] = []
+		var rows: [Int: (Int, Int)] = [:]
+		for p in cells { let r: (Int, Int) = rows[p.y] ?? (p.x, p.x); rows[p.y] = (min(r.0, p.x), max(r.1, p.x)) }
+		for (y, span) in rows {
+			var x: Int = span.0
+			while x <= span.1 {
+				let k: Int = world.wallAt(x, y)
+				let here: IntPair = IntPair(x: x, y: y)
+				if k > 0 && (inBlocks.contains(here) || world.tile(x, y) == .air) {
+					let c: PartCell = host != nil ? v.cellAt(Double(x) + 0.5, Double(y) + 0.5) : PartCell(dx: x - x0, dy: y - y1)
+					if v.walls[c] == nil {
+						walls.append((c, UInt8(k)))
+						_ = world.setWall(x, y, 0)
+					}
+				}
+				x += 1
+			}
+		}
+		inBlocks.removeAll()
+		for w in walls { v.walls[w.0] = w.1 }
 		for p in cells {
 			world.setBuilt(p.x, p.y, false)
 			world.set(p.x, p.y, .air)
@@ -12878,6 +13398,14 @@ extension Game {
 				bagged += 1
 			}
 			for st in held { giveStack(st) }
+		}
+		// its back walls go back up where there is none (or to the bag)
+		for (c, k) in v.walls {
+			let p: (Double, Double) = v.cellCenter(c)
+			let tx: Int = Int(floor(p.0))
+			let ty: Int = Int(floor(p.1))
+			if world.wallAt(tx, ty) == 0 && world.setWall(tx, ty, Int(k)) { continue }
+			if let t = blockWallTile(Int(k)) { giveItem(.block(t), 1) }
 		}
 		vehicles.removeAll { $0 === v }
 		spawnParticles(v.b.x, v.b.y - v.b.h * 0.5, 0x30C0E0, 14, 4.0, 0.6, 2)

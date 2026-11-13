@@ -10738,6 +10738,8 @@ struct FloatText {
 let cellOpen: UInt8 = 0
 let cellSolid: UInt8 = 1
 let cellPlatform: UInt8 = 2
+/// (to another vehicle only: a wheel, met as the round thing it is)
+let cellRound: UInt8 = 3
 
 /// Shared numbers of the physics
 enum Phys {
@@ -10793,8 +10795,9 @@ extension Vehicle {
 	static func walkKind(_ t: PartType, _ b: Tile?) -> UInt8 {
 		if t == .block {
 			guard let tile = b else { return cellSolid }
-			if tile.solid { return cellSolid }
-			if tile.isPlatform || stairSide(tile) != 0 { return cellPlatform }
+			// (a stair is a step up, like a block: walking into it climbs it)
+			if tile.solid || stairSide(tile) != 0 { return cellSolid }
+			if tile.isPlatform { return cellPlatform }
 			return cellOpen
 		}
 		switch t {
@@ -10804,18 +10807,34 @@ extension Vehicle {
 		}
 	}
 
-	/// The walk kinds of every cell, over the cells' box (worked out again whenever the parts change)
+	/// What a part is to another vehicle meeting it: every part is solid, and a block what it is on the
+	/// land (a torch or an open door is passed through, a platform is met from above)
+	static func meetKind(_ t: PartType, _ b: Tile?) -> UInt8 {
+		if isWheelPart(t) { return cellRound }
+		if t != .block { return cellSolid }
+		guard let tile = b else { return cellSolid }
+		if tile.solid || stairSide(tile) != 0 { return cellSolid }
+		if tile.isPlatform { return cellPlatform }
+		return cellOpen
+	}
+
+	/// The walk and meet kinds of every cell, over the cells' box (worked out again whenever the parts
+	/// change)
 	func buildWalkGrid() {
 		gridW = max(1, maxX - minX + 1)
 		gridH = max(1, maxY - minY + 1)
 		var g: [UInt8] = [UInt8](repeating: 0, count: gridW * gridH)
+		var m: [UInt8] = [UInt8](repeating: 0, count: gridW * gridH)
 		for (c, t) in parts {
 			let x: Int = c.dx - minX
 			let y: Int = c.dy - minY
 			if x < 0 || y < 0 || x >= gridW || y >= gridH { continue }
 			g[y * gridW + x] = Vehicle.walkKind(t, blocks[c])
+			m[y * gridW + x] = Vehicle.meetKind(t, blocks[c])
 		}
 		walkGrid = g
+		meetGrid = m
+		artRev &+= 1
 	}
 
 	@inline(__always) func walkAt(_ dx: Int, _ dy: Int) -> UInt8 {
@@ -10823,6 +10842,13 @@ extension Vehicle {
 		let y: Int = dy - minY
 		if x < 0 || y < 0 || x >= gridW || y >= gridH { return 0 }
 		return walkGrid[y * gridW + x]
+	}
+
+	@inline(__always) func meetAt(_ dx: Int, _ dy: Int) -> UInt8 {
+		let x: Int = dx - minX
+		let y: Int = dy - minY
+		if x < 0 || y < 0 || x >= gridW || y >= gridH { return 0 }
+		return meetGrid[y * gridW + x]
 	}
 
 	/// Whether a box in cell coordinates overlaps a solid cell
@@ -10957,6 +10983,24 @@ extension Game {
 				}
 				lb.vy = 0
 				lb.hitCeil = true
+			} else {
+				lx = lx0
+				ly = ly0
+				lb.vx = 0
+				lb.vy = 0
+				w = v.toWorld(lx, ly)
+			}
+		}
+		// another vehicle's cells (a plane parked on a carrier's deck): stepped onto from above, else in
+		// the way like a wall
+		if vehicles.count > 1, let o = vehicleInWay(w.0, w.1, hw, b.h, except: v.id) {
+			if meetOtherVehicle(&b, v, o, w, lb.vx, lb.vy) { return }
+			let wx: (Double, Double) = v.toWorld(lx0, ly)
+			if vehicleInWay(wx.0, wx.1, hw, b.h, except: v.id) == nil {
+				lx = lx0
+				lb.vx = 0
+				lb.hitWall = true
+				w = wx
 			} else {
 				lx = lx0
 				ly = ly0
@@ -11284,6 +11328,338 @@ extension Game {
 		}
 		return (b.vx, b.vy)
 	}
+}
+
+// MARK: - Inside a vehicle: ladders, doors, seats, beds, stations, back walls
+// A vehicle's blocks work as they do on the land: ladders are climbed (in the vehicle's frame, so a
+// ladder on a moving ship carries whoever is on it), doors open as somebody walks into them and close
+// behind them, chairs and sofas are passenger seats, beds pass the night, a crafting station aboard
+// counts as near, chests hold things, and back walls go behind the cells.
+
+/// A door on a vehicle the player opened by walking into it (it closes again behind them)
+struct VehicleDoor {
+	var vid: Int
+	var cell: PartCell
+	var t: Double
+}
+
+extension Game {
+	/// The block of a vehicle's cell (nil for parts)
+	func vehicleBlock(_ v: Vehicle, _ c: PartCell) -> Tile? {
+		guard v.parts[c] == .block else { return nil }
+		return v.blocks[c]
+	}
+
+	/// A cell a body can climb: a ladder, a mod's climbable block, or a hatch laid over a ladder
+	func climbableCell(_ v: Vehicle, _ x: Int, _ y: Int) -> Bool {
+		guard let t = vehicleBlock(v, PartCell(dx: x, dy: y)) else { return false }
+		if t == .ladder { return true }
+		if t.isMod && ModRuntime.shared.climbTiles.contains(t.rawValue) { return true }
+		if t == .platform, vehicleBlock(v, PartCell(dx: x, dy: y + 1)) == .ladder { return true }
+		return false
+	}
+
+	/// The middle of a ladder a body (feet at lx, ly in the vehicle's cells) is on, or nil
+	func ladderIn(_ v: Vehicle, _ lx: Double, _ ly: Double, _ h: Double) -> Double? {
+		let cx: Int = Int(floor(lx))
+		let frac: Double = lx - Double(cx)
+		var cols: [Int] = [cx]
+		if frac < 0.34 { cols.append(cx - 1) } else if frac > 0.66 { cols.append(cx + 1) }
+		let y0: Int = Int(floor(ly - h + 0.1))
+		let y1: Int = Int(floor(ly + 0.05))
+		for tx in cols {
+			var y: Int = y0
+			while y <= y1 {
+				if climbableCell(v, tx, y) { return Double(tx) + 0.5 }
+				y += 1
+			}
+		}
+		return nil
+	}
+
+	/// A ladder the player is on, as the x of its middle in the frame they are in: the land's ladders
+	/// while on the land, the vehicle's while aboard one. A vehicle's ladder reached from the land takes
+	/// them aboard (keeping their speed), so they climb with it as it moves.
+	func ladderSpot() -> Double? {
+		if pb.ride != 0 {
+			guard let v = vehicleByID(pb.ride) else { return nil }
+			return ladderIn(v, pb.rlx, pb.rly, pb.h)
+		}
+		if let lc = ladderColumn() { return Double(lc) + 0.5 }
+		for v in vehicles where !v.parts.isEmpty {
+			if pb.right < v.b.left - 0.4 || pb.left > v.b.right + 0.4 || pb.y < v.b.top - 0.4 || pb.top > v.b.y + 0.4 { continue }
+			let l: (Double, Double) = v.toLocal(pb.x, pb.y)
+			if let x = ladderIn(v, l.0, l.1, pb.h) {
+				boardKeeping(&pb, v)
+				return x
+			}
+		}
+		return nil
+	}
+
+	/// Puts a body aboard a vehicle where it is now, keeping how fast it goes in the world
+	func boardKeeping(_ b: inout Body, _ v: Vehicle) {
+		let l: (Double, Double) = v.toLocal(b.x, b.y)
+		let pv: (Double, Double) = v.pointVel(b.x, b.y)
+		let dvx: Double = b.vx - pv.0
+		let dvy: Double = b.vy - pv.1
+		let c: Double = v.cosA
+		let s: Double = v.sinA
+		b.ride = v.id
+		b.rlx = l.0
+		b.rly = l.1
+		b.vx = dvx * c + dvy * s
+		b.vy = -dvx * s + dvy * c
+	}
+
+	/// Another vehicle's solid cells where a body would stand (feet at wx, wy), or nil
+	func vehicleInWay(_ wx: Double, _ wy: Double, _ hw: Double, _ h: Double, except: Int) -> Vehicle? {
+		for o in vehicles where o.id != except && !o.parts.isEmpty {
+			if wx + hw < o.b.left || wx - hw > o.b.right || wy < o.b.top || wy - h > o.b.y { continue }
+			let l: (Double, Double) = o.toLocal(wx, wy)
+			if o.boxSolidCells(l.0 - hw + 0.02, l.1 - h + 0.02, l.0 + hw - 0.02, l.1 - 0.02) { return o }
+		}
+		return nil
+	}
+
+	/// A body aboard one vehicle meeting another's cells: coming down onto the top of one puts it aboard
+	/// that one (a step from a carrier's deck onto a parked plane); otherwise they are in its way.
+	/// Returns true when it changed vehicles.
+	func meetOtherVehicle(_ b: inout Body, _ v: Vehicle, _ o: Vehicle, _ w: (Double, Double), _ lvx: Double, _ lvy: Double) -> Bool {
+		let hw: Double = b.w * 0.5
+		let lo: (Double, Double) = o.toLocal(w.0, w.1)
+		let row: Double = floor(lo.1 + 0.0005)
+		if lvy < 0 || lo.1 - row > 0.5 { return false }
+		if o.boxSolidCells(lo.0 - hw + 0.02, row - b.h + 0.02, lo.0 + hw - 0.02, row - 0.02) { return false }
+		// its speed in the world, then against the other vehicle
+		let c: Double = v.cosA
+		let s: Double = v.sinA
+		let pv: (Double, Double) = v.pointVel(w.0, w.1)
+		b.x = w.0
+		b.y = w.1
+		b.vx = pv.0 + lvx * c - lvy * s
+		b.vy = pv.1 + lvx * s + lvy * c
+		boardKeeping(&b, o)
+		b.rly = row
+		b.vy = 0
+		b.onGround = true
+		let at: (Double, Double) = o.toWorld(b.rlx, b.rly)
+		b.x = at.0
+		b.y = at.1
+		return true
+	}
+
+	// MARK: doors
+
+	/// The run of door cells in a vehicle's column through a cell (a door is two cells high)
+	func vehicleDoorCells(_ v: Vehicle, _ c: PartCell) -> [PartCell] {
+		var out: [PartCell] = []
+		var y: Int = c.dy
+		while let t = vehicleBlock(v, PartCell(dx: c.dx, dy: y - 1)), isDoor(t), c.dy - y < 4 { y -= 1 }
+		while let t = vehicleBlock(v, PartCell(dx: c.dx, dy: y)), isDoor(t), out.count < 4 {
+			out.append(PartCell(dx: c.dx, dy: y))
+			y += 1
+		}
+		return out
+	}
+
+	/// Opens or shuts a vehicle's door (all its cells)
+	func setVehicleDoor(_ v: Vehicle, _ c: PartCell, open: Bool) {
+		let t: Tile = open ? .doorOpen : .doorClosed
+		for k in vehicleDoorCells(v, c) { v.blocks[k] = t }
+		v.buildWalkGrid()
+		let at: (Double, Double) = v.cellCenter(c)
+		sfx(.door, at: at.0, 0.6)
+	}
+
+	/// Walking into a closed door of a vehicle (aboard it, or from the land) opens it; it closes again once
+	/// the player has gone through
+	func vehicleDoorTouch(_ ix: Double) {
+		if ix == 0 || vehicles.isEmpty { return }
+		let sgn: Double = ix > 0 ? 1.0 : -1.0
+		for v in vehicles where !v.parts.isEmpty {
+			if pb.ride != v.id && (pb.right < v.b.left - 0.5 || pb.left > v.b.right + 0.5 || pb.y < v.b.top - 0.5 || pb.top > v.b.y + 0.5) { continue }
+			let l: (Double, Double) = pb.ride == v.id ? (pb.rlx, pb.rly) : v.toLocal(pb.x, pb.y)
+			let fx: Int = Int(floor(l.0 + sgn * (pb.w * 0.5 + 0.2)))
+			for yy in [Int(floor(l.1 - 0.5)), Int(floor(l.1 - 1.4))] {
+				let c: PartCell = PartCell(dx: fx, dy: yy)
+				if vehicleBlock(v, c) == .doorClosed {
+					setVehicleDoor(v, c, open: true)
+					if !vehicleDoors.contains(where: { $0.vid == v.id && $0.cell.dx == fx }) && vehicleDoors.count < 16 {
+						vehicleDoors.append(VehicleDoor(vid: v.id, cell: c, t: 0))
+					}
+					return
+				}
+			}
+		}
+	}
+
+	/// Closes the vehicle doors the player walked through, once they are clear of the doorway
+	func updateVehicleDoors(_ dt: Double) {
+		if vehicleDoors.isEmpty { return }
+		var keep: [VehicleDoor] = []
+		for var d in vehicleDoors {
+			d.t += dt
+			guard let v = vehicleByID(d.vid), vehicleBlock(v, d.cell) == .doorOpen else { continue }
+			let l: (Double, Double) = pb.ride == v.id ? (pb.rlx, pb.rly) : v.toLocal(pb.x, pb.y)
+			let cells: [PartCell] = vehicleDoorCells(v, d.cell)
+			let top: Double = Double(cells.first?.dy ?? d.cell.dy)
+			let bottom: Double = Double((cells.last?.dy ?? d.cell.dy) + 1)
+			let away: Bool = abs(l.0 - (Double(d.cell.dx) + 0.5)) > pb.w * 0.5 + 1.1 || l.1 < top - 0.5 || l.1 - pb.h > bottom + 0.5
+			if d.t > 0.5 && away {
+				setVehicleDoor(v, d.cell, open: false)
+				continue
+			}
+			if d.t < 60 { keep.append(d) }
+		}
+		vehicleDoors = keep
+	}
+
+	// MARK: seats, beds and stations
+
+	/// Sits down on a chair or sofa built on a vehicle: a passenger, carried with it until they walk or jump
+	func sitAboard(_ v: Vehicle, _ c: PartCell) {
+		if mounted != nil || inVehicle != nil { return }
+		seat = nil
+		seatAboard = c
+		boardFrame(&pb, v, Double(c.dx) + 0.5, Double(c.dy) + 1.0)
+		pb.onGround = true
+		fallPeak = 0
+		say("You sit down. Walk or jump to get up.", 1.6)
+		bumpHUD()
+	}
+
+	/// Keeps a passenger in their seat aboard; false (standing up) once they move or jump, or the seat is gone
+	func stayInSeatAboard(_ ix: Double, _ jumpPressed: Bool) -> Bool {
+		guard let c = seatAboard else { return false }
+		guard pb.ride != 0, let v = vehicleByID(pb.ride), let t = vehicleBlock(v, c), isSeat(t) else {
+			seatAboard = nil
+			bumpHUD()
+			return false
+		}
+		if ix != 0 || jumpPressed || downHeld {
+			seatAboard = nil
+			bumpHUD()
+			return false
+		}
+		pb.rlx = Double(c.dx) + 0.5
+		pb.rly = Double(c.dy) + 1.0
+		pb.vx = 0
+		pb.vy = 0
+		pb.onGround = true
+		let w: (Double, Double) = v.toWorld(pb.rlx, pb.rly)
+		pb.x = w.0
+		pb.y = w.1
+		fallPeak = 0
+		return true
+	}
+
+	/// A bed on a vehicle passes the night like any bed; it moves, so it is not where the player wakes
+	func sleepAboard() {
+		if world.dim != .overworld {
+			say("Nights only pass in the Overworld.", 2.5)
+			return
+		}
+		if !isNight {
+			say("You can only sleep at night. (A bed on a vehicle moves, so it can't be where you wake up.)", 3.0)
+			return
+		}
+		for m in mobs where m.hp > 0 && !m.removed && isThreat(m) && abs(m.b.x - pb.x) < 16 && abs(m.b.y - pb.y) < 10 {
+			say("You can't sleep now: there are monsters nearby.", 2.0)
+			return
+		}
+		if timeOfDay > 0.5 { dayCount += 1 }
+		timeOfDay = 0.02
+		hp = min(maxHP, hp + 6.0)
+		fadeT = 1.0
+		light.valid = false
+		say("You sleep until morning, rocked by the vehicle.", 3.0)
+		bumpHUD()
+	}
+
+	/// A block of a kind built on a vehicle within reach of the player (a crafting station aboard)
+	func stationAboard(_ t: Tile) -> Bool {
+		for v in vehicles where !v.parts.isEmpty {
+			if pb.x < v.b.left - 6 || pb.x > v.b.right + 6 || pb.y < v.b.top - 5 || pb.y > v.b.y + 5 { continue }
+			let l: (Double, Double) = v.toLocal(pb.x, pb.y - 1)
+			let px: Int = Int(floor(l.0))
+			let py: Int = Int(floor(l.1))
+			for dy in -4...3 {
+				for dx in -5...5 where vehicleBlock(v, PartCell(dx: px + dx, dy: py + dy)) == t { return true }
+			}
+		}
+		return false
+	}
+
+	/// A tap on a block built on a vehicle that does something there: doors open and shut, chairs and
+	/// sofas are sat on, beds slept in. True when it was one of those.
+	func useVehicleBlock(_ v: Vehicle, _ c: PartCell) -> Bool {
+		guard let t = vehicleBlock(v, c) else { return false }
+		if isDoor(t) {
+			setVehicleDoor(v, c, open: t == .doorClosed)
+			return true
+		}
+		if isSeat(t) {
+			sitAboard(v, c)
+			return true
+		}
+		let modBed: Bool = t.isMod && ModRuntime.shared.bedTiles.contains(t.rawValue)
+		if t == .bedL || t == .bedR || modBed {
+			sleepAboard()
+			return true
+		}
+		return false
+	}
+
+	// MARK: back walls
+
+	/// Puts a block up as a back wall in a vehicle cell under the aim point (inside its box). True when
+	/// the tap was for a vehicle.
+	func attachWallToVehicle(_ t: Tile) -> Bool {
+		for v in vehicles where !v.parts.isEmpty {
+			if aimX < v.b.left - 0.5 || aimX > v.b.right + 0.5 || aimY < v.b.top - 0.5 || aimY > v.b.y + 0.5 { continue }
+			let c: PartCell = v.cellAt(aimX, aimY)
+			if c.dx < v.minX || c.dx > v.maxX || c.dy < v.minY || c.dy > v.maxY { continue }
+			if placeCD > 0 { return true }
+			placeCD = 0.16
+			if v.walls[c] != nil {
+				say("There is a wall there already.", 1.2)
+				return true
+			}
+			let k: Int = blockWallValue(t)
+			if k <= 0 || !canBeWall(t) {
+				say("That can't be a wall.", 1.2)
+				return true
+			}
+			v.walls[c] = UInt8(k)
+			v.recompute(keepAnchor: true)
+			v.kit = -1
+			if !isCreative { inv.removeAt(sel, 1) }
+			sfx(.place, 0.5)
+			swingT = 0.14
+			bumpHUD()
+			return true
+		}
+		return false
+	}
+
+	/// The wrench on an empty vehicle cell with a back wall (or any cell with AS WALL on) takes the wall down
+	func removeVehicleWall(_ v: Vehicle, _ c: PartCell) -> Bool {
+		guard let k = v.walls[c] else { return false }
+		if v.parts[c] != nil && !wallMode { return false }
+		v.walls[c] = nil
+		v.recompute(keepAnchor: true)
+		if let t = blockWallTile(Int(k)) { giveItem(.block(t), 1) }
+		sfx(.breakStone, 0.5)
+		bumpHUD()
+		return true
+	}
+}
+
+/// How much a back wall adds to a vehicle (a wall is thin: a fifth of its block)
+func vehicleWallMass(_ k: UInt8) -> Double {
+	guard let t = blockWallTile(Int(k)) else { return 0.2 }
+	return max(0.05, tileWeight(t) * 0.2)
 }
 
 // ===== a01_artsheet =====

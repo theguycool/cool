@@ -1059,7 +1059,7 @@ enum WorldRenderer {
 		if g.mounted != nil || g.inVehicle != nil { showItem = false }
 		if showItem && !pose { drawHeldItem(&ctx, g, v) }
 		let shade: Double = openShade(g, g.pb.x, g.pb.cy)
-		if g.seat != nil {
+		if g.seat != nil || g.seatAboard != nil {
 			// sitting: lower on the seat
 			drawSetPosed(&ctx, v, s, 0, left, g.hurtT > 0, g.pb.x, g.pb.y - 0.12, alpha, shade, 0, 0.74)
 		} else if g.landT > 0 {
@@ -1353,7 +1353,12 @@ enum WorldRenderer {
 		let cx: Double = v.sx(veh.px)
 		var cracks: Path = Path()
 		var cracked: Bool = false
+		// a big vehicle, or one with back walls, is drawn from one picture of its cells that do not move
+		// (made again only when it changes); its wheels, propellers and drills are drawn over it
+		let baked: Bool = VehicleArt.wanted(veh) && drawVehiclePicture(&ctx, v, veh, shade, squash, cx)
 		for (cell, t) in veh.parts {
+			let inPicture: Bool = baked && VehicleArt.still(t)
+			if inPicture && veh.hitT <= 0 && (veh.dmg[cell] ?? 0) <= 0.5 && !VehicleArt.working(veh, t) { continue }
 			let p: (Double, Double) = veh.cellCenter(cell)
 			var c: GraphicsContext = ctx
 			if shade < 0.98 { c.addFilter(.colorMultiply(shadeColor(shade))) }
@@ -1373,8 +1378,10 @@ enum WorldRenderer {
 			c.rotate(by: Angle(radians: rot))
 			if flip { c.scaleBy(x: -1, y: 1) }
 			let w: Double = tp * 1.02
-			let img: Image = veh.blocks[cell].map { art.tile($0) } ?? art.parts[t.rawValue]
-			c.draw(img, in: mkRect(-w * 0.5 + jitter, -w * 0.5, w, w))
+			if !inPicture {
+				let img: Image = veh.blocks[cell].map { art.tile($0) } ?? art.parts[t.rawValue]
+				c.draw(img, in: mkRect(-w * 0.5 + jitter, -w * 0.5, w, w))
+			}
 			if isDrill(t) && veh.drilling {
 				// spinning bit: alternating highlight bands
 				let band: Double = (veh.drillRot.truncatingRemainder(dividingBy: 1.0)) * w * 0.4
@@ -1393,6 +1400,24 @@ enum WorldRenderer {
 		}
 		if cracked { ctx.stroke(cracks, with: .color(Color.black.opacity(0.7)), lineWidth: 1.5) }
 		if veh.cannons + veh.guns > 0 { drawBarrels(&ctx, v, veh, squash, cx) }
+	}
+
+	/// Draws a vehicle's still cells and back walls from its cached picture (true when it did)
+	static func drawVehiclePicture(_ ctx: inout GraphicsContext, _ v: View2D, _ veh: Vehicle, _ shade: Double, _ squash: Double, _ cx: Double) -> Bool {
+		guard let img = VehicleArt.picture(veh) else { return false }
+		let tp: Double = v.tp
+		var c: GraphicsContext = ctx
+		if shade < 0.98 { c.addFilter(.colorMultiply(shadeColor(shade))) }
+		if squash < 0.999 {
+			c.translateBy(x: CGFloat(cx), y: 0)
+			c.scaleBy(x: CGFloat(squash), y: 1)
+			c.translateBy(x: CGFloat(-cx), y: 0)
+		}
+		let corner: (Double, Double) = veh.toWorld(Double(veh.minX), Double(veh.minY))
+		c.translateBy(x: CGFloat(v.sx(corner.0)), y: CGFloat(v.sy(corner.1)))
+		c.rotate(by: Angle(radians: veh.angle))
+		c.draw(img, in: mkRect(0, 0, Double(veh.gridW) * tp, Double(veh.gridH) * tp))
+		return true
 	}
 
 	/// Moving parts at work: rotor blades and propeller discs spinning, a jet's flame, a burner's flame
@@ -8125,5 +8150,99 @@ struct StructurePreview: View {
 			}
 		}
 		.background(Color.black.opacity(0.4))
+	}
+}
+
+/// A vehicle's picture of its cells that do not move (blocks, frames, hulls, wings...) and its back
+/// walls, at 16 pixels a cell, kept on the vehicle and made again only when it changes. A ship of
+/// hundreds of cells is then one picture to draw instead of hundreds.
+enum VehicleArt {
+	/// vehicles at least this big are drawn from their picture (and any with back walls)
+	static let cells: Int = 24
+
+	static func wanted(_ veh: Vehicle) -> Bool {
+		return veh.parts.count >= cells || !veh.walls.isEmpty
+	}
+
+	/// Parts that look the same whatever the vehicle does (wheels, propellers and drills turn)
+	static func still(_ t: PartType) -> Bool {
+		switch t {
+		case .wheel, .offroadWheel, .propeller, .drill, .diamondDrill, .voidDrill: return false
+		default: return true
+		}
+	}
+
+	/// Parts with something drawn over them while they work (rotor blades, flames, a balloon's seams)
+	static func working(_ veh: Vehicle, _ t: PartType) -> Bool {
+		if t == .envelope || t == .burner { return true }
+		return veh.aero && (t == .rotor || t == .airProp || t == .tailRotor || t == .jet)
+	}
+
+	static func picture(_ veh: Vehicle) -> Image? {
+		let key: Int = veh.artRev &* 1_000_003 &+ Art.shared.gen
+		if let img = veh.artImage, veh.artKey == key { return img }
+		let n: Int = tileArtPx
+		let w: Int = veh.gridW * n
+		let h: Int = veh.gridH * n
+		if w <= 0 || h <= 0 || w * h > 4_000_000 { return nil }
+		var buf: PixelBuf = PixelBuf(w: w, h: h)
+		let painter: SectionPainter = SectionPainter.shared
+		let art: Art = Art.shared
+		for (c, k) in veh.walls {
+			let ox: Int = (c.dx - veh.minX) * n
+			let oy: Int = (c.dy - veh.minY) * n
+			let base: Int = (Int(k) - 1) * n * n
+			if base < 0 || base + n * n > painter.wallPx.count { continue }
+			for y in 0..<n {
+				for x in 0..<n { over(&buf, ox + x, oy + y, painter.wallPx[base + y * n + x]) }
+			}
+		}
+		for (c, t) in veh.parts where still(t) {
+			let ox: Int = (c.dx - veh.minX) * n
+			let oy: Int = (c.dy - veh.minY) * n
+			var flip: Bool = false
+			if (t == .airProp || t == .jet || t == .tailRotor), let f = veh.face[c], f.0 < 0 { flip = true }
+			if let b = veh.blocks[c], Int(b.rawValue) < art.tileBufs.count {
+				let src: PixelBuf = art.tileBufs[Int(b.rawValue)]
+				stamp(&buf, src, ox, oy, n, flip)
+			} else if t.rawValue < art.partBufs.count {
+				stamp(&buf, art.partBufs[t.rawValue], ox, oy, n, flip)
+			}
+		}
+		let img: Image = pixImage(buf)
+		veh.artImage = img
+		veh.artKey = key
+		return img
+	}
+
+	/// Lays a picture over a cell, scaled to n pixels (8x8 part art is doubled), mirrored if asked
+	static func stamp(_ buf: inout PixelBuf, _ src: PixelBuf, _ ox: Int, _ oy: Int, _ n: Int, _ flip: Bool) {
+		if src.w <= 0 || src.h <= 0 { return }
+		for y in 0..<n {
+			let sy: Int = y * src.h / n
+			for x in 0..<n {
+				var sx: Int = x * src.w / n
+				if flip { sx = src.w - 1 - sx }
+				over(&buf, ox + x, oy + y, src.px[sy * src.w + sx])
+			}
+		}
+	}
+
+	/// One pixel laid over another (non-premultiplied colours)
+	static func over(_ buf: inout PixelBuf, _ x: Int, _ y: Int, _ c: UInt32) {
+		let a: UInt32 = (c >> 24) & 0xFF
+		if a == 0 || x < 0 || y < 0 || x >= buf.w || y >= buf.h { return }
+		let i: Int = y * buf.w + x
+		if a == 255 || buf.px[i] == 0 {
+			buf.px[i] = c
+			return
+		}
+		let d: UInt32 = buf.px[i]
+		let ia: UInt32 = 255 - a
+		let r: UInt32 = (((c >> 16) & 0xFF) * a + ((d >> 16) & 0xFF) * ia) / 255
+		let g: UInt32 = (((c >> 8) & 0xFF) * a + ((d >> 8) & 0xFF) * ia) / 255
+		let b: UInt32 = ((c & 0xFF) * a + (d & 0xFF) * ia) / 255
+		let da: UInt32 = max(a, (d >> 24) & 0xFF)
+		buf.px[i] = (da << 24) | (r << 16) | (g << 8) | b
 	}
 }

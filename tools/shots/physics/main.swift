@@ -131,3 +131,69 @@ do {
     look(g, Double(cx) + 0.5, 95.5)
     render(g, "02_truck_deck")
 }
+
+// 3 (phase 2): a long deck carried on wheels with a plane parked on it and a crate stack, the player
+// walking the deck between them
+do {
+    let g = world()
+    let cx = Int(g.pb.x)
+    tree(g, cx - 24, 6); tree(g, cx + 26, 5)
+    var cells: [(Int, Int, PartType, Tile?)] = []
+    for x in 0..<30 { cells.append((x, 0, .frame, nil)); cells.append((x, 1, .block, .brick)) }
+    for x in [1, 6, 11, 18, 23, 28] { cells.append((x, 2, .offroadWheel, nil)) }
+    // a bridge at the front with a window
+    for y in -4...(-1) { cells.append((27, y, .block, .planks)); cells.append((29, y, .block, .planks)) }
+    cells.append((28, -4, .block, .planks)); cells.append((28, -3, .block, .glass)); cells.append((28, -1, .cockpit, nil))
+    cells.append((28, -2, .block, .planks))
+    let deck = vehicle(g, cells, left: Double(cx) - 15.0, bottom: 100)
+    let plane = Vehicle(id: g.newID(), first: .frame, x: 0, y: 0)
+    plane.parts.removeAll()
+    for p in kitLayout(.planeKit) { plane.parts[PartCell(dx: p.dx, dy: p.dy)] = p.p }
+    plane.recompute(keepAnchor: false)
+    let surface: Double = deck.toWorld(0.0, 0.0).1
+    plane.placeBox(left: Double(cx) - 12.0, bottom: surface + 0.02)
+    g.vehicles.append(plane)
+    var crate: [(Int, Int, PartType, Tile?)] = []
+    for x in 0..<2 { for y in 0..<2 { crate.append((x, y, .block, .crate)) } }
+    _ = vehicle(g, crate, left: Double(cx) + 6.0, bottom: surface)
+    g.pauseVehicles = true
+    g.boardFrame(&g.pb, deck, 18.5, -0.0)
+    g.pb.onGround = true
+    g.facing = -1
+    look(g, Double(cx) + 0.5, 94.0)
+    render(g, "03_deck_plane")
+}
+
+// 4 (phase 2): inside a vehicle: back walls, a door, a ladder to an upper floor, a chair, a bed, a
+// workbench and a chest, drawn from the vehicle's one picture
+do {
+    let g = world()
+    let cx = Int(g.pb.x)
+    var cells: [(Int, Int, PartType, Tile?)] = []
+    let w = 16
+    for x in 0..<w {
+        cells.append((x, 0, .frame, nil))
+        cells.append((x, -9, .block, .shingles))
+        if x != 6 { cells.append((x, -5, .block, .planks)) }
+    }
+    cells.append((6, -5, .block, .platform))
+    for y in 1...8 {
+        if y == 1 || y == 2 { cells.append((w - 1, -y, .block, .doorClosed)) } else { cells.append((w - 1, -y, .block, .planks)) }
+        cells.append((0, -y, .block, y == 3 || y == 7 ? .glass : .planks))
+    }
+    for y in 1...4 { cells.append((6, -y, .block, .ladder)) }
+    cells.append((2, -1, .block, .chair)); cells.append((3, -1, .block, .table)); cells.append((9, -1, .block, .workbench))
+    cells.append((12, -1, .block, .chest)); cells.append((2, -6, .block, .bedL)); cells.append((3, -6, .block, .bedR))
+    cells.append((10, -6, .block, .bookshelf)); cells.append((12, -6, .block, .floorLamp))
+    for x in [1, 5, 10, 14] { cells.append((x, 1, .wheel, nil)) }
+    cells.append((13, -6, .cockpit, nil)); cells.append((14, -6, .engine, nil))
+    let v = vehicle(g, cells, left: Double(cx) - 8.0, bottom: 100)
+    for x in 1..<(w - 1) { for y in 1...8 where y != 5 { v.walls[PartCell(dx: x, dy: -y)] = UInt8(blockWallValue(.planks)) } }
+    v.recompute(keepAnchor: true)
+    g.pauseVehicles = true
+    g.boardFrame(&g.pb, v, 6.5, -1.0)
+    g.pb.onGround = true
+    g.facing = 1
+    look(g, Double(cx) + 0.5, 95.0)
+    render(g, "04_vehicle_insides")
+}

@@ -80,18 +80,35 @@ The user's parts 1 to 16 are all covered. The order is theirs with three changes
   riders at 500, a raft carrying a chicken, a pig and an elephant, pushing light and heavy loads.
 - Known limits: creature AI still reads the land's tiles, so creatures aboard mostly stand or
   wander and do not plan around the vehicle; ladders, doors and background walls on vehicles are
-  phase 2; vehicles still meet each other as boxes until phase 2; the player, creatures and loose
+  phase 2 (done); vehicles met each other as boxes until phase 2; the player, creatures and loose
   blocks still fall no faster than 26 blocks a second (as before; it becomes air drag with the
   structural work of phase 7, which also gives loose blocks sub-steps).
 
-### Phase 2: vehicle foundations
-- Vehicles collide with each other cell by cell with real impulses (a plane lands on a carrier's
-  deck and is carried by it; a tank pushes a car).
-- Any part anywhere: the fixed attachment rules (wheels only underneath, rotors only on top) become
-  physics (a wheel works where it touches the ground, a rotor lifts along its shaft).
-- Insides: background walls on vehicles, doors, ladders, stairs, furniture, chests and machines
-  working inside a moving vehicle; several seats.
-- Vehicle blocks of other sizes and weights; drawing a big vehicle from one cached picture.
+### Phase 2: vehicle foundations (done)
+- Vehicles meet each other cell by cell (`meetVehicleCells`): a vehicle's samples inside another's
+  cells become contacts solved with the land's, pushing both by their masses (`VContact.other`).
+  All vehicles are stepped together (`stepVehicles`: fixed step k of every vehicle before k + 1 of
+  any), each split as finely as how fast it closes on the others. Wheels are round to other
+  vehicles. A vehicle rests on another (`restOn`), sleeps while that one does and wakes with it;
+  wheels driving on another vehicle push it back; a hard blow wakes one at rest and damages both.
+  A turn (TURN) carries vehicles parked on the one turning. Tests: a crate landing on a deck in any
+  order, a tank pushing a light and a heavy crate, two crates meeting at 60 a second each, a crate
+  riding a truck, a plane landing on a moving deck, sleeping together.
+- Any part anywhere: placement only needs a free cell that touches. How it works there is physics:
+  a wheel drives wherever it touches (upright as before; on its roof or against a wall along what it
+  touches, by its grip: `wheelsAlongContacts`), a rotor lifts by the room its blades have
+  (`rotorRoom`), a thruster, gun or drill with no open side waits for one (`boxed`), the steering
+  wheel works from any seat. The game says so when a part goes somewhere unusual (`partNote`).
+- Several seats: the driver sits in the seat tapped (`seatAt`, saved).
+- Insides: doors open as somebody walks into them and close behind them (`vehicleDoorTouch`), ladders
+  are climbed in the vehicle's frame (and one reached from the land takes the climber aboard),
+  stairs are steps, chairs and sofas are passenger seats (`seatAboard`), beds pass the night (not a
+  spawn point: it moves), a station aboard counts as near, back walls go behind cells (AS WALL with ON
+  VEHICLE; saved; weigh a fifth of their block; the assembler takes a house's walls along and gives
+  them back). A body aboard one vehicle meets another's cells (in its way, or stepped onto).
+- A vehicle of 24 cells or more, or with back walls, is drawn from one cached picture of its still
+  cells (`VehicleArt`), made again only when it changes.
+- Not done (moved to phase 4): parts bigger than one cell. Creature AI still reads the land's tiles.
 
 ### Phase 3: flight and water
 - Wind with gusts on everything exposed; wings at any angle and size, flaps, air brakes,
@@ -107,6 +124,7 @@ The user's parts 1 to 16 are all covered. The order is theirs with three changes
 - Rails that carry: rail wheels held to the track, slopes, switches; the ore cart ridden and
   loaded; trains of coupled cars you can walk through.
 - Passenger aircraft, carriers, ships: tests at hundreds of cells, sleeping, the cost per frame.
+- Parts bigger than one cell (a big wheel), moved here from phase 2.
 
 ### Phase 5: mechanical systems
 - Sections joined by hinges, pivots, pistons and telescopes, driven by servos with range, speed and

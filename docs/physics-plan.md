@@ -110,15 +110,32 @@ The user's parts 1 to 16 are all covered. The order is theirs with three changes
   cells (`VehicleArt`), made again only when it changes.
 - Not done (moved to phase 4): parts bigger than one cell. Creature AI still reads the land's tiles.
 
-### Phase 3: flight and water
-- Wind with gusts on everything exposed; wings at any angle and size, flaps, air brakes,
-  stabilisers, intakes (in a side view there is no roll or yaw, so ailerons and rudders become
-  pitch and drag surfaces: said plainly in the game).
-- Flowing water: levels per cell, flows down and sideways, fills containers, pours through
-  openings; sleeping cells so oceans cost nothing.
-- Liquids as data: density, thickness, flow speed, heat, what it does to who is in it, how two
-  liquids react. Water and lava become two of them. The Mod Creator's liquid editor.
-- Floating from enclosed volume, flooding, ballast tanks: ships and submarines.
+### Phase 3: flight and water (done)
+- Liquids flow (`p12c_fluids`): a cell holds 0...255 of its liquid (a part-full cell keeps its level in
+  `Chunk.level`); cells wake when they or a neighbour change (`World.set` → `wakeFlow`), fall first,
+  then even out along their row as far as the floor goes (`levelRow`), in whole 255ths so nothing is
+  made or lost; a thin layer covers only so many cells (`reach`) and a lone film dries up; a cell with
+  nothing to do sleeps, so the world's own seas cost nothing. 20 steps a second, 1,600 cells a step.
+  Levels are saved (`ChunkSave.levels`) and wake again when their ground loads. Part-full cells are
+  drawn live over the land (`drawLiquids`); the section painter leaves them out. The storm surge's
+  water is held still (`flowHold`). Hand-built pools that should stay put: `World.calmLiquids()`.
+- Liquids as data (`LiquidDef`): colour, see-through, density, thickness, spread, harm, burning,
+  what it hardens into where it meets another liquid, drying, an effect. Water and lava are two of
+  them (lava meeting water sets into obsidian, or stone where thin); a mod block with the new Liquid
+  collision is one too (the block editor's AS A LIQUID section), floating on a denser liquid or
+  sinking under a lighter one. Bodies swim by how full their cells are; vehicles float by the
+  liquid's density (lava holds things up three times as hard). The bucket carries a block of any liquid;
+  the sump pump pumps a block's worth a stroke.
+- Ships: the air in a hull holds it up (`updateHullAir`: liquid reaches only cells under the surface,
+  from outside or a flooded neighbour; solid cells keep it out), so an open boat of stone floats on
+  the air inside it, a hole below the waterline floods it a few cells a second and it sinks, and a
+  sealed hull stays dry however deep. Riders in a dry cabin under water breathe and do not swim.
+  Ballast tanks (new part) flood and blow with the stick: a submarine.
+- Flight: wings tilt in steps (tap a parked wing; saved), flapped wings drop their flaps when slow,
+  air brakes open against the motion or rolling to a stop, tailplanes steady the nose. Wind reaches
+  every vehicle (also the box drag of those without wings), rolls in gusts along the land and is
+  sheltered by land close upwind or overhead.
+- Not done: intakes (nothing in this model needs one), freezing water, rain filling containers.
 
 ### Phase 4: big vehicles and rails
 - Rails that carry: rail wheels held to the track, slopes, switches; the ore cart ridden and

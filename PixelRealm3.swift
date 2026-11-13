@@ -1187,19 +1187,27 @@ extension Game {
 		d.work += dt
 		if d.work < 0.4 { return }
 		d.work = 0
-		var best: IntPair? = nil
-		var bd: Int = 999
+		// a block's worth of water a stroke, from the nearest cells first (the water flows, so a
+		// part-full cell counts by what it holds)
+		var cells: [(Int, IntPair)] = []
 		for dy in -4...4 {
 			for dx in -4...4 {
 				let x: Int = d.x + dx
 				let y: Int = d.y + dy
 				if world.tile(x, y) != .water { continue }
-				let dist: Int = abs(dx) + abs(dy)
-				if dist < bd || (dist == bd && y < (best?.y ?? 0)) { bd = dist; best = IntPair(x: x, y: y) }
+				cells.append((abs(dx) + abs(dy), IntPair(x: x, y: y)))
 			}
 		}
-		guard let w = best else { return }
-		world.set(w.x, w.y, .air)
+		if cells.isEmpty { return }
+		cells.sort { $0.0 < $1.0 || ($0.0 == $1.0 && $0.1.y < $1.1.y) }
+		var want: Int = 255
+		for c in cells where want > 0 {
+			let have: Int = world.liquidLevel(c.1.x, c.1.y)
+			let take: Int = min(have, want)
+			world.setLiquidLevel(c.1.x, c.1.y, .water, have - take)
+			want -= take
+		}
+		let w: IntPair = cells[0].1
 		spawnParticles(Double(w.x) + 0.5, Double(w.y) + 0.5, 0x3B7BE0, 3, 1.5, 0.3, 8)
 		for side in 0..<4 {
 			let nx: Int = d.x + sideDX[side]
@@ -2307,8 +2315,11 @@ enum ModCollision: Int, Codable, CaseIterable {
 	case solid, platform, none
 	/// climbed like a ladder; sticky: slows what moves through it; decoration: like a flower (appended)
 	case climbable, sticky, decor
+	/// a liquid that flows, with the numbers in the block's LIQUID section (appended)
+	case liquid
 	var name: String {
 		switch self {
+		case .liquid: return "Liquid"
 		case .solid: return "Solid"
 		case .platform: return "Platform (stand on top)"
 		case .none: return "Pass through"
@@ -2325,6 +2336,7 @@ enum ModCollision: Int, Codable, CaseIterable {
 		case .climbable: return "Passed through, and climbed like a ladder: jump or up to climb, down to go down."
 		case .sticky: return "Passed through slowly, like a cobweb: walking, jumping and falling all slow down in it."
 		case .decor: return "Like a flower or tall grass: passed through, needs ground under it, and a block built there replaces it."
+		case .liquid: return "A liquid: it flows down and spreads, things swim and float in it, and it can harm, heal or harden where it meets another liquid."
 		}
 	}
 }
@@ -2446,6 +2458,20 @@ struct ModBlock: Codable, Identifiable, Equatable {
 	/// much of a blow it gives back (0: none, 1: all of it)
 	var grip: Double = 1.0
 	var bounce: Double = 0.0
+	/// as a liquid (collision .liquid): density (water 1), thickness (water 1, lava 4), how far a block of
+	/// it spreads, harm a second, whether it burns, how see-through it is, the block it hardens into
+	/// where it meets another liquid ("" none), whether a thin film dries up, and an effect it gives
+	/// whoever is in it (a ModEffectKind number, -1 none) and how strong
+	var liqDensity: Double = 1.0
+	var liqThick: Double = 1.0
+	var liqReach: Int = 7
+	var liqHarm: Double = 0
+	var liqHot: Bool = false
+	var liqOpacity: Double = 0.75
+	var liqHardens: String = ""
+	var liqDries: Bool = false
+	var liqEffect: Int = -1
+	var liqEffectAmt: Double = 10
 	/// on Sparkworks power lines: what it does, and how strong it is at it
 	var powerRole: ModPowerRole = .none
 	var powerAmt: Double = 4
@@ -2481,6 +2507,16 @@ struct ModBlock: Codable, Identifiable, Equatable {
 		carry = c.val(.carry, 0)
 		falls = c.val(.falls, false)
 		grip = c.val(.grip, 1.0)
+		liqDensity = c.val(.liqDensity, 1.0)
+		liqThick = c.val(.liqThick, 1.0)
+		liqReach = c.val(.liqReach, 7)
+		liqHarm = c.val(.liqHarm, 0)
+		liqHot = c.val(.liqHot, false)
+		liqOpacity = c.val(.liqOpacity, 0.75)
+		liqHardens = c.val(.liqHardens, "")
+		liqDries = c.val(.liqDries, false)
+		liqEffect = c.val(.liqEffect, -1)
+		liqEffectAmt = c.val(.liqEffectAmt, 10)
 		bounce = c.val(.bounce, 0.0)
 		powerRole = c.val(.powerRole, .none)
 		powerAmt = c.val(.powerAmt, 4)
@@ -4027,6 +4063,14 @@ enum ModValidator {
 			b.carry = clampD(b.carry.isFinite ? b.carry : 0, 0, sb ? 4000 : 400)
 			b.grip = clampD(b.grip.isFinite ? b.grip : 1, 0.02, sb ? 4 : 2)
 			b.bounce = clampD(b.bounce.isFinite ? b.bounce : 0, 0, sb ? 1.2 : 0.9)
+			b.liqDensity = clampD(b.liqDensity.isFinite ? b.liqDensity : 1, 0.2, sb ? 12 : 5)
+			b.liqThick = clampD(b.liqThick.isFinite ? b.liqThick : 1, 1, sb ? 20 : 8)
+			b.liqReach = clampI(b.liqReach, 1, sb ? 30 : 12)
+			b.liqHarm = clampD(b.liqHarm.isFinite ? b.liqHarm : 0, 0, sb ? 100 : 20)
+			b.liqOpacity = clampD(b.liqOpacity.isFinite ? b.liqOpacity : 0.75, 0.1, 1)
+			b.liqEffect = clampI(b.liqEffect, -1, ModEffectKind.allCases.count - 1)
+			b.liqEffectAmt = clampD(b.liqEffectAmt.isFinite ? b.liqEffectAmt : 10, 0, sb ? 200 : 60)
+			if b.liqHardens.count > 80 { b.liqHardens = "" }
 			b.powerAmt = clampD(b.powerAmt.isFinite ? b.powerAmt : 4, 0.1, sb ? 200 : 40)
 			if b.text.count > 200 { b.text = String(b.text.prefix(200)) }
 			if let d = b.drop, !exists(d) {
@@ -5424,6 +5468,8 @@ final class ModRuntime {
 	/// mod blocks climbed like a ladder, and those that slow what moves through them
 	var climbTiles: Set<UInt8> = []
 	var stickyTiles: Set<UInt8> = []
+	/// the mods' liquids by tile number (see p12c_fluids)
+	var liquidDefs: [UInt8: LiquidDef] = [:]
 	var tileForKey: [String: Tile] = [:]
 	var items: [String: ModItemRT] = [:]
 	var itemOrder: [String] = []
@@ -5764,6 +5810,7 @@ final class ModRuntime {
 		d.solid = b.collision == .solid
 		d.platform = b.collision == .platform
 		d.plant = b.collision == .decor
+		d.liquid = b.collision == .liquid
 		d.opaque = d.solid && !b.transparent
 		d.light = b.light
 		d.hurt = b.function == .trap
@@ -6064,13 +6111,19 @@ final class ModRuntime {
 		let base: Int = Int(Tile.modBase)
 		climbTiles = []
 		stickyTiles = []
+		liquidDefs = [:]
 		for i in 0..<ModLimits.blockSlots {
 			guard let t = Tile(rawValue: UInt8(base + i)) else { continue }
 			slotArt[i] = slotArtBuf(i)
 			Tile.patch(t, tileDef(i), tool: slotTool[i])
+			Liquids.hotTable[Int(t.rawValue)] = false
 			if let b = slotDef[i], slotTreeRole[i] == 0 {
 				if b.collision == .climbable { climbTiles.insert(t.rawValue) }
 				if b.collision == .sticky { stickyTiles.insert(t.rawValue) }
+				if b.collision == .liquid {
+					liquidDefs[t.rawValue] = modLiquid(b, t, slotArt[i] ?? PixelBuf(w: 8, h: 8))
+					Liquids.hotTable[Int(t.rawValue)] = b.liqHot
+				}
 			}
 			if let b = slotDef[i], !slotAlt[i], !b.dropSelf, let d = b.drop {
 				slotDrop[i] = Stack(item: resolve(d), count: b.dropCount)
@@ -6080,6 +6133,26 @@ final class ModRuntime {
 		OverrideRT.shared.install()
 		SectionPainter.shared.refreshModTiles()
 		Art.shared.refreshModArt()
+	}
+
+	/// A mod block that is a liquid, as the flow sees it (its colour from its picture)
+	func modLiquid(_ b: ModBlock, _ t: Tile, _ art: PixelBuf) -> LiquidDef {
+		var d: LiquidDef = LiquidDef(tile: t)
+		d.color = averageColor(art)
+		d.opacity = b.liqOpacity
+		d.density = b.liqDensity
+		d.thick = b.liqThick
+		d.reach = b.liqReach
+		d.harm = b.liqHarm
+		d.hot = b.liqHot
+		d.dries = b.liqDries
+		d.effect = b.liqEffect
+		d.effectAmt = b.liqEffectAmt
+		if !b.liqHardens.isEmpty {
+			if b.liqHardens.hasPrefix("tile:"), let n = Int(b.liqHardens.dropFirst(5)), n >= 0, n < 256, let gt = Tile(rawValue: UInt8(n)), gt.solid { d.hardens = gt }
+			else if let mt = tileForKey[b.liqHardens] { d.hardens = mt }
+		}
+		return d
 	}
 
 	/// The picture a slot draws: the block's art (an open door shows its edge, an unlit lamp is darker)

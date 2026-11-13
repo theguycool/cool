@@ -40,7 +40,10 @@ confirmed). `tools/buildcost.sh` measures both ways:
   all; as one job 117 s and 1,225 MB. Not yet confirmed on the iPad. Physics phase 1 (2.54 MB, 65,059
   lines, most of it `p12b_frames` in part 1 and the contact solver in part 2): 367, 376, 395, 394,
   400 and 382 MB, 118 s in all; as one job 97 s and 1,217 MB. Physics phase 2 (2.58 MB, 66,092
-  lines): 374, 385, 396, 394, 402 and 382 MB, 119 s in all; as one job 101 s and 1,226 MB.
+  lines): 374, 385, 396, 394, 402 and 382 MB, 119 s in all; as one job 101 s and 1,226 MB. Phase 3
+  (2.62 MB, 67,073 lines) first measured 421 MB in part 2; the land painter (`p24_painter`) and the
+  hull air moved to part 1: 388, 411, 398, 394, 403 and 384 MB, 110 s in all; as one job 97 s and
+  1,279 MB.
 - A job's peak can jump by 30 MB or more after a small edit (taking the recipe lines out of one
   function once raised part 2 from 473 to 509 MB), so a few MB either way is noise; measure again
   after moving code.
@@ -63,7 +66,8 @@ compiles and runs headless on Linux. If `/opt/pixelrealm` is missing, run `tools
   before committing. Full output is in `/tmp/pixelrealm-build/<suite>/out.log`.
 - `tools/shots.sh power|weather|sky|cloudsheet|stick|alchemy|modplus|building|vehicles|mod5|suit5|mod5c|art|physics [folder]`: PNG screenshots from the game's own renderer (`sky`: clouds by day, dusk, night and storm; `cloudsheet`: every cloud template; `stick`: the combat stick's dial; `alchemy`: mutated creatures, the worn suit, the new stations, and a sheet of the new icons and suit pictures; `modplus`: two custom dimensions and a boss in a phase; `building`: a furnished house with stairs and a lift, a blast throwing blocks, a beam under strain; `vehicles`: every new kit parked, a plane, helicopter and airship flying, a tank firing at a wrecked truck, a ship built from blocks with the assembler, a plane mid-turn; `mod5`: every tree design shape under a mod's sun with rays, the same land at night under a pictured moon, the Overworld under a mod's sun, a lit cavern dimension, a repainted zombie; `suit5`: a sheet of suit designs in their poses, a turret firing with a plate broken off, jet flight with a wing, a laser and a cannon shell; `mod5c`: a mod's vehicle built from its kit, mod blocks on a power line and falling, rain in a mod's colour, a custom dimension's blizzard; `art`: the hand-drawn creatures and blocks in the world at the size an iPad shows them: a meadow by day, monsters at night, a cave with every ore, the bears and the elephant, the pirates and the deep monsters, the three bosses; `physics`: the player and a pig standing inside a
 house that flies under a balloon, riders on a flatbed truck's deck, a plane and a crate parked on a
-wheeled deck, a house on wheels with back walls, a door, a ladder, a bed and furniture).
+wheeled deck, a house on wheels with back walls, a door, a ladder, a bed and furniture, water poured
+off a ledge filling a basin, a submarine under the sea with a dry cabin).
 - `tools/art.sh preview|pack|check|game|compare`: the hand-drawn art (see **Art** below and `tools/art/README.md`): PNG sheets of the drawings, writing them into the game, and before/after sheets.
 - `tools/bench.sh`: chunk generation, painting, lighting and tick timings (debug build; compare
   with `GAME_SRC=<old file> tools/bench.sh`).
@@ -117,7 +121,10 @@ vehicles meeting vehicles: landing on a deck in any order, pushing by mass, head
 truck's bed, a plane landing on a moving deck, resting and waking together, a rider meeting another
 vehicle; parts anywhere: wheels on any side, rotors by their room, boxed-in jets, steering away from
 the seat; several seats; doors, ladders, stairs, chairs, beds, stations and back walls aboard, saved
-and assembled; the cached picture),
+and assembled; the cached picture), `phys3` (phase 3: water falling, spreading, levelling, pouring
+through a hole, nothing made or lost, levels saved, still seas asleep, lava meeting water, a mod's
+liquid floating on water, the bucket; a stone box floating on its air, a holed one sinking, a submarine
+diving and rising with a dry cabin; tilted wings, flaps, air brakes, tailplanes; the wind's shelter),
 and `det` and `det2` (world generation fingerprints for generator versions 1 to 4).
 
 What the stand-ins can't tell you:
@@ -150,7 +157,8 @@ What the stand-ins can't tell you:
   `Infusion`, `ExoMat`, `ExoPart`, `ExoCore`, `ExoModule` (wing ... magnet appended), `ExoSlot`, `SuitBone`,
   `SuitShape`, `SuitKind`, `ModPowerRole`, `ThemeRole`, `ModBlockFunction` (seat, bed appended), `GameRule`
   (its lines in `GameRule.specText` follow the cases), `Dimension` (custom0-2 were appended),
-  `PartType` (vehicle parts: `block` and the aircraft parts were appended), `ProjKind`
+  `PartType` (vehicle parts: `block`, the aircraft parts, then flap, airBrake, stabilizer, ballast were
+  appended), `ModCollision` (liquid appended), `ProjKind`
   and the like) only get new cases appended at the end. Never reorder or remove cases. `hairChoices`,
   `scarfChoices`, `shirtChoices`, `pantsChoices` and the style lists (`hairStyleNames`,
   `shirtStyleNames`, `pantsStyleNames`, each style with its drawing `player_hair_<n>` and so on) are
@@ -236,8 +244,9 @@ What the stand-ins can't tell you:
 ## Map of the parts
 
 Sections start with `// ===== <name> =====` (grep for them). They are spread over the parts in order:
-part 1 `p01_util` to `p12_phys`, `p12b_frames` (bodies on and inside vehicles), then `a01_artsheet`
-(the hand-drawn pictures as text, and their readers); part 2 `p13a_mobdefs` to `p26_vehicle_ux`, then `p33_vehicles`; part 3 `p27_power` to
+part 1 `p01_util` to `p12_phys`, `p12b_frames` (bodies on and inside vehicles), `p12c_fluids` (with the air
+inside hulls), `p24_painter`, then `a01_artsheet`
+(the hand-drawn pictures as text, and their readers); part 2 `p13a_mobdefs` to `p26_vehicle_ux` (without `p24`), then `p33_vehicles`; part 3 `p27_power` to
 `p31c_blockphys`; part 4 `p32_modplus` and `u01_art` (the art store, the player's look, sound, the
 weather simulation, ambient and animal life, the journal, telegraphed attacks); part 5 `u02_render` to
 `u05_menu`, then `u07_mods`; part 6 `u08_alchemy`, `u09_modplus`, `u06_root`. New code goes into
@@ -248,7 +257,8 @@ The sections:
 `p01_util`, `p02_tiles` (Tile, defs, art), `p03_items`, `p04_recipes` (RecipeBook), `p05*` (creature
 sprites), `p06_worldgen`, `p07_chunk`, `p08*` (villages, ruins), `p09_umbral`, `p10_world` (World,
 chunks, `set`), `p11_light`, `p12_phys`, `p12b_frames` (`Phys`, `mobMass`, `moveThing`, `rideStep`,
-`moveInCells`, `meetVehicles`, `syncRiders`, the insides of vehicles), `p13a_mobdefs` (MobKind, MobDef, spawn rules, Mob),
+`moveInCells`, `meetVehicles`, `syncRiders`, the insides of vehicles), `p12c_fluids` (liquids that flow,
+the bucket), `p13a_mobdefs` (MobKind, MobDef, spawn rules, Mob),
 `p13b_vehicles`, `p14a_game` (Game state, Settings), `p14b_player` (`tick`, the frame), `p14c_input`
 (pointer, `interact`), `p14d_tools` (item use, mining, placing), `p15a_mobai` (`updateMobs`,
 `think`, the per-kind AIs), `p15b_spawn` (`updateSpawning`), `p16*` (combat, damage, bosses), `p17`
@@ -376,6 +386,15 @@ the Mod Test LOGIC tab, the sun and moon editor, the tree design editor), `u06_r
   `VehicleSave.walls`, carried by the assembler). Stairs are solid cells aboard (stepped up). A big
   vehicle (24 cells) or one with walls is drawn from `VehicleArt.picture` (cached on the vehicle by
   `artRev` and `Art.gen`); wheels, propellers and drills are drawn over it.
+- **Liquids (p12c_fluids).** See docs/physics-plan.md, phase 3. A liquid cell's level is 0...255
+  (`liquidLevel`, `setLiquidLevel`; `liquidAmount` 0...1); `World.set` wakes the liquid round any change
+  unless `flowHold`; `stepFlow` (from `Game.updateFlow`) falls, evens out rows (`levelRow`), reacts
+  (`meetLiquids`). `Liquids.def(t)` gives a `LiquidDef` (water, lava, `ModRuntime.liquidDefs`);
+  `Liquids.hotTable` marks burning ones. Tests that build pools by hand call `world.calmLiquids()`.
+  Ships: `Vehicle.hullAir` (cells under the surface and how flooded), `updateHullAir`,
+  `hullAirForces`, `dryAt`; `headUnderWater`; ballast (`Vehicle.ballast`, `ballastAndBrakes`).
+  Flight extras: `Vehicle.tilt` (`tiltWing`), flaps, air brakes (`brakeOpen`), tailplanes, all in `Aero`;
+  `windAtVehicle`, `windShelter`. New recipes go in `addPhysicsRecipes` (appended last).
 - **Speed and contact (p17, p33).** No clamps. `stepVehicle`: sub-steps by speed, the open-sky path.
   `vehicleSubstep` gathers `VContact`s and gives their blows together over four rounds (normal push
   held at zero or more, friction within `mu` times it, bounce and grip from the block touched:

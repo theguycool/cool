@@ -402,6 +402,7 @@ enum WorldRenderer {
 			drawSky(&ctx, W, H, g, v)
 		}
 		drawSections(&ctx, g, v, cache)
+		drawLiquids(&ctx, g, v)
 		if !g.stress.isEmpty { drawStress(&ctx, g, v) }
 		drawGroundWeather(&ctx, g, v)
 		drawWaves(&ctx, g, v)
@@ -8151,6 +8152,55 @@ struct StructurePreview: View {
 		}
 		.background(Color.black.opacity(0.4))
 	}
+}
+
+extension WorldRenderer {
+	/// Liquid cells that are only part full (flowing water, a spreading pool of lava), drawn over the
+	/// land each frame at their level, with a lighter line along the surface
+	static func drawLiquids(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
+		let w: World = g.world
+		let x0: Int = Int(floor(v.left)) - 1
+		let x1: Int = Int(ceil(v.left + v.wTiles)) + 1
+		let y0: Int = max(0, Int(floor(v.top)) - 1)
+		let y1: Int = min(w.H - 1, Int(ceil(v.top + v.hTiles)) + 1)
+		if y1 < y0 { return }
+		let tp: Double = v.tp
+		var cx: Int = floorDiv(x0, chunkW)
+		while cx * chunkW <= x1 {
+			if let c = w.chunks[cx], c.partials > 0 {
+				let lev: [UInt8] = c.level
+				let tiles: [UInt8] = c.tiles
+				for lx in 0..<chunkW {
+					let x: Int = cx * chunkW + lx
+					if x < x0 || x > x1 { continue }
+					for y in y0...y1 {
+						let i: Int = lx * w.H + y
+						let l: UInt8 = lev[i]
+						if l == 0 || !Tile.liquidTable[Int(tiles[i])] { continue }
+						guard let t = Tile(rawValue: tiles[i]), let L = Liquids.def(t) else { continue }
+						let a: Double = Double(l) / 255.0
+						let top: Double = Double(y) + 1.0 - a
+						let r: CGRect = mkRect(v.sx(Double(x)), v.sy(top), tp + 0.5, a * tp + 0.5)
+						// the colour of the liquid's own block (so a part-full cell matches a full one)
+						let col: UInt32 = liquidShade(t, L)
+						fillRect(&ctx, r, Color(hex: col, alpha: L.opacity))
+						if !w.tile(x, y - 1).liquid {
+							fillRect(&ctx, mkRect(v.sx(Double(x)), v.sy(top), tp + 0.5, max(1.0, tp * 0.08)), Color(hex: shadeRGB(col, 1.3), alpha: min(1.0, L.opacity + 0.15)))
+						}
+					}
+				}
+			}
+			cx += 1
+		}
+	}
+}
+
+/// The colour a liquid is drawn in where a cell is only part full: the average of its block's picture
+func liquidShade(_ t: Tile, _ L: LiquidDef) -> UInt32 {
+	let i: Int = Int(t.rawValue)
+	let bufs: [PixelBuf] = Art.shared.tileBufs
+	if i < bufs.count, t.isMod == false { return averageColor(bufs[i]) & 0xFFFFFF }
+	return artGrade(L.color)
 }
 
 /// A vehicle's picture of its cells that do not move (blocks, frames, hulls, wings...) and its back

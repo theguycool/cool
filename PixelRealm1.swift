@@ -467,14 +467,15 @@ enum Tile: UInt8, CaseIterable, Codable {
 		meetTable[i] = d.solid
 		opaqueTable[i] = d.opaque
 		lightTable[i] = d.light
-		liquidTable[i] = false
+		liquidTable[i] = d.liquid
+		meetTable[i] = d.solid || d.liquid
 		hurtTable[i] = d.hurt
 		platformTable[i] = d.platform
 		plantTable[i] = d.plant
 		hardTable[i] = d.hard
 		tierTable[i] = d.tier
 		supportTable[i] = d.solid
-		rainStopTable[i] = d.solid || d.platform
+		rainStopTable[i] = d.solid || d.platform || d.liquid
 		modToolTable[i - Int(modBase)] = tool
 	}
 
@@ -1403,8 +1404,15 @@ enum PartType: Int, Codable, CaseIterable {
 	/// propeller and a jet engine, a main rotor and a tail rotor, a balloon envelope and the burner that
 	/// heats it, tank tracks and armour, a cannon and a machine gun, and an autopilot
 	case block, cockpit, wing, elevator, airProp, jet, rotor, tailRotor, envelope, burner, track, armor, cannon, autoGun, autopilot
+	/// appended (flight and water): a wing with a flap that drops for slow flight, an air brake, a fixed
+	/// tailplane that steadies the nose, and a ballast tank that fills with water to dive
+	case flap, airBrake, stabilizer, ballast
 	var name: String {
 		switch self {
+		case .flap: return "Flapped Wing"
+		case .airBrake: return "Air Brake"
+		case .stabilizer: return "Tailplane"
+		case .ballast: return "Ballast Tank"
 		case .block: return "Block"
 		case .cockpit: return "Cockpit"
 		case .wing: return "Wing"
@@ -1469,6 +1477,10 @@ enum PartType: Int, Codable, CaseIterable {
 		case .cannon: return 2.4
 		case .autoGun: return 1.0
 		case .autopilot: return 0.4
+		case .flap: return 0.5
+		case .airBrake: return 0.4
+		case .stabilizer: return 0.25
+		case .ballast: return 1.4
 		}
 	}
 
@@ -1494,6 +1506,10 @@ enum PartType: Int, Codable, CaseIterable {
 		case .cannon: return "Fires explosive shells where you aim. Uses gunpowder."
 		case .autoGun: return "Fires a stream of bullets where you aim. Uses bullets."
 		case .autopilot: return "Holds speed and height, or drives a route you mark (AUTO button)."
+		case .flap: return "A wing whose flap drops by itself when flying slowly: more lift for take-off and landing, and more drag."
+		case .airBrake: return "Opens when you push the stick against your motion (or roll to a stop on the ground): a lot of drag."
+		case .stabilizer: return "A fixed tail surface: keeps the nose steady by itself, with no controls."
+		case .ballast: return "Fills with water to sink and blows it out to rise (stick down and up, in water). Makes a submarine."
 		case .block: return "A block built onto a vehicle."
 		default: return "Vehicle part"
 		}
@@ -1548,6 +1564,9 @@ enum Gadget: Int, Codable, CaseIterable {
 	/// vehicles (appended): ready-made aircraft, an airship, a tank and a truck, and the assembler that
 	/// turns a structure built from blocks into a vehicle (and back)
 	case planeKit, heliKit, airshipKit, tankKit, truckKit, assembler
+	/// appended (flowing liquids): an iron bucket that carries a block of water, lava or a mod's liquid
+	/// (what it holds is in the stack's `extra`: 0 empty, else the liquid's tile number + 1)
+	case bucket
 
 	/// a wiring tool: taps lay or cut wire instead of using what is under them
 	var wiring: Bool { return self == .powerCable || self == .pulseWire || self == .pulseWireB || self == .wireSnips }
@@ -1578,6 +1597,7 @@ enum Gadget: Int, Codable, CaseIterable {
 		case .tankKit: return "Tank Kit"
 		case .truckKit: return "Truck Kit"
 		case .assembler: return "Vehicle Assembler"
+		case .bucket: return "Bucket"
 		}
 	}
 }
@@ -2387,6 +2407,10 @@ func iconMisc(_ it: Item) -> PixelBuf {
 		}
 	case .gadget(let g):
 		switch g {
+		case .bucket:
+			// an iron pail with a handle
+			b.rect(2, 4, 8, 7, 0x8A8E96); b.rect(2, 4, 8, 1, 0xB8BCC4); b.rect(3, 10, 6, 1, 0x5A5E66); b.rect(2, 5, 1, 5, 0xA8ACB4)
+			b.line(2, 4, 5, 1, 0x4A4E56); b.line(9, 4, 6, 1, 0x4A4E56); b.set(5, 1, 0x4A4E56); b.set(6, 1, 0x4A4E56)
 		case .powerCable, .pulseWire, .pulseWireB:
 			// a spool of wire with a loose end
 			let c: UInt32 = g == .powerCable ? 0xD2793A : (g == .pulseWire ? 0xFFC020 : 0x30E0D0)
@@ -2828,7 +2852,20 @@ enum RecipeBook {
 		addFeatureRecipes(add)
 		// appended last so every older recipe keeps its number
 		addBuildingRecipes(add)
+		addPhysicsRecipes(add)
 		return list
+	}
+}
+
+extension RecipeBook {
+	/// The physics overhaul's parts and tools (appended after every older recipe, so their numbers stay)
+	static func addPhysicsRecipes(_ add: (Item, Int, [(Item, Int)], Station, RecipeCat) -> Void) {
+		let planks: Item = .block(.planks)
+		add(.part(.flap), 1, [(.part(.wing), 1), (.mat(.ironBar), 1), (.mat(.copperBar), 1)], .tinker, .vehicle)
+		add(.part(.airBrake), 1, [(.mat(.ironBar), 3), (planks, 1)], .tinker, .vehicle)
+		add(.part(.stabilizer), 1, [(planks, 2), (.mat(.ironBar), 1)], .bench, .vehicle)
+		add(.part(.ballast), 1, [(.mat(.ironBar), 5), (.mat(.copperBar), 1), (.block(.glass), 1)], .tinker, .vehicle)
+		add(.gadget(.bucket), 1, [(.mat(.ironBar), 3)], .anvil, .tools)
 	}
 }
 
@@ -5404,6 +5441,22 @@ func partBuf(_ p: PartType) -> PixelBuf {
 		// a control box with a little screen
 		b.rect(0, 1, 8, 6, 0x3A3F4A); b.rect(1, 2, 6, 3, 0x1A2A2A); b.line(2, 4, 3, 3, 0x50F070); b.line(3, 3, 5, 3, 0x50F070)
 		b.set(1, 5, 0xE04040); b.set(3, 5, 0x50F070); b.set(5, 5, 0xFFC020)
+	case .flap:
+		// a wing with its hinged flap at the trailing end, drooped a little
+		b.rect(1, 3, 5, 1, 0xE8E8EC); b.rect(0, 4, 6, 1, 0xC8C8D0); b.rect(1, 5, 4, 1, 0x8A8A94)
+		b.rect(6, 4, 2, 1, 0xD8A030); b.set(7, 5, 0xD8A030); b.set(6, 5, 0x9A6A20)
+	case .airBrake:
+		// two panels hinged open on a frame, edged in yellow
+		b.rect(0, 5, 8, 2, 0x6A6A74); b.rect(0, 5, 8, 1, 0x9A9AA4)
+		b.line(1, 4, 3, 1, 0xC8C8D0); b.line(6, 4, 4, 1, 0xC8C8D0); b.set(3, 1, 0xE8C040); b.set(4, 1, 0xE8C040)
+	case .stabilizer:
+		// a thin fixed tail surface with a fin
+		b.rect(0, 4, 8, 1, 0xC8C8D0); b.rect(1, 3, 6, 1, 0xE8E8EC); b.rect(0, 5, 7, 1, 0x8A8A94)
+		b.rect(5, 1, 2, 2, 0xA8A8B0); b.set(6, 0, 0xA8A8B0)
+	case .ballast:
+		// a riveted steel tank with a water line and its valve
+		b.rect(0, 1, 8, 6, 0x5A6470); b.rect(0, 1, 8, 1, 0x7A8490); b.rect(1, 4, 6, 2, 0x3B6FC8); b.rect(1, 4, 6, 1, 0x6A9AE0)
+		b.set(1, 2, 0x2A3038); b.set(6, 2, 0x2A3038); b.rect(3, 0, 2, 1, 0xC84A3A)
 	}
 	b.outline(0x1A1410)
 	return b
@@ -6148,6 +6201,10 @@ final class Chunk {
 	var built: [UInt8] = []
 	/// how many stair tiles the chunk holds (-1: not counted yet; see World.stairsNear)
 	var stairs: Int = -1
+	/// how full each part-full liquid cell is (1...254 of 255; 0: a whole block or no liquid), and how
+	/// many there are (see p12c_fluids)
+	var level: [UInt8] = []
+	var partials: Int = 0
 	/// Sparkworks wiring over each cell (see Wire), and how many cells have any
 	var wires: [UInt8] = []
 	var wireCount: Int = 0
@@ -9260,6 +9317,14 @@ final class World {
 	/// structural physics is on: every change is noted for it to look at (see Game.updateStructures)
 	var structWatch: Bool = false
 	var structEdits: [IntPair] = []
+	/// liquid cells awake (see p12c_fluids), a step counter, edits that should not wake them (the storm
+	/// surge), where lava met water this step, and a count of every level change
+	var flowQ: [IntPair] = []
+	var flowSet: Set<IntPair> = []
+	var flowTick: Int = 0
+	var flowHold: Bool = false
+	var flowSteam: [IntPair] = []
+	var flowRev: Int = 0
 
 	func noteEdit(_ x: Int, _ y: Int) {
 		if !editAny {
@@ -9312,6 +9377,8 @@ final class World {
 		if let p = parked[dim.rawValue][cx] {
 			c = p
 			parked[dim.rawValue][cx] = nil
+			chunks[cx] = c
+			wakePartials(c)
 		} else {
 			let t0: Double = perfNow()
 			c = generateChunk(gen, dim, cx)
@@ -9375,6 +9442,8 @@ final class World {
 
 	func switchDimension(_ nd: Dimension) {
 		if nd == dim { return }
+		flowQ.removeAll()
+		flowSet.removeAll()
 		for (k, c) in chunks { if c.dirty { parked[dim.rawValue][k] = c } }
 		chunks.removeAll()
 		cacheCX = Int.min
@@ -9422,6 +9491,12 @@ final class World {
 		c.dirty = true
 		c.rev &+= 1
 		version += 1
+		if !c.level.isEmpty && c.level[lx * H + y] != 0 {
+			// a new tile in a part-full liquid cell: it is a whole block of whatever it is now
+			c.level[lx * H + y] = 0
+			c.partials -= 1
+			c.bumpRows(y, y)
+		}
 		// a new block is not "built" until whoever put it there says so (see setBuilt)
 		if !c.built.isEmpty { c.built[lx * H + y] = 0 }
 		if c.stairs >= 0 {
@@ -9444,6 +9519,7 @@ final class World {
 		}
 		noteEdit(x, y)
 		if old.isPower || t.isPower { powerTileChanged(x, y, old, t) }
+		if !flowHold { wakeFlow(x, y) }
 		return old
 	}
 
@@ -10346,21 +10422,27 @@ extension World {
 		let ty0: Int = Int(floor(y0))
 		let ty1: Int = Int(floor(y1 - 0.0001))
 		if tx1 < tx0 || ty1 < ty0 { return (0, 0) }
-		let waterR: UInt8 = Tile.water.rawValue
 		let lavaR: UInt8 = Tile.lava.rawValue
+		let liq: [Bool] = Tile.liquidTable
+		let hot: [Bool] = Liquids.hotTable
 		let hh: Int = H
-		var w: Int = 0
-		var l: Int = 0
+		var w: Double = 0
+		var l: Double = 0
 		var tx: Int = tx0
 		while tx <= tx1 {
 			let cx: Int = floorDiv(tx, chunkW)
 			if let c = chunk(cx), ty0 >= 0, ty1 < hh {
 				let arr: [UInt8] = c.tiles
+				let lev: [UInt8] = c.level
 				var i: Int = (tx - cx * chunkW) * hh + ty0
 				var y: Int = ty0
 				while y <= ty1 {
 					let r: UInt8 = arr[i]
-					if r == waterR { w += 1 } else if r == lavaR { l += 1 }
+					if liq[Int(r)] {
+						// a part-full cell counts by how full it is (a mod's hot liquid burns like lava)
+						let a: Double = lev.isEmpty || lev[i] == 0 ? 1.0 : Double(lev[i]) / 255.0
+						if r == lavaR || hot[Int(r)] { l += a } else { w += a }
+					}
 					y += 1
 					i += 1
 				}
@@ -10373,7 +10455,7 @@ extension World {
 			tx += 1
 		}
 		let n: Double = Double((tx1 - tx0 + 1) * (ty1 - ty0 + 1))
-		return (Double(w) / n, Double(l) / n)
+		return (w / n, l / n)
 	}
 
 	func liquidFraction(_ x0: Double, _ y0: Double, _ x1: Double, _ y1: Double, _ lava: Bool) -> Double {
@@ -10801,8 +10883,8 @@ extension Vehicle {
 			return cellOpen
 		}
 		switch t {
-		case .frame, .hull, .engine, .fuelTank, .cargo, .armor, .jet, .burner, .cannon, .drill, .diamondDrill, .voidDrill: return cellSolid
-		case .wing, .elevator, .envelope: return cellPlatform
+		case .frame, .hull, .engine, .fuelTank, .cargo, .armor, .jet, .burner, .cannon, .drill, .diamondDrill, .voidDrill, .ballast: return cellSolid
+		case .wing, .elevator, .envelope, .flap, .airBrake, .stabilizer: return cellPlatform
 		default: return cellOpen
 		}
 	}
@@ -11021,8 +11103,10 @@ extension Game {
 		b.x = w.0
 		b.y = w.1
 		let lf: (Double, Double) = world.liquidFractions(b.x - hw, b.y - b.h, b.x + hw, b.y)
-		b.inWater = lf.0 > 0.35
-		b.inLava = lf.1 > 0.2
+		// (in the dry air inside a hull under water, nobody swims)
+		let dry: Bool = (lf.0 > 0.35 || lf.1 > 0.2) && v.dryAt(lx, ly - b.h * 0.5)
+		b.inWater = lf.0 > 0.35 && !dry
+		b.inLava = lf.1 > 0.2 && !dry
 		if !v.around(lx, ly, hw, b.h) {
 			leaveFrame(&b, v)
 			return
@@ -11660,6 +11744,1060 @@ extension Game {
 func vehicleWallMass(_ k: UInt8) -> Double {
 	guard let t = blockWallTile(Int(k)) else { return 0.2 }
 	return max(0.05, tileWeight(t) * 0.2)
+}
+
+// ===== p12c_fluids =====
+
+// MARK: - Liquids
+// Water, lava and a mod's own liquids flow. A cell holds a level of its liquid: a full cell is simply the
+// liquid's block, a part-full one also keeps its level in the chunk's level layer (Chunk.level, 1...254
+// of 255). A cell that changes, or whose neighbour does, wakes up: its liquid falls first, then evens
+// out with the cells beside it, a few times a second (a thick liquid such as lava more slowly); a cell
+// with nothing left to do goes back to sleep, so a still sea costs nothing. Where two liquids meet they
+// react (lava and water make stone, or obsidian from a full block of lava), or the lighter one floats
+// on the heavier. Thin films dry up instead of spreading forever.
+
+/// What a liquid is like (the game's water and lava, or a mod's)
+struct LiquidDef {
+	var tile: Tile
+	var color: UInt32 = 0x3B6FC8
+	/// how see-through it is drawn where it is not a whole block (0 clear ... 1 solid colour)
+	var opacity: Double = 0.72
+	/// water is 1: what floats in it, and which of two liquids sinks under the other
+	var density: Double = 1.0
+	/// how thick it is: water 1, lava 4 (it moves that many times less often)
+	var thick: Double = 1.0
+	/// how far a block of it spreads over flat ground before it is too thin to flow (in blocks)
+	var reach: Int = 7
+	/// damage a second to whoever is in it, and whether it burns
+	var harm: Double = 0
+	var hot: Bool = false
+	/// what it becomes where it meets another liquid (a part-full cell: `hardensThin`); nil: it does not
+	var hardens: Tile? = nil
+	var hardensThin: Tile? = nil
+	/// a lone film of it dries up
+	var dries: Bool = false
+	/// an effect it gives whoever is in it (a ModEffectKind's number; -1 none) and how strong
+	var effect: Int = -1
+	var effectAmt: Double = 0
+}
+
+enum Liquids {
+	static let water: LiquidDef = LiquidDef(tile: .water, color: 0x3B6FC8, opacity: 0.72, density: 1.0, thick: 1.0, reach: 7, harm: 0, hot: false, hardens: nil, hardensThin: nil, dries: true)
+	static let lava: LiquidDef = LiquidDef(tile: .lava, color: 0xE8642A, opacity: 0.95, density: 3.1, thick: 4.0, reach: 4, harm: 4, hot: true, hardens: .obsidian, hardensThin: .stone, dries: false)
+
+	static func def(_ t: Tile) -> LiquidDef? {
+		if t == .water { return water }
+		if t == .lava { return lava }
+		if t.isMod { return ModRuntime.shared.liquidDefs[t.rawValue] }
+		return nil
+	}
+
+	/// which tiles are liquids that burn (lava, and a mod's hot liquids: see ModRuntime.install)
+	static var hotTable: [Bool] = (0..<256).map { $0 == Int(Tile.lava.rawValue) }
+
+	/// how many flow steps a second, and the most cells looked at in one step
+	static let rate: Double = 20.0
+	static let budget: Int = 1600
+	/// how far along a row a liquid evens out in one step (each way), and the least depth (in sevenths of
+	/// a block's 255ths) it spreads onto open ground from
+	static let rowReach: Int = 24
+	static let minSpread: Int = 4
+}
+
+extension World {
+	/// How full a cell is of its liquid (0: none; 1: a whole block)
+	func liquidAmount(_ x: Int, _ y: Int) -> Double {
+		if y < 0 || y >= H { return 0 }
+		let cx: Int = floorDiv(x, chunkW)
+		guard let c = chunk(cx) else { return 0 }
+		let i: Int = (x - cx * chunkW) * H + y
+		if !Tile.liquidTable[Int(c.tiles[i])] { return 0 }
+		if c.level.isEmpty { return 1 }
+		let l: UInt8 = c.level[i]
+		return l == 0 ? 1 : Double(l) / 255.0
+	}
+
+	/// Whether a cell holds only part of a block of its liquid
+	func partLiquid(_ x: Int, _ y: Int) -> Bool {
+		let a: Double = liquidAmount(x, y)
+		return a > 0 && a < 1
+	}
+
+	/// How full a cell is in 255ths (0 none, 255 a whole block): the flow counts in these, so not a drop
+	/// is made or lost as it moves
+	func liquidLevel(_ x: Int, _ y: Int) -> Int {
+		if y < 0 || y >= H { return 0 }
+		let cx: Int = floorDiv(x, chunkW)
+		guard let c = chunk(cx) else { return 0 }
+		let i: Int = (x - cx * chunkW) * H + y
+		if !Tile.liquidTable[Int(c.tiles[i])] { return 0 }
+		if c.level.isEmpty { return 255 }
+		let l: UInt8 = c.level[i]
+		return l == 0 ? 255 : Int(l)
+	}
+
+	/// Puts so much of a liquid in a cell (none: air; a whole block: the liquid's block)
+	func setLiquid(_ x: Int, _ y: Int, _ t: Tile, _ amount: Double) {
+		setLiquidLevel(x, y, t, Int((amount * 255.0).rounded()))
+	}
+
+	/// The same in 255ths
+	func setLiquidLevel(_ x: Int, _ y: Int, _ t: Tile, _ level: Int) {
+		if y < 1 || y >= H - 1 { return }
+		let cx: Int = floorDiv(x, chunkW)
+		guard let c = chunk(cx) else { return }
+		let i: Int = (x - cx * chunkW) * H + y
+		if level <= 0 {
+			if Tile.liquidTable[Int(c.tiles[i])] { _ = set(x, y, .air) }
+			return
+		}
+		if tile(x, y) != t { _ = set(x, y, t) }
+		let lv: UInt8 = level >= 255 ? 0 : UInt8(level)
+		if c.level.isEmpty {
+			if lv == 0 { return }
+			c.level = [UInt8](repeating: 0, count: chunkW * H)
+		}
+		let old: UInt8 = c.level[i]
+		if old == lv { return }
+		c.level[i] = lv
+		c.dirty = true
+		if (old == 0) != (lv == 0) {
+			// whole and part-full cells are drawn differently (see SectionPainter and drawLiquids)
+			c.partials += lv == 0 ? -1 : 1
+			c.bumpRows(y, y)
+		}
+		flowRev &+= 1
+		wakeFlow(x, y)
+	}
+
+	/// Wakes the liquid in a cell and the cells round it
+	func wakeFlow(_ x: Int, _ y: Int) {
+		queueFlow(x, y)
+		queueFlow(x - 1, y)
+		queueFlow(x + 1, y)
+		queueFlow(x, y - 1)
+		queueFlow(x, y + 1)
+	}
+
+	@inline(__always) func queueFlow(_ x: Int, _ y: Int) {
+		if !tile(x, y).liquid { return }
+		let p: IntPair = IntPair(x: x, y: y)
+		if flowSet.contains(p) { return }
+		flowSet.insert(p)
+		flowQ.append(p)
+	}
+
+	/// What a liquid can flow into: open air, or a plant it washes away
+	@inline(__always) func fillable(_ t: Tile) -> Bool {
+		if t == .air { return true }
+		return t.isPlant && !t.solid && t != .torch && t != .lantern && t != .sapling && !isDoor(t)
+	}
+
+	/// One step of every waking liquid cell (the lowest first, so a falling column moves as one).
+	/// Returns how many cells it looked at.
+	@discardableResult
+	func stepFlow(_ budget: Int) -> Int {
+		if flowQ.isEmpty { return 0 }
+		flowTick &+= 1
+		var work: [IntPair] = flowQ
+		flowQ.removeAll(keepingCapacity: true)
+		flowSet.removeAll(keepingCapacity: true)
+		work.sort { $0.y > $1.y }
+		var n: Int = 0
+		for p in work {
+			if n >= budget {
+				// the rest waits for the next step
+				if !flowSet.contains(p) { flowSet.insert(p); flowQ.append(p) }
+				continue
+			}
+			flowCell(p.x, p.y)
+			n += 1
+		}
+		return n
+	}
+
+	/// One liquid cell's step: it reacts with another liquid next to it, falls, then evens out sideways
+	func flowCell(_ x: Int, _ y: Int) {
+		if !isLoaded(x) || y < 1 || y >= H - 2 { return }
+		let t: Tile = tile(x, y)
+		guard t.liquid, let L = Liquids.def(t) else { return }
+		let slow: Int = max(1, Int(L.thick.rounded()))
+		if slow > 1 && (flowTick &+ x) % slow != 0 {
+			// a thick liquid waits its turn (it stays awake meanwhile)
+			let p: IntPair = IntPair(x: x, y: y)
+			if !flowSet.contains(p) { flowSet.insert(p); flowQ.append(p) }
+			return
+		}
+		if meetLiquids(x, y, t, L) { return }
+		var a: Int = liquidLevel(x, y)
+		var moved: Bool = false
+		// down
+		let below: Tile = tile(x, y + 1)
+		if fillable(below) {
+			setLiquidLevel(x, y + 1, t, a)
+			a = 0
+			moved = true
+		} else if below == t {
+			let b: Int = liquidLevel(x, y + 1)
+			let take: Int = min(a, 255 - b)
+			if take > 0 {
+				setLiquidLevel(x, y + 1, t, b + take)
+				a -= take
+				moved = true
+			}
+		}
+		// sideways, standing on something (the floor, or liquid already full below): it evens out with the
+		// row it is on, as far as the same floor goes each way, so a pool is level in a step or two
+		if a > 1 && (!moved || a > 5) && rowUneven(x, y, t, a) {
+			let lv: Int = levelRow(x, y, t, a, L)
+			if lv != a {
+				a = lv
+				moved = true
+			}
+		} else if a > 0 && L.dries && a * 2 < 255 / max(1, L.reach) && !tile(x - 1, y).liquid && !tile(x + 1, y).liquid && !fillable(tile(x, y + 1)) {
+			// a lone film too thin to flow dries up
+			a = 0
+			moved = true
+		}
+		if moved { setLiquidLevel(x, y, t, a) }
+	}
+
+	/// Whether a liquid cell has a lower neighbour of the same liquid, or open space, beside it
+	func rowUneven(_ x: Int, _ y: Int, _ t: Tile, _ a: Int) -> Bool {
+		for d in [-1, 1] {
+			if !isLoaded(x + d) { continue }
+			let st: Tile = tile(x + d, y)
+			if st == t { if liquidLevel(x + d, y) < a - 1 { return true } } else if fillable(st) && a * Liquids.minSpread >= 255 / 7 { return true }
+		}
+		return false
+	}
+
+	/// Shares a liquid out evenly along its row: every cell of it and every open cell as far as the floor
+	/// goes each way (a cell over a drop ends the row: the liquid falls from it next). A thin layer only
+	/// spreads over as many open cells as it can cover more than a film deep. Nothing is made or lost.
+	/// Returns this cell's new level (the others are set here).
+	func levelRow(_ x: Int, _ y: Int, _ t: Tile, _ a: Int, _ L: LiquidDef) -> Int {
+		var cells: [(Int, Int)] = [(x, a)]
+		var total: Int = a
+		var held: Int = 1
+		for dir in [-1, 1] {
+			var k: Int = 1
+			while k <= Liquids.rowReach {
+				let nx: Int = x + dir * k
+				if !isLoaded(nx) { break }
+				let st: Tile = tile(nx, y)
+				var lvl: Int = 0
+				if st == t { lvl = liquidLevel(nx, y) } else if !fillable(st) { break }
+				cells.append((nx, lvl))
+				total += lvl
+				if lvl > 0 { held += 1 }
+				let below: Tile = tile(nx, y + 1)
+				if fillable(below) || (below == t && liquidLevel(nx, y + 1) < 255) { break }
+				k += 1
+			}
+		}
+		if cells.count < 2 { return a }
+		// every cell that holds some keeps a share; a thin layer covers only as many open cells (the nearest)
+		// as it can cover more than a film deep
+		let film: Int = max(1, 255 / max(1, L.reach))
+		let most: Int = max(held, total * 4 / (film * 3))
+		var keep: [(Int, Int)] = cells.filter { $0.1 > 0 }
+		var open: [(Int, Int)] = cells.filter { $0.1 == 0 }
+		open.sort { abs($0.0 - x) < abs($1.0 - x) }
+		var room: Int = most - keep.count
+		for c in open where room > 0 {
+			keep.append(c)
+			room -= 1
+		}
+		// (the odd 255ths go to the leftmost cells, whichever cell does the sharing, and a row already even
+		// to within one is left alone: it settles instead of trading single drops back and forth)
+		cells = keep.sorted { $0.0 < $1.0 }
+		let n: Int = cells.count
+		if n < 2 { return a }
+		let each: Int = total / n
+		let extra: Int = total - each * n
+		var uneven: Bool = false
+		for (i, c) in cells.enumerated() where abs(each + (i < extra ? 1 : 0) - c.1) > 1 { uneven = true }
+		if !uneven { return a }
+		var mine: Int = a
+		for (i, c) in cells.enumerated() {
+			let lv: Int = each + (i < extra ? 1 : 0)
+			if c.0 == x { mine = lv; continue }
+			if lv != c.1 { setLiquidLevel(c.0, y, t, lv) }
+		}
+		return mine
+	}
+
+	/// Where this liquid touches another: one that hardens does (lava into obsidian, or stone where it is
+	/// thin), else the heavier one sinks under the lighter. True when anything changed.
+	func meetLiquids(_ x: Int, _ y: Int, _ t: Tile, _ L: LiquidDef) -> Bool {
+		let ways: [(Int, Int)] = [(0, 1), (0, -1), (1, 0), (-1, 0)]
+		for w in ways {
+			let nx: Int = x + w.0
+			let ny: Int = y + w.1
+			let n: Tile = tile(nx, ny)
+			if !n.liquid || n == t { continue }
+			guard let M = Liquids.def(n) else { continue }
+			if L.hardens != nil || M.hardens != nil {
+				// the one that hardens does; with both, the hotter (lava stays the one that sets)
+				let mine: Bool = L.hardens != nil && (M.hardens == nil || L.hot || !M.hot)
+				let hx: Int = mine ? x : nx
+				let hy: Int = mine ? y : ny
+				let H0: LiquidDef = mine ? L : M
+				let full: Bool = liquidAmount(hx, hy) >= 0.99
+				let into: Tile = (full ? H0.hardens : (H0.hardensThin ?? H0.hardens)) ?? .stone
+				_ = set(hx, hy, into)
+				flowSteam.append(IntPair(x: hx, y: hy))
+				return true
+			}
+			if w.1 == 1 && L.density > M.density + 0.01 {
+				// heavier on top of lighter: they trade places
+				let a: Double = liquidAmount(x, y)
+				let b: Double = liquidAmount(nx, ny)
+				_ = set(x, y, n)
+				setLiquid(x, y, n, b)
+				_ = set(nx, ny, t)
+				setLiquid(nx, ny, t, a)
+				return true
+			}
+		}
+		return false
+	}
+
+	/// The liquid placed so far is at rest: nothing flows until something changes next to it again (for
+	/// pools built by hand that are meant to stay put, as the world's own seas do)
+	func calmLiquids() {
+		flowQ.removeAll()
+		flowSet.removeAll()
+	}
+
+	/// Every part-full cell of a chunk wakes (after loading it, its liquid may be mid-flow)
+	func wakePartials(_ c: Chunk) {
+		if c.level.isEmpty { return }
+		var n: Int = 0
+		for i in 0..<c.level.count where c.level[i] != 0 {
+			if !Tile.liquidTable[Int(c.tiles[i])] { c.level[i] = 0; continue }
+			n += 1
+			queueFlow(c.cx * chunkW + i / H, i % H)
+		}
+		c.partials = n
+	}
+}
+
+extension Game {
+	/// The liquids' flow, a few times a second (also in a dimension's own world)
+	func updateFlow(_ dt: Double) {
+		if world.flowQ.isEmpty {
+			flowAccum = 0
+			return
+		}
+		flowAccum += dt
+		var k: Int = 0
+		let step: Double = 1.0 / Liquids.rate
+		while flowAccum >= step && k < 2 {
+			world.stepFlow(Liquids.budget)
+			flowAccum -= step
+			k += 1
+		}
+		if flowAccum > step { flowAccum = step }
+		// where lava met water: a hiss of steam
+		if !world.flowSteam.isEmpty {
+			for p in world.flowSteam.prefix(6) {
+				spawnParticles(Double(p.x) + 0.5, Double(p.y) + 0.2, 0xE8E8EC, 4, 2.0, 0.6, -4)
+			}
+			if let p = world.flowSteam.first, abs(Double(p.x) - pb.x) < 30 { sfx(.flask, at: Double(p.x), 0.35) }
+			world.flowSteam.removeAll()
+		}
+	}
+
+	/// The liquid at a point, and how deep it is there (0...1 of the cell)
+	func liquidHere(_ x: Double, _ y: Double) -> LiquidDef? {
+		let t: Tile = world.tile(Int(floor(x)), Int(floor(y)))
+		if !t.liquid { return nil }
+		let a: Double = world.liquidAmount(Int(floor(x)), Int(floor(y)))
+		if y - floor(y) < 1.0 - a { return nil }
+		return Liquids.def(t)
+	}
+}
+
+extension Game {
+	/// The bucket: tapped on a liquid it takes up a block of it (from a part-full cell, what is there and
+	/// then from the cells round it); full, tapped on open space, it pours the block out there to flow
+	func useBucket() {
+		if useCD > 0 { return }
+		guard let st = inv.slots[sel], st.item == .gadget(.bucket) else { return }
+		useCD = 0.25
+		if !inReach(aimX, aimY) {
+			say("Too far away. Tap closer to you.", 1.2)
+			return
+		}
+		let tx: Int = Int(floor(aimX))
+		let ty: Int = Int(floor(aimY))
+		swingT = 0.14
+		if st.extra == 0 {
+			let t: Tile = world.tile(tx, ty)
+			guard t.liquid else {
+				say("Tap water or lava (or a mod's liquid) to fill the bucket.", 1.8)
+				return
+			}
+			var got: Double = 0
+			let near: [(Int, Int)] = [(0, 0), (-1, 0), (1, 0), (0, -1), (0, 1), (-2, 0), (2, 0)]
+			for d in near where got < 0.999 {
+				let x: Int = tx + d.0
+				let y: Int = ty + d.1
+				if world.tile(x, y) != t { continue }
+				let a: Double = world.liquidAmount(x, y)
+				let take: Double = min(a, 1.0 - got)
+				world.setLiquid(x, y, t, a - take)
+				got += take
+			}
+			inv.slots[sel]?.extra = Int(t.rawValue) + 1
+			sfx(.splash, 0.5)
+			say(joinText("Bucket of ", t.name, "."), 1.2)
+		} else {
+			guard let t = Tile(rawValue: UInt8(clampI(st.extra - 1, 0, 255))), t.liquid else {
+				inv.slots[sel]?.extra = 0
+				return
+			}
+			let here: Tile = world.tile(tx, ty)
+			if here == t && world.liquidAmount(tx, ty) < 0.999 {
+				world.setLiquid(tx, ty, t, 1.0)
+			} else if world.fillable(here) && !world.tile(tx, ty).solid {
+				world.setLiquid(tx, ty, t, 1.0)
+			} else {
+				say("Pour it into open space.", 1.2)
+				return
+			}
+			inv.slots[sel]?.extra = 0
+			sfx(.splash, 0.6)
+		}
+		bumpHUD()
+	}
+
+	/// What harms or helps whoever is in a mod's liquid (lava and water are handled as before)
+	func modLiquidEffects(_ dt: Double) {
+		guard let L = liquidHere(pb.x, pb.y - pb.h * 0.4), L.tile.isMod else { return }
+		if L.harm > 0 && mode != .creative && !godMode {
+			liquidHarmT += dt
+			if liquidHarmT >= 0.5 {
+				liquidHarmT = 0
+				var info = DamageInfo(amount: L.harm * 0.5, type: L.hot ? .lava : .hazard, source: .environment)
+				info.originX = pb.x
+				_ = hurtPlayer(info)
+			}
+		}
+		if L.effect >= 0, let k = ModEffectKind(rawValue: L.effect) {
+			effects.add(k, L.effectAmt, 1.0)
+		}
+	}
+}
+
+// MARK: - Air inside a hull: floating by enclosed volume, flooding, submarines
+
+extension Vehicle {
+	/// Whether a point (in its cells) is in the dry air inside it (a cabin under water)
+	func dryAt(_ lx: Double, _ ly: Double) -> Bool {
+		guard let f = hullAir[PartCell(dx: Int(floor(lx)), dy: Int(floor(ly)))] else { return false }
+		return f < 0.5
+	}
+}
+
+extension Game {
+	/// Works out which cells inside a vehicle hold air the liquid outside cannot reach. Liquid comes in
+	/// only through cells that are themselves under the surface: from outside the vehicle's box, or from a
+	/// flooded cell next to them; solid parts and solid blocks keep it out. So an open boat floats on
+	/// the air in its hull (its open top is above the water), a hole below the waterline floods the
+	/// cells it reaches, a few at a time, and a sealed hull (a submarine) stays dry however deep it goes.
+	/// The air in each dry cell holds the vehicle up like a block of wood would.
+	func updateHullAir(_ v: Vehicle, _ dt: Double) {
+		v.hullT -= dt
+		if v.hullT > 0 { return }
+		let step: Double = 0.25
+		v.hullT = step
+		if v.submerged <= 0.001 && v.hullAir.isEmpty { return }
+		let x0: Int = v.minX - 1
+		let y0: Int = v.minY - 1
+		let gw: Int = v.gridW + 2
+		let gh: Int = v.gridH + 2
+		if gw * gh > 40_000 { return }
+		var under: [Bool] = [Bool](repeating: false, count: gw * gh)
+		var tight: [Bool] = [Bool](repeating: false, count: gw * gh)
+		for gy in 0..<gh {
+			for gx in 0..<gw {
+				let c: PartCell = PartCell(dx: x0 + gx, dy: y0 + gy)
+				let i: Int = gy * gw + gx
+				tight[i] = v.walkAt(c.dx, c.dy) == cellSolid
+				let w: (Double, Double) = v.cellCenter(c)
+				under[i] = submergedFraction(w.0, w.1) > 0.5
+			}
+		}
+		// the liquid's way in: from the ring outside the box, through cells under the surface
+		var wet: [Bool] = [Bool](repeating: false, count: gw * gh)
+		var stack: [Int] = []
+		for gy in 0..<gh {
+			for gx in 0..<gw where gx == 0 || gy == 0 || gx == gw - 1 || gy == gh - 1 {
+				let i: Int = gy * gw + gx
+				if under[i] && !tight[i] { wet[i] = true; stack.append(i) }
+			}
+		}
+		while let i = stack.popLast() {
+			let gx: Int = i % gw
+			let gy: Int = i / gw
+			let next: [(Int, Int)] = [(gx + 1, gy), (gx - 1, gy), (gx, gy + 1), (gx, gy - 1)]
+			for n in next {
+				if n.0 < 0 || n.1 < 0 || n.0 >= gw || n.1 >= gh { continue }
+				let j: Int = n.1 * gw + n.0
+				if wet[j] || tight[j] || !under[j] { continue }
+				wet[j] = true
+				stack.append(j)
+			}
+		}
+		// each inside cell under the surface: flooding where the liquid reaches, trapped water staying,
+		// and cells that rise above the surface draining
+		var out: [PartCell: Double] = [:]
+		let rate: Double = 1.6 * step
+		for gy in 1..<(gh - 1) {
+			for gx in 1..<(gw - 1) {
+				let i: Int = gy * gw + gx
+				if tight[i] { continue }
+				let c: PartCell = PartCell(dx: x0 + gx, dy: y0 + gy)
+				var f: Double = v.hullAir[c] ?? 0
+				if wet[i] { f = min(1.0, f + rate) } else if !under[i] { f = max(0, f - rate) }
+				if under[i] || f > 0 { out[c] = f }
+			}
+		}
+		v.hullAir = out
+	}
+
+	/// The air held in a vehicle's hull pushes it up where it is (as a block of wood the same size would)
+	func hullAirForces(_ v: Vehicle, _ h: Double, _ c: Double, _ s: Double) {
+		let invM: Double = 1.0 / v.mass
+		let invI: Double = 1.0 / v.inertia
+		for (cell, flood) in v.hullAir where flood < 0.999 {
+			let lx: Double = Double(cell.dx) + 0.5 - v.comX
+			let ly: Double = Double(cell.dy) + 0.5 - v.comY
+			let rx: Double = lx * c - ly * s
+			let ry: Double = lx * s + ly * c
+			let f: Double = submergedFraction(v.px + rx, v.py + ry)
+			if f <= 0 { continue }
+			// (a cell with a part in it, a seat or a lamp, already floats by the part: the air is the rest)
+			let own: Double = v.parts[cell].map { cellDisplacement(v, cell, $0) } ?? 0
+			let disp: Double = (1.0 - flood) * max(0, 1.0 - own) * liquidDensity(v.px + rx, v.py + ry)
+			let pvy: Double = v.vy + v.angVel * rx
+			let fy: Double = -gravityG * disp * f - pvy * 1.5 * disp * f
+			v.vy += fy * invM * h
+			v.angVel += rx * fy * invI * h
+		}
+	}
+
+	/// The ballast tanks fill or empty as the stick says (down to dive, up to rise) while the vehicle is
+	/// in the water and somebody (or the autopilot) is at the controls; the air brakes open while the stick
+	/// pushes against the way it is going, or on the ground with no throttle
+	func ballastAndBrakes(_ v: Vehicle, _ dt: Double) {
+		let crewed: Bool = v.rider || v.auto != 0
+		if v.ballasts > 0 && crewed && abs(v.pitch) > 0.05 {
+			v.ballast = clampD(v.ballast - v.pitch * Aero.ballastRate * dt, 0, 1)
+			v.asleep = false
+			v.sleepT = 0
+		}
+		if v.airBrakes > 0 {
+			let against: Bool = crewed && abs(v.throttle) > 0.1 && v.throttle * v.vx < 0
+			let rolling: Bool = v.contacts > 0 && abs(v.throttle) < 0.1 && abs(v.vx) > 1.5
+			let want: Double = against || rolling ? 1.0 : 0.0
+			v.brakeOpen += clampD(want - v.brakeOpen, -Aero.brakeRate * dt, Aero.brakeRate * dt)
+		}
+	}
+
+	/// The wind where a vehicle is: the weather's, with gusts that roll along the land, and less of it
+	/// behind the land that shelters it (a hill, a wall, a cave roof)
+	func windAtVehicle(_ v: Vehicle) -> Double {
+		if world.dim != .overworld || !settings.weatherOn { return 0 }
+		let base: Double = weatherAt(v.px, v.py).wind
+		if abs(base) < 0.05 { return 0 }
+		let roll: Double = 1.0 + 0.25 * sin(v.px * 0.045 - clock * 0.8 * (base >= 0 ? 1.0 : -1.0))
+		return base * roll * windShelter(v.px, v.py, base >= 0 ? -1 : 1)
+	}
+
+	/// How much of the wind reaches a place: land close upwind takes most of it
+	func windShelter(_ x: Double, _ y: Double, _ upwind: Int) -> Double {
+		let tx: Int = Int(floor(x))
+		let ty: Int = Int(floor(y))
+		var k: Int = 2
+		while k <= 8 {
+			let px: Int = tx + upwind * k
+			if world.tile(px, ty).solid && world.tile(px, ty - 1).solid { return k <= 4 ? 0.3 : 0.6 }
+			k += 2
+		}
+		// under a roof: hardly any
+		var r: Int = 1
+		while r <= 6 {
+			if world.tile(tx, ty - r).solid && world.tile(tx, ty - r - 1).solid { return 0.2 }
+			r += 1
+		}
+		return 1.0
+	}
+
+	/// Tapping a wing (or a flap, elevator or tailplane) of a parked vehicle tilts it a step (3 steps
+	/// either way, then round again): a wing tilted up lifts more at a lower speed, with more drag
+	func tiltWing(_ v: Vehicle, _ c: PartCell) {
+		var k: Int = (v.tilt[c] ?? 0) + 1
+		if k > Aero.tiltSteps { k = -Aero.tiltSteps }
+		v.tilt[c] = k == 0 ? nil : k
+		v.asleep = false
+		let deg: Int = Int((Double(k) * Aero.tiltStep * 180.0 / Double.pi).rounded())
+		let what: String = k == 0 ? "level" : (k > 0 ? joinText("tilted up ", String(deg), " degrees") : joinText("tilted down ", String(-deg), " degrees"))
+		say(joinText((v.parts[c] ?? .wing).name, " ", what, ". Tap again to tilt it further."), 2.5)
+	}
+}
+
+// ===== p24_painter =====
+
+// MARK: - Fast terrain section painter
+// Paints a 16x16-tile section into a premultiplied ARGB pixel buffer using raw pointers,
+// so it stays quick in Playgrounds' debug builds. The UI turns the result into an image.
+
+/// Premultiplies non-premultiplied ARGB pixels in place (only pixels with partial alpha change).
+func premultiplyARGB(_ px: inout [UInt32]) {
+	let n: Int = px.count
+	px.withUnsafeMutableBufferPointer { bp in
+		guard let p = bp.baseAddress else { return }
+		var i: Int = 0
+		while i < n {
+			let c: UInt32 = p[i]
+			let a: UInt32 = c >> 24
+			if a == 0 {
+				p[i] = 0
+			} else if a != 255 {
+				let r: UInt32 = ((c >> 16) & 255) * a / 255
+				let g: UInt32 = ((c >> 8) & 255) * a / 255
+				let b: UInt32 = (c & 255) * a / 255
+				p[i] = (a << 24) | (r << 16) | (g << 8) | b
+			}
+			i += 1
+		}
+	}
+}
+
+/// One pixel of a leaf tuft: where in its cell (y * tileArtPx + x), and its colour
+struct TuftPixel {
+	var at: Int
+	var c: UInt32
+}
+
+/// Leaves that stick out of a canopy into the open cells beside it, so a tree's crown has a ragged
+/// edge instead of a square one. L, g, s and d are the leaf block's own tones from light to dark.
+enum LeafTufts {
+	/// growing up into the cell above (its bottom four rows; the last row touches the leaves)
+	static let up: [String] = [
+		"....L........L..",
+		"...LgL.....LLgL.",
+		"..LgggL...Lgggs.",
+		".LggggsL.Lggggs.",
+	]
+	/// hanging into the cell below (its top four rows; the first row touches the leaves)
+	static let down: [String] = [
+		".sggggs..sgggs..",
+		"..sggs....sgs...",
+		"...ss......s....",
+		"................",
+	]
+	/// sticking out into the cell to the left (its right four columns; the last touches the leaves)
+	static let left: [String] = [
+		"....", "...L", "..Lg", ".Lgg", "..sg", "...s", "....", "....",
+		"....", "..Lg", ".Lgg", ".sgg", "..ss", "....", "....", "....",
+	]
+	/// sticking out into the cell to the right (its left four columns; the first touches the leaves)
+	static let right: [String] = [
+		"....", "L...", "gL..", "ggs.", "gs..", "s...", "....", "....",
+		"....", "gL..", "ggL.", "ggs.", "ss..", "....", "....", "....",
+	]
+
+	/// The four tones of a leaf block's picture, light to dark
+	static func tones(_ b: PixelBuf) -> [UInt32] {
+		var seen: [UInt32] = []
+		for c in b.px where (c >> 24) != 0 {
+			let rgb: UInt32 = c & 0xFFFFFF
+			if !seen.contains(rgb) { seen.append(rgb) }
+		}
+		if seen.isEmpty { return [0x6A9A4A, 0x4C7A3A, 0x3A5E30, 0x284426] }
+		seen.sort { artLum($0) > artLum($1) }
+		let n: Int = seen.count
+		return [seen[0], seen[min(n - 1, n / 3)], seen[min(n - 1, (2 * n) / 3)], seen[n - 1]]
+	}
+
+	/// A leaf block's tufts: for each side (0 up, 1 down, 2 left, 3 right), two versions (the second
+	/// mirrored, or moved along the edge) so a canopy's edge does not repeat block by block
+	static func make(_ b: PixelBuf) -> [[[TuftPixel]]] {
+		let tn: [UInt32] = tones(b)
+		let T: Int = tileArtPx
+		func ink(_ ch: Character) -> UInt32? {
+			switch ch {
+			case "L": return 0xFF000000 | tn[0]
+			case "g": return 0xFF000000 | tn[1]
+			case "s": return 0xFF000000 | tn[2]
+			case "d": return 0xFF000000 | tn[3]
+			default: return nil
+			}
+		}
+		func cells(_ rows: [String], _ ox: Int, _ oy: Int, _ mirror: Bool, _ shift: Int) -> [TuftPixel] {
+			var out: [TuftPixel] = []
+			let w: Int = rows.first?.count ?? 0
+			for (y, row) in rows.enumerated() {
+				for (x, ch) in row.enumerated() {
+					guard let c = ink(ch) else { continue }
+					let xx: Int = ox + (mirror ? w - 1 - x : x)
+					let yy: Int = (oy + y + shift) % T
+					out.append(TuftPixel(at: yy * T + xx, c: c))
+				}
+			}
+			return out
+		}
+		let top: Int = T - up.count
+		let side: Int = T - (left.first?.count ?? 4)
+		return [
+			[cells(up, 0, top, false, 0), cells(up, 0, top, true, 0)],
+			[cells(down, 0, 0, false, 0), cells(down, 0, 0, true, 0)],
+			[cells(left, side, 0, false, 0), cells(left, side, 0, false, T / 2)],
+			[cells(right, 0, 0, false, 0), cells(right, 0, 0, false, T / 2)],
+		]
+	}
+}
+
+final class SectionPainter: @unchecked Sendable {
+	static let shared: SectionPainter = SectionPainter()
+
+	let tileCount: Int
+	/// art for every tile, by raw value: four pictures each (as drawn, mirrored, turned top to bottom,
+	/// both), tileArtPx x tileArtPx pixels a picture
+	var tilePx: [UInt32]
+	/// which of those four a tile may be drawn as from place to place (0: only as drawn; 1: also
+	/// mirrored; 3: all four), so a wall of one block is not wallpaper
+	var tileFlip: [Int]
+	/// 0 = fully transparent, 1 = fully opaque, 2 = mixed alpha
+	var tileKind: [Int]
+	/// darkened backdrop walls, by wall kind - 1
+	var wallPx: [UInt32]
+	var wallBufs: [PixelBuf]
+	var tileBufs: [PixelBuf]
+	let wallCount: Int
+	/// which tiles are leaves, and their tufts (see LeafTufts)
+	var leafT: [Bool] = [Bool](repeating: false, count: 256)
+	var tufts: [Int: [[[TuftPixel]]]] = [:]
+	/// a leaf block's tones, light to dark (for the leaves that fall from it)
+	var leafTones: [Int: [UInt32]] = [:]
+
+	/// Works out which tiles are leaves and makes their tufts (again when a world's mods change: a
+	/// mod's trees have leaf blocks of their own)
+	func findLeaves() {
+		var lt: [Bool] = [Bool](repeating: false, count: 256)
+		var tf: [Int: [[[TuftPixel]]]] = [:]
+		var tn: [Int: [UInt32]] = [:]
+		for raw in 0..<min(256, tileBufs.count) {
+			guard let t = Tile(rawValue: UInt8(raw)), isLeafTile(t) else { continue }
+			lt[raw] = true
+			tf[raw] = LeafTufts.make(tileBufs[raw])
+			tn[raw] = LeafTufts.tones(tileBufs[raw])
+		}
+		leafT = lt
+		tufts = tf
+		leafTones = tn
+	}
+
+	/// How dark a wall made from a block is drawn
+	static func wallShade(_ c: UInt32) -> UInt32 {
+		return (c >> 24) == 0 ? 0 : (c & 0xFF000000) | shadeRGB(c & 0xFFFFFF, 0.5)
+	}
+
+	/// Writes a tile's four pictures into the art table and says what kind it is (0 clear, 1 solid,
+	/// 2 partly see-through)
+	static func put(_ b: PixelBuf, _ px: inout [UInt32], _ i: Int) -> Int {
+		let T: Int = tileArtPx
+		let n: Int = T * T
+		var allClear: Bool = true
+		var allSolid: Bool = true
+		for y in 0..<T {
+			for x in 0..<T {
+				let k: Int = y * T + x
+				let c: UInt32 = k < b.px.count ? b.px[k] : 0
+				let base: Int = i * 4 * n
+				px[base + k] = c
+				px[base + n + y * T + (T - 1 - x)] = c
+				px[base + 2 * n + (T - 1 - y) * T + x] = c
+				px[base + 3 * n + (T - 1 - y) * T + (T - 1 - x)] = c
+				let a: UInt32 = c >> 24
+				if a != 0 { allClear = false }
+				if a != 255 { allSolid = false }
+			}
+		}
+		return allClear ? 0 : (allSolid ? 1 : 2)
+	}
+
+	init() {
+		let n: Int = tileArtPx * tileArtPx
+		var tb: [PixelBuf] = []
+		for t in Tile.allCases { tb.append(tileBuf(t)) }
+		tileBufs = tb
+		tileCount = tb.count
+		var px: [UInt32] = [UInt32](repeating: 0, count: 256 * 4 * n)
+		var kinds: [Int] = [Int](repeating: 0, count: 256)
+		var flips: [Int] = [Int](repeating: 0, count: 256)
+		for (i, b) in tb.enumerated() {
+			kinds[i] = SectionPainter.put(b, &px, i)
+			if i < 256, let f = TileSheet.flips[UInt8(i)] { flips[i] = f }
+		}
+		tilePx = px
+		tileKind = kinds
+		tileFlip = flips
+		let srcs: [Tile] = [.dirt, .stone, .deepRock, .ashStone, .planks, .brick, .sandstone]
+		var ws: [PixelBuf] = []
+		var wp: [UInt32] = []
+		for (k, s) in srcs.enumerated() {
+			var w: PixelBuf = tileBuf(s)
+			let f: Double = k >= 4 ? 0.55 : 0.42
+			for i in 0..<w.px.count {
+				let c: UInt32 = w.px[i]
+				w.px[i] = 0xFF000000 | shadeRGB(c & 0xFFFFFF, f)
+			}
+			ws.append(w)
+			for i in 0..<n { wp.append(i < w.px.count ? w.px[i] : 0xFF000000) }
+		}
+		// walls made from any block (wall value 8 + its tile number): its art, darkened
+		while wp.count < (blockWallBase - 1) * n { wp.append(0) }
+		for raw in 0..<tb.count {
+			let b: PixelBuf = tb[raw]
+			for k in 0..<n { wp.append(SectionPainter.wallShade(k < b.px.count ? b.px[k] : 0)) }
+		}
+		wallBufs = ws
+		wallPx = wp
+		wallCount = blockWallBase - 1 + tb.count
+		findLeaves()
+	}
+
+	/// Redraws the art of the tiles reserved for mods (their meaning changes with a world's mods)
+	func refreshModTiles() {
+		let n: Int = tileArtPx * tileArtPx
+		let base: Int = Int(Tile.modBase)
+		for i in 0..<ModLimits.blockSlots {
+			let raw: Int = base + i
+			guard raw < tileBufs.count, let t = Tile(rawValue: UInt8(raw)) else { continue }
+			let b: PixelBuf = tileBuf(t)
+			tileBufs[raw] = b
+			tileKind[raw] = SectionPainter.put(b, &tilePx, raw)
+			let wb: Int = (blockWallBase - 1 + raw) * n
+			for k in 0..<n where wb + k < wallPx.count {
+				wallPx[wb + k] = SectionPainter.wallShade(k < b.px.count ? b.px[k] : 0)
+			}
+		}
+		findLeaves()
+	}
+
+	/// Paints section `sy` (rows sy*16 ..< sy*16+16) of a chunk: chunkW x 16 blocks at tileArtPx pixels
+	/// a block, premultiplied ARGB. Solid ground gets a lit top edge and a dark line where it meets
+	/// open space below or beside it, so the land reads as shapes.
+	func paint(_ world: World, _ ch: Chunk, _ sy: Int) -> [UInt32] {
+		let T: Int = tileArtPx
+		let TT: Int = T * T
+		let W: Int = chunkW * T
+		let Hh: Int = 16 * T
+		var buf: [UInt32] = [UInt32](repeating: 0, count: W * Hh)
+		let H: Int = ch.H
+		let y0: Int = sy * 16
+		let back: [UInt8] = world.backdrop(ch)
+		let opT: [Bool] = Tile.opaqueTable
+		// part-full liquid cells are drawn live over the land (see WorldRenderer.drawLiquids)
+		let lev: [UInt8] = ch.partials > 0 ? ch.level : []
+		// edge shading follows "solid or trunk", so trees look exactly as they did when trunks had collision
+		let soT: [Bool] = Tile.supportTable
+		let wc: Int = wallCount
+		// the columns just outside the chunk, for the side edges (nil: not loaded, treated as ground)
+		let left: Chunk? = world.chunks[ch.cx - 1]
+		let right: Chunk? = world.chunks[ch.cx + 1]
+		buf.withUnsafeMutableBufferPointer { bb in
+			ch.tiles.withUnsafeBufferPointer { tb in
+				back.withUnsafeBufferPointer { kb in
+					tilePx.withUnsafeBufferPointer { ab in
+						tileKind.withUnsafeBufferPointer { kib in
+							let flipT: [Int] = tileFlip
+							let wx0: Int = ch.cx * chunkW
+							wallPx.withUnsafeBufferPointer { wb in
+								opT.withUnsafeBufferPointer { ob in
+									soT.withUnsafeBufferPointer { sb in
+										guard let out = bb.baseAddress, let tiles = tb.baseAddress, let backs = kb.baseAddress,
+											  let art = ab.baseAddress, let tk = kib.baseAddress, let walls = wb.baseAddress,
+											  let opq = ob.baseAddress, let sol = sb.baseAddress else { return }
+										var lx: Int = 0
+										while lx < chunkW {
+											let colBase: Int = lx * H
+											let ox: Int = lx * T
+											var ly: Int = 0
+											while ly < 16 {
+												let y: Int = y0 + ly
+												if y < 0 || y >= H { ly += 1; continue }
+												let raw: Int = i8(tiles[colBase + y])
+												let oy: Int = ly * T
+												let opaque: Bool = opq[raw]
+												let wall: Int = i8(backs[colBase + y]) - 1
+												if wall >= 0 && wall < wc && !opaque {
+													let src: UnsafePointer<UInt32> = walls + wall * TT
+													var yy: Int = 0
+													while yy < T {
+														(out + (oy + yy) * W + ox).update(from: src + yy * T, count: T)
+														yy += 1
+													}
+												}
+												if raw == 0 { ly += 1; continue }
+												if !lev.isEmpty && lev[colBase + y] != 0 { ly += 1; continue }
+												let kind: Int = tk[raw]
+												// which of the block's four pictures goes here: always the same one for a place
+												var pick: Int = 0
+												let fm: Int = flipT[raw]
+												if fm != 0 {
+													var hsh: Int = (wx0 + lx) &* 374761393 &+ y &* 668265263
+													hsh = (hsh ^ (hsh >> 13)) &* 1274126177
+													pick = (hsh >> 16) & fm
+												}
+												let src: UnsafePointer<UInt32> = art + (raw * 4 + pick) * TT
+												if kind == 1 {
+													var yy: Int = 0
+													while yy < T {
+														(out + (oy + yy) * W + ox).update(from: src + yy * T, count: T)
+														yy += 1
+													}
+												} else if kind == 2 {
+													var yy: Int = 0
+													while yy < T {
+														let row: UnsafeMutablePointer<UInt32> = out + (oy + yy) * W + ox
+														var xx: Int = 0
+														while xx < T {
+															let c: UInt32 = src[yy * T + xx]
+															let a: UInt32 = c >> 24
+															if a == 255 {
+																row[xx] = c
+															} else if a != 0 {
+																let under: UInt32 = row[xx]
+																if (under >> 24) == 0 {
+																	row[xx] = c
+																} else {
+																	let f: Double = Double(a) / 255.0
+																	row[xx] = 0xFF000000 | mixRGB(under & 0xFFFFFF, c & 0xFFFFFF, f)
+																}
+															}
+															xx += 1
+														}
+														yy += 1
+													}
+												}
+												// edges where solid ground meets open space (easier to read the terrain)
+												if sol[raw] && opaque {
+													let upOpaque: Bool = y > 0 ? opq[i8(tiles[colBase + y - 1])] : false
+													if !upOpaque {
+														let row: UnsafeMutablePointer<UInt32> = out + oy * W + ox
+														var xx: Int = 0
+														while xx < T {
+															row[xx] = 0xFF000000 | shadeRGB(row[xx] & 0xFFFFFF, 1.12)
+															xx += 1
+														}
+													}
+													let dnOpaque: Bool = y + 1 < H ? opq[i8(tiles[colBase + y + 1])] : true
+													if !dnOpaque {
+														let row: UnsafeMutablePointer<UInt32> = out + (oy + T - 1) * W + ox
+														var xx: Int = 0
+														while xx < T {
+															row[xx] = 0xFF000000 | shadeRGB(row[xx] & 0xFFFFFF, 0.6)
+															xx += 1
+														}
+													}
+													var lfOpaque: Bool = true
+													if lx > 0 {
+														lfOpaque = opq[i8(tiles[colBase - H + y])]
+													} else if let c = left, y < c.H {
+														lfOpaque = opq[Int(c.tiles[(chunkW - 1) * c.H + y])]
+													}
+													if !lfOpaque {
+														var yy: Int = 0
+														while yy < T {
+															let px: UnsafeMutablePointer<UInt32> = out + (oy + yy) * W + ox
+															px[0] = 0xFF000000 | shadeRGB(px[0] & 0xFFFFFF, 0.72)
+															yy += 1
+														}
+													}
+													var rtOpaque: Bool = true
+													if lx + 1 < chunkW {
+														rtOpaque = opq[i8(tiles[colBase + H + y])]
+													} else if let c = right, y < c.H {
+														rtOpaque = opq[Int(c.tiles[y])]
+													}
+													if !rtOpaque {
+														var yy: Int = 0
+														while yy < T {
+															let px: UnsafeMutablePointer<UInt32> = out + (oy + yy) * W + ox + T - 1
+															px[0] = 0xFF000000 | shadeRGB(px[0] & 0xFFFFFF, 0.66)
+															yy += 1
+														}
+													}
+												}
+												ly += 1
+											}
+											lx += 1
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+		paintTufts(&buf, world, ch, sy, left, right)
+		premultiplyARGB(&buf)
+		return buf
+	}
+
+	/// Leaves sticking out of a canopy: every open cell of the section with a leaf block above, below
+	/// or beside it gets that block's tufts on that side
+	func paintTufts(_ buf: inout [UInt32], _ world: World, _ ch: Chunk, _ sy: Int, _ left: Chunk?, _ right: Chunk?) {
+		if tufts.isEmpty { return }
+		let T: Int = tileArtPx
+		let W: Int = chunkW * T
+		let H: Int = ch.H
+		let y0: Int = sy * 16
+		let opT: [Bool] = Tile.opaqueTable
+		func at(_ lx: Int, _ y: Int) -> Int {
+			if y < 0 || y >= H { return 0 }
+			if lx < 0 {
+				guard let c = left, y < c.H else { return 0 }
+				return Int(c.tiles[(chunkW - 1) * c.H + y])
+			}
+			if lx >= chunkW {
+				guard let c = right, y < c.H else { return 0 }
+				return Int(c.tiles[y])
+			}
+			return Int(ch.tiles[lx * H + y])
+		}
+		for lx in 0..<chunkW {
+			for ly in 0..<16 {
+				let y: Int = y0 + ly
+				if y < 0 || y >= H { continue }
+				let raw: Int = at(lx, y)
+				if opT[raw] || leafT[raw] { continue }
+				// (side 0: tufts growing up from the leaves below; 1: hanging from those above; 2: from
+				// the leaves to the right, sticking out leftward; 3: from the leaves to the left)
+				let near: [(Int, Int)] = [(at(lx, y + 1), 0), (at(lx, y - 1), 1), (at(lx + 1, y), 2), (at(lx - 1, y), 3)]
+				for (nraw, side) in near where leafT[nraw] {
+					guard let tf = tufts[nraw] else { continue }
+					let wx: Int = ch.x0 + lx
+					let pick: Int = Int(hashU(wx, y, UInt64(7717 + side)) & 1)
+					let base: Int = ly * T * W + lx * T
+					for tp in tf[side][pick] {
+						let cy: Int = tp.at / T
+						let cx: Int = tp.at - cy * T
+						buf[base + cy * W + cx] = tp.c
+					}
+				}
+			}
+		}
+	}
 }
 
 // ===== a01_artsheet =====

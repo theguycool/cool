@@ -197,3 +197,61 @@ do {
     look(g, Double(cx) + 0.5, 95.0)
     render(g, "04_vehicle_insides")
 }
+
+// 5 (phase 3): water poured from a ledge falls, spreads over the floor and fills a stone basin, half
+// way through; lava meeting the water has set into obsidian
+do {
+    let g = world()
+    let cx = Int(g.pb.x)
+    let w = g.world
+    // a cliff with a ledge on the left, a basin below
+    for x in (cx - 14)...(cx - 8) { for y in 88..<100 { w.set(x, y, .stone) } }
+    for x in (cx - 8)...(cx + 10) { w.set(x, 100, .stone) }
+    for y in 92...99 { w.set(cx + 10, y, .stone) }
+    w.flowQ.removeAll(); w.flowSet.removeAll()
+    // a pool of lava at the far end
+    for x in (cx + 6)...(cx + 9) { w.setLiquidLevel(x, 99, .lava, 255) }
+    // poured off the ledge's edge: a falling stream, a pool spreading below
+    var k = 0
+    while k < 90 {
+        if k % 2 == 0 { w.setLiquidLevel(cx - 7, 87, .water, 255) }
+        w.stepFlow(Liquids.budget)
+        k += 1
+    }
+    g.pb.x = Double(cx) - 11.5; g.pb.y = 88
+    g.facing = 1
+    look(g, Double(cx) + 0.5, 92.0)
+    render(g, "05_flowing_water")
+}
+
+// 6 (phase 3): a submarine under the sea, its cabin dry, the player standing inside
+do {
+    let g = world()
+    let cx = Int(g.pb.x)
+    let w = g.world
+    for x in (cx - 40)...(cx + 40) {
+        for y in 86..<104 { w.set(x, y, .water) }
+        for y in 104..<110 { w.set(x, y, .sand) }
+    }
+    w.flowQ.removeAll(); w.flowSet.removeAll()
+    var cells: [(Int, Int, PartType, Tile?)] = []
+    for x in 0..<12 {
+        cells.append((x, 5, .block, .stone))
+        cells.append((x, 0, .block, .planks))
+    }
+    for y in 1...4 { cells.append((0, y, .block, .planks)); cells.append((11, y, .block, y == 2 ? .glass : .planks)) }
+    for x in 1...10 { cells.append((x, 4, .ballast, nil)) }
+    cells.append((9, 3, .cockpit, nil)); cells.append((-1, 2, .propeller, nil)); cells.append((-1, 3, .engine, nil))
+    cells.append((3, 3, .block, .chest)); cells.append((5, 3, .block, .chair))
+    let v = vehicle(g, cells, left: Double(cx) - 6.0, bottom: 99)
+    for x in 1...10 { for y in 1...3 { v.walls[PartCell(dx: x, dy: y)] = UInt8(blockWallValue(.planks)) } }
+    v.recompute(keepAnchor: true)
+    v.ballast = 1
+    g.updateHullAir(v, 1.0)
+    g.pauseVehicles = true
+    g.boardFrame(&g.pb, v, 7.5, 4.0)
+    g.pb.onGround = true
+    g.facing = 1
+    look(g, Double(cx) + 0.5, 94.0)
+    render(g, "06_submarine")
+}

@@ -170,6 +170,7 @@ do {
     let (g, px) = arena()
     let ww = put(g, px, 98, .waterWheel)!
     for dy in -1...1 { g.world.set(px + 1, 98 + dy, .water); g.world.set(px - 1, 98 + dy, .water) }
+    g.world.calmLiquids()
     put(g, px + 3, 99, .lampOff)
     wire(g, 0, px, 98, px + 3, 98); wire(g, 0, px + 3, 98, px + 3, 99)
     step(g, 1)
@@ -479,6 +480,7 @@ do {
     let bat = put(g, px - 4, 99, .accumulator)!
     bat.charge = 5000
     for x in (px + 1)...(px + 3) { g.world.set(x, 99, .water) }
+    g.world.calmLiquids()
     put(g, px, 99, .sumpPump)
     wire(g, 0, px - 4, 99, px, 99)
     step(g, 2)

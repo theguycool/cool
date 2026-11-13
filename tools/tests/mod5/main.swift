@@ -481,7 +481,8 @@ do {
     aimAt(g, Double(x + 2) + 0.5, 99.5)
     use(g)
     check(g.world.tile(x + 2, 99) == .planks, "building where a decoration stands replaces it, as with flowers")
-    check(ModCollision.allCases.count == 6 && ModCollision.allCases.allSatisfy { !$0.help.isEmpty }, "the block editor explains every kind")
+    // (seven since the liquid was appended in the physics overhaul's phase 3)
+    check(ModCollision.allCases.count == 7 && ModCollision.allCases.allSatisfy { !$0.help.isEmpty }, "the block editor explains every kind")
 }
 
 ModRuntime.activate([], world: nil)

@@ -9312,9 +9312,11 @@ extension Game {
 			if rising && weather.surge.count < 90 && abs(h.coastX - pb.x) < 140 { floodShore(h, level) }
 		}
 		if rising || weather.surge.isEmpty { return }
-		// ebbing: a few spots at a time, wherever the ground is loaded (the rest waits for it)
+		// ebbing: a few spots at a time, wherever the ground is loaded (the rest waits for it). (The surge's
+		// water is the storm's: it neither flows nor wakes the water round it.)
 		var keep: [SurgeCell] = []
 		var drained: Int = 0
+		world.flowHold = true
 		for c in weather.surge {
 			if world.dim == .overworld && drained < 12 && world.isLoaded(c.x) {
 				if world.tile(c.x, c.y) == .water { world.set(c.x, c.y, .air) }
@@ -9323,6 +9325,7 @@ extension Game {
 			}
 			keep.append(c)
 		}
+		world.flowHold = false
 		weather.surge = keep
 	}
 
@@ -9340,6 +9343,8 @@ extension Game {
 		if !world.isLoaded(x) || k >= 60 { return }
 		var added: Int = 0
 		var col: Int = 0
+		world.flowHold = true
+		defer { world.flowHold = false }
 		while col < 30 && added < 8 && weather.surge.count < 90 {
 			let cx: Int = x + inland * col
 			if !world.isLoaded(cx) { return }

@@ -477,6 +477,8 @@ struct VPartSave: Codable {
 	var tile: Int? = nil
 	/// damage the cell has taken (nil: none)
 	var dmg: Double? = nil
+	/// a wing's tilt (nil: none)
+	var tilt: Int? = nil
 }
 
 /// A point on an autopilot's route (world coordinates)
@@ -502,6 +504,8 @@ struct VehicleSave: Codable {
 	/// the driver's seat (dx, dy) and the back walls (dx, dy, wall), when there are any
 	var seat: [Int]? = nil
 	var walls: [[Int]]? = nil
+	/// how full the ballast tanks are (nil: empty)
+	var ballast: Double? = nil
 }
 
 /// Displaced volume per part (how much it floats)
@@ -695,6 +699,20 @@ final class Vehicle {
 	var openProps: Int = 0
 	var openPaddles: Int = 0
 	var openTails: Int = 0
+	/// flight and water: each wing's tilt (steps of Aero.tiltStep; saved), flaps, air brakes, tailplanes
+	/// and ballast tanks, how full the ballast tanks are (0 air ... 1 water), and how far the air brakes
+	/// are open
+	var tilt: [PartCell: Int] = [:]
+	var flaps: Int = 0
+	var airBrakes: Int = 0
+	var stabilizers: Int = 0
+	var ballasts: Int = 0
+	var ballast: Double = 0
+	var brakeOpen: Double = 0
+	/// the cells inside it that are under the surface of what it floats in, and how flooded each is
+	/// (0 dry air ... 1 full); worked out a few times a second (see updateHullAir)
+	var hullAir: [PartCell: Double] = [:]
+	var hullT: Double = 0
 
 	init(id: Int, first: PartType, x: Double, y: Double) {
 		self.id = id
@@ -788,6 +806,7 @@ final class Vehicle {
 		engines = 0; wheels = 0; propellers = 0; paddles = 0; tanks = 0; drills = 0; offroadWheels = 0; headlights = 0
 		wings = 0; elevators = 0; airProps = 0; jets = 0; rotors = 0; tailRotors = 0; envelopes = 0; burners = 0
 		tracks = 0; armors = 0; cannons = 0; guns = 0; autopilots = 0
+		flaps = 0; airBrakes = 0; stabilizers = 0; ballasts = 0
 		hasSeat = false
 		hasSteering = false
 		hasCockpit = false
@@ -805,7 +824,9 @@ final class Vehicle {
 			buoyancy += partVolume(t)
 			countPart(t)
 		}
-		aero = wings + elevators + airProps + jets + rotors + envelopes > 0
+		aero = wings + elevators + airProps + jets + rotors + envelopes + airBrakes + stabilizers > 0
+		tilt = tilt.filter { parts[$0.key] != nil }
+		hullAir = hullAir.filter { parts[$0.key] == nil || Vehicle.walkKind(parts[$0.key]!, blocks[$0.key]) != cellSolid }
 		// back walls weigh a little where they are
 		for (c, k) in walls {
 			let wm: Double = vehicleWallMass(k)
@@ -897,6 +918,10 @@ final class Vehicle {
 		case .cannon: cannons += 1
 		case .autoGun: guns += 1
 		case .autopilot: autopilots += 1
+		case .flap: wings += 1; flaps += 1
+		case .airBrake: airBrakes += 1
+		case .stabilizer: stabilizers += 1
+		case .ballast: ballasts += 1
 		default: break
 		}
 	}
@@ -1071,12 +1096,14 @@ final class Vehicle {
 			var e = VPartSave(dx: c.dx, dy: c.dy, type: t.rawValue)
 			if let b = blocks[c] { e.tile = Int(b.rawValue) }
 			if let d = dmg[c], d > 0 { e.dmg = d }
+			if let k = tilt[c], k != 0 { e.tilt = k }
 			ps.append(e)
 		}
 		var s = VehicleSave(id: id, parts: ps, x: px, y: py, fuel: fuel, dir: dir, kit: kit, rot: angle)
 		if auto != 0 { s.auto = auto }
 		if !route.isEmpty { s.route = route }
 		if let c = seatAt { s.seat = [c.dx, c.dy] }
+		if ballast > 0.001 { s.ballast = ballast }
 		if !walls.isEmpty { s.walls = walls.map { [$0.key.dx, $0.key.dy, Int($0.value)] } }
 		return s
 	}
@@ -1091,11 +1118,13 @@ final class Vehicle {
 			if let tr = p.tile, tr >= 0, tr < 256, let b = Tile(rawValue: UInt8(tr)) { v.blocks[c] = b }
 			else if t == .block { v.blocks[c] = .planks }
 			if let d = p.dmg { v.dmg[c] = d }
+			if let k = p.tilt, k != 0 { v.tilt[c] = clampI(k, -Aero.tiltSteps, Aero.tiltSteps) }
 		}
 		if v.parts.isEmpty { v.parts[PartCell(dx: 0, dy: 0)] = .frame }
 		v.auto = s.auto ?? 0
 		v.route = s.route ?? []
 		if let c = s.seat, c.count == 2 { v.seatAt = PartCell(dx: c[0], dy: c[1]) }
+		v.ballast = clampD(s.ballast ?? 0, 0, 1)
 		for w in s.walls ?? [] where w.count == 3 && w[2] > 0 && w[2] < 256 { v.walls[PartCell(dx: w[0], dy: w[1])] = UInt8(w[2]) }
 		v.recompute(keepAnchor: false)
 		if let r = s.rot {
@@ -1588,6 +1617,9 @@ final class Game: ObservableObject, @unchecked Sendable {
 	var tornadoGround: Double = 0
 	var hurricaneAcc: Double = 0
 	var surgeT: Double = 0
+	/// time not yet spent on the liquids' flow (see updateFlow), and the beat of a mod liquid's harm
+	var flowAccum: Double = 0
+	var liquidHarmT: Double = 0
 	var swampT: Double = 0
 	var wxDevT: Double = 0
 	var wxNoteT: Double = 0
@@ -1934,6 +1966,7 @@ extension Game {
 		if !pauseWorldTicks {
 			updateFallingBlocks(dt)
 			updateStructures(dt)
+			updateFlow(dt)
 		}
 		updateDrops(dt)
 		if !pauseVehicles { updateVehicles(dt) }
@@ -2257,6 +2290,20 @@ extension Game {
 			lavaT = 0
 		}
 		updatePlayerBurn(dt)
+		modLiquidEffects(dt)
+	}
+
+	/// Whether the player's head is under water (below the surface of a part-full cell too), and not in
+	/// the dry air inside a vehicle
+	func headUnderWater() -> Bool {
+		let hy: Double = pb.y - pb.h * 0.92
+		let hx: Int = Int(floor(pb.x))
+		let hyI: Int = Int(floor(hy))
+		let t: Tile = world.tile(hx, hyI)
+		if !t.liquid || t == .lava || Liquids.hotTable[Int(t.rawValue)] { return false }
+		if hy - Double(hyI) < 1.0 - world.liquidAmount(hx, hyI) { return false }
+		if pb.ride != 0, let v = vehicleByID(pb.ride), v.dryAt(pb.rlx, pb.rly - pb.h * 0.92) { return false }
+		return true
 	}
 
 	func updateSurvival(_ dt: Double, _ ix: Double) {
@@ -2264,7 +2311,7 @@ extension Game {
 		// air
 		let headY: Int = Int(floor(pb.y - pb.h * 0.92))
 		// a Deepbreath Draught or a sealed suit keeps the air coming
-		if world.tile(Int(floor(pb.x)), headY) == .water && effects.value(.breathing) <= 0 && !suitHas(.seal) {
+		if headUnderWater() && effects.value(.breathing) <= 0 && !suitHas(.seal) {
 			air -= dt * (wearing(.divingMask) ? 1.0 / 3.0 : 1.0)
 			if air <= 0 {
 				air = 0
@@ -4354,6 +4401,8 @@ extension Game {
 
 	func useGadget(_ g: Gadget, _ pressed: Bool) {
 		switch g {
+		case .bucket:
+			if pressed { useBucket() }
 		case .treasureMap:
 			if pressed {
 				showMap = true
@@ -8053,6 +8102,9 @@ struct VSample {
 /// lot. Parts without displacement (the old model) made engines and propellers drag boats under.
 func partDisplacement(_ p: PartType) -> Double {
 	switch p {
+	case .flap: return 0.3
+	case .airBrake, .stabilizer: return 0.2
+	case .ballast: return 1.0
 	case .hull: return 4.0
 	case .fuelTank: return 1.0
 	case .frame: return 0.8
@@ -8281,18 +8333,28 @@ extension Game {
 		let end: Int = Int(floor(bottom))
 		var y: Int = start
 		while y <= end {
-			if world.tile(tx, y) == .water {
+			let t: Tile = world.tile(tx, y)
+			if t.liquid {
 				var top: Int = y
 				if y == start {
-					// already under water at the part's top: find the surface above
+					// already under at the part's top: find the surface above
 					var k: Int = 0
-					while k < 6 && world.tile(tx, top - 1) == .water { top -= 1; k += 1 }
+					while k < 6 && world.tile(tx, top - 1).liquid { top -= 1; k += 1 }
 				}
-				return clampD(bottom - Double(top), 0, 1)
+				// (the top cell may be only part full: its surface is lower)
+				let surface: Double = Double(top) + 1.0 - world.liquidAmount(tx, top)
+				return clampD(bottom - surface, 0, 1)
 			}
 			y += 1
 		}
 		return 0
+	}
+
+	/// How dense the liquid at a point is (water 1; no liquid: water's)
+	func liquidDensity(_ x: Double, _ y: Double) -> Double {
+		let t: Tile = world.tile(Int(floor(x)), Int(floor(y + 0.4)))
+		if !t.liquid || t == .water { return 1.0 }
+		return Liquids.def(t)?.density ?? 1.0
 	}
 
 	/// True when every chunk under (and next to) the vehicle is loaded. Otherwise the vehicle waits:
@@ -8499,7 +8561,8 @@ extension Game {
 			}
 			nearWater = true
 			wetSum += f
-			let disp: Double = cellDisplacement(v, cell, t)
+			// (what it floats in: lava holds things up three times as hard as water)
+			let disp: Double = cellDisplacement(v, cell, t) * liquidDensity(wx, wy)
 			let rx: Double = wx - v.px
 			let ry: Double = wy - v.py
 			let pvx: Double = v.vx - v.angVel * ry
@@ -8511,6 +8574,7 @@ extension Game {
 			v.vy += fy * invM * h
 			v.angVel += (rx * fy - ry * fx) * invI * h
 		}
+		if !open && !v.hullAir.isEmpty { hullAirForces(v, h, c, s) }
 		let sub: Double = wetSum / Double(max(1, v.parts.count))
 		// how deep the hulls sit: about 0.4 when floating freely, falling as a boat runs aground
 		let hullDepth: Double = hullN > 0 ? hullWet / Double(hullN) : sub
@@ -8725,7 +8789,9 @@ extension Game {
 			// the air against a vehicle with no wings (aircraft work theirs out part by part): it grows
 			// with the square of the speed, on the faces that meet it
 			let rho: Double = airDensity(v.py)
-			v.vx -= Aero.kDrag * rho * Double(v.gridH) * v.vx * abs(v.vx) * invM * h
+			// (the air moves too: a gale leans on a balloon of planks or a parked raft)
+			let ax: Double = v.vx - v.windX
+			v.vx -= Aero.kDrag * rho * Double(v.gridH) * ax * abs(ax) * invM * h
 			v.vy -= Aero.kDrag * rho * Double(v.gridW) * v.vy * abs(v.vy) * invM * h
 		}
 		if hits == 0 && sub <= 0 && v.wheels > 0 && !v.aero {
@@ -9167,6 +9233,10 @@ extension Game {
 			openChest = k
 			showInventory = true
 			bumpHUD()
+			return
+		}
+		if let t = v.parts[c], t == .wing || t == .flap || t == .elevator || t == .stabilizer, !v.rider, heldItem == nil || heldItem == .gadget(.wrench) {
+			tiltWing(v, c)
 			return
 		}
 		let massS: String = String(format: "%.1f", v.mass)
@@ -9778,6 +9848,8 @@ struct ChunkSave: Codable {
 	var wires: Data? = nil
 	/// which blocks the player built (nil: none; see World.isBuilt)
 	var built: Data? = nil
+	/// how full each part-full liquid cell is (nil: none; see p12c_fluids)
+	var levels: Data? = nil
 }
 
 struct SaveMeta: Codable {
@@ -9929,12 +10001,16 @@ extension Game {
 				let i: Int = (ox - c.x0) * c.H + oy
 				if i >= 0 && i < tiles.count && tiles[i] == Tile.air.rawValue { tiles[i] = Tile.chest.rawValue }
 			}
-			cs.append(ChunkSave(dim: cur, cx: k, data: Data(World.rle(tiles)), walls: c.walls.isEmpty ? nil : Data(World.rle(c.walls)), wires: c.wireCount == 0 ? nil : Data(World.rle(c.wires)), built: c.built.isEmpty ? nil : Data(World.rle(c.built))))
+			var one: ChunkSave = ChunkSave(dim: cur, cx: k, data: Data(World.rle(tiles)), walls: c.walls.isEmpty ? nil : Data(World.rle(c.walls)), wires: c.wireCount == 0 ? nil : Data(World.rle(c.wires)), built: c.built.isEmpty ? nil : Data(World.rle(c.built)))
+			if c.partials > 0 { one.levels = Data(World.rle(c.level)) }
+			cs.append(one)
 		}
 		for d in 0..<world.parked.count {
 			for (k, c) in world.parked[d] {
 				if d == cur && world.chunks[k] != nil { continue }
-				cs.append(ChunkSave(dim: d, cx: k, data: Data(World.rle(c.tiles)), walls: c.walls.isEmpty ? nil : Data(World.rle(c.walls)), wires: c.wireCount == 0 ? nil : Data(World.rle(c.wires)), built: c.built.isEmpty ? nil : Data(World.rle(c.built))))
+				var one: ChunkSave = ChunkSave(dim: d, cx: k, data: Data(World.rle(c.tiles)), walls: c.walls.isEmpty ? nil : Data(World.rle(c.walls)), wires: c.wireCount == 0 ? nil : Data(World.rle(c.wires)), built: c.built.isEmpty ? nil : Data(World.rle(c.built)))
+				if c.partials > 0 { one.levels = Data(World.rle(c.level)) }
+				cs.append(one)
 			}
 		}
 		var chestList: [ChestEntry] = []
@@ -10027,6 +10103,10 @@ extension Game {
 			if let bd = c.built {
 				ch.built = World.unrle([UInt8](bd), chunkW * H)
 				if ch.built.count != chunkW * H { ch.built = [] }
+			}
+			if let lv = c.levels {
+				ch.level = World.unrle([UInt8](lv), chunkW * H)
+				if ch.level.count != chunkW * H { ch.level = [] }
 			}
 			ch.dirty = true
 			ch.rebuildSky()
@@ -11151,452 +11231,6 @@ extension BossAtk {
 	static func != (a: BossAtk, b: BossAtk) -> Bool { return a.rawValue != b.rawValue }
 }
 
-// ===== p24_painter =====
-
-// MARK: - Fast terrain section painter
-// Paints a 16x16-tile section into a premultiplied ARGB pixel buffer using raw pointers,
-// so it stays quick in Playgrounds' debug builds. The UI turns the result into an image.
-
-/// Premultiplies non-premultiplied ARGB pixels in place (only pixels with partial alpha change).
-func premultiplyARGB(_ px: inout [UInt32]) {
-	let n: Int = px.count
-	px.withUnsafeMutableBufferPointer { bp in
-		guard let p = bp.baseAddress else { return }
-		var i: Int = 0
-		while i < n {
-			let c: UInt32 = p[i]
-			let a: UInt32 = c >> 24
-			if a == 0 {
-				p[i] = 0
-			} else if a != 255 {
-				let r: UInt32 = ((c >> 16) & 255) * a / 255
-				let g: UInt32 = ((c >> 8) & 255) * a / 255
-				let b: UInt32 = (c & 255) * a / 255
-				p[i] = (a << 24) | (r << 16) | (g << 8) | b
-			}
-			i += 1
-		}
-	}
-}
-
-/// One pixel of a leaf tuft: where in its cell (y * tileArtPx + x), and its colour
-struct TuftPixel {
-	var at: Int
-	var c: UInt32
-}
-
-/// Leaves that stick out of a canopy into the open cells beside it, so a tree's crown has a ragged
-/// edge instead of a square one. L, g, s and d are the leaf block's own tones from light to dark.
-enum LeafTufts {
-	/// growing up into the cell above (its bottom four rows; the last row touches the leaves)
-	static let up: [String] = [
-		"....L........L..",
-		"...LgL.....LLgL.",
-		"..LgggL...Lgggs.",
-		".LggggsL.Lggggs.",
-	]
-	/// hanging into the cell below (its top four rows; the first row touches the leaves)
-	static let down: [String] = [
-		".sggggs..sgggs..",
-		"..sggs....sgs...",
-		"...ss......s....",
-		"................",
-	]
-	/// sticking out into the cell to the left (its right four columns; the last touches the leaves)
-	static let left: [String] = [
-		"....", "...L", "..Lg", ".Lgg", "..sg", "...s", "....", "....",
-		"....", "..Lg", ".Lgg", ".sgg", "..ss", "....", "....", "....",
-	]
-	/// sticking out into the cell to the right (its left four columns; the first touches the leaves)
-	static let right: [String] = [
-		"....", "L...", "gL..", "ggs.", "gs..", "s...", "....", "....",
-		"....", "gL..", "ggL.", "ggs.", "ss..", "....", "....", "....",
-	]
-
-	/// The four tones of a leaf block's picture, light to dark
-	static func tones(_ b: PixelBuf) -> [UInt32] {
-		var seen: [UInt32] = []
-		for c in b.px where (c >> 24) != 0 {
-			let rgb: UInt32 = c & 0xFFFFFF
-			if !seen.contains(rgb) { seen.append(rgb) }
-		}
-		if seen.isEmpty { return [0x6A9A4A, 0x4C7A3A, 0x3A5E30, 0x284426] }
-		seen.sort { artLum($0) > artLum($1) }
-		let n: Int = seen.count
-		return [seen[0], seen[min(n - 1, n / 3)], seen[min(n - 1, (2 * n) / 3)], seen[n - 1]]
-	}
-
-	/// A leaf block's tufts: for each side (0 up, 1 down, 2 left, 3 right), two versions (the second
-	/// mirrored, or moved along the edge) so a canopy's edge does not repeat block by block
-	static func make(_ b: PixelBuf) -> [[[TuftPixel]]] {
-		let tn: [UInt32] = tones(b)
-		let T: Int = tileArtPx
-		func ink(_ ch: Character) -> UInt32? {
-			switch ch {
-			case "L": return 0xFF000000 | tn[0]
-			case "g": return 0xFF000000 | tn[1]
-			case "s": return 0xFF000000 | tn[2]
-			case "d": return 0xFF000000 | tn[3]
-			default: return nil
-			}
-		}
-		func cells(_ rows: [String], _ ox: Int, _ oy: Int, _ mirror: Bool, _ shift: Int) -> [TuftPixel] {
-			var out: [TuftPixel] = []
-			let w: Int = rows.first?.count ?? 0
-			for (y, row) in rows.enumerated() {
-				for (x, ch) in row.enumerated() {
-					guard let c = ink(ch) else { continue }
-					let xx: Int = ox + (mirror ? w - 1 - x : x)
-					let yy: Int = (oy + y + shift) % T
-					out.append(TuftPixel(at: yy * T + xx, c: c))
-				}
-			}
-			return out
-		}
-		let top: Int = T - up.count
-		let side: Int = T - (left.first?.count ?? 4)
-		return [
-			[cells(up, 0, top, false, 0), cells(up, 0, top, true, 0)],
-			[cells(down, 0, 0, false, 0), cells(down, 0, 0, true, 0)],
-			[cells(left, side, 0, false, 0), cells(left, side, 0, false, T / 2)],
-			[cells(right, 0, 0, false, 0), cells(right, 0, 0, false, T / 2)],
-		]
-	}
-}
-
-final class SectionPainter: @unchecked Sendable {
-	static let shared: SectionPainter = SectionPainter()
-
-	let tileCount: Int
-	/// art for every tile, by raw value: four pictures each (as drawn, mirrored, turned top to bottom,
-	/// both), tileArtPx x tileArtPx pixels a picture
-	var tilePx: [UInt32]
-	/// which of those four a tile may be drawn as from place to place (0: only as drawn; 1: also
-	/// mirrored; 3: all four), so a wall of one block is not wallpaper
-	var tileFlip: [Int]
-	/// 0 = fully transparent, 1 = fully opaque, 2 = mixed alpha
-	var tileKind: [Int]
-	/// darkened backdrop walls, by wall kind - 1
-	var wallPx: [UInt32]
-	var wallBufs: [PixelBuf]
-	var tileBufs: [PixelBuf]
-	let wallCount: Int
-	/// which tiles are leaves, and their tufts (see LeafTufts)
-	var leafT: [Bool] = [Bool](repeating: false, count: 256)
-	var tufts: [Int: [[[TuftPixel]]]] = [:]
-	/// a leaf block's tones, light to dark (for the leaves that fall from it)
-	var leafTones: [Int: [UInt32]] = [:]
-
-	/// Works out which tiles are leaves and makes their tufts (again when a world's mods change: a
-	/// mod's trees have leaf blocks of their own)
-	func findLeaves() {
-		var lt: [Bool] = [Bool](repeating: false, count: 256)
-		var tf: [Int: [[[TuftPixel]]]] = [:]
-		var tn: [Int: [UInt32]] = [:]
-		for raw in 0..<min(256, tileBufs.count) {
-			guard let t = Tile(rawValue: UInt8(raw)), isLeafTile(t) else { continue }
-			lt[raw] = true
-			tf[raw] = LeafTufts.make(tileBufs[raw])
-			tn[raw] = LeafTufts.tones(tileBufs[raw])
-		}
-		leafT = lt
-		tufts = tf
-		leafTones = tn
-	}
-
-	/// How dark a wall made from a block is drawn
-	static func wallShade(_ c: UInt32) -> UInt32 {
-		return (c >> 24) == 0 ? 0 : (c & 0xFF000000) | shadeRGB(c & 0xFFFFFF, 0.5)
-	}
-
-	/// Writes a tile's four pictures into the art table and says what kind it is (0 clear, 1 solid,
-	/// 2 partly see-through)
-	static func put(_ b: PixelBuf, _ px: inout [UInt32], _ i: Int) -> Int {
-		let T: Int = tileArtPx
-		let n: Int = T * T
-		var allClear: Bool = true
-		var allSolid: Bool = true
-		for y in 0..<T {
-			for x in 0..<T {
-				let k: Int = y * T + x
-				let c: UInt32 = k < b.px.count ? b.px[k] : 0
-				let base: Int = i * 4 * n
-				px[base + k] = c
-				px[base + n + y * T + (T - 1 - x)] = c
-				px[base + 2 * n + (T - 1 - y) * T + x] = c
-				px[base + 3 * n + (T - 1 - y) * T + (T - 1 - x)] = c
-				let a: UInt32 = c >> 24
-				if a != 0 { allClear = false }
-				if a != 255 { allSolid = false }
-			}
-		}
-		return allClear ? 0 : (allSolid ? 1 : 2)
-	}
-
-	init() {
-		let n: Int = tileArtPx * tileArtPx
-		var tb: [PixelBuf] = []
-		for t in Tile.allCases { tb.append(tileBuf(t)) }
-		tileBufs = tb
-		tileCount = tb.count
-		var px: [UInt32] = [UInt32](repeating: 0, count: 256 * 4 * n)
-		var kinds: [Int] = [Int](repeating: 0, count: 256)
-		var flips: [Int] = [Int](repeating: 0, count: 256)
-		for (i, b) in tb.enumerated() {
-			kinds[i] = SectionPainter.put(b, &px, i)
-			if i < 256, let f = TileSheet.flips[UInt8(i)] { flips[i] = f }
-		}
-		tilePx = px
-		tileKind = kinds
-		tileFlip = flips
-		let srcs: [Tile] = [.dirt, .stone, .deepRock, .ashStone, .planks, .brick, .sandstone]
-		var ws: [PixelBuf] = []
-		var wp: [UInt32] = []
-		for (k, s) in srcs.enumerated() {
-			var w: PixelBuf = tileBuf(s)
-			let f: Double = k >= 4 ? 0.55 : 0.42
-			for i in 0..<w.px.count {
-				let c: UInt32 = w.px[i]
-				w.px[i] = 0xFF000000 | shadeRGB(c & 0xFFFFFF, f)
-			}
-			ws.append(w)
-			for i in 0..<n { wp.append(i < w.px.count ? w.px[i] : 0xFF000000) }
-		}
-		// walls made from any block (wall value 8 + its tile number): its art, darkened
-		while wp.count < (blockWallBase - 1) * n { wp.append(0) }
-		for raw in 0..<tb.count {
-			let b: PixelBuf = tb[raw]
-			for k in 0..<n { wp.append(SectionPainter.wallShade(k < b.px.count ? b.px[k] : 0)) }
-		}
-		wallBufs = ws
-		wallPx = wp
-		wallCount = blockWallBase - 1 + tb.count
-		findLeaves()
-	}
-
-	/// Redraws the art of the tiles reserved for mods (their meaning changes with a world's mods)
-	func refreshModTiles() {
-		let n: Int = tileArtPx * tileArtPx
-		let base: Int = Int(Tile.modBase)
-		for i in 0..<ModLimits.blockSlots {
-			let raw: Int = base + i
-			guard raw < tileBufs.count, let t = Tile(rawValue: UInt8(raw)) else { continue }
-			let b: PixelBuf = tileBuf(t)
-			tileBufs[raw] = b
-			tileKind[raw] = SectionPainter.put(b, &tilePx, raw)
-			let wb: Int = (blockWallBase - 1 + raw) * n
-			for k in 0..<n where wb + k < wallPx.count {
-				wallPx[wb + k] = SectionPainter.wallShade(k < b.px.count ? b.px[k] : 0)
-			}
-		}
-		findLeaves()
-	}
-
-	/// Paints section `sy` (rows sy*16 ..< sy*16+16) of a chunk: chunkW x 16 blocks at tileArtPx pixels
-	/// a block, premultiplied ARGB. Solid ground gets a lit top edge and a dark line where it meets
-	/// open space below or beside it, so the land reads as shapes.
-	func paint(_ world: World, _ ch: Chunk, _ sy: Int) -> [UInt32] {
-		let T: Int = tileArtPx
-		let TT: Int = T * T
-		let W: Int = chunkW * T
-		let Hh: Int = 16 * T
-		var buf: [UInt32] = [UInt32](repeating: 0, count: W * Hh)
-		let H: Int = ch.H
-		let y0: Int = sy * 16
-		let back: [UInt8] = world.backdrop(ch)
-		let opT: [Bool] = Tile.opaqueTable
-		// edge shading follows "solid or trunk", so trees look exactly as they did when trunks had collision
-		let soT: [Bool] = Tile.supportTable
-		let wc: Int = wallCount
-		// the columns just outside the chunk, for the side edges (nil: not loaded, treated as ground)
-		let left: Chunk? = world.chunks[ch.cx - 1]
-		let right: Chunk? = world.chunks[ch.cx + 1]
-		buf.withUnsafeMutableBufferPointer { bb in
-			ch.tiles.withUnsafeBufferPointer { tb in
-				back.withUnsafeBufferPointer { kb in
-					tilePx.withUnsafeBufferPointer { ab in
-						tileKind.withUnsafeBufferPointer { kib in
-							let flipT: [Int] = tileFlip
-							let wx0: Int = ch.cx * chunkW
-							wallPx.withUnsafeBufferPointer { wb in
-								opT.withUnsafeBufferPointer { ob in
-									soT.withUnsafeBufferPointer { sb in
-										guard let out = bb.baseAddress, let tiles = tb.baseAddress, let backs = kb.baseAddress,
-											  let art = ab.baseAddress, let tk = kib.baseAddress, let walls = wb.baseAddress,
-											  let opq = ob.baseAddress, let sol = sb.baseAddress else { return }
-										var lx: Int = 0
-										while lx < chunkW {
-											let colBase: Int = lx * H
-											let ox: Int = lx * T
-											var ly: Int = 0
-											while ly < 16 {
-												let y: Int = y0 + ly
-												if y < 0 || y >= H { ly += 1; continue }
-												let raw: Int = i8(tiles[colBase + y])
-												let oy: Int = ly * T
-												let opaque: Bool = opq[raw]
-												let wall: Int = i8(backs[colBase + y]) - 1
-												if wall >= 0 && wall < wc && !opaque {
-													let src: UnsafePointer<UInt32> = walls + wall * TT
-													var yy: Int = 0
-													while yy < T {
-														(out + (oy + yy) * W + ox).update(from: src + yy * T, count: T)
-														yy += 1
-													}
-												}
-												if raw == 0 { ly += 1; continue }
-												let kind: Int = tk[raw]
-												// which of the block's four pictures goes here: always the same one for a place
-												var pick: Int = 0
-												let fm: Int = flipT[raw]
-												if fm != 0 {
-													var hsh: Int = (wx0 + lx) &* 374761393 &+ y &* 668265263
-													hsh = (hsh ^ (hsh >> 13)) &* 1274126177
-													pick = (hsh >> 16) & fm
-												}
-												let src: UnsafePointer<UInt32> = art + (raw * 4 + pick) * TT
-												if kind == 1 {
-													var yy: Int = 0
-													while yy < T {
-														(out + (oy + yy) * W + ox).update(from: src + yy * T, count: T)
-														yy += 1
-													}
-												} else if kind == 2 {
-													var yy: Int = 0
-													while yy < T {
-														let row: UnsafeMutablePointer<UInt32> = out + (oy + yy) * W + ox
-														var xx: Int = 0
-														while xx < T {
-															let c: UInt32 = src[yy * T + xx]
-															let a: UInt32 = c >> 24
-															if a == 255 {
-																row[xx] = c
-															} else if a != 0 {
-																let under: UInt32 = row[xx]
-																if (under >> 24) == 0 {
-																	row[xx] = c
-																} else {
-																	let f: Double = Double(a) / 255.0
-																	row[xx] = 0xFF000000 | mixRGB(under & 0xFFFFFF, c & 0xFFFFFF, f)
-																}
-															}
-															xx += 1
-														}
-														yy += 1
-													}
-												}
-												// edges where solid ground meets open space (easier to read the terrain)
-												if sol[raw] && opaque {
-													let upOpaque: Bool = y > 0 ? opq[i8(tiles[colBase + y - 1])] : false
-													if !upOpaque {
-														let row: UnsafeMutablePointer<UInt32> = out + oy * W + ox
-														var xx: Int = 0
-														while xx < T {
-															row[xx] = 0xFF000000 | shadeRGB(row[xx] & 0xFFFFFF, 1.12)
-															xx += 1
-														}
-													}
-													let dnOpaque: Bool = y + 1 < H ? opq[i8(tiles[colBase + y + 1])] : true
-													if !dnOpaque {
-														let row: UnsafeMutablePointer<UInt32> = out + (oy + T - 1) * W + ox
-														var xx: Int = 0
-														while xx < T {
-															row[xx] = 0xFF000000 | shadeRGB(row[xx] & 0xFFFFFF, 0.6)
-															xx += 1
-														}
-													}
-													var lfOpaque: Bool = true
-													if lx > 0 {
-														lfOpaque = opq[i8(tiles[colBase - H + y])]
-													} else if let c = left, y < c.H {
-														lfOpaque = opq[Int(c.tiles[(chunkW - 1) * c.H + y])]
-													}
-													if !lfOpaque {
-														var yy: Int = 0
-														while yy < T {
-															let px: UnsafeMutablePointer<UInt32> = out + (oy + yy) * W + ox
-															px[0] = 0xFF000000 | shadeRGB(px[0] & 0xFFFFFF, 0.72)
-															yy += 1
-														}
-													}
-													var rtOpaque: Bool = true
-													if lx + 1 < chunkW {
-														rtOpaque = opq[i8(tiles[colBase + H + y])]
-													} else if let c = right, y < c.H {
-														rtOpaque = opq[Int(c.tiles[y])]
-													}
-													if !rtOpaque {
-														var yy: Int = 0
-														while yy < T {
-															let px: UnsafeMutablePointer<UInt32> = out + (oy + yy) * W + ox + T - 1
-															px[0] = 0xFF000000 | shadeRGB(px[0] & 0xFFFFFF, 0.66)
-															yy += 1
-														}
-													}
-												}
-												ly += 1
-											}
-											lx += 1
-										}
-									}
-								}
-							}
-						}
-					}
-				}
-			}
-		}
-		paintTufts(&buf, world, ch, sy, left, right)
-		premultiplyARGB(&buf)
-		return buf
-	}
-
-	/// Leaves sticking out of a canopy: every open cell of the section with a leaf block above, below
-	/// or beside it gets that block's tufts on that side
-	func paintTufts(_ buf: inout [UInt32], _ world: World, _ ch: Chunk, _ sy: Int, _ left: Chunk?, _ right: Chunk?) {
-		if tufts.isEmpty { return }
-		let T: Int = tileArtPx
-		let W: Int = chunkW * T
-		let H: Int = ch.H
-		let y0: Int = sy * 16
-		let opT: [Bool] = Tile.opaqueTable
-		func at(_ lx: Int, _ y: Int) -> Int {
-			if y < 0 || y >= H { return 0 }
-			if lx < 0 {
-				guard let c = left, y < c.H else { return 0 }
-				return Int(c.tiles[(chunkW - 1) * c.H + y])
-			}
-			if lx >= chunkW {
-				guard let c = right, y < c.H else { return 0 }
-				return Int(c.tiles[y])
-			}
-			return Int(ch.tiles[lx * H + y])
-		}
-		for lx in 0..<chunkW {
-			for ly in 0..<16 {
-				let y: Int = y0 + ly
-				if y < 0 || y >= H { continue }
-				let raw: Int = at(lx, y)
-				if opT[raw] || leafT[raw] { continue }
-				// (side 0: tufts growing up from the leaves below; 1: hanging from those above; 2: from
-				// the leaves to the right, sticking out leftward; 3: from the leaves to the left)
-				let near: [(Int, Int)] = [(at(lx, y + 1), 0), (at(lx, y - 1), 1), (at(lx + 1, y), 2), (at(lx - 1, y), 3)]
-				for (nraw, side) in near where leafT[nraw] {
-					guard let tf = tufts[nraw] else { continue }
-					let wx: Int = ch.x0 + lx
-					let pick: Int = Int(hashU(wx, y, UInt64(7717 + side)) & 1)
-					let base: Int = ly * T * W + lx * T
-					for tp in tf[side][pick] {
-						let cy: Int = tp.at / T
-						let cx: Int = tp.at - cy * T
-						buf[base + cy * W + cx] = tp.c
-					}
-				}
-			}
-		}
-	}
-}
-
 // ===== p25_hud =====
 
 // MARK: - HUD change detection
@@ -12147,6 +11781,20 @@ enum Aero {
 	static let elevatorArea: Double = 1.0
 	/// a wing's camber: it lifts a little even meeting the air head on (radians of extra angle)
 	static let camber: Double = 0.07
+	/// a wing's tilt: steps of this angle (radians), up to this many either way
+	static let tiltStep: Double = 0.05
+	static let tiltSteps: Int = 3
+	/// a flap's drop at its lowest (it drops below flapSpeed, fully by half of it), and its drag then
+	static let flapDrop: Double = 0.16
+	static let flapSpeed: Double = 18.0
+	static let flapDrag: Double = 0.07
+	/// an open air brake's drag, and how fast it opens and closes (per second)
+	static let brakeDrag: Double = 1.8
+	static let brakeRate: Double = 2.5
+	/// a tailplane's area (a wing is 1)
+	static let stabArea: Double = 0.6
+	/// how fast ballast tanks fill or empty at full stick (of a tank a second)
+	static let ballastRate: Double = 0.25
 	/// static thrust of an air propeller per engine of power, and the airspeed where it fades out
 	static let propThrust: Double = 110.0
 	static let propVmax: Double = 64.0
@@ -12255,12 +11903,17 @@ func vehicleBlockMass(_ b: Tile, _ t: PartType) -> Double {
 /// floats and stone sinks), anything else a little
 func cellDisplacement(_ v: Vehicle, _ c: PartCell, _ t: PartType) -> Double {
 	if t == .block, let b = v.blocks[c] { return b.solid ? 1.0 : 0.2 }
+	if t == .ballast { return 0.15 + 0.85 * (1.0 - v.ballast) }
 	return partDisplacement(t)
 }
 
 /// How much damage a part takes before it breaks off
 func partHP(_ t: PartType) -> Double {
 	switch t {
+	case .ballast: return 40
+	case .flap: return 22
+	case .airBrake: return 18
+	case .stabilizer: return 14
 	case .armor: return 160
 	case .track, .jet, .drill, .diamondDrill, .voidDrill, .cannon: return 55
 	case .engine, .hull, .cargo, .frame, .offroadWheel: return 40
@@ -12416,11 +12069,15 @@ extension Game {
 			var fbx: Double = 0
 			var fby: Double = 0
 			let k: Double = v.boost[cell] ?? 1.0
-			if t == .wing || t == .elevator {
-				let f: (Double, Double, Double, Bool, Double) = wingForce(t, bx, by, lx, rho, wantSpin, t == .wing ? bank * k : k)
+			if t == .wing || t == .elevator || t == .flap || t == .stabilizer {
+				// (its tilt, and a flap's drop when slow, turn the wing further into the air)
+				var extra: Double = Double(v.tilt[cell] ?? 0) * Aero.tiltStep
+				if t == .flap { extra += Aero.flapDrop * clampD((Aero.flapSpeed - v.airspeed) / (Aero.flapSpeed * 0.5), 0, 1) }
+				let wide: Bool = t == .wing || t == .flap
+				let f: (Double, Double, Double, Bool, Double) = wingForce(t, bx, by, lx, rho, wantSpin, wide ? bank * k : k, extra)
 				fbx = f.0
 				fby = f.1
-				if t == .wing {
+				if t == .wing || t == .flap {
 					lift += f.2
 					alpha = max(alpha, f.4)
 				}
@@ -12448,6 +12105,13 @@ extension Game {
 						let f: Double = Aero.jetThrust * w * k * dirX * (0.7 + 0.3 * rho) * max(0.35, 1.0 - abs(bx) / 90.0)
 						fbx += f
 						thrust += abs(f)
+					}
+				case .airBrake:
+					if v.brakeOpen > 0.01 {
+						// a panel across the flow: drag by how far it is open
+						let q: Double = Aero.brakeDrag * Aero.kDrag * rho * v.brakeOpen * k
+						fbx += q * bx * abs(bx)
+						fby += q * by * abs(by)
 					}
 				case .rotor:
 					if rotorF > 0 {
@@ -12509,7 +12173,7 @@ extension Game {
 	/// One wing or elevator: lift across the airflow and drag along it, from the angle the air meets it
 	/// (folded so the wing works flying either way), with an elevator's flap turned by the stick.
 	/// Returns the body-frame force, the lift, and whether it has stalled.
-	func wingForce(_ t: PartType, _ bx: Double, _ by: Double, _ lx: Double, _ rho: Double, _ wantSpin: Double, _ scale: Double) -> (Double, Double, Double, Bool, Double) {
+	func wingForce(_ t: PartType, _ bx: Double, _ by: Double, _ lx: Double, _ rho: Double, _ wantSpin: Double, _ scale: Double, _ extra: Double = 0) -> (Double, Double, Double, Bool, Double) {
 		let sp2: Double = bx * bx + by * by
 		if sp2 < 0.09 { return (0, 0, 0, false, 0) }
 		let sp: Double = sqrt(sp2)
@@ -12517,9 +12181,12 @@ extension Game {
 		let dy: Double = by / sp
 		var a: Double = atan2(-dy, -dx)
 		if a > Double.pi * 0.5 { a -= Double.pi } else if a < -Double.pi * 0.5 { a += Double.pi }
-		// the camber lifts toward the top of the wing whichever way the air comes
-		if t == .wing { a += dx < 0 ? Aero.camber : -Aero.camber }
+		// the camber lifts toward the top of the wing whichever way the air comes; a tilt or a dropped flap
+		// adds to it
+		if t == .wing || t == .flap { a += dx < 0 ? Aero.camber : -Aero.camber }
+		if extra != 0 { a += dx < 0 ? extra : -extra }
 		var area: Double = 1.0
+		if t == .stabilizer { area = Aero.stabArea }
 		if t == .elevator {
 			// the flap, tilted the way that turns the nose as asked (behind or ahead of the centre of mass)
 			area = Aero.elevatorArea
@@ -12528,11 +12195,12 @@ extension Game {
 			a += -wantSpin * side * flow * Aero.flap
 		}
 		let cl: Double = liftCoefficient(a)
-		let cd: Double = wingDrag(a, cl)
+		var cd: Double = wingDrag(a, cl)
+		if t == .flap { cd += Aero.flapDrag * clampD(extra / Aero.flapDrop, 0, 1) }
 		let q: Double = Aero.kLift * rho * sp2 * area * scale
 		let fbx: Double = q * cl * -dy + q * Aero.dragShare * cd * dx
 		let fby: Double = q * cl * dx + q * Aero.dragShare * cd * dy
-		let stalled: Bool = t == .wing && abs(a) > Aero.stallAngle && sp > 4.0
+		let stalled: Bool = (t == .wing || t == .flap) && abs(a) > Aero.stallAngle && sp > 4.0
 		return (fbx, fby, abs(q * cl), stalled, sp > 4.0 ? abs(a) : 0)
 	}
 
@@ -12652,8 +12320,10 @@ extension Game {
 	func vehicleExtras(_ v: Vehicle, _ dt: Double) {
 		if v.parts.isEmpty { return }
 		if v.hitT > 0 { v.hitT -= dt }
+		ballastAndBrakes(v, dt)
+		updateHullAir(v, dt)
+		if !v.asleep || v.aero { v.windX = windAtVehicle(v) * 0.6 }
 		if v.aero {
-			v.windX = world.dim == .overworld && settings.weatherOn ? weatherAt(v.px, v.py).wind * 0.6 : 0
 			if v.auto != 0 && !v.rider { autopilotSteer(v, 0, 0, dt) }
 			flightControls(v, dt)
 			airFuel(v, dt)
@@ -13037,6 +12707,7 @@ extension Game {
 
 	/// What the controls do in this vehicle (said when getting in)
 	func controlsHint(_ v: Vehicle) -> String {
+		if v.ballasts > 0 && v.wings == 0 && v.rotors == 0 { return "Under way. Stick down floods the ballast tanks to dive, up blows them to rise; left and right: the propeller." }
 		if v.rotors > 0 { return "Flying. Stick up and down: climb and sink (let go to hover). Left and right: tilt and fly that way." }
 		if v.burners > 0 && v.envelopes > 0 { return "Ballooning. Stick up: heat the balloon and rise; down: let it cool and sink. Left and right: the propellers." }
 		if v.wings > 0 { return "Flying. Left and right: the throttle. Up and down: pitch the nose (gather speed on the ground, then pull up). TURN turns round." }
@@ -13647,6 +13318,8 @@ extension Game {
 	/// A line about the guns (reload) and the autopilot, while driving
 	func vehicleStatusLine(_ v: Vehicle) -> String? {
 		var parts: [String] = []
+		if v.ballasts > 0 { parts.append(joinText("BALLAST ", String(Int((v.ballast * 100).rounded())), "%")) }
+		if v.airBrakes > 0 && v.brakeOpen > 0.5 { parts.append("AIR BRAKES") }
 		if v.cannons > 0 {
 			var cd: Double = 0
 			for (c, t) in v.parts where t == .cannon { cd = max(cd, v.gunCD[c] ?? 0) }

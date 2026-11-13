@@ -342,6 +342,7 @@ do {
     for t in [Tile.planks, .stone] {
         let (g, x0) = runway()
         for x in (x0 + 60)...(x0 + 90) { for y in 90..<100 { g.world.set(x, y, .water) } ; for y in 100..<104 { g.world.set(x, y, .water) } }
+        g.world.calmLiquids()
         for x in (x0 + 60)...(x0 + 90) { g.world.set(x, 104, .stone) }
         let v = Vehicle(id: g.newID(), first: .block, x: 0, y: 0)
         v.parts.removeAll()

@@ -373,6 +373,7 @@ func sea() -> (Game, Int) {
         for y in 100..<108 { g.world.set(x, y, .water) }
         for y in 108..<112 { g.world.set(x, y, .stone) }
     }
+    g.world.calmLiquids()
     return (g, x0)
 }
 func raft(_ g: Game, _ x0: Int) -> Vehicle {

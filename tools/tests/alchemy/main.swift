@@ -198,11 +198,13 @@ do {
     // breathing
     let w = arena()
     for x in (Int(w.pb.x) - 3)...(Int(w.pb.x) + 3) { for y in 95..<100 { w.world.set(x, y, .water) } }
+    w.world.calmLiquids()
     w.effects.add(.breathing, 1, 180)
     frames(w, 60 * 12)
     check(w.air >= 9.9, "Deepbreath Draught: under water the air never runs out (air \(w.air) after 12 s)")
     func swimRun(_ g: Game) -> Double {
         for x in (Int(g.pb.x) - 30)...(Int(g.pb.x) + 30) { for y in 92..<100 { g.world.set(x, y, .water) } }
+        g.world.calmLiquids()
         g.pb.y = 99
         frames(g, 30)
         g.keyR = true
@@ -385,6 +387,7 @@ do {
     let fr = arena()
     let fx: Int = Int(fr.pb.x) + 6
     for x in (fx - 2)...(fx + 2) { for y in 97..<100 { fr.world.set(x, y, .water) } }
+    fr.world.calmLiquids()
     let burner: Mob = dummy(fr, .pig, Double(fx) + 0.5, 97)
     burner.burn = 5
     fr.burstPotion(.frost, Double(fx) + 0.5, 97.0, direct: nil)
@@ -895,6 +898,7 @@ do {
     // seal: breathing and fire
     let e = suited([.seal])
     for x in (Int(e.pb.x) - 3)...(Int(e.pb.x) + 3) { for y in 95..<100 { e.world.set(x, y, .water) } }
+    e.world.calmLiquids()
     frames(e, 60 * 12)
     check(e.air >= 9.9 && e.suit.energy < e.suitStats.capacity, "environment seal: air under water, while it spends energy")
     let f = suited([.seal])
@@ -949,6 +953,7 @@ do {
     w.pb.onGround = false
     w.jumpHeld = true
     for x in (Int(w.pb.x) - 3)...(Int(w.pb.x) + 3) { for y in 60..<75 { w.world.set(x, y, .water) } }
+    w.world.calmLiquids()
     frame(w)
     check(w.suitLastLoad <= w.suitStats.output + 0.001 && w.suitLastLoad > 0, "a core never gives more than its output a second (asked for more, gave \(String(format: "%.1f", w.suitLastLoad)) of \(w.suitStats.output))")
 }

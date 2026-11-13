@@ -7210,7 +7210,49 @@ extension BlockEditorView {
 					StatSlider(label: "Strength (sparks a second)", value: b(\.powerAmt, 4), range: 0.1...(s.mod.sandbox ? 200 : 40), step: 0.1, format: "%.1f")
 				}
 			}
+			if p.collision == .liquid { liquidSection }
 		}
+	}
+
+	/// A liquid's numbers (collision: Liquid)
+	var liquidSection: some View {
+		let sb: Bool = s.mod.sandbox
+		return ModSection(title: "AS A LIQUID", help: "Water is density 1 and thickness 1; lava is 3.1 and 4. A part-full cell is drawn in the block's colour, this see-through.") {
+			StatSlider(label: "Density (what floats in it)", value: b(\.liqDensity, 1.0), range: 0.2...(sb ? 12.0 : 5.0), step: 0.05, format: "%.2f")
+			StatSlider(label: "Thickness (how slowly it flows)", value: b(\.liqThick, 1.0), range: 1.0...(sb ? 20.0 : 8.0), step: 1, format: "%.0f")
+			StatSlider(label: "Spreads (blocks over flat ground)", value: reachBind, range: 1.0...(sb ? 30.0 : 12.0), step: 1, format: "%.0f")
+			StatSlider(label: "See-through (1 is solid colour)", value: b(\.liqOpacity, 0.75), range: 0.1...1.0, step: 0.05, format: "%.2f")
+			StatSlider(label: "Harm a second to who is in it", value: b(\.liqHarm, 0), range: 0.0...(sb ? 100.0 : 20.0), step: 0.5, format: "%.1f")
+			ModToggle(label: "Burns (like lava)", help: "Whoever is in it is set alight; a vehicle floats on it", isOn: b(\.liqHot, false))
+			ModToggle(label: "Dries up", help: "A thin film of it left alone evaporates", isOn: b(\.liqDries, false))
+			Text("Hardens into, where it meets another liquid").font(.pixel(12, .bold)).foregroundColor(Color(ui: 0xFFFFFF))
+			ChoiceRows(options: BlockEditorView.hardenNames, selected: hardenBind, columns: 4)
+			Text("Gives whoever is in it").font(.pixel(12, .bold)).foregroundColor(Color(ui: 0xFFFFFF))
+			ChoiceRows(options: ["Nothing"] + ModEffectKind.allCases.map { $0.name }, selected: effectBind, columns: 3)
+			if block.liqEffect >= 0 {
+				StatSlider(label: "Effect strength", value: b(\.liqEffectAmt, 10), range: 0.0...(sb ? 200.0 : 60.0), step: 1, format: "%.0f")
+			}
+		}
+	}
+
+	static let hardenNames: [String] = ["Nothing", "Stone", "Obsidian", "Glass", "Ice", "Sand", "Dirt", "Ash Stone"]
+	static let hardenKeys: [String] = ["", BlockEditorView.tileKey(.stone), BlockEditorView.tileKey(.obsidian), BlockEditorView.tileKey(.glass), BlockEditorView.tileKey(.ice), BlockEditorView.tileKey(.sand), BlockEditorView.tileKey(.dirt), BlockEditorView.tileKey(.ashStone)]
+
+	static func tileKey(_ t: Tile) -> String { return "tile:" + String(t.rawValue) }
+
+	var hardenBind: Binding<Int> {
+		let base: Binding<String> = b(\.liqHardens, "")
+		return Binding<Int>(get: { BlockEditorView.hardenKeys.firstIndex(of: base.wrappedValue) ?? 0 }, set: { (i: Int) in base.wrappedValue = BlockEditorView.hardenKeys[clampI(i, 0, BlockEditorView.hardenKeys.count - 1)] })
+	}
+
+	var effectBind: Binding<Int> {
+		let base: Binding<Int> = b(\.liqEffect, -1)
+		return Binding<Int>(get: { base.wrappedValue + 1 }, set: { (i: Int) in base.wrappedValue = i - 1 })
+	}
+
+	var reachBind: Binding<Double> {
+		let base: Binding<Int> = b(\.liqReach, 7)
+		return Binding<Double>(get: { Double(base.wrappedValue) }, set: { (v: Double) in base.wrappedValue = Int(v.rounded()) })
 	}
 
 	var powerBind: Binding<Int> {

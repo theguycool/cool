@@ -1358,6 +1358,8 @@ enum WorldRenderer {
 		// (made again only when it changes); its wheels, propellers and drills are drawn over it
 		let baked: Bool = VehicleArt.wanted(veh) && drawVehiclePicture(&ctx, v, veh, shade, squash, cx)
 		for (cell, t) in veh.parts {
+			// (a part bigger than one cell is drawn once, from its middle)
+			if let m = veh.spanOf[cell], m != cell { continue }
 			let inPicture: Bool = baked && VehicleArt.still(t)
 			if inPicture && veh.hitT <= 0 && (veh.dmg[cell] ?? 0) <= 0.5 && !VehicleArt.working(veh, t) { continue }
 			let p: (Double, Double) = veh.cellCenter(cell)
@@ -1378,8 +1380,10 @@ enum WorldRenderer {
 			if (t == .airProp || t == .jet || t == .tailRotor), let f = veh.face[cell], f.0 < 0 { flip = true }
 			c.rotate(by: Angle(radians: rot))
 			if flip { c.scaleBy(x: -1, y: 1) }
-			let w: Double = tp * 1.02
-			if !inPicture {
+			let w: Double = tp * 1.02 * Double(partSpan(t))
+			if t == .bigWheel {
+				drawBigWheel(&c, w)
+			} else if !inPicture {
 				let img: Image = veh.blocks[cell].map { art.tile($0) } ?? art.parts[t.rawValue]
 				c.draw(img, in: mkRect(-w * 0.5 + jitter, -w * 0.5, w, w))
 			}
@@ -1401,6 +1405,46 @@ enum WorldRenderer {
 		}
 		if cracked { ctx.stroke(cracks, with: .color(Color.black.opacity(0.7)), lineWidth: 1.5) }
 		if veh.cannons + veh.guns > 0 { drawBarrels(&ctx, v, veh, squash, cx) }
+		if !veh.links.isEmpty { drawCouplings(&ctx, g, v, veh) }
+	}
+
+	/// A big wheel, round at any size: a treaded tyre, the rim and four spokes (the context is already
+	/// turned with the wheel)
+	static func drawBigWheel(_ c: inout GraphicsContext, _ w: Double) {
+		let r: Double = w * 0.49
+		fillOval(&c, mkRect(-r, -r, r * 2, r * 2), Color(hex: 0x1A1A1E))
+		let t: Double = r * 0.86
+		fillOval(&c, mkRect(-t, -t, t * 2, t * 2), Color(hex: 0x2E2E34))
+		let rim: Double = r * 0.56
+		fillOval(&c, mkRect(-rim, -rim, rim * 2, rim * 2), Color(hex: artGrade(0x8A8A94)))
+		let hub: Double = r * 0.18
+		var k: Int = 0
+		while k < 4 {
+			let a: Double = Double(k) * Double.pi * 0.5
+			strokeLine(&c, 0, 0, cos(a) * rim, sin(a) * rim, Color(hex: 0x4A4A52), max(1.5, w * 0.05))
+			k += 1
+		}
+		// tread blocks round the tyre
+		k = 0
+		while k < 12 {
+			let a: Double = Double(k) * Double.pi / 6.0
+			let x: Double = cos(a) * r * 0.93
+			let y: Double = sin(a) * r * 0.93
+			fillOval(&c, mkRect(x - w * 0.035, y - w * 0.035, w * 0.07, w * 0.07), Color(hex: 0x3A3A42))
+			k += 1
+		}
+		fillOval(&c, mkRect(-hub, -hub, hub * 2, hub * 2), Color(hex: artGrade(0xD8D8E0)))
+	}
+
+	/// The bar between two coupled vehicles' couplers (drawn by the one with the lower number)
+	static func drawCouplings(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D, _ veh: Vehicle) {
+		for l in veh.links where veh.id < l.other {
+			guard let o = g.vehicleByID(l.other) else { continue }
+			let a: (Double, Double) = veh.cellCenter(l.cell)
+			let b: (Double, Double) = o.cellCenter(l.oc)
+			strokeLine(&ctx, v.sx(a.0), v.sy(a.1), v.sx(b.0), v.sy(b.1), Color(hex: 0x1E1E24), v.tp * 0.22)
+			strokeLine(&ctx, v.sx(a.0), v.sy(a.1), v.sx(b.0), v.sy(b.1), Color(hex: 0x6A6E78), v.tp * 0.12)
+		}
 	}
 
 	/// Draws a vehicle's still cells and back walls from its cached picture (true when it did)
@@ -8217,7 +8261,7 @@ enum VehicleArt {
 	/// Parts that look the same whatever the vehicle does (wheels, propellers and drills turn)
 	static func still(_ t: PartType) -> Bool {
 		switch t {
-		case .wheel, .offroadWheel, .propeller, .drill, .diamondDrill, .voidDrill: return false
+		case .wheel, .offroadWheel, .propeller, .drill, .diamondDrill, .voidDrill, .railWheel, .bigWheel: return false
 		default: return true
 		}
 	}

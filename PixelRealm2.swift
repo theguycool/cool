@@ -479,6 +479,8 @@ struct VPartSave: Codable {
 	var dmg: Double? = nil
 	/// a wing's tilt (nil: none)
 	var tilt: Int? = nil
+	/// a cell of a part bigger than one cell: the part's middle cell (dx, dy)
+	var span: [Int]? = nil
 }
 
 /// A point on an autopilot's route (world coordinates)
@@ -506,6 +508,8 @@ struct VehicleSave: Codable {
 	var walls: [[Int]]? = nil
 	/// how full the ballast tanks are (nil: empty)
 	var ballast: Double? = nil
+	/// its couplings to other vehicles (a train)
+	var links: [VLink]? = nil
 }
 
 /// Displaced volume per part (how much it floats)
@@ -713,6 +717,17 @@ final class Vehicle {
 	/// (0 dry air ... 1 full); worked out a few times a second (see updateHullAir)
 	var hullAir: [PartCell: Double] = [:]
 	var hullT: Double = 0
+	/// parts bigger than one cell: every cell of one, mapped to its middle cell (where it is counted,
+	/// weighs and is drawn); the couplers, and the links to other vehicles they make (a train)
+	var spanOf: [PartCell: PartCell] = [:]
+	var couplers: Int = 0
+	var railWheels: Int = 0
+	var links: [VLink] = []
+	/// a moment after being uncoupled by hand, before its couplers link again
+	var noCoupleT: Double = 0
+	/// its collision samples, kept until it changes
+	var sampleCache: [VSample] = []
+	var sampleKey: Int = -1
 
 	init(id: Int, first: PartType, x: Double, y: Double) {
 		self.id = id
@@ -806,7 +821,8 @@ final class Vehicle {
 		engines = 0; wheels = 0; propellers = 0; paddles = 0; tanks = 0; drills = 0; offroadWheels = 0; headlights = 0
 		wings = 0; elevators = 0; airProps = 0; jets = 0; rotors = 0; tailRotors = 0; envelopes = 0; burners = 0
 		tracks = 0; armors = 0; cannons = 0; guns = 0; autopilots = 0
-		flaps = 0; airBrakes = 0; stabilizers = 0; ballasts = 0
+		flaps = 0; airBrakes = 0; stabilizers = 0; ballasts = 0; couplers = 0; railWheels = 0
+		spanOf = spanOf.filter { parts[$0.key] != nil }
 		hasSeat = false
 		hasSteering = false
 		hasCockpit = false
@@ -817,6 +833,8 @@ final class Vehicle {
 		for (c, t) in parts {
 			if first { x0 = c.dx; x1 = c.dx; y0 = c.dy; y1 = c.dy; first = false }
 			x0 = min(x0, c.dx); x1 = max(x1, c.dx); y0 = min(y0, c.dy); y1 = max(y1, c.dy)
+			// (the outer cells of a big part are counted and weighed at its middle)
+			if let k = spanOf[c], k != c { continue }
 			let pm: Double = cellMass(c, t)
 			mass += pm
 			mx += pm * (Double(c.dx) + 0.5)
@@ -922,6 +940,9 @@ final class Vehicle {
 		case .airBrake: airBrakes += 1
 		case .stabilizer: stabilizers += 1
 		case .ballast: ballasts += 1
+		case .railWheel: wheels += 1; railWheels += 1
+		case .bigWheel: wheels += 1; offroadWheels += 1
+		case .coupler: couplers += 1
 		default: break
 		}
 	}
@@ -1070,6 +1091,17 @@ final class Vehicle {
 	/// if it survives, otherwise the largest), returning what came off (the removed cell first)
 	func cutAway(_ c: PartCell, keep: PartCell? = nil) -> [VCell] {
 		var out: [VCell] = []
+		if let mid = spanOf[c] {
+			// a part bigger than one cell comes away whole (given back once, from its middle)
+			for (k, m) in spanOf where m == mid {
+				if k == mid, let t = parts[k] { out.append(VCell(cell: k, type: t, tile: blocks[k])) }
+				parts[k] = nil
+				blocks[k] = nil
+				dmg[k] = nil
+				spanOf[k] = nil
+			}
+			if parts.isEmpty { return out }
+		}
 		if let t = parts[c] { out.append(VCell(cell: c, type: t, tile: blocks[c])) }
 		parts[c] = nil
 		blocks[c] = nil
@@ -1082,10 +1114,12 @@ final class Vehicle {
 		}
 		let staySet: Set<PartCell> = Set(stay)
 		for k in Array(parts.keys) where !staySet.contains(k) {
-			if let t = parts[k] { out.append(VCell(cell: k, type: t, tile: blocks[k])) }
+			let outer: Bool = spanOf[k] != nil && spanOf[k] != k
+			if let t = parts[k], !outer { out.append(VCell(cell: k, type: t, tile: blocks[k])) }
 			parts[k] = nil
 			blocks[k] = nil
 			dmg[k] = nil
+			spanOf[k] = nil
 		}
 		return out
 	}
@@ -1097,6 +1131,7 @@ final class Vehicle {
 			if let b = blocks[c] { e.tile = Int(b.rawValue) }
 			if let d = dmg[c], d > 0 { e.dmg = d }
 			if let k = tilt[c], k != 0 { e.tilt = k }
+			if let m = spanOf[c] { e.span = [m.dx, m.dy] }
 			ps.append(e)
 		}
 		var s = VehicleSave(id: id, parts: ps, x: px, y: py, fuel: fuel, dir: dir, kit: kit, rot: angle)
@@ -1104,6 +1139,7 @@ final class Vehicle {
 		if !route.isEmpty { s.route = route }
 		if let c = seatAt { s.seat = [c.dx, c.dy] }
 		if ballast > 0.001 { s.ballast = ballast }
+		if !links.isEmpty { s.links = links }
 		if !walls.isEmpty { s.walls = walls.map { [$0.key.dx, $0.key.dy, Int($0.value)] } }
 		return s
 	}
@@ -1119,12 +1155,14 @@ final class Vehicle {
 			else if t == .block { v.blocks[c] = .planks }
 			if let d = p.dmg { v.dmg[c] = d }
 			if let k = p.tilt, k != 0 { v.tilt[c] = clampI(k, -Aero.tiltSteps, Aero.tiltSteps) }
+			if let m = p.span, m.count == 2 { v.spanOf[c] = PartCell(dx: m[0], dy: m[1]) }
 		}
 		if v.parts.isEmpty { v.parts[PartCell(dx: 0, dy: 0)] = .frame }
 		v.auto = s.auto ?? 0
 		v.route = s.route ?? []
 		if let c = s.seat, c.count == 2 { v.seatAt = PartCell(dx: c[0], dy: c[1]) }
 		v.ballast = clampD(s.ballast ?? 0, 0, 1)
+		v.links = s.links ?? []
 		for w in s.walls ?? [] where w.count == 3 && w[2] > 0 && w[2] < 256 { v.walls[PartCell(dx: w[0], dy: w[1])] = UInt8(w[2]) }
 		v.recompute(keepAnchor: false)
 		if let r = s.rot {
@@ -4483,6 +4521,10 @@ extension Game {
 		if !pressed || useCD > 0 { return }
 		if !inReach(aimX, aimY) {
 			say("Too far away. Tap closer to you.", 1.2)
+			return
+		}
+		if p == .bigWheel {
+			if !attachBigWheel() { say("Tap next to a vehicle: the cell you tap is the big wheel's middle.", 2.0) }
 			return
 		}
 		// attach to an existing vehicle (the tapped cell must touch it)
@@ -8093,6 +8135,8 @@ struct VSample {
 	var hull: Bool
 	/// a track (grips harder than a wheel and rolls less freely)
 	var track: Bool = false
+	/// a rail wheel (rolls almost freely on rails, drags elsewhere)
+	var rail: Bool = false
 	/// the cell it belongs to (a hard crash damages that part)
 	var cx: Int = 0
 	var cy: Int = 0
@@ -8102,6 +8146,9 @@ struct VSample {
 /// lot. Parts without displacement (the old model) made engines and propellers drag boats under.
 func partDisplacement(_ p: PartType) -> Double {
 	switch p {
+	case .railWheel: return 0.5
+	case .coupler: return 0.3
+	case .bigWheel: return 3.0
 	case .flap: return 0.3
 	case .airBrake, .stabilizer: return 0.2
 	case .ballast: return 1.0
@@ -8233,6 +8280,7 @@ extension Game {
 	func updateVehicles(_ dt: Double) {
 		let t0: Double = perfNow()
 		stepVehicles(vehicles, dt)
+		formCouplings(dt)
 		// weapons, the autopilot, turns and damage (also for a vehicle at rest)
 		for v in vehicles { vehicleExtras(v, dt) }
 		flushVehicleBlasts()
@@ -8257,6 +8305,15 @@ extension Game {
 	/// Collision samples: the four corners and edge midpoints of square parts; a ring for wheels.
 	/// Hull samples follow the visible hull (its art leaves the top quarter of the cell empty).
 	func vehicleSamples(_ v: Vehicle) -> [VSample] {
+		// (worked out again only when the vehicle changes: a big ship has thousands)
+		if v.sampleKey == v.artRev && !v.sampleCache.isEmpty { return v.sampleCache }
+		let made: [VSample] = makeVehicleSamples(v)
+		v.sampleCache = made
+		v.sampleKey = v.artRev
+		return made
+	}
+
+	func makeVehicleSamples(_ v: Vehicle) -> [VSample] {
 		var out: [VSample] = []
 		out.reserveCapacity(v.parts.count * 8)
 		// on a boat every part slides like a hull (engine and propeller included)
@@ -8265,11 +8322,18 @@ extension Game {
 			let x0: Double = Double(c.dx)
 			let y0: Double = Double(c.dy)
 			if isWheelPart(t) {
+				if let m = v.spanOf[c], m != c { continue }
 				var k: Int = 0
 				let tr: Bool = t == .track
-				while k < 10 {
-					let a: Double = Double(k) / 10.0 * 2.0 * Double.pi
-					out.append(VSample(lx: x0 + 0.5 + cos(a) * 0.47, ly: y0 + 0.5 + sin(a) * 0.47, wheel: true, ramp: true, hull: false, track: tr, cx: c.dx, cy: c.dy))
+				// (a big wheel: one ring three cells across round its middle)
+				let big: Bool = t == .bigWheel
+				let r: Double = big ? 1.47 : 0.47
+				let n: Int = big ? 22 : 10
+				while k < n {
+					let a: Double = Double(k) / Double(n) * 2.0 * Double.pi
+					var smp: VSample = VSample(lx: x0 + 0.5 + cos(a) * r, ly: y0 + 0.5 + sin(a) * r, wheel: true, ramp: true, hull: false, track: tr, cx: c.dx, cy: c.dy)
+					smp.rail = t == .railWheel
+					out.append(smp)
 					k += 1
 				}
 			} else {
@@ -8399,8 +8463,10 @@ extension Game {
 		var most: Int = 0
 		for r in runs { most = max(most, r.n) }
 		var k: Int = 0
+		let linked: Bool = vehicles.contains { !$0.links.isEmpty }
 		while k < most {
 			for r in runs where k < r.n { vehicleFixedStep(r) }
+			if linked { solveCouplings(vehicleStep) }
 			k += 1
 		}
 		for r in runs { r.v.inStep = false }
@@ -8575,6 +8641,7 @@ extension Game {
 			v.angVel += (rx * fy - ry * fx) * invI * h
 		}
 		if !open && !v.hullAir.isEmpty { hullAirForces(v, h, c, s) }
+		if v.railWheels > 0 && !open { railHold(v, h) }
 		let sub: Double = wetSum / Double(max(1, v.parts.count))
 		// how deep the hulls sit: about 0.4 when floating freely, falling as a boat runs aground
 		let hullDepth: Double = hullN > 0 ? hullWet / Double(hullN) : sub
@@ -8635,7 +8702,9 @@ extension Game {
 			let ry: Double = lx * s2 + ly * c2
 			let wx: Double = v.px + rx
 			let wy: Double = v.py + ry
-			guard let pen = penetration(wx, wy, wheel: smp.ramp) else { continue }
+			// (a rail wheel rides the rails' smooth surface where there are rails)
+			let found: (Double, Double, Double)? = smp.rail ? railPenetration(wx, wy) : penetration(wx, wy, wheel: smp.ramp)
+			guard let pen = found else { continue }
 			let depth: Double = pen.0
 			let nx: Double = pen.1
 			let ny: Double = pen.2
@@ -8674,6 +8743,11 @@ extension Game {
 				let braking: Bool = abs(throttle) < 0.1 || (throttle * vt < 0 && !v.aero)
 				mu = braking ? (v.rider ? 0.9 : 0.25) : (v.aero ? 0.02 : 0.06)
 				if smp.track { mu = braking ? (v.rider ? 1.1 : 0.4) : 0.14 }
+				if smp.rail {
+					// (a rail wheel coasts unless the driver pulls against the motion)
+					let pulling: Bool = v.rider && abs(throttle) > 0.1 && throttle * vt < 0
+					mu = railGrip(Int(floor(wx)), Int(floor(wy)), pulling, v.rider)
+				}
 			}
 			let leave: Double = vn < 0 ? -max(0.04, ground.bounce) * vn : 0
 			var kc: VContact = VContact(rx: rx, ry: ry, nx: nx, ny: ny, rn: rn, kn: invM + rn * rn * invI, rt: rt, kt: invM + rt * rt * invI, want: leave, mu: mu * ground.grip)
@@ -9223,6 +9297,11 @@ extension Game {
 		}
 		if repairVehiclePart(v, c) { return }
 		if useVehicleBlock(v, c) { return }
+		if v.parts[c] == .coupler && v.links.contains(where: { $0.cell == c }) {
+			uncouple(v, c)
+			say("Uncoupled.", 1.2)
+			return
+		}
 		if let t = v.parts[c], t == .seat || t == .steering || t == .cockpit {
 			mountVehicle(v, at: t == .steering ? nil : c)
 			return
@@ -11904,12 +11983,15 @@ func vehicleBlockMass(_ b: Tile, _ t: PartType) -> Double {
 func cellDisplacement(_ v: Vehicle, _ c: PartCell, _ t: PartType) -> Double {
 	if t == .block, let b = v.blocks[c] { return b.solid ? 1.0 : 0.2 }
 	if t == .ballast { return 0.15 + 0.85 * (1.0 - v.ballast) }
+	if let k = v.spanOf[c], k != c { return 0 }
 	return partDisplacement(t)
 }
 
 /// How much damage a part takes before it breaks off
 func partHP(_ t: PartType) -> Double {
 	switch t {
+	case .bigWheel: return 70
+	case .railWheel, .coupler: return 30
 	case .ballast: return 40
 	case .flap: return 22
 	case .airBrake: return 18
@@ -12793,6 +12875,10 @@ extension Game {
 		var nw: [PartCell: UInt8] = [:]
 		for (c, k) in v.walls { nw[PartCell(dx: sx - c.dx, dy: c.dy)] = k }
 		v.walls = nw
+		var ns: [PartCell: PartCell] = [:]
+		for (c, m) in v.spanOf { ns[PartCell(dx: sx - c.dx, dy: c.dy)] = PartCell(dx: sx - m.dx, dy: m.dy) }
+		v.spanOf = ns
+		for i in v.links.indices { v.links[i].cell = PartCell(dx: sx - v.links[i].cell.dx, dy: v.links[i].cell.dy) }
 		if let st = v.seatAt { v.seatAt = PartCell(dx: sx - st.dx, dy: st.dy) }
 		v.parts = np
 		v.blocks = nb

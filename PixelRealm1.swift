@@ -1407,8 +1407,14 @@ enum PartType: Int, Codable, CaseIterable {
 	/// appended (flight and water): a wing with a flap that drops for slow flight, an air brake, a fixed
 	/// tailplane that steadies the nose, and a ballast tank that fills with water to dive
 	case flap, airBrake, stabilizer, ballast
+	/// appended (big vehicles and rails): a flanged wheel that rolls almost freely on rails, a coupler that
+	/// links two vehicles into a train, and a wheel three cells across
+	case railWheel, coupler, bigWheel
 	var name: String {
 		switch self {
+		case .railWheel: return "Rail Wheel"
+		case .coupler: return "Coupler"
+		case .bigWheel: return "Big Wheel"
 		case .flap: return "Flapped Wing"
 		case .airBrake: return "Air Brake"
 		case .stabilizer: return "Tailplane"
@@ -1481,6 +1487,9 @@ enum PartType: Int, Codable, CaseIterable {
 		case .airBrake: return 0.4
 		case .stabilizer: return 0.25
 		case .ballast: return 1.4
+		case .railWheel: return 0.7
+		case .coupler: return 0.4
+		case .bigWheel: return 3.2
 		}
 	}
 
@@ -1510,6 +1519,9 @@ enum PartType: Int, Codable, CaseIterable {
 		case .airBrake: return "Opens when you push the stick against your motion (or roll to a stop on the ground): a lot of drag."
 		case .stabilizer: return "A fixed tail surface: keeps the nose steady by itself, with no controls."
 		case .ballast: return "Fills with water to sink and blows it out to rise (stick down and up, in water). Makes a submarine."
+		case .railWheel: return "Rolls almost freely along rails (and drags on anything else). Ore carts and trains run on them."
+		case .coupler: return "Links up with another vehicle's coupler when they touch: a train. Tap it to uncouple."
+		case .bigWheel: return "A wheel three cells across: climbs over steps a small wheel stops at. Takes a free space three by three."
 		case .block: return "A block built onto a vehicle."
 		default: return "Vehicle part"
 		}
@@ -1517,7 +1529,10 @@ enum PartType: Int, Codable, CaseIterable {
 }
 
 /// Parts that hang under the body and roll on the ground (tracks too: they ride on wheels)
-func isWheelPart(_ p: PartType) -> Bool { return p == .wheel || p == .offroadWheel || p == .track }
+func isWheelPart(_ p: PartType) -> Bool { return p == .wheel || p == .offroadWheel || p == .track || p == .railWheel || p == .bigWheel }
+
+/// How many cells across a part is (most are one; a big wheel three)
+func partSpan(_ p: PartType) -> Int { return p == .bigWheel ? 3 : 1 }
 
 /// Equipment worn in the two gear slots
 enum Gear: Int, Codable, CaseIterable {
@@ -2866,6 +2881,10 @@ extension RecipeBook {
 		add(.part(.stabilizer), 1, [(planks, 2), (.mat(.ironBar), 1)], .bench, .vehicle)
 		add(.part(.ballast), 1, [(.mat(.ironBar), 5), (.mat(.copperBar), 1), (.block(.glass), 1)], .tinker, .vehicle)
 		add(.gadget(.bucket), 1, [(.mat(.ironBar), 3)], .anvil, .tools)
+		add(.part(.railWheel), 2, [(.mat(.ironBar), 3)], .anvil, .vehicle)
+		add(.part(.coupler), 1, [(.mat(.ironBar), 2), (.mat(.string), 1)], .anvil, .vehicle)
+		add(.part(.bigWheel), 1, [(.mat(.ironBar), 4), (.mat(.leather), 3), (.mat(.fur), 1)], .tinker, .vehicle)
+		add(.block(.oreCart), 1, [(.mat(.ironBar), 4), (planks, 2)], .anvil, .vehicle)
 	}
 }
 
@@ -5457,6 +5476,18 @@ func partBuf(_ p: PartType) -> PixelBuf {
 		// a riveted steel tank with a water line and its valve
 		b.rect(0, 1, 8, 6, 0x5A6470); b.rect(0, 1, 8, 1, 0x7A8490); b.rect(1, 4, 6, 2, 0x3B6FC8); b.rect(1, 4, 6, 1, 0x6A9AE0)
 		b.set(1, 2, 0x2A3038); b.set(6, 2, 0x2A3038); b.rect(3, 0, 2, 1, 0xC84A3A)
+	case .railWheel:
+		// a steel wheel with its flange (the darker rim that rides inside the rail)
+		b.ellipse(4, 4, 4, 4, 0x3A3E46); b.ellipse(4, 4, 3, 3, 0x8A8E98); b.ellipse(4, 4, 1.4, 1.4, 0x4A4E56)
+		b.set(4, 4, 0xC8CCD4); b.set(2, 2, 0xB8BCC4)
+	case .coupler:
+		// a buffer beam with a hook and a link
+		b.rect(0, 2, 3, 4, 0x5A5E66); b.rect(0, 2, 3, 1, 0x8A8E96); b.rect(3, 3, 3, 2, 0x3A3E46)
+		b.ellipse(6.5, 4, 1.6, 1.6, 0x2A2E36); b.set(6, 4, 0x8A8E96); b.set(7, 4, 0x8A8E96)
+	case .bigWheel:
+		// drawn three cells across: a tyre with heavy tread and a spoked hub
+		b.ellipse(4, 4, 4, 4, 0x1E1E22); b.ellipse(4, 4, 3.2, 3.2, 0x2E2E34); b.ellipse(4, 4, 2.2, 2.2, 0x9A9AA4)
+		b.line(2, 4, 6, 4, 0x5A5A64); b.line(4, 2, 4, 6, 0x5A5A64); b.set(4, 4, 0xD8D8E0); b.set(1, 1, 0x3A3A42); b.set(6, 6, 0x3A3A42)
 	}
 	b.outline(0x1A1410)
 	return b
@@ -10883,7 +10914,7 @@ extension Vehicle {
 			return cellOpen
 		}
 		switch t {
-		case .frame, .hull, .engine, .fuelTank, .cargo, .armor, .jet, .burner, .cannon, .drill, .diamondDrill, .voidDrill, .ballast: return cellSolid
+		case .frame, .hull, .engine, .fuelTank, .cargo, .armor, .jet, .burner, .cannon, .drill, .diamondDrill, .voidDrill, .ballast, .coupler: return cellSolid
 		case .wing, .elevator, .envelope, .flap, .airBrake, .stabilizer: return cellPlatform
 		default: return cellOpen
 		}
@@ -10892,6 +10923,7 @@ extension Vehicle {
 	/// What a part is to another vehicle meeting it: every part is solid, and a block what it is on the
 	/// land (a torch or an open door is passed through, a platform is met from above)
 	static func meetKind(_ t: PartType, _ b: Tile?) -> UInt8 {
+		if t == .bigWheel { return cellSolid }
 		if isWheelPart(t) { return cellRound }
 		if t != .block { return cellSolid }
 		guard let tile = b else { return cellSolid }

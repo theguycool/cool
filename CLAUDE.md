@@ -43,7 +43,8 @@ confirmed). `tools/buildcost.sh` measures both ways:
   lines): 374, 385, 396, 394, 402 and 382 MB, 119 s in all; as one job 101 s and 1,226 MB. Phase 3
   (2.62 MB, 67,073 lines) first measured 421 MB in part 2; the land painter (`p24_painter`) and the
   hull air moved to part 1: 388, 411, 398, 394, 403 and 384 MB, 110 s in all; as one job 97 s and
-  1,279 MB.
+  1,279 MB. Phase 4 (2.64 MB, 67,536 lines, most of it `p31d_rails` at the end of part 3): 388, 413,
+  402, 395, 403 and 384 MB, 134 s in all; as one job 110 s and 1,285 MB.
 - A job's peak can jump by 30 MB or more after a small edit (taking the recipe lines out of one
   function once raised part 2 from 473 to 509 MB), so a few MB either way is noise; measure again
   after moving code.
@@ -67,7 +68,8 @@ compiles and runs headless on Linux. If `/opt/pixelrealm` is missing, run `tools
 - `tools/shots.sh power|weather|sky|cloudsheet|stick|alchemy|modplus|building|vehicles|mod5|suit5|mod5c|art|physics [folder]`: PNG screenshots from the game's own renderer (`sky`: clouds by day, dusk, night and storm; `cloudsheet`: every cloud template; `stick`: the combat stick's dial; `alchemy`: mutated creatures, the worn suit, the new stations, and a sheet of the new icons and suit pictures; `modplus`: two custom dimensions and a boss in a phase; `building`: a furnished house with stairs and a lift, a blast throwing blocks, a beam under strain; `vehicles`: every new kit parked, a plane, helicopter and airship flying, a tank firing at a wrecked truck, a ship built from blocks with the assembler, a plane mid-turn; `mod5`: every tree design shape under a mod's sun with rays, the same land at night under a pictured moon, the Overworld under a mod's sun, a lit cavern dimension, a repainted zombie; `suit5`: a sheet of suit designs in their poses, a turret firing with a plate broken off, jet flight with a wing, a laser and a cannon shell; `mod5c`: a mod's vehicle built from its kit, mod blocks on a power line and falling, rain in a mod's colour, a custom dimension's blizzard; `art`: the hand-drawn creatures and blocks in the world at the size an iPad shows them: a meadow by day, monsters at night, a cave with every ore, the bears and the elephant, the pirates and the deep monsters, the three bosses; `physics`: the player and a pig standing inside a
 house that flies under a balloon, riders on a flatbed truck's deck, a plane and a crate parked on a
 wheeled deck, a house on wheels with back walls, a door, a ladder, a bed and furniture, water poured
-off a ledge filling a basin, a submarine under the sea with a dry cabin).
+off a ledge filling a basin, a submarine under the sea with a dry cabin, a train of an engine and two
+ore carts on stepped rails, a truck on big wheels at a step).
 - `tools/art.sh preview|pack|check|game|compare`: the hand-drawn art (see **Art** below and `tools/art/README.md`): PNG sheets of the drawings, writing them into the game, and before/after sheets.
 - `tools/bench.sh`: chunk generation, painting, lighting and tick timings (debug build; compare
   with `GAME_SRC=<old file> tools/bench.sh`).
@@ -125,6 +127,9 @@ and assembled; the cached picture), `phys3` (phase 3: water falling, spreading, 
 through a hole, nothing made or lost, levels saved, still seas asleep, lava meeting water, a mod's
 liquid floating on water, the bucket; a stone box floating on its air, a holed one sinking, a submarine
 diving and rising with a dry cabin; tilted wings, flaps, air brakes, tailplanes; the wind's shelter),
+`phys4` (phase 4: rail wheels coasting on rails and dragging off them, the ore cart on a rail and down a
+stepped track, a train coupled, pulled, pushed, saved, walked through and uncoupled; big wheels put on,
+climbing a step small wheels stop at, saved, taken off whole; a ship of 424 cells and its cost a frame),
 and `det` and `det2` (world generation fingerprints for generator versions 1 to 4).
 
 What the stand-ins can't tell you:
@@ -157,8 +162,8 @@ What the stand-ins can't tell you:
   `Infusion`, `ExoMat`, `ExoPart`, `ExoCore`, `ExoModule` (wing ... magnet appended), `ExoSlot`, `SuitBone`,
   `SuitShape`, `SuitKind`, `ModPowerRole`, `ThemeRole`, `ModBlockFunction` (seat, bed appended), `GameRule`
   (its lines in `GameRule.specText` follow the cases), `Dimension` (custom0-2 were appended),
-  `PartType` (vehicle parts: `block`, the aircraft parts, then flap, airBrake, stabilizer, ballast were
-  appended), `ModCollision` (liquid appended), `ProjKind`
+  `PartType` (vehicle parts: `block`, the aircraft parts, then flap, airBrake, stabilizer, ballast,
+  railWheel, coupler, bigWheel were appended), `ModCollision` (liquid appended), `ProjKind`
   and the like) only get new cases appended at the end. Never reorder or remove cases. `hairChoices`,
   `scarfChoices`, `shirtChoices`, `pantsChoices` and the style lists (`hairStyleNames`,
   `shirtStyleNames`, `pantsStyleNames`, each style with its drawing `player_hair_<n>` and so on) are
@@ -247,7 +252,7 @@ Sections start with `// ===== <name> =====` (grep for them). They are spread ove
 part 1 `p01_util` to `p12_phys`, `p12b_frames` (bodies on and inside vehicles), `p12c_fluids` (with the air
 inside hulls), `p24_painter`, then `a01_artsheet`
 (the hand-drawn pictures as text, and their readers); part 2 `p13a_mobdefs` to `p26_vehicle_ux` (without `p24`), then `p33_vehicles`; part 3 `p27_power` to
-`p31c_blockphys`; part 4 `p32_modplus` and `u01_art` (the art store, the player's look, sound, the
+`p31c_blockphys`, `p31d_rails`; part 4 `p32_modplus` and `u01_art` (the art store, the player's look, sound, the
 weather simulation, ambient and animal life, the journal, telegraphed attacks); part 5 `u02_render` to
 `u05_menu`, then `u07_mods`; part 6 `u08_alchemy`, `u09_modplus`, `u06_root`. New code goes into
 the section it belongs to. A `private` or `fileprivate` name can only be used in its own part, so
@@ -395,6 +400,11 @@ the Mod Test LOGIC tab, the sun and moon editor, the tree design editor), `u06_r
   `hullAirForces`, `dryAt`; `headUnderWater`; ballast (`Vehicle.ballast`, `ballastAndBrakes`).
   Flight extras: `Vehicle.tilt` (`tiltWing`), flaps, air brakes (`brakeOpen`), tailplanes, all in `Aero`;
   `windAtVehicle`, `windShelter`. New recipes go in `addPhysicsRecipes` (appended last).
+- **Rails, trains, big parts (p31d_rails).** Rail wheels (`VSample.rail`, `railGrip`, `railPenetration` over
+  `railSurface`, `railHold`), the ore cart (`placeOreCart`, from `placeSpecial`), couplers (`VLink` on
+  both vehicles, `formCouplings` after the vehicles move, `solveCouplings` between fixed steps,
+  `uncouple`), the big wheel (`partSpan`, `Vehicle.spanOf`, `attachBigWheel`; `cutAway` takes a big part
+  whole). Collision samples are cached per vehicle (`sampleCache`, keyed by `artRev`).
 - **Speed and contact (p17, p33).** No clamps. `stepVehicle`: sub-steps by speed, the open-sky path.
   `vehicleSubstep` gathers `VContact`s and gives their blows together over four rounds (normal push
   held at zero or more, friction within `mu` times it, bounce and grip from the block touched:

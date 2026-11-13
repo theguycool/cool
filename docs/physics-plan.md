@@ -137,11 +137,23 @@ The user's parts 1 to 16 are all covered. The order is theirs with three changes
   sheltered by land close upwind or overhead.
 - Not done: intakes (nothing in this model needs one), freezing water, rain filling containers.
 
-### Phase 4: big vehicles and rails
-- Rails that carry: rail wheels held to the track, slopes, switches; the ore cart ridden and
-  loaded; trains of coupled cars you can walk through.
-- Passenger aircraft, carriers, ships: tests at hundreds of cells, sleeping, the cost per frame.
-- Parts bigger than one cell (a big wheel), moved here from phase 2.
+### Phase 4: big vehicles and rails (done)
+- Rail wheels (new part): on rails they roll almost freely (braking only when the driver pulls
+  against the motion), off them they drag. Rails are a smooth surface to them: a track built in
+  steps is a ramp between the middles of neighbouring columns (`railSurface`), and a rail wheel in
+  the air over rails is held down onto them (`railHold`), so carts follow stepped track.
+- The ore cart (now craftable) put on a rail is a little vehicle: two crates on two rail wheels,
+  pushed, ridden, loaded, or pulled.
+- Couplers (new part) that touch link two vehicles (`VLink`, kept by both, saved): each pulls and
+  pushes the other at the coupler (`solveCouplings`, between fixed steps), a tap lets go, a hard
+  enough pull breaks the link. Trains are walked through from car to car.
+- Parts bigger than one cell: the big wheel, three across (`Vehicle.spanOf` maps its cells to its
+  middle, where it is counted, weighed, sampled as one ring and drawn round); put on with the cell
+  tapped as its middle (the vehicle lifted up to three blocks to make room), taken off whole.
+- Big vehicles: collision samples cached per vehicle until it changes; a ship of 424 cells costs
+  about 3 ms a frame under way in a debug build here, and sleeps at rest.
+- Not done: switches between tracks (in a side view tracks only cross at different heights),
+  passenger aircraft and carriers as ready-made kits (they can be built from parts).
 
 ### Phase 5: mechanical systems
 - Sections joined by hinges, pivots, pistons and telescopes, driven by servos with range, speed and

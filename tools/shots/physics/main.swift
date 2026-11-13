@@ -255,3 +255,54 @@ do {
     look(g, Double(cx) + 0.5, 94.0)
     render(g, "06_submarine")
 }
+
+// 7 (phase 4): a train on rails: an engine pulling two ore carts, coupled, over a track built in steps
+do {
+    let g = world()
+    let cx = Int(g.pb.x)
+    let w = g.world
+    tree(g, cx - 22, 6); tree(g, cx + 24, 5)
+    for x in (cx - 30)...(cx - 2) { w.set(x, 99, .rail) }
+    // a step down, then on
+    for x in (cx - 1)...(cx + 30) { w.set(x, 99, .air); w.set(x, 100, .rail); w.set(x, 101, .dirt) }
+    var loco: [(Int, Int, PartType, Tile?)] = [(0, 0, .block, .planks), (1, 0, .engine, nil), (2, 0, .engine, nil), (0, -1, .cockpit, nil), (1, -1, .block, .planks), (2, -1, .fuelTank, nil), (0, 1, .railWheel, nil), (2, 1, .railWheel, nil), (1, 1, .railWheel, nil), (-1, 0, .coupler, nil)]
+    loco.append((1, -2, .block, .planks)); loco.append((0, -2, .block, .planks))
+    let engine = vehicle(g, loco, left: Double(cx) + 3.4, bottom: 101)
+    let c1 = vehicle(g, [(0, 0, .cargo, nil), (1, 0, .cargo, nil), (0, 1, .railWheel, nil), (1, 1, .railWheel, nil), (-1, 0, .coupler, nil), (2, 0, .coupler, nil)], left: Double(cx) - 1.0, bottom: 101)
+    let c2 = vehicle(g, [(0, 0, .cargo, nil), (1, 0, .cargo, nil), (0, 1, .railWheel, nil), (1, 1, .railWheel, nil), (-1, 0, .coupler, nil), (2, 0, .coupler, nil)], left: Double(cx) - 5.4, bottom: 100)
+    // coupled end to end: the engine's back to the first cart's front, that cart's back to the second's
+    engine.links = [VLink(cell: PartCell(dx: -1, dy: 0), other: c1.id, oc: PartCell(dx: 2, dy: 0), len: 1.2)]
+    c1.links = [VLink(cell: PartCell(dx: 2, dy: 0), other: engine.id, oc: PartCell(dx: -1, dy: 0), len: 1.2), VLink(cell: PartCell(dx: -1, dy: 0), other: c2.id, oc: PartCell(dx: 2, dy: 0), len: 1.2)]
+    c2.links = [VLink(cell: PartCell(dx: 2, dy: 0), other: c1.id, oc: PartCell(dx: -1, dy: 0), len: 1.2)]
+    c1.angle = 0.0
+    g.pauseVehicles = true
+    g.boardFrame(&g.pb, c1, 1.0, 0.0)
+    g.pb.onGround = true
+    g.facing = 1
+    look(g, Double(cx) + 0.5, 95.0)
+    render(g, "07_train")
+}
+
+// 8 (phase 4): a truck on big wheels climbing a step two blocks high, a small-wheeled car stopped at it
+do {
+    let g = world()
+    let cx = Int(g.pb.x)
+    let w = g.world
+    for x in (cx + 2)...(cx + 30) { w.set(x, 99, .stone); w.set(x, 98, .stone) }
+    var cells: [(Int, Int, PartType, Tile?)] = []
+    for x in 0..<6 { cells.append((x, 0, .frame, nil)) }
+    cells.append((4, -1, .cockpit, nil)); cells.append((3, -1, .engine, nil)); cells.append((2, -1, .engine, nil)); cells.append((5, -1, .block, .glass))
+    let truck = vehicle(g, cells, left: Double(cx) - 7.0, bottom: 97)
+    for mid in [PartCell(dx: 0, dy: 2), PartCell(dx: 5, dy: 2)] {
+        for dy in -1...1 { for dx in -1...1 { let k = PartCell(dx: mid.dx + dx, dy: mid.dy + dy); truck.parts[k] = .bigWheel; truck.spanOf[k] = mid } }
+    }
+    truck.recompute(keepAnchor: false)
+    truck.placeBox(left: Double(cx) - 4.6, bottom: 100)
+    truck.wheelRot = 0.6
+    let car = vehicle(g, [(0, 0, .frame, nil), (1, 0, .frame, nil), (2, 0, .frame, nil), (0, 1, .wheel, nil), (2, 1, .wheel, nil), (0, -1, .seat, nil), (1, -1, .steering, nil), (2, -1, .engine, nil)], left: Double(cx) - 16.0, bottom: 100)
+    _ = car
+    g.pauseVehicles = true
+    g.pb.x = Double(cx) - 20.5; g.pb.y = 100
+    look(g, Double(cx) - 2.5, 94.0)
+    render(g, "08_big_wheels")
+}

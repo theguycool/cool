@@ -10978,6 +10978,7 @@ extension Game {
 	/// aimed one, or to the left if that is taken), stairs rise away from the player. True when it
 	/// was handled (placed or refused); false for anything else.
 	func placeSpecial(_ t: Tile, _ tx: Int, _ ty: Int) -> Bool {
+		if t == .oreCart { return placeOreCart(tx, ty) }
 		if stairSide(t) != 0 {
 			let s: Tile = stairSide(t) == 1 ? t : stairMirror(t)
 			let placed: Tile = aimX >= pb.x ? s : stairMirror(s)
@@ -11942,5 +11943,305 @@ extension Game {
 		if y >= world.H - 1 { return true }
 		let t: Tile = world.tile(x, y)
 		return t.solid && !world.isBuilt(x, y)
+	}
+}
+
+// ===== p31d_rails =====
+
+// MARK: - Rails, the ore cart, trains and big parts
+// A rail wheel rolls almost freely along rails (and brakes only when the driver pulls against the
+// motion), and drags anywhere else. An ore cart put on a rail is a little vehicle of two crates on two
+// rail wheels: pushed, ridden, loaded, or pulled by an engine. Couplers that touch link two vehicles
+// into a train: each pulls and pushes the other at the coupler, and a tap on one lets go. A big wheel is
+// a part three cells across (Vehicle.spanOf maps its cells to its middle).
+
+/// A coupling between two vehicles (each keeps one, naming the other): this vehicle's coupler cell, the
+/// other vehicle and its coupler cell, and how far apart the two are held
+struct VLink: Codable {
+	var cell: PartCell
+	var other: Int
+	var oc: PartCell
+	var len: Double
+}
+
+/// The numbers of rails and trains
+enum Rails {
+	/// how a rail wheel rolls on rails, and drags off them
+	static let roll: Double = 0.004
+	static let offRail: Double = 0.35
+	/// how close two couplers link up, the most a coupling stretches before it breaks, and how long a
+	/// pair let go by hand waits before it can link again (seconds)
+	static let reach: Double = 1.35
+	static let snap: Double = 3.0
+	static let wait: Double = 2.0
+	/// how hard a coupling pulls a stretch back each step (of the stretch)
+	static let stiff: Double = 0.25
+	/// how hard rails hold a rail wheel that has come off them but is still over them (in its weight)
+	static let hold: Double = 2.5
+}
+
+extension Game {
+	/// A rail wheel's grip where it touches: on rails it rolls almost freely, braking only when told to;
+	/// off them its flange drags
+	func railGrip(_ tx: Int, _ ty: Int, _ braking: Bool, _ rider: Bool) -> Double {
+		let onRail: Bool = world.tile(tx, ty - 1) == .rail || world.tile(tx, ty) == .rail || world.tile(tx, ty + 1) == .rail
+		if onRail { return braking && rider ? 0.6 : Rails.roll }
+		return braking ? 0.7 : Rails.offRail
+	}
+
+	/// The top of the track under a rail wheel at a point: the ground under the rails, sloping evenly from
+	/// the middle of one column to the next where the rails rise or fall a block (a track built in steps
+	/// is a ramp to a rail wheel). nil where there are no rails near.
+	func railSurface(_ x: Double, _ y: Double) -> (Double, Double)? {
+		let tx: Int = Int(floor(x))
+		guard let h0 = railTop(tx, y) else { return nil }
+		let f: Double = x - (Double(tx) + 0.5)
+		let side: Int = f >= 0 ? 1 : -1
+		guard let h1 = railTop(tx + side, h0 - 0.5), abs(h1 - h0) <= 1.01 else { return (h0, 0) }
+		// height here, and how it falls per block to the right
+		return (h0 + (h1 - h0) * abs(f), (h1 - h0) * Double(side))
+	}
+
+	/// The top of the ground under a rail in a column, near a height (a rail sits on the block below it)
+	func railTop(_ tx: Int, _ near: Double) -> Double? {
+		let ny: Int = Int(floor(near))
+		for dy in [0, -1, 1, 2] where world.tile(tx, ny + dy) == .rail { return Double(ny + dy + 1) }
+		return nil
+	}
+
+	/// Where a rail wheel's sample meets the track: by the rails' smooth surface where there are rails,
+	/// else the land as for any wheel
+	func railPenetration(_ x: Double, _ y: Double) -> (Double, Double, Double)? {
+		guard let s = railSurface(x, y) else { return penetration(x, y, wheel: true) }
+		let depth: Double = y - s.0
+		if depth <= 0 { return nil }
+		let k: Double = sqrt(s.1 * s.1 + 1.0)
+		return (depth / k, s.1 / k, -1.0 / k)
+	}
+
+	/// Rails hold their wheels: a rail wheel in the air with rails under it (going down a step, over a
+	/// crest) is pulled down onto them, so a cart follows the track instead of tipping over the edge
+	func railHold(_ v: Vehicle, _ h: Double) {
+		var cells: [PartCell] = []
+		for (c, t) in v.parts where t == .railWheel { cells.append(c) }
+		if cells.isEmpty { return }
+		let share: Double = v.mass / Double(cells.count)
+		for c in cells {
+			let w: (Double, Double) = v.cellCenter(c)
+			let bx: Int = Int(floor(w.0))
+			let by: Int = Int(floor(w.1 + 0.56))
+			// (standing: the cell under the wheel is ground)
+			if world.tile(bx, by).solid { continue }
+			var over: Bool = false
+			var k: Int = 0
+			while k <= 1 && !over {
+				if world.tile(bx, by + k) == .rail { over = true }
+				k += 1
+			}
+			if over { v.push(w.0, w.1, 0, Rails.hold * gravityG * share * h) }
+		}
+	}
+
+	/// An ore cart put on a rail: a little vehicle of two crates on two rail wheels
+	func placeOreCart(_ tx: Int, _ ty: Int) -> Bool {
+		var ry: Int = ty
+		if world.tile(tx, ry) != .rail {
+			if world.tile(tx, ry + 1) == .rail { ry += 1 } else {
+				say("Put the ore cart on a rail.", 1.6)
+				return true
+			}
+		}
+		var left: Int = tx
+		if world.tile(tx + 1, ry) != .rail && world.tile(tx - 1, ry) == .rail { left = tx - 1 }
+		for x in left...(left + 1) {
+			for y in (ry - 1)...ry where world.tile(x, y).solid {
+				say("No room for the cart here.", 1.5)
+				return true
+			}
+		}
+		if !inReach(Double(tx) + 0.5, Double(ry) + 0.5) { return true }
+		let v: Vehicle = Vehicle(id: newID(), first: .frame, x: 0, y: 0)
+		v.parts.removeAll()
+		v.parts[PartCell(dx: 0, dy: 0)] = .cargo
+		v.parts[PartCell(dx: 1, dy: 0)] = .cargo
+		v.parts[PartCell(dx: 0, dy: 1)] = .railWheel
+		v.parts[PartCell(dx: 1, dy: 1)] = .railWheel
+		v.recompute(keepAnchor: false)
+		v.placeBox(left: Double(left), bottom: Double(ry + 1))
+		vehicles.append(v)
+		if !isCreative { inv.removeAt(sel, 1) }
+		sfx(.place, 0.7)
+		say("An ore cart on the rails: push it, ride it, load it (tap it), or couple it to an engine.", 3.0)
+		bumpHUD()
+		return true
+	}
+
+	/// A big wheel: the cell tapped is its middle; all nine cells must be free, one of them next to the
+	/// vehicle. Where the land is in the way the vehicle is lifted (up to three blocks) if it fits higher.
+	/// True when the tap was for a vehicle.
+	func attachBigWheel() -> Bool {
+		for v in vehicles {
+			if aimX < v.b.left - 3 || aimX > v.b.right + 3 || aimY < v.b.top - 3 || aimY > v.b.y + 3 { continue }
+			let mid: PartCell = v.cellAt(aimX, aimY)
+			var cells: [PartCell] = []
+			var touches: Bool = false
+			var free: Bool = true
+			for dy in -1...1 {
+				for dx in -1...1 {
+					let k: PartCell = PartCell(dx: mid.dx + dx, dy: mid.dy + dy)
+					if v.parts[k] != nil { free = false }
+					if v.hasNeighbor(k) { touches = true }
+					cells.append(k)
+				}
+			}
+			if !touches { continue }
+			if useCD > 0 { return true }
+			useCD = 0.3
+			if !free {
+				say("A big wheel needs a free space three by three (the cell you tap is its middle).", 2.5)
+				return true
+			}
+			var lift: Int = 0
+			while lift <= 3 && bigWheelBlocked(v, cells, lift) { lift += 1 }
+			if lift > 3 {
+				say("The ground is in the way of the big wheel.", 2.0)
+				return true
+			}
+			if lift > 0 {
+				v.py -= Double(lift)
+				v.vy = 0
+				v.updateBox()
+			}
+			for k in cells {
+				v.parts[k] = .bigWheel
+				v.spanOf[k] = mid
+			}
+			v.recompute(keepAnchor: true)
+			v.kit = -1
+			v.asleep = false
+			if !isCreative { inv.removeAt(sel, 1) }
+			sfx(.place, 0.7)
+			swingT = 0.15
+			bumpHUD()
+			return true
+		}
+		return false
+	}
+
+	/// Whether the land is in the way of a vehicle and its new cells, lifted so many blocks
+	func bigWheelBlocked(_ v: Vehicle, _ extra: [PartCell], _ lift: Int) -> Bool {
+		var all: [PartCell] = Array(v.parts.keys)
+		all.append(contentsOf: extra)
+		for c in all {
+			let wp: (Double, Double) = v.cellPos(c)
+			let y: Double = wp.1 - Double(lift)
+			if world.boxSolid(wp.0 + 0.02, y + 0.02, wp.0 + 0.98, y + 0.98) { return true }
+		}
+		return false
+	}
+
+	// MARK: trains
+
+	/// Couplers that come within reach of each other link up (each vehicle keeps the link)
+	func formCouplings(_ dt: Double) {
+		var any: Bool = false
+		for v in vehicles where v.couplers > 0 {
+			if v.noCoupleT > 0 { v.noCoupleT -= dt }
+			any = true
+		}
+		if !any { return }
+		for a in vehicles where a.couplers > 0 && a.noCoupleT <= 0 {
+			for (ca, ta) in a.parts where ta == .coupler && !a.links.contains(where: { $0.cell == ca }) {
+				let pa: (Double, Double) = a.cellCenter(ca)
+				for b in vehicles where b !== a && b.couplers > 0 && b.noCoupleT <= 0 {
+					if b.b.right < pa.0 - 2 || b.b.left > pa.0 + 2 || b.b.y < pa.1 - 2 || b.b.top > pa.1 + 2 { continue }
+					for (cb, tb) in b.parts where tb == .coupler && !b.links.contains(where: { $0.cell == cb }) {
+						let pb: (Double, Double) = b.cellCenter(cb)
+						let d: Double = sqrt((pb.0 - pa.0) * (pb.0 - pa.0) + (pb.1 - pa.1) * (pb.1 - pa.1))
+						if d > Rails.reach { continue }
+						let len: Double = max(1.0, d)
+						a.links.append(VLink(cell: ca, other: b.id, oc: cb, len: len))
+						b.links.append(VLink(cell: cb, other: a.id, oc: ca, len: len))
+						sfx(.hit, at: pa.0, 0.5)
+						if abs(pa.0 - self.pb.x) < 30 { say("Coupled.", 1.0) }
+						break
+					}
+					if a.links.contains(where: { $0.cell == ca }) { break }
+				}
+			}
+		}
+	}
+
+	/// Every coupling pulls and pushes its two vehicles at the couplers toward the length it was made at
+	/// (worked out together a few times, as the contacts are); one stretched far past it breaks
+	func solveCouplings(_ h: Double) {
+		var round: Int = 0
+		while round < 4 {
+			for a in vehicles where !a.links.isEmpty {
+				for (i, l) in a.links.enumerated() where a.id < l.other {
+					guard let b = vehicleByID(l.other) else { a.links.remove(at: i); return }
+					coupleStep(a, b, l, h, round == 0)
+				}
+			}
+			round += 1
+		}
+	}
+
+	func coupleStep(_ a: Vehicle, _ b: Vehicle, _ l: VLink, _ h: Double, _ first: Bool) {
+		let pa: (Double, Double) = a.cellCenter(l.cell)
+		let pb: (Double, Double) = b.cellCenter(l.oc)
+		let dx: Double = pb.0 - pa.0
+		let dy: Double = pb.1 - pa.1
+		let d: Double = sqrt(dx * dx + dy * dy)
+		if d < 1e-6 { return }
+		if first && d > l.len + Rails.snap {
+			// pulled apart: the coupling gives
+			uncouple(a, l.cell)
+			return
+		}
+		let nx: Double = dx / d
+		let ny: Double = dy / d
+		let aDyn: Bool = a.inStep || !a.asleep
+		let bDyn: Bool = b.inStep || !b.asleep
+		let ia: Double = aDyn ? 1.0 / a.mass : 0
+		let ib: Double = bDyn ? 1.0 / b.mass : 0
+		let iia: Double = aDyn ? 1.0 / a.inertia : 0
+		let iib: Double = bDyn ? 1.0 / b.inertia : 0
+		let rax: Double = pa.0 - a.px
+		let ray: Double = pa.1 - a.py
+		let rbx: Double = pb.0 - b.px
+		let rby: Double = pb.1 - b.py
+		let rna: Double = rax * ny - ray * nx
+		let rnb: Double = rbx * ny - rby * nx
+		let k: Double = ia + rna * rna * iia + ib + rnb * rnb * iib
+		if k <= 0 { return }
+		let va: (Double, Double) = a.pointVel(pa.0, pa.1)
+		let vb: (Double, Double) = b.pointVel(pb.0, pb.1)
+		let vrel: Double = (vb.0 - va.0) * nx + (vb.1 - va.1) * ny
+		let target: Double = -Rails.stiff * (d - l.len) / max(h, 1e-4)
+		let lam: Double = (target - vrel) / k
+		if abs(lam) < 1e-9 { return }
+		b.vx += lam * nx * ib
+		b.vy += lam * ny * ib
+		b.angVel += rnb * lam * iib
+		a.vx -= lam * nx * ia
+		a.vy -= lam * ny * ia
+		a.angVel -= rna * lam * iia
+		if abs(lam) * max(ia, ib) > 0.2 {
+			a.asleep = false
+			b.asleep = false
+		}
+	}
+
+	/// Lets go of a coupling at a coupler (both vehicles forget it; they wait a moment before linking again)
+	func uncouple(_ v: Vehicle, _ c: PartCell) {
+		guard let i = v.links.firstIndex(where: { $0.cell == c }) else { return }
+		let l: VLink = v.links[i]
+		v.links.remove(at: i)
+		v.noCoupleT = Rails.wait
+		if let o = vehicleByID(l.other) {
+			o.links.removeAll { $0.other == v.id && $0.cell == l.oc }
+			o.noCoupleT = Rails.wait
+		}
 	}
 }

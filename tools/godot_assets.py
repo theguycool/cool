@@ -524,7 +524,7 @@ write_table('misc_data.gd', 'Biomes, tiers, the player sprite layout, clouds and
 # loot dropped by creatures, read straight from the Swift mobDrops function
 _repo = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
 # the game is eight parts, PixelRealm1.swift to PixelRealm8.swift (fewer, or one file, in older versions)
-_parts = sorted(glob.glob(os.path.join(_repo, 'PixelRealm[0-9].swift'))) or [os.path.join(_repo, 'PixelRealm.swift')]
+_parts = sorted(glob.glob(os.path.join(_repo, 'PixelRealm[0-9]*.swift'))) or [os.path.join(_repo, 'PixelRealm.swift')]
 swift = '\n'.join(open(f).read() for f in _parts)
 m = re.search(r'func mobDrops\(.*?\n(?:    |\t)switch k \{\n(.*?)\n(?:    |\t)\}\n', swift, re.S)
 loot = {}

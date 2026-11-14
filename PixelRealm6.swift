@@ -1,8 +1,7 @@
-// PIXEL REALM v2, part 6 of 8: the art store and the player's look, sound, weather, ambient and animal life, the journal and
-// telegraphed attacks, the menus, the receiver panel, and the potion and exosuit screens.
-// The game is eight files that go together in one Swift Playgrounds app: PixelRealm1.swift to
-// PixelRealm8.swift. Each goes in its own file in the app (delete ContentView.swift; MyApp.swift can
-// hold part 1). The hand-drawn pictures are kept as text in part 2 (a01_artsheet).
+// PIXEL REALM v2, part 6 of 10: potions and mutation, infusions, the exosuit, building (furniture, stairs, lifts), block physics, and rails and trains.
+// The game is 10 files that go together in one Swift Playgrounds app: PixelRealm1.swift to
+// PixelRealm10.swift. Each goes in its own file in the app (delete ContentView.swift; MyApp.swift can
+// hold part 1). The hand-drawn pictures are kept as text in part 3 (a01_artsheet).
 
 import SwiftUI
 import AVFoundation
@@ -10,603 +9,1097 @@ import AVFoundation
 import UIKit
 #endif
 
-// ===== u01_art =====
+// ===== p29_alchemy =====
 
-// MARK: - Art store (converts the procedural PixelBufs into SwiftUI images)
+// MARK: - Alchemy: rarity, potions, ingredients
 
-extension Color {
-	init(hex: UInt32, alpha: Double = 1.0) {
-		let ir: UInt32 = (hex >> 16) & 255
-		let ig: UInt32 = (hex >> 8) & 255
-		let ib: UInt32 = hex & 255
-		let r: Double = Double(ir) / 255.0
-		let g: Double = Double(ig) / 255.0
-		let b: Double = Double(ib) / 255.0
-		self.init(.sRGB, red: r, green: g, blue: b, opacity: alpha)
-	}
-}
-
-/// Fast path: pixels are already premultiplied ARGB words (0xAARRGGBB). No per-pixel work.
-func makeCGImagePremul(_ px: [UInt32], _ w: Int, _ h: Int) -> CGImage? {
-	if w <= 0 || h <= 0 || px.count < w * h { return nil }
-	let data: Data = px.withUnsafeBufferPointer { bp in Data(buffer: bp) }
-	guard let provider = CGDataProvider(data: data as CFData) else { return nil }
-	let raw: UInt32 = CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.premultipliedFirst.rawValue
-	let info: CGBitmapInfo = CGBitmapInfo(rawValue: raw)
-	return CGImage(width: w, height: h, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: w * 4,
-				   space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: info,
-				   provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
-}
-
-/// Pixels are non-premultiplied ARGB (what the art generators produce)
-func makeCGImage(_ px: [UInt32], _ w: Int, _ h: Int) -> CGImage? {
-	var p: [UInt32] = px
-	premultiplyARGB(&p)
-	return makeCGImagePremul(p, w, h)
-}
-
-func pixImage(_ b: PixelBuf) -> Image {
-	if let cg = makeCGImage(b.px, b.w, b.h) {
-		return Image(decorative: cg, scale: 1.0).interpolation(.none)
-	}
-	return Image(systemName: "questionmark")
-}
-
-/// A set of animation frames for one creature, with the metrics needed to stand it on the ground.
-struct SpriteSet {
-	var right: [Image]
-	var left: [Image]
-	var hurtR: [Image]
-	var hurtL: [Image]
-	var w: Int
-	var h: Int
-	var footRow: Int      // art pixel row of the bottom of the feet
-	var centerCol: Double // art pixel column of the body centre (facing right)
-	var scale: Double     // tiles per art pixel
-	var anim: CreatureAnim = CreatureAnim()
-
-	func frame(_ i: Int, left lf: Bool, hurt: Bool) -> Image {
-		let n: Int = max(1, right.count)
-		let k: Int = ((i % n) + n) % n
-		if hurt { return lf ? hurtL[k] : hurtR[k] }
-		return lf ? left[k] : right[k]
-	}
-}
-
-func opaqueBounds(_ b: PixelBuf) -> (Int, Int, Int, Int) {
-	var x0: Int = b.w
-	var x1: Int = -1
-	var y0: Int = b.h
-	var y1: Int = -1
-	for y in 0..<b.h {
-		for x in 0..<b.w where (b.px[y * b.w + x] >> 24) != 0 {
-			if x < x0 { x0 = x }
-			if x > x1 { x1 = x }
-			if y < y0 { y0 = y }
-			if y > y1 { y1 = y }
+/// How rare something is. It colours a name and says how hard the ingredients are to come by: basic
+/// things come from the overworld, rarer ones from deep places, storms, the Umbral realm and its bosses.
+enum Rarity: Int, Codable, CaseIterable {
+	case basic, uncommon, rare, veryRare, legendary
+	var name: String {
+		switch self {
+		case .basic: return "Basic"
+		case .uncommon: return "Uncommon"
+		case .rare: return "Rare"
+		case .veryRare: return "Very rare"
+		case .legendary: return "Boss relic"
 		}
 	}
-	if x1 < 0 { return (0, 0, b.w - 1, b.h - 1) }
-	return (x0, y0, x1, y1)
+	var color: UInt32 {
+		switch self {
+		case .basic: return 0xD8D8D8
+		case .uncommon: return 0x6EE07A
+		case .rare: return 0x5AB4FF
+		case .veryRare: return 0xC07CFF
+		case .legendary: return 0xFFB040
+		}
+	}
 }
 
-func makeSpriteSet(_ frames: [PixelBuf], hitH: Double, fixedScale: Double? = nil, anim: CreatureAnim = CreatureAnim(), foot footRow: Int? = nil, cx: Double? = nil) -> SpriteSet {
-	let f0: PixelBuf = frames.isEmpty ? PixelBuf(w: 1, h: 1) : frames[0]
-	let bb: (Int, Int, Int, Int) = opaqueBounds(f0)
-	let opaqueH: Double = Double(bb.3 - bb.1 + 1)
-	var sc: Double = 0.125
-	if let f = fixedScale { sc = f } else {
-		sc = clampD(hitH * 1.12 / max(1.0, opaqueH), 0.05, 0.125)
+/// Every potion. Drinkable ones work on the player at once or for a while; the rest are thrown and burst
+/// over an area. Saved by number: new kinds only ever go on the end.
+enum Potion: Int, Codable, CaseIterable {
+	case mending, greaterMending, regrowth, brawn, quickstep, prospector, ironhide, emberward, deepbreath, owlsight, seeker, featherfall, hearthfire, springstep
+	case searing, blight, mire, enfeeble, mendingSplash, regrowthSplash, smoke, frost, mutagen
+
+	var name: String {
+		switch self {
+		case .mending: return "Mending Draught"
+		case .greaterMending: return "Greater Mending Draught"
+		case .regrowth: return "Regrowth Tonic"
+		case .brawn: return "Brawn Brew"
+		case .quickstep: return "Quickstep Elixir"
+		case .prospector: return "Prospector's Draught"
+		case .ironhide: return "Ironhide Tonic"
+		case .emberward: return "Emberward Draught"
+		case .deepbreath: return "Deepbreath Draught"
+		case .owlsight: return "Owlsight Draught"
+		case .seeker: return "Seeker's Tonic"
+		case .featherfall: return "Featherfall Tonic"
+		case .hearthfire: return "Hearthfire Tonic"
+		case .springstep: return "Springstep Draught"
+		case .searing: return "Searing Splash"
+		case .blight: return "Blight Splash"
+		case .mire: return "Mire Splash"
+		case .enfeeble: return "Enfeebling Splash"
+		case .mendingSplash: return "Mending Splash"
+		case .regrowthSplash: return "Regrowth Splash"
+		case .smoke: return "Smoke Flask"
+		case .frost: return "Frost Splash"
+		case .mutagen: return "Mutagen"
+		}
 	}
-	var r: [Image] = []
-	var l: [Image] = []
-	var hr: [Image] = []
-	var hl: [Image] = []
-	for f in frames {
-		r.append(pixImage(f))
-		l.append(pixImage(f.flipped()))
-		// hit frames flash white (reads clearly on every creature, and is not a red full-body tint)
-		let t: PixelBuf = f.whiteFlash()
-		hr.append(pixImage(t))
-		hl.append(pixImage(t.flipped()))
+
+	/// thrown to burst (the others are drunk)
+	var thrown: Bool { return rawValue >= Potion.searing.rawValue }
+
+	/// the colour of what is inside (also the colour of its burst and of its effect's icon)
+	var color: UInt32 {
+		switch self {
+		case .mending, .mendingSplash: return 0xE8445A
+		case .greaterMending: return 0xFF2E6A
+		case .regrowth, .regrowthSplash: return 0xF07AB8
+		case .brawn: return 0xC8402A
+		case .quickstep: return 0x7AD8F8
+		case .prospector: return 0xE8B83A
+		case .ironhide: return 0x9AA4B8
+		case .emberward: return 0xFF8A2A
+		case .deepbreath: return 0x2E7AE8
+		case .owlsight: return 0x3A4AC8
+		case .seeker: return 0x5AE070
+		case .featherfall: return 0xE8ECF8
+		case .hearthfire: return 0xE86A3A
+		case .springstep: return 0x8AE85A
+		case .searing: return 0xFF5A1E
+		case .blight: return 0x6AB82E
+		case .mire: return 0x7A5A3A
+		case .enfeeble: return 0x8A7AA8
+		case .smoke: return 0x8A8A90
+		case .frost: return 0xA8E8FF
+		case .mutagen: return 0x9AF04A
+		}
 	}
-	// the outline under the soles sits on the ground line; a hand-drawn creature says where its soles
-	// and its middle are (a long tail or a raised arm must not move the body off its place)
-	let foot: Int = footRow ?? bb.3
-	let cc: Double = cx ?? Double(bb.0 + bb.2 + 1) * 0.5
-	return SpriteSet(right: r, left: l, hurtR: hr, hurtL: hl, w: f0.w, h: f0.h, footRow: foot, centerCol: cc, scale: sc, anim: anim)
+
+	var rarity: Rarity {
+		switch self {
+		case .mending, .springstep, .featherfall, .quickstep, .smoke, .mire: return .basic
+		case .regrowth, .brawn, .prospector, .ironhide, .deepbreath, .owlsight, .hearthfire, .searing, .blight, .mendingSplash, .frost: return .uncommon
+		case .emberward, .enfeeble, .regrowthSplash, .greaterMending: return .rare
+		case .seeker: return .rare
+		case .mutagen: return .veryRare
+		}
+	}
+
+	/// the effect a drink gives, with its strength and seconds (nil: healing, which acts at once)
+	var effect: ModEffect? {
+		switch self {
+		case .regrowth: return ModEffect(.regen, 1.0, 20)
+		case .brawn: return ModEffect(.strength, 35, 60)
+		case .quickstep: return ModEffect(.speed, 30, 90)
+		case .prospector: return ModEffect(.mining, 60, 120)
+		case .ironhide: return ModEffect(.resistance, 30, 90)
+		case .emberward: return ModEffect(.fireproof, 1, 120)
+		case .deepbreath: return ModEffect(.breathing, 1, 180)
+		case .owlsight: return ModEffect(.nightVision, 1, 180)
+		case .seeker: return ModEffect(.luck, 25, 150)
+		case .featherfall: return ModEffect(.featherfall, 1, 120)
+		case .hearthfire: return ModEffect(.warmth, 1, 240)
+		case .springstep: return ModEffect(.jump, 40, 90)
+		default: return nil
+		}
+	}
+
+	/// health a mending potion gives back at once
+	var healAmount: Double {
+		switch self {
+		case .mending: return 8
+		case .greaterMending: return 14
+		case .mendingSplash: return 6
+		default: return 0
+		}
+	}
+
+	/// how far a thrown potion's burst reaches (blocks)
+	var radius: Double {
+		switch self {
+		case .searing: return 2.6
+		case .blight: return 2.8
+		case .mendingSplash, .regrowthSplash: return 3.2
+		case .smoke: return 3.6
+		case .mutagen: return 1.6
+		default: return 3.0
+		}
+	}
+
+	var maxStack: Int { return self == .mutagen ? 4 : (thrown ? 16 : 10) }
+
+	/// what it does, in a line
+	var blurb: String {
+		switch self {
+		case .mending: return "Heals 8 at once (then 10 s before mending works fully again)"
+		case .greaterMending: return "Heals 14 at once (then 14 s before mending works fully again)"
+		case .regrowth: return "Heals 1 a second for 20 s"
+		case .brawn: return "Hit 35% harder for 60 s"
+		case .quickstep: return "Run 30% faster for 90 s"
+		case .prospector: return "Mine 60% faster for 2 min"
+		case .ironhide: return "Take 30% less damage for 90 s"
+		case .emberward: return "Fire and lava can't hurt you for 2 min"
+		case .deepbreath: return "Breathe under water and swim faster for 3 min"
+		case .owlsight: return "See in the dark for 3 min"
+		case .seeker: return "A 25% chance of one extra ore, gem or creature drop, for 150 s"
+		case .featherfall: return "Fall slowly and take no fall damage for 2 min"
+		case .hearthfire: return "The cold can't get at you for 4 min"
+		case .springstep: return "Jump 40% higher for 90 s"
+		case .searing: return "Burns creatures it bursts over: 8 damage"
+		case .blight: return "Poisons creatures: 1.5 a second for 8 s (not the undead or stone)"
+		case .mire: return "Bogs creatures down: half speed for 8 s"
+		case .enfeeble: return "Creatures hit 40% softer for 15 s"
+		case .mendingSplash: return "Heals you and your animals within reach: 6"
+		case .regrowthSplash: return "You and your animals heal 1 a second for 12 s"
+		case .smoke: return "A cloud for 8 s: monsters can't see into or out of it"
+		case .frost: return "Slows creatures hard, puts out fires, freezes still water"
+		case .mutagen: return "The creature it hits doubles in size, health and strength"
+		}
+	}
+
+	/// what it is like to use, for its tooltip
+	var useLine: String {
+		if self == .mutagen { return "Rare. Throw it at a creature: aim with the attack stick" }
+		return thrown ? "Throw it: aim with the attack stick and let go" : "Tap to drink it"
+	}
 }
 
-// MARK: - Suits drawn piece by piece
+/// Seconds after drinking a mending potion before another heals fully (a second one inside that time
+/// heals a third as much)
+let mendingRest: [Double] = [10, 14]
 
-/// A picture three times finer, every pixel a 3 x 3 block
-func upscale3(_ b: PixelBuf) -> PixelBuf {
-	let u: Int = suitUnit
-	var o = PixelBuf(w: b.w * u, h: b.h * u)
-	for y in 0..<b.h {
-		for x in 0..<b.w {
-			let c: UInt32 = b.px[y * b.w + x]
-			if c == 0 { continue }
-			for yy in 0..<u {
-				let row: Int = (y * u + yy) * o.w + x * u
-				for xx in 0..<u { o.px[row + xx] = c }
+// MARK: status effects on creatures
+
+extension Mob {
+	/// how hard its blows land: doubled by each mutation, softened while it is weakened
+	var dmgMul: Double { return mutDmg * (weakT > 0 ? 0.6 : 1.0) * phaseDmg }
+	/// how fast it moves: bogged down by mire, frost and frost-infused weapons
+	var speedMul: Double { return slowT > 0 ? max(0.2, 1.0 - slowAmt) : 1.0 }
+	/// any potion effect showing on it (for drawing)
+	var hasStatus: Bool { return slowT > 0 || poisonT > 0 || weakT > 0 || regenT > 0 }
+}
+
+/// Creatures that poison does not touch: the restless dead, stone and crystal, and slimes
+func poisonImmune(_ m: Mob) -> Bool {
+	switch m.kind {
+	case .zombie, .skeleton, .wraith, .golem, .sentinel, .warden, .slime, .emberSlime: return true
+	default: return false
+	}
+}
+
+// MARK: smoke
+
+/// A smoke flask's cloud: monsters can't see into it or out of it while it lasts
+struct SmokeCloud {
+	var x: Double
+	var y: Double
+	var r: Double
+	var t: Double
+	var maxT: Double
+}
+
+/// Thrown-potion bursts drawn as a ring for a moment
+struct BurstRing {
+	var x: Double
+	var y: Double
+	var r: Double
+	var t: Double
+	var color: UInt32
+}
+
+// MARK: mutation limits
+
+/// Safe limits for creature mutation. Each dose doubles size, health and strength, but the numbers stop
+/// at these caps, so stacking can never break the physics, the drawing or the arithmetic.
+enum MutationLimits {
+	/// doses a creature can take (more still burst, but change nothing)
+	static let maxStacks: Int = 8
+	/// the most a body may grow to, in blocks
+	static let maxW: Double = 7.0
+	static let maxH: Double = 7.0
+	/// size multiplier cap (whatever the doses)
+	static let maxSize: Double = 8.0
+	/// health: at most this many times the normal amount, and never above `maxHP`
+	static let maxHPMul: Double = 64.0
+	static let maxHP: Double = 3000.0
+	/// strength: at most this many times the normal blow, and no blow above `maxBlow`
+	static let maxDmgMul: Double = 6.0
+	static let maxBlow: Double = 26.0
+	/// bosses take one dose only, and it is milder
+	static let bossHP: Double = 1.5
+	static let bossDmg: Double = 1.25
+	static let bossSize: Double = 1.15
+	/// mutated creatures kept (and saved) at once; the oldest wild ones give way
+	static let maxMutants: Int = 16
+}
+
+// MARK: saving
+
+/// The player's potion effects in a save: each kind by number with its strength and time left
+struct EffectsSave: Codable {
+	var kinds: [Int]
+	var amount: [Double]
+	var time: [Double]
+	/// seconds before mending potions heal fully again
+	var mendCD: Double? = nil
+}
+
+/// A mutated creature in a save (wild ones as well as pets): where it is and how mutated
+struct MutantSave: Codable {
+	var kind: Int
+	var x: Double
+	var y: Double
+	var hp: Double
+	var maxHP: Double
+	var mut: Int
+	var variant: Int
+	var tame: Bool
+	var dim: Int
+}
+
+extension Game {
+	// MARK: effects every frame
+
+	/// Every frame: effects run down; regeneration heals; fire protection puts out flames. Runs in every
+	/// world (mod armour's worn effects and jump pads are in updateModPlay).
+	func updateEffects(_ dt: Double) {
+		effects.tick(dt)
+		if mendCD > 0 { mendCD = max(0, mendCD - dt) }
+		let regen: Double = effects.value(.regen) + armorInf.regen
+		if regen > 0 && !dead && hp < maxHP {
+			effects.regenAcc += regen * dt
+			if effects.regenAcc >= 1 {
+				let n: Double = floor(effects.regenAcc)
+				effects.regenAcc -= n
+				hp = min(maxHP, hp + n)
+				bumpHUD()
+			}
+		}
+		if effects.value(.fireproof) > 0 { playerBurn = 0 }
+		// a falling body drifts down gently and lands softly
+		if effects.value(.featherfall) > 0 && !pb.onGround && !pb.inWater && inVehicle == nil && mounted == nil {
+			if pb.vy > 5.5 { pb.vy = 5.5 }
+			fallPeak = 0
+		}
+		if !smokes.isEmpty {
+			for i in smokes.indices { smokes[i].t -= dt }
+			smokes.removeAll { $0.t <= 0 }
+		}
+		if !rings.isEmpty {
+			for i in rings.indices { rings[i].t -= dt }
+			rings.removeAll { $0.t <= 0 }
+		}
+		updateSuit(dt)
+	}
+
+	/// Potion effects on a creature, once a frame: slows and weakness wear off, poison hurts once a
+	/// second, regeneration heals
+	func mobStatus(_ m: Mob, _ dt: Double) {
+		if m.slowT > 0 { m.slowT -= dt }
+		if m.weakT > 0 { m.weakT -= dt }
+		if m.poisonT > 0 {
+			m.poisonT -= dt
+			m.poisonTick += dt
+			if m.poisonTick >= 1.0 {
+				m.poisonTick = 0
+				var info = DamageInfo(amount: m.poisonDps, type: .poison, source: m.poisonByPlayer ? .player : .environment)
+				info.originX = m.b.x
+				applyMobDamage(m, info)
+				spawnParticles(m.b.x, m.b.top + 0.2, 0x7AD040, 3, 1.2, 0.5, -3)
+			}
+		}
+		if m.regenT > 0 {
+			m.regenT -= dt
+			m.regenAcc += m.regenRate * dt
+			if m.regenAcc >= 1 {
+				let n: Double = floor(m.regenAcc)
+				m.regenAcc -= n
+				m.hp = min(m.maxHP, m.hp + n)
 			}
 		}
 	}
-	return o
-}
 
-/// Lays a suit's working pieces over one frame of the figure drawn three times finer (`frame`: 0
-/// standing, 1-2 walking, 3 winding up, 4 striking, 5 blocking, 6 shooting). Each piece moves with its
-/// part of the body, shows its colour with lit and shaded edges and its part's marks, and cracks as it
-/// wears; broken pieces are gone. `pick` (a piece id) is drawn brighter. A dark line is drawn round
-/// what sticks out past the body.
-func paintSuitPieces(_ cv: inout PixelBuf, _ d: SuitDesign, frame: Int, pick: Int = -1) {
-	let ox: Double = Double(humanOX * suitUnit)
-	var mine: [Bool] = [Bool](repeating: false, count: cv.w * cv.h)
-	let order: [Int] = d.pieces.indices.sorted { (a: Int, b: Int) -> Bool in
-		let la: Int = d.pieces[a].bone.layer
-		let lb: Int = d.pieces[b].bone.layer
-		return la != lb ? la < lb : a < b
+	// MARK: drinking
+
+	/// A potion in hand: drink it, or throw it
+	func usePotion(_ p: Potion, _ pressed: Bool) {
+		if p.thrown {
+			if pressed { throwPotion(p) }
+			return
+		}
+		if !pressed || useCD > 0 { return }
+		drinkPotion(p)
 	}
-	for i in order {
-		let p: SuitPiece = d.pieces[i]
-		if p.broken { continue }
-		let mv: BoneMove = BoneMove.of(p.bone, frame)
-		// the piece's box in the frame, roomy enough for any turn
-		let c: (Double, Double) = mv.apply(p.x, p.y)
-		let r: Double = sqrt(p.w * p.w + p.h * p.h) * 0.5 + 1.0
-		let x0: Int = max(0, Int(floor(c.0 + ox - r)))
-		let x1: Int = min(cv.w - 1, Int(ceil(c.0 + ox + r)))
-		let y0: Int = max(0, Int(floor(c.1 - r)))
-		let y1: Int = min(cv.h - 1, Int(ceil(c.1 + r)))
-		if x1 < x0 || y1 < y0 { continue }
-		let ww: Int = x1 - x0 + 1
-		let hh: Int = y1 - y0 + 1
-		// which pixels it covers (tested back on the body standing still)
-		var on: [Bool] = [Bool](repeating: false, count: ww * hh)
-		let back: BoneMove = BoneMove(dx: -mv.dx, dy: -mv.dy, turn: 0, px: 0, py: 0)
-		for yy in 0..<hh {
-			for xx in 0..<ww {
-				var bx: Double = Double(x0 + xx) + 0.5 - ox
-				var by: Double = Double(y0 + yy) + 0.5
-				let s: (Double, Double) = back.apply(bx, by)
-				bx = s.0
-				by = s.1
-				if mv.turn != 0 {
-					let cs: Double = cos(-mv.turn)
-					let sn: Double = sin(-mv.turn)
-					let rx: Double = bx - mv.px
-					let ry: Double = by - mv.py
-					bx = mv.px + rx * cs - ry * sn
-					by = mv.py + rx * sn + ry * cs
+
+	/// Drinks a potion from the selected slot: its effect, a sip sound, bubbles in its colour and a word
+	/// over the player's head
+	func drinkPotion(_ p: Potion) {
+		guard let s = inv.slots[sel], s.item == .potion(p) else { return }
+		if p.healAmount > 0 {
+			if hp >= maxHP && !isCreative {
+				say("You are not hurt.", 1.2)
+				useCD = 0.4
+				return
+			}
+			let rested: Bool = mendCD <= 0
+			let amount: Double = rested ? p.healAmount : (p.healAmount / 3.0).rounded()
+			heal(amount)
+			mendCD = max(mendCD, p == .greaterMending ? mendingRest[1] : mendingRest[0])
+			floatText(joinText("+", String(Int(amount))), pb.x, pb.y - pb.h - 0.4, 0x60F070)
+			if !rested { say("Too soon after the last: it only mends a little.", 1.6) }
+		} else if let e = p.effect {
+			effects.add(e.kind, e.amount, e.seconds)
+			floatText(e.kind.short, pb.x, pb.y - pb.h - 0.4, p.color)
+			if e.kind == .nightVision { light.valid = false }
+		}
+		if !isCreative { inv.removeAt(sel, 1) }
+		useCD = 0.7
+		eatT = 0.6
+		sfx(.drink, 0.7)
+		spawnParticles(pb.x + Double(facing) * 0.3, pb.y - 1.5, p.color, 8, 2.0, 0.6, -3)
+		if !journal.crafted.contains(p.name) { journal.crafted.append(p.name) }
+		bumpHUD()
+	}
+
+	// MARK: throwing
+
+	/// Throws a potion from the selected slot in a lob toward the aim: it flies as a flask and bursts
+	/// where it lands or on the first creature it meets
+	func throwPotion(_ p: Potion) {
+		if useCD > 0 { return }
+		guard let s = inv.slots[sel], s.item == .potion(p) else { return }
+		if !isCreative { inv.removeAt(sel, 1) }
+		facing = aimFacing()
+		let ox: Double = pb.x + Double(facing) * 0.4
+		let oy: Double = pb.y - 1.3
+		let a: Double = lobAngle(aimX - ox, aimY - oy, throwSpeed, throwGravity)
+		var pr = Projectile(kind: .flask, x: ox, y: oy, vx: cos(a) * throwSpeed, vy: sin(a) * throwSpeed, dmg: 0, fromPlayer: true, gravity: throwGravity)
+		pr.life = 2.5
+		pr.w = 0.3
+		pr.source = .player
+		pr.uid = newID()
+		pr.potion = p.rawValue
+		// the creature under the aim (a mutagen goes to it even if it is hit only at the edge)
+		pr.owner = -1
+		projectiles.append(pr)
+		useCD = 0.5
+		swingT = 0.18
+		swingDir = facing
+		sfx(.swingLight, 0.5)
+		bumpHUD()
+	}
+
+	/// A thrown potion breaks: what it does to everything within its reach (through open air only), a
+	/// ring and a puff in its colour, and the sound of glass
+	func burstPotion(_ p: Potion, _ x: Double, _ y: Double, direct: Mob?) {
+		let r: Double = p.radius
+		sfx(.potionBreak, at: x, 0.9)
+		spawnParticles(x, y, p.color, 14, 4.5, 0.55, 6)
+		spawnParticles(x, y, 0xD8F0FF, 5, 3.5, 0.3, 16)
+		if rings.count >= 6 { rings.removeFirst() }
+		rings.append(BurstRing(x: x, y: y, r: r, t: 0.35, color: p.color))
+		addLightFlash(x, y - 0.3, peak: 9, dur: 0.35, radius: r, color: p.color)
+		switch p {
+		case .smoke:
+			if smokes.count >= 4 { smokes.removeFirst() }
+			smokes.append(SmokeCloud(x: x, y: y - 0.8, r: r, t: 8.0, maxT: 8.0))
+			return
+		case .mutagen:
+			var target: Mob? = direct
+			if target == nil {
+				var bd: Double = r
+				for m in mobsNear(x - r - 3, x + r + 3) where m.hp > 0 && !m.removed && !m.downed {
+					let d: Double = boxDistance(x, y, m.b.left, m.b.top, m.b.right, m.b.y)
+					if d <= bd { bd = d; target = m }
 				}
-				if p.covers(bx, by) { on[yy * ww + xx] = true }
+			}
+			if let m = target { _ = mutate(m) } else { floatText("Nothing to change", x, y - 0.6, 0xC8C8C8) }
+			return
+		default: break
+		}
+		let helpful: Bool = p == .mendingSplash || p == .regrowthSplash
+		if helpful && !dead {
+			let d: Double = boxDistance(x, y, pb.left, pb.top, pb.right, pb.y)
+			if d <= r && world.lineClear(x, y, pb.x, pb.cy) { splashPlayer(p) }
+		}
+		if p == .frost { frostBurst(x, y, r) }
+		for m in mobsNear(x - r - 4, x + r + 4) {
+			if m.hp <= 0 || m.removed { continue }
+			let d: Double = boxDistance(x, y, m.b.left, m.b.top, m.b.right, m.b.y)
+			if d > r { continue }
+			if !world.lineClear(x, y, m.b.x, m.b.cy) && direct !== m { continue }
+			if helpful {
+				if m.tame { splashMob(p, m) }
+			} else if !m.tame {
+				splashMob(p, m)
 			}
 		}
-		var base: UInt32 = suitColor(p)
-		if p.id == pick { base = mixRGB(base, 0xFFFFFF, 0.35) }
-		let accent: UInt32 = suitAccent(p)
-		for yy in 0..<hh {
-			for xx in 0..<ww where on[yy * ww + xx] {
-				let up: Bool = yy > 0 && on[(yy - 1) * ww + xx]
-				let down: Bool = yy < hh - 1 && on[(yy + 1) * ww + xx]
-				let left: Bool = xx > 0 && on[yy * ww + xx - 1]
-				let right: Bool = xx < ww - 1 && on[yy * ww + xx + 1]
-				var col: UInt32 = base
-				if !up || !left { col = shadeRGB(base, 1.22) }
-				if !down || !right { col = shadeRGB(base, 0.68) }
-				let gx: Int = x0 + xx
-				let gy: Int = y0 + yy
-				// cracks as it wears
-				if p.dmg > 0.3 {
-					let hsh: Double = hash2(gx * 7 + p.id, gy * 13, 9091)
-					if hsh < (p.dmg - 0.25) * 0.5 { col = shadeRGB(col, 0.45) }
-				}
-				cv.px[gy * cv.w + gx] = 0xFF000000 | col
-				mine[gy * cv.w + gx] = true
+	}
+
+	/// A helpful splash on the player
+	func splashPlayer(_ p: Potion) {
+		if p == .mendingSplash {
+			let rested: Bool = mendCD <= 0
+			let amount: Double = rested ? p.healAmount : (p.healAmount / 3.0).rounded()
+			if hp < maxHP {
+				heal(amount)
+				floatText(joinText("+", String(Int(amount))), pb.x, pb.y - pb.h - 0.4, 0x60F070)
 			}
+			mendCD = max(mendCD, mendingRest[0])
+		} else if p == .regrowthSplash {
+			effects.add(.regen, 1.0, 12)
+			floatText(ModEffectKind.regen.short, pb.x, pb.y - pb.h - 0.4, p.color)
 		}
-		// its marks: a core glows at its heart, a working part shows its colour at its working end
-		if accent != 0 {
-			let a: Double = (p.rot + mv.turn * 180.0 / Double.pi) * Double.pi / 180.0
-			let tip: (Double, Double)
-			if p.kind == .core {
-				tip = (c.0, c.1)
+		bumpHUD()
+	}
+
+	/// A splash on a creature. Bosses feel the harmful ones less.
+	func splashMob(_ p: Potion, _ m: Mob) {
+		let boss: Bool = m.isBoss
+		switch p {
+		case .mendingSplash:
+			m.hp = min(m.maxHP, m.hp + p.healAmount)
+			floatText(joinText("+", String(Int(p.healAmount))), m.b.x, m.b.top - 0.3, 0x60F070)
+		case .regrowthSplash:
+			m.regenT = 12
+			m.regenRate = 1.0
+		case .searing:
+			var info = DamageInfo(amount: 8, type: .magic, source: .player)
+			info.originX = m.b.x
+			info.knock = 3
+			info.key = newID()
+			applyMobDamage(m, info)
+		case .blight:
+			if poisonImmune(m) {
+				floatText("Immune", m.b.x, m.b.top - 0.3, 0xB8B8B8)
 			} else {
-				tip = (c.0 + cos(a) * p.w * 0.32, c.1 + sin(a) * p.w * 0.32)
+				m.poisonT = max(m.poisonT, boss ? 4.0 : 8.0)
+				m.poisonDps = boss ? 0.75 : 1.5
+				m.poisonByPlayer = true
+				m.lastHitByPlayer = clock
+				angerBy(m)
 			}
-			let tx: Int = Int(floor(tip.0 + ox))
-			let ty: Int = Int(floor(tip.1))
-			for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
-				let px: Int = tx + dx - 1
-				let py: Int = ty + dy - 1
-				if px < 0 || py < 0 || px >= cv.w || py >= cv.h { continue }
-				if mine[py * cv.w + px] { cv.px[py * cv.w + px] = 0xFF000000 | accent }
+		case .mire:
+			m.slowT = max(m.slowT, boss ? 4.0 : 8.0)
+			m.slowAmt = max(m.slowT > 0 ? m.slowAmt : 0, boss ? 0.25 : 0.5)
+			angerBy(m)
+		case .enfeeble:
+			m.weakT = max(m.weakT, boss ? 8.0 : 15.0)
+			angerBy(m)
+		case .frost:
+			m.slowT = max(m.slowT, boss ? 2.0 : 4.0)
+			m.slowAmt = max(m.slowAmt, boss ? 0.35 : 0.7)
+			m.burn = 0
+			angerBy(m)
+		default: break
+		}
+	}
+
+	/// A harmful splash counts as an attack: animals that defend themselves turn on the player
+	func angerBy(_ m: Mob) {
+		m.lastHitByPlayer = clock
+		if m.def.behavior == .defensive {
+			m.angry = true
+			m.t3 = 10.0
+		}
+	}
+
+	/// Frost: fires in reach go out (on the player too), and still water near the burst freezes over
+	func frostBurst(_ x: Double, _ y: Double, _ r: Double) {
+		if !dead && boxDistance(x, y, pb.left, pb.top, pb.right, pb.y) <= r { playerBurn = 0 }
+		fireZones.removeAll { abs($0.x - x) < r + $0.r && abs($0.y - y) < r + 1.5 }
+		let x0: Int = Int(floor(x - r))
+		let x1: Int = Int(floor(x + r))
+		let y0: Int = Int(floor(y - r))
+		let y1: Int = Int(floor(y + r))
+		var frozen: Int = 0
+		for ty in y0...y1 {
+			for tx in x0...x1 where frozen < 16 {
+				let dx: Double = Double(tx) + 0.5 - x
+				let dy: Double = Double(ty) + 0.5 - y
+				if dx * dx + dy * dy > r * r { continue }
+				// only the surface of water (open air above it) freezes, so nothing is sealed in
+				if world.tile(tx, ty) == .water && world.tile(tx, ty - 1) == .air {
+					world.set(tx, ty, .ice)
+					frozen += 1
+				}
 			}
 		}
 	}
-	// a dark edge round the pieces where they stand against nothing
-	var edge: [Int] = []
-	for y in 0..<cv.h {
-		for x in 0..<cv.w where cv.px[y * cv.w + x] == 0 {
-			var near: Bool = false
-			for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
-				let nx: Int = x + dx
-				let ny: Int = y + dy
-				if nx >= 0 && ny >= 0 && nx < cv.w && ny < cv.h && mine[ny * cv.w + nx] { near = true }
-			}
-			if near { edge.append(y * cv.w + x) }
+
+	/// True when a point is inside a smoke cloud
+	func inSmoke(_ x: Double, _ y: Double) -> Bool {
+		for s in smokes {
+			let dx: Double = x - s.x
+			let dy: Double = y - s.y
+			if dx * dx + dy * dy < s.r * s.r { return true }
+		}
+		return false
+	}
+
+	// MARK: vials and ingredients
+
+	/// An empty vial held over water fills it (one each tap)
+	func useVial(_ pressed: Bool) {
+		if !pressed || useCD > 0 { return }
+		let tx: Int = Int(floor(aimX))
+		let ty: Int = Int(floor(aimY))
+		if world.tile(tx, ty) == .water && inReach(Double(tx) + 0.5, Double(ty) + 0.5) {
+			_ = inv.remove(.mat(.vial), 1)
+			giveItem(.mat(.waterVial), 1)
+			sfx(.splash, 0.5)
+			spawnParticles(Double(tx) + 0.5, Double(ty) + 0.2, 0x8DBBFF, 5, 2.0, 0.4, 10)
+			useCD = 0.25
+			bumpHUD()
+		} else {
+			say("Tap water with it to fill it.", 1.4)
+			useCD = 0.4
 		}
 	}
-	for k in edge { cv.px[k] = 0xFF1A1410 }
-}
 
-/// The mark a working part shows (0: none): a core's glow, a jet's flame, a lamp, a lens
-func suitAccent(_ p: SuitPiece) -> UInt32 {
-	if p.kind == .core, let c = p.core { return shadeRGB(c.color, 1.4) }
-	guard p.kind == .module, let m = p.module else { return 0 }
-	switch m {
-	case .hover: return 0xFF9A3A
-	case .lamp: return 0xFFF4C0
-	case .laser: return 0xFF4A6A
-	case .turret, .cannon: return 0x1E2028
-	case .solar: return 0x2A4A8A
-	case .magnet: return 0xD83A3A
-	case .battery: return 0x8AE85A
-	case .barrier: return 0xC07CFF
-	case .gauntlet: return 0xFFF07A
-	default: return shadeRGB(m.color, 1.3)
+	/// Ingredients a creature leaves when the player killed it, the extra drops of a Seeker's Tonic, and
+	/// the glands of a mutated creature
+	func alchemyDrops(_ m: Mob, _ rng: inout RNG, _ credit: Bool) -> [Stack] {
+		var out: [Stack] = []
+		if !credit || m.tame { return out }
+		func chance(_ it: Mat, _ p: Double, _ n: Int = 1) {
+			if rng.double() < p { out.append(Stack(item: .mat(it), count: n)) }
+		}
+		switch m.kind {
+		case .slime: chance(.slimeGel, 0.6, 1 + rng.int(2))
+		case .emberSlime: chance(.slimeGel, 0.4); chance(.emberAsh, 0.45)
+		case .scorpion: chance(.venomSac, 0.5)
+		case .crawler: chance(.venomSac, 0.35)
+		case .polarBear: chance(.frostCrystal, 0.4)
+		case .imp, .cinderBat: chance(.emberAsh, 0.4)
+		case .wraith: chance(.wraithDust, 0.6)
+		case .bat: chance(.glowcap, 0.25)
+		case .golem: chance(.golemCore, 0.35)
+		case .sentinel: out.append(Stack(item: .mat(.sentinelLens), count: 1 + rng.int(2)))
+		case .warden: out.append(Stack(item: .mat(.emberAsh), count: 4))
+		default: break
+		}
+		if m.mut > 0 {
+			out.append(Stack(item: .mat(.mutantGland), count: min(4, 1 + m.mut / 2)))
+		}
+		// luck: one more of what it normally drops, now and then (never anything it would not drop)
+		let luck: Double = effects.value(.luck) / 100.0
+		if luck > 0 && rng.double() < luck {
+			var r2 = RNG(UInt64(truncatingIfNeeded: m.id) &* 0x9E3779B97F4A7C15 &+ 77)
+			if let extra = mobDrops(m.kind, &r2, m.sheared).first(where: { !$0.item.isRareLoot }) {
+				out.append(Stack(item: extra.item, count: 1))
+				floatText("Lucky!", m.b.x, m.b.top - 0.6, 0x5AE070)
+			}
+		}
+		return out
+	}
+
+	// MARK: mutation
+
+	/// One dose of mutagen on a creature: it grows to twice the size (as far as there is room), with
+	/// twice the health and twice the strength, its colours shift a little, and it keeps its own mind.
+	/// Every number stops at the limits in MutationLimits. Returns whether anything changed.
+	@discardableResult
+	func mutate(_ m: Mob) -> Bool {
+		if m.hp <= 0 || m.removed { return false }
+		let base: MobDef = m.def
+		if m.isBoss && m.mut >= 1 {
+			floatText("It resists further change", m.b.x, m.b.top - 0.6, 0xC8C8C8)
+			return false
+		}
+		if m.mut >= MutationLimits.maxStacks {
+			floatText("It can change no further", m.b.x, m.b.top - 0.6, 0xC8C8C8)
+			return false
+		}
+		let boss: Bool = m.isBoss
+		m.mut += 1
+		// health: the same share of health as before, of a doubled (capped) total
+		let frac: Double = m.maxHP > 0 ? clampD(m.hp / m.maxHP, 0.05, 1.0) : 1.0
+		let hpMul: Double = boss ? MutationLimits.bossHP : 2.0
+		let cap: Double = min(MutationLimits.maxHP, base.hp * mobHealthMult * MutationLimits.maxHPMul)
+		m.maxHP = min(cap, max(m.maxHP, m.maxHP * hpMul))
+		m.hp = max(1, m.maxHP * frac)
+		// strength: doubled, with no single blow above the cap
+		let dmgMul: Double = boss ? MutationLimits.bossDmg : 2.0
+		let blowCap: Double = base.dmg > 0 ? MutationLimits.maxBlow / base.dmg : MutationLimits.maxDmgMul
+		m.mutDmg = min(min(MutationLimits.maxDmgMul, blowCap), max(1.0, m.mutDmg * dmgMul))
+		// size: doubled, within the caps and only as far as there is room around it
+		let want: Double = min(mutCap(base), m.mutSize * (boss ? MutationLimits.bossSize : 2.0))
+		let grown: Double = growRoom(m, base, want)
+		let changedSize: Bool = grown > m.mutSize + 0.001
+		setMutSize(m, base, grown)
+		m.persistent = true
+		m.flash = 0.25
+		spawnParticles(m.b.x, m.b.cy, 0x9AF04A, 16, 4.0, 0.7, -2)
+		spawnParticles(m.b.x, m.b.cy, 0xC07CFF, 8, 3.0, 0.6, -2)
+		sfx(.roar, at: m.b.x, 0.5)
+		addShake(0.2)
+		var note: String = joinText(base.name, " mutates! (", String(m.mut), ")")
+		if !changedSize && !boss { note = joinText(base.name, " grows stronger, but has no room to grow") }
+		floatText(note, m.b.x, m.b.top - 0.8, 0x9AF04A)
+		keepMutantsInCheck()
+		bumpHUD()
+		return true
+	}
+
+	/// The largest size up to `want` that fits where the creature stands (it may rise a little to fit)
+	func growRoom(_ m: Mob, _ base: MobDef, _ want: Double) -> Double {
+		var s: Double = want
+		var tries: Int = 0
+		while s > m.mutSize + 0.001 && tries < 6 {
+			tries += 1
+			let w: Double = base.w * s
+			let h: Double = base.h * s
+			let hw: Double = w * 0.5
+			var lift: Double = 0
+			while lift <= 2.0 {
+				let fy: Double = m.b.y - lift
+				if !world.boxSolid(m.b.x - hw + 0.02, fy - h + 0.02, m.b.x + hw - 0.02, fy - 0.02) {
+					if lift > 0 { m.b.y = fy }
+					return s
+				}
+				lift += 1.0
+			}
+			s = m.mutSize + (s - m.mutSize) * 0.6
+			if s - m.mutSize < 0.1 { break }
+		}
+		return m.mutSize
+	}
+
+	/// The biggest a creature may grow: the size cap, and no wider or taller than the body limits
+	func mutCap(_ base: MobDef) -> Double {
+		let a: Double = MutationLimits.maxW / max(0.1, base.w)
+		let b: Double = MutationLimits.maxH / max(0.1, base.h)
+		return max(1.0, min(MutationLimits.maxSize, min(a, b)))
+	}
+
+	/// Sets the body size from the size multiplier, so the hit box and the picture always agree
+	func setMutSize(_ m: Mob, _ base: MobDef, _ s: Double) {
+		m.mutSize = clampD(s, 1.0, mutCap(base))
+		m.b.w = base.w * m.mutSize
+		m.b.h = base.h * m.mutSize
+	}
+
+	/// The drawn size of a creature against its normal size (1 for creatures that never mutated); the
+	/// same number as its body, so what is seen is what can be hit
+	func drawScale(_ m: Mob) -> Double {
+		return m.mut > 0 ? max(1.0, m.mutSize) : 1.0
+	}
+
+	/// Too many mutated creatures: the oldest wild ones (not pets, not bosses) lose their hold on the
+	/// world and wander off like any other creature
+	func keepMutantsInCheck() {
+		let list: [Mob] = mobs.filter { $0.mut > 0 && $0.hp > 0 && !$0.removed }
+		if list.count <= MutationLimits.maxMutants { return }
+		var extra: Int = list.count - MutationLimits.maxMutants
+		for m in list where extra > 0 && !m.tame && !m.isBoss {
+			m.persistent = false
+			extra -= 1
+		}
+	}
+
+	/// The mutated creatures for a save
+	func mutantSaves() -> [MutantSave]? {
+		var out: [MutantSave] = []
+		for m in mobs where m.mut > 0 && m.hp > 0 && !m.removed && m.persistent && m.kind != .rex && m.kind != .custom && !m.isBoss {
+			if m.tame { continue }
+			out.append(MutantSave(kind: m.kind.rawValue, x: m.b.x, y: m.b.y, hp: m.hp, maxHP: m.maxHP, mut: m.mut, variant: m.variant, tame: false, dim: world.dim.rawValue))
+			if out.count >= MutationLimits.maxMutants { break }
+		}
+		return out.isEmpty ? nil : out
+	}
+
+	/// Brings saved mutated creatures back (those of the realm the player is in)
+	func restoreMutants(_ list: [MutantSave]) {
+		for s in list.prefix(MutationLimits.maxMutants) where s.dim == world.dim.rawValue {
+			guard let k = MobKind(rawValue: s.kind), k != .custom, k != .rex else { continue }
+			let m: Mob = addMob(k, s.x, s.y)
+			m.variant = s.variant
+			reapplyMutation(m, clampI(s.mut, 1, MutationLimits.maxStacks))
+			m.maxHP = clampD(s.maxHP, 1, MutationLimits.maxHP)
+			m.hp = clampD(s.hp, 1, m.maxHP)
+			m.persistent = true
+		}
+	}
+
+	/// Puts a creature back to `n` doses (loading): the size, health and strength it had
+	func reapplyMutation(_ m: Mob, _ n: Int) {
+		let base: MobDef = m.def
+		m.mut = 0
+		m.mutDmg = 1
+		m.mutSize = 1
+		let boss: Bool = m.isBoss
+		let doses: Int = boss ? min(1, n) : n
+		var size: Double = 1
+		var dmg: Double = 1
+		var hpv: Double = m.maxHP
+		let cap: Double = min(MutationLimits.maxHP, base.hp * mobHealthMult * MutationLimits.maxHPMul)
+		let blowCap: Double = base.dmg > 0 ? MutationLimits.maxBlow / base.dmg : MutationLimits.maxDmgMul
+		for _ in 0..<doses {
+			size = min(mutCap(base), size * (boss ? MutationLimits.bossSize : 2.0))
+			dmg = min(min(MutationLimits.maxDmgMul, blowCap), dmg * (boss ? MutationLimits.bossDmg : 2.0))
+			hpv = min(cap, hpv * (boss ? MutationLimits.bossHP : 2.0))
+		}
+		m.mut = doses
+		m.mutDmg = max(1, dmg)
+		m.maxHP = max(m.maxHP, hpv)
+		m.hp = m.maxHP
+		setMutSize(m, base, growRoom(m, base, size))
 	}
 }
 
-/// The player's frames with a suit on: the figure drawn three times finer with the suit's pieces over
-/// it, frame by frame
-func suitFrames(_ plain: [PixelBuf], _ d: SuitDesign, pick: Int = -1) -> [PixelBuf] {
-	var out: [PixelBuf] = []
-	for (f, b) in plain.enumerated() {
-		var cv: PixelBuf = upscale3(b)
-		paintSuitPieces(&cv, d, frame: f, pick: pick)
-		out.append(cv)
+extension Item {
+	/// one of a kind or found only in the best chests (a Seeker's Tonic never doubles these)
+	var isRareLoot: Bool {
+		switch self {
+		case .relic, .gear: return true
+		case .mat(let m): return m == .umbralHeart || m == .relicFragment || m == .sentinelLens || m == .diamond
+		default: return MineLoot.isExceptional(self)
+		}
 	}
+}
+
+extension ModEffectKind {
+	/// a word or two shown over the player when the effect starts
+	var short: String {
+		switch self {
+		case .heal: return "Healed"
+		case .feed: return "Fed"
+		case .speed: return "Swift"
+		case .strength: return "Strong"
+		case .resistance: return "Ironhide"
+		case .regen: return "Regrowth"
+		case .glow: return "Glowing"
+		case .jump: return "Springy"
+		case .fireproof: return "Fireproof"
+		case .cure: return "Cured"
+		case .mining: return "Prospecting"
+		case .breathing: return "Water breathing"
+		case .nightVision: return "Night vision"
+		case .luck: return "Lucky"
+		case .featherfall: return "Featherlight"
+		case .warmth: return "Warm"
+		}
+	}
+
+	/// the colour of its icon in the HUD
+	var color: UInt32 {
+		switch self {
+		case .heal: return 0xE8445A
+		case .feed: return 0xC0703A
+		case .speed: return 0x7AD8F8
+		case .strength: return 0xC8402A
+		case .resistance: return 0x9AA4B8
+		case .regen: return 0xF07AB8
+		case .glow: return 0xFFE070
+		case .jump: return 0x8AE85A
+		case .fireproof: return 0xFF8A2A
+		case .cure: return 0xE8E8E8
+		case .mining: return 0xE8B83A
+		case .breathing: return 0x2E7AE8
+		case .nightVision: return 0x5A6AE8
+		case .luck: return 0x5AE070
+		case .featherfall: return 0xE8ECF8
+		case .warmth: return 0xE86A3A
+		}
+	}
+}
+
+extension World {
+	/// A few ingredients, now and then a potion or a compound, added to a chest's loot. Fixed by the
+	/// world and the chest's place (like the rest of its loot); deeper and Umbral chests hold rarer finds.
+	func alchemyChestExtras(_ base: [Stack], _ g: WorldGen, _ dim: Dimension, _ x: Int, _ y: Int) -> [Stack] {
+		var out: [Stack] = base
+		if out.count >= 27 { return out }
+		var rng = RNG(hashU(x &+ 913, y, g.seed &+ 0xA1C4E))
+		let deep: Bool = dim == .umbral || y > 140
+		if rng.double() < 0.4 {
+			var pool: [Mat] = [.sunleaf, .vial, .slimeGel, .waterVial]
+			if deep { pool += [.glowcap, .frostCrystal, .venomSac] }
+			if dim == .umbral { pool = [.emberAsh, .glowcap, .wraithDust, .venomSac] }
+			let m: Mat = pool[rng.int(pool.count)]
+			out.append(Stack(item: .mat(m), count: 1 + rng.int(3)))
+		}
+		if rng.double() < (deep ? 0.12 : 0.07) && out.count < 27 {
+			let pool: [Potion] = deep ? [.regrowth, .ironhide, .owlsight, .prospector, .emberward, .blight] : [.mending, .quickstep, .springstep, .featherfall, .mire, .smoke]
+			out.append(Stack(item: .potion(pool[rng.int(pool.count)]), count: 1 + rng.int(2)))
+		}
+		if rng.double() < (deep ? 0.05 : 0.02) && out.count < 27 {
+			let pool: [Infusion] = deep ? [.keen, .venom, .bountiful, .fireward, .bulwark, .fleet] : [.honed, .heft, .haste, .reinforced]
+			out.append(Stack(item: .compound(pool[rng.int(pool.count)]), count: 1))
+		}
+		return out
+	}
+}
+
+extension Game {
+	// MARK: guards on the player
+
+	/// A hit after the armour infusions and the suit have done their part (before armour and wards)
+	func guardedAmount(_ info: DamageInfo) -> Double {
+		var a: Double = info.amount
+		if info.source.kind == .mob { a *= info.source.mult }
+		let ai: ArmorInf = armorInf
+		if info.type == .fire || info.type == .lava { a *= 1.0 - ai.fireCut }
+		if info.type == .shock { a *= 1.0 - ai.stormCut }
+		if a > 6 && ai.heavyCut > 0 { a *= 1.0 - ai.heavyCut }
+		return suitGuard(a, info)
+	}
+
+	/// How far the player is thrown by a blow: Bulwark armour and a heavy suit hold them steadier
+	var knockTaken: Double {
+		var k: Double = armorInf.knockMul
+		if suit.worn { k *= suitStats.knockMul }
+		return k
+	}
+
+	/// Barbed armour: a creature that strikes the player takes some of the blow back
+	func thornsBack(_ info: DamageInfo, _ amount: Double) {
+		let t: Double = armorInf.thorns
+		if t <= 0 || info.source.kind != .mob { return }
+		if info.type != .melee && info.type != .contact { return }
+		guard let m = mobs.first(where: { $0.id == info.source.id }), m.hp > 0 else { return }
+		var back = DamageInfo(amount: max(0.5, amount * t), type: .magic, source: .player)
+		back.originX = pb.x
+		applyMobDamage(m, back)
+	}
+
+	/// How much of the cold still gets in: a Hearthfire Tonic keeps it all out; Frostward armour and the
+	/// suit keep some out
+	func coldGuard() -> Double {
+		if effects.value(.warmth) > 0 { return 0 }
+		return (1.0 - armorInf.coldCut) * suitColdMul
+	}
+
+	/// The held weapon's Quickened infusion: attacks come sooner
+	func quickMul() -> Double {
+		if let s = inv.slots[sel], s.has(.quickened) { return 0.85 }
+		return 1.0
+	}
+
+	/// A flask lands: a potion bursts, a fire flask catches
+	func burstFlaskOrPotion(_ p: Projectile, _ x: Double, _ y: Double, _ m: Mob?) {
+		if p.potion >= 0, let pt = Potion(rawValue: p.potion) {
+			burstPotion(pt, x, y, direct: m)
+		} else {
+			burstFlask(x, y, p.source)
+		}
+	}
+
+	/// A lightning strike near the player sometimes leaves a spark of storm essence behind (a lightning
+	/// rod catches it more often)
+	func stormEssenceAt(_ x: Double, _ y: Double, rod: Bool) {
+		if abs(x - pb.x) > 60 || world.dim != .overworld { return }
+		let p: Double = rod ? 0.5 : 0.2
+		if Double.random(in: 0...1) < p {
+			spawnDrop(Stack(item: .mat(.stormEssence), count: 1), x, y - 0.6, 0, -2)
+			spawnParticles(x, y - 0.4, 0xFFF07A, 6, 2.0, 0.6, -2)
+		}
+	}
+
+	/// The tapped station's screens
+	func openExo() {
+		showExo = true
+		bumpHUD()
+	}
+
+	func openInfuser() {
+		showInfuse = true
+		bumpHUD()
+	}
+
+	// MARK: saving
+
+	func effectsSave() -> EffectsSave? {
+		var k: [Int] = []
+		var a: [Double] = []
+		var t: [Double] = []
+		for kind in ModEffectKind.allCases where effects.time[kind.rawValue] > 0 {
+			k.append(kind.rawValue)
+			a.append(effects.amount[kind.rawValue])
+			t.append(effects.time[kind.rawValue])
+		}
+		if k.isEmpty && mendCD <= 0 { return nil }
+		return EffectsSave(kinds: k, amount: a, time: t, mendCD: mendCD > 0 ? mendCD : nil)
+	}
+
+	func restoreEffects(_ s: EffectsSave) {
+		for (i, raw) in s.kinds.enumerated() where i < s.amount.count && i < s.time.count {
+			guard let kind = ModEffectKind(rawValue: raw), kind.timed else { continue }
+			let amount: Double = clampD(s.amount[i], kind.amountRange.lo, kind.amountRange.sandboxHi)
+			effects.add(kind, amount, clampD(s.time[i], 0, 3600))
+		}
+		mendCD = clampD(s.mendCD ?? 0, 0, 60)
+	}
+
+	/// A saved suit, checked: one built the old way (a part in each place) is rebuilt piece by piece (a
+	/// part in a place it doesn't fit goes back into the bag), every piece kept within the suit's limits
+	func restoreSuit(_ s: ExoSuit) {
+		var clean: ExoSuit = ExoSuit()
+		var loose: [Stack] = []
+		for (k, st) in s.parts {
+			if let slot = ExoSlot(rawValue: k), slot.fits(st.item) { clean[slot] = st } else { loose.append(st) }
+		}
+		clean.design = s.design
+		clean.migrate()
+		var d: SuitDesign = clean.d
+		if d.pieces.count > SuitDesign.maxPieces { d.pieces = Array(d.pieces.prefix(SuitDesign.maxPieces)) }
+		for k in d.pieces.indices { d.pieces[k].clamp() }
+		clean.d = d
+		let stats: ExoStats = ExoStats.of(clean)
+		clean.energy = clampD(s.energy, 0, stats.capacity)
+		clean.worn = s.worn && stats.complete
+		clean.off = s.off
+		suit = clean
+		for st in loose { addStack(st) }
+		suitChanged()
+	}
+}
+
+// MARK: - Recipes for alchemy, infusion compounds and the suit
+
+extension RecipeBook {
+	static func addFeatureRecipes(_ add: (Item, Int, [(Item, Int)], Station, RecipeCat) -> Void) {
+		let wv: Item = .mat(.waterVial)
+		func m(_ x: Mat) -> Item { return .mat(x) }
+		func pot(_ p: Potion) -> Item { return .potion(p) }
+		// the stations
+		add(.block(.alchemyStill), 1, [(m(.copperBar), 4), (.block(.glass), 3), (.block(.stone), 4)], .bench, .alchemy)
+		add(.block(.infuser), 1, [(.block(.obsidian), 4), (m(.goldBar), 2), (m(.crystalShard), 2), (m(.ironBar), 4)], .anvil, .infusion)
+		add(.block(.exoStation), 1, [(m(.ironBar), 10), (m(.copperBar), 6), (.block(.glass), 2), (m(.goldBar), 1)], .anvil, .exosuit)
+		// vials and water
+		add(m(.vial), 3, [(.block(.glass), 1)], .furnace, .alchemy)
+		add(m(.vial), 3, [(.block(.glass), 1)], .still, .alchemy)
+		add(wv, 3, [(.gadget(.waterFlask), 1), (m(.vial), 3)], .still, .alchemy)
+		// drinkable potions
+		add(pot(.mending), 1, [(wv, 1), (m(.sunleaf), 2), (.food(.apple), 1)], .still, .alchemy)
+		add(pot(.greaterMending), 1, [(pot(.mending), 1), (m(.glowcap), 1), (m(.crystalShard), 1)], .still, .alchemy)
+		add(pot(.regrowth), 1, [(wv, 1), (m(.sunleaf), 1), (m(.slimeGel), 1), (.food(.carrot), 1)], .still, .alchemy)
+		add(pot(.brawn), 1, [(wv, 1), (m(.claw), 1), (m(.bone), 1)], .still, .alchemy)
+		add(pot(.quickstep), 1, [(wv, 1), (m(.feather), 2), (m(.sunleaf), 1)], .still, .alchemy)
+		add(pot(.prospector), 1, [(wv, 1), (m(.amethyst), 1), (m(.glowcap), 1)], .still, .alchemy)
+		add(pot(.ironhide), 1, [(wv, 1), (m(.ironBar), 1), (m(.tusk), 1)], .still, .alchemy)
+		add(pot(.emberward), 1, [(wv, 1), (m(.frostCrystal), 1), (m(.slimeGel), 1), (.block(.obsidian), 1)], .still, .alchemy)
+		add(pot(.deepbreath), 1, [(wv, 1), (.food(.rawFish), 1), (m(.sunleaf), 1)], .still, .alchemy)
+		add(pot(.owlsight), 1, [(wv, 1), (m(.glowcap), 1), (.food(.carrot), 1)], .still, .alchemy)
+		add(pot(.seeker), 1, [(wv, 1), (m(.goldBar), 1), (m(.crystalShard), 1), (m(.glowcap), 1)], .still, .alchemy)
+		add(pot(.featherfall), 1, [(wv, 1), (m(.feather), 3)], .still, .alchemy)
+		add(pot(.hearthfire), 1, [(wv, 1), (m(.coal), 1), (m(.fur), 1)], .still, .alchemy)
+		add(pot(.springstep), 1, [(wv, 1), (m(.slimeGel), 1), (m(.feather), 1)], .still, .alchemy)
+		// splashes (gunpowder bursts the flask)
+		add(pot(.searing), 2, [(wv, 1), (m(.gunpowder), 1), (m(.saltpeter), 1)], .still, .alchemy)
+		add(pot(.blight), 2, [(wv, 1), (m(.gunpowder), 1), (m(.venomSac), 1)], .still, .alchemy)
+		add(pot(.mire), 2, [(wv, 1), (m(.gunpowder), 1), (m(.slimeGel), 2)], .still, .alchemy)
+		add(pot(.enfeeble), 2, [(wv, 1), (m(.gunpowder), 1), (m(.wraithDust), 1)], .still, .alchemy)
+		add(pot(.mendingSplash), 1, [(pot(.mending), 1), (m(.gunpowder), 1), (m(.sunleaf), 1)], .still, .alchemy)
+		add(pot(.regrowthSplash), 1, [(pot(.regrowth), 1), (m(.gunpowder), 1)], .still, .alchemy)
+		add(pot(.smoke), 2, [(wv, 1), (m(.gunpowder), 1), (m(.coal), 2)], .still, .alchemy)
+		add(pot(.frost), 2, [(wv, 1), (m(.gunpowder), 1), (m(.frostCrystal), 1)], .still, .alchemy)
+		add(pot(.mutagen), 1, [(wv, 1), (m(.crystalShard), 2), (m(.venomSac), 1), (m(.glowcap), 1), (m(.slimeGel), 1)], .still, .alchemy)
+		add(pot(.mutagen), 1, [(wv, 1), (m(.mutantGland), 1), (m(.slimeGel), 1)], .still, .alchemy)
+		// infusion compounds
+		func comp(_ i: Infusion, _ cost: [(Item, Int)]) { add(.compound(i), 1, cost + [(wv, 1)], .infuser, .infusion) }
+		comp(.honed, [(m(.ironBar), 1), (m(.saltpeter), 1)])
+		comp(.quickened, [(m(.feather), 2), (m(.sunleaf), 2), (m(.silverBar), 1)])
+		comp(.keen, [(m(.amethyst), 2), (m(.crystalShard), 1)])
+		comp(.heft, [(m(.ironBar), 2), (m(.bone), 2)])
+		comp(.longReach, [(m(.bronzeBar), 2), (m(.string), 3), (m(.feather), 1)])
+		comp(.emberbrand, [(m(.emberAsh), 2), (m(.saltpeter), 1), (m(.goldBar), 1)])
+		comp(.frostbite, [(m(.frostCrystal), 3), (m(.silverBar), 1)])
+		comp(.stormcall, [(m(.stormEssence), 2), (m(.crystalShard), 2), (m(.silverBar), 2)])
+		comp(.venom, [(m(.venomSac), 2), (m(.slimeGel), 1)])
+		comp(.volatile, [(m(.gunpowder), 3), (m(.emberAsh), 1), (m(.saltpeter), 2)])
+		comp(.voidrend, [(m(.umbralHeart), 1), (m(.voidBar), 2), (m(.sentinelLens), 1)])
+		comp(.haste, [(m(.copperBar), 2), (m(.sunleaf), 2)])
+		comp(.bountiful, [(m(.goldBar), 2), (m(.glowcap), 2), (m(.amethyst), 1)])
+		comp(.precision, [(m(.silverBar), 1), (m(.crystalShard), 1), (m(.slimeGel), 1)])
+		comp(.quarry, [(m(.golemCore), 1), (m(.diamond), 2), (m(.stormEssence), 1)])
+		comp(.thrift, [(m(.golemCore), 1), (m(.copperBar), 4), (m(.crystalShard), 1)])
+		comp(.reinforced, [(m(.ironBar), 2), (m(.leather), 2)])
+		comp(.bulwark, [(m(.tusk), 2), (m(.ironBar), 2), (m(.fur), 1)])
+		comp(.fireward, [(m(.frostCrystal), 1), (m(.slimeGel), 2), (.block(.obsidian), 1)])
+		comp(.frostward, [(m(.fur), 2), (m(.coal), 2), (m(.wool), 2)])
+		comp(.stormward, [(m(.stormEssence), 1), (m(.copperBar), 3), (m(.slimeGel), 1)])
+		comp(.fleet, [(m(.feather), 3), (m(.sunleaf), 2), (m(.leather), 1)])
+		comp(.renewal, [(m(.glowcap), 2), (m(.slimeGel), 2), (m(.crystalShard), 1), (m(.goldBar), 1)])
+		comp(.barbed, [(m(.claw), 3), (m(.ironBar), 1)])
+		// suits are built piece by piece from bars now: the old parts melt down into their metal
+		for mt in ExoMat.allCases {
+			let b: Item = mt.bar
+			add(b, 2, [(.exoPart(.helmet, mt), 1)], .assembly, .exosuit)
+			add(b, 4, [(.exoPart(.chestFrame, mt), 1)], .assembly, .exosuit)
+			add(b, 2, [(.exoPart(.arm, mt), 1)], .assembly, .exosuit)
+			add(b, 3, [(.exoPart(.legs, mt), 1)], .assembly, .exosuit)
+			add(b, 2, [(.exoPart(.boots, mt), 1)], .assembly, .exosuit)
+			add(b, 1, [(.exoPlate(mt), 1)], .assembly, .exosuit)
+		}
+		// power cores
+		add(.exoCore(.sparkCell), 1, [(m(.copperBar), 4), (m(.coal), 4), (m(.ironBar), 1)], .assembly, .exosuit)
+		add(.exoCore(.dynamo), 1, [(m(.ironBar), 4), (m(.copperBar), 4), (m(.goldBar), 2), (.block(.battery), 1)], .assembly, .exosuit)
+		add(.exoCore(.crystal), 1, [(m(.crystalShard), 4), (m(.goldBar), 3), (.block(.accumulator), 1)], .assembly, .exosuit)
+		add(.exoCore(.ember), 1, [(m(.emberBar), 4), (m(.emberAsh), 4), (m(.golemCore), 1)], .assembly, .exosuit)
+		add(.exoCore(.heart), 1, [(m(.umbralHeart), 1), (m(.voidBar), 4), (m(.sentinelLens), 2)], .assembly, .exosuit)
+		// modules
+		add(.exoModule(.servo), 1, [(m(.ironBar), 4), (m(.copperBar), 3), (m(.string), 4)], .assembly, .exosuit)
+		add(.exoModule(.drill), 1, [(m(.ironBar), 4), (.part(.drill), 1)], .assembly, .exosuit)
+		add(.exoModule(.sprint), 1, [(m(.bronzeBar), 4), (m(.copperBar), 2), (m(.feather), 4)], .assembly, .exosuit)
+		add(.exoModule(.leap), 1, [(m(.ironBar), 3), (m(.slimeGel), 4), (m(.copperBar), 2)], .assembly, .exosuit)
+		add(.exoModule(.hover), 1, [(m(.mythrilBar), 4), (m(.stormEssence), 3), (m(.golemCore), 1)], .assembly, .exosuit)
+		add(.exoModule(.lamp), 1, [(m(.copperBar), 2), (.block(.glass), 1), (.block(.torch), 2)], .assembly, .exosuit)
+		add(.exoModule(.seal), 1, [(.block(.glass), 4), (m(.slimeGel), 4), (m(.frostCrystal), 2), (m(.emberAsh), 2)], .assembly, .exosuit)
+		add(.exoModule(.cargo), 1, [(m(.leather), 6), (m(.ironBar), 2), (.block(.chest), 1)], .assembly, .exosuit)
+		add(.exoModule(.gauntlet), 1, [(m(.copperBar), 4), (m(.silverBar), 2), (m(.stormEssence), 1)], .assembly, .exosuit)
+		add(.exoModule(.barrier), 1, [(m(.crystalShard), 3), (m(.goldBar), 2), (m(.sentinelLens), 1)], .assembly, .exosuit)
+		add(.exoModule(.wing), 1, [(m(.leather), 4), (m(.feather), 6), (m(.ironBar), 2)], .assembly, .exosuit)
+		add(.exoModule(.battery), 1, [(m(.copperBar), 3), (.block(.battery), 1)], .assembly, .exosuit)
+		add(.exoModule(.solar), 1, [(.block(.glass), 2), (m(.copperBar), 2), (m(.goldBar), 1)], .assembly, .exosuit)
+		add(.exoModule(.turret), 1, [(m(.ironBar), 4), (m(.gunpowder), 2), (m(.copperBar), 2)], .assembly, .exosuit)
+		add(.exoModule(.cannon), 1, [(m(.ironBar), 6), (m(.gunpowder), 4), (m(.bronzeBar), 2)], .assembly, .exosuit)
+		add(.exoModule(.laser), 1, [(m(.crystalShard), 2), (m(.goldBar), 2), (m(.stormEssence), 1)], .assembly, .exosuit)
+		add(.exoModule(.magnet), 1, [(m(.ironBar), 3), (m(.copperBar), 2), (m(.stormEssence), 1)], .assembly, .exosuit)
+	}
+}
+
+/// The alchemy, infusion and suit items, in palette order
+func featureItems() -> [Item] {
+	var out: [Item] = []
+	for p in Potion.allCases { out.append(.potion(p)) }
+	for i in Infusion.allCases { out.append(.compound(i)) }
+	for c in ExoCore.allCases { out.append(.exoCore(c)) }
+	for m in ExoModule.allCases { out.append(.exoModule(m)) }
 	return out
 }
 
-/// Pictures of suit designs for the Assembly Station (drawn again only when the design changes)
-final class SuitPictures: @unchecked Sendable {
-	static let shared: SuitPictures = SuitPictures()
-	var cache: [Int: Image] = [:]
-	let plain: [PixelBuf] = humanoidFrames(playerStyle(hairIdx: 0, scarfIdx: 0, head: nil, chest: nil, legs: nil))
-
-	/// the design worn by a plain figure, in one frame, with a piece shown picked
-	func image(_ d: SuitDesign, _ frame: Int, _ pick: Int) -> Image {
-		var h: Hasher = Hasher()
-		h.combine(d)
-		h.combine(frame)
-		h.combine(pick)
-		let key: Int = h.finalize()
-		if let i = cache[key] { return i }
-		let f: Int = clampI(frame, 0, plain.count - 1)
-		var cv: PixelBuf = upscale3(plain[f])
-		paintSuitPieces(&cv, d, frame: f, pick: pick)
-		let img: Image = pixImage(cv)
-		if cache.count > 48 { cache.removeAll() }
-		cache[key] = img
-		return img
-	}
-}
-
-func heartBuf(_ full: Bool) -> PixelBuf {
-	let rows: [String] = [".rr.rr..", "rRrrrrr.", "rRrrrrr.", "rrrrrrr.", ".rrrrr..", "..rrr...", "...r....", "........"]
-	let col: UInt32 = full ? 0xE02828 : 0x3A2A2A
-	let hi: UInt32 = full ? 0xFF9090 : 0x5A4A4A
-	var b: PixelBuf = bufFromRows(rows, ["r": col, "R": hi])
-	b = padBuf(b)
-	b.outline(0x101010)
-	return b
-}
-
-func foodBuf(_ full: Bool) -> PixelBuf {
-	let rows: [String] = ["....bb..", "...bmm..", "..mmmm..", ".mmMmm..", ".mmmm...", "bmmm....", "bb......", "........"]
-	let m: UInt32 = full ? 0xC0703A : 0x3A2E26
-	let mh: UInt32 = full ? 0xE8A070 : 0x4A3E36
-	let bo: UInt32 = full ? 0xF0E8D8 : 0x50504C
-	var b: PixelBuf = bufFromRows(rows, ["m": m, "M": mh, "b": bo])
-	b = padBuf(b)
-	b.outline(0x101010)
-	return b
-}
-
-func bubbleBuf() -> PixelBuf {
-	let rows: [String] = ["..bbb...", ".bWbbb..", "bWbbbbb.", "bbbbbbb.", "bbbbbbb.", ".bbbbb..", "..bbb...", "........"]
-	var b: PixelBuf = bufFromRows(rows, ["b": 0x6AB8FF, "W": 0xFFFFFF])
-	b = padBuf(b)
-	b.outline(0x102040)
-	return b
-}
-
-func shieldBuf() -> PixelBuf {
-	let rows: [String] = ["sssssss.", "sSSSSSs.", "sSssSSs.", "sSSSSSs.", ".sSSSs..", ".sSSSs..", "..sss...", "........"]
-	var b: PixelBuf = bufFromRows(rows, ["s": 0x9AA0AA, "S": 0xC8D0DA])
-	b = padBuf(b)
-	b.outline(0x101010)
-	return b
-}
-
-func padBuf(_ b: PixelBuf) -> PixelBuf {
-	var o = PixelBuf(w: b.w + 2, h: b.h + 2)
-	o.blit(b, 1, 1)
-	return o
-}
-
-// MARK: - The player's look
-
-/// The marker colours of the player's drawing (tools/art/creatures/player.py, MARK): the game swaps
-/// each set, light to deep, for the chosen colour's tones. Keep them the same as the drawing's.
-enum PlayerInk {
-	static let hair: [UInt32] = [0xF00001, 0xF00002, 0xF00003, 0xF00004]
-	static let shirt: [UInt32] = [0x00F001, 0x00F002, 0x00F003, 0x00F004]
-	static let pants: [UInt32] = [0x0000F1, 0x0000F2, 0x0000F3, 0x0000F4]
-	static let shoe: [UInt32] = [0xF0F001, 0xF0F002, 0xF0F003, 0xF0F004]
-	static let scarf: [UInt32] = [0x00F0F1, 0x00F0F2, 0x00F0F3, 0x00F0F4]
-	static let helm: [UInt32] = [0xF000F1, 0xF000F2, 0xF000F3, 0xF000F4]
-	/// the shoes' own colour (leg armour makes them a darker shade of its metal)
-	static let shoeColor: UInt32 = 0x24242E
-}
-
-/// Four tones of a colour, as the drawings shade with (`ramp` in tools/art/artlib.py): a warm light,
-/// the colour, a shadow and a deep shadow that both lean cool
-func artRamp(_ c: UInt32, light: UInt32 = 0xFFF0C8, dark: UInt32 = 0x241A38) -> [UInt32] {
-	let s1: UInt32 = mixRGB(mixRGB(c, 0x000000, 0.22), dark, 0.18)
-	let s2: UInt32 = mixRGB(mixRGB(c, 0x000000, 0.42), dark, 0.30)
-	return [mixRGB(c, light, 0.28), c, s1, s2]
-}
-
-/// A chosen colour's tones through the game's grade, ready to swap for a set of markers
-func lookRamp(_ c: UInt32) -> [UInt32] {
-	return artRamp(c).map { artGrade($0) }
-}
-
-/// A picture with some colours swapped for others (exact matches only)
-func swapColors(_ b: PixelBuf, _ map: [UInt32: UInt32]) -> PixelBuf {
-	if map.isEmpty { return b }
-	var o: PixelBuf = b
-	for i in 0..<o.px.count {
-		let c: UInt32 = o.px[i]
-		if (c >> 24) == 0 { continue }
-		if let n = map[c & 0xFFFFFF] { o.px[i] = (c & 0xFF000000) | n }
-	}
-	return o
-}
-
-/// What the player chose to look like (Settings), and the armour worn over it
-struct PlayerLookChoice {
-	var hair: Int = 0
-	var hairStyle: Int = 0
-	var shirt: Int = 0
-	var shirtStyle: Int = 0
-	var pants: Int = 0
-	var pantsStyle: Int = 0
-	var scarf: Int = 0
-	var head: Tier? = nil
-	var chest: Tier? = nil
-	var legs: Tier? = nil
-
-	init(_ s: Settings, head: Tier? = nil, chest: Tier? = nil, legs: Tier? = nil) {
-		hair = clampI(s.hair, 0, hairChoices.count - 1)
-		hairStyle = clampI(s.hairStyle, 0, hairStyleNames.count - 1)
-		shirt = clampI(s.shirtColor, 0, shirtChoices.count - 1)
-		shirtStyle = clampI(s.shirtStyle, 0, shirtStyleNames.count - 1)
-		pants = clampI(s.pantsColor, 0, pantsChoices.count - 1)
-		pantsStyle = clampI(s.pantsStyle, 0, pantsStyleNames.count - 1)
-		scarf = clampI(s.scarf, 0, scarfChoices.count - 1)
-		self.head = head
-		self.chest = chest
-		self.legs = legs
-	}
-
-	/// One number for the whole choice (the sprite caches are keyed by it)
-	var key: Int {
-		let looks: Int = (((((hair * 8 + hairStyle) * 16 + shirt) * 8 + shirtStyle) * 16 + pants) * 8 + pantsStyle) * 8 + scarf
-		let worn: Int = ((head?.rawValue ?? 15) * 16 + (chest?.rawValue ?? 15)) * 16 + (legs?.rawValue ?? 15)
-		return looks &* 4096 &+ worn
-	}
-}
-
-/// The colour armour of a tier is drawn in
-func armorLookColor(_ t: Tier) -> UInt32 {
-	return t == .wood ? 0x9A5A2A : t.color
-}
-
-/// The player's frames: the bare figure with the chosen trousers, shirt, scarf and hair laid over it
-/// (each a drawing of only what it changes), then every marker swapped for the chosen colour's
-/// tones. Armour takes the place of the clothes: a chest piece is a long-sleeved top of its metal,
-/// leg pieces are trousers of it (with darker boots), a helmet goes over the hair.
-func playerFrames(_ c: PlayerLookChoice) -> [PixelBuf] {
-	var frames: [PixelBuf] = CreatureSheet.frames("player")
-	if frames.isEmpty { return frames }
-	var map: [UInt32: UInt32] = [:]
-	func tone(_ markers: [UInt32], _ col: UInt32) {
-		let r: [UInt32] = lookRamp(col)
-		for i in 0..<min(markers.count, r.count) { map[markers[i]] = r[i] }
-	}
-	func lay(_ name: String) {
-		let over: [PixelBuf] = CreatureSheet.frames(name)
-		for i in 0..<min(frames.count, over.count) { frames[i].blit(over[i], 0, 0) }
-	}
-	var pantsStyle: Int = c.pantsStyle
-	var pantsCol: UInt32 = pantsChoices[c.pants]
-	var shoeCol: UInt32 = PlayerInk.shoeColor
-	if let t = c.legs {
-		pantsStyle = 0
-		pantsCol = shadeRGB(armorLookColor(t), 0.85)
-		shoeCol = shadeRGB(armorLookColor(t), 0.6)
-	}
-	var shirtStyle: Int = c.shirtStyle
-	var shirtCol: UInt32 = shirtChoices[c.shirt]
-	if let t = c.chest {
-		shirtStyle = 1
-		shirtCol = armorLookColor(t)
-	}
-	lay(joinText("player_pants_", String(pantsStyle)))
-	lay(joinText("player_shirt_", String(shirtStyle)))
-	if c.scarf != 0 { lay("player_scarf") }
-	lay(joinText("player_hair_", String(c.hairStyle)))
-	if c.head != nil { lay("player_helm") }
-	tone(PlayerInk.pants, pantsCol)
-	tone(PlayerInk.shoe, shoeCol)
-	tone(PlayerInk.shirt, shirtCol)
-	tone(PlayerInk.hair, hairChoices[c.hair])
-	if c.scarf != 0 { tone(PlayerInk.scarf, scarfChoices[c.scarf]) }
-	if let t = c.head { tone(PlayerInk.helm, armorLookColor(t)) }
-	return frames.map { swapColors($0, map) }
-}
-
-/// The player's look for a choice of clothes and armour
-func playerLook(_ c: PlayerLookChoice) -> CreatureLook {
-	guard let a = CreatureSheet.arts["player"] else {
-		let st: HumanStyle = playerStyle(hairIdx: c.hair, scarfIdx: c.scarf, head: c.head, chest: c.chest, legs: c.legs)
-		return CreatureLook(frames: humanoidFrames(st), anim: CreatureAnim(), scale: creatureScale)
-	}
-	return CreatureLook(frames: playerFrames(c), anim: CreatureSheet.anim(a), scale: fineScale, foot: a.foot + 1, cx: a.cx, fine: true)
-}
-
-final class Art: @unchecked Sendable {
-	static let shared: Art = Art()
-
-	var tiles: [Image] = []
-	var tileBufs: [PixelBuf] = []
-	var walls: [PixelBuf] = []
-	var heartFull: Image
-	var heartEmpty: Image
-	var foodFull: Image
-	var foodEmpty: Image
-	var bubble: Image
-	var shieldIcon: Image
-	var boat: Image
-	var boatL: Image
-	var parts: [Image] = []
-	/// the parts' pictures as pixels (for vehicles drawn from one picture), and a count of art changes
-	var partBufs: [PixelBuf] = []
-	var gen: Int = 0
-	private var icons: [Item: Image] = [:]
-	/// weather symbols (see weatherIcon)
-	var wxIcons: [Int: Image] = [:]
-	var mobSets: [Int: SpriteSet] = [:]
-	/// sprites of custom creatures, by slot (rebuilt when the mods change)
-	var modMobSets: [Int: SpriteSet] = [:]
-	private var playerSets: [Int: SpriteSet] = [:]
-	var crack: [Image] = []
-
-	init() {
-		let painter: SectionPainter = SectionPainter.shared
-		tileBufs = painter.tileBufs
-		var ti: [Image] = []
-		for b in painter.tileBufs { ti.append(pixImage(b)) }
-		tiles = ti
-		// dark backdrop walls, indexed by backdrop kind - 1
-		walls = painter.wallBufs
-		heartFull = pixImage(heartBuf(true))
-		heartEmpty = pixImage(heartBuf(false))
-		foodFull = pixImage(foodBuf(true))
-		foodEmpty = pixImage(foodBuf(false))
-		bubble = pixImage(bubbleBuf())
-		shieldIcon = pixImage(shieldBuf())
-		let bt: PixelBuf = gradeBuf(spritePirateBoat())
-		boat = pixImage(bt)
-		boatL = pixImage(bt.flipped())
-		var ps: [Image] = []
-		var pb: [PixelBuf] = []
-		for p in PartType.allCases {
-			let b: PixelBuf = gradeBuf(partBuf(p))
-			pb.append(b)
-			ps.append(pixImage(b))
-		}
-		parts = ps
-		partBufs = pb
-		var cr: [Image] = []
-		for stage in 0..<5 {
-			var b = PixelBuf(w: 8, h: 8)
-			var rng = RNG(UInt64(stage + 3))
-			let n: Int = 3 + stage * 4
-			for _ in 0..<n { b.set(rng.int(8), rng.int(8), 0x101010) }
-			if stage >= 2 { b.line(1, 2, 6, 5, 0x101010) }
-			if stage >= 3 { b.line(5, 0, 2, 7, 0x101010) }
-			cr.append(pixImage(b))
-		}
-		crack = cr
-	}
-
-	func tile(_ t: Tile) -> Image { return tiles[Int(t.rawValue)] }
-
-	/// After a world's mods change: new pictures for the reserved tiles, and forget every cached icon
-	/// and sprite of custom content
-	func refreshModArt() {
-		gen &+= 1
-		let painter: SectionPainter = SectionPainter.shared
-		let base: Int = Int(Tile.modBase)
-		for i in 0..<ModLimits.blockSlots where base + i < tiles.count && base + i < painter.tileBufs.count {
-			tiles[base + i] = pixImage(painter.tileBufs[base + i])
-			tileBufs[base + i] = painter.tileBufs[base + i]
-		}
-		var keep: [Item: Image] = [:]
-		for (k, v) in icons {
-			switch k {
-			case .custom: continue
-			case .block(let t): if t.isMod { continue }
-			default: break
-			}
-			keep[k] = v
-		}
-		icons = keep
-		modMobSets.removeAll()
-		// game creatures a mod repaints (or stops repainting) are drawn afresh
-		mobSets.removeAll()
-	}
-
-	func icon(_ it: Item) -> Image {
-		if let i = icons[it] { return i }
-		var b: PixelBuf = itemBuf(it)
-		switch it {
-		case .block, .custom: break
-		default: b = gradeBuf(b)
-		}
-		let img: Image = pixImage(b)
-		icons[it] = img
-		return img
-	}
-
-	func playerSet(_ g: Game) -> SpriteSet {
-		let key: Int = g.armorKey
-		if let s = playerSets[key] { return s }
-		let a = g.armorPieces()
-		var s: SpriteSet
-		if g.suit.worn && !g.suit.d.pieces.isEmpty {
-			// a suit is built on the older figure, drawn three times finer: it stands where it always does
-			let st: HumanStyle = playerStyle(hairIdx: g.settings.hair, scarfIdx: g.settings.scarf, head: a.0, chest: a.1, legs: a.2)
-			let plain: [PixelBuf] = humanoidFrames(st)
-			s = makeSpriteSet(suitFrames(plain, g.suit.d).map { gradeBuf($0) }, hitH: 1.8, fixedScale: 0.125 / Double(suitUnit))
-			let bb: (Int, Int, Int, Int) = opaqueBounds(plain[0])
-			s.footRow = bb.3 * suitUnit
-			s.centerCol = Double(bb.0 + bb.2 + 1) * 0.5 * Double(suitUnit)
-		} else {
-			s = lookSpriteSet(playerLook(PlayerLookChoice(g.settings, head: a.0, chest: a.1, legs: a.2)), hitH: 1.8)
-		}
-		if playerSets.count > 24 { playerSets.removeAll() }
-		playerSets[key] = s
-		return s
-	}
-
-	/// The player as chosen on the character screen: from the front and from the side
-	func previewPlayer(_ s: Settings) -> (Image, Image) {
-		let l: CreatureLook = playerLook(PlayerLookChoice(s))
-		let i: Int = l.anim.pose("front", 0)
-		let front: Image = pixImage(l.frames[min(i, l.frames.count - 1)])
-		let side: Image = pixImage(l.frames[0])
-		return (front, side)
-	}
-
-	func mobSet(_ m: Mob) -> SpriteSet {
+extension Art {
+	/// A mutated creature's sprites: its own, with the colours turned a little further round the wheel
+	/// for each dose (up to four steps). Built once per creature kind and step.
+	func mutantSet(_ m: Mob) -> SpriteSet {
 		if m.kind == .custom { return customMobSet(m.cslot, m.mphase) }
 		var variant: Int = 0
 		switch m.kind {
@@ -615,7474 +1108,4256 @@ final class Art: @unchecked Sendable {
 		case .wolf: variant = m.tame ? 1 : 0
 		default: variant = 0
 		}
-		let key: Int = m.kind.rawValue * 16 + variant
+		let step: Int = clampI(m.mut, 1, 4)
+		let key: Int = 1_000_000 + m.kind.rawValue * 256 + variant * 8 + step
 		if let s = mobSets[key] { return s }
-		let s: SpriteSet = buildMobSet(m.kind, variant)
-		mobSets[key] = s
-		return s
-	}
-
-	func buildMobSet(_ k: MobKind, _ v: Int) -> SpriteSet {
-		if let fr = OverrideRT.shared.creatureArt(k, v) {
-			// a mod's repainted sprite, timed like the drawing it was painted over: the hand-drawn one,
-			// or the older one for repaints made before the creature was redrawn
-			let look: CreatureLook = creatureLook(k, v)
-			if look.fine && OverrideRT.shared.mobFine[k.rawValue] == true {
-				return makeSpriteSet(fr, hitH: mobDef(k).h, fixedScale: look.scale, anim: look.anim)
-			}
-			return makeSpriteSet(fr, hitH: mobDef(k).h, fixedScale: creatureScale, anim: olderCreatureArt(k, v).1)
-		}
-		return creatureSpriteSet(k, v)
-	}
-
-	/// A custom creature's sprites (made once per world; refreshModArt clears them)
-	func customMobSet(_ slot: Int) -> SpriteSet {
-		if let s = modMobSets[slot] { return s }
-		guard let r = ModRuntime.shared.mob(slot) else { return creaturePreview(.zombie) }
-		let s: SpriteSet = modMobSpriteSet(r.def)
-		modMobSets[slot] = s
-		return s
-	}
-
-	/// A game creature's sprites (the Mod Creator's body picker)
-	func creaturePreview(_ k: MobKind) -> SpriteSet {
-		let key: Int = k.rawValue * 16
-		if let s = mobSets[key] { return s }
-		let s: SpriteSet = buildMobSet(k, 0)
+		var look: CreatureLook = creatureLook(m.kind, variant)
+		let hue: Double = 12.0 * Double(step)
+		look.frames = look.frames.map { recolorBuf($0, hue: hue, sat: 1.06, bright: 1.0, tint: 0x9AF04A, amt: 0.035 * Double(step)) }
+		let s: SpriteSet = lookSpriteSet(look, hitH: mobDef(m.kind).h)
 		mobSets[key] = s
 		return s
 	}
 }
 
-/// True for creatures drawn with the shared humanoid frames
-
-
-
-
-// MARK: - Sound: every effect is synthesised at first use (no audio files), short and soft, in one style
-
-enum SoundID: Int, CaseIterable {
-	case digStone, digDirt, digWood, digSand, digCrystal, digLeaves
-	case breakStone, breakDirt, breakWood, breakCrystal
-	case place, pickup, craft, chestOpen, door
-	case swing, hit, hurt, bow, arrowHit, gun, explosion, land, eat, splash
-	case discovery, warn, roar, portal, tap
-	/// combat (appended): a knife's flick, a heavy blow, a thrust, a critical hit, several foes at once,
-	/// crossbow, sling, blunderbuss, lightning, a fire flask, a dazed foe, a weapon swap, a rare find
-	case swingLight, swingHeavy, thrust, crit, multiHit, crossbow, sling, blunderbuss, zap, flask, daze, swap, rareLoot
-	/// weather (appended): a close thunderclap, far-off rolling thunder, the crackle before a strike,
-	/// an alert chime, a hailstone's tick
-	case thunderNear, thunderFar, strikeWarn, weatherAlert, hailTick
-	/// alchemy and the suit (appended): a sip, a flask breaking, an infusion taking hold, a suit closing
-	case drink, potionBreak, infuse, suitUp
-}
-
-enum LoopID: Int, CaseIterable {
-	case engine, drill, rain, wind
-	/// weather beds (appended): a heavy downpour, a howling gale, hail on everything, a tornado's roar,
-	/// a storm siren
-	case heavyRain, gale, hail, tornado, siren
-}
-
-/// The sound a block makes when dug or broken
-func soundMaterial(_ t: Tile) -> Int {
-	if isLeafTile(t) || t.isPlant || t == .cobweb { return 5 }
-	switch t {
-	case .glass, .ice, .glowCrystal, .crystalOre, .diamond: return 4
-	case .sand: return 3
-	default: break
-	}
-	switch toolClass(t) {
-	case .axe: return 2
-	case .shovel, .hoe: return 1
-	case .pickaxe: return 0
-	}
-}
-
-/// Small additive synthesiser: tones with pitch sweeps, filtered noise and plucked strings, each with an
-/// attack and an exponential decay, mixed and normalised
-struct Synth {
-	static let rate: Double = 22050
-	var out: [Float]
-	var seed: UInt64
-
-	init(_ seconds: Double, seed: UInt64) {
-		out = [Float](repeating: 0, count: max(1, Int(seconds * Synth.rate)))
-		self.seed = seed &* 2862933555777941757 &+ 3037000493
-	}
-
-	static func env(_ t: Double, _ attack: Double, _ decay: Double) -> Double {
-		return t < attack ? t / max(attack, 0.0001) : exp(-(t - attack) / max(decay, 0.0001))
-	}
-
-	/// wave: 0 sine, 1 triangle, 2 saw, 3 soft square
-	mutating func tone(_ f0: Double, _ f1: Double, _ dur: Double, _ attack: Double, _ decay: Double, _ amp: Double, wave: Int = 0, at: Double = 0, vibrato: Double = 0) {
-		let n0: Int = Int(at * Synth.rate)
-		let n: Int = min(out.count - n0, Int(dur * Synth.rate))
-		if n <= 0 { return }
-		var ph: Double = 0
-		for i in 0..<n {
-			let t: Double = Double(i) / Synth.rate
-			let k: Double = t / max(dur, 0.0001)
-			var f: Double = f0 + (f1 - f0) * k
-			if vibrato > 0 { f *= 1.0 + 0.012 * sin(t * vibrato * 2.0 * Double.pi) }
-			ph += f / Synth.rate
-			let x: Double = ph - floor(ph)
-			var v: Double
-			switch wave {
-			case 1: v = 4.0 * abs(x - 0.5) - 1.0
-			case 2: v = 2.0 * x - 1.0
-			case 3: v = tanh(sin(x * 2.0 * Double.pi) * 3.0)
-			default: v = sin(x * 2.0 * Double.pi)
-			}
-			out[n0 + i] += Float(v * amp * Synth.env(t, attack, decay))
-		}
-	}
-
-	mutating func rnd() -> Double {
-		seed = seed &* 6364136223846793005 &+ 1442695040888963407
-		return Double((seed >> 33) & 0xFFFFFF) / Double(0xFFFFFF) * 2.0 - 1.0
-	}
-
-	/// noise through a one-pole low-pass (lp) and high-pass (hp); lp can sweep to lp1
-	mutating func noise(_ dur: Double, _ attack: Double, _ decay: Double, _ amp: Double, lp: Double, hp: Double, lp1: Double = -1, at: Double = 0) {
-		let n0: Int = Int(at * Synth.rate)
-		let n: Int = min(out.count - n0, Int(dur * Synth.rate))
-		if n <= 0 { return }
-		var low: Double = 0
-		var low2: Double = 0
-		let ah: Double = 1.0 - exp(-2.0 * Double.pi * hp / Synth.rate)
-		for i in 0..<n {
-			let t: Double = Double(i) / Synth.rate
-			let cut: Double = lp1 > 0 ? lp + (lp1 - lp) * (t / dur) : lp
-			let al: Double = 1.0 - exp(-2.0 * Double.pi * cut / Synth.rate)
-			low += al * (rnd() - low)
-			low2 += ah * (low - low2)
-			out[n0 + i] += Float((low - low2) * amp * 2.2 * Synth.env(t, attack, decay))
-		}
-	}
-
-	/// a plucked string (Karplus-Strong)
-	mutating func pluck(_ f: Double, _ dur: Double, _ amp: Double, at: Double = 0) {
-		let period: Int = max(2, Int(Synth.rate / f))
-		var ring: [Double] = (0..<period).map { _ in rnd() }
-		let n0: Int = Int(at * Synth.rate)
-		let n: Int = min(out.count - n0, Int(dur * Synth.rate))
-		if n <= 0 { return }
-		var k: Int = 0
-		for i in 0..<n {
-			let a: Double = ring[k]
-			let b: Double = ring[(k + 1) % period]
-			ring[k] = (a + b) * 0.497
-			out[n0 + i] += Float(a * amp)
-			k = (k + 1) % period
-		}
-	}
-
-	/// peak-normalise and fade the ends so nothing clicks
-	mutating func finish(_ peak: Float) {
-		var m: Float = 0
-		for v in out { m = max(m, abs(v)) }
-		let g: Float = m > 0 ? peak / m : 0
-		let fade: Int = min(out.count / 2, 66)
-		for i in 0..<out.count {
-			var v: Float = out[i] * g
-			if i < fade { v *= Float(i) / Float(fade) }
-			if i > out.count - 1 - fade { v *= Float(out.count - 1 - i) / Float(fade) }
-			out[i] = v
-		}
-	}
-}
-
-enum SoundBank {
-	static func effect(_ id: SoundID, _ variant: Int) -> [Float] {
-		let p: Double = [0.94, 1.0, 1.06][variant % 3]
-		let seed: UInt64 = UInt64(id.rawValue * 31 + variant + 1)
-		var s: Synth
-		var peak: Float = 0.75
-		switch id {
-		case .digStone, .breakStone:
-			let big: Bool = id == .breakStone
-			s = Synth(big ? 0.22 : 0.08, seed: seed)
-			s.noise(big ? 0.2 : 0.06, 0.002, big ? 0.06 : 0.02, 0.6, lp: 6000, hp: 1500)
-			s.tone(900 * p, 700 * p, 0.06, 0.001, 0.015, 0.3)
-			if big { s.noise(0.18, 0.01, 0.06, 0.4, lp: 1500, hp: 200, at: 0.03) }
-		case .digDirt, .breakDirt:
-			let big: Bool = id == .breakDirt
-			s = Synth(big ? 0.2 : 0.09, seed: seed)
-			s.noise(big ? 0.18 : 0.08, 0.003, big ? 0.06 : 0.03, 0.8, lp: 900, hp: 80)
-			s.tone(140 * p, 90 * p, 0.08, 0.002, 0.03, 0.4)
-		case .digWood, .breakWood:
-			let big: Bool = id == .breakWood
-			s = Synth(big ? 0.25 : 0.09, seed: seed)
-			s.tone(320 * p, 300 * p, 0.08, 0.001, 0.025, 0.6, wave: 1)
-			s.tone(640 * p, 600 * p, 0.06, 0.001, 0.015, 0.25)
-			s.noise(0.03, 0.001, 0.01, 0.3, lp: 3000, hp: 400)
-			if big { s.tone(240 * p, 200 * p, 0.2, 0.002, 0.06, 0.5, wave: 1, at: 0.04); s.noise(0.15, 0.01, 0.05, 0.3, lp: 1200, hp: 150, at: 0.05) }
-		case .digSand:
-			s = Synth(0.1, seed: seed)
-			s.noise(0.09, 0.005, 0.04, 0.6, lp: 2500, hp: 300)
-		case .digCrystal, .breakCrystal:
-			let big: Bool = id == .breakCrystal
-			s = Synth(big ? 0.45 : 0.3, seed: seed)
-			s.tone(1500 * p, 1500 * p, 0.3, 0.002, 0.12, 0.4)
-			s.tone(2310 * p, 2300 * p, 0.25, 0.002, 0.08, 0.25)
-			s.noise(0.02, 0.001, 0.006, 0.2, lp: 8000, hp: 2000)
-			if big { for k in 0..<4 { s.tone((1800 + Double(k) * 420) * p, 1700 * p, 0.2, 0.002, 0.06, 0.18, at: 0.03 * Double(k)) } }
-			peak = 0.55
-		case .digLeaves:
-			s = Synth(0.08, seed: seed)
-			s.noise(0.07, 0.01, 0.025, 0.35, lp: 4000, hp: 1200)
-			peak = 0.4
-		case .place:
-			s = Synth(0.09, seed: seed)
-			s.tone(200 * p, 120 * p, 0.08, 0.002, 0.025, 0.7)
-			s.noise(0.04, 0.001, 0.012, 0.3, lp: 1200, hp: 100)
-		case .pickup:
-			s = Synth(0.14, seed: seed)
-			s.tone(660 * p, 660 * p, 0.06, 0.002, 0.03, 0.4, wave: 1)
-			s.tone(990 * p, 990 * p, 0.08, 0.002, 0.04, 0.35, wave: 1, at: 0.05)
-			peak = 0.4
-		case .craft:
-			s = Synth(0.4, seed: seed)
-			s.tone(1180 * p, 1180 * p, 0.35, 0.001, 0.1, 0.4)
-			s.tone(1770 * p, 1770 * p, 0.3, 0.001, 0.06, 0.3)
-			s.tone(2900 * p, 2900 * p, 0.2, 0.001, 0.03, 0.15)
-			s.noise(0.02, 0.001, 0.005, 0.3, lp: 7000, hp: 1500)
-			peak = 0.5
-		case .chestOpen:
-			s = Synth(0.3, seed: seed)
-			s.tone(150 * p, 130 * p, 0.26, 0.02, 0.12, 0.4, wave: 1, vibrato: 18)
-			s.tone(95 * p, 80 * p, 0.08, 0.002, 0.03, 0.4, at: 0.2)
-			peak = 0.5
-		case .door:
-			s = Synth(0.12, seed: seed)
-			s.tone(240 * p, 180 * p, 0.08, 0.001, 0.025, 0.6, wave: 1)
-			s.noise(0.05, 0.001, 0.015, 0.4, lp: 2000, hp: 150)
-		case .swing:
-			s = Synth(0.16, seed: seed)
-			s.noise(0.15, 0.04, 0.05, 0.4, lp: 700 * p, hp: 250, lp1: 3200 * p)
-			peak = 0.35
-		case .hit:
-			s = Synth(0.12, seed: seed)
-			s.noise(0.08, 0.001, 0.025, 0.7, lp: 1800, hp: 100)
-			s.tone(120 * p, 70 * p, 0.1, 0.001, 0.04, 0.8)
-		case .hurt:
-			s = Synth(0.2, seed: seed)
-			s.tone(230 * p, 150 * p, 0.17, 0.005, 0.07, 0.5, wave: 1)
-			s.noise(0.08, 0.002, 0.03, 0.3, lp: 1200, hp: 100)
-		case .bow:
-			s = Synth(0.3, seed: seed)
-			s.pluck(196 * p, 0.28, 0.6)
-			s.noise(0.03, 0.001, 0.01, 0.2, lp: 3000, hp: 600)
-			peak = 0.5
-		case .arrowHit:
-			s = Synth(0.08, seed: seed)
-			s.noise(0.04, 0.001, 0.012, 0.5, lp: 2500, hp: 300)
-			s.tone(260 * p, 200 * p, 0.05, 0.001, 0.02, 0.4, wave: 1)
-			peak = 0.45
-		case .gun:
-			s = Synth(0.16, seed: seed)
-			s.noise(0.12, 0.001, 0.035, 0.9, lp: 7000, hp: 200)
-			s.tone(90 * p, 50 * p, 0.12, 0.001, 0.05, 0.7)
-			peak = 0.7
-		case .explosion:
-			s = Synth(1.0, seed: seed)
-			s.noise(0.95, 0.003, 0.28, 1.0, lp: 700 * p, hp: 20)
-			s.tone(60 * p, 35 * p, 0.8, 0.003, 0.3, 0.8)
-			peak = 0.85
-		case .land:
-			s = Synth(0.09, seed: seed)
-			s.noise(0.07, 0.002, 0.025, 0.7, lp: 600, hp: 40)
-			s.tone(90 * p, 60 * p, 0.06, 0.001, 0.025, 0.4)
-			peak = 0.5
-		case .eat:
-			s = Synth(0.3, seed: seed)
-			for k in 0..<3 { s.noise(0.05, 0.002, 0.015, 0.4, lp: 2500, hp: 500, at: Double(k) * 0.09) }
-			peak = 0.4
-		case .splash:
-			s = Synth(0.3, seed: seed)
-			s.noise(0.28, 0.005, 0.1, 0.6, lp: 3000, hp: 400)
-			peak = 0.45
-		case .discovery:
-			s = Synth(0.75, seed: seed)
-			for (k, f) in [523.0, 659.0, 784.0, 1047.0].enumerated() { s.tone(f, f, 0.4, 0.004, 0.16, 0.3, wave: 1, at: Double(k) * 0.09) }
-			peak = 0.45
-		case .warn:
-			s = Synth(0.5, seed: seed)
-			s.tone(110, 165, 0.45, 0.05, 0.25, 0.35, wave: 3)
-			peak = 0.4
-		case .roar:
-			s = Synth(1.1, seed: seed)
-			s.noise(1.0, 0.08, 0.4, 0.8, lp: 500, hp: 40)
-			s.tone(75 * p, 55 * p, 1.0, 0.06, 0.4, 0.5, wave: 2, vibrato: 7)
-			peak = 0.7
-		case .portal:
-			s = Synth(1.0, seed: seed)
-			for f in [440.0, 660.0, 880.0] { s.tone(f, f * 1.02, 0.9, 0.15, 0.4, 0.25, vibrato: 5) }
-			peak = 0.45
-		case .tap:
-			s = Synth(0.04, seed: seed)
-			s.tone(1400, 1300, 0.03, 0.001, 0.008, 0.3)
-			peak = 0.25
-		case .swingLight:
-			s = Synth(0.1, seed: seed)
-			s.noise(0.09, 0.01, 0.025, 0.4, lp: 1800 * p, hp: 700, lp1: 6000 * p)
-			peak = 0.3
-		case .swingHeavy:
-			s = Synth(0.3, seed: seed)
-			s.noise(0.28, 0.06, 0.08, 0.6, lp: 300 * p, hp: 60, lp1: 1400 * p)
-			s.tone(95 * p, 60 * p, 0.25, 0.04, 0.08, 0.4)
-			peak = 0.45
-		case .thrust:
-			s = Synth(0.12, seed: seed)
-			s.noise(0.1, 0.005, 0.03, 0.5, lp: 2500 * p, hp: 500, lp1: 7000 * p)
-			s.tone(500 * p, 900 * p, 0.05, 0.002, 0.02, 0.15)
-			peak = 0.35
-		case .crit:
-			s = Synth(0.25, seed: seed)
-			s.noise(0.08, 0.001, 0.025, 0.7, lp: 2400, hp: 100)
-			s.tone(130 * p, 70 * p, 0.12, 0.001, 0.045, 0.8)
-			s.tone(1480 * p, 1320 * p, 0.2, 0.001, 0.07, 0.3)
-			s.tone(2220 * p, 2000 * p, 0.14, 0.001, 0.04, 0.15)
-			peak = 0.75
-		case .multiHit:
-			s = Synth(0.3, seed: seed)
-			s.tone(660 * p, 660 * p, 0.12, 0.002, 0.05, 0.35, wave: 1)
-			s.tone(990 * p, 990 * p, 0.16, 0.002, 0.07, 0.35, wave: 1, at: 0.07)
-			peak = 0.45
-		case .crossbow:
-			s = Synth(0.24, seed: seed)
-			s.pluck(110 * p, 0.2, 0.7)
-			s.noise(0.03, 0.001, 0.008, 0.5, lp: 4000, hp: 800)
-			s.tone(180 * p, 120 * p, 0.06, 0.001, 0.02, 0.4, wave: 1, at: 0.01)
-			peak = 0.55
-		case .sling:
-			s = Synth(0.26, seed: seed)
-			s.noise(0.2, 0.02, 0.06, 0.35, lp: 900 * p, hp: 200, lp1: 2600 * p)
-			for i in 0..<s.out.count { s.out[i] *= Float(0.6 + 0.4 * sin(Double(i) / Synth.rate * 38.0 * 2.0 * Double.pi)) }
-			s.noise(0.05, 0.001, 0.015, 0.4, lp: 3500, hp: 600, at: 0.18)
-			peak = 0.4
-		case .blunderbuss:
-			s = Synth(0.5, seed: seed)
-			s.noise(0.45, 0.001, 0.12, 1.0, lp: 4500 * p, hp: 60, lp1: 900)
-			s.tone(70 * p, 32 * p, 0.4, 0.001, 0.14, 0.9)
-			peak = 0.85
-		case .zap:
-			s = Synth(0.3, seed: seed)
-			for k in 0..<5 { s.noise(0.03, 0.001, 0.01, 0.6, lp: 9000, hp: 2200, at: Double(k) * 0.045) }
-			s.tone(1900 * p, 420 * p, 0.25, 0.001, 0.08, 0.35, wave: 2)
-			peak = 0.6
-		case .flask:
-			s = Synth(0.6, seed: seed)
-			s.noise(0.06, 0.001, 0.02, 0.6, lp: 9000, hp: 3000)
-			for k in 0..<3 { s.tone((2600 + Double(k) * 700) * p, 2400 * p, 0.08, 0.001, 0.03, 0.15, at: 0.01 * Double(k)) }
-			s.noise(0.5, 0.08, 0.2, 0.7, lp: 400, hp: 60, lp1: 1600, at: 0.04)
-			peak = 0.6
-		case .daze:
-			s = Synth(0.35, seed: seed)
-			for (k, f) in [1500.0, 1900.0, 1700.0].enumerated() { s.tone(f * p, f * 1.05 * p, 0.08, 0.004, 0.03, 0.25, at: Double(k) * 0.09) }
-			peak = 0.3
-		case .swap:
-			s = Synth(0.1, seed: seed)
-			s.tone(900 * p, 850 * p, 0.04, 0.001, 0.012, 0.35, wave: 1)
-			s.tone(1300 * p, 1250 * p, 0.04, 0.001, 0.012, 0.3, wave: 1, at: 0.045)
-			s.noise(0.02, 0.001, 0.006, 0.2, lp: 6000, hp: 1500)
-			peak = 0.3
-		case .rareLoot:
-			s = Synth(0.9, seed: seed)
-			for (k, f) in [784.0, 988.0, 1175.0, 1568.0, 1976.0].enumerated() { s.tone(f, f, 0.45, 0.003, 0.18, 0.28, wave: 1, at: Double(k) * 0.07) }
-			for k in 0..<6 { s.tone(3000 + Double(k) * 310, 2900, 0.1, 0.001, 0.04, 0.08, at: 0.35 + Double(k) * 0.05) }
-			peak = 0.5
-		case .thunderNear:
-			// a sharp crack, then the long rumble rolling away under it
-			s = Synth(2.4, seed: seed)
-			s.noise(0.09, 0.001, 0.03, 1.0, lp: 9000, hp: 900)
-			s.noise(0.25, 0.004, 0.09, 0.8, lp: 2600 * p, hp: 120, at: 0.02)
-			s.noise(2.3, 0.03, 0.75, 0.9, lp: 420 * p, hp: 25, lp1: 160, at: 0.05)
-			s.noise(1.2, 0.05, 0.35, 0.5, lp: 300 * p, hp: 25, at: 0.6 + 0.2 * Double(variant))
-			s.tone(48 * p, 34 * p, 1.6, 0.02, 0.6, 0.35)
-			peak = 0.9
-		case .thunderFar:
-			// rolls of low rumble, no crack (the high notes are lost on the way)
-			s = Synth(3.0, seed: seed)
-			s.noise(2.6, 0.25, 0.9, 0.7, lp: 260 * p, hp: 22, lp1: 140)
-			s.noise(1.0, 0.1, 0.35, 0.55, lp: 220 * p, hp: 22, at: 0.5 + 0.3 * Double(variant))
-			s.noise(1.0, 0.1, 0.35, 0.45, lp: 200 * p, hp: 22, at: 1.4)
-			s.tone(40 * p, 30 * p, 2.4, 0.3, 0.8, 0.25)
-			peak = 0.6
-		case .strikeWarn:
-			// the buzz and crackle in the air just before a strike
-			s = Synth(0.7, seed: seed)
-			for k in 0..<9 { s.noise(0.035, 0.001, 0.012, 0.45 + 0.05 * Double(k), lp: 9000, hp: 2600, at: Double(k) * 0.07) }
-			s.tone(120 * p, 180 * p, 0.65, 0.2, 0.3, 0.2, wave: 2, vibrato: 30)
-			peak = 0.5
-		case .weatherAlert:
-			s = Synth(0.9, seed: seed)
-			s.tone(880, 880, 0.3, 0.005, 0.12, 0.35, wave: 1)
-			s.tone(660, 660, 0.4, 0.005, 0.18, 0.35, wave: 1, at: 0.28)
-			s.tone(880, 880, 0.3, 0.005, 0.12, 0.25, wave: 1, at: 0.56)
-			peak = 0.45
-		case .hailTick:
-			s = Synth(0.05, seed: seed)
-			s.noise(0.03, 0.0005, 0.008, 0.6, lp: 9000, hp: 2500)
-			s.tone(2600 * p, 2400 * p, 0.02, 0.0005, 0.006, 0.3)
-			peak = 0.3
-		case .drink:
-			// three soft gulps
-			s = Synth(0.5, seed: seed)
-			for k in 0..<3 { s.tone(320 * p, 220 * p, 0.09, 0.01, 0.04, 0.35, wave: 0, at: Double(k) * 0.14) }
-			s.noise(0.4, 0.02, 0.15, 0.12, lp: 900, hp: 200)
-			peak = 0.4
-		case .potionBreak:
-			// glass, then a hiss
-			s = Synth(0.55, seed: seed)
-			s.noise(0.05, 0.0008, 0.015, 0.7, lp: 9500, hp: 3500)
-			for k in 0..<4 { s.tone((2900 + Double(k) * 520) * p, 2500 * p, 0.07, 0.001, 0.025, 0.14, at: 0.008 * Double(k)) }
-			s.noise(0.45, 0.04, 0.16, 0.45, lp: 2600, hp: 500, at: 0.05)
-			peak = 0.55
-		case .infuse:
-			// a rising shimmer
-			s = Synth(0.8, seed: seed)
-			for (k, f) in [440.0, 554.0, 659.0, 880.0].enumerated() { s.tone(f * p, f * 1.01 * p, 0.45, 0.04, 0.2, 0.22, wave: 1, at: Double(k) * 0.08, vibrato: 6) }
-			peak = 0.45
-		case .suitUp:
-			// servos and a latch
-			s = Synth(0.45, seed: seed)
-			s.tone(180 * p, 420 * p, 0.25, 0.01, 0.1, 0.3, wave: 3)
-			s.noise(0.06, 0.001, 0.02, 0.6, lp: 4000, hp: 800, at: 0.28)
-			s.tone(1200 * p, 1100 * p, 0.05, 0.001, 0.02, 0.25, at: 0.3)
-			peak = 0.45
-		}
-		s.finish(peak)
-		return s.out
-	}
-
-	/// Seamless loops: whole numbers of cycles per loop, and noise cross-faded into its own start
-	static func loop(_ id: LoopID) -> [Float] {
-		var s: Synth
-		switch id {
-		case .engine:
-			s = Synth(1.0, seed: 101)
-			s.tone(55, 55, 1.0, 0.0001, 1000, 0.5, wave: 2)
-			s.tone(110, 110, 1.0, 0.0001, 1000, 0.25, wave: 3)
-			for i in 0..<s.out.count { s.out[i] *= Float(0.75 + 0.25 * sin(Double(i) / Synth.rate * 9.0 * 2.0 * Double.pi)) }
-		case .drill:
-			s = Synth(1.0, seed: 102)
-			s.tone(180, 180, 1.0, 0.0001, 1000, 0.4, wave: 3)
-			s.noise(1.0, 0.0001, 1000, 0.2, lp: 2000, hp: 300)
-			for i in 0..<s.out.count { s.out[i] *= Float(0.7 + 0.3 * sin(Double(i) / Synth.rate * 30.0 * 2.0 * Double.pi)) }
-		case .rain:
-			s = Synth(2.2, seed: 103)
-			s.noise(2.2, 0.0001, 1000, 0.6, lp: 3000, hp: 500)
-		case .wind:
-			s = Synth(3.2, seed: 104)
-			s.noise(3.2, 0.0001, 1000, 0.6, lp: 300, hp: 40)
-			for i in 0..<s.out.count { s.out[i] *= Float(0.6 + 0.4 * sin(Double(i) / Synth.rate / 3.0 * 2.0 * Double.pi)) }
-		case .heavyRain:
-			// denser and deeper than light rain, with slow surges
-			s = Synth(3.0, seed: 105)
-			s.noise(3.0, 0.0001, 1000, 0.7, lp: 1800, hp: 120)
-			s.noise(3.0, 0.0001, 1000, 0.3, lp: 5000, hp: 1500)
-			for i in 0..<s.out.count { s.out[i] *= Float(0.8 + 0.2 * sin(Double(i) / Synth.rate / 1.4 * 2.0 * Double.pi)) }
-		case .gale:
-			// a howl: band-limited noise whose loudness rises and falls in gusts
-			s = Synth(4.2, seed: 106)
-			s.noise(4.2, 0.0001, 1000, 0.6, lp: 900, hp: 250)
-			s.noise(4.2, 0.0001, 1000, 0.4, lp: 260, hp: 60)
-			for i in 0..<s.out.count {
-				let t: Double = Double(i) / Synth.rate
-				s.out[i] *= Float(0.55 + 0.3 * sin(t / 2.0 * 2.0 * Double.pi) + 0.15 * sin(t / 0.5 * 2.0 * Double.pi))
-			}
-		case .hail:
-			// countless small stones ticking on everything
-			s = Synth(2.2, seed: 107)
-			s.noise(2.2, 0.0001, 1000, 0.15, lp: 6000, hp: 1800)
-			var k: Int = 0
-			while k < 110 {
-				let at: Double = s.rnd() * 0.5 + 0.5
-				s.noise(0.02, 0.0005, 0.006, 0.6, lp: 9000, hp: 2400, at: at * 2.0)
-				k += 1
-			}
-		case .tornado:
-			// a deep, steady roar like a train that does not pass
-			s = Synth(3.4, seed: 108)
-			s.noise(3.4, 0.0001, 1000, 0.8, lp: 180, hp: 25)
-			s.noise(3.4, 0.0001, 1000, 0.3, lp: 700, hp: 200)
-			for i in 0..<s.out.count { s.out[i] *= Float(0.75 + 0.25 * sin(Double(i) / Synth.rate / 0.85 * 2.0 * Double.pi)) }
-		case .siren:
-			// a siren's slow rise and fall: the pitch's swing averages out over the loop, so the wave
-			// ends exactly where it began
-			s = Synth(4.0, seed: 109)
-			var ph: Double = 0
-			for i in 0..<s.out.count {
-				let t: Double = Double(i) / Synth.rate
-				let f: Double = 640.0 + 220.0 * sin(t / 4.0 * 2.0 * Double.pi)
-				ph += f / Synth.rate
-				let x: Double = ph - floor(ph)
-				s.out[i] = Float(tanh(sin(x * 2.0 * Double.pi) * 2.0) * 0.5)
+extension WorldRenderer {
+	/// Smoke clouds (soft grey puffs that thin out as they end) and the rings of bursting potions
+	static func drawPotionFX(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
+		for s in g.smokes {
+			let a: Double = 0.55 * clampD(s.t / 1.5, 0, 1)
+			for k in 0..<7 {
+				let ang: Double = Double(k) * 0.898 + g.clock * 0.15
+				let rr: Double = s.r * (0.35 + 0.12 * Double(k % 3))
+				let px: Double = s.x + cos(ang) * rr
+				let py: Double = s.y + sin(ang) * rr * 0.6
+				let sz: Double = s.r * (0.75 + 0.1 * Double(k % 2))
+				fillOval(&ctx, v.rect(px - sz * 0.5, py - sz * 0.4, sz, sz * 0.8), Color(hex: 0x8A8A90, alpha: a))
 			}
 		}
-		if id == .siren {
-			// the siren's wave already joins up end to start: no fades, which would dip at the seam
-			var m: Float = 0
-			for v in s.out { m = max(m, abs(v)) }
-			if m > 0 { for i in 0..<s.out.count { s.out[i] *= 0.6 / m } }
-		} else {
-			s.finish(0.6)
+		for r in g.rings {
+			let p: Double = 1.0 - r.t / 0.35
+			let rad: Double = r.r * (0.3 + 0.7 * p)
+			let path: Path = Path(ellipseIn: v.rect(r.x - rad, r.y - rad * 0.6, rad * 2.0, rad * 1.2))
+			ctx.stroke(path, with: .color(Color(hex: r.color, alpha: 0.7 * (1.0 - p))), lineWidth: 3)
 		}
-		if id == .rain || id == .wind || id == .heavyRain || id == .gale || id == .hail || id == .tornado {
-			// fold the extra 0.2 s back over the start so the loop point is seamless
-			let tail: Int = Int(0.2 * Synth.rate)
-			let n: Int = s.out.count - tail
-			for i in 0..<tail {
-				let k: Float = Float(i) / Float(tail)
-				s.out[i] = s.out[i] * k + s.out[n + i] * (1 - k)
-			}
-			s.out.removeLast(tail)
-		}
-		return s.out
 	}
 }
 
-/// Plays the effects: a small pool of voices (the oldest is cut off when all are busy), a minimum gap
-/// between repeats of the same effect, and four looping beds whose volume follows the game.
-final class Sound {
-	static let shared: Sound = Sound()
-	private let engine: AVAudioEngine = AVAudioEngine()
-	private var format: AVAudioFormat? = nil
-	private var voices: [AVAudioPlayerNode] = []
-	private var loopNodes: [AVAudioPlayerNode] = []
-	private var buffers: [Int: [AVAudioPCMBuffer]] = [:]
-	private var lastPlay: [Int: Double] = [:]
-	private var nextVoice: Int = 0
-	private(set) var running: Bool = false
-	private var started: Bool = false
-	var enabled: Bool = true
-	var sfxVolume: Float = 0.7
-	var ambienceVolume: Float = 0.5
+// ===== p30_infusion =====
 
-	/// Call once the game is on screen
-	func start() {
-		if started { return }
-		started = true
-		#if os(iOS)
-		// ambient: mixes with the player's own music and respects the silent switch
-		try? AVAudioSession.sharedInstance().setCategory(.ambient, mode: .default, options: [.mixWithOthers])
-		try? AVAudioSession.sharedInstance().setActive(true)
-		#endif
-		guard let fmt = AVAudioFormat(standardFormatWithSampleRate: Synth.rate, channels: 1) else { return }
-		format = fmt
-		for _ in 0..<8 {
-			let n = AVAudioPlayerNode()
-			engine.attach(n)
-			engine.connect(n, to: engine.mainMixerNode, format: fmt)
-			voices.append(n)
-		}
-		for _ in LoopID.allCases {
-			let n = AVAudioPlayerNode()
-			engine.attach(n)
-			engine.connect(n, to: engine.mainMixerNode, format: fmt)
-			n.volume = 0
-			loopNodes.append(n)
-		}
-		engine.prepare()
-		do { try engine.start() } catch { return }
-		running = true
-		for v in voices { v.play() }
-		for l in LoopID.allCases {
-			let n: AVAudioPlayerNode = loopNodes[l.rawValue]
-			if let b = makeBuffer(SoundBank.loop(l)) {
-				n.scheduleBuffer(b, at: nil, options: .loops, completionHandler: nil)
-				n.play()
-			}
-		}
-	}
+// MARK: - Infusion: lasting properties worked into equipment
 
-	private func makeBuffer(_ samples: [Float]) -> AVAudioPCMBuffer? {
-		guard let fmt = format, let b = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: AVAudioFrameCount(samples.count)) else { return nil }
-		b.frameLength = AVAudioFrameCount(samples.count)
-		if let ch = b.floatChannelData {
-			for i in 0..<samples.count { ch[0][i] = samples[i] }
+/// The kinds of equipment an infusion can go on
+enum InfuseClass: Int {
+	case melee, ranged, tool, armor, suit
+	var name: String {
+		switch self {
+		case .melee: return "melee weapons"
+		case .ranged: return "bows, slings and guns"
+		case .tool: return "tools"
+		case .armor: return "armour and suit plating"
+		case .suit: return "suit cores and modules"
 		}
-		return b
-	}
-
-	static func minGap(_ id: SoundID) -> Double {
-		switch id {
-		case .pickup, .tap: return 0.05
-		case .digStone, .digDirt, .digWood, .digSand, .digCrystal, .digLeaves: return 0.09
-		case .hit, .arrowHit: return 0.06
-		case .land, .place, .door: return 0.08
-		case .warn: return 0.35
-		case .roar, .portal, .discovery, .explosion, .rareLoot: return 0.25
-		case .thunderNear: return 0.3
-		case .thunderFar: return 0.5
-		case .strikeWarn: return 0.6
-		case .weatherAlert: return 2.0
-		case .hailTick: return 0.07
-		case .crit, .multiHit, .swingLight: return 0.05
-		case .daze, .flask: return 0.15
-		default: return 0.04
-		}
-	}
-
-	func play(_ id: SoundID, _ volume: Double = 1.0) {
-		guard running && enabled && sfxVolume > 0 && volume > 0.02 else { return }
-		let now: Double = Date().timeIntervalSinceReferenceDate
-		if let t = lastPlay[id.rawValue], now - t < Sound.minGap(id) { return }
-		lastPlay[id.rawValue] = now
-		if buffers[id.rawValue] == nil {
-			var list: [AVAudioPCMBuffer] = []
-			for v in 0..<3 { if let b = makeBuffer(SoundBank.effect(id, v)) { list.append(b) } }
-			buffers[id.rawValue] = list
-		}
-		guard let list = buffers[id.rawValue], !list.isEmpty else { return }
-		let b: AVAudioPCMBuffer = list[Int.random(in: 0..<list.count)]
-		let v: AVAudioPlayerNode = voices[nextVoice]
-		nextVoice = (nextVoice + 1) % voices.count
-		v.volume = Float(min(1.0, volume)) * sfxVolume
-		v.scheduleBuffer(b, at: nil, options: .interrupts, completionHandler: nil)
-		if !v.isPlaying { v.play() }
-	}
-
-	/// Silences every loop at once: leaving a world (nothing sets their volumes any more after that)
-	func silenceLoops() {
-		for n in loopNodes { n.volume = 0 }
-	}
-
-	func setLoop(_ id: LoopID, _ volume: Double) {
-		guard running else { return }
-		let target: Float = enabled ? Float(max(0, min(1, volume))) * ambienceVolume : 0
-		let n: AVAudioPlayerNode = loopNodes[id.rawValue]
-		// ease toward the target so loops fade in and out instead of popping
-		n.volume += (target - n.volume) * 0.15
 	}
 }
 
-extension Game {
-	/// A sound effect; world events further than ~32 blocks from the player are not heard
-	func sfx(_ id: SoundID, at x: Double? = nil, _ volume: Double = 1.0) {
-		var v: Double = volume
-		if let wx = x { v *= max(0, 1.0 - abs(wx - pb.x) / 32.0) }
-		Sound.shared.play(id, v)
-	}
-
-	func digSound(_ t: Tile, broke: Bool) {
-		let m: Int = soundMaterial(t)
-		let id: SoundID
-		switch m {
-		case 0: id = broke ? .breakStone : .digStone
-		case 1: id = broke ? .breakDirt : .digDirt
-		case 2: id = broke ? .breakWood : .digWood
-		case 3: id = broke ? .breakDirt : .digSand
-		case 4: id = broke ? .breakCrystal : .digCrystal
-		default: id = .digLeaves
-		}
-		sfx(id, broke ? 0.9 : 0.6)
-	}
-
-	/// Once a frame: settings into the mixer, and the looping beds (engine, drill, rain, wind)
-	func updateAudio() {
-		let snd: Sound = Sound.shared
-		snd.enabled = settings.soundOn
-		snd.sfxVolume = Float(settings.sfxVolume)
-		snd.ambienceVolume = Float(settings.ambienceVolume)
-		if !snd.running { return }
-		var engineV: Double = 0
-		var drillV: Double = 0
-		if let v = inVehicle, v.engines > 0, v.fuel > 0 || isCreative {
-			engineV = 0.3 + 0.5 * abs(v.throttle)
-			if v.drilling { drillV = 0.7 }
-		}
-		snd.setLoop(.engine, engineV)
-		snd.setLoop(.drill, drillV)
-		// the weather beds, layered: light and heavy rain, wind and gale, hail, a tornado, a siren. They
-		// all run from the start and only their volumes move, so nothing restarts or clicks. Under a roof
-		// the rain and wind are muffled rather than cut.
-		let L: LocalWeather = wxHere
-		let ow: Bool = world.dim == .overworld && settings.weatherOn
-		let muffle: Double = shelterLevel == 0 ? 1.0 : (shelterLevel == 1 ? 0.55 : (shelterLevel == 2 ? 0.3 : 0.08))
-		let rainV: Double = ow && !L.snow ? L.precip : 0
-		snd.setLoop(.rain, min(1.0, rainV * 1.1) * muffle)
-		snd.setLoop(.heavyRain, clampD((rainV - 0.45) * 1.6, 0, 1) * muffle)
-		let aw: Double = ow ? abs(L.wind) : 0
-		let high: Double = world.dim == .overworld && shelterLevel == 0 && pb.y < 80 ? 0.35 : 0
-		snd.setLoop(.wind, world.dim == .umbral ? 0.6 : max(high, clampD(aw / 10.0, 0, 0.8) * muffle))
-		snd.setLoop(.gale, clampD((aw - 8.0) / 8.0, 0, 1) * muffle)
-		snd.setLoop(.hail, ow ? clampD(L.hail * 1.2, 0, 1) * muffle : 0)
-		var roar: Double = 0
-		if ow, let e = weather.tornado { roar = clampD(1.0 - abs(e.x - pb.x) / 90.0, 0, 1) * e.funnel * max(muffle, 0.4) }
-		snd.setLoop(.tornado, roar)
-		snd.setLoop(.siren, sirenLevel * 0.7)
-	}
-}
-
-
-// MARK: - Weather: one simulation for the whole overworld
-// The weather is a single saved simulation (WeatherSim), stepped once a frame by the game clock. It
-// holds the state over the region (clear, rain, a storm...), the plan of what comes next (the forecast
-// devices read it directly), amounts that ease toward whatever the state and the settings allow (cloud,
-// rain, wind, lightning, hail, cold) and the two rare events (a tornado, a hurricane). What a place
-// actually gets is worked out from that and the place itself: storm cells drift over the land with the
-// wind (a noise field in world space, so it is the same whichever chunks happen to be loaded), deserts
-// stay dry, cold country gets snow and the coast takes the brunt of a hurricane. Nothing keeps a timer
-// of its own: rain, lightning, hail, cold and the weather devices all read the simulation.
-
-enum WeatherKind: Int, Codable, CaseIterable {
-	case clear, partlyCloudy, overcast, lightRain, heavyRain, thunderstorm, strongWind, windstorm, hailstorm, snowfall, blizzard, tornado, hurricane
+/// Infusions: a compound worked into a piece of equipment at an Infusion Crucible gives it one lasting
+/// property. Each piece has a few slots (more for better metals), each infusion goes on it once, and
+/// most bonuses are a share of what the item already does, so a good item stays better than a poor one.
+/// Saved by number on the item: new kinds only go on the end.
+enum Infusion: Int, Codable, CaseIterable {
+	case honed, quickened, keen, heft, longReach, emberbrand, frostbite, stormcall, venom, volatile, voidrend
+	case haste, bountiful, precision, quarry, thrift
+	case reinforced, bulwark, fireward, frostward, stormward, fleet, renewal, barbed
 
 	var name: String {
 		switch self {
-		case .clear: return "Clear"
-		case .partlyCloudy: return "Partly cloudy"
-		case .overcast: return "Overcast"
-		case .lightRain: return "Light rain"
-		case .heavyRain: return "Heavy rain"
-		case .thunderstorm: return "Thunderstorm"
-		case .strongWind: return "Strong wind"
-		case .windstorm: return "Windstorm"
-		case .hailstorm: return "Hailstorm"
-		case .snowfall: return "Snowfall"
-		case .blizzard: return "Blizzard"
-		case .tornado: return "Tornado"
-		case .hurricane: return "Hurricane"
+		case .honed: return "Honed"
+		case .quickened: return "Quickened"
+		case .keen: return "Keen"
+		case .heft: return "Heft"
+		case .longReach: return "Long Reach"
+		case .emberbrand: return "Emberbrand"
+		case .frostbite: return "Frostbite"
+		case .stormcall: return "Stormcall"
+		case .venom: return "Venom"
+		case .volatile: return "Volatile"
+		case .voidrend: return "Voidrend"
+		case .haste: return "Haste"
+		case .bountiful: return "Bountiful"
+		case .precision: return "Precision"
+		case .quarry: return "Quarry"
+		case .thrift: return "Thrift"
+		case .reinforced: return "Reinforced"
+		case .bulwark: return "Bulwark"
+		case .fireward: return "Fireward"
+		case .frostward: return "Frostward"
+		case .stormward: return "Stormward"
+		case .fleet: return "Fleet"
+		case .renewal: return "Renewal"
+		case .barbed: return "Barbed"
 		}
 	}
 
-	var severe: Bool {
+	var rarity: Rarity {
 		switch self {
-		case .thunderstorm, .windstorm, .hailstorm, .blizzard, .tornado, .hurricane: return true
-		default: return false
+		case .honed, .heft, .haste, .reinforced: return .basic
+		case .quickened, .keen, .longReach, .venom, .bountiful, .precision, .bulwark, .fireward, .frostward, .fleet, .barbed: return .uncommon
+		case .emberbrand, .frostbite, .volatile, .thrift, .stormward, .renewal: return .rare
+		case .stormcall, .quarry: return .veryRare
+		case .voidrend: return .legendary
 		}
 	}
 
-
-	/// What a spell of it brings at full strength (before the settings and the place are applied)
-	var profile: WeatherProfile {
+	/// what it can go on
+	var classes: [InfuseClass] {
 		switch self {
-		case .clear: return WeatherProfile(cloud: 0.04, wind: 1.2, gust: 0.25)
-		case .partlyCloudy: return WeatherProfile(cloud: 0.35, wind: 2.4, gust: 0.35)
-		case .overcast: return WeatherProfile(cloud: 0.72, wind: 3.0, gust: 0.35)
-		case .lightRain: return WeatherProfile(cloud: 0.78, precip: 0.38, wind: 3.0, gust: 0.4, cover: 0.55)
-		case .heavyRain: return WeatherProfile(cloud: 0.9, precip: 0.85, wind: 5.0, gust: 0.5, cover: 0.8)
-		case .thunderstorm: return WeatherProfile(cloud: 1.0, precip: 0.9, wind: 7.0, gust: 0.7, thunder: 6.0, cover: 0.75)
-		case .strongWind: return WeatherProfile(cloud: 0.4, wind: 9.0, gust: 0.6, cover: 0.3)
-		case .windstorm: return WeatherProfile(cloud: 0.7, precip: 0.15, wind: 14.0, gust: 0.8, cover: 0.4)
-		case .hailstorm: return WeatherProfile(cloud: 0.95, precip: 0.55, wind: 6.0, gust: 0.6, thunder: 2.0, hail: 1.0, cover: 0.6)
-		case .snowfall: return WeatherProfile(cloud: 0.8, precip: 0.6, wind: 2.5, gust: 0.4, cover: 0.85, chill: 0.2)
-		case .blizzard: return WeatherProfile(cloud: 1.0, precip: 1.0, wind: 13.0, gust: 0.7, cover: 1.0, chill: 1.0)
-		case .tornado: return WeatherProfile(cloud: 1.0, precip: 0.75, wind: 8.0, gust: 0.8, thunder: 5.0, hail: 0.25, cover: 0.7)
-		case .hurricane: return WeatherProfile(cloud: 1.0, precip: 1.0, wind: 15.0, gust: 0.8, thunder: 2.0, cover: 1.0)
+		case .honed, .longReach, .emberbrand, .frostbite, .voidrend: return [.melee, .ranged]
+		case .quickened: return [.melee, .ranged]
+		case .keen, .heft, .stormcall, .venom: return [.melee]
+		case .volatile: return [.ranged]
+		case .haste, .bountiful, .precision, .quarry: return [.tool]
+		case .thrift: return [.suit]
+		case .reinforced, .bulwark, .fireward, .frostward, .stormward, .fleet, .renewal, .barbed: return [.armor]
 		}
 	}
 
-	/// How long a spell of it lasts, in seconds of play (a day is 720)
-	var spell: ClosedRange<Double> {
+	/// what it does, in a line
+	var blurb: String {
 		switch self {
-		case .clear: return 180...420
-		case .partlyCloudy: return 150...300
-		case .overcast: return 120...240
-		case .lightRain: return 90...200
-		case .heavyRain: return 70...150
-		case .thunderstorm: return 80...150
-		case .strongWind: return 70...140
-		case .windstorm: return 60...110
-		case .hailstorm: return 35...70
-		case .snowfall: return 120...240
-		case .blizzard: return 80...150
-		case .tornado: return 95...120
-		case .hurricane: return 330...440
+		case .honed: return "+20% damage"
+		case .quickened: return "Attacks and shots come 15% sooner"
+		case .keen: return "+12% chance of a critical blow"
+		case .heft: return "Blows knock foes 60% further"
+		case .longReach: return "Melee reaches 0.6 further; shots fly 25% further"
+		case .emberbrand: return "Sets what it hits alight for 3 s"
+		case .frostbite: return "What it hits moves 40% slower for 3 s"
+		case .stormcall: return "One blow in five sends a spark leaping to 2 more foes"
+		case .venom: return "Poisons what it hits: 1 a second for 4 s"
+		case .volatile: return "Shots burst on impact (3 damage around, no blocks broken)"
+		case .voidrend: return "+15% damage, and 35% more against bosses and Umbral creatures"
+		case .haste: return "Mines 25% faster"
+		case .bountiful: return "A 20% chance of one extra ore, gem or crystal"
+		case .precision: return "Glass, ice, crystal, leaves and grass come away whole"
+		case .quarry: return "Also breaks the blocks above and below (diamond tools and better)"
+		case .thrift: return "Powered suit parts use 25% less energy"
+		case .reinforced: return "+1 defence"
+		case .bulwark: return "Less knockback; heavy blows hurt 15% less"
+		case .fireward: return "Fire and lava hurt 20% less (each piece)"
+		case .frostward: return "The cold gets in 25% slower (each piece)"
+		case .stormward: return "Lightning and hail hurt 30% less (each piece)"
+		case .fleet: return "Run 4% faster (each piece)"
+		case .renewal: return "Slowly heals you (each piece adds a little)"
+		case .barbed: return "Foes that strike you take 15% of the blow back (each piece)"
 		}
 	}
-}
 
-struct WeatherProfile {
-	var cloud: Double = 0
-	var precip: Double = 0
-	/// typical air speed over open ground, in blocks per second
-	var wind: Double = 0
-	/// how far the wind gusts above and below that (0 steady ... 1 wild)
-	var gust: Double = 0
-	/// lightning strikes per minute over the land around the player
-	var thunder: Double = 0
-	var hail: Double = 0
-	/// how much of the land the rain covers at once (0 scattered showers ... 1 everywhere)
-	var cover: Double = 0
-	/// how much colder it makes the land
-	var chill: Double = 0
-}
-
-struct WeatherStep: Codable {
-	var kind: WeatherKind
-	var dur: Double
-}
-
-/// A tornado: it forms far off (the warning), touches down and crosses the land with the wind, then
-/// ropes out. Its strength never changes on the way, so its danger can be judged from afar.
-struct TornadoEvent: Codable {
-	var x: Double
-	/// which way it travels (-1 west, 1 east) and how fast
-	var dir: Double
-	var speed: Double
-	/// 0 forming (the warning), 1 on the ground, 2 roping out
-	var phase: Int = 0
-	var t: Double = 0
-	var warnDur: Double
-	var groundDur: Double
-	var strength: Double
-	var wander: Double
-	/// blocks it has torn loose so far (it stops tearing at a limit)
-	var broken: Int = 0
-	var uid: Int = 0
-	/// closest it came to the player (for the journal)
-	var closest: Double = 1e9
-
-	static let ropeDur: Double = 8.0
-
-	/// 0...1: how much of a funnel there is (grows while forming, thins as it ropes out)
-	var funnel: Double {
-		switch phase {
-		case 0: return clampD((t - warnDur + 12.0) / 12.0, 0, 1) * 0.55
-		case 1: return min(1.0, 0.55 + t / 4.0)
-		default: return max(0, 1.0 - t / TornadoEvent.ropeDur)
-		}
-	}
-	/// how hard it blows and tears (0 while it is only forming)
-	var force: Double {
-		switch phase {
-		case 0: return 0
-		case 1: return strength * min(1.0, t / 4.0)
-		default: return strength * max(0, 1.0 - t / TornadoEvent.ropeDur)
-		}
-	}
-}
-
-enum HurricaneStage: Int, Codable, CaseIterable {
-	case approaching, intensifying, peak, eye, backside, weakening, clearing
-
-	var name: String {
+	/// colour of its compound and of its mark on an item
+	var color: UInt32 {
 		switch self {
-		case .approaching: return "approaching"
-		case .intensifying: return "intensifying"
-		case .peak: return "at its height"
-		case .eye: return "the eye is passing"
-		case .backside: return "back wall of the storm"
-		case .weakening: return "weakening"
-		case .clearing: return "clearing"
-		}
-	}
-	/// how hard it blows in this stage (0...1 of its strength)
-	var force: Double {
-		switch self {
-		case .approaching: return 0.35
-		case .intensifying: return 0.7
-		case .peak: return 1.0
-		case .eye: return 0.12
-		case .backside: return 0.95
-		case .weakening: return 0.55
-		case .clearing: return 0.2
-		}
-	}
-	/// share of the whole storm's length
-	var share: Double {
-		switch self {
-		case .approaching: return 0.26
-		case .intensifying: return 0.15
-		case .peak: return 0.13
-		case .eye: return 0.05
-		case .backside: return 0.12
-		case .weakening: return 0.15
-		case .clearing: return 0.14
+		case .honed: return 0xE0E4EC
+		case .quickened: return 0x7AD8F8
+		case .keen: return 0xC07CFF
+		case .heft: return 0xA88A5A
+		case .longReach: return 0x8AC8E8
+		case .emberbrand: return 0xFF7A2A
+		case .frostbite: return 0xA8E8FF
+		case .stormcall: return 0xFFF07A
+		case .venom: return 0x7AD040
+		case .volatile: return 0xFF5A3A
+		case .voidrend: return 0xB04CFF
+		case .haste: return 0xE8B83A
+		case .bountiful: return 0x5AE070
+		case .precision: return 0xE8F4FF
+		case .quarry: return 0xC8A070
+		case .thrift: return 0x60E0C8
+		case .reinforced: return 0xB8C0CC
+		case .bulwark: return 0x8A9AB8
+		case .fireward: return 0xFF9A4A
+		case .frostward: return 0x9AD8FF
+		case .stormward: return 0xE8E87A
+		case .fleet: return 0x9AF0D0
+		case .renewal: return 0xF07AB8
+		case .barbed: return 0xC86A5A
 		}
 	}
 }
 
-/// A hurricane comes in off the sea in stages, blowing onshore until the eye passes and offshore
-/// after it. It is felt hardest at the coast and fades inland.
-struct HurricaneEvent: Codable {
-	var stage: HurricaneStage = .approaching
-	var t: Double = 0
-	var total: Double
-	/// the side the sea (and the storm) is on: -1 west, 1 east
-	var side: Double
-	/// where it comes ashore
-	var coastX: Double
-	var strength: Double
-	/// eased 0...1 force now
-	var force: Double = 0
-	var broken: Int = 0
-	var closest: Double = 1e9
-
-	var stageDur: Double { return total * stage.share }
-	/// seconds from now until the end of each stage, then the time it is over
-	func timeLeft() -> Double {
-		var left: Double = stageDur - t
-		var k: Int = stage.rawValue + 1
-		while k < HurricaneStage.allCases.count {
-			left += total * HurricaneStage.allCases[k].share
-			k += 1
-		}
-		return max(0, left)
-	}
-}
-
-/// Wet ground and lying snow over a 48-block stretch of land
-struct GroundCell: Codable {
-	var wet: Double = 0
-	var snow: Double = 0
-	var t: Double = 0
-}
-
-struct SurgeCell: Codable, Hashable {
-	var x: Int
-	var y: Int
-}
-
-/// A storm the player lived through, for the journal
-struct StormRecord: Codable {
-	var kind: Int
-	var day: Int
-	var note: String
-}
-
-struct WeatherSim: Codable {
-	var kind: WeatherKind = .clear
-	var stateT: Double = 0
-	var stateDur: Double = 300
-	/// what comes after the present spell, in order (kept four steps long)
-	var plan: [WeatherStep] = []
-	/// smoothed amounts (see WeatherProfile); wind is signed, positive blowing east
-	var cloud: Double = 0.04
-	var precip: Double = 0
-	var wind: Double = 1.0
-	var gust: Double = 0.25
-	var thunder: Double = 0
-	var hail: Double = 0
-	var chill: Double = 0
-	var cover: Double = 0
-	/// which way the wind is set to blow (-1 / 1); it may turn round between spells
-	var windDir: Double = 1
-	/// how far the storm cells and the clouds have drifted with the wind, in blocks
-	var drift: Double = 0
-	var cloudDrift: Double = 0
-	/// weather clock: seconds of play since the simulation began
-	var t: Double = 0
-	var rngS: UInt64 = 0x51ED_2701
-	/// a second stream for what the weather does (where bolts fall, what the wind tears loose), so
-	/// those never change what the weather itself does next
-	var fxS: UInt64 = 0xFACE_0FF5
-	/// severe weather (and tornadoes and hurricanes, more rarely still) may not begin before these
-	/// times: each severe spell is followed by a calm (a new world starts with one)
-	var calmUntil: Double = 600
-	var tornadoUntil: Double = 1200
-	var hurricaneUntil: Double = 1800
-	var bigHail: Bool = false
-	var tornado: TornadoEvent? = nil
-	var hurricane: HurricaneEvent? = nil
-	var cells: [Int: GroundCell] = [:]
-	/// what weather devices hold (rain collectors, turbines), by place
-	var store: [String: Double] = [:]
-	/// sea water a storm surge pushed ashore, taken away again when the storm passes
-	var surge: [SurgeCell] = []
-	/// the settings the plan was made under (a change makes it again)
-	var planSig: Int = -1
-	/// whether the master switch was on last frame
-	var wasOn: Bool = true
-
-	init() {}
-
-	enum CodingKeys: String, CodingKey {
-		case kind, stateT, stateDur, plan, cloud, precip, wind, gust, thunder, hail, chill, cover, windDir, drift, cloudDrift, t, rngS, fxS
-		case calmUntil, tornadoUntil, hurricaneUntil, bigHail, tornado, hurricane, cells, store, surge, planSig, wasOn
-	}
-
-	/// Missing or damaged fields fall back to their defaults, so a weather record never stops a world
-	/// from loading
-	init(from decoder: Decoder) throws {
-		let c = try decoder.container(keyedBy: CodingKeys.self)
-		kind = (try? c.decodeIfPresent(WeatherKind.self, forKey: .kind)) ?? .clear
-		stateT = (try? c.decodeIfPresent(Double.self, forKey: .stateT)) ?? 0
-		stateDur = (try? c.decodeIfPresent(Double.self, forKey: .stateDur)) ?? 300
-		plan = (try? c.decodeIfPresent([WeatherStep].self, forKey: .plan)) ?? []
-		cloud = (try? c.decodeIfPresent(Double.self, forKey: .cloud)) ?? 0.04
-		precip = (try? c.decodeIfPresent(Double.self, forKey: .precip)) ?? 0
-		wind = (try? c.decodeIfPresent(Double.self, forKey: .wind)) ?? 1.0
-		gust = (try? c.decodeIfPresent(Double.self, forKey: .gust)) ?? 0.25
-		thunder = (try? c.decodeIfPresent(Double.self, forKey: .thunder)) ?? 0
-		hail = (try? c.decodeIfPresent(Double.self, forKey: .hail)) ?? 0
-		chill = (try? c.decodeIfPresent(Double.self, forKey: .chill)) ?? 0
-		cover = (try? c.decodeIfPresent(Double.self, forKey: .cover)) ?? 0
-		windDir = (try? c.decodeIfPresent(Double.self, forKey: .windDir)) ?? 1
-		drift = (try? c.decodeIfPresent(Double.self, forKey: .drift)) ?? 0
-		cloudDrift = (try? c.decodeIfPresent(Double.self, forKey: .cloudDrift)) ?? 0
-		t = (try? c.decodeIfPresent(Double.self, forKey: .t)) ?? 0
-		rngS = (try? c.decodeIfPresent(UInt64.self, forKey: .rngS)) ?? 0x51ED_2701
-		fxS = (try? c.decodeIfPresent(UInt64.self, forKey: .fxS)) ?? 0xFACE_0FF5
-		calmUntil = (try? c.decodeIfPresent(Double.self, forKey: .calmUntil)) ?? 600
-		tornadoUntil = (try? c.decodeIfPresent(Double.self, forKey: .tornadoUntil)) ?? 1200
-		hurricaneUntil = (try? c.decodeIfPresent(Double.self, forKey: .hurricaneUntil)) ?? 1800
-		bigHail = (try? c.decodeIfPresent(Bool.self, forKey: .bigHail)) ?? false
-		tornado = (try? c.decodeIfPresent(TornadoEvent.self, forKey: .tornado)) ?? nil
-		hurricane = (try? c.decodeIfPresent(HurricaneEvent.self, forKey: .hurricane)) ?? nil
-		cells = (try? c.decodeIfPresent([Int: GroundCell].self, forKey: .cells)) ?? [:]
-		store = (try? c.decodeIfPresent([String: Double].self, forKey: .store)) ?? [:]
-		surge = (try? c.decodeIfPresent([SurgeCell].self, forKey: .surge)) ?? []
-		planSig = (try? c.decodeIfPresent(Int.self, forKey: .planSig)) ?? -1
-		wasOn = (try? c.decodeIfPresent(Bool.self, forKey: .wasOn)) ?? true
-		// a record from a broken save must not leave the simulation stuck
-		if !stateDur.isFinite || stateDur <= 0 { stateDur = 120 }
-		if !stateT.isFinite || stateT < 0 { stateT = 0 }
-		if !wind.isFinite { wind = 1 }
-	}
-
-	/// The simulation's own random numbers (saved with it, so a reloaded world carries on the same way)
-	mutating func rand() -> Double {
-		rngS = rngS &+ 0x9E3779B97F4A7C15
-		var z: UInt64 = rngS
-		z = (z ^ (z >> 30)) &* 0xBF58476D1CE4E5B9
-		z = (z ^ (z >> 27)) &* 0x94D049BB133111EB
-		z = z ^ (z >> 31)
-		return Double(z >> 11) / 9007199254740992.0
-	}
-
-	mutating func pick(_ r: ClosedRange<Double>) -> Double {
-		let u: Double = rand()
-		return r.lowerBound + (r.upperBound - r.lowerBound) * u
-	}
-
-	/// The effects' stream (see fxS)
-	mutating func fx() -> Double {
-		fxS = fxS &+ 0x9E3779B97F4A7C15
-		var z: UInt64 = fxS
-		z = (z ^ (z >> 30)) &* 0xBF58476D1CE4E5B9
-		z = (z ^ (z >> 27)) &* 0x94D049BB133111EB
-		z = z ^ (z >> 31)
-		return Double(z >> 11) / 9007199254740992.0
-	}
-
-	mutating func fxPick(_ r: ClosedRange<Double>) -> Double {
-		let u: Double = fx()
-		return r.lowerBound + (r.upperBound - r.lowerBound) * u
-	}
-}
-
-/// The weather at one place, after the storm cells, the land and the height have had their say
-struct LocalWeather {
-	var cloud: Double = 0
-	/// how hard it is falling here (0...1)
-	var precip: Double = 0
-	var snow: Bool = false
-	/// signed air speed (blocks per second), gusts included
-	var wind: Double = 0
-	var thunder: Double = 0
-	var hail: Double = 0
-	/// 0 warm ... 1 bitter (snow falls from 0.5)
-	var chill: Double = 0
-	var hot: Bool = false
-	/// how much the air is thick with rain or snow (0 clear ... 1 a whiteout)
-	var fog: Double = 0
-	var wet: Double = 0
-	var snowCover: Double = 0
-	/// 0...1: how hard a tornado or hurricane is felt here
-	var tornado: Double = 0
-	var hurricane: Double = 0
-}
-
-/// Where the weather is judged when picking what comes next
-struct WeatherContext {
-	var cold: Bool = false
-	var dry: Bool = false
-	var tornadoCountry: Bool = false
-	/// the sea is that way (-1 west, 1 east) and near enough for a hurricane; 0 when too far inland
-	var seaSide: Double = 0
-	var coastX: Double = 0
-}
-
-/// Walks forward through the present spell and the plan, keeping track of when severe weather may
-/// next begin (the planner and the simulation use the same rules, so the forecast holds)
-struct PlanCursor {
-	var T: Double
-	var calm: Double
-	var tor: Double
-	var hur: Double
-	var last: WeatherKind
-
-	mutating func note(_ k: WeatherKind, _ end: Double, _ gaps: (Double, Double, Double)) {
-		if k.severe { calm = max(calm, end + gaps.0) }
-		if k == .tornado { tor = max(tor, end + gaps.1) }
-		if k == .hurricane { hur = max(hur, end + gaps.2) }
-		last = k
-		T = end
-	}
-}
-
-/// A bolt of lightning on screen: the main channel, a few forks, and how long it shows
-struct LightningBolt {
-	var pts: [(Double, Double)]
-	var forks: [[(Double, Double)]]
-	var life: Double
-	var maxLife: Double
-}
-
-/// A strike about to land near the player: shown and heard first, so it can be dodged
-struct StrikeMark {
-	var x: Double
-	var y: Double
-	var t: Double
-	var total: Double
-}
-
-struct PendingThunder {
-	var t: Double
-	var vol: Double
-	var near: Bool
-}
-
-/// One hailstone of the small pool the hail is drawn from (it bounces once, then breaks)
-struct HailStone {
-	var x: Double = 0
-	var y: Double = 0
-	var vx: Double = 0
-	var vy: Double = 0
-	var bounces: Int = 0
-	var size: Double = 0.12
-	var on: Bool = false
-}
-
-struct ForecastLine {
-	var kind: WeatherKind
-	var startsIn: Double
-	var dur: Double
-}
-
-// MARK: - Weather simulation: states, the plan, smoothing and the weather at a place
-
-/// how wet a biome's weather is (deserts mostly stay dry under passing storms)
-func biomeWetness(_ b: Biome) -> Double {
-	switch b {
-	case .desert: return 0.1
-	case .savanna: return 0.5
-	case .jungle: return 1.15
-	case .swamp: return 1.1
-	default: return 1.0
-	}
-}
-
-/// width of the strips of land that remember wet ground and lying snow
-let groundCellW: Double = 48.0
-
-extension Game {
-	/// Calm kept between severe spells, and the longer gaps between tornadoes and between hurricanes,
-	/// by the frequency setting
-	func weatherGaps() -> (Double, Double, Double) {
-		switch settings.severeFrequency {
-		case 0: return (900, 3600, 5400)
-		case 2: return (150, 600, 900)
-		default: return (420, 1800, 2700)
+/// How many infusions a piece of equipment holds: more for better metals and rarer finds (0: none)
+func infusionSlots(_ it: Item) -> Int {
+	func byTier(_ t: Tier) -> Int {
+		switch t {
+		case .wood, .stone, .copper: return 1
+		case .iron, .gold, .diamond: return 2
+		case .mythril, .ember, .voidium: return 3
 		}
 	}
-
-	/// How much more (or less) often severe weather is picked when it may come
-	func severeWeight() -> Double {
-		switch settings.severeFrequency {
-		case 0: return 0.4
-		case 2: return 2.2
-		default: return 1.0
+	switch it {
+	case .sword(let t), .spear(let t), .hammer(let t), .knife(let t): return byTier(t)
+	case .tool(_, let t): return byTier(t)
+	case .armor(_, let t): return byTier(t)
+	case .club, .sling: return 1
+	case .bow: return 2
+	case .relic: return 3
+	case .gun(let g):
+		switch g {
+		case .pistol, .crossbow, .blunderbuss: return 1
+		case .rifle, .arbalest, .repeater, .stormRod: return 2
 		}
-	}
-
-	var weatherIntensity: Double { return clampD(settings.weatherIntensity, 0.25, 1.5) }
-
-	func weatherAllowed(_ k: WeatherKind) -> Bool {
-		let s: Settings = settings
-		switch k {
-		case .lightRain, .heavyRain, .snowfall: return s.allowRain
-		case .thunderstorm: return s.allowThunder
-		case .strongWind, .windstorm: return s.allowWind
-		case .hailstorm: return s.allowHail
-		case .blizzard: return s.allowBlizzard
-		case .tornado: return s.allowTornado
-		case .hurricane: return s.allowHurricane
-		default: return true
-		}
-	}
-
-	/// The settings the forecast depends on; when they change the plan is made again
-	func planSignature() -> Int {
-		let s: Settings = settings
-		var k: Int = s.severeFrequency
-		let flags: [Bool] = [s.allowRain, s.allowThunder, s.allowWind, s.allowTornado, s.allowHurricane, s.allowBlizzard, s.allowHail]
-		for f in flags { k = k * 2 + (f ? 1 : 0) }
-		return k
-	}
-
-	/// What a state brings once the switched-off kinds of weather are taken out and the intensity is
-	/// applied. Blizzards and hurricanes bring their own snow, rain and wind (their switches decide).
-	func allowedProfile(_ k: WeatherKind) -> WeatherProfile {
-		let s: Settings = settings
-		if !s.weatherOn { return WeatherProfile() }
-		var kk: WeatherKind = k
-		if kk == .blizzard && !s.allowBlizzard { kk = .snowfall }
-		if kk == .hurricane && !s.allowHurricane { kk = .windstorm }
-		if kk == .tornado && !s.allowTornado { kk = .thunderstorm }
-		var p: WeatherProfile = kk.profile
-		let own: Bool = kk == .blizzard || kk == .hurricane
-		if !s.allowRain && !own { p.precip = 0 }
-		if !s.allowWind && !own {
-			p.wind = 0
-			p.gust = 0
-		}
-		if !s.allowThunder { p.thunder = 0 }
-		if !s.allowHail { p.hail = 0 }
-		let I: Double = weatherIntensity
-		let mw: ModWeather? = ModRuntime.shared.weather
-		p.precip = min(1.0, p.precip * I * (mw?.rain ?? 1))
-		p.wind *= I * (mw?.wind ?? 1)
-		p.thunder *= I
-		p.hail = min(1.0, p.hail * I)
-		return p
-	}
-
-	/// Where the weather is judged: the player in the overworld, or where they left it
-	var weatherX: Double { return world.dim == .overworld ? pb.x : wxHomeX }
-
-	func weatherContext() -> WeatherContext {
-		var c = WeatherContext()
-		let x: Int = Int(floor(weatherX))
-		let col: Col = gen.col(x)
-		let b: Biome = col.biome
-		c.cold = b == .tundra || (b == .mountain && col.h < 84)
-		c.dry = b == .desert
-		c.tornadoCountry = b == .plains || b == .savanna || b == .forest || b == .swamp || b == .desert
-		if let sea = seaNear(x) {
-			c.seaSide = sea.0
-			c.coastX = sea.1
-		}
-		return c
-	}
-
-	/// The nearest open sea within 280 blocks: which side it is on, and where its shore is
-	func seaNear(_ x: Int) -> (Double, Double)? {
-		let key: Int = floorDiv(x, 32)
-		if let c = coastCache[key] { return c.0 == 0 ? nil : c }
-		var found: (Double, Double) = (0, 0)
-		var d: Int = 0
-		while d <= 280 {
-			if gen.col(x + d).biome == .ocean { found = (1, Double(x + d)); break }
-			if gen.col(x - d).biome == .ocean { found = (-1, Double(x - d)); break }
-			d += 8
-		}
-		if coastCache.count > 256 { coastCache.removeAll() }
-		coastCache[key] = found
-		return found.0 == 0 ? nil : found
-	}
-
-	// MARK: the plan (the forecast is read straight from it)
-
-	/// Where the present spell and the plan end, and when severe weather may next begin after them
-	func planCursor() -> PlanCursor {
-		let gaps: (Double, Double, Double) = weatherGaps()
-		var cur = PlanCursor(T: weather.t, calm: weather.calmUntil, tor: weather.tornadoUntil, hur: weather.hurricaneUntil, last: weather.kind)
-		cur.note(weather.kind, weather.t + max(0, weather.stateDur - weather.stateT), gaps)
-		for s in weather.plan { cur.note(s.kind, cur.T + s.dur, gaps) }
-		return cur
-	}
-
-	func fillPlan() {
-		if weather.plan.count >= 4 { return }
-		let ctx: WeatherContext = weatherContext()
-		let gaps: (Double, Double, Double) = weatherGaps()
-		var cur: PlanCursor = planCursor()
-		while weather.plan.count < 4 {
-			let step: WeatherStep = planStep(cur, ctx)
-			weather.plan.append(step)
-			cur.note(step.kind, cur.T + step.dur, gaps)
-		}
-	}
-
-	/// Picks the spell that follows `cur.last`, beginning at `cur.T`. Weather moves to its neighbours
-	/// (clear to cloud to rain to storm and back), so it changes gradually; severe spells may only
-	/// begin once the calm after the last one is over, and a thunderstorm may grow hail or spin up a
-	/// tornado as part of the same storm.
-	func planStep(_ cur: PlanCursor, _ ctx: WeatherContext) -> WeatherStep {
-		let s: Settings = settings
-		let fw: Double = severeWeight()
-		let sev: Double = cur.T >= cur.calm ? fw : 0
-		var opts: [(WeatherKind, Double)] = []
-		let modWx: ModWeather? = ModRuntime.shared.weather
-		func add(_ k: WeatherKind, _ w: Double) {
-			let m: Double = modWx?.chanceOf(k) ?? 1
-			if w > 0 && m > 0 && weatherAllowed(k) { opts.append((k, w * m)) }
-		}
-		let rain: WeatherKind = ctx.cold ? .snowfall : .lightRain
-		let heavy: WeatherKind = ctx.cold ? .snowfall : .heavyRain
-		let hurricaneOK: Bool = ctx.seaSide != 0 && !ctx.cold && cur.T >= cur.hur
-		// with rain switched off the wet spells drop out; storms can still come, dry
-		let dryFill: Double = s.allowRain ? 0 : 3.0
-		switch cur.last {
-		case .clear:
-			add(.clear, 2.2)
-			add(.partlyCloudy, 4.0)
-			add(.strongWind, ctx.dry ? 1.2 : 0.5)
-		case .partlyCloudy:
-			add(.clear, 3.0)
-			add(.partlyCloudy, 1.2)
-			add(.overcast, 3.0)
-			add(.strongWind, 0.6)
-		case .overcast:
-			add(.partlyCloudy, 2.5)
-			add(.overcast, 0.6)
-			add(rain, ctx.dry ? 0.7 : 3.0)
-			add(heavy, ctx.dry ? 0.2 : 0.7)
-			add(.windstorm, 0.35 * sev)
-			if !ctx.cold { add(.hailstorm, 0.25 * sev) }
-			if !s.allowRain && !ctx.cold { add(.thunderstorm, 0.6 * sev) }
-			if hurricaneOK { add(.hurricane, 0.22 * sev) }
-		case .lightRain:
-			add(.overcast, 2.0)
-			add(.lightRain, 1.0)
-			add(.heavyRain, 2.4)
-		case .heavyRain:
-			add(.lightRain, 2.6)
-			add(.heavyRain, 0.6)
-			if !ctx.cold { add(.thunderstorm, 1.6 * sev) }
-		case .thunderstorm:
-			add(.heavyRain, 3.0)
-			add(.overcast, dryFill)
-			add(.hailstorm, 0.5 * fw)
-			if ctx.tornadoCountry && cur.T >= cur.tor { add(.tornado, 0.45 * fw) }
-		case .strongWind:
-			add(.partlyCloudy, 2.4)
-			add(.clear, 1.0)
-			add(.strongWind, 0.6)
-			add(.windstorm, 0.8 * sev)
-			if hurricaneOK { add(.hurricane, 0.12 * sev) }
-		case .windstorm:
-			add(.strongWind, 2.5)
-			add(.overcast, 1.5)
-		case .hailstorm:
-			add(.heavyRain, 2.5)
-			add(.lightRain, 1.0)
-			add(.overcast, dryFill)
-		case .snowfall:
-			add(.overcast, 2.4)
-			add(.snowfall, 1.0)
-			if ctx.cold { add(.blizzard, 0.9 * sev) }
-		case .blizzard:
-			add(.snowfall, 3.0)
-			add(.overcast, dryFill)
-		case .tornado, .hurricane:
-			add(.heavyRain, 2.0)
-			add(.lightRain, 1.0)
-			add(.overcast, s.allowRain ? 0.3 : 3.0)
-		}
-		if opts.isEmpty, let mw = modWx {
-			// a mod that rules out every usual next spell: any kind it allows comes straight in
-			for k in WeatherKind.allCases where mw.chanceOf(k) > 0 && weatherAllowed(k) && (!k.severe || sev > 0) { opts.append((k, mw.chanceOf(k))) }
-		}
-		if opts.isEmpty { opts.append((.partlyCloudy, 1.0)) }
-		var total: Double = 0
-		for o in opts { total += o.1 }
-		var r: Double = weather.rand() * total
-		var k: WeatherKind = opts[opts.count - 1].0
-		for o in opts {
-			if r < o.1 {
-				k = o.0
-				break
-			}
-			r -= o.1
-		}
-		let dur: Double = weather.pick(k.spell) * (modWx?.length ?? 1)
-		return WeatherStep(kind: k, dur: dur)
-	}
-
-	/// The present spell is over: the next one in the plan begins (and the plan is topped up)
-	func advanceWeather() {
-		let prev: WeatherKind = weather.kind
-		let gaps: (Double, Double, Double) = weatherGaps()
-		if prev.severe { weather.calmUntil = max(weather.calmUntil, weather.t + gaps.0) }
-		if prev == .tornado { weather.tornadoUntil = max(weather.tornadoUntil, weather.t + gaps.1) }
-		if prev == .hurricane { weather.hurricaneUntil = max(weather.hurricaneUntil, weather.t + gaps.2) }
-		// a severe spell the player was out in goes in the journal (tornadoes and hurricanes keep their own)
-		if prev.severe && prev != .tornado && prev != .hurricane && stormFelt && world.dim == .overworld {
-			recordStorm(prev, weatherLabel(prev, snow: wxHere.snow).lowercased() == prev.name.lowercased() ? "weathered it" : weatherLabel(prev, snow: wxHere.snow).lowercased())
-		}
-		stormFelt = false
-		if weather.plan.isEmpty { fillPlan() }
-		var step: WeatherStep = weather.plan.removeFirst()
-		let ctx: WeatherContext = weatherContext()
-		// the land may have changed under the forecast (the player travelled): no hurricane far from
-		// the sea, no tornado in the mountains or the snow
-		if step.kind == .hurricane && ctx.seaSide == 0 { step.kind = settings.allowWind ? .windstorm : .overcast }
-		if step.kind == .tornado && !ctx.tornadoCountry { step.kind = settings.allowThunder ? .thunderstorm : .heavyRain }
-		weather.kind = step.kind
-		weather.stateT = 0
-		weather.stateDur = step.dur
-		// calm spells can bring the wind round
-		if (step.kind == .clear || step.kind == .partlyCloudy) && weather.rand() < 0.35 { weather.windDir = -weather.windDir }
-		switch step.kind {
-		case .tornado: spawnTornado()
-		case .hurricane: spawnHurricane(ctx)
-		case .hailstorm:
-			weather.bigHail = weather.rand() < 0.15
-			hailBroken = 0
-		default: break
-		}
-		fillPlan()
-		announceWeather(prev, step.kind)
-	}
-
-	/// Weather switched off: everything it was doing stops at once and leaves nothing behind (storm
-	/// surge water is taken away as its ground loads; see updateSurge)
-	func weatherShutdown() {
-		weather.wasOn = false
-		weather.tornado = nil
-		weather.hurricane = nil
-		weather.kind = .clear
-		weather.stateT = 0
-		weather.stateDur = 120
-		weather.plan.removeAll()
-		weather.cloud = 0
-		weather.precip = 0
-		weather.wind = 0
-		weather.gust = 0
-		weather.thunder = 0
-		weather.hail = 0
-		weather.chill = 0
-		weather.cover = 0
-		weather.cells.removeAll()
-		clearWeatherFX()
-		// fires lightning started go out with it
-		fireZones.removeAll { $0.env }
-	}
-
-	/// The short-lived things weather puts in the world: bolts, thunder still on its way, a strike
-	/// about to land, hailstones, alerts and the forces on the player
-	func clearWeatherFX() {
-		bolts.removeAll()
-		thunderQueue.removeAll()
-		strikeMark = nil
-		strikeAcc = 0
-		skyFlash = 0
-		for i in 0..<hailPool.count { hailPool[i].on = false }
-		hailAcc = 0
-		wxBanner = ""
-		wxBannerLevel = 0
-		wxWalk = 0
-		wxAirDrift = 0
-		wxRest = 0
-		wxAccelX = 0
-		wxAccelY = 0
-		wxSlip = 0
-		wxSlow = 1
-		weatherRain = 0
-		weatherSnow = false
-		wxHere = LocalWeather()
-		tornadoAcc = 0
-		hurricaneAcc = 0
-	}
-
-	/// Weather switched back on: it starts fair, with a calm before anything severe
-	func weatherRestart() {
-		weather.wasOn = true
-		weather.kind = .clear
-		weather.stateT = 0
-		weather.stateDur = weather.pick(60...120)
-		weather.calmUntil = max(weather.calmUntil, weather.t + 300)
-		weather.plan.removeAll()
-		weather.planSig = planSignature()
-		fillPlan()
-	}
-
-	func easeTo(_ v: Double, _ to: Double, _ tau: Double, _ dt: Double) -> Double {
-		let k: Double = 1.0 - exp(-dt / max(0.05, tau))
-		return v + (to - v) * k
-	}
-
-	/// One step of the simulation (the regional state; what that means at a place is weatherAt)
-	func stepWeatherSim(_ dt: Double) {
-		if world.dim == .overworld { wxHomeX = pb.x }
-		if !settings.weatherOn {
-			if weather.wasOn { weatherShutdown() }
-			// the scenery clouds still drift by as they always have
-			weather.cloudDrift += CloudField.wind * dt
-			return
-		}
-		if !weather.wasOn { weatherRestart() }
-		weather.t += dt
-		let sig: Int = planSignature()
-		if sig != weather.planSig {
-			weather.planSig = sig
-			weather.plan.removeAll()
-			// an event whose switch went off ends at once
-			if weather.tornado != nil && !settings.allowTornado { endTornado(survived: false) }
-			if weather.hurricane != nil && !settings.allowHurricane { endHurricane(survived: false) }
-			fillPlan()
-		}
-		weather.stateT += dt
-		let held: Bool = weather.tornado != nil || weather.hurricane != nil
-		if weather.stateT >= weather.stateDur && !held { advanceWeather() }
-		if weather.plan.count < 4 { fillPlan() }
-		// ease toward what the state brings; anything switched off fades out within a second
-		var p: WeatherProfile = allowedProfile(weather.kind)
-		let raw: WeatherProfile = weather.kind.profile
-		if let h = weather.hurricane {
-			p.wind *= h.force
-			p.precip *= clampD(h.force * 1.2, 0.2, 1.0)
-			p.cloud = 0.55 + 0.45 * min(1.0, h.force * 1.6)
-			p.thunder *= h.force
-		}
-		func tau(_ target: Double, _ rv: Double, _ normal: Double) -> Double {
-			return (target <= 0.0001 && rv > 0.0001) ? 0.8 : normal
-		}
-		weather.cloud = easeTo(weather.cloud, p.cloud, 20, dt)
-		weather.precip = easeTo(weather.precip, p.precip, tau(p.precip, raw.precip, 14), dt)
-		weather.thunder = easeTo(weather.thunder, p.thunder, tau(p.thunder, raw.thunder, 8), dt)
-		weather.hail = easeTo(weather.hail, p.hail, tau(p.hail, raw.hail, 6), dt)
-		weather.chill = easeTo(weather.chill, p.chill, 25, dt)
-		weather.cover = easeTo(weather.cover, p.cover, 18, dt)
-		weather.gust = easeTo(weather.gust, p.gust, 10, dt)
-		// the wind eases through calm when it turns round, never flipping in a frame
-		if let h = weather.hurricane {
-			// onshore until the eye has passed, offshore after it
-			weather.windDir = h.stage.rawValue <= HurricaneStage.eye.rawValue ? -h.side : h.side
-		}
-		let wt: Double = p.wind * weather.windDir
-		weather.wind = easeTo(weather.wind, wt, tau(abs(wt), raw.wind, 9), dt)
-		weather.drift += weather.wind * 0.55 * dt
-		weather.cloudDrift += (weather.wind * 0.16 + (abs(weather.wind) < 0.05 ? CloudField.wind : 0)) * dt
-	}
-
-	// MARK: the weather at a place
-
-	/// How much of the land at x a storm cell covers just now (0 a dry gap ... 1 under the storm).
-	/// The cells are a noise field in world space that drifts with the wind.
-	func coverAt(_ x: Double) -> Double {
-		let c: Double = weather.cover
-		if c >= 0.99 { return 1 }
-		if c <= 0.001 { return 0 }
-		let n: Double = fbm1((x - weather.drift) / 170.0, gen.seed &+ 0x57A2, 2)
-		let thr: Double = 1.0 - c - 0.11
-		return smooth(clampD((n - thr) / 0.22, 0, 1))
-	}
-
-	/// The wind's gusting right now (the same everywhere; it rises and falls over a few seconds)
-	func gustNow() -> Double {
-		let g: Double = weather.gust
-		if g <= 0.001 { return 1 }
-		let n: Double = fbm1(weather.t * 0.23, gen.seed &+ 0x6057, 3)
-		return clampD(1.0 + (n - 0.5) * 2.0 * g, 0.35, 1.6)
-	}
-
-	/// How cold it is: the land, the height, the night and the weather (snow falls from 0.5)
-	func chillAt(_ y: Double, _ col: Col) -> Double {
-		var c: Double
-		switch col.biome {
-		case .tundra: c = 0.75
-		case .mountain: c = col.h < 84 ? 0.62 : 0.3
-		case .desert, .savanna, .jungle: c = 0.0
-		case .ocean: c = 0.2
-		default: c = 0.18
-		}
-		if y < 76 { c += (76.0 - y) / 50.0 }
-		let hot: Bool = col.biome == .desert || col.biome == .savanna || col.biome == .jungle
-		if isNight && !hot { c += 0.12 }
-		c += weather.chill * 0.4 + weather.precip * 0.05
-		return clampD(c, 0, 1.2)
-	}
-
-	/// The weather at a place. Only reads the simulation and the world's (deterministic) biomes, so a
-	/// place has the same weather whichever chunks are loaded.
-	func weatherAt(_ x: Double, _ y: Double) -> LocalWeather {
-		var L = LocalWeather()
-		if let d = customDim, settings.weatherOn { return customWeather(d, x, y) }
-		if world.dim != .overworld || !settings.weatherOn { return L }
-		let ix: Int = Int(floor(x))
-		let col: Col = gen.col(ix)
-		let cov: Double = coverAt(x)
-		// blended from one column to the next, so rain changes gradually over a biome border
-		let wa: Double = landWetness(ix)
-		let wetF: Double = wa + (landWetness(ix + 1) - wa) * (x - Double(ix))
-		L.chill = chillAt(y, col)
-		L.snow = L.chill >= 0.5
-		L.hot = col.biome == .desert || col.biome == .savanna || col.biome == .jungle
-		L.precip = clampD(weather.precip * cov * wetF, 0, 1)
-		L.cloud = weather.cloud * (0.6 + 0.4 * cov)
-		L.thunder = weather.thunder * cov
-		// up in the cold, hail falls as snow
-		L.hail = L.snow ? 0 : weather.hail * cov
-		L.wind = weather.wind * gustNow()
-		if let e = weather.tornado {
-			let d: Double = abs(x - e.x)
-			L.tornado = e.funnel * clampD(1.0 - (d - 4.0) / 40.0, 0, 1)
-			L.cloud = max(L.cloud, min(1.0, 0.25 + e.funnel * clampD(1.0 - d / 120.0, 0, 1)))
-		}
-		if let h = weather.hurricane {
-			let f: Double = hurricaneReach(x, h)
-			L.hurricane = h.force * f
-			L.wind *= 0.3 + 0.7 * f
-			L.precip *= 0.5 + 0.5 * f
-		}
-		let blow: Double = clampD(abs(L.wind) / 14.0, 0, 1)
-		L.fog = L.snow ? L.precip * (0.25 + 0.6 * blow) : L.precip * 0.3
-		L.wet = groundValue(x, false)
-		L.snowCover = groundValue(x, true)
-		return L
-	}
-
-	/// How readily rain falls at column x: its biome's wetness, with the land 14 columns either side
-	func landWetness(_ x: Int) -> Double {
-		let w0: Double = biomeWetness(gen.col(x - 14).biome)
-		let w1: Double = biomeWetness(gen.col(x).biome)
-		let w2: Double = biomeWetness(gen.col(x + 14).biome)
-		return (w0 + w1 * 2.0 + w2) * 0.25
-	}
-
-	/// How hard a hurricane is felt at x: fully over the sea and at the coast, fading inland
-	func hurricaneReach(_ x: Double, _ h: HurricaneEvent) -> Double {
-		let inland: Double = (h.coastX - x) * h.side
-		return clampD(1.0 - (inland - 40.0) / 300.0, 0.25, 1.0)
-	}
-
-	/// Wet ground or lying snow at x (interpolated between the strips' centres)
-	func groundValue(_ x: Double, _ snow: Bool) -> Double {
-		let f: Double = x / groundCellW - 0.5
-		let c0: Int = Int(floor(f))
-		let u: Double = f - Double(c0)
-		let a: GroundCell? = weather.cells[c0]
-		let b: GroundCell? = weather.cells[c0 + 1]
-		let va: Double = snow ? (a?.snow ?? 0) : (a?.wet ?? 0)
-		let vb: Double = snow ? (b?.snow ?? 0) : (b?.wet ?? 0)
-		return va + (vb - va) * u
-	}
-
-	/// Rain soaks the ground and snow lies on it, strip by strip around the player; strips the player
-	/// has been away from catch up as if the weather had been fair meanwhile (cheap, and close enough)
-	func updateGroundCells(_ dt: Double) {
-		wxCellT += dt
-		if wxCellT < 0.5 { return }
-		let step: Double = wxCellT
-		wxCellT = 0
-		// the strips are the Overworld's ground: another dimension's weather never lies on them
-		if !settings.weatherOn || world.dim != .overworld { return }
-		let c0: Int = Int(floor(weatherX / groundCellW))
-		for c in (c0 - 4)...(c0 + 4) {
-			let cx: Double = (Double(c) + 0.5) * groundCellW
-			var cell: GroundCell = weather.cells[c] ?? GroundCell(wet: 0, snow: 0, t: weather.t)
-			let away: Double = max(0, weather.t - cell.t - step)
-			let surf: Double = Double(gen.col(Int(cx)).h)
-			let L: LocalWeather = weatherAt(cx, surf)
-			if away > 0 {
-				cell.wet *= exp(-away / 150.0)
-				if L.chill < 0.5 { cell.snow *= exp(-away / 300.0) }
-			}
-			if L.precip > 0.03 && !L.snow {
-				cell.wet = min(1.0, cell.wet + L.precip * step / 35.0)
-			} else {
-				let dryT: Double = L.hot ? 60 : (weather.cloud > 0.6 ? 220 : 110)
-				cell.wet = max(0, cell.wet - step / dryT)
-			}
-			if L.snow && L.precip > 0.03 {
-				cell.snow = min(1.0, cell.snow + L.precip * step / 50.0)
-			} else if L.chill < 0.45 {
-				let melt: Double = L.precip > 0.05 ? 50 : 140
-				cell.snow = max(0, cell.snow - step / melt)
-			}
-			cell.t = weather.t
-			weather.cells[c] = cell
-		}
-		if weather.cells.count > 40 {
-			weather.cells = weather.cells.filter { abs($0.key - c0) <= 12 || $0.value.wet > 0.02 || $0.value.snow > 0.02 }
-		}
-	}
-
-	// MARK: words for it: names, the forecast, pressure, alerts
-
-	/// The name of a spell as it will actually be felt: with some kinds of weather switched off, a
-	/// thunderstorm may be dry or a blizzard plain snow; up in the cold, rain is snow
-	func weatherLabel(_ k: WeatherKind, snow: Bool) -> String {
-		let s: Settings = settings
-		if !s.weatherOn { return "No weather" }
-		let p: WeatherProfile = allowedProfile(k)
-		switch k {
-		case .lightRain: return p.precip <= 0 ? "Overcast" : (snow ? "Light snow" : "Light rain")
-		case .heavyRain: return p.precip <= 0 ? "Overcast" : (snow ? "Heavy snow" : "Heavy rain")
-		case .snowfall: return p.precip <= 0 ? "Overcast" : (snow ? "Snowfall" : "Cold rain")
-		case .thunderstorm:
-			if p.thunder <= 0 { return p.precip > 0 ? (snow ? "Heavy snow" : "Heavy rain") : "Overcast" }
-			return p.precip > 0 ? "Thunderstorm" : "Dry thunderstorm"
-		case .hailstorm:
-			if p.hail <= 0 { return p.thunder > 0 ? "Thunderstorm" : (p.precip > 0 ? "Heavy rain" : "Overcast") }
-			return weather.bigHail && k == weather.kind ? "Large hail" : "Hailstorm"
-		case .strongWind: return p.wind <= 0.01 ? "Partly cloudy" : "Strong wind"
-		case .windstorm: return p.wind <= 0.01 ? "Overcast" : "Windstorm"
-		case .blizzard: return s.allowBlizzard ? (snow ? "Blizzard" : "Gale and cold rain") : weatherLabel(.snowfall, snow: snow)
-		case .tornado: return s.allowTornado ? "Tornado" : weatherLabel(.thunderstorm, snow: snow)
-		case .hurricane: return s.allowHurricane ? "Hurricane" : weatherLabel(.windstorm, snow: snow)
-		default: return k.name
-		}
-	}
-
-	/// What the weather is doing where the player is, in a few words
-	var weatherHereLabel: String {
-		if world.dim != .overworld { return "" }
-		if !settings.weatherOn { return "" }
-		let L: LocalWeather = wxHere
-		var name: String = weatherLabel(weather.kind, snow: L.snow)
-		// a storm cell that has not reached here yet (or has passed) shows as such
-		let p: WeatherProfile = allowedProfile(weather.kind)
-		if p.precip > 0.2 && L.precip < 0.05 && weather.kind != .tornado && weather.kind != .hurricane { name = joinText(name, " nearby") }
-		return name
-	}
-
-	/// The present spell, then the plan: what comes, when, and for how long
-	func forecast() -> [ForecastLine] {
-		var out: [ForecastLine] = []
-		var t: Double = max(0, weather.stateDur - weather.stateT)
-		if let h = weather.hurricane { t = max(t, h.timeLeft()) }
-		out.append(ForecastLine(kind: weather.kind, startsIn: 0, dur: t))
-		for s in weather.plan {
-			out.append(ForecastLine(kind: s.kind, startsIn: t, dur: s.dur))
-			t += s.dur
-		}
-		return out
-	}
-
-	/// Air pressure (hPa) from the simulation: low under storms, lowest near a hurricane's eye
-	func pressureNow() -> Double {
-		var p: Double = 1018.0 - 12.0 * weather.cloud - 9.0 * weather.precip - 0.8 * abs(weather.wind)
-		if let h = weather.hurricane {
-			let core: Double = h.stage == .eye ? 1.15 : h.force
-			p -= 42.0 * core * h.strength * hurricaneReach(weatherX, h)
-		}
-		if let e = weather.tornado { p -= 8.0 * e.funnel }
-		return p
-	}
-
-	/// The pressure the next spell will settle at (for the barometer's trend)
-	func pressureNext() -> Double {
-		let k: WeatherKind = weather.plan.first?.kind ?? weather.kind
-		let p: WeatherProfile = allowedProfile(k)
-		var v: Double = 1018.0 - 12.0 * p.cloud - 9.0 * p.precip - 0.8 * p.wind
-		if k == .hurricane && settings.allowHurricane { v -= 40 }
-		if k == .tornado && settings.allowTornado { v -= 8 }
-		return v
-	}
-
-	/// A line in the message box when the weather turns (only for changes worth knowing about)
-	func announceWeather(_ prev: WeatherKind, _ k: WeatherKind) {
-		if !settings.weatherAlerts || world.dim != .overworld { return }
-		let p: WeatherProfile = allowedProfile(k)
-		let snow: Bool = wxHere.snow
-		var line: String = ""
-		switch k {
-		case .lightRain:
-			if prev != .heavyRain && p.precip > 0 { line = snow ? "Snow is beginning to fall." : "It's starting to rain." }
-		case .heavyRain:
-			if prev == .lightRain && p.precip > 0 { line = snow ? "The snow is getting heavier." : "The rain is getting heavier." }
-		case .thunderstorm:
-			if p.thunder > 0 { line = "A thunderstorm is rolling in. Lightning finds high, open ground." }
-		case .strongWind:
-			if (prev == .clear || prev == .partlyCloudy) && p.wind > 0 { line = "The wind is picking up." }
-		case .windstorm:
-			if p.wind > 0 { line = "Windstorm! Strong gusts will push you around." }
-		case .hailstorm:
-			if p.hail > 0 { line = weather.bigHail ? "Large hail! Get under a roof." : "Hail is falling." }
-		case .snowfall:
-			if p.precip > 0 && prev != .blizzard { line = snow ? "Snow is falling." : "A cold rain is falling." }
-		case .blizzard:
-			if settings.allowBlizzard { line = "A blizzard is blowing in. Find shelter and warmth." }
-		case .clear, .partlyCloudy:
-			if prev.severe || prev == .heavyRain { line = "The weather is clearing." }
-		default:
-			break
-		}
-		if !line.isEmpty {
-			say(line, 3.5)
-			if k.severe { sfx(.weatherAlert, 0.6) }
-		}
-	}
-
-	/// The warning strip under the top bar while something dangerous is going on
-	func updateWeatherBanner() {
-		var text: String = ""
-		var level: Int = 0
-		let on: Bool = settings.weatherOn && world.dim == .overworld
-		if on, let e = weather.tornado {
-			let d: Double = e.x - pb.x
-			let side: String = d > 0 ? "east" : "west"
-			let dist: String = String(Int(abs(d).rounded()))
-			switch e.phase {
-			case 0:
-				let left: Int = Int(max(0, e.warnDur - e.t).rounded())
-				text = joinText("TORNADO WARNING · forming ", dist, " blocks ", side, " · take shelter (", String(left), " s)")
-				level = 2
-			case 1:
-				text = joinText("TORNADO ON THE GROUND · ", dist, " blocks ", side, " · moving ", e.dir > 0 ? "east" : "west")
-				level = 2
-			default:
-				text = "The tornado is lifting"
-				level = 1
-			}
-		} else if on, let h = weather.hurricane {
-			text = joinText("HURRICANE · ", h.stage.name)
-			level = (h.stage == .approaching || h.stage == .clearing || h.stage == .eye) ? 1 : 2
-		} else if on && strikeMark != nil {
-			text = "LIGHTNING IS ABOUT TO STRIKE NEAR YOU · move or take cover"
-			level = 2
-		} else if on && weather.kind == .blizzard && settings.allowBlizzard && wxHere.snow {
-			text = "BLIZZARD · stay sheltered and keep warm"
-			level = 1
-		} else if on && weather.kind == .hailstorm && weather.bigHail && wxHere.hail > 0.1 {
-			text = "LARGE HAIL · get under a roof"
-			level = 1
-		} else if on && weather.kind == .thunderstorm && wxHere.thunder > 0.5 {
-			text = "Thunderstorm · keep off high, open ground"
-			level = 1
-		} else if bodyCold > 0.45 && on {
-			text = "Freezing · find a fire, shelter or warm clothes"
-			level = 1
-		}
-		if !settings.weatherAlerts {
-			text = ""
-			level = 0
-		}
-		wxBanner = text
-		wxBannerLevel = level
-	}
-}
-
-// MARK: - Weather in the world: lightning, hail, cold, the wind's push, tornadoes and hurricanes
-
-/// How readily wind tears a block loose (0: never). The ground itself, stone and anything built to
-/// stand up to storms never goes; plants, leaves and light building blocks go first.
-func windBreak(_ t: Tile) -> Double {
-	if isLeafTile(t) { return 0.85 }
-	if isLogTile(t) { return 0.18 }
-	switch t {
-	case .tallGrass, .flowerR, .flowerY, .deadBush, .reed, .mushroom: return 0.9
-	case .wheat1, .wheat2, .wheat3, .carrot1, .carrot2, .carrot3: return 0.55
-	case .torch, .cobweb: return 0.8
-	case .hay: return 0.6
-	case .glass: return 0.5
-	case .cactus: return 0.3
-	case .platform, .ladder: return 0.45
-	case .planks: return 0.3
-	case .doorClosed, .doorOpen: return 0.25
-	case .logBlock, .jungleLogBlock, .palmLogBlock, .birchLogBlock: return 0.15
-	case .workbench, .lantern, .crate: return 0.2
-	case .crackedBrick: return 0.08
-	case .brick, .mossBrick, .amethystBlock: return 0.02
+	case .exoPart(_, let m): return m.slots
+	case .exoPlate(let m): return max(1, m.slots - 1)
+	case .exoCore, .exoModule: return 1
+	case .custom(let k):
+		guard let r = ModRuntime.shared.item(k) else { return 0 }
+		return (r.def.kind.isWeapon || r.def.kind == .tool || r.def.kind == .armor) ? 1 : 0
 	default: return 0
 	}
 }
 
-/// Things lightning can set alight
-func isFlammable(_ t: Tile) -> Bool {
-	if isLeafTile(t) || isLogTile(t) { return true }
-	switch t {
-	case .tallGrass, .flowerR, .flowerY, .deadBush, .reed, .hay, .planks, .platform, .ladder, .dryGrass, .logBlock, .jungleLogBlock, .palmLogBlock, .birchLogBlock, .workbench, .crate, .cactus:
-		return true
-	default:
-		return false
+/// The kinds of equipment an item counts as, for infusing
+func infuseClasses(_ it: Item) -> [InfuseClass] {
+	switch it {
+	case .sword, .spear, .hammer, .knife, .club, .relic: return [.melee]
+	case .bow, .sling: return [.ranged]
+	case .gun: return [.ranged]
+	case .tool: return [.tool]
+	case .armor, .exoPart, .exoPlate: return [.armor]
+	case .exoCore, .exoModule: return [.suit]
+	case .custom(let k):
+		guard let r = ModRuntime.shared.item(k) else { return [] }
+		switch r.def.kind {
+		case .melee: return [.melee]
+		case .bow, .gun, .thrown, .magic: return [.ranged]
+		case .tool: return [.tool]
+		case .armor: return [.armor]
+		default: return []
+		}
+	default: return []
 	}
 }
 
-/// How much a shot of each kind is carried by the wind (heavy and fast shots hardly at all)
-func windCatch(_ k: ProjKind) -> Double {
-	switch k {
-	case .arrow: return 0.22
-	case .quarrel, .bolt: return 0.15
-	case .pebble, .spit: return 0.25
-	case .bomb, .flask: return 0.3
-	case .fireball: return 0.12
-	case .rock, .shard: return 0.08
-	case .pellet, .shell: return 0.05
-	case .bullet, .shock: return 0
+extension Stack {
+	/// the infusions worked into this item
+	var infusions: [Infusion] {
+		guard let l = inf else { return [] }
+		var out: [Infusion] = []
+		for r in l { if let i = Infusion(rawValue: r) { out.append(i) } }
+		return out
+	}
+
+	func has(_ i: Infusion) -> Bool { return inf?.contains(i.rawValue) ?? false }
+
+	/// Why an infusion cannot go on this item (nil: it can)
+	func infuseProblem(_ i: Infusion) -> String? {
+		let slots: Int = infusionSlots(item)
+		if slots <= 0 { return "This can't be infused." }
+		let cls: [InfuseClass] = infuseClasses(item)
+		if !i.classes.contains(where: { cls.contains($0) }) {
+			let names: [String] = i.classes.map { $0.name }
+			return joinText(i.name, " only goes on ", names.joined(separator: " or "), ".")
+		}
+		if has(i) { return joinText("It already has ", i.name, ".") }
+		if (inf?.count ?? 0) >= slots { return joinText("All ", String(slots), " of its slots are taken.") }
+		if i == .quarry {
+			var ok: Bool = false
+			if case .tool(let k, let t) = item, (k == .pickaxe || k == .shovel), t.rawValue >= Tier.diamond.rawValue { ok = true }
+			if !ok { return "Quarry needs a diamond (or better) pickaxe or shovel." }
+		}
+		if i == .volatile, case .gun(let g) = item, g == .stormRod { return "The storm rod's lightning can't carry it." }
+		if i == .longReach, case .gun(let g) = item, g == .stormRod { return "The storm rod's lightning can't carry it." }
+		return nil
 	}
 }
 
-/// Light creatures the wind carries along
-func isWindBlown(_ k: MobKind) -> Bool {
-	switch k {
-	case .crow, .bat, .chicken: return true
-	default: return false
+/// Armour infusions summed over everything worn (worked out again only when what is worn changes)
+struct ArmorInf {
+	var defense: Double = 0
+	var knockMul: Double = 1
+	var heavyCut: Double = 0
+	var fireCut: Double = 0
+	var coldCut: Double = 0
+	var stormCut: Double = 0
+	var speed: Double = 0
+	var regen: Double = 0
+	var thorns: Double = 0
+
+	mutating func add(_ s: Stack) {
+		for n in s.inf ?? [] where n >= customInfusionBase { addCustom(n) }
+		for i in s.infusions {
+			switch i {
+			case .reinforced: defense += 1.0
+			case .bulwark:
+				knockMul *= 0.75
+				heavyCut = min(0.4, heavyCut + 0.15)
+			case .fireward: fireCut = min(0.6, fireCut + 0.2)
+			case .frostward: coldCut = min(0.75, coldCut + 0.25)
+			case .stormward: stormCut = min(0.75, stormCut + 0.3)
+			case .fleet: speed = min(0.2, speed + 0.04)
+			case .renewal: regen = min(0.35, regen + 0.1)
+			case .barbed: thorns = min(0.45, thorns + 0.15)
+			default: break
+			}
+		}
 	}
 }
 
 extension Game {
-	/// How much of the open weather reaches someone at a given level of shelter
-	func shelterExposure(_ level: Int) -> Double {
-		switch level {
-		case 0: return 1.0
-		case 1: return 0.55
+	// MARK: infusing
+
+	/// Works a compound into the item in a bag slot. Everything is checked again here (the panel may be
+	/// out of date): the item must still be there, the infusion must fit, and a compound must be in the
+	/// bag. The item itself never leaves its slot, so nothing can be lost on the way. Returns what to say.
+	@discardableResult
+	func infuse(slot i: Int, _ inf: Infusion) -> String {
+		guard i >= 0 && i < inv.slots.count, var s = inv.slots[i] else { return "That item is gone." }
+		if let why = s.infuseProblem(inf) { return why }
+		if !isCreative && inv.total(.compound(inf)) < 1 { return joinText("You need a ", inf.name, " compound.") }
+		if !isCreative { _ = inv.remove(.compound(inf), 1) }
+		var list: [Int] = s.inf ?? []
+		list.append(inf.rawValue)
+		s.inf = list
+		inv.slots[i] = s
+		sfx(.infuse, 0.8)
+		spawnParticles(pb.x, pb.y - 1.2, inf.color, 12, 3.0, 0.7, -4)
+		if !journal.crafted.contains(joinText("Infusion: ", inf.name)) { journal.crafted.append(joinText("Infusion: ", inf.name)) }
+		bumpHUD()
+		return joinText(s.item.name, " is now ", inf.name, ".")
+	}
+
+	/// Takes an infusion back out of an item (the compound is spent; the item is unharmed)
+	@discardableResult
+	func removeInfusion(slot i: Int, _ inf: Infusion) -> String {
+		guard i >= 0 && i < inv.slots.count, var s = inv.slots[i], s.has(inf) else { return "Nothing to remove." }
+		var list: [Int] = s.inf ?? []
+		list.removeAll { $0 == inf.rawValue }
+		s.inf = list.isEmpty ? nil : list
+		inv.slots[i] = s
+		sfx(.tap, 0.6)
+		bumpHUD()
+		return joinText(inf.name, " was drawn out of ", s.item.name, ".")
+	}
+
+	/// The infusions of the item in hand, if it is the given item (nil: none)
+	func heldInfusions(_ it: Item?) -> [Int] {
+		guard let i = it, let s = inv.slots[sel], s.item == i, let l = s.inf else { return [] }
+		return l
+	}
+
+	/// The melee profile of an item as the player swings it: its own, changed by its infusions
+	func infusedMelee(_ it: Item?) -> MeleeProfile {
+		var p: MeleeProfile = it?.melee ?? Item.bareHands
+		let l: [Int] = heldInfusions(it)
+		if !l.isEmpty { p = Game.infuseProfile(p, l) }
+		if suitWorn { p = suitMelee(p) }
+		return p
+	}
+
+	static func infuseProfile(_ p0: MeleeProfile, _ l: [Int]) -> MeleeProfile {
+		var p: MeleeProfile = p0
+		for r in l {
+			guard let i = Infusion(rawValue: r) else {
+				p = Game.customProfile(p, r)
+				continue
+			}
+			switch i {
+			case .honed: p.damage *= 1.2
+			case .quickened: p.cooldown *= 0.85
+			case .keen: p.critChance += 0.12
+			case .heft: p.knock *= 1.6
+			case .longReach: p.reach += 0.6
+			case .voidrend: p.damage *= 1.15
+			case .emberbrand: p.burn = max(p.burn, 3.0)
+			default: break
+			}
+		}
+		return p
+	}
+
+	/// After a melee blow lands: frost, poison, voidrend's extra bite and stormcall's spark
+	func meleeInfusionHit(_ m: Mob, _ l: [Int], _ dmg: Double) {
+		if l.isEmpty { return }
+		for r in l {
+			guard let i = Infusion(rawValue: r) else {
+				customHit(m, r, dmg, m.b.x, m.b.cy)
+				continue
+			}
+			if m.hp <= 0 { continue }
+			switch i {
+			case .frostbite:
+				m.slowT = max(m.slowT, m.isBoss ? 1.5 : 3.0)
+				m.slowAmt = max(m.slowAmt, m.isBoss ? 0.2 : 0.4)
+			case .venom:
+				if !poisonImmune(m) {
+					m.poisonT = max(m.poisonT, m.isBoss ? 2.0 : 4.0)
+					m.poisonDps = max(m.poisonDps, 1.0)
+					m.poisonByPlayer = true
+				}
+			case .voidrend:
+				if m.isBoss || faction(of: m) == .umbral {
+					var info = DamageInfo(amount: dmg * 0.2, type: .magic, source: .player)
+					info.originX = pb.x
+					applyMobDamage(m, info)
+				}
+			case .stormcall:
+				if Double.random(in: 0...1) < 0.2 { stormSpark(m) }
+			default: break
+			}
+		}
+	}
+
+	/// A spark leaps from a struck foe to up to two more close by
+	func stormSpark(_ from: Mob) {
+		var hit: [Mob] = []
+		var prev: Mob = from
+		for _ in 0..<2 {
+			var best: Mob? = nil
+			var bd: Double = 6.0
+			for m in mobsNear(prev.b.x - 7, prev.b.x + 7) where m !== from && !hit.contains(where: { $0 === m }) {
+				if m.hp <= 0 || m.removed || m.tame { continue }
+				let d: Double = abs(m.b.x - prev.b.x) + abs(m.b.cy - prev.b.cy)
+				if d < bd { bd = d; best = m }
+			}
+			guard let n = best else { break }
+			arcs.append(ArcFX(pts: [(prev.b.x, prev.b.cy), ((prev.b.x + n.b.x) * 0.5, min(prev.b.cy, n.b.cy) - 0.6), (n.b.x, n.b.cy)], life: 0.2))
+			var info = DamageInfo(amount: 5, type: .shock, source: .player)
+			info.originX = prev.b.x
+			info.key = newID()
+			applyMobDamage(n, info)
+			hit.append(n)
+			prev = n
+		}
+		if !hit.isEmpty { sfx(.zap, at: from.b.x, 0.5) }
+	}
+
+	/// Infusions on the weapon that fires a shot: damage, range, and what it does when it lands
+	func infuseShot(_ p: inout Projectile, _ it: Item?) {
+		let l: [Int] = heldInfusions(it)
+		if l.isEmpty { return }
+		var bits: Int = 0
+		for r in l {
+			guard let i = Infusion(rawValue: r) else { continue }
+			switch i {
+			case .honed: p.dmg *= 1.2
+			case .voidrend: p.dmg *= 1.15; bits |= 8
+			case .longReach: p.life *= 1.25
+			case .emberbrand: bits |= 1
+			case .frostbite: bits |= 2
+			case .volatile: bits |= 4
+			default: break
+			}
+		}
+		p.inf = bits
+		customShot(&p, l)
+	}
+
+	/// A shot with infusions lands on a creature
+	func shotInfusionHit(_ p: Projectile, _ m: Mob?, _ x: Double, _ y: Double) {
+		if let mm = m { for n in p.custom { customHit(mm, n, p.dmg, x, y) } }
+		if let mm = m, mm.hp > 0 {
+			if p.inf & 1 != 0 && !heatImmune(mm) { mm.burn = max(mm.burn, 3.0) }
+			if p.inf & 2 != 0 {
+				mm.slowT = max(mm.slowT, mm.isBoss ? 1.5 : 3.0)
+				mm.slowAmt = max(mm.slowAmt, mm.isBoss ? 0.2 : 0.4)
+			}
+			if p.inf & 8 != 0 && (mm.isBoss || faction(of: mm) == .umbral) {
+				var info = DamageInfo(amount: p.dmg * 0.2, type: .magic, source: .player)
+				info.originX = x
+				applyMobDamage(mm, info)
+			}
+		}
+		if p.inf & 4 != 0 { volatileBurst(x, y) }
+	}
+
+	/// A volatile shot's little blast: hurts what is close, breaks nothing
+	func volatileBurst(_ x: Double, _ y: Double) {
+		var info = DamageInfo(amount: 3, type: .explosion, source: .player)
+		info.knock = 4
+		info.key = newID()
+		info.cooldown = 0.5
+		for m in mobsNear(x - 2.5, x + 2.5) where m.hp > 0 && !m.removed && !m.tame {
+			let d: Double = boxDistance(x, y, m.b.left, m.b.top, m.b.right, m.b.y)
+			if d <= 1.3 {
+				var i2: DamageInfo = info
+				i2.originX = x
+				i2.originY = y
+				applyMobDamage(m, i2)
+			}
+		}
+		spawnParticles(x, y, 0xFF8A3A, 8, 4.0, 0.3, 4)
+		sfx(.flask, at: x, 0.35)
+	}
+
+	// MARK: mining with infusions
+
+	/// How much faster than usual the player mines right now: potions, the tool's Haste, the suit's drill
+	func mineBoost(_ kind: ToolType?) -> Double {
+		var b: Double = 1.0 + effects.value(.mining) / 100.0
+		if kind != nil, let s = inv.slots[sel], s.has(.haste) { b *= 1.25 }
+		if kind != nil, let s = inv.slots[sel] { b *= customMining(s) }
+		return b
+	}
+
+	/// What breaking a block gives: its usual drops, ingredients from plants and ice, whole blocks with
+	/// Precision, and now and then one extra ore or gem (Bountiful, a Seeker's Tonic)
+	func minedDrops(_ t: Tile, _ x: Int, _ y: Int, _ byPlayer: Bool) -> [Stack] {
+		let held: Stack? = byPlayer ? inv.slots[sel] : nil
+		var tool: Bool = false
+		if let h = held, case .tool = h.item { tool = true }
+		if tool, let h = held, h.has(.precision), precisionKeeps(t) {
+			return [Stack(item: .block(t == .grass ? .grass : t), count: 1)]
+		}
+		var out: [Stack] = tileDropStacks(t, x, y)
+		if !byPlayer { return out }
+		let r: Double = Double.random(in: 0...1)
+		switch t {
+		case .tallGrass: if r < 0.1 { out.append(Stack(item: .mat(.sunleaf), count: 1)) }
+		case .flowerR, .flowerY: if r < 0.35 { out.append(Stack(item: .mat(.sunleaf), count: 1)) }
+		case .mushroom: if r < 0.3 { out.append(Stack(item: .mat(.glowcap), count: 1)) }
+		case .ice: if r < 0.15 { out.append(Stack(item: .mat(.frostCrystal), count: 1)) }
+		case .snow: if r < 0.03 { out.append(Stack(item: .mat(.frostCrystal), count: 1)) }
+		default: break
+		}
+		if isOreTile(t), let first = out.first {
+			var p: Double = effects.value(.luck) / 100.0
+			if tool, let h = held, h.has(.bountiful) { p += 0.2 }
+			if p > 0 && Double.random(in: 0...1) < min(0.5, p) {
+				out.append(Stack(item: first.item, count: 1))
+				floatText("+1", Double(x) + 0.5, Double(y) - 0.2, 0x5AE070)
+			}
+		}
+		return out
+	}
+
+	/// Blocks that Precision lifts whole
+	func precisionKeeps(_ t: Tile) -> Bool {
+		switch t {
+		case .glass, .ice, .glowCrystal, .grass, .leaves, .jungleLeaves, .birchLeaves, .pineLeaves, .snow: return true
+		default: return false
+		}
+	}
+
+	/// After a block breaks under a Quarry tool: the blocks right above and below go too, if they are
+	/// no harder and the tool could mine them anyway
+	func quarryAround(_ x: Int, _ y: Int, _ t0: Tile, _ kind: ToolType, _ tier: Tier) {
+		guard let s = inv.slots[sel], s.has(.quarry) else { return }
+		for dy in [-1, 1] {
+			let t: Tile = world.tile(x, y + dy)
+			if t == .air || t.liquid || t == .bedrock || t == .chest || t.isPower || t.hardness >= 99 { continue }
+			if t.hardness > t0.hardness + 0.01 { continue }
+			if toolClass(t) != kind || t.def.tier > tier.rawValue { continue }
+			if t == .portalFrame || t == .portalOff || t == .portalOn { continue }
+			breakTile(x, y + dy, true)
+		}
+	}
+
+	// MARK: armour infusions
+
+	/// Armour infusions over everything worn (rebuilt only when what is worn changes)
+	var armorInf: ArmorInf {
+		var h: Hasher = Hasher()
+		for i in 0..<min(3, inv.armor.count) { h.combine(inv.armor[i]) }
+		h.combine(suitRev)
+		h.combine(suit.worn)
+		let k: Int = h.finalize()
+		if k == armorInfKey { return armorInfCache }
+		var a: ArmorInf = ArmorInf()
+		for i in 0..<min(3, inv.armor.count) { if let s = inv.armor[i] { a.add(s) } }
+		if suit.worn {
+			for s in suit.d.items.values { a.add(s) }
+		}
+		armorInfCache = a
+		armorInfKey = k
+		return a
+	}
+
+	/// Everything that guards the player: armour, its Reinforced infusions and a worn suit
+	var totalDefense: Double {
+		// (a suit guards by its plates where each blow lands: see suitGuard)
+		return inv.defense + armorInf.defense
+	}
+}
+
+/// The ores, gems and crystals a Bountiful tool or a Seeker's Tonic can turn up more of
+func isOreTile(_ t: Tile) -> Bool {
+	switch t {
+	case .coal, .copper, .iron, .gold, .diamond, .mythril, .emberOre, .voidOre, .crystalOre, .tin, .saltpeter, .silver, .amethyst, .glowCrystal: return true
+	default: return false
+	}
+}
+
+// ===== p31_exosuit =====
+
+// MARK: - The modular exosuit: parts, materials, cores and modules
+
+/// The metals a suit part is made from. Iron is easy to come by and even; heavier metals guard better
+/// but slow the wearer; gold carries energy well; rare metals are light or strong; the Umbral metals
+/// shrug off fire, cold and lightning and give room for the most modules. Saved by number.
+enum ExoMat: Int, Codable, CaseIterable {
+	case iron, bronze, gold, diamond, mythril, ember, voidium
+
+	var name: String {
+		switch self {
+		case .iron: return "Iron"
+		case .bronze: return "Bronze"
+		case .gold: return "Gilded"
+		case .diamond: return "Diamond"
+		case .mythril: return "Mythril"
+		case .ember: return "Ember"
+		case .voidium: return "Voidium"
+		}
+	}
+	/// how much a part of this metal guards (iron 1)
+	var protect: Double {
+		switch self {
+		case .iron: return 1.0
+		case .bronze: return 0.85
+		case .gold: return 0.7
+		case .diamond: return 1.6
+		case .mythril: return 1.5
+		case .ember: return 1.8
+		case .voidium: return 2.2
+		}
+	}
+	/// how heavy a part of this metal is (iron 1)
+	var weight: Double {
+		switch self {
+		case .iron: return 1.0
+		case .bronze: return 0.85
+		case .gold: return 1.2
+		case .diamond: return 1.35
+		case .mythril: return 0.7
+		case .ember: return 1.5
+		case .voidium: return 1.2
+		}
+	}
+	/// how well it carries energy: powered parts use less in a suit of good conductors (iron 1)
+	var conduct: Double {
+		switch self {
+		case .iron: return 1.0
+		case .bronze: return 1.1
+		case .gold: return 1.5
+		case .diamond: return 0.9
+		case .mythril: return 1.2
+		case .ember: return 1.0
+		case .voidium: return 1.3
+		}
+	}
+	/// module sockets a chest frame of this metal has
+	var sockets: Int {
+		switch self {
+		case .iron, .bronze, .gold: return 2
+		case .diamond, .mythril, .ember: return 3
+		case .voidium: return 4
+		}
+	}
+	/// infusion slots on a part of this metal
+	var slots: Int {
+		switch self {
+		case .iron, .bronze: return 1
+		case .gold, .diamond: return 2
+		case .mythril, .ember, .voidium: return 3
+		}
+	}
+	/// the mining tier a drill arm of this metal bores at (pickaxe tiers)
+	var drillTier: Int {
+		switch self {
+		case .bronze: return 3
+		case .iron: return 4
+		case .gold: return 5
+		case .diamond: return 6
+		case .mythril: return 7
+		case .ember: return 8
+		case .voidium: return 9
+		}
+	}
+	var color: UInt32 {
+		switch self {
+		case .iron: return 0xC8CCD4
+		case .bronze: return 0xC89040
+		case .gold: return 0xF0C840
+		case .diamond: return 0x5ADCE4
+		case .mythril: return 0x8A7CFF
+		case .ember: return 0xE8642A
+		case .voidium: return 0x9A4CE8
+		}
+	}
+	var rarity: Rarity {
+		switch self {
+		case .iron, .bronze: return .basic
+		case .gold: return .uncommon
+		case .diamond: return .rare
+		case .mythril, .ember: return .veryRare
+		case .voidium: return .legendary
+		}
+	}
+	/// the metal a part is made of, for its recipe
+	var bar: Item {
+		switch self {
+		case .iron: return .mat(.ironBar)
+		case .bronze: return .mat(.bronzeBar)
+		case .gold: return .mat(.goldBar)
+		case .diamond: return .mat(.diamond)
+		case .mythril: return .mat(.mythrilBar)
+		case .ember: return .mat(.emberBar)
+		case .voidium: return .mat(.voidBar)
+		}
+	}
+	/// what it adds besides guarding
+	var special: String {
+		switch self {
+		case .iron: return "Even and easy to make"
+		case .bronze: return "Light and cheap, guards a little less"
+		case .gold: return "Carries energy well: powered parts use less"
+		case .diamond: return "Guards very well, but heavy"
+		case .mythril: return "Strong and very light"
+		case .ember: return "Turns fire and lava (each part)"
+		case .voidium: return "Turns cold and lightning; room for 4 modules"
+		}
+	}
+}
+
+/// The frame parts of a suit
+enum ExoPart: Int, Codable, CaseIterable {
+	case helmet, chestFrame, arm, legs, boots
+	var name: String {
+		switch self {
+		case .helmet: return "Suit Helmet"
+		case .chestFrame: return "Chest Frame"
+		case .arm: return "Suit Arm"
+		case .legs: return "Suit Legs"
+		case .boots: return "Suit Boots"
+		}
+	}
+	var baseDefense: Double {
+		switch self {
+		case .helmet: return 0.9
+		case .chestFrame: return 1.6
+		case .arm: return 0.5
+		case .legs: return 1.1
+		case .boots: return 0.6
+		}
+	}
+	var baseWeight: Double {
+		switch self {
+		case .helmet: return 3
+		case .chestFrame: return 8
+		case .arm: return 3
+		case .legs: return 6
+		case .boots: return 3
+		}
+	}
+}
+
+/// Power cores: how much energy they hold, how much they can give at once, and how fast they refill
+enum ExoCore: Int, Codable, CaseIterable {
+	case sparkCell, dynamo, crystal, ember, heart
+	var name: String {
+		switch self {
+		case .sparkCell: return "Spark Cell"
+		case .dynamo: return "Dynamo Core"
+		case .crystal: return "Crystal Core"
+		case .ember: return "Ember Core"
+		case .heart: return "Heart Core"
+		}
+	}
+	var capacity: Double {
+		switch self {
+		case .sparkCell: return 120
+		case .dynamo: return 240
+		case .crystal: return 400
+		case .ember: return 600
+		case .heart: return 1000
+		}
+	}
+	/// the most energy a second it can give
+	var output: Double {
+		switch self {
+		case .sparkCell: return 6
+		case .dynamo: return 10
+		case .crystal: return 14
+		case .ember: return 20
+		case .heart: return 30
+		}
+	}
+	/// energy a second it makes by itself
+	var recharge: Double {
+		switch self {
+		case .sparkCell: return 0.5
+		case .dynamo: return 1.0
+		case .crystal: return 1.6
+		case .ember: return 2.4
+		case .heart: return 4.0
+		}
+	}
+	var color: UInt32 {
+		switch self {
+		case .sparkCell: return 0xFFC830
+		case .dynamo: return 0x60E0FF
+		case .crystal: return 0x8AF0E8
+		case .ember: return 0xFF7A2A
+		case .heart: return 0xD860FF
+		}
+	}
+	var rarity: Rarity {
+		switch self {
+		case .sparkCell: return .basic
+		case .dynamo: return .uncommon
+		case .crystal: return .rare
+		case .ember: return .veryRare
+		case .heart: return .legendary
+		}
+	}
+}
+
+/// Suit modules: each does one thing, costs energy to run, and needs certain parts to hold it
+enum ExoModule: Int, Codable, CaseIterable {
+	case servo, drill, sprint, leap, hover, lamp, seal, cargo, gauntlet, barrier
+	/// appended: wings, batteries, solar panels, turrets, cannons, lasers and a magnet
+	case wing, battery, solar, turret, cannon, laser, magnet
+	var name: String {
+		switch self {
+		case .servo: return "Servo Muscles"
+		case .drill: return "Drill"
+		case .sprint: return "Booster"
+		case .leap: return "Leap Piston"
+		case .hover: return "Jet"
+		case .lamp: return "Suit Lamp"
+		case .seal: return "Environment Seal"
+		case .cargo: return "Cargo Pack"
+		case .gauntlet: return "Shock Gauntlet"
+		case .barrier: return "Barrier Projector"
+		case .wing: return "Suit Wing"
+		case .battery: return "Suit Battery"
+		case .solar: return "Solar Panel"
+		case .turret: return "Mini Turret"
+		case .cannon: return "Mini Cannon"
+		case .laser: return "Mini Laser"
+		case .magnet: return "Magnet"
+		}
+	}
+	var blurb: String {
+		switch self {
+		case .servo: return "Each carries 12 more weight and hits harder (a little energy each swing)"
+		case .drill: return "On an arm: mine with any hand, faster, at the drill's metal tier (energy while mining)"
+		case .sprint: return "Run faster: each booster adds speed (energy while running)"
+		case .leap: return "Jump higher: each piston adds height (energy each jump)"
+		case .hover: return "Hold jump in the air: jets push the way they point. Enough lift for the suit's weight and it flies (energy while firing)"
+		case .lamp: return "Lights the way in the dark (a trickle of energy)"
+		case .seal: return "Fire, lava, cold, water and lightning hurt far less (energy while it works)"
+		case .cargo: return "A chest on your back: 27 stacks that go where you go (PACK button)"
+		case .gauntlet: return "Melee blows add a shock (energy each hit)"
+		case .barrier: return "Turns part of each hit into energy drain instead of harm"
+		case .wing: return "Hold jump while falling to glide; more wing, slower fall"
+		case .battery: return "Holds more energy (charged by cores, panels and stations)"
+		case .solar: return "Makes energy under the open sky by day"
+		case .turret: return "Shoots the nearest foe by itself (energy each shot)"
+		case .cannon: return "Fires a shell at your aim while SUIT FIRE is held (energy each shot)"
+		case .laser: return "A beam at your aim while SUIT FIRE is held (energy while firing)"
+		case .magnet: return "Draws dropped things to you"
+		}
+	}
+	var weight: Double {
+		switch self {
+		case .drill, .cannon: return 4
+		case .hover, .cargo, .turret: return 3
+		case .solar, .magnet, .lamp: return 1
+		default: return 2
+		}
+	}
+	var rarity: Rarity {
+		switch self {
+		case .lamp, .cargo, .battery, .wing: return .basic
+		case .servo, .drill, .sprint, .leap, .solar, .magnet: return .uncommon
+		case .seal, .gauntlet, .turret: return .rare
+		case .hover, .barrier, .cannon, .laser: return .veryRare
+		}
+	}
+	var color: UInt32 {
+		switch self {
+		case .servo: return 0xA8B0C0
+		case .drill: return 0xD8D8E0
+		case .sprint: return 0x7AD8F8
+		case .leap: return 0x8AE85A
+		case .hover: return 0xFF9A3A
+		case .lamp: return 0xFFF0A0
+		case .seal: return 0x60C8E8
+		case .cargo: return 0x9A6A3A
+		case .gauntlet: return 0xFFF07A
+		case .barrier: return 0xC07CFF
+		case .wing: return 0xD8D0C0
+		case .battery: return 0x6ADA5A
+		case .solar: return 0x3A5AB0
+		case .turret: return 0x8A929E
+		case .cannon: return 0x5A606A
+		case .laser: return 0xE84A6A
+		case .magnet: return 0xC8384A
+		}
+	}
+}
+
+/// The places on a suit. Frame parts first, then the core, the armour plates, and module sockets.
+enum ExoSlot: Int, Codable, CaseIterable {
+	case helmet, chest, armL, armR, legs, boots, core, plateHead, plateShoulders, plateChest, plateArms, plateLegs, mod1, mod2, mod3, mod4
+
+	var name: String {
+		switch self {
+		case .helmet: return "Helmet"
+		case .chest: return "Chest frame"
+		case .armL: return "Left arm"
+		case .armR: return "Right arm"
+		case .legs: return "Legs"
+		case .boots: return "Boots"
+		case .core: return "Power core"
+		case .plateHead: return "Helmet plate"
+		case .plateShoulders: return "Shoulder plates"
+		case .plateChest: return "Chest plate"
+		case .plateArms: return "Arm plates"
+		case .plateLegs: return "Leg plates"
+		case .mod1: return "Module 1"
+		case .mod2: return "Module 2"
+		case .mod3: return "Module 3"
+		case .mod4: return "Module 4"
+		}
+	}
+	var isPlate: Bool { return rawValue >= ExoSlot.plateHead.rawValue && rawValue <= ExoSlot.plateLegs.rawValue }
+	var isModule: Bool { return rawValue >= ExoSlot.mod1.rawValue }
+	/// the frame part a plate is fixed to
+	var plateBase: ExoSlot? {
+		switch self {
+		case .plateHead: return .helmet
+		case .plateShoulders, .plateChest: return .chest
+		case .plateArms: return .armL
+		case .plateLegs: return .legs
+		default: return nil
+		}
+	}
+	/// how much a plate here guards (before its metal)
+	var plateDefense: Double {
+		switch self {
+		case .plateHead: return 0.5
+		case .plateShoulders: return 0.6
+		case .plateChest: return 0.9
+		case .plateArms: return 0.5
+		case .plateLegs: return 0.6
 		default: return 0
 		}
 	}
+	/// what kind of part fits here
+	func fits(_ it: Item) -> Bool {
+		switch it {
+		case .exoPart(let p, _):
+			switch p {
+			case .helmet: return self == .helmet
+			case .chestFrame: return self == .chest
+			case .arm: return self == .armL || self == .armR
+			case .legs: return self == .legs
+			case .boots: return self == .boots
+			}
+		case .exoPlate: return isPlate
+		case .exoCore: return self == .core
+		case .exoModule: return isModule
+		default: return false
+		}
+	}
+}
 
-	/// True when rain falls on the head of a body standing at (x, feet y) with the given height
-	func rainReaches(_ x: Double, _ feetY: Double, _ h: Double) -> Bool {
-		if world.dim != .overworld { return false }
-		let tx: Int = Int(floor(x))
-		return Int(floor(feetY - h)) < world.rainTop(tx)
+/// A suit: built piece by piece (its design: every plate and working part, each with its own damage),
+/// whether it is being worn, and the energy in it. `parts` is how a suit was built before (one part in
+/// each place): it is read from old saves and rebuilt piece by piece (see migrate).
+struct ExoSuit: Codable, Equatable {
+	var parts: [Int: Stack] = [:]
+	var worn: Bool = false
+	var energy: Double = 0
+	/// the module switches the player has turned off (by module number)
+	var off: [Int]? = nil
+	/// the suit as built piece by piece (nil only in a save from before)
+	var design: SuitDesign? = nil
+
+	init() {}
+
+	/// the design (empty when there is none yet)
+	var d: SuitDesign {
+		get { return design ?? SuitDesign() }
+		set { design = newValue }
 	}
 
-	/// 0 out in the open, 1 under a roof, 2 indoors (a roof and walls on both sides), 3 underground or
-	/// in a reinforced storm shelter
-	func shelterAt(_ x: Double, _ feetY: Double) -> Int {
-		if world.dim != .overworld { return 3 }
-		let tx: Int = Int(floor(x))
-		let head: Int = Int(floor(feetY - 1.6))
-		if head < world.rainTop(tx) { return 0 }
-		var reinforced: Bool = false
-		// count the solid cover overhead (four blocks or more is underground)
-		var solidAbove: Int = 0
-		var y: Int = head - 1
-		var n: Int = 0
-		while n < 24 && y > 0 {
-			let t: Tile = world.tile(tx, y)
-			if t.solid {
-				solidAbove += 1
-				if isStormproof(t) { reinforced = true }
-			}
-			y -= 1
-			n += 1
+	var isEmpty: Bool { return parts.isEmpty && (design?.pieces.isEmpty ?? true) }
+
+	subscript(_ s: ExoSlot) -> Stack? {
+		get { return parts[s.rawValue] }
+		set { parts[s.rawValue] = newValue }
+	}
+
+	/// the metal of an old-style part
+	func material(_ s: ExoSlot) -> ExoMat? {
+		if let st = parts[s.rawValue] {
+			if case .exoPart(_, let m) = st.item { return m }
+			if case .exoPlate(let m) = st.item { return m }
 		}
-		if solidAbove >= 4 && !reinforced { return 3 }
-		// walls on both sides, at head or body height
-		func wall(_ dir: Int) -> Bool {
-			var k: Int = 1
-			while k <= 8 {
-				let a: Tile = world.tile(tx + dir * k, head)
-				let b: Tile = world.tile(tx + dir * k, head + 1)
-				if a.solid || b.solid {
-					if isStormproof(a) || isStormproof(b) { reinforced = true }
-					return true
+		return nil
+	}
+}
+
+// MARK: - Suits built piece by piece
+
+/// Who a suit's cannon shell belongs to: a small blast that never breaks blocks (see shellBurst)
+let suitShellOwner: Int = 3_000_000
+
+/// Suit units to a sprite pixel: pieces sit on a grid three times finer than the sprite's
+let suitUnit: Int = 3
+/// The body's design space in suit units: the figure is 30 wide (10 pixels) and 51 tall (17 rows of
+/// its frame, feet on row 15); pieces may hang 18 units off either side (wings, a pack, a cannon)
+let suitBodyW: Double = 30
+let suitBodyH: Double = 51
+let suitMargin: Double = 18
+
+/// Where a piece is fixed: it moves with that part of the body (the legs stride, the front arm swings
+/// out to strike and shoot). Drawn back to front in `layer` order.
+enum SuitBone: Int, Codable, CaseIterable {
+	case head, torso, armBack, armFront, legBack, legFront, back
+	var name: String {
+		switch self {
+		case .head: return "Head"
+		case .torso: return "Body"
+		case .armBack: return "Back arm"
+		case .armFront: return "Front arm"
+		case .legBack: return "Back leg"
+		case .legFront: return "Front leg"
+		case .back: return "Back"
+		}
+	}
+	var layer: Int {
+		switch self {
+		case .back: return 0
+		case .armBack: return 1
+		case .legBack: return 2
+		case .torso: return 3
+		case .head: return 4
+		case .legFront: return 5
+		case .armFront: return 6
+		}
+	}
+	/// the same place on the other side (for mirrored copies)
+	var other: SuitBone {
+		switch self {
+		case .armBack: return .armFront
+		case .armFront: return .armBack
+		case .legBack: return .legFront
+		case .legFront: return .legBack
+		default: return self
+		}
+	}
+}
+
+/// The body's parts for guarding: a blow lands on one of them
+enum SuitSection: Int, CaseIterable {
+	case head, torso, arms, legs, feet
+	var name: String {
+		switch self {
+		case .head: return "Head"
+		case .torso: return "Body"
+		case .arms: return "Arms"
+		case .legs: return "Legs"
+		case .feet: return "Feet"
+		}
+	}
+}
+
+/// The outline of a piece
+enum SuitShape: Int, Codable, CaseIterable {
+	case box, rounded, round, wedge, spike
+	var name: String {
+		switch self {
+		case .box: return "Box"
+		case .rounded: return "Rounded"
+		case .round: return "Round"
+		case .wedge: return "Wedge"
+		case .spike: return "Spike"
+		}
+	}
+	/// how much of its box it fills
+	var fill: Double {
+		switch self {
+		case .box: return 1.0
+		case .rounded: return 0.92
+		case .round: return 0.785
+		case .wedge, .spike: return 0.5
+		}
+	}
+	/// whether a point of the piece's box (each from -1 to 1 across and down) is on it
+	func inside(_ u: Double, _ v: Double) -> Bool {
+		if abs(u) > 1.0 || abs(v) > 1.0 { return false }
+		switch self {
+		case .box: return true
+		case .rounded:
+			let a: Double = abs(u) - 0.55
+			let b: Double = abs(v) - 0.55
+			return a <= 0 || b <= 0 || a * a + b * b <= 0.2025
+		case .round: return u * u + v * v <= 1.0
+		case .wedge: return v >= -u
+		case .spike: return abs(u) <= (v + 1.0) * 0.5
+		}
+	}
+}
+
+/// What a piece is: an armour plate (guards), a frame piece (light, guards a little), a power core,
+/// or a working part (one of the modules, or a mod's part)
+enum SuitKind: Int, Codable, CaseIterable {
+	case plate, frame, core, module
+	var name: String {
+		switch self {
+		case .plate: return "Plate"
+		case .frame: return "Frame"
+		case .core: return "Core"
+		case .module: return "Part"
+		}
+	}
+}
+
+/// One piece of a suit: where it is (its centre, measured on the body standing still, in suit units),
+/// its size, turn, shape and thickness, what it is made of and painted, and how damaged it is
+struct SuitPiece: Codable, Hashable, Identifiable {
+	var id: Int = 0
+	var kind: SuitKind = .plate
+	/// a core's or a module's number (cores: ExoCore, modules: ExoModule)
+	var part: Int = 0
+	/// a mod's part, by key (then `part` is the module it works as)
+	var modPart: String = ""
+	var bone: SuitBone = .torso
+	var x: Double = 15
+	var y: Double = 25
+	var w: Double = 6
+	var h: Double = 6
+	/// turned clockwise, in degrees
+	var rot: Double = 0
+	var shape: SuitShape = .box
+	/// layers of material (1 to 3): thicker guards more and weighs more
+	var thick: Int = 1
+	/// the game's metal (ExoMat), or a mod's material by key
+	var mat: Int = 0
+	var modMat: String = ""
+	/// paint (0: the material's own colour)
+	var color: UInt32 = 0
+	/// how damaged (0 whole ... 1 broken off)
+	var dmg: Double = 0
+	/// the group of the item it was made from (0: made of material); see SuitDesign.items
+	var src: Int = 0
+
+	init() {}
+
+	init(from decoder: Decoder) throws {
+		let c = try decoder.container(keyedBy: CodingKeys.self)
+		id = c.val(.id, 0)
+		kind = c.val(.kind, .plate)
+		part = c.val(.part, 0)
+		modPart = c.val(.modPart, "")
+		bone = c.val(.bone, .torso)
+		x = c.val(.x, 15)
+		y = c.val(.y, 25)
+		w = c.val(.w, 6)
+		h = c.val(.h, 6)
+		rot = c.val(.rot, 0)
+		shape = c.val(.shape, .box)
+		thick = c.val(.thick, 1)
+		mat = c.val(.mat, 0)
+		modMat = c.val(.modMat, "")
+		color = c.val(.color, 0)
+		dmg = c.val(.dmg, 0)
+		src = c.val(.src, 0)
+	}
+
+	var broken: Bool { return dmg >= 0.999 }
+	var area: Double { return w * h * shape.fill }
+	var module: ExoModule? { return kind == .module ? ExoModule(rawValue: part) : nil }
+	var core: ExoCore? { return kind == .core ? ExoCore(rawValue: part) : nil }
+
+	/// whether a point (suit units, the body standing still) is on the piece
+	func covers(_ px: Double, _ py: Double) -> Bool {
+		let a: Double = -rot * Double.pi / 180.0
+		let dx: Double = px - x
+		let dy: Double = py - y
+		let lx: Double = dx * cos(a) - dy * sin(a)
+		let ly: Double = dx * sin(a) + dy * cos(a)
+		return shape.inside(lx / max(0.5, w * 0.5), ly / max(0.5, h * 0.5))
+	}
+
+	/// the same piece as it looks and is made (everything but where it is and how damaged)
+	func sameMake(_ o: SuitPiece) -> Bool {
+		return kind == o.kind && part == o.part && modPart == o.modPart && w == o.w && h == o.h && shape == o.shape && thick == o.thick && mat == o.mat && modMat == o.modMat
+	}
+
+	/// the piece kept within what the suit allows (sizes, places, thickness)
+	mutating func clamp() {
+		w = clampD(w.isFinite ? w : 6, 1, 30)
+		h = clampD(h.isFinite ? h : 6, 1, 30)
+		x = clampD(x.isFinite ? x : 15, -suitMargin, suitBodyW + suitMargin)
+		y = clampD(y.isFinite ? y : 25, 0, suitBodyH)
+		rot = rot.isFinite ? rot.truncatingRemainder(dividingBy: 360) : 0
+		thick = clampI(thick, 1, 3)
+		dmg = clampD(dmg.isFinite ? dmg : 0, 0, 1)
+		if kind == .core && ExoCore(rawValue: part) == nil { part = 0 }
+		if kind == .module && ExoModule(rawValue: part) == nil { part = 0 }
+	}
+}
+
+/// A whole suit design: its pieces (drawn and guarding in order: later pieces lie over earlier ones on
+/// the same part of the body), and the items its working parts were made from, by group (a core, a
+/// module, or a part of a suit built the old way). An item goes back to the bag when every piece of
+/// its group is taken off.
+struct SuitDesign: Codable, Hashable {
+	var pieces: [SuitPiece] = []
+	var items: [Int: Stack] = [:]
+	var nextID: Int = 1
+
+	init() {}
+
+	init(from decoder: Decoder) throws {
+		let c = try decoder.container(keyedBy: CodingKeys.self)
+		var skip: Int = 0
+		pieces = c.list(.pieces, &skip)
+		items = c.val(.items, [:])
+		nextID = c.val(.nextID, 1)
+		let top: Int = pieces.map { $0.id }.max() ?? 0
+		if nextID <= top { nextID = top + 1 }
+	}
+
+	/// most pieces a suit may have
+	static let maxPieces: Int = 160
+
+	mutating func newID() -> Int {
+		let n: Int = nextID
+		nextID += 1
+		return n
+	}
+
+	/// a new group for an item
+	mutating func newGroup() -> Int {
+		var g: Int = 1
+		while items[g] != nil { g += 1 }
+		return g
+	}
+
+	/// pieces that still work
+	var working: [SuitPiece] { return pieces.filter { !$0.broken } }
+
+	func index(_ id: Int) -> Int? { return pieces.firstIndex { $0.id == id } }
+}
+
+/// A mod's suit part, ready for play: the module it works as, its name and colour, how strong it is at
+/// that work (1 the game's own) and what it weighs
+struct SuitPartInfo {
+	var name: String = "Part"
+	var color: UInt32 = 0x8A929E
+	var works: ExoModule = .turret
+	var power: Double = 1
+	var weight: Double = 2
+}
+
+/// The numbers of a suit material: the game's metals, or a mod's
+struct SuitMatInfo {
+	var name: String = "Iron"
+	var color: UInt32 = 0xC8CCD4
+	/// how well a layer guards (iron 1)
+	var protect: Double = 1
+	/// weight for its size (iron 1)
+	var weight: Double = 1
+	/// how much it takes before it breaks (iron 1)
+	var durability: Double = 1
+	/// how well it carries energy (iron 1)
+	var conduct: Double = 1
+	/// what each piece of it takes off fire, cold and lightning
+	var fireCut: Double = 0
+	var coldCut: Double = 0
+	var stormCut: Double = 0
+	/// what it is paid with, a unit at a time
+	var cost: Item = .mat(.ironBar)
+	/// the mining tier a drill of it bores at
+	var drillTier: Int = 4
+}
+
+extension ExoMat {
+	/// how much a piece of this metal takes before it breaks (iron 1)
+	var durability: Double {
+		switch self {
+		case .iron: return 1.0
+		case .bronze: return 0.85
+		case .gold: return 0.6
+		case .diamond: return 1.4
+		case .mythril: return 1.3
+		case .ember: return 1.5
+		case .voidium: return 1.8
+		}
+	}
+
+	var info: SuitMatInfo {
+		var i = SuitMatInfo()
+		i.name = name
+		i.color = color
+		i.protect = protect
+		i.weight = weight
+		i.durability = durability
+		i.conduct = conduct
+		i.fireCut = self == .ember ? 0.05 : 0
+		i.coldCut = self == .voidium ? 0.04 : 0
+		i.stormCut = self == .voidium ? 0.04 : 0
+		i.cost = bar
+		i.drillTier = drillTier
+		return i
+	}
+}
+
+/// A piece's material numbers (a mod's, if it names one that is on)
+func suitMat(_ p: SuitPiece) -> SuitMatInfo {
+	if !p.modMat.isEmpty, let m = ModRuntime.shared.suitMats[p.modMat] { return m }
+	return (ExoMat(rawValue: p.mat) ?? .iron).info
+}
+
+/// The colour a piece shows
+func suitColor(_ p: SuitPiece) -> UInt32 {
+	if p.color != 0 { return p.color & 0xFFFFFF }
+	if p.kind == .core, let c = p.core { return c.color }
+	if p.kind == .module, !p.modPart.isEmpty, let mp = ModRuntime.shared.suitParts[p.modPart] { return mp.color }
+	if p.kind == .module, let m = p.module { return shadeRGB(m.color, 0.85) }
+	return suitMat(p).color
+}
+
+/// The body standing still, cell by cell (sprite pixels, columns from the figure's left edge), with the
+/// part of the body each cell is: what a blow can land on
+enum SuitBody {
+	/// rows: (row, first column, last column, section)
+	static let spans: [(Int, Int, Int, SuitSection)] = [
+		(1, 3, 6, .head), (2, 2, 7, .head), (3, 2, 7, .head), (4, 2, 7, .head), (5, 3, 6, .head),
+		(6, 3, 6, .torso),
+		(7, 1, 2, .arms), (7, 3, 6, .torso), (7, 7, 8, .arms),
+		(8, 1, 2, .arms), (8, 3, 6, .torso), (8, 7, 8, .arms),
+		(9, 1, 2, .arms), (9, 3, 6, .torso), (9, 7, 8, .arms),
+		(10, 2, 7, .torso), (11, 2, 7, .torso),
+		(12, 2, 3, .legs), (12, 6, 7, .legs), (13, 2, 3, .legs), (13, 6, 7, .legs), (14, 2, 3, .legs), (14, 6, 7, .legs),
+		(15, 2, 3, .feet), (15, 6, 7, .feet)
+	]
+
+	/// every body cell of a section, as (column, row)
+	static let cells: [[(Int, Int)]] = {
+		var out: [[(Int, Int)]] = [[(Int, Int)]](repeating: [], count: SuitSection.allCases.count)
+		for s in spans {
+			for x in s.1...s.2 { out[s.3.rawValue].append((x, s.0)) }
+		}
+		return out
+	}()
+
+	/// the section of a body cell (nil: not the body)
+	static func section(_ col: Int, _ row: Int) -> SuitSection? {
+		for s in spans where s.0 == row && col >= s.1 && col <= s.2 { return s.3 }
+		return nil
+	}
+
+	/// The part of the body a piece placed with its centre at (x, y) belongs to
+	static func bone(_ x: Double, _ y: Double) -> SuitBone {
+		let col: Int = Int(floor(x / Double(suitUnit)))
+		let row: Int = Int(floor(y / Double(suitUnit)))
+		if row <= 5 { return .head }
+		if row >= 12 { return col <= 4 ? .legBack : .legFront }
+		if col < 1 { return .back }
+		if row >= 6 && row <= 10 {
+			if col <= 2 { return .armBack }
+			if col >= 7 { return .armFront }
+		}
+		return .torso
+	}
+}
+
+/// How a part of the body is moved in one of the sprite's frames (0 standing, 1-2 walking, 3 winding up,
+/// 4 striking, 5 blocking, 6 shooting): shifted, and the front arm turned out from the shoulder
+struct BoneMove {
+	var dx: Double = 0
+	var dy: Double = 0
+	var turn: Double = 0
+	var px: Double = 0
+	var py: Double = 0
+
+	static func of(_ b: SuitBone, _ frame: Int) -> BoneMove {
+		var m = BoneMove()
+		let u: Double = Double(suitUnit)
+		switch b {
+		case .legBack:
+			if frame == 1 { m.dx = -u } else if frame == 2 { m.dx = u }
+		case .legFront:
+			if frame == 1 { m.dx = u } else if frame == 2 { m.dx = -u }
+		case .armFront:
+			if frame >= 3 {
+				// the arm swings forward from the shoulder (raised a pixel while winding up)
+				m.turn = -Double.pi / 2
+				m.px = 8 * u
+				m.py = 8 * u
+				if frame == 3 { m.dy = -u }
+			}
+		default: break
+		}
+		return m
+	}
+
+	/// a point (suit units, standing still) where it is in this frame
+	func apply(_ x: Double, _ y: Double) -> (Double, Double) {
+		if turn == 0 { return (x + dx, y + dy) }
+		let c: Double = cos(turn)
+		let s: Double = sin(turn)
+		let rx: Double = x - px
+		let ry: Double = y - py
+		return (px + rx * c - ry * s + dx, py + rx * s + ry * c + dy)
+	}
+}
+
+/// What a suit adds up to: worked out once each time it changes, never every frame
+struct ExoStats {
+	var weight: Double = 0
+	var strength: Double = 20
+	var speedMul: Double = 1
+	var jumpMul: Double = 1
+	var capacity: Double = 0
+	var output: Double = 0
+	var recharge: Double = 0
+	var drainMul: Double = 1
+	var fireCut: Double = 0
+	var coldCut: Double = 0
+	var stormCut: Double = 0
+	var knockMul: Double = 1
+	var drillTier: Int = 0
+	/// the share of a blow its plates stop, on average over the whole body (0 ... 1)
+	var guardAll: Double = 0
+	/// for each part of the body (SuitSection): the share of it covered by working plates, and the
+	/// share of a blow there they stop on average
+	var cover: [Double] = [0, 0, 0, 0, 0]
+	var guardBy: [Double] = [0, 0, 0, 0, 0]
+	/// working parts by module, and their strength (a mod's part counts as more)
+	var counts: [Int: Int] = [:]
+	var power: [Int: Double] = [:]
+	/// the jets' lift, in body weights (over 1 rises), and the wings' area
+	var thrust: Double = 0
+	var wingArea: Double = 0
+	/// energy the solar panels make a second in full sun
+	var solar: Double = 0
+	var modules: [ExoModule] = []
+	/// can be worn: it has some pieces
+	var complete: Bool = false
+	/// what is wrong or missing, in plain words
+	var notes: [String] = []
+	var thrift: Set<Int> = []
+	var pieces: Int = 0
+	var broken: Int = 0
+
+	func has(_ m: ExoModule) -> Bool { return (counts[m.rawValue] ?? 0) > 0 }
+	func count(_ m: ExoModule) -> Int { return counts[m.rawValue] ?? 0 }
+	func strength(_ m: ExoModule) -> Double { return power[m.rawValue] ?? 0 }
+
+	/// what the old defence number would have been (for the item screens): 25 points stop everything
+	var defense: Double { return guardAll * 25.0 }
+
+	static func of(_ s: ExoSuit) -> ExoStats { return of(s.d) }
+
+	static func of(_ d: SuitDesign) -> ExoStats {
+		var r: ExoStats = ExoStats()
+		var conductSum: Double = 0
+		var conductN: Double = 0
+		var drill: Int = 0
+		for p in d.pieces {
+			r.pieces += 1
+			if p.broken {
+				r.broken += 1
+				continue
+			}
+			let mi: SuitMatInfo = suitMat(p)
+			switch p.kind {
+			case .plate, .frame:
+				let k: Double = p.kind == .plate ? 1.0 : 0.6
+				r.weight += p.area * Double(p.thick) * mi.weight * 0.035 * k
+				conductSum += mi.conduct
+				conductN += 1
+				r.fireCut = min(0.6, r.fireCut + mi.fireCut)
+				r.coldCut = min(0.6, r.coldCut + mi.coldCut)
+				r.stormCut = min(0.6, r.stormCut + mi.stormCut)
+			case .core:
+				guard let c = p.core else { continue }
+				r.capacity += c.capacity
+				r.output += c.output
+				r.recharge += c.recharge
+				r.weight += 3
+				if let st = d.items[p.src], st.has(.thrift) { r.drainMul *= 0.75 }
+			case .module:
+				guard let m = p.module else { continue }
+				var k: Double = 1.0
+				if !p.modPart.isEmpty, let mp = ModRuntime.shared.suitParts[p.modPart] {
+					k = mp.power
+					r.weight += mp.weight
+				} else {
+					r.weight += m.weight
 				}
-				k += 1
+				r.counts[m.rawValue, default: 0] += 1
+				r.power[m.rawValue, default: 0] += k
+				if let st = d.items[p.src], st.has(.thrift) { r.thrift.insert(m.rawValue) }
+				switch m {
+				case .hover:
+					// a jet lifts more the bigger it is, along the way it points (straight down: all up)
+					let lift: Double = clampD(0.25 + p.area * 0.012, 0.25, 1.0) * k
+					r.thrust += lift * max(0, cos(p.rot * Double.pi / 180.0))
+				case .wing: r.wingArea += p.area * k
+				case .battery: r.capacity += clampD(60 + p.area * 1.5, 60, 160) * k
+				case .solar: r.solar += clampD(0.2 + p.area * 0.01, 0.2, 0.6) * k
+				case .drill: drill = max(drill, mi.drillTier)
+				default: break
+				}
 			}
-			return false
 		}
-		let left: Bool = wall(-1)
-		let right: Bool = wall(1)
-		if left && right { return reinforced ? 3 : 2 }
-		return 1
+		if conductN > 0 { r.drainMul /= max(0.6, conductSum / conductN) }
+		r.drillTier = drill
+		var mods: [ExoModule] = []
+		for m in ExoModule.allCases where r.has(m) { mods.append(m) }
+		r.modules = mods
+		// servos: more strength and harder blows
+		r.strength += 12.0 * min(3.0, r.strength(.servo))
+		// weight against strength, the jets' lift against the suit's weight
+		let over: Double = max(0, r.weight - r.strength)
+		r.speedMul = 1.0 - min(0.35, over * 0.006)
+		r.jumpMul = 1.0 - min(0.3, over * 0.004)
+		r.knockMul = max(0.35, 1.0 - r.weight * 0.012)
+		r.thrust /= 1.0 + r.weight / 60.0
+		// how well it guards, part of the body by part
+		let g: SuitGuardMap = SuitGuardMap.of(d)
+		r.cover = g.cover
+		r.guardBy = g.guardBy
+		r.guardAll = g.guardAll
+		r.complete = !d.pieces.isEmpty
+		if d.pieces.isEmpty { r.notes.append("Place some pieces: plates to guard, and parts that work.") }
+		if r.capacity <= 0 && !r.modules.isEmpty { r.notes.append("Fit a power core or a battery: its parts have no energy without one.") }
+		if r.capacity > 0 && r.output <= 0 && !r.modules.isEmpty { r.notes.append("Batteries hold energy but only a core can give it out quickly; fit a core.") }
+		if r.has(.hover) && r.thrust < 1.0 { r.notes.append(joinText("Its jets lift ", String(Int((r.thrust * 100).rounded())), "% of its weight: they slow a fall but can't climb.")) }
+		if r.has(.drill) && !d.pieces.contains(where: { $0.module == .drill && !$0.broken && ($0.bone == .armFront || $0.bone == .armBack) }) {
+			r.notes.append("A drill works only on an arm.")
+		}
+		if r.broken > 0 { r.notes.append(joinText(String(r.broken), r.broken == 1 ? " piece is" : " pieces are", " broken: mend them at an Assembly Station.")) }
+		for st in d.items.values { r.drainMul *= customEnergyMul(st) }
+		// a drill must be on an arm to bore
+		if !d.pieces.contains(where: { $0.module == .drill && !$0.broken && ($0.bone == .armFront || $0.bone == .armBack) }) {
+			r.counts[ExoModule.drill.rawValue] = nil
+			r.modules.removeAll { $0 == .drill }
+			r.drillTier = 0
+		}
+		return r
+	}
+}
+
+/// How well a design guards, worked out over the body cell by cell (each cell split three by three)
+struct SuitGuardMap {
+	var cover: [Double] = [0, 0, 0, 0, 0]
+	var guardBy: [Double] = [0, 0, 0, 0, 0]
+	var guardAll: Double = 0
+
+	static func of(_ d: SuitDesign) -> SuitGuardMap {
+		var g = SuitGuardMap()
+		var total: Double = 0
+		var n: Double = 0
+		let u: Int = suitUnit
+		for sec in SuitSection.allCases {
+			var covered: Double = 0
+			var stop: Double = 0
+			var cells: Double = 0
+			for (cx, cy) in SuitBody.cells[sec.rawValue] {
+				for sy in 0..<u {
+					for sx in 0..<u {
+						let px: Double = Double(cx * u + sx) + 0.5
+						let py: Double = Double(cy * u + sy) + 0.5
+						let pass: Double = suitPass(d, px, py).0
+						if pass < 0.999 { covered += 1 }
+						stop += 1.0 - pass
+						cells += 1
+					}
+				}
+			}
+			if cells > 0 {
+				g.cover[sec.rawValue] = covered / cells
+				g.guardBy[sec.rawValue] = stop / cells
+			}
+			total += stop
+			n += cells
+		}
+		g.guardAll = n > 0 ? total / n : 0
+		return g
+	}
+}
+
+/// What a piece stops of a blow that lands on it (0 ... 0.8): plates by their metal and thickness,
+/// less as they wear; frames a little; working parts hardly at all
+func suitShare(_ p: SuitPiece) -> Double {
+	if p.broken { return 0 }
+	let mi: SuitMatInfo = suitMat(p)
+	var s: Double
+	switch p.kind {
+	case .plate: s = clampD(0.2 * mi.protect * Double(p.thick), 0.05, 0.8)
+	case .frame: s = clampD(0.08 * mi.protect * Double(p.thick), 0.02, 0.4)
+	case .core, .module: s = 0.06
+	}
+	return s * (1.0 - 0.5 * clampD(p.dmg, 0, 1))
+}
+
+/// What gets through a blow at a body point (suit units, standing still), and the pieces over it
+/// outermost first (the share each one takes is its own; a blow passes through them in turn)
+func suitPass(_ d: SuitDesign, _ px: Double, _ py: Double) -> (Double, [Int]) {
+	var over: [Int] = []
+	for (i, p) in d.pieces.enumerated() where !p.broken && p.covers(px, py) { over.append(i) }
+	if over.isEmpty { return (1.0, []) }
+	over.sort { (a: Int, b: Int) -> Bool in
+		let la: Int = d.pieces[a].bone.layer
+		let lb: Int = d.pieces[b].bone.layer
+		return la != lb ? la > lb : a > b
+	}
+	var pass: Double = 1.0
+	for i in over { pass *= 1.0 - suitShare(d.pieces[i]) }
+	return (pass, over)
+}
+
+/// How much a piece can take before it breaks
+func suitPieceHP(_ p: SuitPiece) -> Double {
+	let mi: SuitMatInfo = suitMat(p)
+	switch p.kind {
+	case .plate, .frame: return 6.0 + p.area * Double(p.thick) * mi.durability * 0.35
+	case .core: return 14
+	case .module: return 10
+	}
+}
+
+/// What a piece costs to make: units of its material (plates and frames), or its item (cores and parts)
+func suitPieceCost(_ p: SuitPiece) -> (Item, Int)? {
+	if p.kind != .plate && p.kind != .frame { return nil }
+	let per: Double = p.kind == .plate ? 40.0 : 80.0
+	let n: Int = max(1, Int(ceil(p.area * Double(p.thick) / per)))
+	return (suitMat(p).cost, n)
+}
+
+/// A bill: items to pay and to give back
+struct SuitBill {
+	var pay: [Item: Int] = [:]
+	var back: [Item: Int] = [:]
+	/// item stacks to take from the bag, and to give back (cores, parts, old suit parts)
+	var take: [Stack] = []
+	var give: [Stack] = []
+
+	var isEmpty: Bool { return pay.isEmpty && back.isEmpty && take.isEmpty && give.isEmpty }
+
+	/// what is paid, in words
+	func payText() -> String {
+		var parts: [String] = []
+		for (it, n) in pay.sorted(by: { $0.key.name < $1.key.name }) { parts.append(joinText(String(n), " ", it.name)) }
+		for s in take { parts.append(s.item.name) }
+		return parts.joined(separator: ", ")
+	}
+}
+
+extension SuitDesign {
+	/// What changing this design into `plan` costs: new and changed pieces are paid for, pieces taken
+	/// off give back what is left of them (a damaged piece less), and an item comes back when the last
+	/// piece of its group goes
+	func bill(to plan: SuitDesign) -> SuitBill {
+		var b = SuitBill()
+		var old: [Int: SuitPiece] = [:]
+		for p in pieces { old[p.id] = p }
+		var keep: Set<Int> = []
+		for p in plan.pieces {
+			if let o = old[p.id], o.sameMake(p) {
+				keep.insert(p.id)
+				continue
+			}
+			if let c = suitPieceCost(p) { b.pay[c.0, default: 0] += c.1 }
+		}
+		for p in pieces where !keep.contains(p.id) {
+			if let c = suitPieceCost(p) {
+				let n: Int = Int(floor(Double(c.1) * (1.0 - p.dmg)))
+				if n > 0 { b.back[c.0, default: 0] += n }
+			}
+		}
+		// items: groups in the plan that are new, groups no longer used
+		let usedNow: Set<Int> = Set(plan.pieces.map { $0.src }.filter { $0 != 0 })
+		for (g, st) in plan.items where usedNow.contains(g) && items[g] != st { b.take.append(st) }
+		for (g, st) in items where !usedNow.contains(g) || plan.items[g] != st { b.give.append(st) }
+		// what is both paid and given back of the same item only costs the difference
+		for (it, n) in b.back {
+			if let p = b.pay[it] {
+				let m: Int = min(p, n)
+				b.pay[it] = p - m == 0 ? nil : p - m
+				b.back[it] = n - m == 0 ? nil : n - m
+			}
+		}
+		return b
 	}
 
-	// MARK: lightning
-
-	func updateLightning(_ dt: Double) {
-		if !bolts.isEmpty {
-			for i in 0..<bolts.count { bolts[i].life -= dt }
-			bolts.removeAll { $0.life <= 0 }
-		}
-		if skyFlash > 0 { skyFlash = max(0, skyFlash - dt * (settings.reduceFlashes ? 0.9 : 2.6)) }
-		if playerStrikeCD > 0 { playerStrikeCD -= dt }
-		if !thunderQueue.isEmpty {
-			for i in 0..<thunderQueue.count { thunderQueue[i].t -= dt }
-			for q in thunderQueue where q.t <= 0 { Sound.shared.play(q.near ? .thunderNear : .thunderFar, q.vol) }
-			thunderQueue.removeAll { $0.t <= 0 }
-		}
-		let on: Bool = settings.weatherOn && settings.allowThunder && world.dim == .overworld
-		if var m = strikeMark {
-			if !on {
-				strikeMark = nil
+	/// What mending every damaged piece costs: its share of its material (cores and parts: copper)
+	func repairBill() -> [Item: Int] {
+		var out: [Item: Int] = [:]
+		for p in pieces where p.dmg > 0.001 {
+			if let c = suitPieceCost(p) {
+				out[c.0, default: 0] += max(1, Int(ceil(Double(c.1) * p.dmg)))
 			} else {
-				m.t -= dt
-				if m.t <= 0 {
-					strikeMark = nil
-					lightningStrike(m.x, m.y, rod: false)
-				} else {
-					strikeMark = m
-					if frameNo % 6 == 0 { spawnParticles(m.x + Double.random(in: -0.6...0.6), m.y - 0.3, 0xCFE4FF, 1, 2.0, 0.3, -4) }
+				out[.mat(.copperBar), default: 0] += max(1, Int(ceil(2.0 * p.dmg)))
+			}
+		}
+		return out
+	}
+}
+
+extension Game {
+	// MARK: suit state
+
+	/// a suit is on
+	var suitWorn: Bool { return suit.worn }
+
+	/// the suit's numbers, worked out again only when it changes
+	var suitStats: ExoStats {
+		if suitStatsRev == suitRev { return suitStatsCache }
+		suitStatsCache = ExoStats.of(suit)
+		suitStatsRev = suitRev
+		return suitStatsCache
+	}
+
+	/// Call after any change to the suit: its numbers, its armour infusions and its look are redone
+	func suitChanged() {
+		suitRev &+= 1
+		bumpHUD()
+	}
+
+	/// A module that is fitted, working, switched on and has energy behind it
+	func suitHas(_ m: ExoModule) -> Bool {
+		if !suit.worn || suit.energy <= 0.01 { return false }
+		if suit.off?.contains(m.rawValue) ?? false { return false }
+		return suitStats.has(m)
+	}
+
+	/// Spends energy on a module; false (nothing spent) when there is not enough
+	@discardableResult
+	func suitSpend(_ m: ExoModule, _ amount: Double) -> Bool {
+		if isCreative { return true }
+		let st: ExoStats = suitStats
+		var a: Double = amount * st.drainMul
+		if st.thrift.contains(m.rawValue) { a *= 0.75 }
+		if suit.energy < a { return false }
+		suit.energy -= a
+		return true
+	}
+
+	/// Spends energy over time for a module that runs continuously, within what the cores can give
+	/// each second; false when they can't keep it going
+	func suitRun(_ m: ExoModule, _ perSec: Double, _ dt: Double) -> Bool {
+		if !suitHas(m) { return false }
+		let st: ExoStats = suitStats
+		var rate: Double = perSec * st.drainMul
+		if st.thrift.contains(m.rawValue) { rate *= 0.75 }
+		if suitLoad + rate > st.output + 1e-6 { return false }
+		suitLoad += rate
+		if isCreative { return true }
+		let a: Double = rate * dt
+		if suit.energy < a { return false }
+		suit.energy -= a
+		return true
+	}
+
+	/// A point of the suit (suit units, the body standing still) in the world, as the player stands and
+	/// faces now
+	func suitPoint(_ x: Double, _ y: Double) -> (Double, Double) {
+		let ax: Double = x / Double(suitUnit) - 5.0
+		let ay: Double = y / Double(suitUnit) - 16.0
+		return (pb.x + Double(facing) * ax * 0.125, pb.y + ay * 0.125)
+	}
+
+	/// Once a frame while the suit is worn: the cores refill a little (and the sun through solar
+	/// panels), the parts that run by themselves take their share, jets lift, wings glide, turrets shoot
+	func updateSuit(_ dt: Double) {
+		// the load counts everything run since the last frame's end (the drill runs earlier in the
+		// frame, while mining), so all modules share the cores' output together
+		defer {
+			suitLastLoad = suitLoad
+			suitLoad = 0
+		}
+		suitHover = false
+		suitBeams.removeAll()
+		if !suit.worn { return }
+		let st: ExoStats = suitStats
+		if !st.complete {
+			suit.worn = false
+			suitChanged()
+			return
+		}
+		var gain: Double = st.recharge
+		if st.solar > 0 && suitInSun() { gain += st.solar * dayFactor }
+		suit.energy = min(st.capacity, suit.energy + gain * dt)
+		if dead || inVehicle != nil || mounted != nil { return }
+		// the seal works only while something it guards against is around
+		if st.has(.seal) && sealNeeded() { _ = suitRun(.seal, 2.0, dt) }
+		suitFly(st, dt)
+		if st.has(.sprint) && abs(pb.vx) > 4.0 && pb.onGround { suitSprinting = suitRun(.sprint, 1.2, dt) } else { suitSprinting = false }
+		// the lamp lights itself in the dark: at night, under ground, in the Umbral realm
+		if st.has(.lamp) && suitNeedsLight() { suitLit = suitRun(.lamp, 0.25, dt) } else { suitLit = false }
+		if st.has(.servo) { _ = suitRun(.servo, 0.1, dt) }
+		if st.has(.magnet) && suitRun(.magnet, 0.3, dt) { suitPull(st, dt) }
+		if st.has(.turret) { suitTurrets(st, dt) }
+		if suitFireHeld && (st.has(.cannon) || st.has(.laser)) { suitFire(st, dt) }
+		if suit.energy <= 0.01 && !suitEmptyWarned && !st.modules.isEmpty {
+			suitEmptyWarned = true
+			say("Suit energy is spent: its parts are dead weight until it charges.", 2.5)
+		} else if suit.energy > 5 {
+			suitEmptyWarned = false
+		}
+	}
+
+	/// Under the open sky (for solar panels)
+	func suitInSun() -> Bool {
+		if !dimHasSky(world.dim) { return false }
+		return world.isSkyExposed(Int(floor(pb.x)), Int(floor(pb.y - 1.6)))
+	}
+
+	/// Jets and wings, with jump held in the air: the jets push along the way they point (lifting the
+	/// suit if their lift beats its weight), and wings hold a fall to a glide
+	func suitFly(_ st: ExoStats, _ dt: Double) {
+		if !jumpHeld || pb.onGround || pb.inWater || flying { return }
+		var glide: Bool = false
+		if st.has(.hover) {
+			let rate: Double = 2.5 * max(0.3, st.strength(.hover))
+			if suitRun(.hover, rate, dt) {
+				suitHover = true
+				var push: Double = 0
+				for p in suit.d.working where p.module == .hover {
+					let lift: Double = clampD(0.25 + p.area * 0.012, 0.25, 1.0)
+					push += lift * sin(p.rot * Double.pi / 180.0)
 				}
-			}
-		}
-		if !on || weather.thunder < 0.01 {
-			strikeAcc = 0
-			return
-		}
-		strikeAcc += dt * weather.thunder / 60.0
-		if strikeAcc >= 1.0 {
-			strikeAcc = weather.fxPick(-0.4...0.2)
-			pickStrike()
-		}
-	}
-
-	/// Where the next bolt goes. Most land away from the player and some only light up the clouds;
-	/// one landing near the player is marked first, and the next one near them waits a good while
-	/// (lightning never singles a player out).
-	func pickStrike() {
-		let px: Double = pb.x
-		var x: Double = px + weather.fxPick(-75...75)
-		if coverAt(x) < 0.3 || weather.fx() < 0.3 {
-			cloudFlash(x)
-			return
-		}
-		if abs(x - px) < 12 && playerStrikeCD > 0 {
-			x = px + (x >= px ? 1.0 : -1.0) * weather.fxPick(16...40)
-		}
-		guard let spot = strikeSpot(x) else {
-			cloudFlash(x)
-			return
-		}
-		if spot.2 {
-			lightningStrike(spot.0, spot.1, rod: true)
-			return
-		}
-		if abs(spot.0 - px) < 12 {
-			// where it actually comes down decides: near the player again so soon, it stays in the cloud
-			if playerStrikeCD > 0 {
-				cloudFlash(spot.0)
-				return
-			}
-			playerStrikeCD = 45
-			strikeMark = StrikeMark(x: spot.0, y: spot.1, t: 1.5, total: 1.5)
-			sfx(.strikeWarn, 0.8)
-			return
-		}
-		lightningStrike(spot.0, spot.1, rod: false)
-	}
-
-	/// Lightning that stays in the cloud: a soft flicker and far-off thunder
-	func cloudFlash(_ x: Double) {
-		let d: Double = abs(x - pb.x)
-		let k: Double = clampD(1.0 - d / 160.0, 0.2, 1.0)
-		skyFlash = max(skyFlash, (settings.reduceFlashes ? 0.05 : 0.2) * k)
-		thunderQueue.append(PendingThunder(t: 0.6 + d / 45.0, vol: 0.35 * k, near: false))
-	}
-
-	/// Where a bolt aimed at x comes down: a lightning rod in reach takes it, otherwise the highest
-	/// exposed point close by (a tree top, a roof, a hill). Returns (x, top y, taken by a rod).
-	func strikeSpot(_ x: Double) -> (Double, Double, Bool)? {
-		if let r = rodCovering(x) { return (Double(r.x) + 0.5, Double(r.y), true) }
-		var best: Int = Int.max
-		let x0: Int = Int(floor(x))
-		var bx: Int = x0
-		for k in -3...3 {
-			let cx: Int = x0 + k
-			if !world.isLoaded(cx) { continue }
-			let top: Int = world.rainTop(cx)
-			if top < best {
-				best = top
-				bx = cx
-			}
-		}
-		if best == Int.max || best >= world.H - 2 { return nil }
-		// the highest point may lie within a rod's reach even if the aim did not
-		if let r = rodCovering(Double(bx) + 0.5) { return (Double(r.x) + 0.5, Double(r.y), true) }
-		return (Double(bx) + 0.5, Double(best), false)
-	}
-
-	func lightningStrike(_ x: Double, _ y: Double, rod: Bool) {
-		let soft: Bool = settings.reduceFlashes
-		makeBolt(x, y)
-		stormEssenceAt(x, y, rod: rod)
-		skyFlash = max(skyFlash, soft ? 0.12 : 0.55)
-		addLightFlash(x, y - 0.5, peak: soft ? 11 : 15, dur: soft ? 0.7 : 0.35, radius: 1.4, color: 0xC8DCFF)
-		// thunder: at once up close, later the further off it was (light is quick, sound is slow)
-		let d: Double = abs(x - pb.x) + abs(y - pb.y) * 0.3
-		let vol: Double = clampD(1.15 - d / 140.0, 0.12, 1.0)
-		if d < 14 {
-			Sound.shared.play(.thunderNear, vol)
-		} else {
-			thunderQueue.append(PendingThunder(t: d / 45.0, vol: vol, near: d < 40))
-		}
-		spawnParticles(x, y - 0.2, 0xE8F0FF, 8, 6.0, 0.35, 10)
-		if d < 24 { addShake(0.35) }
-		if rod {
-			// the rod carries it safely into the ground
-			spawnParticles(x, y + 0.2, 0xFFE8A0, 10, 4.0, 0.4, 14)
-			return
-		}
-		let I: Double = weatherIntensity
-		if settings.weatherHurtsPlayer && !dead && abs(pb.x - x) < 1.8 && pb.y > y - 0.5 && pb.top < y + 0.6 {
-			var info = DamageInfo(amount: 7.0 * I, type: .shock, source: .environment)
-			info.originX = x
-			info.knock = 7
-			info.key = newID()
-			if hurtPlayer(info) && settings.weatherAlerts { say("Struck by lightning!", 1.5) }
-		}
-		if settings.weatherHurtsCreatures {
-			for m in mobsNear(x - 3, x + 3) where m.hp > 0 && !m.removed {
-				if abs(m.b.x - x) < 2.0 && m.b.y > y - 0.5 && m.b.top < y + 0.6 {
-					var info = DamageInfo(amount: 12.0 * I, type: .shock, source: .environment)
-					info.originX = x
-					info.knock = 5
-					info.key = newID()
-					applyMobDamage(m, info)
-				}
-			}
-		}
-		if settings.weatherHurtsBlocks { lightningFire(Int(floor(x)), Int(floor(y))) }
-	}
-
-	/// A jagged bolt from the cloud base down to the strike, with a few forks
-	func makeBolt(_ x: Double, _ y: Double) {
-		let top: Double = min(y - 24.0, camY - viewTilesH * 0.5 - 3.0)
-		var pts: [(Double, Double)] = []
-		var cx: Double = x + weather.fxPick(-4...4)
-		let n: Int = max(6, Int((y - top) / 1.6))
-		for i in 0...n {
-			let f: Double = Double(i) / Double(n)
-			let cy: Double = top + (y - top) * f
-			cx += weather.fxPick(-0.9...0.9)
-			cx += (x - cx) * f * 0.35
-			if i == n { cx = x }
-			pts.append((cx, cy))
-		}
-		var forks: [[(Double, Double)]] = []
-		let nf: Int = 1 + Int(weather.fx() * 3.0)
-		for _ in 0..<nf {
-			let k: Int = clampI(Int(weather.fxPick(0.15...0.6) * Double(n)), 1, n - 1)
-			var fx: Double = pts[k].0
-			var fy: Double = pts[k].1
-			let side: Double = weather.fx() < 0.5 ? -1.0 : 1.0
-			var f: [(Double, Double)] = [(fx, fy)]
-			let len: Int = 3 + Int(weather.fx() * 4.0)
-			for _ in 0..<len {
-				fx += side * weather.fxPick(0.4...1.3)
-				fy += weather.fxPick(0.8...1.6)
-				f.append((fx, fy))
-			}
-			forks.append(f)
-		}
-		if bolts.count >= 4 { bolts.removeFirst() }
-		bolts.append(LightningBolt(pts: pts, forks: forks, life: 0.32, maxLife: 0.32))
-	}
-
-	/// A strike on something that burns: leaves and plants go up, and a short fire burns where it hit
-	/// (it dies sooner in the rain)
-	func lightningFire(_ tx: Int, _ ty: Int) {
-		let t: Tile = world.tile(tx, ty)
-		if !isFlammable(t) { return }
-		if isLeafTile(t) || t.isPlant || t == .hay { breakTile(tx, ty, false, dropChance: 0.3) }
-		let rain: Double = weatherAt(Double(tx) + 0.5, Double(ty)).precip
-		let ground: Int = world.groundBelow(tx, ty)
-		if fireZones.count >= 6 { fireZones.removeFirst() }
-		var z = FireZone(x: Double(tx) + 0.5, y: Double(ground), r: 1.6, t: max(1.5, 6.0 - 4.5 * rain), uid: newID())
-		z.tick = 0.35
-		z.env = true
-		fireZones.append(z)
-		spawnParticles(Double(tx) + 0.5, Double(ty), 0xFF8030, 10, 4.0, 0.6, -3)
-	}
-
-	// MARK: hail
-
-	func updateHail(_ dt: Double) {
-		let on: Bool = settings.weatherOn && settings.allowHail && world.dim == .overworld
-		let h: Double = on ? wxHere.hail : 0
-		if hailPool.isEmpty { hailPool = [HailStone](repeating: HailStone(), count: 56) }
-		let density: Double = clampD(settings.weatherParticles, 0.2, 1.0)
-		if h > 0.02 {
-			hailAcc += dt * h * 70.0 * density
-			let halfW: Double = viewTilesW * 0.5 + 3.0
-			let topY: Double = camY - viewTilesH * 0.5 - 1.0
-			while hailAcc >= 1.0 {
-				hailAcc -= 1.0
-				guard let i = hailPool.firstIndex(where: { !$0.on }) else {
-					hailAcc = 0
-					break
-				}
-				var s = HailStone()
-				s.on = true
-				s.x = camX + Double.random(in: -halfW...halfW)
-				s.y = topY - Double.random(in: 0...3)
-				s.vy = Double.random(in: 18...24)
-				s.vx = wxHere.wind * 0.25
-				s.size = weather.bigHail ? Double.random(in: 0.18...0.26) : Double.random(in: 0.09...0.14)
-				hailPool[i] = s
-			}
-		} else {
-			hailAcc = 0
-		}
-		let bottom: Double = camY + viewTilesH * 0.5 + 2.0
-		for i in 0..<hailPool.count where hailPool[i].on {
-			var s: HailStone = hailPool[i]
-			s.vy = min(s.vy + 30.0 * dt, 26)
-			s.vx += (wxHere.wind * 0.25 - s.vx) * min(1.0, dt * 2.0)
-			s.x += s.vx * dt
-			s.y += s.vy * dt
-			let tx: Int = Int(floor(s.x))
-			let ty: Int = Int(floor(s.y))
-			if s.vy > 0 && ty >= world.rainTop(tx) && Tile.rainStopTable[world.tile(tx, ty).idx] {
-				if s.bounces == 0 {
-					// a bounce off whatever it hit, then it breaks
-					s.y = Double(ty) - 0.02
-					s.vy = -s.vy * 0.32
-					s.vx += Double.random(in: -2.5...2.5)
-					s.bounces = 1
-					if abs(s.x - pb.x) < 6 && frameNo % 3 == 0 { sfx(.hailTick, 0.25) }
-				} else {
-					s.on = false
-					if particles.count < 120 && abs(s.x - pb.x) < 20 { spawnParticles(s.x, s.y, 0xE8F4FF, 2, 2.0, 0.25, 22) }
-				}
-			}
-			if s.y > bottom { s.on = false }
-			hailPool[i] = s
-		}
-		if h < 0.05 { return }
-		// what hail does: large stones sting whoever is out in it; crops, flowers and glass suffer
-		hailHitT -= dt
-		if hailHitT > 0 { return }
-		hailHitT = weather.bigHail ? 1.6 : 2.4
-		let I: Double = weatherIntensity
-		if weather.bigHail && h > 0.3 {
-			if settings.weatherHurtsPlayer && !dead && rainReaches(pb.x, pb.y, pb.h) {
-				// a helmet turns most of the stones
-				let helmet: Bool = inv.armor[0] != nil || suitHelmet
-				if !helmet || Double.random(in: 0...1) < 0.35 {
-					var info = DamageInfo(amount: 1.0 * I * (1.0 - armorInf.stormCut) * (suitHas(.seal) ? 0.5 : 1.0), type: .impact, source: .environment)
-					info.originX = pb.x
-					info.key = newID()
-					_ = hurtPlayer(info)
-				}
-			}
-			if settings.weatherHurtsCreatures {
-				for m in mobsNear(pb.x - 30, pb.x + 30) where m.hp > 0 && !m.removed && !m.isBoss && m.kind != .fish {
-					if Double.random(in: 0...1) < 0.3 && rainReaches(m.b.x, m.b.y, m.b.h) {
-						var info = DamageInfo(amount: 1.0 * I, type: .impact, source: .environment)
-						info.originX = m.b.x
-						info.key = newID()
-						applyMobDamage(m, info)
+				pb.vy -= gravityG * st.thrust * dt
+				pb.vy = max(pb.vy, -8.0)
+				pb.vx += Double(facing) * push * gravityG * 0.5 * dt
+				fallPeak = 0
+				if frameNo % 3 == 0 {
+					for p in suit.d.working where p.module == .hover {
+						let q: (Double, Double) = suitPoint(p.x, p.y + p.h * 0.5)
+						spawnParticles(q.0, q.1, 0xFF9A3A, 1, 1.5, 0.25, 6)
 					}
 				}
 			}
 		}
-		if settings.weatherHurtsBlocks { hailDamage(h) }
-	}
-
-	/// Hail beats down crops a stage, shreds flowers and (large hail) breaks glass left open to the
-	/// sky. A roof over anything protects it, and only a few panes go in one storm.
-	func hailDamage(_ h: Double) {
-		for _ in 0..<3 {
-			let tx: Int = Int(floor(pb.x)) + Int.random(in: -30...30)
-			if !world.isLoaded(tx) { continue }
-			let ty: Int = world.rainTop(tx)
-			// the first thing the hail hits, or a crop or plant standing on it
-			var y: Int = ty
-			var t: Tile = world.tile(tx, y)
-			let above: Tile = world.tile(tx, y - 1)
-			if above.isPlant {
-				y -= 1
-				t = above
+		if st.wingArea > 0 && pb.vy > 0 {
+			// the more wing, the slower the fall, and a little carry forward
+			let maxFall: Double = clampD(7.0 - st.wingArea * 0.06, 1.2, 7.0)
+			if pb.vy > maxFall {
+				pb.vy = maxFall
+				glide = true
 			}
-			let r: Double = Double.random(in: 0...1)
-			switch t {
-			case .wheat3: if r < 0.4 * h { world.set(tx, y, .wheat2) }
-			case .wheat2: if r < 0.3 * h { world.set(tx, y, .wheat1) }
-			case .carrot3: if r < 0.4 * h { world.set(tx, y, .carrot2) }
-			case .carrot2: if r < 0.3 * h { world.set(tx, y, .carrot1) }
-			case .tallGrass, .flowerR, .flowerY:
-				if r < 0.25 * h { breakTile(tx, y, false, dropChance: 0.5) }
-			case .glass:
-				if weather.bigHail && hailBroken < 6 && r < 0.15 * h {
-					hailBroken += 1
-					breakTile(tx, y, false, dropChance: 0)
-					sfx(.breakCrystal, at: Double(tx), 0.6)
-				}
-			default:
-				break
+			if glide {
+				let carry: Double = min(3.0, st.wingArea * 0.03)
+				pb.vx += Double(facing) * carry * dt * 4.0
+				fallPeak = 0
 			}
 		}
 	}
 
-	// MARK: cold
+	/// The magnet draws dropped things to the player
+	func suitPull(_ st: ExoStats, _ dt: Double) {
+		let r: Double = 6.0 + 2.0 * Double(max(0, st.count(.magnet) - 1))
+		for i in drops.indices {
+			let dx: Double = pb.x - drops[i].x
+			let dy: Double = (pb.y - 0.8) - drops[i].y
+			let d: Double = sqrt(dx * dx + dy * dy)
+			if d > r || d < 0.3 || drops[i].heldBack { continue }
+			drops[i].vx += dx / d * 18.0 * dt
+			drops[i].vy += dy / d * 18.0 * dt - 6.0 * dt
+		}
+	}
 
-	/// Heat from fires, furnaces, lamps and heaters close by (0...1)
-	func heatNear() -> Double {
-		let px: Int = Int(floor(pb.x))
-		let py: Int = Int(floor(pb.y - 1.0))
-		var best: Double = 0
-		for dy in -3...3 {
-			for dx in -5...5 {
-				let t: Tile = world.tile(px + dx, py + dy)
-				var heat: Double = 0
-				switch t {
-				case .campfire, .heater: heat = 1.0
-				case .furnace: heat = 0.7
-				case .lantern: heat = 0.3
-				case .torch: heat = 0.2
-				case .lava: heat = 0.8
-				default: break
-				}
-				if heat > 0 {
-					let d: Double = sqrt(Double(dx * dx + dy * dy))
-					best = max(best, heat * clampD(1.0 - d / 6.5, 0, 1))
-				}
+	/// The nearest foe in reach of a point, and in sight of it
+	func suitTarget(_ x: Double, _ y: Double, _ reach: Double) -> Mob? {
+		var best: Mob? = nil
+		var bd: Double = reach
+		for m in mobsNear(x - reach, x + reach) where m.hp > 0 && !m.removed && !m.downed && isThreat(m) {
+			let d: Double = hypot(m.b.x - x, m.b.cy - y)
+			if d < bd && world.lineClear(x, y, m.b.x, m.b.cy) {
+				bd = d
+				best = m
 			}
 		}
 		return best
 	}
 
-	/// Cold country in bad weather draws the warmth out of a player who is out in it; shelter, heat
-	/// and warm clothes keep it in. Far gone, the cold slows them and then starts to hurt (never to
-	/// the death outside hardcore, like hunger).
-	func updateCold(_ dt: Double) {
-		warmthT -= dt
-		if warmthT <= 0 {
-			warmthT = 0.5
-			warmthNear = heatNear()
-			shelterLevel = shelterAt(pb.x, pb.y)
-		}
-		let L: LocalWeather = wxHere
-		var loss: Double = 0
-		if settings.weatherOn && world.dim == .overworld && mode != .creative && !dead {
-			let cold: Double = clampD((L.chill - 0.5) * 2.0, 0, 1)
-			if cold > 0 {
-				loss = cold * (0.55 + 0.45 * clampD(abs(L.wind) / 12.0, 0, 1)) + L.precip * 0.15 * cold
-				switch shelterLevel {
-				case 1: loss *= 0.6
-				case 2: loss *= 0.25
-				case 3: loss *= 0.05
-				default: break
-				}
-				if wearing(.winterCoat) { loss *= 0.35 }
-				if wearing(.snowBoots) { loss *= 0.8 }
-				if pb.inWater { loss += 0.6 * cold }
-				loss *= coldGuard()
+	/// Turrets find the nearest foe and shoot at it by themselves (energy each shot)
+	func suitTurrets(_ st: ExoStats, _ dt: Double) {
+		for p in suit.d.working where p.module == .turret {
+			let cd: Double = (suitGunCD[p.id] ?? 0) - dt
+			if cd > 0 {
+				suitGunCD[p.id] = cd
+				continue
 			}
-		}
-		let gain: Double = warmthNear * 0.12 + (loss <= 0.001 ? 0.05 : 0)
-		// bare in a full blizzard a player freezes in about half a minute; a coat triples that
-		bodyCold = clampD(bodyCold + (loss * 0.03 - gain) * dt, 0, 1)
-		if !settings.weatherOn { bodyCold = max(0, bodyCold - dt * 0.2) }
-		var slow: Double = 1.0 - 0.3 * clampD((bodyCold - 0.5) * 2.0, 0, 1)
-		// deep snow drags at the feet (snow boots stay on top of it)
-		if settings.weatherOn && pb.onGround && L.snowCover > 0.5 && shelterLevel == 0 && !wearing(.snowBoots) {
-			slow *= 1.0 - 0.15 * clampD((L.snowCover - 0.5) * 2.0, 0, 1)
-		}
-		wxSlow = slow
-		if bodyCold > 0.4 && !coldWarned {
-			coldWarned = true
-			if settings.weatherAlerts { say("You're getting cold. Get out of the wind, near a fire, or into warm clothes.", 3.5) }
-		}
-		if bodyCold < 0.2 { coldWarned = false }
-		if bodyCold >= 0.97 && settings.weatherHurtsPlayer && settings.weatherOn {
-			coldHurtT += dt
-			if coldHurtT >= 4.0 {
-				coldHurtT = 0
-				if hp > 1 || mode == .hardcore {
-					damagePlayer(1, from: pb.x, knock: 0, ignoreArmor: true)
-					floatText("Freezing", pb.x, pb.y - pb.h - 0.6, 0xA8D8FF)
-				}
+			let o: (Double, Double) = suitPoint(p.x, p.y)
+			guard let m = suitTarget(o.0, o.1, 12.0) else {
+				suitGunCD[p.id] = 0.25
+				continue
 			}
-		} else {
-			coldHurtT = 0
+			if !suitSpend(.turret, 1.2) {
+				suitGunCD[p.id] = 0.5
+				continue
+			}
+			let k: Double = suitPartPower(p)
+			let a: Double = atan2(m.b.cy - o.1, m.b.x + m.b.vx * 0.15 - o.0)
+			suitShoot(.bullet, o, a, 40.0, (3.0 + min(3.0, p.area * 0.05)) * k, 2.0)
+			suitGunCD[p.id] = 1.1
+			sfx(.gun, at: o.0, 0.25)
 		}
 	}
 
-	// MARK: the wind's push
-
-	/// The wind's (and a tornado's) hold on the player this frame: how it shifts walking, drifting in
-	/// the air and standing still, how slippery the ground is, and a tornado's pull. Every part of it
-	/// is bounded, and all of it is zero with the weather off.
-	func updateWeatherForces(_ dt: Double) {
-		wxWalk = 0
-		wxAirDrift = 0
-		wxRest = 0
-		wxAccelX = 0
-		wxAccelY = 0
-		wxSlip = 0
-		if flingT > 0 { flingT -= dt }
-		if !settings.weatherOn || world.dim != .overworld || inVehicle != nil || mounted != nil || flying || noclip || dead { return }
-		let expo: Double = shelterExposure(shelterLevel)
-		// a breeze (under 3 blocks a second) moves nobody: calm weather leaves movement exactly as it was
-		let raw: Double = wxHere.wind
-		let w: Double = (raw > 0 ? 1.0 : -1.0) * max(0, abs(raw) - 3.0) * expo
-		wxWalk = w * 0.1
-		wxAirDrift = w * 0.3
-		// a player standing still braces against the wind; only hurricane-force gusts shuffle them
-		// along, slowly (at most 0.8 blocks a second), so nobody is blown across the map
-		if abs(w) > 18.0 { wxRest = clampD((w - (w > 0 ? 18.0 : -18.0)) * 0.15, -0.8, 0.8) }
-		if pb.onGround && expo > 0.5 {
-			var slip: Double = clampD((wxHere.snowCover - 0.35) * 1.4, 0, 0.6)
-			if wxHere.chill > 0.7 && wxHere.snowCover > 0.2 { slip = max(slip, 0.35) }
-			if wxHere.precip > 0.4 && !wxHere.snow { slip = max(slip, 0.2 * wxHere.wet) }
-			if wearing(.snowBoots) { slip *= 0.15 }
-			wxSlip = slip
-		}
-		let tf: (Double, Double, Double) = tornadoField(pb.x, pb.y - pb.h * 0.5)
-		if tf.2 > 0 {
-			let k: Double = shelterLevel >= 3 ? 0 : (shelterLevel == 2 ? 0.3 : (shelterLevel == 1 ? 0.6 : 1.0))
-			if k > 0 {
-				wxAccelX = clampD((tf.0 - pb.vx) * 3.5, -40, 40) * k
-				if tf.1 < -1.0 {
-					let lift: Double = clampD(-tf.1 / 12.0, 0, 1)
-					wxAccelY = (-gravityG * 1.05 * lift + clampD((tf.1 - pb.vy) * 2.5, -30, 30)) * k
-					if wxAccelY < -8 { flingT = 2.5 }
-				}
+	/// Cannons and lasers, while the suit's FIRE control is held: at the aim, or the nearest foe
+	func suitFire(_ st: ExoStats, _ dt: Double) {
+		for p in suit.d.working where p.module == .cannon || p.module == .laser {
+			let o: (Double, Double) = suitPoint(p.x, p.y)
+			var tx: Double = o.0 + Double(facing) * 10.0
+			var ty: Double = o.1
+			if aimValid {
+				tx = aimX
+				ty = aimY
+			} else if let m = suitTarget(o.0, o.1, 16.0) {
+				tx = m.b.x
+				ty = m.b.cy
 			}
-		}
-	}
-
-	/// Light things in the open drift with the wind: shots in flight, items on the ground, small
-	/// birds and bats
-	func updateWindOnThings(_ dt: Double) {
-		if !settings.weatherOn || world.dim != .overworld { return }
-		let w: Double = wxHere.wind
-		if abs(w) < 2.5 { return }
-		for i in 0..<projectiles.count {
-			let k: Double = windCatch(projectiles[i].kind)
-			if k <= 0 || projectiles[i].stuck > 0 { continue }
-			let px: Double = projectiles[i].x
-			if projectiles[i].y >= Double(world.skyTop(Int(floor(px)))) { continue }
-			projectiles[i].vx += w * k * dt
-		}
-		if abs(w) > 7.0 {
-			for i in 0..<drops.count {
-				let d: DropItem = drops[i]
-				if d.y >= Double(world.skyTop(Int(floor(d.x)))) { continue }
-				drops[i].vx = clampD(d.vx + (w * 0.45 - d.vx) * min(1.0, 0.8 * dt), -6, 6)
-			}
-		}
-		for m in mobsNear(pb.x - 40, pb.x + 40) where isWindBlown(m.kind) && m.hp > 0 && !m.removed {
-			if m.b.y >= Double(world.skyTop(Int(floor(m.b.x)))) { continue }
-			m.b.vx = clampD(m.b.vx + w * 0.35 * dt, -9, 9)
-		}
-		// rough water tosses boats about
-		let rough: Double = max(wxHere.hurricane, abs(w) > 9.0 ? (abs(w) - 9.0) / 10.0 : 0)
-		if rough > 0.05 {
-			for v in vehicles where v.isBoat && v.submerged > 0.05 && abs(v.px - pb.x) < 80 {
-				v.asleep = false
-				v.sleepT = 0
-				let ph: Double = sin(weather.t * 1.7 + v.px * 0.3)
-				v.vy = clampD(v.vy + ph * 10.0 * rough * dt, -6, 6)
-				v.vx = clampD(v.vx + w * 0.15 * rough * dt, -10, 10)
-				v.angVel = clampD(v.angVel + cos(weather.t * 1.3 + v.px * 0.2) * 1.4 * rough * dt, -1.5, 1.5)
-			}
-			// at a hurricane's height an open boat is swamped now and then
-			if let v = inVehicle, v.isBoat, wxHere.hurricane > 0.7, settings.weatherHurtsPlayer {
-				swampT += dt
-				if swampT > 9.0 {
-					swampT = 0
-					if weather.fx() < 0.35 {
-						dismount()
-						pb.vy = -6
-						sfx(.splash, 0.9)
-						if settings.weatherAlerts { say("A wave swamps the boat and throws you into the sea!", 2.5) }
-					}
-				}
+			let a: Double = atan2(ty - o.1, tx - o.0)
+			let k: Double = suitPartPower(p)
+			if p.module == .cannon {
+				let cd: Double = (suitGunCD[p.id] ?? 0) - dt
+				suitGunCD[p.id] = cd
+				if cd > 0 || !suitSpend(.cannon, 10.0) { continue }
+				suitShoot(.shell, o, a, 30.0, 14.0 * k, 9.0)
+				suitGunCD[p.id] = 2.2
+				spawnParticles(o.0, o.1, 0xFFC050, 6, 4.0, 0.25, 2)
+				pb.vx -= cos(a) * 3.0
+				addShake(0.15)
+				sfx(.blunderbuss, at: o.0, 0.7)
 			} else {
-				swampT = 0
+				if !suitRun(.laser, 5.0, dt) { continue }
+				suitLaser(o, a, 10.0 * k * dt, p.id)
 			}
 		}
 	}
 
-	// MARK: tornadoes
-
-	func spawnTornado() {
-		let dir: Double = weather.windDir
-		let warn: Double = weather.pick(30...40)
-		let ground: Double = max(30, weather.stateDur - warn - TornadoEvent.ropeDur)
-		let dist: Double = weather.pick(85...110)
-		let px: Double = weatherX
-		let e = TornadoEvent(x: px - dir * dist, dir: dir, speed: weather.pick(2.6...3.4), warnDur: warn, groundDur: ground, strength: weather.pick(0.55...1.0), wander: weather.rand() * 6.283, uid: newID())
-		weather.tornado = e
-		tornadoAcc = 0
-		if settings.weatherAlerts && world.dim == .overworld {
-			say(joinText("Tornado warning! A funnel is forming to the ", dir > 0 ? "west" : "east", ". Get underground or into a shelter."), 4.5)
-			sfx(.weatherAlert, 0.9)
-		}
+	/// A shot from the suit: the player's own
+	func suitShoot(_ kind: ProjKind, _ o: (Double, Double), _ a: Double, _ speed: Double, _ dmg: Double, _ knock: Double) {
+		var q = Projectile(kind: kind, x: o.0 + cos(a) * 0.4, y: o.1 + sin(a) * 0.4, vx: cos(a) * speed + (inVehicle == nil ? pb.vx : 0) * 0.5 + carrierVel().0, vy: sin(a) * speed + carrierVel().1, dmg: dmg, fromPlayer: true, gravity: kind == .shell ? 14 : 2)
+		q.life = kind == .shell ? 4.0 : 1.2
+		q.w = kind == .shell ? 0.3 : 0.12
+		q.source = .player
+		q.owner = kind == .shell ? suitShellOwner : 0
+		q.uid = newID()
+		q.knock = knock
+		projectiles.append(q)
 	}
 
-	func endTornado(survived: Bool) {
-		guard let e = weather.tornado else { return }
-		weather.tornado = nil
-		tornadoAcc = 0
-		if weather.kind == .tornado { weather.stateT = max(weather.stateT, weather.stateDur) }
-		if survived && e.closest < 120 {
-			let d: Int = Int(e.closest.rounded())
-			recordStorm(.tornado, e.closest < 30 ? joinText("passed within ", String(d), " blocks of you") : joinText("seen ", String(d), " blocks away"))
-			if settings.weatherAlerts && world.dim == .overworld { say("The tornado has lifted. Look around for anything it scattered.", 3.5) }
+	/// A laser's beam: it runs straight until a block stops it, and burns the first foe in its way
+	func suitLaser(_ o: (Double, Double), _ a: Double, _ dmg: Double, _ id: Int) {
+		let dx: Double = cos(a)
+		let dy: Double = sin(a)
+		var x: Double = o.0
+		var y: Double = o.1
+		var hitMob: Mob? = nil
+		var k: Int = 0
+		while k < 56 {
+			x += dx * 0.25
+			y += dy * 0.25
+			if world.tile(Int(floor(x)), Int(floor(y))).solid { break }
+			if let m = mobsNear(x - 1, x + 1).first(where: { $0.hp > 0 && !$0.removed && isThreat($0) && x >= $0.b.left && x <= $0.b.right && y >= $0.b.top && y <= $0.b.y }) {
+				hitMob = m
+				break
+			}
+			k += 1
 		}
+		suitBeams.append((o.0, o.1, x, y))
+		guard let m = hitMob else { return }
+		var info = DamageInfo(amount: dmg, type: .magic, source: .player)
+		info.originX = o.0
+		info.originY = o.1
+		applyMobDamage(m, info)
+		if frameNo % 4 == 0 { spawnParticles(x, y, 0xFF5A8A, 2, 2.0, 0.2, 0) }
 	}
 
-	func updateTornado(_ dt: Double) {
-		guard var e = weather.tornado else { return }
-		e.t += dt
-		switch e.phase {
-		case 0:
-			e.x += e.dir * 0.8 * dt
-			if e.t >= e.warnDur {
-				e.phase = 1
-				e.t = 0
-				if settings.weatherAlerts && world.dim == .overworld {
-					say("A tornado has touched down!", 3.0)
-					sfx(.weatherAlert, 0.9)
-				}
-			}
-		case 1:
-			e.x += (e.dir * e.speed + sin(e.wander + e.t * 0.35) * 1.3) * dt
-			if e.t >= e.groundDur {
-				e.phase = 2
-				e.t = 0
-			}
-		default:
-			e.x += e.dir * e.speed * 0.6 * dt
-			if e.t >= TornadoEvent.ropeDur {
-				weather.tornado = e
-				endTornado(survived: true)
-				return
-			}
-		}
-		if world.dim == .overworld { e.closest = min(e.closest, abs(e.x - pb.x)) }
-		weather.tornado = e
-		// only near the player is it simulated in detail (beyond that it only moves)
-		if world.dim == .overworld && abs(e.x - pb.x) < 100 && world.isLoaded(Int(floor(e.x))) {
-			tornadoGround = Double(world.surfaceY(Int(floor(e.x))))
-			tornadoEffects(dt)
-		}
+	/// How strong a working part is: a mod's part by its own number, the game's by 1
+	func suitPartPower(_ p: SuitPiece) -> Double {
+		if !p.modPart.isEmpty, let mp = ModRuntime.shared.suitParts[p.modPart] { return mp.power }
+		return 1.0
 	}
 
-	/// The air a tornado moves at a point: drawn in toward the funnel, lifted near it and swirled about
-	/// it, strongest at the edge of its core and fading with distance; at the top of the funnel things
-	/// are thrown outward. Returns (vx, vy, nearness 0...1). Speeds never exceed 16 blocks a second.
-	func tornadoField(_ x: Double, _ y: Double) -> (Double, Double, Double) {
-		guard let e = weather.tornado, world.dim == .overworld, settings.weatherOn else { return (0, 0, 0) }
-		let f: Double = e.force * weatherIntensity
-		if f <= 0.01 { return (0, 0, 0) }
-		let dx: Double = x - e.x
-		let ad: Double = abs(dx)
-		let reach: Double = 24.0
-		if ad > reach { return (0, 0, 0) }
-		let core: Double = 3.2
-		let height: Double = tornadoGround - y
-		let near: Double = ad < core ? 1.0 : pow(max(0, (reach - ad) / (reach - core)), 1.6)
-		let s: Double = dx >= 0 ? 1.0 : -1.0
-		var vx: Double = -s * 9.0 * near * f
-		if ad < core * 1.8 { vx += sin(weather.t * 4.2 + y * 0.7) * 7.0 * f }
-		var vy: Double = 0
-		if ad < core * 2.2 {
-			let lift: Double = height < 18 ? 1.0 : max(0, 1.0 - (height - 18.0) / 6.0)
-			vy = -12.0 * f * lift * (ad < core ? 1.0 : 0.6)
-			if height >= 18 { vx = s * 10.0 * f }
-		}
-		let mag: Double = sqrt(vx * vx + vy * vy)
-		if mag > 16.0 {
-			vx *= 16.0 / mag
-			vy *= 16.0 / mag
-		}
-		return (vx, vy, near)
+	/// Dark enough for the helmet lamp
+	func suitNeedsLight() -> Bool {
+		if world.dim != .overworld { return true }
+		if dayFactor < 0.5 { return true }
+		return !world.isSkyExposed(Int(floor(pb.x)), Int(floor(pb.y - 1.0)))
 	}
 
-	/// What a tornado near the player does: it draws in and flings creatures, items, shots and
-	/// vehicles, its debris hurts, and it tears loose plants, leaves and light building blocks (up to a
-	/// limit; never the ground). Shelter keeps the player out of most of it.
-	func tornadoEffects(_ dt: Double) {
-		guard let e = weather.tornado else { return }
-		let f: Double = e.force
-		if f <= 0.01 { return }
-		let I: Double = weatherIntensity
-		for m in mobsNear(e.x - 24, e.x + 24) where m.hp > 0 && !m.removed && !m.isBoss && m.kind != .fish {
-			let tf: (Double, Double, Double) = tornadoField(m.b.x, m.b.y - m.b.h * 0.5)
-			if tf.2 <= 0 { continue }
-			if !rainReaches(m.b.x, m.b.y, m.b.h) && shelterAt(m.b.x, m.b.y) >= 2 { continue }
-			let light: Double = 1.0 / (1.0 + m.b.w * m.b.h * 0.6)
-			m.b.vx = clampD(m.b.vx + clampD((tf.0 - m.b.vx) * 3.0, -40, 40) * light * dt, -16, 16)
-			if tf.1 < -1.0 {
-				m.b.vy = clampD(m.b.vy + (-gravityG * 1.05 + clampD((tf.1 - m.b.vy) * 2.5, -30, 30)) * light * dt, -14, 26)
-				m.b.onGround = false
-			}
-			if !settings.weatherHurtsCreatures { m.fallPeak = 0 }
-			if settings.weatherHurtsCreatures && abs(m.b.x - e.x) < 4.5 {
-				var info = DamageInfo(amount: 2.0 * f * I, type: .impact, source: .environment)
-				info.originX = e.x
-				info.key = e.uid
-				info.cooldown = 1.4
-				applyMobDamage(m, info)
-			}
-		}
-		for i in 0..<drops.count where abs(drops[i].x - e.x) < 24 {
-			let tf: (Double, Double, Double) = tornadoField(drops[i].x, drops[i].y)
-			if tf.2 <= 0 { continue }
-			drops[i].vx = clampD(drops[i].vx + (tf.0 - drops[i].vx) * 2.0 * dt, -14, 14)
-			if tf.1 < -1.0 { drops[i].vy = clampD(drops[i].vy + (tf.1 - drops[i].vy) * 2.5 * dt - gravityG * 0.8 * dt, -12, 18) }
-		}
-		for i in 0..<projectiles.count where abs(projectiles[i].x - e.x) < 24 && projectiles[i].stuck <= 0 {
-			let tf: (Double, Double, Double) = tornadoField(projectiles[i].x, projectiles[i].y)
-			projectiles[i].vx += tf.0 * 0.6 * dt
-			projectiles[i].vy += tf.1 * 0.6 * dt
-		}
-		for v in vehicles where abs(v.px - e.x) < 24 {
-			let tf: (Double, Double, Double) = tornadoField(v.px, v.py)
-			if tf.2 <= 0 { continue }
-			let heavy: Double = 1.0 / max(1.0, v.mass * 0.15)
-			v.asleep = false
-			v.sleepT = 0
-			v.vx = clampD(v.vx + clampD((tf.0 - v.vx) * 0.8, -12, 12) * heavy * dt, -12, 12)
-			v.angVel = clampD(v.angVel + tf.0 * 0.05 * heavy * dt, -2, 2)
-		}
-		// its debris
-		if settings.weatherHurtsPlayer && !dead && abs(pb.x - e.x) < 4.5 && shelterLevel < 2 {
-			wxDebrisT -= dt
-			if wxDebrisT <= 0 {
-				wxDebrisT = 1.4
-				var info = DamageInfo(amount: 2.0 * f * I, type: .impact, source: .environment)
-				info.originX = e.x
-				info.knock = 3
-				info.key = newID()
-				_ = hurtPlayer(info)
-			}
-		}
-		// the dust and wreckage thrown up at its foot
-		if particles.count < 140 && abs(e.x - pb.x) < 50 && frameNo % 2 == 0 {
-			let col: UInt32 = [0x8A7A60, 0x6A5A44, 0x5E8A4A, 0x9A8A70][frameNo % 4]
-			spawnParticles(e.x + Double.random(in: -3...3), tornadoGround - 0.3, col, 2, 7.0, 0.8, 8)
-		}
-		if settings.weatherHurtsBlocks && e.broken < 90 {
-			tornadoAcc += dt * 7.0 * f * I
-			var broken: Int = e.broken
-			while tornadoAcc >= 1.0 && broken < 90 {
-				tornadoAcc -= 1.0
-				let hit: Bool = weather.fx() < 0.7 ? tearAt(e.x + weather.fxPick(-4.8...4.8), f) : tearFace(e.x, e.dir, f)
-				if hit { broken += 1 }
-			}
-			weather.tornado?.broken = broken
-		} else {
-			tornadoAcc = 0
-		}
-	}
-
-	/// Tears one block loose at column x, working down from the first thing the wind reaches (plants
-	/// and leaves give way; a solid roof or the ground stops it)
-	@discardableResult
-	func tearAt(_ x: Double, _ f: Double) -> Bool {
-		let tx: Int = Int(floor(x))
-		if !world.isLoaded(tx) { return false }
-		var y: Int = max(1, world.rainTop(tx) - 1)
-		var n: Int = 0
-		while n < 4 {
-			let t: Tile = world.tile(tx, y)
-			if t == .air {
-				y += 1
-				n += 1
-				continue
-			}
-			if weather.fx() < windBreak(t) * f {
-				let c: UInt32 = t.def.colors.first ?? 0x8A7A60
-				stormTear(tx, y, weather.wind >= 0 ? 1.0 : -1.0)
-				spawnParticles(Double(tx) + 0.5, Double(y) + 0.5, c, 4, 7.0, 0.7, 6)
-				return true
-			}
-			if t.solid { return false }
-			y += 1
-			n += 1
+	/// Fire, lava, deep water, a blizzard or a thunderstorm around the player
+	func sealNeeded() -> Bool {
+		if playerBurn > 0 || pb.inLava || lavaT > 0 { return true }
+		let headY: Int = Int(floor(pb.y - pb.h * 0.92))
+		if world.tile(Int(floor(pb.x)), headY) == .water { return true }
+		if world.dim == .overworld && settings.weatherOn {
+			if wxHere.chill > 0.5 || wxHere.thunder > 0.4 || wxHere.hail > 0.3 { return true }
 		}
 		return false
 	}
 
-	/// Tears loose the first block the wind meets coming from `fromDir` at a random height near the
-	/// surface around x: walls take the wind side-on (a closed storm shutter or a stone wall in front
-	/// of a window keeps the glass whole)
-	@discardableResult
-	func tearFace(_ x: Double, _ fromDir: Double, _ f: Double) -> Bool {
-		let cx: Int = Int(floor(x + weather.fxPick(-6...6)))
-		if !world.isLoaded(cx) { return false }
-		let ground: Int = world.surfaceY(cx)
-		let y: Int = ground - 1 - Int(weather.fx() * 7.0)
-		let step: Int = fromDir > 0 ? 1 : -1
-		var tx: Int = cx - step * 12
-		var k: Int = 0
-		while k < 24 {
-			let t: Tile = world.tile(tx, y)
-			if t != .air && !t.liquid {
-				if weather.fx() < windBreak(t) * f {
-					stormTear(tx, y, fromDir)
-					return true
-				}
-				return false
-			}
-			tx += step
-			k += 1
-		}
-		return false
+	/// The suit's speed: its weight against its strength, and the boosters
+	var suitSpeedMul: Double {
+		if !suit.worn { return 1.0 }
+		var m: Double = suitStats.speedMul
+		if suitSprinting { m *= min(1.4, 1.0 + 0.2 * suitStats.strength(.sprint)) }
+		return m
 	}
 
-	// MARK: hurricanes
-
-	func spawnHurricane(_ ctx: WeatherContext) {
-		let side: Double = ctx.seaSide != 0 ? ctx.seaSide : 1
-		let h = HurricaneEvent(total: weather.stateDur, side: side, coastX: ctx.coastX, strength: weather.pick(0.7...1.0))
-		weather.hurricane = h
-		hurricaneAcc = 0
-		if settings.weatherAlerts && world.dim == .overworld {
-			say(joinText("Hurricane warning: a hurricane is coming in off the sea to the ", side > 0 ? "east" : "west", ". Close your shutters, then get to high ground or a shelter."), 5.0)
-			sfx(.weatherAlert, 0.9)
-		}
+	/// The suit's jump: weight, and the leap pistons (each boosted jump costs energy)
+	func suitJumpMul() -> Double {
+		if !suit.worn { return 1.0 }
+		var m: Double = suitStats.jumpMul
+		if suitHas(.leap) && suitSpend(.leap, 3.0) { m *= min(1.6, 1.0 + 0.35 * suitStats.strength(.leap)) }
+		return m
 	}
 
-	func endHurricane(survived: Bool) {
-		guard let h = weather.hurricane else { return }
-		weather.hurricane = nil
-		hurricaneAcc = 0
-		if weather.kind == .hurricane { weather.stateT = max(weather.stateT, weather.stateDur) }
-		if survived && h.closest < 400 {
-			recordStorm(.hurricane, h.closest < 80 ? "rode it out on the coast" : "felt it inland")
-		}
+	/// A melee blow through the suit: servos hit harder
+	func suitMelee(_ p0: MeleeProfile) -> MeleeProfile {
+		var p: MeleeProfile = p0
+		if suitHas(.servo) { p.damage *= 1.0 + 0.25 * min(2.0, suitStats.strength(.servo)) }
+		return p
 	}
 
-	func updateHurricane(_ dt: Double) {
-		guard var h = weather.hurricane else { return }
-		h.t += dt
-		if h.t >= h.stageDur {
-			h.t = 0
-			if h.stage == .clearing {
-				weather.hurricane = h
-				endHurricane(survived: true)
-				if settings.weatherAlerts && world.dim == .overworld { say("The hurricane has passed. The sea is going back down.", 3.5) }
-				return
-			}
-			h.stage = HurricaneStage(rawValue: h.stage.rawValue + 1) ?? .clearing
-			if settings.weatherAlerts && world.dim == .overworld {
-				var line: String = ""
-				switch h.stage {
-				case .intensifying: line = "The hurricane is strengthening. The sea is rising."
-				case .peak: line = "The hurricane is at its height!"
-				case .eye: line = "The eye of the hurricane: a sudden calm. The far wall is coming, and the wind will turn."
-				case .backside: line = "The wind is back, from the other side!"
-				case .weakening: line = "The hurricane is weakening."
-				case .clearing: line = "The hurricane is moving on."
-				default: break
-				}
-				if !line.isEmpty { say(line, 3.5) }
+	/// After a melee blow lands with the suit on: the gauntlet's shock
+	func suitMeleeHit(_ m: Mob) {
+		if m.hp <= 0 || !suitHas(.gauntlet) { return }
+		if !suitSpend(.gauntlet, 1.5) { return }
+		var info = DamageInfo(amount: 4 * max(1.0, suitStats.strength(.gauntlet)), type: .shock, source: .player)
+		info.originX = pb.x
+		info.key = newID()
+		applyMobDamage(m, info)
+		spawnParticles(m.b.x, m.b.cy, 0xFFF07A, 5, 3.0, 0.2, 0)
+	}
+
+	/// The share of a blow the suit lets through: its plates where it lands (each takes the damage
+	/// itself, layer by layer), the metals and the seal against fire, water and lightning, and the
+	/// barrier turning some of what is left into energy drain
+	func suitGuard(_ amount: Double, _ info: DamageInfo) -> Double {
+		if !suit.worn { return amount }
+		let st: ExoStats = suitStats
+		let type: DamageType = info.type
+		var a: Double = amount
+		if type == .fire || type == .lava {
+			a *= 1.0 - st.fireCut
+			if suitHas(.seal) { a *= 0.4 }
+		}
+		if type == .shock {
+			a *= 1.0 - st.stormCut
+			if suitHas(.seal) { a *= 0.5 }
+		}
+		if type == .drown && suitHas(.seal) { a = 0 }
+		if a > 0 && !type.bypassesArmor && type != .shock { a = suitTakeBlow(a, info) }
+		if a > 0 && suitHas(.barrier) && type != .starve && type != .drown {
+			let take: Double = a * min(0.6, 0.4 * suitStats.strength(.barrier))
+			if suitSpend(.barrier, take * 3.0) {
+				a -= take
+				spawnParticles(pb.x, pb.cy, 0xC07CFF, 4, 2.5, 0.25, 0)
 			}
 		}
-		h.force = easeTo(h.force, h.stage.force * h.strength, 8, dt)
-		if world.dim == .overworld { h.closest = min(h.closest, abs(pb.x - h.coastX)) }
-		weather.hurricane = h
-		if world.dim != .overworld { return }
-		let reach: Double = hurricaneReach(pb.x, h)
-		if settings.weatherHurtsBlocks && h.broken < 60 && h.force > 0.6 && reach > 0.4 {
-			hurricaneAcc += dt * 1.2 * h.force * reach * weatherIntensity
-			var broken: Int = h.broken
-			while hurricaneAcc >= 1.0 && broken < 60 {
-				hurricaneAcc -= 1.0
-				let x: Double = pb.x + weather.fxPick(-40...40)
-				let fromDir: Double = weather.wind >= 0 ? 1 : -1
-				let hit: Bool = weather.fx() < 0.5 ? tearAt(x, h.force * 0.6) : tearFace(x, fromDir, h.force * 0.6)
-				if hit { broken += 1 }
+		return a
+	}
+
+	/// How high on the body a blow lands (0 the top of the head ... 1 the feet; nil: anywhere)
+	func suitHitHeight(_ info: DamageInfo) -> Double? {
+		var oy: Double? = nil
+		if info.source.kind == .mob, let m = mobs.first(where: { $0.id == info.source.id }) { oy = m.b.cy }
+		if oy == nil && info.originY != 0 { oy = info.originY }
+		guard let y = oy else { return nil }
+		return clampD((y - pb.top) / max(0.5, pb.h), 0, 1)
+	}
+
+	/// A point on the body (suit units, standing still) a blow lands on: at about the height given,
+	/// spread a little, or anywhere on the body
+	func suitBodyPoint(_ f: Double?) -> (Double, Double) {
+		var cells: [(Int, Int)] = []
+		if let h = f {
+			let row: Int = clampI(1 + Int(((h + Double.random(in: -0.15...0.15)) * 15.0).rounded()), 1, 15)
+			for sec in SuitBody.cells {
+				for c in sec where abs(c.1 - row) <= 1 { cells.append(c) }
 			}
-			weather.hurricane?.broken = broken
+		}
+		if cells.isEmpty { for sec in SuitBody.cells { cells += sec } }
+		let c: (Int, Int) = cells[Int.random(in: 0..<cells.count)]
+		let u: Double = Double(suitUnit)
+		return (Double(c.0) * u + Double.random(in: 0..<u), Double(c.1) * u + Double.random(in: 0..<u))
+	}
+
+	/// A blow on the suit: where it lands the pieces over the body take it in turn, outermost first,
+	/// each stopping its share and taking that much damage itself. A blast spreads over the body.
+	/// Returns what gets through.
+	func suitTakeBlow(_ amount: Double, _ info: DamageInfo) -> Double {
+		var d: SuitDesign = suit.d
+		if d.pieces.isEmpty { return amount }
+		var points: [(Double, Double)] = []
+		if info.type.isArea {
+			for _ in 0..<6 { points.append(suitBodyPoint(nil)) }
 		} else {
-			hurricaneAcc = 0
+			points.append(suitBodyPoint(suitHitHeight(info)))
 		}
-	}
-
-	// MARK: storm surge
-
-	/// At a hurricane's height the sea climbs a block or two up the shore near the player (sandbags
-	/// hold it back). Every flooded spot is remembered, and saved, until the water has been taken
-	/// away again once the storm eases; that also happens if the weather is switched off.
-	func updateSurge(_ dt: Double) {
-		surgeT -= dt
-		if surgeT > 0 { return }
-		surgeT = 0.5
-		var rising: Bool = false
-		var level: Int = WorldGen.sea - 1
-		if settings.weatherOn && settings.allowHurricane && settings.weatherHurtsBlocks, let h = weather.hurricane, world.dim == .overworld {
-			if h.stage == .peak || h.stage == .backside || h.stage == .intensifying {
-				rising = true
-				if h.stage == .peak || h.stage == .backside { level = WorldGen.sea - 2 }
-			}
-			if rising && weather.surge.count < 90 && abs(h.coastX - pb.x) < 140 { floodShore(h, level) }
-		}
-		if rising || weather.surge.isEmpty { return }
-		// ebbing: a few spots at a time, wherever the ground is loaded (the rest waits for it). (The surge's
-		// water is the storm's: it neither flows nor wakes the water round it.)
-		var keep: [SurgeCell] = []
-		var drained: Int = 0
-		world.flowHold = true
-		for c in weather.surge {
-			if world.dim == .overworld && drained < 12 && world.isLoaded(c.x) {
-				if world.tile(c.x, c.y) == .water { world.set(c.x, c.y, .air) }
-				drained += 1
-				continue
-			}
-			keep.append(c)
-		}
-		world.flowHold = false
-		weather.surge = keep
-	}
-
-	/// Floods the low shore next to the sea, one strip of columns at a time
-	func floodShore(_ h: HurricaneEvent, _ level: Int) {
-		let inland: Int = h.side > 0 ? -1 : 1
-		let sea: Int = WorldGen.sea
-		// walk in from the open sea to the first column whose surface row is not sea water
-		var x: Int = Int(floor(h.coastX)) - inland * 8
-		var k: Int = 0
-		while k < 60 && world.isLoaded(x) && world.tile(x, sea) == .water {
-			x += inland
-			k += 1
-		}
-		if !world.isLoaded(x) || k >= 60 { return }
-		var added: Int = 0
-		var col: Int = 0
-		world.flowHold = true
-		defer { world.flowHold = false }
-		while col < 30 && added < 8 && weather.surge.count < 90 {
-			let cx: Int = x + inland * col
-			if !world.isLoaded(cx) { return }
-			var y: Int = level
-			var blocked: Bool = false
-			while y < sea {
-				let t: Tile = world.tile(cx, y)
-				if t == .sandbag { blocked = true; break }
-				if t == .air {
-					world.set(cx, y, .water)
-					weather.surge.append(SurgeCell(x: cx, y: y))
-					added += 1
+		let share: Double = 1.0 / Double(points.count)
+		var through: Double = 0
+		var broke: [String] = []
+		var look: Bool = false
+		for pt in points {
+			let over: [Int] = suitPass(d, pt.0, pt.1).1
+			var left: Double = amount * share
+			for i in over {
+				let took: Double = left * suitShare(d.pieces[i])
+				left -= took
+				let before: Int = Int(d.pieces[i].dmg * 3.0)
+				let hp: Double = suitPieceHP(d.pieces[i])
+				d.pieces[i].dmg = min(1.0, d.pieces[i].dmg + took * 1.3 / max(1.0, hp))
+				if d.pieces[i].broken {
+					broke.append(suitPieceName(d.pieces[i]))
+					let q: (Double, Double) = suitPoint(d.pieces[i].x, d.pieces[i].y)
+					spawnParticles(q.0, q.1, suitColor(d.pieces[i]), 7, 3.5, 0.5, 14)
+				} else if Int(d.pieces[i].dmg * 3.0) != before {
+					look = true
 				}
-				y += 1
 			}
-			// the surge stops at higher ground or at a sandbag wall
-			if blocked || world.tile(cx, level).solid { return }
-			col += 1
+			through += left
+		}
+		suit.d = d
+		if !broke.isEmpty {
+			sfx(.breakStone, 0.6)
+			if suitSayT <= clock {
+				suitSayT = clock + 2.0
+				say(joinText("A suit piece broke: ", broke[0], "."), 1.8)
+			}
+			suitChanged()
+		} else if look {
+			suitChanged()
+		}
+		return through
+	}
+
+	/// A piece's name, in words
+	func suitPieceName(_ p: SuitPiece) -> String {
+		if p.kind == .core, let c = p.core { return c.name }
+		if p.kind == .module {
+			if !p.modPart.isEmpty, let mp = ModRuntime.shared.suitParts[p.modPart] { return mp.name }
+			if let m = p.module { return m.name }
+		}
+		return joinText(suitMat(p).name.lowercased(), " ", p.kind == .plate ? "plate" : "frame", " on the ", p.bone.name.lowercased())
+	}
+
+	/// How much slower the cold gets in through the suit
+	var suitColdMul: Double {
+		if !suit.worn { return 1.0 }
+		var m: Double = 1.0 - suitStats.coldCut
+		if suitHas(.seal) { m *= 0.1 }
+		return m
+	}
+
+	/// The drill, if it can bore right now: its tier (0: no drill)
+	func suitDrillTier() -> Int {
+		if !suitHas(.drill) { return 0 }
+		return suitStats.drillTier
+	}
+
+	/// The suit covers the head (a hailstone can't reach it)
+	var suitHelmet: Bool { return suit.worn && suitStats.cover[SuitSection.head.rawValue] > 0.5 }
+
+	// MARK: putting the suit on and off
+
+	/// Puts the suit on: the armour slots for head, body and legs must be free (armour worn there goes
+	/// into the bag first). Returns what to say.
+	@discardableResult
+	func wearSuit() -> String {
+		let st: ExoStats = suitStats
+		if !st.complete { return st.notes.first ?? "The suit has no pieces yet." }
+		if suit.worn { return "You are already wearing it." }
+		for i in 0..<3 {
+			if let a = inv.armor[i] {
+				if inv.canFit(a.item, 1) {
+					addStack(a)
+					inv.armor[i] = nil
+				} else {
+					return "Your bag is too full to take off your armour."
+				}
+			}
+		}
+		suit.worn = true
+		if suit.energy <= 0 && isCreative { suit.energy = st.capacity }
+		sfx(.suitUp, 0.8)
+		spawnParticles(pb.x, pb.y - 1.0, st.modules.isEmpty ? 0xC8CCD4 : 0x60E0FF, 12, 3.0, 0.5, -2)
+		suitChanged()
+		return "Suit on."
+	}
+
+	@discardableResult
+	func takeOffSuit() -> String {
+		if !suit.worn { return "You are not wearing it." }
+		suit.worn = false
+		sfx(.suitUp, 0.5)
+		suitChanged()
+		return "Suit off."
+	}
+
+	/// Puts a whole stack (with its infusions) into the bag, or at the player's feet if it is full:
+	/// nothing is ever lost
+	func addStack(_ s: Stack) {
+		for i in 0..<inv.slots.count where inv.slots[i] == nil {
+			inv.slots[i] = s
+			bumpHUD()
+			return
+		}
+		spawnDrop(s, pb.x, pb.y - 1, 0, -2)
+		say("Your bag is full: it went on the ground.", 1.6)
+	}
+
+	/// Gives items to the bag (what does not fit goes on the ground)
+	func giveItems(_ it: Item, _ n: Int) {
+		let left: Int = inv.add(it, n)
+		if left > 0 { spawnDrop(Stack(item: it, count: left), pb.x, pb.y - 1, 0, -2) }
+		bumpHUD()
+	}
+
+	/// Builds a planned design: new and changed pieces are paid for out of the bag (their metal, and the
+	/// cores and parts placed), pieces taken off give back what is left of them, and an item comes back
+	/// when the last piece of its group goes. All or nothing. Returns what to say.
+	@discardableResult
+	func applyDesign(_ plan0: SuitDesign) -> String {
+		var plan: SuitDesign = plan0
+		if plan.pieces.count > SuitDesign.maxPieces { return joinText("A suit holds at most ", String(SuitDesign.maxPieces), " pieces.") }
+		var now: [Int: SuitPiece] = [:]
+		for p in suit.d.pieces { now[p.id] = p }
+		for k in plan.pieces.indices {
+			plan.pieces[k].clamp()
+			// a piece kept as it was keeps its damage; a new or remade one is whole
+			if let o = now[plan.pieces[k].id], o.sameMake(plan.pieces[k]) { plan.pieces[k].dmg = o.dmg } else { plan.pieces[k].dmg = 0 }
+			if !isCreative && (plan.pieces[k].kind == .core || plan.pieces[k].kind == .module) && plan.items[plan.pieces[k].src] == nil {
+				return joinText(suitPieceName(plan.pieces[k]), " has to be made first (at the Assembly Station) and taken from your bag.")
+			}
+		}
+		let used: Set<Int> = Set(plan.pieces.map { $0.src })
+		plan.items = plan.items.filter { used.contains($0.key) }
+		if plan.nextID <= (plan.pieces.map { $0.id }.max() ?? 0) { plan.nextID = (plan.pieces.map { $0.id }.max() ?? 0) + 1 }
+		let b: SuitBill = suit.d.bill(to: plan)
+		if !isCreative {
+			for (it, n) in b.pay where inv.total(it) < n {
+				return joinText("Not enough ", it.name, ": it takes ", String(n), " and you have ", String(inv.total(it)), ". Nothing was changed.")
+			}
+			var bag: [Stack?] = inv.slots
+			for st in b.take {
+				guard let i = bag.firstIndex(where: { $0 == st }) else { return joinText(st.item.name, " is no longer in your bag: nothing was changed.") }
+				bag[i] = nil
+			}
+			inv.slots = bag
+			for (it, n) in b.pay { _ = inv.remove(it, n) }
+			for (it, n) in b.back { giveItems(it, n) }
+			for st in b.give { addStack(st) }
+		}
+		let wasWorn: Bool = suit.worn
+		suit.d = plan
+		let st: ExoStats = ExoStats.of(plan)
+		suit.energy = min(suit.energy, st.capacity)
+		if !st.has(.cargo) { emptyPack() }
+		if wasWorn && !st.complete { suit.worn = false }
+		suitChanged()
+		sfx(.craft, 0.7)
+		if wasWorn && !st.complete { return "Built. The suit came off: it has no pieces." }
+		return wasWorn ? "Built and still on." : "Built."
+	}
+
+	/// Mends every damaged and broken piece, paying its share of its metal (cores and parts: copper).
+	/// Returns what to say.
+	@discardableResult
+	func repairSuit() -> String {
+		let bill: [Item: Int] = suit.d.repairBill()
+		if bill.isEmpty { return "Nothing needs mending." }
+		if !isCreative {
+			for (it, n) in bill where inv.total(it) < n {
+				return joinText("Mending takes ", String(n), " ", it.name, " (you have ", String(inv.total(it)), ").")
+			}
+			for (it, n) in bill { _ = inv.remove(it, n) }
+		}
+		var d: SuitDesign = suit.d
+		for k in d.pieces.indices { d.pieces[k].dmg = 0 }
+		suit.d = d
+		suitChanged()
+		sfx(.craft, 0.6)
+		return "Every piece is whole again."
+	}
+
+	/// Opens the cargo pack (stored like a chest, under a key no block can have)
+	func openPack() {
+		if !(suit.worn && suitStats.has(.cargo)) { return }
+		let k: IntPair = packSpot
+		// the pack is kept with the realm the player is in: bring it along from the other one
+		for d in 0..<dimCount where d != world.dim.rawValue {
+			let other: ChestKey = ChestKey(d: d, x: k.x, y: k.y)
+			if let items = world.chests[other] {
+				let here: ChestKey = world.chestKey(k.x, k.y)
+				world.chests[here] = (world.chests[here] ?? []) + items
+				world.chests[other] = nil
+			}
+		}
+		if world.chests[world.chestKey(k.x, k.y)] == nil { world.setChestItems(k.x, k.y, []) }
+		openChest = k
+		showInventory = true
+		sfx(.chestOpen, 0.6)
+		bumpHUD()
+	}
+
+	/// Everything in the cargo pack goes into the bag (or at the player's feet)
+	func emptyPack() {
+		let k: IntPair = packSpot
+		for d in 0..<dimCount {
+			let key: ChestKey = ChestKey(d: d, x: k.x, y: k.y)
+			if let items = world.chests[key] {
+				world.chests[key] = nil
+				for st in items { addStack(st) }
+			}
+		}
+		if let p = openChest, isPackSpot(p) { openChest = nil }
+	}
+
+	/// The pack's storage key (outside any block a world can have)
+	var packSpot: IntPair { return IntPair(x: -1_900_000_000, y: -88) }
+
+	/// The pack's storage lives in the overworld's chest list wherever the player is: it travels along
+	func isPackSpot(_ p: IntPair) -> Bool { return p.y == -88 && p.x == -1_900_000_000 }
+
+	// MARK: charging
+
+	/// The assembly station charges a worn suit nearby from the power line it is wired to (it takes
+	/// sparks from the network only while it has a suit to charge)
+	func runSuitDock(_ d: PowerDev, _ dt: Double) {
+		let near: Bool = suit.worn && abs(Double(d.x) + 0.5 - pb.x) < 4.5 && abs(Double(d.y) + 0.5 - pb.cy) < 4.0
+		let st: ExoStats = suitStats
+		let wants: Bool = near && suit.energy < st.capacity - 0.01
+		if d.enabled != wants { d.enabled = wants }
+		if wants && d.powered {
+			suit.energy = min(st.capacity, suit.energy + PowerSpec.draw(.exoStation) * dt)
+			if frameNo % 20 == 0 { spawnParticles(pb.x, pb.y - 1.0, 0x60E0FF, 1, 1.5, 0.3, -2) }
 		}
 	}
 
-	// MARK: everything, once a frame
-
-	func updateWeather(_ dt: Double) {
-		if landT > 0 { landT -= dt }
-		if pb.inWater && !wasInWater && pb.vy > 4.0 {
-			sfx(.splash, clampD(pb.vy / 14.0, 0.3, 1.0))
-			spawnParticles(pb.x, pb.y - 0.4, 0xB8D8F8, 8, 3.5, 0.45, 14)
+	/// Tapping a battery or accumulator while wearing the suit fills it from the stored charge
+	func chargeSuitFrom(_ d: PowerDev) -> Bool {
+		if !suit.worn { return false }
+		let st: ExoStats = suitStats
+		let room: Double = st.capacity - suit.energy
+		if room <= 0.5 {
+			say("The suit is full.", 1.2)
+			return true
 		}
-		wasInWater = pb.inWater
-		stepWeatherSim(dt)
-		wxHere = weatherAt(pb.x, pb.y - pb.h)
-		weatherRain = wxHere.precip
-		weatherSnow = wxHere.snow
-		updateGroundCells(dt)
-		updateTornado(dt)
-		updateHurricane(dt)
-		updateSurge(dt)
-		updateLightning(dt)
-		updateHail(dt)
-		updateCold(dt)
-		updateWeatherForces(dt)
-		updateWindOnThings(dt)
-		updateWeatherDevices(dt)
-		updateWeatherBanner()
-		wxNoteT -= dt
-		if wxNoteT <= 0 {
-			wxNoteT = 1.0
-			checkWeatherNotes()
-			let L: LocalWeather = wxHere
-			if L.precip > 0.3 || abs(L.wind) > 8 || L.thunder > 0.5 || L.hail > 0.2 { stormFelt = true }
+		let take: Double = min(room, d.charge)
+		if take < 0.5 {
+			say("That battery is empty.", 1.2)
+			return true
 		}
-		// rain puts out a burning player standing in it
-		if weatherRain > 0.5 && !weatherSnow && playerBurn > 0 && rainReaches(pb.x, pb.y, pb.h) { playerBurn = 0 }
+		d.charge -= take
+		suit.energy += take
+		sfx(.zap, 0.5)
+		say(joinText("The suit takes ", String(Int(take.rounded())), " from the battery (", String(Int(suit.energy)), " of ", String(Int(st.capacity)), ")."), 2.0)
+		return true
 	}
 
-	/// How hard it is raining at x (cheap: for checks made for many creatures)
-	func precipAt(_ x: Double) -> Double {
-		if world.dim != .overworld || !settings.weatherOn || weather.precip < 0.01 { return 0 }
-		return weather.precip * coverAt(x) * biomeWetness(gen.col(Int(floor(x))).biome)
-	}
-
-	/// Keeps a storm the player lived through in the journal
-	func recordStorm(_ k: WeatherKind, _ note: String) {
-		var list: [StormRecord] = journal.storms ?? []
-		list.append(StormRecord(kind: k.rawValue, day: dayCount, note: note))
-		if list.count > 40 { list.removeFirst(list.count - 40) }
-		journal.storms = list
+	/// What the player's sprite is drawn from: the suit's pieces and how damaged they look (0: no suit)
+	var suitDrawKey: Int {
+		if !suit.worn { return 0 }
+		var h: Hasher = Hasher()
+		for p in suit.d.pieces {
+			h.combine(p.id)
+			h.combine(p.x)
+			h.combine(p.y)
+			h.combine(p.w)
+			h.combine(p.h)
+			h.combine(p.rot)
+			h.combine(p.shape.rawValue)
+			h.combine(p.bone.rawValue)
+			h.combine(suitColor(p))
+			h.combine(Int(p.dmg * 3.0))
+		}
+		return h.finalize() | 1
 	}
 }
 
-// MARK: - Weather on screen: storm skies, rain and snow, hail, wind, the funnel, lightning, waves
-// Everything here is drawn from the simulation and a hash of each drop's index (no per-particle
-// state), batched into one path per colour; only hailstones come from a small pool.
+extension ExoSuit {
+	/// A suit built the old way (a part in each place) rebuilt piece by piece: each part becomes the
+	/// pieces that cover what it covered, in its metal. The parts themselves stay with the design (their
+	/// infusions still count) and come back to the bag when all their pieces are taken off.
+	mutating func migrate() {
+		if parts.isEmpty {
+			if design == nil { design = SuitDesign() }
+			return
+		}
+		var d: SuitDesign = design ?? SuitDesign()
+		for slot in ExoSlot.allCases {
+			guard let st = parts[slot.rawValue] else { continue }
+			let g: Int = d.newGroup()
+			d.items[g] = st
+			for p0 in SuitTemplates.oldPart(slot, st.item) {
+				var p: SuitPiece = p0
+				p.id = d.newID()
+				p.src = g
+				d.pieces.append(p)
+			}
+		}
+		parts = [:]
+		design = d
+	}
+}
 
-/// Small pixel-art weather symbols for the HUD and the station's screen
-func weatherIconBuf(_ k: WeatherKind, _ snow: Bool) -> PixelBuf {
+/// Ready-made pieces: what a part of a suit built the old way turns into, where a new working part
+/// goes first, and whole designs to start from
+enum SuitTemplates {
+	/// a piece: centre and size in sprite pixels (columns from the figure's left edge, rows from the
+	/// frame's top), made of a metal
+	static func piece(_ kind: SuitKind, _ bone: SuitBone, _ cx: Double, _ cy: Double, _ w: Double, _ h: Double, _ m: ExoMat, _ shape: SuitShape = .box) -> SuitPiece {
+		var p = SuitPiece()
+		let u: Double = Double(suitUnit)
+		p.kind = kind
+		p.bone = bone
+		p.x = cx * u
+		p.y = cy * u
+		p.w = w * u
+		p.h = h * u
+		p.mat = m.rawValue
+		p.shape = shape
+		return p
+	}
+
+	/// a working part where it first goes on the body
+	static func module(_ m: ExoModule) -> SuitPiece {
+		var p: SuitPiece
+		switch m {
+		case .drill: p = piece(.module, .armFront, 9.5, 9.5, 1.6, 1.0, .iron, .spike); p.rot = 90
+		case .gauntlet: p = piece(.module, .armBack, 1.5, 9.8, 2.0, 0.8, .iron)
+		case .servo: p = piece(.module, .torso, 5.0, 7.0, 2.6, 0.7, .iron, .rounded)
+		case .sprint: p = piece(.module, .legFront, 7.0, 13.5, 1.4, 1.2, .iron)
+		case .leap: p = piece(.module, .legBack, 3.0, 15.6, 1.8, 0.6, .iron)
+		case .hover: p = piece(.module, .back, -0.5, 10.0, 1.4, 2.4, .iron, .rounded)
+		case .lamp: p = piece(.module, .head, 7.6, 2.6, 1.0, 1.0, .iron, .round)
+		case .seal: p = piece(.module, .head, 5.0, 5.6, 4.0, 0.6, .iron)
+		case .cargo: p = piece(.module, .back, -1.0, 9.0, 2.4, 4.0, .iron, .rounded)
+		case .barrier: p = piece(.module, .torso, 5.0, 10.0, 1.4, 1.4, .iron, .round)
+		case .wing: p = piece(.module, .back, -3.0, 8.0, 5.0, 2.2, .iron, .wedge); p.rot = -20
+		case .battery: p = piece(.module, .back, 0.2, 8.4, 1.2, 2.4, .iron)
+		case .solar: p = piece(.module, .back, -1.6, 6.6, 3.0, 0.6, .iron)
+		case .turret: p = piece(.module, .torso, 5.2, 6.6, 1.6, 1.2, .iron, .rounded)
+		case .cannon: p = piece(.module, .torso, 6.8, 6.8, 3.0, 1.0, .iron)
+		case .laser: p = piece(.module, .armFront, 9.2, 8.6, 1.8, 0.8, .iron)
+		case .magnet: p = piece(.module, .torso, 4.0, 9.6, 1.2, 1.2, .iron, .round)
+		}
+		p.part = m.rawValue
+		return p
+	}
+
+	/// a power core over the heart
+	static func core(_ c: ExoCore) -> SuitPiece {
+		var p: SuitPiece = piece(.core, .torso, 5.0, 8.3, 1.6, 1.6, .iron, .round)
+		p.part = c.rawValue
+		return p
+	}
+
+	/// The pieces a part of a suit built the old way becomes
+	static func oldPart(_ slot: ExoSlot, _ it: Item) -> [SuitPiece] {
+		switch it {
+		case .exoCore(let c): return [core(c)]
+		case .exoModule(let m): return [module(m)]
+		case .exoPart(_, let m), .exoPlate(let m):
+			switch slot {
+			case .helmet:
+				var visor: SuitPiece = piece(.frame, .head, 6.0, 3.5, 4.0, 1.0, m)
+				visor.color = 0x60E0FF
+				return [piece(.plate, .head, 5.0, 3.5, 6.0, 5.0, m, .rounded), visor]
+			case .chest: return [piece(.plate, .torso, 5.0, 9.0, 4.0, 6.0, m)]
+			case .armL: return [piece(.plate, .armBack, 2.0, 8.5, 2.0, 3.0, m)]
+			case .armR: return [piece(.plate, .armFront, 8.0, 8.5, 2.0, 3.0, m)]
+			case .legs: return [piece(.plate, .legBack, 3.0, 13.5, 2.0, 3.0, m), piece(.plate, .legFront, 7.0, 13.5, 2.0, 3.0, m)]
+			case .boots: return [piece(.plate, .legBack, 3.0, 15.5, 2.2, 1.0, m), piece(.plate, .legFront, 7.0, 15.5, 2.2, 1.0, m)]
+			case .plateHead: return [piece(.plate, .head, 5.0, 1.5, 4.0, 1.0, m)]
+			case .plateShoulders: return [piece(.plate, .armBack, 2.0, 7.5, 2.4, 1.0, m, .rounded), piece(.plate, .armFront, 8.0, 7.5, 2.4, 1.0, m, .rounded)]
+			case .plateChest: return [piece(.plate, .torso, 5.0, 8.0, 4.0, 2.0, m)]
+			case .plateArms: return [piece(.plate, .armBack, 2.0, 9.5, 2.0, 1.0, m), piece(.plate, .armFront, 8.0, 9.5, 2.0, 1.0, m)]
+			case .plateLegs: return [piece(.plate, .legBack, 3.0, 13.5, 2.0, 1.0, m), piece(.plate, .legFront, 7.0, 13.5, 2.0, 1.0, m)]
+			default: return []
+			}
+		default: return []
+		}
+	}
+
+	/// Whole designs to start from: a light suit, a knight's, a heavy one, and a flyer's
+	static let names: [String] = ["Empty", "Light", "Knight", "Heavy", "Flyer"]
+
+	static func design(_ i: Int, _ m: ExoMat) -> SuitDesign {
+		var d = SuitDesign()
+		var ps: [SuitPiece] = []
+		func plate(_ b: SuitBone, _ cx: Double, _ cy: Double, _ w: Double, _ h: Double, _ s: SuitShape = .box, thick: Int = 1, rot: Double = 0) {
+			var p: SuitPiece = piece(.plate, b, cx, cy, w, h, m, s)
+			p.thick = thick
+			p.rot = rot
+			ps.append(p)
+		}
+		switch i {
+		case 1:
+			plate(.head, 5.0, 2.0, 5.0, 2.4, .rounded)
+			plate(.torso, 5.0, 8.4, 4.0, 3.4)
+			plate(.legBack, 3.0, 13.6, 2.0, 2.0)
+			plate(.legFront, 7.0, 13.6, 2.0, 2.0)
+		case 2:
+			plate(.head, 5.0, 3.0, 6.0, 4.4, .rounded)
+			var visor: SuitPiece = piece(.frame, .head, 6.2, 3.4, 3.6, 0.7, m)
+			visor.color = 0x2A2E36
+			ps.append(visor)
+			plate(.head, 5.0, 0.8, 1.0, 1.6, .spike)
+			plate(.torso, 5.0, 8.6, 4.0, 4.2)
+			plate(.torso, 5.0, 10.6, 6.0, 1.0)
+			plate(.armBack, 2.0, 7.4, 2.8, 1.4, .rounded)
+			plate(.armFront, 8.0, 7.4, 2.8, 1.4, .rounded)
+			plate(.armBack, 2.0, 9.0, 2.0, 2.0)
+			plate(.armFront, 8.0, 9.0, 2.0, 2.0)
+			plate(.legBack, 3.0, 13.4, 2.0, 3.0)
+			plate(.legFront, 7.0, 13.4, 2.0, 3.0)
+			plate(.legBack, 3.0, 15.5, 2.4, 1.0, .rounded)
+			plate(.legFront, 7.0, 15.5, 2.4, 1.0, .rounded)
+		case 3:
+			plate(.head, 5.0, 3.0, 6.4, 5.0, .rounded, thick: 2)
+			plate(.torso, 5.0, 8.8, 4.6, 5.0, thick: 2)
+			plate(.torso, 5.0, 8.4, 3.0, 2.0, thick: 1)
+			plate(.armBack, 2.0, 7.3, 3.2, 1.8, .rounded, thick: 2)
+			plate(.armFront, 8.0, 7.3, 3.2, 1.8, .rounded, thick: 2)
+			plate(.armBack, 2.0, 9.0, 2.2, 2.4, thick: 2)
+			plate(.armFront, 8.0, 9.0, 2.2, 2.4, thick: 2)
+			plate(.torso, 5.0, 11.0, 6.4, 1.6, thick: 2)
+			plate(.legBack, 3.0, 13.5, 2.4, 3.2, thick: 2)
+			plate(.legFront, 7.0, 13.5, 2.4, 3.2, thick: 2)
+			plate(.legBack, 3.0, 15.4, 2.8, 1.4, .rounded, thick: 2)
+			plate(.legFront, 7.0, 15.4, 2.8, 1.4, .rounded, thick: 2)
+		case 4:
+			plate(.head, 5.0, 2.6, 5.4, 3.6, .rounded)
+			plate(.torso, 5.0, 8.6, 4.0, 3.6)
+			plate(.legBack, 3.0, 13.6, 2.0, 2.4)
+			plate(.legFront, 7.0, 13.6, 2.0, 2.4)
+			var w: SuitPiece = module(.wing)
+			w.mat = m.rawValue
+			ps.append(w)
+			var j1: SuitPiece = module(.hover)
+			j1.mat = m.rawValue
+			ps.append(j1)
+			var j2: SuitPiece = module(.hover)
+			j2.mat = m.rawValue
+			j2.y += 6
+			ps.append(j2)
+		default: break
+		}
+		for var p in ps {
+			p.id = d.newID()
+			d.pieces.append(p)
+		}
+		return d
+	}
+}
+
+// MARK: - Suits in mods: materials, parts and whole designs
+
+/// A metal (or any material) of a mod's for suit pieces: its colour and numbers, and what it is paid with
+struct ModSuitMat: Codable, Identifiable, Equatable {
+	var id: String = ""
+	var name: String = "New Metal"
+	var color: UInt32 = 0x8AC8E8
+	var protect: Double = 1.2
+	var weight: Double = 1.0
+	var durability: Double = 1.2
+	var conduct: Double = 1.0
+	var fireCut: Double = 0
+	var coldCut: Double = 0
+	var stormCut: Double = 0
+	/// what a unit of it is paid with (nil: iron bars)
+	var cost: Item? = nil
+	var drillTier: Int = 4
+
+	init() {}
+
+	init(from decoder: Decoder) throws {
+		let c = try decoder.container(keyedBy: CodingKeys.self)
+		id = c.val(.id, "")
+		name = c.val(.name, "Metal")
+		color = c.val(.color, 0x8AC8E8)
+		protect = c.val(.protect, 1.2)
+		weight = c.val(.weight, 1.0)
+		durability = c.val(.durability, 1.2)
+		conduct = c.val(.conduct, 1.0)
+		fireCut = c.val(.fireCut, 0)
+		coldCut = c.val(.coldCut, 0)
+		stormCut = c.val(.stormCut, 0)
+		cost = c.val(.cost, nil)
+		drillTier = c.val(.drillTier, 4)
+	}
+}
+
+/// A working part of a mod's for suits: an item (made by the mod's recipes) that, placed on a suit,
+/// works as one of the game's parts at its own strength, weight and colour
+struct ModSuitPart: Codable, Identifiable, Equatable {
+	var id: String = ""
+	var name: String = "New Part"
+	var desc: String = ""
+	var works: ExoModule = .turret
+	/// how strong it is at its work (1: as the game's own part)
+	var power: Double = 1.0
+	var weight: Double = 2.0
+	var color: UInt32 = 0x8A929E
+	/// its icon (blank: the game part's, in its colour)
+	var icon: ModPixels = ModPixels(w: 12, h: 12)
+
+	init() {}
+
+	init(from decoder: Decoder) throws {
+		let c = try decoder.container(keyedBy: CodingKeys.self)
+		id = c.val(.id, "")
+		name = c.val(.name, "Part")
+		desc = c.val(.desc, "")
+		works = c.val(.works, .turret)
+		power = c.val(.power, 1.0)
+		weight = c.val(.weight, 2.0)
+		color = c.val(.color, 0x8A929E)
+		icon = c.val(.icon, ModPixels(w: 12, h: 12))
+	}
+}
+
+/// A whole suit design kept in a mod, to start from at an Assembly Station
+struct ModSuitDesign: Codable, Identifiable, Equatable {
+	var id: String = ""
+	var name: String = "New Suit"
+	var design: SuitDesign = SuitDesign()
+
+	init() {}
+
+	init(from decoder: Decoder) throws {
+		let c = try decoder.container(keyedBy: CodingKeys.self)
+		id = c.val(.id, "")
+		name = c.val(.name, "Suit")
+		design = c.val(.design, SuitDesign())
+	}
+}
+
+/// The limits on a mod's suit content
+enum ModSuitLimits {
+	static let mats: Int = 12
+	static let parts: Int = 24
+	static let designs: Int = 12
+}
+
+extension ModValidator {
+	/// A mod's suit materials, parts and designs kept in range: numbers within limits, what a metal is
+	/// paid with an item that exists, designs only of what the suit allows and of this mod's own
+	/// materials and parts
+	static func checkSuits(_ p: inout ModPack, _ mn: String, _ sb: Bool, _ known: [String: String], _ r: inout ModReport) {
+		func c(_ v: Double, _ lo: Double, _ hi: Double, _ d: Double) -> Double { return clampD(v.isFinite ? v : d, lo, hi) }
+		if p.suitMats.count > ModSuitLimits.mats {
+			r.add(1, mn, "Mod", joinText("Only ", String(ModSuitLimits.mats), " suit materials fit in one mod; the rest were left out."))
+			p.suitMats = Array(p.suitMats.prefix(ModSuitLimits.mats))
+		}
+		if p.suitParts.count > ModSuitLimits.parts {
+			r.add(1, mn, "Mod", joinText("Only ", String(ModSuitLimits.parts), " suit parts fit in one mod; the rest were left out."))
+			p.suitParts = Array(p.suitParts.prefix(ModSuitLimits.parts))
+		}
+		if p.suitDesigns.count > ModSuitLimits.designs {
+			r.add(1, mn, "Mod", joinText("Only ", String(ModSuitLimits.designs), " suit designs fit in one mod; the rest were left out."))
+			p.suitDesigns = Array(p.suitDesigns.prefix(ModSuitLimits.designs))
+		}
+		let ownItems: Set<String> = Set(p.items.map { p.key($0.id) } + p.suitParts.map { p.key($0.id) })
+		var used: Set<String> = Set(p.blocks.map { $0.id } + p.items.map { $0.id } + p.mobs.map { $0.id } + p.infusions.map { $0.id } + p.dims.map { $0.id } + p.trees.map { $0.id })
+		func fresh(_ id: String, _ pre: String, _ i: Int) -> String {
+			if !id.isEmpty && !used.contains(id) { return id }
+			return joinText(pre, String(i + 1), "x", String(used.count))
+		}
+		for i in p.suitMats.indices {
+			var m: ModSuitMat = p.suitMats[i]
+			m.id = fresh(m.id, "smat", i)
+			used.insert(m.id)
+			if m.name.trimmingCharacters(in: .whitespaces).isEmpty { m.name = "Metal" }
+			m.name = String(m.name.prefix(24))
+			m.protect = c(m.protect, 0.2, sb ? 6 : 3, 1)
+			m.weight = c(m.weight, 0.2, sb ? 6 : 3, 1)
+			m.durability = c(m.durability, 0.2, sb ? 8 : 4, 1)
+			m.conduct = c(m.conduct, 0.5, sb ? 4 : 2, 1)
+			m.fireCut = c(m.fireCut, 0, 0.1, 0)
+			m.coldCut = c(m.coldCut, 0, 0.1, 0)
+			m.stormCut = c(m.stormCut, 0, 0.1, 0)
+			m.drillTier = clampI(m.drillTier, 0, 9)
+			if let it = m.cost, case .custom(let k) = it, !ownItems.contains(k) && known[k] != "item" {
+				r.add(1, mn, joinText("Suit material \u{201C}", m.name, "\u{201D}"), "What it is paid with does not exist; iron bars stand in.")
+				m.cost = nil
+			}
+			p.suitMats[i] = m
+		}
+		for i in p.suitParts.indices {
+			var sp: ModSuitPart = p.suitParts[i]
+			sp.id = fresh(sp.id, "spart", i)
+			used.insert(sp.id)
+			if sp.name.trimmingCharacters(in: .whitespaces).isEmpty { sp.name = "Part" }
+			sp.name = String(sp.name.prefix(24))
+			sp.desc = String(sp.desc.prefix(120))
+			sp.power = c(sp.power, 0.25, sb ? 10 : 4, 1)
+			sp.weight = c(sp.weight, 0, sb ? 30 : 10, 2)
+			if !sp.icon.valid || sp.icon.w > 32 || sp.icon.h > 32 { sp.icon = ModPixels(w: 12, h: 12) }
+			p.suitParts[i] = sp
+		}
+		let mats: Set<String> = Set(p.suitMats.map { p.key($0.id) })
+		let parts: Set<String> = Set(p.suitParts.map { p.key($0.id) })
+		for i in p.suitDesigns.indices {
+			var d: ModSuitDesign = p.suitDesigns[i]
+			d.id = fresh(d.id, "suit", i)
+			used.insert(d.id)
+			if d.name.trimmingCharacters(in: .whitespaces).isEmpty { d.name = "Suit" }
+			d.name = String(d.name.prefix(24))
+			var g: SuitDesign = d.design
+			if g.pieces.count > SuitDesign.maxPieces { g.pieces = Array(g.pieces.prefix(SuitDesign.maxPieces)) }
+			var keep: [SuitPiece] = []
+			for var piece in g.pieces {
+				piece.clamp()
+				piece.dmg = 0
+				piece.src = 0
+				if !piece.modMat.isEmpty && !mats.contains(piece.modMat) && known[piece.modMat] != "suitmat" { piece.modMat = "" }
+				if !piece.modPart.isEmpty && !parts.contains(piece.modPart) && known[piece.modPart] != "item" { continue }
+				keep.append(piece)
+			}
+			g.pieces = keep
+			g.items = [:]
+			d.design = g
+			p.suitDesigns[i] = d
+		}
+	}
+}
+
+extension ModRuntime {
+	/// The mods' suit materials and parts, ready for play (each part is also an item, see buildItems)
+	func buildSuits() {
+		for p in packs {
+			for m in p.suitMats where !disabled.contains(p.key(m.id)) {
+				var i = SuitMatInfo()
+				i.name = m.name
+				i.color = m.color & 0xFFFFFF
+				i.protect = m.protect
+				i.weight = m.weight
+				i.durability = m.durability
+				i.conduct = m.conduct
+				i.fireCut = m.fireCut
+				i.coldCut = m.coldCut
+				i.stormCut = m.stormCut
+				i.cost = m.cost.map { resolve($0) } ?? .mat(.ironBar)
+				i.drillTier = m.drillTier
+				suitMats[p.key(m.id)] = i
+			}
+			for sp in p.suitParts where !disabled.contains(p.key(sp.id)) {
+				var i = SuitPartInfo()
+				i.name = sp.name
+				i.color = sp.color & 0xFFFFFF
+				i.works = sp.works
+				i.power = sp.power
+				i.weight = sp.weight
+				suitParts[p.key(sp.id)] = i
+			}
+			for d in p.suitDesigns where !disabled.contains(p.key(d.id)) {
+				suitDesigns.append((joinText(d.name, " (", p.name, ")"), d.design))
+			}
+		}
+	}
+
+	/// A suit part as an item: held, crafted by the mod's recipes, placed at an Assembly Station
+	func suitPartItem(_ p: ModPack, _ sp: ModSuitPart) -> ModItem {
+		var it = ModItem()
+		it.id = sp.id
+		it.name = sp.name
+		it.desc = sp.desc.isEmpty ? joinText("A suit part: works as a ", sp.works.name.lowercased(), ". Place it on a suit at an Assembly Station.") : sp.desc
+		it.kind = .material
+		it.stack = 1
+		it.rarity = 2
+		if sp.icon.isBlank {
+			it.baseIcon = .exoModule(sp.works)
+			it.tint = sp.color
+			it.tintAmt = 0.5
+		} else {
+			it.icon = sp.icon
+		}
+		return it
+	}
+}
+
+// MARK: - Alchemy, infusion and suit art
+
+/// A potion's icon: a round flask for a drink, a squat strapped flask for a splash, the mutagen glowing
+func iconPotion(_ p: Potion) -> PixelBuf {
 	var b = PixelBuf(w: 12, h: 12)
-	let cloudL: UInt32 = 0xE8EEF4
-	let cloudD: UInt32 = 0x8A929E
-	let cloudS: UInt32 = 0x5A606C
-	func cloud(_ c: UInt32, _ y: Int) {
-		b.ellipse(4.5, Double(y) + 0.5, 2.6, 2.0, c)
-		b.ellipse(7.5, Double(y) - 0.5, 3.0, 2.6, c)
-		b.rect(2, y, 8, 2, c)
-	}
-	func drops(_ c: UInt32, _ n: Int) {
-		for i in 0..<n {
-			let x: Int = 2 + (i * 3) % 9
-			let y: Int = 8 + (i % 2)
-			b.set(x, y, c)
-			b.set(x - 1, y + 2, c)
+	let liq: UInt32 = p.color
+	let glass: UInt32 = 0xCFEFFF
+	if p.thrown {
+		b.rect(5, 0, 2, 1, 0x5A4A3A)
+		b.rect(4, 1, 4, 2, glass)
+		b.rect(2, 3, 8, 8, glass)
+		b.rect(3, 5, 6, 5, liq)
+		b.rect(3, 9, 6, 1, shadeRGB(liq, 0.75))
+		b.rect(2, 4, 8, 1, 0x7A5A3A)
+		b.set(4, 6, shadeRGB(liq, 1.45))
+		b.set(8, 4, 0xFFFFFF)
+		if p == .mutagen {
+			b.set(5, 7, 0xC07CFF)
+			b.set(7, 6, 0xC07CFF)
+			b.set(6, 8, 0xE0B8FF)
 		}
-	}
-	func flakes() {
-		for (x, y) in [(2, 9), (5, 10), (8, 9), (10, 11), (4, 11)] {
-			b.set(x, y, 0xFFFFFF)
-		}
-	}
-	switch k {
-	case .clear:
-		b.ellipse(6, 6, 3.0, 3.0, 0xFFD84A)
-		b.ellipse(5.5, 5.5, 1.6, 1.6, 0xFFF2A0)
-		for (x, y) in [(6, 0), (6, 11), (0, 6), (11, 6), (2, 2), (9, 2), (2, 9), (9, 9)] { b.set(x, y, 0xFFD84A) }
-	case .partlyCloudy:
-		b.ellipse(4, 4, 2.6, 2.6, 0xFFD84A)
-		cloud(cloudL, 7)
-	case .overcast:
-		cloud(cloudD, 5)
-		cloud(cloudL, 7)
-	case .lightRain, .snowfall:
-		cloud(cloudD, 4)
-		if snow || k == .snowfall { flakes() } else { drops(0x7AB0F0, 3) }
-	case .heavyRain:
-		cloud(cloudS, 4)
-		if snow { flakes() } else { drops(0x5A98F0, 6) }
-	case .thunderstorm:
-		cloud(cloudS, 4)
-		b.line(7, 6, 5, 9, 0xFFE060)
-		b.line(5, 9, 7, 9, 0xFFE060)
-		b.line(7, 9, 5, 11, 0xFFE060)
-		drops(0x5A98F0, 2)
-	case .strongWind, .windstorm:
-		b.line(1, 3, 8, 3, 0xE8EEF4)
-		b.line(8, 3, 9, 2, 0xE8EEF4)
-		b.line(0, 6, 10, 6, 0xE8EEF4)
-		b.line(10, 6, 11, 5, 0xE8EEF4)
-		b.line(2, 9, 7, 9, 0xE8EEF4)
-		if k == .windstorm { b.set(9, 9, 0x8A6A3A); b.set(4, 11, 0x5E8A4A) }
-	case .hailstorm:
-		cloud(cloudS, 4)
-		for (x, y) in [(3, 8), (6, 10), (9, 8), (4, 11)] { b.rect(x, y, 2, 1, 0xF4FAFF) }
-	case .blizzard:
-		cloud(cloudD, 3)
-		flakes()
-		b.line(0, 8, 6, 8, 0xC8D8E8)
-	case .tornado:
-		b.rect(1, 0, 10, 2, cloudS)
-		b.rect(3, 2, 7, 2, 0x6E727B)
-		b.rect(4, 4, 5, 2, 0x55585F)
-		b.rect(5, 6, 3, 2, 0x6E727B)
-		b.rect(5, 8, 2, 2, 0x55585F)
-		b.rect(4, 10, 2, 1, 0x8A7A60)
-	case .hurricane:
-		b.ellipse(6, 6, 4.6, 4.6, 0x8A929E)
-		b.ellipse(6, 6, 3.0, 3.0, 0xE8EEF4)
-		b.ellipse(6, 6, 1.2, 1.2, 0x3A70C8)
-		b.line(6, 1, 10, 2, 0xE8EEF4)
-		b.line(6, 11, 2, 10, 0xE8EEF4)
+	} else {
+		b.rect(5, 0, 2, 1, 0x8A5A2A)
+		b.rect(5, 1, 2, 2, glass)
+		b.ellipse(6, 7.5, 4.0, 3.8, glass)
+		b.ellipse(6, 8.2, 3.2, 2.9, liq)
+		b.ellipse(4.8, 7.0, 1.0, 0.8, shadeRGB(liq, 1.45))
+		b.set(8, 5, 0xFFFFFF)
+		if p == .greaterMending { b.set(6, 3, 0xFFD040) }
 	}
 	b.outline(0x1A1410)
 	return b
 }
 
-extension Art {
-	func weatherIcon(_ k: WeatherKind, _ snow: Bool) -> Image {
-		let key: Int = k.rawValue * 2 + (snow ? 1 : 0)
-		if let i = wxIcons[key] { return i }
-		let img: Image = pixImage(weatherIconBuf(k, snow))
-		wxIcons[key] = img
-		return img
-	}
+/// An infusion compound's icon: a stoppered phial with a swirl in the infusion's colour, ringed in
+/// its rarity's colour
+func iconCompound(_ i: Infusion) -> PixelBuf {
+	var b = PixelBuf(w: 12, h: 12)
+	let c: UInt32 = i.color
+	let ring: UInt32 = i.rarity.color
+	b.rect(5, 0, 2, 2, 0x6A6E78)
+	b.rect(4, 2, 4, 1, ring)
+	b.rect(3, 3, 6, 7, 0x2A2A34)
+	b.rect(4, 4, 4, 5, c)
+	b.set(4, 4, shadeRGB(c, 1.4))
+	b.set(6, 6, shadeRGB(c, 0.6))
+	b.set(5, 7, shadeRGB(c, 1.3))
+	b.rect(3, 10, 6, 1, ring)
+	b.outline(0x1A1410)
+	return b
 }
 
-extension WorldRenderer {
-	/// The sky's share of the weather: cloud cover and storm darkness, stars and sun hidden, the
-	/// glow of lightning, and a hurricane's wall of cloud coming in off the sea
-	static func drawSkyWeather(_ ctx: inout GraphicsContext, _ W: Double, _ H: Double, _ g: Game, _ v: View2D, _ day: Double) {
-		let L: LocalWeather = g.wxHere
-		let full: CGRect = mkRect(0, 0, W, H)
-		let cl: Double = L.cloud
-		if cl > 0.05 { fillRect(&ctx, full, Color(hex: 0x66707C, alpha: 0.7 * cl * max(0.3, day))) }
-		let storm: Double = clampD((cl - 0.65) * 2.5, 0, 1) * (0.5 + 0.5 * L.precip)
-		if storm > 0.02 { fillRect(&ctx, full, Color(hex: 0x262C36, alpha: 0.42 * storm * max(0.4, day))) }
-		if L.snow && L.precip > 0.4 { fillRect(&ctx, full, Color(hex: 0xD8E0EA, alpha: 0.3 * L.precip * day)) }
+/// The icon of a suit part, plate, core or module
+func iconExo(_ it: Item) -> PixelBuf {
+	var b = PixelBuf(w: 12, h: 12)
+	switch it {
+	case .exoPart(let p, let m):
+		let c: UInt32 = m.color
+		let hi: UInt32 = shadeRGB(c, 1.25)
+		let lo: UInt32 = shadeRGB(c, 0.7)
+		switch p {
+		case .helmet:
+			b.rect(3, 2, 6, 7, c); b.rect(4, 1, 4, 1, c); b.rect(3, 5, 6, 2, 0x60E0FF); b.rect(3, 2, 6, 1, hi); b.rect(3, 8, 6, 1, lo)
+		case .chestFrame:
+			b.rect(2, 2, 8, 7, c); b.rect(3, 9, 6, 2, lo); b.rect(0, 2, 2, 3, c); b.rect(10, 2, 2, 3, c)
+			b.rect(5, 4, 2, 2, 0xFFC830); b.rect(2, 2, 8, 1, hi)
+		case .arm:
+			b.rect(4, 1, 4, 4, c); b.rect(5, 5, 3, 4, lo); b.rect(5, 9, 3, 2, 0x3A3E48); b.rect(4, 1, 4, 1, hi)
+		case .legs:
+			b.rect(2, 1, 8, 2, lo); b.rect(2, 3, 3, 8, c); b.rect(7, 3, 3, 8, c); b.rect(2, 6, 3, 1, hi); b.rect(7, 6, 3, 1, hi)
+		case .boots:
+			b.rect(1, 5, 4, 4, c); b.rect(7, 5, 4, 4, c); b.rect(0, 9, 5, 2, lo); b.rect(7, 9, 5, 2, lo); b.rect(1, 5, 4, 1, hi); b.rect(7, 5, 4, 1, hi)
+		}
+	case .exoPlate(let m):
+		let c: UInt32 = m.color
+		b.rect(1, 2, 10, 8, shadeRGB(c, 0.75)); b.rect(2, 3, 8, 6, c); b.rect(2, 3, 8, 1, shadeRGB(c, 1.3))
+		b.set(2, 3, 0x3A3E48); b.set(9, 3, 0x3A3E48); b.set(2, 8, 0x3A3E48); b.set(9, 8, 0x3A3E48)
+	case .exoCore(let k):
+		let c: UInt32 = k.color
+		b.ellipse(6, 6, 4.6, 4.6, 0x3A3E48); b.ellipse(6, 6, 3.4, 3.4, shadeRGB(c, 0.7)); b.ellipse(6, 6, 2.2, 2.2, c)
+		b.set(5, 5, 0xFFFFFF); b.rect(5, 0, 2, 2, 0x6A6E78); b.rect(5, 10, 2, 2, 0x6A6E78)
+	case .exoModule(let m):
+		let c: UInt32 = m.color
+		b.rect(1, 2, 10, 8, 0x3A3E48); b.rect(2, 3, 8, 6, 0x5A6270)
+		switch m {
+		case .drill: b.rect(3, 5, 3, 2, c); b.rect(6, 5, 2, 2, shadeRGB(c, 0.8)); b.set(8, 5, c); b.set(9, 6, c)
+		case .lamp: b.ellipse(6, 6, 2.2, 2.2, c); b.set(6, 6, 0xFFFFFF)
+		case .hover: b.rect(3, 4, 2, 4, 0x9AA4B0); b.rect(7, 4, 2, 4, 0x9AA4B0); b.rect(3, 8, 2, 1, c); b.rect(7, 8, 2, 1, c)
+		case .cargo: b.rect(3, 4, 6, 4, c); b.rect(3, 4, 6, 1, shadeRGB(c, 1.3)); b.set(6, 6, 0xE8C060)
+		case .barrier: b.ellipse(6, 6, 3.0, 3.0, c); b.ellipse(6, 6, 1.8, 1.8, 0x5A6270)
+		case .gauntlet: b.line(3, 8, 6, 4, c); b.line(6, 4, 5, 6, c); b.line(5, 6, 8, 3, c)
+		default: b.rect(3, 4, 6, 4, c); b.rect(4, 5, 4, 2, shadeRGB(c, 1.3))
+		}
+		b.rect(1, 2, 10, 1, shadeRGB(0x5A6270, 1.3))
+	default: break
 	}
-
-	/// The weather on the horizon: a hurricane's wall of cloud coming in off the sea
-	static func drawSkyWeatherFront(_ ctx: inout GraphicsContext, _ W: Double, _ H: Double, _ g: Game) {
-		if let h = g.weather.hurricane, h.stage.rawValue <= HurricaneStage.intensifying.rawValue {
-			drawStormWall(&ctx, W, H, g, h)
-		}
-	}
-
-	/// A towering wall of dark cloud on the sea-side horizon, growing as a hurricane comes in, with
-	/// curtains of rain hanging under it
-	static func drawStormWall(_ ctx: inout GraphicsContext, _ W: Double, _ H: Double, _ g: Game, _ h: HurricaneEvent) {
-		var prog: Double = clampD(h.t / max(1, h.stageDur), 0, 1)
-		if h.stage == .intensifying { prog = 1.0 + prog }
-		let width: Double = W * (0.22 + 0.3 * prog)
-		let east: Bool = h.side > 0
-		let step: Double = 8.0
-		var wall: Path = Path()
-		var shafts: Path = Path()
-		var sx: Double = 0
-		while sx < width {
-			let x: Double = east ? W - sx - step : sx
-			let n: Double = fbm1(sx / 60.0 + g.weather.t * 0.05, 4411, 3)
-			// the wall rises toward the open sea, its top billowing
-			let rise: Double = 0.35 + 0.5 * pow(1.0 - sx / width, 0.6) + 0.12 * n
-			let top: Double = floor(H * (0.7 - rise * 0.75) / 4.0) * 4.0
-			let base: Double = H * 0.7
-			wall.addRect(mkRect(x, top, step + 1.0, base - top))
-			if hash2(Int(sx / step), 3, 91) < 0.5 { shafts.addRect(mkRect(x + 2, base, 3, H * 0.2)) }
-			sx += step
-		}
-		ctx.fill(wall, with: .color(Color(hex: 0x2E333C, alpha: 0.88)))
-		ctx.fill(shafts, with: .color(Color(hex: 0x4A5464, alpha: 0.35)))
-	}
-
-	/// Lying snow (deeper where the wind drifts it), wet ground and puddles on the open surfaces in
-	/// view. Drawn over the terrain and under everything else, so the light map shades it like the ground.
-	static func drawGroundWeather(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
-		if g.world.dim != .overworld || !g.settings.weatherOn { return }
-		if g.weather.cells.isEmpty { return }
-		let x0: Int = Int(floor(v.left)) - 1
-		let x1: Int = Int(ceil(v.left + v.wTiles)) + 1
-		let tp: Double = v.tp
-		var snowP: Path = Path()
-		var wetP: Path = Path()
-		var pudP: Path = Path()
-		var anySnow: Bool = false
-		var anyWet: Bool = false
-		var wetSum: Double = 0
-		var wetN: Double = 0
-		let lee: Double = g.weather.wind >= 0 ? 1 : -1
-		let raining: Bool = g.wxHere.precip > 0.1 && !g.wxHere.snow
-		var ripples: Path = Path()
-		for x in x0...x1 {
-			let top: Int = g.world.rainTop(x)
-			if top <= 0 || top >= g.world.H - 2 { continue }
-			let wy: Double = Double(top)
-			if wy < v.top - 1 || wy > v.top + v.hTiles + 1 { continue }
-			let t: Tile = g.world.tile(x, top)
-			if t.liquid { continue }
-			let wx: Double = Double(x) + 0.5
-			let sc: Double = g.groundValue(wx, true)
-			let wet: Double = g.groundValue(wx, false)
-			let sx: Double = v.sx(Double(x))
-			let sy: Double = v.sy(wy)
-			if sc > 0.05 {
-				let h0: Double = hash2(x, 41, 3)
-				let dr: Double = 0.5 + 0.5 * sin(Double(x) * 0.37 * lee)
-				let hh: Double = tp * min(0.45, sc * (0.12 + 0.22 * h0 + 0.15 * dr))
-				let snapH: Double = max(2.0, floor(hh / 2.0) * 2.0)
-				snowP.addRect(mkRect(sx, sy - snapH + 2.0, tp + 0.5, snapH))
-				anySnow = true
-			}
-			if wet > 0.08 && t.solid && !isLeafTile(t) && sc < 0.3 {
-				wetP.addRect(mkRect(sx, sy, tp + 0.5, max(2.0, tp * 0.14)))
-				wetSum += wet
-				wetN += 1
-				anyWet = true
-				let level: Bool = g.world.rainTop(x - 1) == top && g.world.rainTop(x + 1) == top
-				if wet > 0.35 && t != .sand && level && hash2(x, 43, 5) < (wet - 0.3) * 0.9 {
-					pudP.addRect(mkRect(sx + 1.0, sy - 2.0, tp - 2.0, 4.0))
-					if raining && hash2(x, Int(g.clock * 3.0), 47) < 0.5 {
-						let rx: Double = sx + tp * (0.2 + 0.6 * hash2(x, Int(g.clock * 3.0), 48))
-						ripples.addRect(mkRect(rx - 2.0, sy - 3.0, 4.0, 1.0))
-					}
-				}
-			}
-		}
-		if anyWet {
-			let a: Double = 0.22 * clampD(wetSum / max(1, wetN), 0, 1)
-			ctx.fill(wetP, with: .color(Color(hex: 0x10203A, alpha: a)))
-			ctx.fill(pudP, with: .color(Color(hex: 0x6A9AD0, alpha: 0.62)))
-			ctx.fill(ripples, with: .color(Color(hex: 0xD8ECFF, alpha: 0.7)))
-		}
-		if anySnow { ctx.fill(snowP, with: .color(Color(hex: 0xF4F8FF, alpha: 0.95))) }
-	}
-
-	/// Rain and snow falling in world space, slanted and carried by the wind and stopping on the first
-	/// thing in their way; splashes where rain lands; hail from the pool; blown dust and grass bent
-	/// over in the wind
-	static func drawPrecip(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
-		if (g.world.dim != .overworld && g.customDim == nil) || !g.settings.weatherOn { return }
-		let dens: Double = clampD(g.settings.weatherParticles, 0.2, 1.0)
-		let tp: Double = v.tp
-		let bands: Int = 8
-		var amt: [Double] = [Double](repeating: 0, count: bands)
-		var cold: [Bool] = [Bool](repeating: false, count: bands)
-		var anyP: Double = 0
-		let midY: Double = v.top + v.hTiles * 0.5
-		for b in 0..<bands {
-			let x: Double = v.left + v.wTiles * (Double(b) + 0.5) / Double(bands)
-			let L: LocalWeather = g.weatherAt(x, midY)
-			amt[b] = L.precip
-			cold[b] = L.snow
-			anyP = max(anyP, L.precip)
-		}
-		let wind: Double = g.wxHere.wind
-		let clock: Double = g.clock
-		if anyP > 0.02 {
-			let n: Int = Int(300.0 * dens)
-			let span: Double = v.hTiles + 6.0
-			let cell: Double = v.wTiles + 8.0
-			let x0: Double = v.left - 4.0
-			var rain: Path = Path()
-			var heavy: Path = Path()
-			var snow: Path = Path()
-			var streak: Path = Path()
-			for i in 0..<n {
-				let fx: Double = hash2(i, 11, 77)
-				let fy: Double = hash2(i, 12, 77)
-				let fz: Double = hash2(i, 13, 77)
-				let fw: Double = hash2(i, 14, 77)
-				// which band it falls in decides whether it falls at all (storm cells have edges)
-				let guess: Double = x0 + fx * cell
-				let bi: Int = clampI(Int((guess - v.left) / v.wTiles * Double(bands)), 0, bands - 1)
-				let a: Double = amt[bi]
-				if fw > a { continue }
-				let isSnow: Bool = cold[bi]
-				let speed: Double = isSnow ? 2.6 + fz * 1.6 : 19.0 + fz * 7.0
-				let vx: Double = isSnow ? wind * 0.85 : wind * 0.75
-				let fallen: Double = (fy * span + clock * speed).truncatingRemainder(dividingBy: span)
-				let wy: Double = v.top - 3.0 + fallen
-				var raw: Double = fx * cell + vx * (fallen / speed)
-				if isSnow { raw += sin(clock * 1.3 + Double(i)) * 0.5 }
-				let rel: Double = raw.truncatingRemainder(dividingBy: cell)
-				let wx: Double = x0 + (rel < 0 ? rel + cell : rel)
-				if wy >= Double(g.world.rainTop(Int(floor(wx)))) { continue }
-				let sx: Double = v.sx(wx)
-				let sy: Double = v.sy(wy)
-				if isSnow {
-					if abs(vx) > 7.0 {
-						let l: Double = tp * 0.45
-						streak.move(to: mkPoint(sx, sy))
-						streak.addLine(to: mkPoint(sx - (vx > 0 ? l : -l), sy - l * 0.25))
-					} else {
-						let s: Double = fz > 0.7 ? 3.0 : 2.0
-						snow.addRect(mkRect(sx, sy, s, s))
-					}
-				} else {
-					let len: Double = (a > 0.6 ? 0.75 : 0.5) * tp
-					let dx: Double = vx / speed * len
-					if a > 0.6 && fz < 0.5 {
-						heavy.move(to: mkPoint(sx, sy))
-						heavy.addLine(to: mkPoint(sx - dx, sy - len))
-					} else {
-						rain.move(to: mkPoint(sx, sy))
-						rain.addLine(to: mkPoint(sx - dx, sy - len))
-					}
-				}
-			}
-			// a mod's rain colour (the Overworld's), else the game's
-			let rc: UInt32 = g.world.dim == .overworld ? (ModRuntime.shared.weather?.rainColor ?? 0) : 0
-			ctx.stroke(rain, with: .color(Color(hex: rc != 0 ? rc : 0xA8C8F0, alpha: 0.45)), lineWidth: 1.5)
-			ctx.stroke(heavy, with: .color(Color(hex: rc != 0 ? shadeRGB(rc, 0.9) : 0x9CBCE4, alpha: 0.55)), lineWidth: 2.0)
-			ctx.fill(snow, with: .color(Color.white.opacity(0.85)))
-			ctx.stroke(streak, with: .color(Color.white.opacity(0.7)), lineWidth: 2.0)
-			drawSplashes(&ctx, g, v, amt, cold)
-		}
-		drawHail(&ctx, g, v)
-		drawWindFX(&ctx, g, v)
-	}
-
-	/// Little crowns of spray where rain is landing on open ground
-	static func drawSplashes(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D, _ amt: [Double], _ cold: [Bool]) {
-		let x0: Int = Int(floor(v.left))
-		let x1: Int = Int(ceil(v.left + v.wTiles))
-		let bands: Int = amt.count
-		let tick: Int = Int(g.clock * 7.0)
-		var p: Path = Path()
-		var x: Int = x0
-		while x <= x1 {
-			let bi: Int = clampI(Int((Double(x) - v.left) / v.wTiles * Double(bands)), 0, bands - 1)
-			let a: Double = amt[bi]
-			if a > 0.05 && !cold[bi] && hash2(x, tick, 9) < a * 0.3 {
-				let top: Int = g.world.rainTop(x)
-				let wy: Double = Double(top)
-				if top > 0 && v.visible(Double(x), wy, 1) && !g.world.tile(x, top).liquid {
-					let ph: Double = (g.clock * 7.0).truncatingRemainder(dividingBy: 1.0)
-					let sx: Double = v.sx(Double(x) + 0.2 + 0.6 * hash2(x, tick, 10))
-					let sy: Double = v.sy(wy)
-					let up: Double = 3.0 + 4.0 * ph
-					p.addRect(mkRect(sx - 3.0 - ph * 2.0, sy - up, 2, 2))
-					p.addRect(mkRect(sx + 1.0 + ph * 2.0, sy - up, 2, 2))
-				}
-			}
-			x += 1
-		}
-		ctx.fill(p, with: .color(Color(hex: 0xC8DCF4, alpha: 0.6)))
-	}
-
-	static func drawHail(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
-		if g.hailPool.isEmpty { return }
-		var p: Path = Path()
-		var any: Bool = false
-		for s in g.hailPool where s.on {
-			if !v.visible(s.x, s.y, 1) { continue }
-			let r: Double = max(2.0, s.size * v.tp)
-			p.addRect(mkRect(v.sx(s.x) - r * 0.5, v.sy(s.y) - r * 0.5, r, r))
-			any = true
-		}
-		if !any { return }
-		ctx.fill(p, with: .color(Color(hex: 0xF0F8FF, alpha: 0.95)))
-		ctx.stroke(p, with: .color(Color(hex: 0x9AB0C8, alpha: 0.6)), lineWidth: 1)
-	}
-
-	/// Streaks of blown air (dust in dry country) and the grass bending over in the wind
-	static func drawWindFX(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
-		let wind: Double = g.wxHere.wind
-		let aw: Double = abs(wind)
-		if aw < 2.5 { return }
-		let tp: Double = v.tp
-		let dens: Double = clampD(g.settings.weatherParticles, 0.2, 1.0)
-		if aw > 5.0 {
-			let n: Int = min(48, Int((aw - 5.0) * 4.0 * dens))
-			let cell: Double = v.wTiles + 8.0
-			let x0: Double = v.left - 4.0
-			let dry: Bool = g.biomeHere == .desert || g.biomeHere == .savanna
-			var p: Path = Path()
-			for i in 0..<n {
-				let fx: Double = hash2(i, 21, 55)
-				let fy: Double = hash2(i, 22, 55)
-				let fz: Double = hash2(i, 23, 55)
-				let raw: Double = (fx * cell + g.clock * wind * (1.1 + fz)).truncatingRemainder(dividingBy: cell)
-				let wx: Double = x0 + (raw < 0 ? raw + cell : raw)
-				let wy: Double = v.top + fy * v.hTiles
-				if wy >= Double(g.world.rainTop(Int(floor(wx)))) { continue }
-				let l: Double = tp * (0.8 + 1.2 * fz) * min(1.6, aw / 10.0)
-				let sx: Double = v.sx(wx)
-				let sy: Double = floor(v.sy(wy))
-				p.addRect(mkRect(wind > 0 ? sx - l : sx, sy, l, dry ? 2 : 1))
-			}
-			ctx.fill(p, with: .color(dry ? Color(hex: 0xD8C890, alpha: 0.4) : Color.white.opacity(0.22)))
-		}
-		// grass bent over by the wind on open ground near the surface
-		let x0: Int = Int(floor(v.left))
-		let x1: Int = Int(ceil(v.left + v.wTiles))
-		let lean: Double = clampD(wind / 14.0, -1, 1) * 0.3
-		var blades: Path = Path()
-		var any: Bool = false
-		for x in x0...x1 {
-			let top: Int = g.world.rainTop(x)
-			if top <= 0 || !v.visible(Double(x), Double(top), 1) { continue }
-			let t: Tile = g.world.tile(x, top)
-			if t != .grass && t != .dryGrass && t != .jungleGrass && t != .mossGrass { continue }
-			let sx: Double = v.sx(Double(x))
-			let sy: Double = v.sy(Double(top))
-			for k in 0..<2 {
-				let bx: Double = sx + tp * (0.25 + 0.5 * Double(k))
-				let sway: Double = (lean + sin(g.clock * 3.1 + Double(x) * 0.9 + Double(k)) * 0.06 * g.weather.gust) * tp
-				blades.move(to: mkPoint(bx, sy + 1.0))
-				blades.addLine(to: mkPoint(bx + sway, sy - tp * 0.26))
-				any = true
-			}
-		}
-		if any { ctx.stroke(blades, with: .color(Color(hex: 0x6EB848, alpha: 0.9)), lineWidth: max(1.5, tp * 0.07)) }
-	}
-
-	/// The tornado: a swaying funnel of grey bands that turn as they rise, debris flung round it and
-	/// a skirt of dust at its foot. While forming it only reaches part of the way down.
-	static func drawTornado(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
-		guard let e = g.weather.tornado, g.world.dim == .overworld, g.settings.weatherOn else { return }
-		let fn: Double = e.funnel
-		if fn <= 0.02 { return }
-		let ground: Double = g.tornadoGround > 0 ? g.tornadoGround : Double(g.world.surfaceY(Int(floor(e.x))))
-		let cloudBase: Double = ground - 32.0
-		if !v.visible(e.x, ground - 22.0, 40) { return }
-		let tp: Double = v.tp
-		let px: Double = tp / 8.0
-		let reach: Double = e.phase == 0 ? cloudBase + (ground - cloudBase) * min(1.0, fn / 0.55) * 0.75 : ground
-		var dark: Path = Path()
-		var light: Path = Path()
-		var y: Double = cloudBase
-		let bandH: Double = 0.5
-		while y < reach {
-			let hf: Double = (ground - y) / (ground - cloudBase)
-			let w: Double = (0.6 + 6.8 * pow(hf, 1.35)) * (0.5 + 0.5 * fn)
-			let sway: Double = sin(g.clock * 1.6 + hf * 3.0) * (0.4 + hf * 1.6)
-			let cx: Double = e.x + sway
-			let sx: Double = floor(v.sx(cx - w) / px) * px
-			let ex: Double = floor(v.sx(cx + w) / px) * px
-			let sy: Double = floor(v.sy(y) / px) * px
-			let stripe: Int = Int(floor(hf * 30.0 - g.clock * 5.0)) & 3
-			let r: CGRect = mkRect(sx, sy, max(px, ex - sx), bandH * tp + 1.0)
-			if stripe == 0 { light.addRect(r) } else { dark.addRect(r) }
-			y += bandH
-		}
-		let a: Double = min(1.0, fn * 1.2)
-		ctx.fill(dark, with: .color(Color(hex: 0x40434A, alpha: 0.95 * a)))
-		ctx.fill(light, with: .color(Color(hex: 0x5E626B, alpha: 0.95 * a)))
-		if e.phase == 0 { return }
-		// debris whirling round it, and dust at the foot
-		var deb: Path = Path()
-		var leaf: Path = Path()
-		for i in 0..<30 {
-			let hf: Double = hash2(i, 61, 7) * 0.7
-			let wy: Double = ground - hf * (ground - cloudBase)
-			let w: Double = (0.6 + 6.8 * pow(hf, 1.35)) * 1.2 + 0.7
-			let ang: Double = g.clock * (3.0 + hash2(i, 62, 7) * 2.0) + Double(i) * 1.7
-			let wx: Double = e.x + cos(ang) * w + sin(g.clock * 1.6 + hf * 3.0) * (0.4 + hf * 1.6)
-			let s: Double = max(2.0, tp * (0.12 + 0.12 * hash2(i, 63, 7)))
-			let r: CGRect = mkRect(v.sx(wx), v.sy(wy), s, s)
-			if i % 3 == 0 { leaf.addRect(r) } else { deb.addRect(r) }
-		}
-		ctx.fill(deb, with: .color(Color(hex: 0x6A5A44, alpha: 0.9 * a)))
-		ctx.fill(leaf, with: .color(Color(hex: 0x4E7A3A, alpha: 0.9 * a)))
-		var dust: Path = Path()
-		for k in 0..<5 {
-			let off: Double = (Double(k) - 2.0) * 1.6 + sin(g.clock * 2.0 + Double(k)) * 0.5
-			let rw: Double = (2.2 + hash2(k, 64, 7) * 1.4) * tp
-			let rh: Double = rw * 0.45
-			dust.addEllipse(in: mkRect(v.sx(e.x + off) - rw * 0.5, v.sy(ground) - rh * 0.9, rw, rh))
-		}
-		ctx.fill(dust, with: .color(Color(hex: 0x8A7A60, alpha: 0.45 * a)))
-	}
-
-	/// Storm waves along the open sea's surface (a hurricane or a strong wind), with foam on the crests
-	static func drawWaves(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
-		if g.world.dim != .overworld || !g.settings.weatherOn { return }
-		let aw: Double = abs(g.weather.wind)
-		let rough: Double = max(g.wxHere.hurricane, clampD((aw - 6.0) / 10.0, 0, 1) * 0.6)
-		if rough < 0.05 { return }
-		let sea: Int = WorldGen.sea
-		if Double(sea) < v.top - 3.0 || Double(sea) > v.top + v.hTiles + 3.0 { return }
-		let tp: Double = v.tp
-		let dir: Double = g.weather.wind >= 0 ? 1 : -1
-		var body: Path = Path()
-		var foam: Path = Path()
-		let x0: Int = Int(floor(v.left))
-		let x1: Int = Int(ceil(v.left + v.wTiles))
-		for x in x0...x1 {
-			// the water's surface at sea level, or a block or two above it where a surge has come in
-			var top: Int = -1
-			for y in (sea - 2)...sea where g.world.tile(x, y) == .water && g.world.tile(x, y - 1) == .air {
-				top = y
-				break
-			}
-			if top < 0 { continue }
-			let sy: Double = v.sy(Double(top))
-			let ph: Double = Double(x) * 0.42 - g.clock * 2.6 * dir
-			let s: Double = sin(ph)
-			let hgt: Double = floor(rough * 1.6 * (0.55 + 0.45 * s) * tp / 2.0) * 2.0
-			let sx: Double = v.sx(Double(x))
-			body.addRect(mkRect(sx, sy - hgt, tp + 0.5, hgt))
-			if s > 0.55 { foam.addRect(mkRect(sx, sy - hgt - 2.0, tp + 0.5, 3.0)) }
-		}
-		ctx.fill(body, with: .color(Color(hex: artGrade(0x3B6FC8), alpha: 0.78)))
-		ctx.fill(foam, with: .color(Color.white.opacity(0.75)))
-	}
-
-	/// Lightning (drawn over the darkness, so it lights up the night) and the warning glow where a
-	/// strike is about to land
-	static func drawBolts(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
-		let tp: Double = v.tp
-		if let m = g.strikeMark {
-			let k: Double = clampD(1.0 - m.t / max(0.01, m.total), 0, 1)
-			let pulse: Double = 0.5 + 0.5 * sin(g.clock * 18.0)
-			let a: Double = (0.25 + 0.5 * k) * (g.settings.reduceFlashes ? 0.7 : (0.6 + 0.4 * pulse))
-			let cx: Double = v.sx(m.x)
-			let cy: Double = v.sy(m.y)
-			fillRect(&ctx, mkRect(cx - tp * 0.15, cy - tp * 6.0, tp * 0.3, tp * 6.0), Color(hex: 0xCFE4FF, alpha: a * 0.35))
-			fillOval(&ctx, mkRect(cx - tp * 1.2, cy - tp * 0.4, tp * 2.4, tp * 0.8), Color(hex: 0xCFE4FF, alpha: a * 0.6))
-		}
-		if g.bolts.isEmpty { return }
-		let soft: Bool = g.settings.reduceFlashes
-		for b in g.bolts {
-			let k: Double = clampD(b.life / b.maxLife, 0, 1)
-			// a double flicker (steady when flashes are turned down)
-			let flick: Double = soft ? 0.8 : ((b.life > b.maxLife * 0.55 || b.life < b.maxLife * 0.3) ? 1.0 : 0.45)
-			var main: Path = Path()
-			for (i, p) in b.pts.enumerated() {
-				let pt: CGPoint = mkPoint(v.sx(p.0), v.sy(p.1))
-				if i == 0 { main.move(to: pt) } else { main.addLine(to: pt) }
-			}
-			var forks: Path = Path()
-			for f in b.forks {
-				for (i, p) in f.enumerated() {
-					let pt: CGPoint = mkPoint(v.sx(p.0), v.sy(p.1))
-					if i == 0 { forks.move(to: pt) } else { forks.addLine(to: pt) }
-				}
-			}
-			ctx.stroke(main, with: .color(Color(hex: 0x9EC0FF, alpha: 0.35 * k * flick)), lineWidth: max(4.0, tp * 0.45))
-			ctx.stroke(main, with: .color(Color.white.opacity(k * flick)), lineWidth: 2.5)
-			ctx.stroke(forks, with: .color(Color(hex: 0xDDE8FF, alpha: 0.8 * k * flick)), lineWidth: 1.5)
-		}
-	}
-
-	/// The air itself: a whiteout in a blizzard, grey murk in heavy rain, the dark under a tornado,
-	/// frost creeping in at the edges when the player is freezing, and lightning's flash
-	static func drawWeatherOverlay(_ ctx: inout GraphicsContext, _ W: Double, _ H: Double, _ g: Game, _ v: View2D) {
-		if g.world.dim != .overworld { return }
-		let L: LocalWeather = g.wxHere
-		let full: CGRect = mkRect(0, 0, W, H)
-		// heavy cloud dims the daylight evenly over everything (a storm by day is dark)
-		let dim: Double = clampD((L.cloud - 0.55) * 2.2, 0, 1) * g.dayFactor
-		if g.settings.weatherOn && dim > 0.02 { fillRect(&ctx, full, Color(hex: 0x0A0E16, alpha: 0.22 * dim)) }
-		if g.settings.weatherOn && g.shelterLevel <= 1 {
-			if L.fog > 0.02 {
-				if L.snow {
-					fillRect(&ctx, full, Color(hex: 0xDDE5EE, alpha: min(0.55, L.fog * 0.6)))
-				} else {
-					fillRect(&ctx, full, Color(hex: 0x7A8696, alpha: min(0.25, L.fog * 0.35)))
-				}
-			}
-			if L.tornado > 0.05 { fillRect(&ctx, full, Color(hex: 0x1E2228, alpha: 0.22 * L.tornado)) }
-			// blowing dust in dry country
-			let aw: Double = abs(L.wind)
-			let b: Biome = g.biomeHere
-			if aw > 6 && (b == .desert || b == .savanna) {
-				fillRect(&ctx, full, Color(hex: 0xD2B47A, alpha: 0.3 * clampD((aw - 6.0) / 8.0, 0, 1) * max(0.35, g.dayFactor)))
-			}
-		}
-		if g.bodyCold > 0.3 { edgeVignette(&ctx, W, H, 0xCFEFFF, (g.bodyCold - 0.3) * 0.7) }
-		if g.skyFlash > 0.01 {
-			let inside: Double = g.shelterLevel >= 3 ? 0.3 : 1.0
-			let a: Double = g.skyFlash * (g.settings.reduceFlashes ? 0.25 : 0.38) * inside
-			fillRect(&ctx, full, Color(hex: 0xEEF4FF, alpha: a))
-		}
-	}
+	b.outline(0x1A1410)
+	return b
 }
 
-// MARK: - Weather devices: station, siren, lightning rod, turbine, rain barrels, vane, heater
-// Every device reads the simulation itself (a station's forecast is the simulation's own plan, a vane
-// points where the wind actually blows, a barrel fills with the rain that actually falls on it). Their
-// places come from a per-chunk list that is rebuilt only when the chunk changes.
+// ===== p31b_building =====
 
-struct DeviceSpot {
-	var x: Int
-	var y: Int
-	var t: Tile
+// MARK: - Building: blocks placed as walls, ladders built on, furniture, lifts
+
+/// A wall made from any block (as opposed to the seven old wall kinds) is stored in the wall layer as
+/// 8 + the block's tile number
+let blockWallBase: Int = 8
+
+/// The wall value of a block placed as a wall (0 if it cannot be one)
+func blockWallValue(_ t: Tile) -> Int {
+	let v: Int = blockWallBase + Int(t.rawValue)
+	return v <= 255 ? v : 0
 }
 
-/// Blocks built to stand up to storms: the wind never moves them, and walls or a roof of them make a
-/// storm shelter
-func isStormproof(_ t: Tile) -> Bool {
+/// The block a wall was made from (nil for the old wall kinds)
+func blockWallTile(_ k: Int) -> Tile? {
+	if k < blockWallBase || k > 255 { return nil }
+	return Tile(rawValue: UInt8(k - blockWallBase))
+}
+
+/// Blocks that can be put up as a wall instead: anything solid that is only a block (not a machine,
+/// a chest, a door, the rift or bedrock)
+func canBeWall(_ t: Tile) -> Bool {
+	if !t.solid || t.liquid || t.isPower || t.hardness >= 9000 { return false }
+	if isDoor(t) || t == .chest || t == .furnace || t == .portalFrame || t == .portalOff || t == .portalOn { return false }
+	if t.isMod, let b = ModRuntime.shared.blockDef(t), b.function != .none { return false }
+	return blockWallValue(t) > 0
+}
+
+/// The words for one piece of furniture (nil for anything else)
+func furnitureBlurb(_ t: Tile) -> String? {
 	switch t {
-	case .stormBrick, .sandbag, .shutterClosed, .shingles: return true
-	default: return false
+	case .chair, .sofa: return "Furniture: tap it to sit down"
+	case .bedL, .bedR: return "Furniture: sleep through the night, and wake here"
+	case .cabinet, .wardrobe: return "Furniture: keeps things like a chest"
+	case .table, .shelf, .bookshelf: return "Furniture: things can stand on top"
+	case .floorLamp: return "Furniture: a bright lamp"
+	case .stairWoodR, .stairStoneR, .stairBrickR, .stairWoodL, .stairStoneL, .stairBrickL: return "Stairs: walk up them; they face the way you place them"
+	case .liftRail: return "Lift: a column of rails for a lift car"
+	case .liftButton: return "Lift: beside the rails, calls the car to this floor"
+	case .liftCar: return "Lift: place it on a lift rail"
+	default: return nil
 	}
-}
-
-func isWeatherDevice(_ t: Tile) -> Bool {
-	switch t {
-	case .weatherStation, .dopplerStation, .stormSiren, .lightningRod, .windTurbine, .rainBarrel, .rainCistern, .weatherVane: return true
-	default: return false
-	}
-}
-
-/// How far a lightning rod draws strikes (blocks to either side)
-let rodReach: Double = 14.0
-/// How far a turbine's charge reaches a Doppler station
-let turbineReach: Double = 10.0
-
-extension World {
-	/// Re-reads a chunk's weather facts if it has changed since: per column, the row rain first stops
-	/// at (anything solid, glass, leaves, platforms, water), and where its weather devices are
-	func weatherScan(_ c: Chunk) {
-		if c.wxRev == c.rev && c.wxTop.count == chunkW { return }
-		c.wxRev = c.rev
-		if c.wxTop.count != chunkW { c.wxTop = [Int](repeating: c.H, count: chunkW) }
-		c.wxDev.removeAll(keepingCapacity: true)
-		let H: Int = c.H
-		for lx in 0..<chunkW {
-			let base: Int = lx * H
-			var top: Int = H
-			var y: Int = 0
-			while y < H {
-				let raw: Int = Int(c.tiles[base + y])
-				if raw != 0 {
-					if top == H && Tile.rainStopTable[raw] { top = y }
-					if Tile.deviceTable[raw] { c.wxDev.append(DeviceSpot(x: c.x0 + lx, y: y, t: Tile.make(UInt8(raw)))) }
-				}
-				y += 1
-			}
-			c.wxTop[lx] = c.hasSky ? top : 0
-		}
-	}
-
-	/// The first row rain (or hail, or lightning) stops at in column x; 0 where nothing is loaded
-	func rainTop(_ x: Int) -> Int {
-		let cx: Int = floorDiv(x, chunkW)
-		guard let c = chunk(cx) else { return 0 }
-		weatherScan(c)
-		return c.wxTop[x - cx * chunkW]
-	}
-
-	/// Weather devices of the given kinds between columns x0 and x1 (loaded chunks only)
-	func devices(_ x0: Int, _ x1: Int, _ kinds: [Tile]) -> [DeviceSpot] {
-		var out: [DeviceSpot] = []
-		let c0: Int = floorDiv(x0, chunkW)
-		let c1: Int = floorDiv(x1, chunkW)
-		if c1 < c0 { return out }
-		for cx in c0...c1 {
-			guard let c = chunks[cx] else { continue }
-			weatherScan(c)
-			for d in c.wxDev where d.x >= x0 && d.x <= x1 && kinds.contains(d.t) { out.append(d) }
-		}
-		return out
-	}
-}
-
-/// What a weather station's screen shows, a line at a time
-struct StationLine {
-	var kind: WeatherKind?
-	var snow: Bool = false
-	var text: String
-	var sub: String = ""
-	var color: UInt32 = 0xE8F0E8
-}
-
-func roughWhen(_ s: Double) -> String {
-	if s < 90 { return "soon" }
-	if s < 300 { return "in a few minutes" }
-	if s < 600 { return "later on" }
-	return "much later"
-}
-
-func minutesText(_ s: Double) -> String {
-	let m: Int = Int((s / 60.0).rounded())
-	if m <= 0 { return "under a minute" }
-	return m == 1 ? "about 1 min" : joinText("about ", String(m), " min")
-}
-
-func windWords(_ w: Double) -> String {
-	let a: Double = abs(w)
-	let from: String = w > 0 ? "west" : "east"
-	let speed: String = String(Int(a.rounded()))
-	var how: String = "calm"
-	if a >= 13 { how = "gale" } else if a >= 8 { how = "strong" } else if a >= 4 { how = "breezy" } else if a >= 1.5 { how = "light" }
-	if a < 0.8 { return "Calm" }
-	return joinText("Wind ", speed, " blocks/s from the ", from, " (", how, ")")
 }
 
 extension Game {
-	/// The nearest lightning rod whose reach covers column x
-	func rodCovering(_ x: Double) -> DeviceSpot? {
-		let ix: Int = Int(floor(x))
-		let r: Int = Int(rodReach)
-		var best: DeviceSpot? = nil
-		var bd: Int = Int.max
-		for d in world.devices(ix - r, ix + r, [.lightningRod]) {
-			let dd: Int = abs(d.x - ix)
-			// a rod buried under a roof is no use: it has to stand in the open
-			if d.y >= world.rainTop(d.x) && d.y > 0 { continue }
-			if dd < bd {
-				bd = dd
-				best = d
-			}
-		}
-		return best
+	// MARK: walls
+
+	/// Whether the held item is a block that can go up as a wall (the HUD shows the WALL switch then)
+	var canToggleWall: Bool {
+		guard let it = heldItem, case .block(let t) = it else { return false }
+		return canBeWall(t.placedForm)
 	}
 
-	func deviceKey(_ d: DeviceSpot) -> String { return joinText(String(d.x), ",", String(d.y)) }
-
-	/// Rain barrels fill with the rain that falls on them, turbines store the wind's energy (and run
-	/// Doppler stations near them), and sirens sound when a storm worth warning of is near
-	func updateWeatherDevices(_ dt: Double) {
-		wxDevT -= dt
-		if wxDevT > 0 { return }
-		let step: Double = 0.5 - wxDevT
-		wxDevT = 0.5
-		sirenLevel = 0
-		if world.dim != .overworld { return }
-		let px: Int = Int(floor(pb.x))
-		let list: [DeviceSpot] = world.devices(px - 96, px + 96, [.rainBarrel, .rainCistern, .windTurbine, .stormSiren, .dopplerStation])
-		if list.isEmpty { return }
-		let warn: Bool = settings.weatherOn && sirenWorthy()
-		for d in list {
-			let k: String = deviceKey(d)
-			switch d.t {
-			case .rainBarrel, .rainCistern:
-				let cap: Double = d.t == .rainBarrel ? 8 : 32
-				let open: Bool = d.y < world.rainTop(d.x)
-				let L: LocalWeather = weatherAt(Double(d.x) + 0.5, Double(d.y))
-				if open && L.precip > 0.02 {
-					let rate: Double = (L.snow ? 0.012 : 0.04) * (d.t == .rainCistern ? 2.0 : 1.0)
-					weather.store[k] = min(cap, (weather.store[k] ?? 0) + L.precip * rate * step)
-				}
-			case .windTurbine:
-				let open: Bool = d.y - 1 < world.rainTop(d.x) || world.tile(d.x, d.y - 1) == .air
-				if open && settings.weatherOn {
-					// like a real turbine it needs some wind before it turns (2 blocks a second)
-					let w: Double = abs(weatherAt(Double(d.x) + 0.5, Double(d.y)).wind)
-					weather.store[k] = min(100, (weather.store[k] ?? 0) + max(0, w - 2.0) * 0.35 * step)
-				}
-			case .dopplerStation:
-				// the radar draws a little charge from a turbine close by
-				if let t = poweringTurbine(d) {
-					let tk: String = deviceKey(t)
-					weather.store[tk] = max(0, (weather.store[tk] ?? 0) - 0.1 * step)
-				}
-			case .stormSiren:
-				// sounds by itself for a dangerous storm, or whenever a pulse wire through it is on
-				if warn || pulseOnAt(d.x, d.y) {
-					let dist: Double = abs(Double(d.x) - pb.x)
-					sirenLevel = max(sirenLevel, clampD(1.0 - dist / 64.0, 0, 1))
-				}
-			default:
-				break
-			}
-		}
+	/// The HUD's WALL switch: blocks go up as passable walls, or solid as usual
+	func toggleWallMode() {
+		wallMode.toggle()
+		say(wallMode ? "Blocks now go up as walls you can walk through." : "Blocks now go up solid.", 1.6)
+		bumpHUD()
 	}
 
-	/// Storms a siren sounds for: a tornado forming or on the ground, a hurricane, a blizzard
-	func sirenWorthy() -> Bool {
-		if let e = weather.tornado, e.phase < 2, abs(e.x - pb.x) < 200 { return true }
-		if let h = weather.hurricane, h.stage != .clearing { return true }
-		if weather.kind == .blizzard && settings.allowBlizzard && wxHere.snow { return true }
+	/// Puts the held block up as a wall behind the aimed spot (passable, drawn darker, mined back into
+	/// the block)
+	func placeBlockAsWall(_ t: Tile) {
+		let v: Int = blockWallValue(t)
+		if v == 0 { return }
+		usePlaceWall(v)
+	}
+
+	// MARK: ladders
+
+	/// Holding a ladder against one already up builds it on: the next rung goes at the end the player
+	/// aims toward (down past its foot when aiming level or lower, up past its top when aiming above
+	/// the head; it stops when that end is out of reach or blocked), so a long ladder needs no tapping,
+	/// never has a gap and never doubles up. Each rung uses one ladder (none in creative, where it can
+	/// be built on up to 24 blocks away).
+	func extendLadder(_ tx: Int, _ ty: Int) -> Bool {
+		if world.tile(tx, ty) != .ladder { return false }
+		let up: Bool = aimY < pb.y - pb.h
+		for d in [up ? -1 : 1] {
+			var y: Int = ty
+			var n: Int = 0
+			while world.tile(tx, y + d) == .ladder && n < 400 {
+				y += d
+				n += 1
+			}
+			let ny: Int = y + d
+			if ny < 2 || ny >= world.H - 2 { continue }
+			let cur: Tile = world.tile(tx, ny)
+			if !(cur == .air || cur.liquid || (cur.isPlant && cur != .torch && cur != .lantern)) { continue }
+			// within reach (in creative, anywhere within 24 blocks)
+			let near: Bool = isCreative ? abs(Double(ny) + 0.5 - pb.cy) <= 24 && abs(Double(tx) + 0.5 - pb.x) <= 24 : inReach(Double(tx) + 0.5, Double(ny) + 0.5)
+			if !near { continue }
+			world.set(tx, ny, .ladder)
+			world.setBuilt(tx, ny, true)
+			if !isCreative { inv.removeAt(sel, 1) }
+			sfx(.place, 0.5)
+			placeCD = 0.12
+			swingT = 0.12
+			bumpHUD()
+			return true
+		}
 		return false
 	}
 
-	/// A turbine with charge to spare close enough to run a Doppler station
-	func poweringTurbine(_ d: DeviceSpot) -> DeviceSpot? {
-		let r: Int = Int(turbineReach)
-		for t in world.devices(d.x - r, d.x + r, [.windTurbine]) where abs(t.y - d.y) <= r {
-			if (weather.store[deviceKey(t)] ?? 0) > 2 { return t }
-		}
-		return nil
-	}
+	// MARK: furniture
 
-	/// Tapping a weather device
-	func useWeatherDevice(_ tx: Int, _ ty: Int, _ t: Tile) {
-		let d = DeviceSpot(x: tx, y: ty, t: t)
-		let k: String = deviceKey(d)
-		switch t {
-		case .weatherStation, .dopplerStation:
-			stationAt = d
-			showWeather = true
-			sfx(.tap, 0.6)
-			bumpHUD()
-		case .stormSiren:
-			let on: Bool = settings.weatherOn && sirenWorthy()
-			say(on ? "The siren is sounding: a dangerous storm is near. Take shelter!" : "Storm siren: it sounds by itself when a tornado, hurricane or blizzard comes near.", 3.0)
-		case .lightningRod:
-			let open: Bool = ty < world.rainTop(tx)
-			say(open ? "Lightning rod: strikes within 14 blocks either side come down here, harmlessly." : "This rod is under cover. A lightning rod only works out in the open, on top of things.", 3.0)
-		case .windTurbine:
-			let charge: Double = weather.store[k] ?? 0
-			if let st = heldStack, case .gun(.stormRod) = st.item, charge >= 50 {
-				var n: Int = 0
-				for i in 0..<inv.slots.count {
-					if var s = inv.slots[i], case .gun(.stormRod) = s.item, s.extra < GunType.stormRod.magazine {
-						s.extra = GunType.stormRod.magazine
-						inv.slots[i] = s
-						n += 1
-					}
-				}
-				if n > 0 {
-					weather.store[k] = charge - 50
-					sfx(.zap, 0.6)
-					say("The turbine's charge fills your storm rod.", 2.0)
-					bumpHUD()
-					return
-				}
+	/// Places a piece of furniture or a stair: a bed takes two tiles (its foot to the right of the
+	/// aimed one, or to the left if that is taken), stairs rise away from the player. True when it
+	/// was handled (placed or refused); false for anything else.
+	func placeSpecial(_ t: Tile, _ tx: Int, _ ty: Int) -> Bool {
+		if t == .oreCart { return placeOreCart(tx, ty) }
+		if stairSide(t) != 0 {
+			let s: Tile = stairSide(t) == 1 ? t : stairMirror(t)
+			let placed: Tile = aimX >= pb.x ? s : stairMirror(s)
+			if !canPlaceAt(tx, ty, placed) { return true }
+			finishPlace(placed, tx, ty)
+			return true
+		}
+		if t == .bedL || t == .bedR {
+			if !canPlaceAt(tx, ty, .bedL) { return true }
+			var hx: Int = tx
+			if !bedSpotFree(tx + 1, ty) {
+				if !bedSpotFree(tx - 1, ty) { say("A bed needs two spaces side by side.", 1.5); return true }
+				hx = tx - 1
 			}
-			let w: Double = abs(weatherAt(Double(tx) + 0.5, Double(ty)).wind)
-			say(joinText("Wind turbine: ", String(Int(charge.rounded())), "% charged (", w > 0.5 ? joinText("turning at ", String(Int(w.rounded())), " blocks/s of wind") : "becalmed", "). Runs a Doppler station within 10 blocks; tap it holding a storm rod to recharge the rod."), 3.5)
-		case .rainBarrel, .rainCistern:
-			let cap: Double = t == .rainBarrel ? 8 : 32
-			let have: Double = weather.store[k] ?? 0
-			if have >= 1.0 {
-				weather.store[k] = have - 1.0
-				giveItem(.gadget(.waterFlask), 1)
-				sfx(.splash, 0.5)
-				say(joinText("You fill a flask. ", String(Int(have - 1.0)), " of ", String(Int(cap)), " left."), 2.0)
-			} else {
-				say(joinText(t == .rainBarrel ? "Rain barrel" : "Rain cistern", ": ", String(format: "%.1f", have), " of ", String(Int(cap)), ". It fills when rain falls on it."), 2.5)
-			}
-		case .weatherVane:
-			let w: Double = weatherAt(Double(tx) + 0.5, Double(ty)).wind
-			say(joinText("Weather vane: ", windWords(w), "."), 2.5)
-		case .shutterClosed, .shutterOpen:
-			world.set(tx, ty, t == .shutterClosed ? .shutterOpen : .shutterClosed)
-			sfx(.door, 0.6)
-			light.valid = false
-		case .heater:
-			say("Heater: keeps you warm when you stand close to it, without the smoke of a fire.", 2.5)
-		default:
-			break
-		}
-	}
-
-	/// What the station that was tapped shows (a Doppler station near a charged turbine shows more,
-	/// and more exactly)
-	func stationReport() -> [StationLine] {
-		var out: [StationLine] = []
-		guard let st = stationAt else { return out }
-		let doppler: Bool = st.t == .dopplerStation
-		let powered: Bool = doppler && poweringTurbine(st) != nil
-		if !settings.weatherOn {
-			out.append(StationLine(kind: .clear, text: "The weather is switched off", sub: "Turn it on in Settings (WEATHER) to see forecasts."))
-			return out
-		}
-		let L: LocalWeather = weatherAt(Double(st.x) + 0.5, Double(st.y))
-		let fc: [ForecastLine] = forecast()
-		let now: ForecastLine = fc[0]
-		out.append(StationLine(kind: weather.kind, snow: L.snow, text: joinText("Now: ", weatherLabel(weather.kind, snow: L.snow)), sub: joinText(powered ? minutesText(now.dur) : roughWhen(now.dur), " more"), color: 0xFFFFFF))
-		let p: Double = pressureNow()
-		let trend: Double = pressureNext() - p
-		let tr: String = trend < -6 ? "falling fast" : (trend < -2 ? "falling" : (trend > 2 ? "rising" : "steady"))
-		let temp: String = L.chill > 0.8 ? "freezing" : (L.chill > 0.5 ? "cold" : (L.chill > 0.25 ? "cool" : (L.hot ? "hot" : "mild")))
-		out.append(StationLine(text: windWords(L.wind), sub: joinText("Pressure ", String(Int(p.rounded())), " hPa, ", tr, " · ", temp)))
-		// warnings from the simulation's events
-		if let e = weather.tornado {
-			let d: Double = e.x - pb.x
-			var line: String = joinText(e.phase == 0 ? "TORNADO FORMING " : "TORNADO ", String(Int(abs(d).rounded())), " blocks ", d > 0 ? "east" : "west")
-			var sub: String = joinText("Moving ", e.dir > 0 ? "east" : "west")
-			if powered {
-				let coming: Bool = (d > 0) != (e.dir > 0)
-				if coming && e.phase <= 1 {
-					let eta: Double = abs(d) / max(0.5, e.speed) + (e.phase == 0 ? max(0, e.warnDur - e.t) : 0)
-					sub = joinText(sub, " · reaches you in ", minutesText(eta))
-				} else {
-					sub = joinText(sub, " · moving away from you")
-				}
-				line = joinText(line, String(format: " · strength %d", Int((e.strength * 5.0).rounded())))
-			}
-			out.append(StationLine(kind: .tornado, text: line, sub: sub, color: 0xFF7060))
-		}
-		if let h = weather.hurricane {
-			let sub: String = powered ? joinText("Over in ", minutesText(h.timeLeft()), " · sea to the ", h.side > 0 ? "east" : "west") : "Stay off the coast and out of boats"
-			out.append(StationLine(kind: .hurricane, text: joinText("HURRICANE: ", h.stage.name), sub: sub, color: 0xFF7060))
-		}
-		if doppler && !powered { out.append(StationLine(text: "Radar unpowered", sub: "Put a charged wind turbine within 10 blocks for the full forecast", color: 0xFFC060)) }
-		// the rain that is on its way (radar)
-		if powered && L.precip < 0.05 && weather.precip > 0.15 {
-			let up: Double = weather.wind >= 0 ? -1 : 1
-			var dx: Double = 8
-			while dx <= 240 {
-				if coverAt(pb.x + up * dx) > 0.4 {
-					let speed: Double = max(0.3, abs(weather.wind) * 0.55)
-					out.append(StationLine(text: joinText("Rain ", String(Int(dx)), " blocks upwind"), sub: joinText("Reaches you in ", minutesText(dx / speed))))
-					break
-				}
-				dx += 8
-			}
-		}
-		// the plan
-		let n: Int = powered ? fc.count : min(3, fc.count)
-		if n > 1 {
-			for i in 1..<n {
-				let f: ForecastLine = fc[i]
-				let when: String = powered ? joinText("In ", minutesText(f.startsIn), ", for ", minutesText(f.dur)) : roughWhen(f.startsIn).capitalized
-				let warnCol: UInt32 = f.kind.severe ? 0xFFB060 : 0xE8F0E8
-				out.append(StationLine(kind: f.kind, snow: L.snow, text: weatherLabel(f.kind, snow: L.snow), sub: when, color: warnCol))
-			}
-		}
-		// devices close by
-		let rods: Int = world.devices(st.x - 40, st.x + 40, [.lightningRod]).count
-		let sirens: Int = world.devices(st.x - 64, st.x + 64, [.stormSiren]).count
-		out.append(StationLine(text: joinText("Lightning rods nearby: ", String(rods), " · sirens: ", String(sirens)), sub: doppler ? "Doppler station" : "Weather station (craft a Doppler station for exact times)"))
-		return out
-	}
-
-	/// A barometer in hand: less than a station tells, but always with you
-	func barometerReading() -> String {
-		if !settings.weatherOn { return "Barometer: steady (no weather)" }
-		let p: Double = pressureNow()
-		let trend: Double = pressureNext() - p
-		var look: String = "fair"
-		if trend < -6 || p < 995 { look = "storm likely" } else if trend < -2 { look = "unsettled" } else if trend > 2 { look = "clearing" }
-		let arrow: String = trend < -2 ? "▼" : (trend > 2 ? "▲" : "▶")
-		return joinText("Barometer ", String(Int(p.rounded())), " hPa ", arrow, " ", look)
-	}
-
-	/// Pouring a water flask: a crop grows a stage, a fire goes out, a burning player is doused
-	func useWaterFlask(_ pressed: Bool) {
-		if !pressed || useCD > 0 { return }
-		let tx: Int = Int(floor(aimX))
-		let ty: Int = Int(floor(aimY))
-		func spend() {
+			world.set(hx, ty, .bedL)
+			world.set(hx + 1, ty, .bedR)
+			world.setBuilt(hx, ty, true)
+			world.setBuilt(hx + 1, ty, true)
 			if !isCreative { inv.removeAt(sel, 1) }
-			useCD = 0.4
-			swingT = 0.18
-			sfx(.splash, 0.5)
-			spawnParticles(aimX, aimY, 0x8DBBFF, 8, 2.5, 0.4, 14)
+			sfx(.place, 0.6)
+			placeCD = 0.25
+			swingT = 0.14
 			bumpHUD()
+			return true
 		}
-		if inReach(aimX, aimY) {
-			let t: Tile = world.tile(tx, ty)
-			var grown: Tile? = nil
-			switch t {
-			case .wheat1: grown = .wheat2
-			case .wheat2: grown = .wheat3
-			case .carrot1: grown = .carrot2
-			case .carrot2: grown = .carrot3
-			default: break
-			}
-			if let g = grown {
-				world.set(tx, ty, g)
-				spend()
-				return
-			}
-			if let i = fireZones.firstIndex(where: { abs($0.x - aimX) < $0.r + 0.6 && abs($0.y - aimY) < 2.5 }) {
-				fireZones.remove(at: i)
-				spawnParticles(aimX, aimY, 0xC8C8C8, 10, 2.0, 0.8, -3)
-				spend()
-				return
-			}
+		if t == .liftCar {
+			placeLiftCar(tx, ty)
+			return true
 		}
-		if playerBurn > 0 {
-			playerBurn = 0
-			spend()
+		return false
+	}
+
+	func bedSpotFree(_ x: Int, _ y: Int) -> Bool {
+		let cur: Tile = world.tile(x, y)
+		if !(cur == .air || (cur.isPlant && cur != .torch && cur != .lantern)) { return false }
+		return world.supports(world.tile(x, y + 1), .bedL)
+	}
+
+	/// The common end of placing a block: the tile, its record as something built, the item used up
+	func finishPlace(_ placed: Tile, _ tx: Int, _ ty: Int) {
+		world.set(tx, ty, placed)
+		world.setBuilt(tx, ty, true)
+		// a mod block that falls like sand drops at once when put up in the air
+		if placed.isMod && fallsLikeSand(placed) { checkFalling(tx, ty) }
+		if !isCreative { inv.removeAt(sel, 1) }
+		sfx(.place, 0.6)
+		placeCD = 0.11
+		swingT = 0.14
+		swingDir = aimFacing()
+		facing = swingDir
+		bumpHUD()
+	}
+
+	/// Sits on a chair or sofa: the player rests on it until they walk or jump off
+	func sitOn(_ tx: Int, _ ty: Int) {
+		if !isSeat(world.tile(tx, ty)) { return }
+		if mounted != nil || inVehicle != nil { return }
+		seat = IntPair(x: tx, y: ty)
+		pb.x = Double(tx) + 0.5
+		pb.y = Double(ty) + 1.0
+		pb.vx = 0
+		pb.vy = 0
+		say("You sit down. Walk or jump to get up.", 1.6)
+		bumpHUD()
+	}
+
+	/// Keeps a seated player on their seat; false (and standing up) once they move, jump, or the seat
+	/// is gone
+	func stayInSeat(_ ix: Double, _ jumpPressed: Bool) -> Bool {
+		guard let s = seat else { return false }
+		if ix != 0 || jumpPressed || downHeld || !isSeat(world.tile(s.x, s.y)) {
+			seat = nil
+			bumpHUD()
+			return false
+		}
+		pb.x = Double(s.x) + 0.5
+		pb.y = Double(s.y) + 1.0
+		pb.vx = 0
+		pb.vy = 0
+		pb.onGround = true
+		fallPeak = 0
+		return true
+	}
+
+	/// A bed: at night, with no monster near, the player sleeps until morning and is healed a little;
+	/// at any time it becomes where they wake after dying
+	func sleepIn(_ tx: Int, _ ty: Int) {
+		let t: Tile = world.tile(tx, ty)
+		let modBed: Bool = t.isMod && ModRuntime.shared.bedTiles.contains(t.rawValue)
+		if t != .bedL && t != .bedR && !modBed { return }
+		let hx: Int = t == .bedR ? tx - 1 : tx
+		spawnX = Double(hx) + (modBed ? 0.5 : 1.0)
+		spawnY = Double(ty) + 1.0
+		if world.dim != .overworld {
+			say("This bed is now where you wake up. (Nights only pass in the Overworld.)", 3.0)
 			return
 		}
-		say("Pour it on a young crop to help it grow, or on a fire to put it out.", 2.0)
+		if !isNight {
+			say("You can only sleep at night. This bed is now where you wake up.", 2.5)
+			return
+		}
+		for m in mobs where m.hp > 0 && !m.removed && isThreat(m) && abs(m.b.x - pb.x) < 16 && abs(m.b.y - pb.y) < 10 {
+			say("You can't sleep now: there are monsters nearby.", 2.0)
+			return
+		}
+		// on to the next morning
+		if timeOfDay > 0.5 { dayCount += 1 }
+		timeOfDay = 0.02
+		hp = min(maxHP, hp + 6.0)
+		fadeT = 1.0
+		light.valid = false
+		say("You sleep until morning. This bed is where you wake up.", 3.0)
+		bumpHUD()
+	}
+
+	/// A cabinet or wardrobe opens like a chest
+	func openStorage(_ tx: Int, _ ty: Int) {
+		sfx(.chestOpen, 0.6)
+		openChest = IntPair(x: tx, y: ty)
+		showInventory = true
+		bumpHUD()
 	}
 }
 
-extension WorldRenderer {
-	/// The moving parts of weather devices in view: turbine blades turning with the wind, the vane
-	/// pointing downwind, a siren's beacon, the water in a barrel, a station's blinking screen
-	static func drawWeatherDevices(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
-		if g.world.dim != .overworld { return }
-		let x0: Int = Int(floor(v.left)) - 2
-		let x1: Int = Int(ceil(v.left + v.wTiles)) + 2
-		let list: [DeviceSpot] = g.world.devices(x0, x1, [.windTurbine, .weatherVane, .stormSiren, .rainBarrel, .rainCistern, .weatherStation, .dopplerStation])
-		if list.isEmpty { return }
-		let tp: Double = v.tp
-		var blades: Path = Path()
-		var vane: Path = Path()
-		var water: Path = Path()
-		var glow: Path = Path()
-		var beacon: Path = Path()
-		for d in list {
-			if !v.visible(Double(d.x), Double(d.y), 3) { continue }
-			let cx: Double = v.sx(Double(d.x) + 0.5)
-			let top: Double = v.sy(Double(d.y))
-			switch d.t {
-			case .windTurbine:
-				// three blades round the hub, turning with the local wind
-				let w: Double = g.settings.weatherOn ? g.weatherAt(Double(d.x) + 0.5, Double(d.y)).wind : 0
-				let ang: Double = g.clock * clampD(w * 0.6, -9, 9)
-				let hx: Double = cx
-				let hy: Double = top + tp * 0.18
-				let len: Double = tp * 0.95
-				for k in 0..<3 {
-					let a: Double = ang + Double(k) * 2.0944
-					blades.move(to: mkPoint(hx, hy))
-					blades.addLine(to: mkPoint(hx + cos(a) * len, hy + sin(a) * len))
-				}
-			case .weatherVane:
-				let w: Double = g.settings.weatherOn ? g.weatherAt(Double(d.x) + 0.5, Double(d.y)).wind : 0
-				let s: Double = w >= 0 ? 1.0 : -1.0
-				let wob: Double = sin(g.clock * 5.0) * min(0.15, abs(w) * 0.01)
-				let y: Double = top + tp * 0.22
-				vane.move(to: mkPoint(cx - s * tp * 0.45, y + wob * tp))
-				vane.addLine(to: mkPoint(cx + s * tp * 0.45, y - wob * tp))
-				vane.move(to: mkPoint(cx + s * tp * 0.45, y))
-				vane.addLine(to: mkPoint(cx + s * tp * 0.25, y - tp * 0.15))
-				vane.move(to: mkPoint(cx + s * tp * 0.45, y))
-				vane.addLine(to: mkPoint(cx + s * tp * 0.25, y + tp * 0.15))
-			case .stormSiren:
-				if g.sirenLevel > 0.01 || (g.settings.weatherOn && g.sirenWorthy()) {
-					let on: Bool = Int(g.clock * 3.0) % 2 == 0
-					if on { beacon.addEllipse(in: mkRect(cx - tp * 0.7, top - tp * 0.5, tp * 1.4, tp * 1.0)) }
-				}
-			case .rainBarrel, .rainCistern:
-				let cap: Double = d.t == .rainBarrel ? 8 : 32
-				let f: Double = clampD((g.weather.store[g.deviceKey(d)] ?? 0) / cap, 0, 1)
-				if f > 0.02 {
-					let inner: Double = tp * 0.7
-					let h: Double = max(2.0, tp * 0.75 * f)
-					water.addRect(mkRect(cx - inner * 0.5, top + tp - h - tp * 0.05, inner, h))
-				}
-			case .weatherStation, .dopplerStation:
-				if Int(g.clock * 1.5) % 3 != 0 { glow.addRect(mkRect(cx - tp * 0.32, top + tp * 0.55, tp * 0.64, tp * 0.2)) }
-			default:
-				break
-			}
-		}
-		ctx.stroke(blades, with: .color(Color(hex: 0xF0F2F4)), lineWidth: max(2.0, tp * 0.12))
-		ctx.stroke(vane, with: .color(Color(hex: 0xD2793A)), lineWidth: max(1.5, tp * 0.08))
-		ctx.fill(water, with: .color(Color(hex: 0x3B7BE0, alpha: 0.85)))
-		ctx.fill(glow, with: .color(Color(hex: 0x70F0B0, alpha: 0.5)))
-		ctx.fill(beacon, with: .color(Color(hex: 0xFF3020, alpha: 0.45)))
+extension RecipeBook {
+	/// Furniture, stairs and lifts (appended after every older recipe, so their numbers stay)
+	static func addBuildingRecipes(_ add: (Item, Int, [(Item, Int)], Station, RecipeCat) -> Void) {
+		let planks: Item = .block(.planks)
+		let stick: Item = .mat(.stick)
+		let fe: Item = .mat(.ironBar)
+		let cu: Item = .mat(.copperBar)
+		let glass: Item = .block(.glass)
+		add(.block(.chair), 1, [(planks, 3), (stick, 2)], .bench, .build)
+		add(.block(.table), 1, [(planks, 4), (stick, 2)], .bench, .build)
+		add(.block(.bedL), 1, [(planks, 4), (.mat(.wool), 3)], .bench, .build)
+		add(.block(.cabinet), 1, [(planks, 6), (cu, 1)], .bench, .build)
+		add(.block(.wardrobe), 1, [(planks, 8), (cu, 1)], .bench, .build)
+		add(.block(.shelf), 2, [(planks, 2), (stick, 1)], .bench, .build)
+		add(.block(.bookshelf), 1, [(planks, 6), (.mat(.leather), 2)], .bench, .build)
+		add(.block(.floorLamp), 1, [(fe, 1), (glass, 1), (.block(.torch), 1)], .bench, .build)
+		add(.block(.sofa), 1, [(planks, 3), (.mat(.wool), 2), (.mat(.leather), 1)], .bench, .build)
+		add(.block(.stairWoodR), 4, [(planks, 3)], .bench, .build)
+		add(.block(.stairStoneR), 4, [(.block(.stone), 3)], .bench, .build)
+		add(.block(.stairBrickR), 4, [(.block(.brick), 3)], .bench, .build)
+		add(.block(.liftRail), 4, [(fe, 1), (planks, 2)], .anvil, .build)
+		add(.block(.liftButton), 1, [(cu, 1), (.block(.stone), 1)], .bench, .build)
+		add(.block(.liftCar), 1, [(fe, 6), (planks, 4), (glass, 2)], .anvil, .build)
 	}
 }
 
-// MARK: - Weather settings, the station's screen, the journal's weather pages
+// MARK: - Lifts
 
-/// Weather options, shared by the main settings screen and the pause menu. Every kind of weather
-/// has its own switch; the first switch turns all of it off at once.
-struct WeatherSettingsSection: View {
-	@Binding var settings: Settings
-	var onChange: () -> Void = {}
+/// An elevator car: a platform three blocks wide riding up and down a column of lift rails, with
+/// the rail column in its middle. Floors are where lift buttons stand two blocks beside the rails;
+/// the car stops level with the floor of each. Riders, creatures and dropped things standing on it
+/// move with it; it stops if anything solid or anybody is in its way.
+final class Lift {
+	let id: Int
+	var x: Int
+	/// the car's floor (where a rider's feet are)
+	var y: Double
+	var vy: Double = 0
+	var target: Double? = nil
+	/// 0 slow, 1 normal, 2 fast
+	var speed: Int = 1
+	/// how far it moved this frame
+	var dy: Double = 0
+	static let speeds: [Double] = [2.5, 4.5, 7.5]
+	static let speedNames: [String] = ["slow", "normal", "fast"]
 
-	func label(_ s: String, _ v: String) -> some View {
-		Text(verbatim: joinText(s, ": ", v)).font(.pixel(12, .bold))
+	init(id: Int, x: Int, y: Double) {
+		self.id = id
+		self.x = x
+		self.y = y
 	}
 
-	var freqName: String {
-		switch settings.severeFrequency {
-		case 0: return "rare"
-		case 2: return "frequent"
-		default: return "normal"
-		}
-	}
-
-	func freqButton(_ i: Int, _ title: String) -> some View {
-		SmallButton(title: title, color: settings.severeFrequency == i ? Color(hex: 0x4E8A3E) : Color(hex: 0x555555)) {
-			settings.severeFrequency = i
-			onChange()
-		}
-	}
-
-	var body: some View {
-		VStack(alignment: .leading, spacing: 6) {
-			Text("WEATHER").font(.pixel(15)).foregroundColor(Color(hex: 0xFFE066))
-			Toggle("Weather (all of it)", isOn: $settings.weatherOn)
-			if settings.weatherOn {
-				Toggle("Rain and snow", isOn: $settings.allowRain)
-				Toggle("Thunderstorms and lightning", isOn: $settings.allowThunder)
-				Toggle("Wind", isOn: $settings.allowWind)
-				Toggle("Hail", isOn: $settings.allowHail)
-				Toggle("Blizzards", isOn: $settings.allowBlizzard)
-				Toggle("Tornadoes", isOn: $settings.allowTornado)
-				Toggle("Hurricanes (near the sea)", isOn: $settings.allowHurricane)
-				Text("WEATHER DAMAGE").font(.pixel(12)).foregroundColor(Color(hex: 0xFFE066))
-				Toggle("Hurts the player", isOn: $settings.weatherHurtsPlayer)
-				Toggle("Damages blocks and buildings", isOn: $settings.weatherHurtsBlocks)
-				Toggle("Hurts creatures", isOn: $settings.weatherHurtsCreatures)
-				label("Intensity", joinText(String(Int((settings.weatherIntensity * 100.0).rounded())), "%"))
-				Slider(value: $settings.weatherIntensity, in: 0.25...1.5, step: 0.05)
-				label("Severe weather", freqName)
-				HStack(spacing: 6) {
-					freqButton(0, "RARE")
-					freqButton(1, "NORMAL")
-					freqButton(2, "FREQUENT")
-				}
-				Toggle("Weather alerts and warnings", isOn: $settings.weatherAlerts)
-				label("Rain, snow and hail drawn", joinText(String(Int((settings.weatherParticles * 100.0).rounded())), "%"))
-				Slider(value: $settings.weatherParticles, in: 0.2...1.0, step: 0.05)
-				Toggle("Gentler lightning flashes", isOn: $settings.reduceFlashes)
-			}
-			SmallButton(title: "RESET WEATHER DEFAULTS") {
-				settings.resetWeather()
-				onChange()
-			}
-		}
-		.font(.pixel(13, .bold))
-		.foregroundColor(Color.white)
-	}
+	var x0: Double { return Double(x) - 1.0 }
+	var x1: Double { return Double(x) + 2.0 }
+	var deckID: Int { return 2_000_000 + id }
 }
 
-/// How dangerous nights are, and when wiring is drawn
-struct NightSettingsSection: View {
-	@Binding var settings: Settings
-
-	func choice(_ title: String, _ on: Bool, _ act: @escaping () -> Void) -> some View {
-		SmallButton(title: title, color: on ? Color(hex: 0x4E8A3E) : Color(hex: 0x555555), action: act)
-	}
-
-	var body: some View {
-		VStack(alignment: .leading, spacing: 6) {
-			Text("NIGHTS").font(.pixel(15)).foregroundColor(Color(hex: 0xFFE066))
-			Text("How many monsters come out at night, and how quickly").font(.pixel(11, .semibold))
-			HStack(spacing: 6) {
-				choice("CALM", settings.nightDanger == 0) { settings.nightDanger = 0 }
-				choice("NORMAL", settings.nightDanger == 1) { settings.nightDanger = 1 }
-				choice("DEADLY", settings.nightDanger == 2) { settings.nightDanger = 2 }
-			}
-			Text("POWER WIRING").font(.pixel(15)).foregroundColor(Color(hex: 0xFFE066))
-			HStack(spacing: 6) {
-				choice("WHEN BUILDING", settings.showWires == 0) { settings.showWires = 0 }
-				choice("ALWAYS", settings.showWires == 1) { settings.showWires = 1 }
-				choice("FAINT", settings.showWires == 2) { settings.showWires = 2 }
-			}
-			buildingPart
-		}
-		.font(.pixel(13, .bold))
-		.foregroundColor(Color.white)
-	}
-
-	var buildingPart: some View {
-		VStack(alignment: .leading, spacing: 6) {
-			Text("BUILDINGS").font(.pixel(15)).foregroundColor(Color(hex: 0xFFE066))
-			Toggle("Structural physics", isOn: $settings.structural)
-			Text("Blocks you build need support: each holds up so much weight and reaches out so far (shown in its info). Too far out or too heavy, it cracks and falls. The land itself never falls.").font(.pixel(11, .semibold))
-			Toggle("Vehicle damage", isOn: $settings.vehicleDamage)
-			Text("Shots, blasts and crashes damage vehicles: parts crack and break off. Hold an iron bar and tap a part to mend it.").font(.pixel(11, .semibold))
-		}
-	}
-}
-
-/// A weather station's screen, read live from the simulation
-struct WeatherPanel: View {
-	@ObservedObject var game: Game
-	@ObservedObject var hud: HUDSignal
-	var body: some View {
-		let lines: [StationLine] = game.stationReport()
-		let title: String = game.stationAt?.t == .dopplerStation ? "DOPPLER STATION" : "WEATHER STATION"
-		return VStack(alignment: .leading, spacing: 8) {
-			HStack {
-				Text(verbatim: title).font(.pixel(17)).foregroundColor(Color(hex: 0x70F0B0))
-				Spacer()
-				SmallButton(title: "CLOSE", color: Color(hex: 0xA03030)) {
-					game.showWeather = false
-					game.bumpHUD()
-				}
-			}
-			ForEach(0..<lines.count, id: \.self) { i in
-				HStack(alignment: .top, spacing: 8) {
-					if let k = lines[i].kind {
-						Art.shared.weatherIcon(k, lines[i].snow).resizable().frame(width: 24, height: 24)
-					} else {
-						Color.clear.frame(width: 24, height: 24)
-					}
-					VStack(alignment: .leading, spacing: 1) {
-						Text(verbatim: lines[i].text).font(.pixel(13)).foregroundColor(Color(hex: lines[i].color))
-						if !lines[i].sub.isEmpty {
-							Text(verbatim: lines[i].sub).font(.pixel(11, .semibold)).foregroundColor(Color(hex: 0xA8C8B8))
-						}
-					}
-				}
-			}
-		}
-		.padding(16)
-		.background(PixelBox(color: Color(hex: 0x14201C)).opacity(0.96))
-		.frame(maxWidth: 560)
-		.padding(16)
-	}
-}
-
-/// The weather a player has lived through, and the notes they have made about it
-struct WeatherJournalPage: View {
-	let game: Game
-	let ink: Color
-	var body: some View {
-		let storms: [StormRecord] = game.journal.storms ?? []
-		let notes: [String] = game.journal.lore.filter { $0.hasPrefix("wx.") }
-		return VStack(alignment: .leading, spacing: 8) {
-			Text("STORMS WEATHERED").font(.pixel(13)).foregroundColor(ink)
-			if storms.isEmpty {
-				Text("None yet. Severe weather is rare; a weather station shows what is coming.").font(.pixel(12, .semibold)).foregroundColor(ink)
-			}
-			ForEach(0..<storms.count, id: \.self) { i in
-				let s: StormRecord = storms[storms.count - 1 - i]
-				let name: String = (WeatherKind(rawValue: s.kind) ?? .thunderstorm).name
-				HStack {
-					Text(verbatim: name).font(.pixel(12)).foregroundColor(ink)
-					Text(verbatim: s.note).font(.pixel(11, .semibold)).foregroundColor(Color(hex: 0x6A4A2A))
-					Spacer()
-					Text(verbatim: joinText("day ", String(s.day))).font(.pixel(11, .semibold)).foregroundColor(Color(hex: 0x6A4A2A))
-				}
-			}
-			Text("WEATHER NOTES").font(.pixel(13)).foregroundColor(ink).padding(.top, 6)
-			if notes.isEmpty {
-				Text("What you learn about lightning, wind, hail and storms is written down here as you meet them.").font(.pixel(12, .semibold)).foregroundColor(ink)
-			}
-			ForEach(0..<notes.count, id: \.self) { i in
-				VStack(alignment: .leading, spacing: 2) {
-					Text(verbatim: loreEntry(notes[i]).0).font(.pixel(12)).foregroundColor(ink)
-					Text(verbatim: loreEntry(notes[i]).1).font(.pixel(11, .semibold)).foregroundColor(Color(hex: 0x5A3A1A))
-				}
-			}
-		}
-	}
+struct LiftSave: Codable {
+	var d: Int
+	var x: Int
+	var y: Double
+	var speed: Int
 }
 
 extension Game {
-	/// Writes a weather note into the journal the first time the player meets that kind of weather
-	func learnWeather(_ key: String) {
-		if journal.lore.contains(key) { return }
-		journal.lore.append(key)
-		if settings.weatherAlerts { floatText("New note in your journal", pb.x, pb.y - pb.h - 1.0, 0xE8D8A0) }
+	func liftOnColumn(_ x: Int) -> Lift? {
+		for l in lifts where l.x == x { return l }
+		return nil
 	}
 
-	/// Notes worth writing down from what is happening now (checked about once a second)
-	func checkWeatherNotes() {
-		if !settings.weatherOn || world.dim != .overworld { return }
-		let L: LocalWeather = wxHere
-		if let e = weather.tornado, e.phase >= 1, abs(e.x - pb.x) < 120 { learnWeather("wx.tornado") }
-		if L.hurricane > 0.3 { learnWeather("wx.hurricane") }
-		if weather.kind == .blizzard && settings.allowBlizzard && L.snow && L.precip > 0.4 { learnWeather("wx.blizzard") }
-		if L.hail > 0.2 { learnWeather("wx.hail") }
-		if abs(L.wind) > 9 { learnWeather("wx.wind") }
-		if L.thunder > 1.0 { learnWeather("wx.lightning") }
-		if bodyCold > 0.5 { learnWeather("wx.cold") }
+	/// The lift whose car covers a point (for taps)
+	func liftAt(_ wx: Double, _ wy: Double) -> Lift? {
+		for l in lifts where wx >= l.x0 && wx < l.x1 && wy >= l.y - 3.2 && wy <= l.y + 0.4 { return l }
+		return nil
 	}
 
-	/// Debug: make a kind of weather begin now (an event starts with its usual warning)
-	func debugForceWeather(_ k: WeatherKind) {
-		if !settings.weatherOn {
-			say("Weather is switched off in Settings.", 2.0)
-			return
+	/// Whether the car can be at floor height y: a rail in the cell above its floor, and nothing solid
+	/// in the three cells across its floor's row or the two rows above it
+	func liftCanBe(_ l: Lift, _ y: Double) -> Bool {
+		let row: Int = Int(floor(y - 0.001))
+		if world.tile(l.x, row) != .liftRail { return false }
+		for dx in -1...1 {
+			for r in (row - 1)...row where world.tile(l.x + dx, r).solid { return false }
 		}
-		weather.tornado = nil
-		weather.hurricane = nil
-		weather.kind = k
-		weather.stateT = 0
-		weather.stateDur = weather.pick(k.spell)
-		weather.plan.removeAll()
-		clearWeatherFX()
-		if k == .tornado {
-			if settings.allowTornado { spawnTornado() } else { say("Tornadoes are switched off in Settings.", 2.0) }
-		}
-		if k == .hurricane {
-			if settings.allowHurricane {
-				var ctx: WeatherContext = weatherContext()
-				// debug storms come in anywhere: with no sea in reach, the "coast" is put to the east
-				if ctx.seaSide == 0 {
-					ctx.seaSide = 1
-					ctx.coastX = pb.x + 60
-				}
-				spawnHurricane(ctx)
-			} else {
-				say("Hurricanes are switched off in Settings.", 2.0)
+		return true
+	}
+
+	/// The floors of a lift: rows beside its rails with a lift button, reachable along unbroken rail
+	func liftStops(_ l: Lift) -> [Double] {
+		var out: [Double] = []
+		let row0: Int = Int(floor(l.y - 0.001))
+		for dir in [-1, 1] {
+			var r: Int = row0
+			var n: Int = 0
+			while world.tile(l.x, r) == .liftRail && n < 300 {
+				if world.tile(l.x - 2, r) == .liftButton || world.tile(l.x + 2, r) == .liftButton { out.append(Double(r + 1)) }
+				r += dir
+				n += 1
 			}
 		}
-		if k == .hailstorm { weather.bigHail = true }
-		// the amounts jump most of the way there, so the change can be seen at once
-		let p: WeatherProfile = allowedProfile(k)
-		weather.cloud = p.cloud
-		weather.precip = p.precip * 0.8
-		weather.cover = max(p.cover, 0.6)
-		weather.thunder = p.thunder
-		weather.hail = p.hail
-		weather.chill = p.chill
-		weather.wind = p.wind * weather.windDir
-		fillPlan()
-		say(joinText("Weather: ", weatherLabel(k, snow: wxHere.snow)), 1.5)
+		return Array(Set(out)).sorted()
 	}
 
-	/// Counts the monsters that hold a place right now (the same count the spawner uses)
-	func monstersAbout() -> Int {
+	/// Puts a lift car on the rail at the aimed spot, its floor at the bottom of that rail cell
+	func placeLiftCar(_ tx: Int, _ ty: Int) {
+		if !inReach(Double(tx) + 0.5, Double(ty) + 0.5) { return }
+		if world.tile(tx, ty) != .liftRail {
+			say("Place the lift car on a lift rail.", 1.6)
+			placeCD = 0.3
+			return
+		}
+		if liftOnColumn(tx) != nil {
+			say("This rail already has a car.", 1.6)
+			placeCD = 0.3
+			return
+		}
+		let l: Lift = Lift(id: newID(), x: tx, y: Double(ty + 1))
+		if !liftCanBe(l, l.y) {
+			say("The car needs three blocks of clear space across the rail.", 2.0)
+			placeCD = 0.3
+			return
+		}
+		lifts.append(l)
+		if !isCreative { inv.removeAt(sel, 1) }
+		sfx(.place, 0.7)
+		placeCD = 0.3
+		say("Lift car placed. Buttons two blocks beside the rails make floors.", 2.5)
+		bumpHUD()
+	}
+
+	/// Sends a lift to the floor at y (true if it can go there)
+	@discardableResult
+	func sendLift(_ l: Lift, _ y: Double) -> Bool {
+		if abs(l.y - y) < 0.02 { return false }
+		l.target = y
+		sfx(.tap, 0.6)
+		return true
+	}
+
+	/// A tap on a lift button calls the car to this floor
+	func callLift(_ bx: Int, _ by: Int) {
+		for x in [bx - 2, bx + 2] {
+			guard let l = liftOnColumn(x) else { continue }
+			let y: Double = Double(by + 1)
+			if liftStops(l).contains(y) {
+				if !sendLift(l, y) { say("The lift is here.", 1.2) }
+				return
+			}
+		}
+		say("No lift car on rails beside this button.", 1.6)
+	}
+
+	/// A tap on the car: up to the next floor when tapping its upper half, down when tapping low
+	func rideLiftTap(_ l: Lift, _ wy: Double) {
+		let up: Bool = wy < l.y - 1.5
+		let stops: [Double] = liftStops(l)
+		let from: Double = l.target ?? l.y
+		let next: Double? = up ? stops.filter { $0 < from - 0.02 }.max() : stops.filter { $0 > from + 0.02 }.min()
+		if let n = next {
+			sendLift(l, n)
+		} else {
+			say(up ? "No floor above." : "No floor below.", 1.2)
+		}
+	}
+
+	/// The wrench: on a lift button it changes the car's speed, on the car it packs the car up
+	func wrenchLift(_ wx: Double, _ wy: Double) -> Bool {
+		let tx: Int = Int(floor(wx))
+		let ty: Int = Int(floor(wy))
+		if world.tile(tx, ty) == .liftButton {
+			for x in [tx - 2, tx + 2] {
+				guard let l = liftOnColumn(x) else { continue }
+				l.speed = (l.speed + 1) % Lift.speeds.count
+				say(joinText("Lift speed: ", Lift.speedNames[l.speed], "."), 1.5)
+				return true
+			}
+			return false
+		}
+		if let l = liftAt(wx, wy) {
+			lifts.removeAll { $0 === l }
+			spawnDrop(Stack(item: .block(.liftCar), count: 1), Double(l.x) + 0.5, l.y - 0.5, 0, -2)
+			say("Lift car packed up.", 1.2)
+			return true
+		}
+		return false
+	}
+
+	/// Moves the lifts: each eases toward its floor; riders standing on it move with it. A car whose
+	/// rail is gone falls apart into its item.
+	func updateLifts(_ dt: Double) {
+		if lifts.isEmpty { return }
+		var gone: [Lift] = []
+		for l in lifts {
+			l.dy = 0
+			if !liftCanBe(l, l.y) && world.tile(l.x, Int(floor(l.y - 0.001))) != .liftRail {
+				gone.append(l)
+				continue
+			}
+			guard let t = l.target else { continue }
+			let dist: Double = t - l.y
+			if abs(dist) < 0.01 {
+				l.y = t
+				l.vy = 0
+				l.target = nil
+				sfx(.door, at: Double(l.x), 0.4)
+				continue
+			}
+			let vmax: Double = Lift.speeds[clampI(l.speed, 0, Lift.speeds.count - 1)]
+			let acc: Double = 7.0
+			let want: Double = (dist > 0 ? 1.0 : -1.0) * min(vmax, sqrt(2.0 * acc * abs(dist)) + 0.3)
+			l.vy += clampD(want - l.vy, -acc * dt, acc * dt)
+			var step: Double = l.vy * dt
+			if abs(step) > abs(dist) { step = dist }
+			let ny: Double = l.y + step
+			if !liftCanBe(l, ny) || (step > 0 && liftBlockedBelow(l, ny)) {
+				l.vy = 0
+				l.target = nil
+				say("The lift is blocked.", 1.2)
+				continue
+			}
+			carryOnLift(l, step)
+			l.y = ny
+			l.dy = step
+		}
+		for l in gone {
+			lifts.removeAll { $0 === l }
+			spawnDrop(Stack(item: .block(.liftCar), count: 1), Double(l.x) + 0.5, l.y - 0.5, 0, -2)
+		}
+	}
+
+	/// Somebody under the car's floor in the way of a car going down
+	func liftBlockedBelow(_ l: Lift, _ ny: Double) -> Bool {
+		if !dead && pb.right > l.x0 && pb.left < l.x1 && pb.top < ny && pb.top >= l.y - 0.05 && !(abs(pb.y - l.y) < 0.08) { return true }
+		for m in mobsNear(l.x0 - 1, l.x1 + 1) where m.hp > 0 && !m.removed {
+			if m.b.right > l.x0 && m.b.left < l.x1 && m.b.top < ny && m.b.top >= l.y - 0.05 && !(abs(m.b.y - l.y) < 0.08) { return true }
+		}
+		return false
+	}
+
+	/// Moves whatever stands on the car's floor along with it
+	func carryOnLift(_ l: Lift, _ step: Double) {
+		if !dead && pb.right > l.x0 + 0.05 && pb.left < l.x1 - 0.05 && abs(pb.y - l.y) < 0.12 && pb.vy >= -0.5 {
+			pb.y = l.y + step
+			if step < 0 { pb.vy = min(pb.vy, 0) }
+		}
+		for m in mobsNear(l.x0 - 1, l.x1 + 1) where m.hp > 0 && !m.removed && !m.def.flying {
+			if m.b.right > l.x0 + 0.05 && m.b.left < l.x1 - 0.05 && abs(m.b.y - l.y) < 0.12 && m.b.vy >= -0.5 {
+				m.b.y = l.y + step
+			}
+		}
+		for i in 0..<drops.count where drops[i].x > l.x0 && drops[i].x < l.x1 && abs(drops[i].y - l.y) < 0.15 {
+			drops[i].y = l.y + step
+			drops[i].vy = 0
+		}
+	}
+
+	func liftSaves() -> [LiftSave] {
+		var out: [LiftSave] = []
+		for d in 0..<dimCount {
+			let list: [Lift] = d == world.dim.rawValue ? lifts : liftStash[d]
+			// where the car is now (a rider is saved where they stand, on it)
+			for l in list { out.append(LiftSave(d: d, x: l.x, y: l.y, speed: l.speed)) }
+		}
+		return out
+	}
+
+	func restoreLifts(_ saves: [LiftSave]) {
+		for s in saves where s.d >= 0 && s.d < dimCount {
+			let l: Lift = Lift(id: newID(), x: s.x, y: s.y)
+			l.speed = clampI(s.speed, 0, Lift.speeds.count - 1)
+			if s.d == world.dim.rawValue { lifts.append(l) } else { liftStash[s.d].append(l) }
+		}
+	}
+}
+
+// ===== p31c_blockphys =====
+
+// MARK: - Block weight, flying blocks and structures
+
+/// A block as building material: how heavy it is (stone 2.5), how much weight can rest on it before
+/// it gives way, and how many blocks it can reach out sideways from a support. One table used by
+/// blasts, storms, falling blocks and structural physics.
+struct BlockPhys {
+	var weight: Double
+	var carry: Double
+	var span: Int
+	/// how well wheels, hulls and feet grip it (1: stone and soil; ice far less)
+	var grip: Double = 1.0
+	/// how much of a blow it gives back (0: none; hay a little)
+	var bounce: Double = 0.0
+}
+
+enum BlockPhysTable {
+	static let table: [BlockPhys] = Tile.allCases.map { blockPhysOf($0) }
+}
+
+/// The material numbers of the game's own blocks (mod blocks are worked out from their hardness)
+func blockPhysOf(_ t: Tile) -> BlockPhys {
+	var p: BlockPhys = blockWeights(t)
+	switch t {
+	case .ice: p.grip = 0.12
+	case .snow: p.grip = 0.6
+	case .mud: p.grip = 0.7
+	case .sand: p.grip = 0.85
+	case .glass, .obsidian: p.grip = 0.75
+	case .sandbag: p.grip = 1.15
+	case .hay: p.grip = 0.9; p.bounce = 0.3
+	case .crate, .planks, .platform: p.bounce = 0.08
+	default: break
+	}
+	return p
+}
+
+/// Weight, carry and reach of the game's own blocks
+func blockWeights(_ t: Tile) -> BlockPhys {
+	switch t {
+	case .air, .water, .lava: return BlockPhys(weight: 0, carry: 0, span: 0)
+	case .bedrock: return BlockPhys(weight: 20, carry: 9999, span: 9)
+	case .grass, .dirt, .farmland, .dryGrass, .jungleGrass, .mossGrass: return BlockPhys(weight: 1.5, carry: 30, span: 1)
+	case .mud: return BlockPhys(weight: 1.8, carry: 20, span: 1)
+	case .sand: return BlockPhys(weight: 1.6, carry: 20, span: 0)
+	case .snow: return BlockPhys(weight: 0.4, carry: 4, span: 1)
+	case .ice: return BlockPhys(weight: 0.9, carry: 16, span: 2)
+	case .stone, .fossil: return BlockPhys(weight: 2.5, carry: 150, span: 2)
+	case .slate: return BlockPhys(weight: 2.7, carry: 160, span: 2)
+	case .deepRock: return BlockPhys(weight: 3.0, carry: 200, span: 2)
+	case .sandstone: return BlockPhys(weight: 2.2, carry: 90, span: 2)
+	case .obsidian: return BlockPhys(weight: 2.6, carry: 260, span: 3)
+	case .ashStone: return BlockPhys(weight: 2.4, carry: 120, span: 2)
+	case .coal, .saltpeter: return BlockPhys(weight: 2.2, carry: 120, span: 2)
+	case .copper, .tin, .diamond, .crystalOre: return BlockPhys(weight: 3.5, carry: 150, span: 2)
+	case .iron, .mythril, .emberOre, .voidOre: return BlockPhys(weight: 4.0, carry: 170, span: 2)
+	case .silver: return BlockPhys(weight: 4.5, carry: 160, span: 2)
+	case .gold: return BlockPhys(weight: 6.0, carry: 140, span: 2)
+	case .amethyst: return BlockPhys(weight: 2.6, carry: 120, span: 2)
+	case .planks: return BlockPhys(weight: 0.6, carry: 24, span: 4)
+	case .logBlock, .jungleLogBlock, .palmLogBlock, .birchLogBlock: return BlockPhys(weight: 0.8, carry: 40, span: 5)
+	case .glass: return BlockPhys(weight: 1.0, carry: 6, span: 1)
+	case .brick, .mossBrick: return BlockPhys(weight: 2.0, carry: 120, span: 3)
+	case .crackedBrick: return BlockPhys(weight: 1.9, carry: 60, span: 2)
+	case .stormBrick: return BlockPhys(weight: 2.6, carry: 220, span: 3)
+	case .shingles: return BlockPhys(weight: 0.8, carry: 16, span: 4)
+	case .hay: return BlockPhys(weight: 0.3, carry: 3, span: 2)
+	case .amethystBlock: return BlockPhys(weight: 2.6, carry: 160, span: 3)
+	case .sandbag: return BlockPhys(weight: 1.4, carry: 60, span: 1)
+	case .crate: return BlockPhys(weight: 0.7, carry: 14, span: 2)
+	case .platform: return BlockPhys(weight: 0.3, carry: 8, span: 4)
+	case .ladder: return BlockPhys(weight: 0.3, carry: 8, span: 1)
+	case .liftRail: return BlockPhys(weight: 1.2, carry: 40, span: 1)
+	case .signalPost, .vehicleSensor: return BlockPhys(weight: 0.8, carry: 6, span: 1)
+	case .doorClosed, .doorOpen, .shutterClosed, .shutterOpen: return BlockPhys(weight: 0.7, carry: 10, span: 1)
+	case .gateClosed, .gateOpen: return BlockPhys(weight: 3.0, carry: 60, span: 2)
+	case .stairWoodR, .stairWoodL: return BlockPhys(weight: 0.5, carry: 20, span: 3)
+	case .stairStoneR, .stairStoneL: return BlockPhys(weight: 2.0, carry: 120, span: 2)
+	case .stairBrickR, .stairBrickL: return BlockPhys(weight: 1.8, carry: 110, span: 2)
+	case .chair, .shelf: return BlockPhys(weight: 0.4, carry: 4, span: 1)
+	case .table, .floorLamp: return BlockPhys(weight: 0.6, carry: 8, span: 1)
+	case .bedL, .bedR: return BlockPhys(weight: 0.8, carry: 8, span: 1)
+	case .sofa: return BlockPhys(weight: 1.0, carry: 8, span: 1)
+	case .cabinet: return BlockPhys(weight: 1.2, carry: 10, span: 1)
+	case .bookshelf: return BlockPhys(weight: 1.4, carry: 10, span: 1)
+	case .wardrobe: return BlockPhys(weight: 1.6, carry: 10, span: 1)
+	case .chest, .workbench: return BlockPhys(weight: 1.0, carry: 10, span: 1)
+	case .furnace, .alchemyStill: return BlockPhys(weight: 3.0, carry: 20, span: 1)
+	case .anvil: return BlockPhys(weight: 7.0, carry: 40, span: 1)
+	case .torch, .lantern, .cobweb: return BlockPhys(weight: 0.1, carry: 1, span: 1)
+	default:
+		let d: TileDef = Tile.makeDef(t)
+		if isLeafTile(t) || d.plant { return BlockPhys(weight: 0.1, carry: 1, span: 1) }
+		return blockPhysFrom(d)
+	}
+}
+
+/// Material numbers from a block's hardness (mod blocks, and anything without its own entry)
+func blockPhysFrom(_ d: TileDef) -> BlockPhys {
+	if !d.solid { return BlockPhys(weight: 0.5, carry: 6, span: 1) }
+	let w: Double = clampD(0.6 + d.hard * 0.9, 0.3, 8.0)
+	return BlockPhys(weight: w, carry: 20.0 + d.hard * 40.0, span: d.hard < 1.0 ? 3 : 2)
+}
+
+/// A block's material numbers
+func blockPhys(_ t: Tile) -> BlockPhys {
+	if t.isMod {
+		var p: BlockPhys = blockPhysFrom(t.def)
+		if let b = ModRuntime.shared.blockDef(t) {
+			if b.weight > 0 { p.weight = b.weight }
+			if b.carry > 0 { p.carry = b.carry }
+			p.grip = b.grip
+			p.bounce = b.bounce
+		}
+		return p
+	}
+	let i: Int = Int(t.rawValue)
+	return i < BlockPhysTable.table.count ? BlockPhysTable.table[i] : BlockPhys(weight: 1, carry: 20, span: 2)
+}
+
+func tileWeight(_ t: Tile) -> Double { return blockPhys(t).weight }
+
+/// Part of a structure: something that holds other blocks up (solid blocks, platforms, ladders,
+/// stairs, lift rails); everything else (furniture, machines, torches) only rests on it as a load
+func isStructural(_ t: Tile) -> Bool {
+	return t.solid || t.isPlatform || t == .ladder || t == .liftRail || stairSide(t) != 0
+}
+
+/// The item info line with a block's weight (and, for building blocks, what it holds and reaches)
+func weightLine(_ t: Tile) -> String {
+	let p: BlockPhys = blockPhys(t)
+	if !isStructural(t) { return String(format: "Weight %.1f", p.weight) }
+	return joinText(String(format: "Weight %.1f", p.weight), " · holds ", String(Int(p.carry)), " · reaches ", String(p.span))
+}
+
+/// How hard a blast has to be to break a block (a blast nearly that strong only knocks it loose)
+func blastResist(_ t: Tile) -> Double {
+	if Tile.tierTable[t.idx] > 4 { return 99 }
+	return t.hardness + tileWeight(t) * 0.25
+}
+
+extension World {
+	/// Whether the block at (x, y) was put there (by the player, or settled there after being thrown):
+	/// what structural physics looks at. The generated land never counts.
+	func isBuilt(_ x: Int, _ y: Int) -> Bool {
+		if y < 0 || y >= H { return false }
+		let cx: Int = floorDiv(x, chunkW)
+		guard let c = chunk(cx), !c.built.isEmpty else { return false }
+		return c.built[(x - cx * chunkW) * H + y] != 0
+	}
+
+	func setBuilt(_ x: Int, _ y: Int, _ on: Bool) {
+		if y < 0 || y >= H { return }
+		let cx: Int = floorDiv(x, chunkW)
+		guard let c = chunk(cx) else { return }
+		if c.built.isEmpty {
+			if !on { return }
+			c.built = [UInt8](repeating: 0, count: chunkW * H)
+		}
+		let i: Int = (x - cx * chunkW) * H + y
+		let v: UInt8 = on ? 1 : 0
+		if c.built[i] == v { return }
+		c.built[i] = v
+		c.dirty = true
+	}
+}
+
+// MARK: flying blocks
+
+extension Game {
+	/// Knocks a block loose: it leaves its place and flies with the given speed, by its weight, until
+	/// it lands and settles back into a block (see updateFallingBlocks). Too many already flying: it
+	/// just breaks.
+	func displaceBlock(_ x: Int, _ y: Int, vx: Double, vy: Double) {
+		let t: Tile = world.tile(x, y)
+		if t == .air || t.liquid { return }
+		if fallingBlocks.count >= 120 {
+			breakTile(x, y, false, dropChance: 0.4)
+			return
+		}
+		let built: Bool = world.isBuilt(x, y)
+		if world.set(x, y, .air) != t { return }
+		var fb: FallingBlock = FallingBlock(x: Double(x) + 0.5, y: Double(y) + 1.0, vy: vy, tile: t, uid: newID())
+		fb.vx = vx
+		fb.mass = max(0.2, tileWeight(t))
+		fb.spin = clampD(vx * 0.6, -9, 9)
+		fb.built = built
+		fb.flung = true
+		fallingBlocks.append(fb)
+		// what stood on it comes down too
+		let above: Tile = world.tile(x, y - 1)
+		if world.needsSupport(above) && !world.supports(.air, above) { breakTile(x, y - 1, false) }
+	}
+
+	/// What a blast does to the blocks around it, nearest first. Each block takes the blast's strength
+	/// where it stands (falling off with distance) against what it can stand (blastResist: its hardness
+	/// and weight): strong enough, it is destroyed. If it survives and has room to move, it is knocked
+	/// loose and thrown when the blast was nearly strong enough to break it, or when the blast's push
+	/// (which reaches further) is more than its weight can hold against: light blocks are thrown from
+	/// further off, and fly further. Otherwise it is untouched. Chests and storage keep their place
+	/// (and contents).
+	func blastBlocks(_ x: Double, _ y: Double, radius: Double, power power0: Double) {
+		// a blast breaks blocks by its size as much as by how hard it hits creatures (a mod's explosive
+		// shot with little damage still breaks the ground it was made to; a bomb is both)
+		let power: Double = max(power0, radius * 7.6)
+		let reach: Double = radius + 0.6
+		let pushReach: Double = radius + 2.5
+		let r: Int = Int(ceil(pushReach))
+		let tx: Int = Int(floor(x))
+		let ty: Int = Int(floor(y))
+		var cells: [(Int, Int, Double)] = []
+		for dy in -r...r {
+			for dx in -r...r {
+				let cx: Double = Double(tx + dx) + 0.5 - x
+				let cy: Double = Double(ty + dy) + 0.5 - y
+				let d: Double = sqrt(cx * cx + cy * cy)
+				if d <= pushReach { cells.append((tx + dx, ty + dy, d)) }
+			}
+		}
+		cells.sort { $0.2 < $1.2 }
+		for (cx, cy, d) in cells {
+			let t: Tile = world.tile(cx, cy)
+			if t == .air || t.liquid || t.hardness >= 9000 { continue }
+			if t == .chest || isStorageFurniture(t) || t == .portalOff || t == .portalOn || t == .portalFrame { continue }
+			if t.isMod && (ModRuntime.shared.blockDef(t)?.blastProof ?? true) { continue }
+			let f: Double = min(1.0, d / reach)
+			let blast: Double = power * 0.16 * (1.0 - f * f)
+			let shove: Double = power * 0.12 * max(0, 1.0 - d / pushReach)
+			let resist: Double = blastResist(t)
+			let w: Double = tileWeight(t)
+			let hold: Double = w * 0.5 + t.hardness * 0.25
+			if blast >= resist {
+				breakTile(cx, cy, false, dropChance: 0.35)
+			} else if t.solid && (blast >= resist * 0.5 || shove >= hold) && openSide(cx, cy) {
+				var ux: Double = Double(cx) + 0.5 - x
+				var uy: Double = Double(cy) + 0.5 - y
+				let len: Double = max(0.3, sqrt(ux * ux + uy * uy))
+				ux /= len
+				uy /= len
+				let push: Double = clampD((max(blast - resist * 0.5, 0) + shove) * 6.0 / max(0.4, w), 3.0, 16.0)
+				// away from the blast where there is room, else out of the open side (up out of a crater)
+				let away: Int = ux >= 0 ? 1 : -1
+				var vx: Double = ux * push
+				var vy: Double = min(-2.5, uy * push - 3.0)
+				if !world.solid(cx, cy - 1) {
+					if world.solid(cx + away, cy) { vx = ux * push * 0.4 }
+					vy = min(vy, -(3.0 + push * 0.7))
+				} else if !world.solid(cx + away, cy) {
+					vx = Double(away) * push
+				} else if !world.solid(cx - away, cy) {
+					vx = -Double(away) * push * 0.5
+				} else {
+					vx = 0
+					vy = 0
+				}
+				displaceBlock(cx, cy, vx: vx, vy: vy)
+			}
+		}
+	}
+
+	/// Whether a block has room to move: anything not solid beside, above or below it (a block buried in
+	/// the ground stays put; the edge of a fresh crater has room)
+	func openSide(_ x: Int, _ y: Int) -> Bool {
+		return !world.solid(x - 1, y) || !world.solid(x + 1, y) || !world.solid(x, y - 1) || !world.solid(x, y + 1)
+	}
+
+	/// A storm tears a block loose: plants, leaves and the like are broken off; a building block is
+	/// lifted and carried, by its weight (see the wind in updateFallingBlocks)
+	func stormTear(_ x: Int, _ y: Int, _ windDir: Double) {
+		let t: Tile = world.tile(x, y)
+		if t.solid && !t.liquid && t.hardness < 9000 && !isStorageFurniture(t) && t != .chest {
+			let light: Double = 1.0 / max(0.3, tileWeight(t))
+			displaceBlock(x, y, vx: windDir * clampD(4.0 * light, 1.5, 9.0), vy: -clampD(3.0 + 4.0 * light, 3.0, 10.0))
+		} else {
+			breakTile(x, y, false, dropChance: 0.5)
+		}
+	}
+
+	/// The wind on a flying block: a tornado's swirl and lift, a hurricane's gale, felt less by heavy
+	/// blocks
+	func windOnBlock(_ fb: inout FallingBlock, _ dt: Double) {
+		if weather.tornado == nil && weather.hurricane == nil { return }
+		let light: Double = 1.0 / (1.0 + fb.mass)
+		let tf: (Double, Double, Double) = tornadoField(fb.x, fb.y - 0.5)
+		if tf.2 > 0 {
+			fb.vx += clampD((tf.0 - fb.vx) * 2.4, -40, 40) * light * dt
+			if tf.1 < -1.0 { fb.vy += (-gravityG * 0.9 + clampD((tf.1 - fb.vy) * 2.2, -30, 30)) * light * dt }
+		}
+		if let h = weather.hurricane, world.dim == .overworld {
+			let w: Double = weather.wind * h.force * hurricaneReach(fb.x, h)
+			fb.vx += clampD(w - fb.vx, -12, 12) * 0.6 * light * dt
+		}
+	}
+
+	/// Puts a block that has come to rest back into the world: in the cell it landed in, or one beside
+	/// or above it that is free; with nowhere to go, it drops as an item
+	func settleBlock(_ fb: FallingBlock, _ row: Int) {
+		let tx: Int = Int(floor(fb.x))
+		let spots: [(Int, Int)] = [(tx, row), (tx, row - 1), (tx - 1, row), (tx + 1, row), (tx, row - 2)]
+		for (sx, sy) in spots {
+			let cur: Tile = world.tile(sx, sy)
+			if !(cur == .air || cur.liquid || (cur.isPlant && cur != .torch && cur != .lantern)) { continue }
+			let below: Tile = world.tile(sx, sy + 1)
+			if !(below.supportsThings || below.isPlatform) && sy != row { continue }
+			world.set(sx, sy, fb.tile)
+			if fb.built { world.setBuilt(sx, sy, true) }
+			spawnParticles(Double(sx) + 0.5, Double(sy) + 1.0, fb.tile.def.colors.first ?? 0xA09080, 4, 2.0, 0.3, 10)
+			return
+		}
+		let item: Item = fb.tile.def.drop ?? .block(fb.tile)
+		spawnDrop(Stack(item: item, count: 1), fb.x, Double(row), 0, -2)
+	}
+}
+
+// MARK: structural physics
+
+/// What a structure check found: the blocks crushed by more weight than they can carry (worst first),
+/// the blocks nothing holds up (lowest first), those under strain (how close to their limit,
+/// 0.7...1), how many blocks were looked at, and where they were
+struct StructCheck {
+	var crushed: [IntPair] = []
+	var fails: [IntPair] = []
+	var strained: [(IntPair, Double)] = []
+	var count: Int = 0
+	var minX: Int = Int.max
+	var maxX: Int = Int.min
+	var minY: Int = Int.max
+	var maxY: Int = Int.min
+}
+
+/// One block of a structure while it is being looked at
+struct StructNode {
+	var x: Int
+	var y: Int
+	var phys: BlockPhys
+	/// how much further it can hold out (0: nothing holds it)
+	var sup: Int = 0
+	var parent: Int = -1
+	var load: Double = 0
+}
+
+extension Game {
+	/// Structural physics (Settings.structural): built blocks (what the player placed) make up
+	/// structures standing on the land, which never moves. A block standing on a held block is held;
+	/// a block beside or under one is held if it is within its reach (`span`) of a standing support;
+	/// everything resting on a block (the blocks it holds up, furniture on it) must not weigh more than
+	/// it can carry. Blocks out of reach, or carrying too much, crack and fall. Only structures next
+	/// to a change are looked at, a little at a time, and never more than `maxNodes` blocks at once.
+	func updateStructures(_ dt: Double) {
+		if !settings.structural {
+			if world.structWatch {
+				world.structWatch = false
+				world.structEdits.removeAll()
+				structQueue.removeAll()
+				stress.removeAll()
+			}
+			return
+		}
+		world.structWatch = true
+		if !world.structEdits.isEmpty {
+			// only changes next to something built matter (grass spreading, crops growing do not)
+			for e in world.structEdits where structQueue.count < 48 && builtNear(e.x, e.y) {
+				if !structQueue.contains(e) { structQueue.append(e) }
+			}
+			world.structEdits.removeAll()
+			structT = max(structT, 0.12)
+		}
+		if structT > 0 {
+			structT -= dt
+			return
+		}
+		if structQueue.isEmpty { return }
+		let e: IntPair = structQueue.removeFirst()
+		let fails: Int = settleStructure(e.x, e.y, maxFalls: 12)
+		if fails > 0 {
+			// what was resting on them is looked at again once they are gone
+			structQueue.append(e)
+			structT = 0.18
+		}
+	}
+
+	/// Looks at the structure around (x, y) and brings down what cannot stand (at most `maxFalls`
+	/// blocks, worst first). Returns how many fell.
+	@discardableResult
+	func settleStructure(_ x: Int, _ y: Int, maxFalls: Int) -> Int {
+		let res: StructCheck = checkStructure(x, y)
+		// strain marks: those of the blocks just looked at are replaced
+		if res.count > 0 && !stress.isEmpty {
+			stress = stress.filter { (kv: (key: Int, value: Double)) -> Bool in
+				let sx: Int = floorDiv(kv.key, 4096)
+				let sy: Int = kv.key - sx * 4096
+				return sx < res.minX || sx > res.maxX || sy < res.minY || sy > res.maxY
+			}
+		}
+		for (p, f) in res.strained { stress[structKey(p.x, p.y)] = f }
 		var n: Int = 0
-		for m in mobs where m.hp > 0 && !m.removed && m.def.hostile && !m.kind.isPredator && !m.tame && !m.persistent && !m.isBoss && m.boat < 0 && m.lair == 0 {
-			if abs(m.b.x - pb.x) <= 72 && abs(m.b.y - pb.y) <= 56 { n += 1 }
+		// a block carrying more than it can breaks under the weight
+		for p in res.crushed {
+			if n >= maxFalls { break }
+			if world.tile(p.x, p.y) == .air { continue }
+			stress[structKey(p.x, p.y)] = nil
+			breakTile(p.x, p.y, false)
+			n += 1
+		}
+		// a block nothing holds up falls (and settles where it lands)
+		for p in res.fails {
+			if n >= maxFalls { break }
+			let t: Tile = world.tile(p.x, p.y)
+			if t == .air { continue }
+			stress[structKey(p.x, p.y)] = nil
+			if fallingBlocks.count < 120 && t.solid {
+				displaceBlock(p.x, p.y, vx: Double.random(in: -0.6...0.6), vy: 0)
+			} else {
+				breakTile(p.x, p.y, false)
+			}
+			n += 1
+		}
+		if n > 0 {
+			sfx(.breakWood, at: Double(x) + 0.5, 0.7)
+			addShake(min(0.5, 0.08 * Double(n)))
+		} else if res.count > 0 {
+			// a creak and some dust where it is near its limit
+			let worst: (IntPair, Double)? = res.strained.max { $0.1 < $1.1 }
+			if let w = worst, w.1 > 0.92 {
+				sfx(.digWood, at: Double(w.0.x) + 0.5, 0.4)
+				spawnParticles(Double(w.0.x) + 0.5, Double(w.0.y) + 1.0, 0xB0A080, 3, 1.5, 0.6, 12)
+			}
 		}
 		return n
 	}
 
-	func spawnDebugLines() -> [String] {
-		var out: [String] = []
-		let place: String = world.dim == .umbral ? "umbral" : (Int(pb.y) - gen.col(Int(floor(pb.x))).h > 18 ? "cave" : "surface")
-		let cap: Int = monsterCap(place == "surface" ? .surface : .cave)
-		out.append(joinText(isNight ? "Night" : "Day", "  ", place, "  monsters ", String(monstersAbout()), " / ", String(cap), String(format: "  next in %.1fs", max(0, monsterSpawnCD))))
-		if !spawnLast.isEmpty { out.append(joinText("Last attempt: ", spawnLast)) }
-		let top: [(String, Int)] = spawnLog.sorted { $0.value > $1.value }.prefix(6).map { ($0.key, $0.value) }
-		for t in top { out.append(joinText("  ", t.0, " ×", String(t.1))) }
+	func structKey(_ x: Int, _ y: Int) -> Int { return x &* 4096 &+ y }
+
+	/// Something built in the 3x3 around (x, y)
+	func builtNear(_ x: Int, _ y: Int) -> Bool {
+		for dy in -1...1 { for dx in -1...1 where world.isBuilt(x + dx, y + dy) { return true } }
+		return false
+	}
+
+	/// The structure check (see updateStructures)
+	func checkStructure(_ x0: Int, _ y0: Int) -> StructCheck {
+		let maxNodes: Int = 5000
+		var nodes: [StructNode] = []
+		var index: [Int: Int] = [:]
+		var stack: [Int] = []
+		func consider(_ x: Int, _ y: Int) {
+			let k: Int = structKey(x, y)
+			if index[k] != nil { return }
+			let t: Tile = world.tile(x, y)
+			if !isStructural(t) || !world.isBuilt(x, y) { return }
+			index[k] = nodes.count
+			stack.append(nodes.count)
+			nodes.append(StructNode(x: x, y: y, phys: blockPhys(t)))
+		}
+		for dy in -1...1 { for dx in -1...1 { consider(x0 + dx, y0 + dy) } }
+		var out: StructCheck = StructCheck()
+		if nodes.isEmpty { return out }
+		while let i = stack.popLast() {
+			if nodes.count > maxNodes {
+				// too big to look at in one go: left standing
+				out.count = nodes.count
+				return out
+			}
+			let nx: Int = nodes[i].x
+			let ny: Int = nodes[i].y
+			consider(nx - 1, ny)
+			consider(nx + 1, ny)
+			consider(nx, ny - 1)
+			consider(nx, ny + 1)
+		}
+		// standing: on the land, built into it at the side, or on a standing block of the same column
+		// (worked out from the bottom up); each holds out to its full reach
+		var sup: [Int] = [Int](repeating: 0, count: nodes.count)
+		var parent: [Int] = [Int](repeating: -1, count: nodes.count)
+		var depth: [Int] = [Int](repeating: 0, count: nodes.count)
+		var buckets: [[Int]] = [[Int]](repeating: [], count: 11)
+		let upward: [Int] = Array(0..<nodes.count).sorted { nodes[$0].y > nodes[$1].y }
+		for i in upward {
+			let n: StructNode = nodes[i]
+			let full: Int = clampI(n.phys.span + 1, 1, 10)
+			if landAt(n.x, n.y + 1) || landAt(n.x - 1, n.y) || landAt(n.x + 1, n.y) {
+				sup[i] = full
+			} else if let j = index[structKey(n.x, n.y + 1)], sup[j] > 0 {
+				sup[i] = full
+				parent[i] = j
+				depth[i] = depth[j] + 1
+			}
+			if sup[i] > 0 { buckets[sup[i]].append(i) }
+		}
+		// reach spreads out from the standing blocks: one less for each block out sideways or down,
+		// the same up (a block resting on a held block is held as well as it is), never more than a
+		// block's own reach
+		var done: [Bool] = [Bool](repeating: false, count: nodes.count)
+		var level: Int = 10
+		while level >= 1 {
+			if buckets[level].isEmpty {
+				level -= 1
+				continue
+			}
+			let i: Int = buckets[level].removeLast()
+			if done[i] || sup[i] != level { continue }
+			done[i] = true
+			let n: StructNode = nodes[i]
+			let nbr: [(Int, Int, Bool)] = [(n.x, n.y - 1, true), (n.x - 1, n.y, false), (n.x + 1, n.y, false), (n.x, n.y + 1, false)]
+			for (ax, ay, up) in nbr {
+				guard let j = index[structKey(ax, ay)], !done[j] else { continue }
+				let cap: Int = clampI(nodes[j].phys.span + 1, 1, 10)
+				let cand: Int = min(cap, up ? level : level - 1)
+				if cand > sup[j] {
+					sup[j] = cand
+					parent[j] = i
+					depth[j] = depth[i] + 1
+					buckets[cand].append(j)
+				}
+			}
+		}
+		// the load flows down the support tree, the furthest blocks first: each block carries itself,
+		// what rests on it, and what it holds up
+		let byDepth: [Int] = Array(0..<nodes.count).sorted { depth[$0] > depth[$1] }
+		for i in byDepth {
+			let n: StructNode = nodes[i]
+			var load: Double = nodes[i].load + n.phys.weight
+			let above: Tile = world.tile(n.x, n.y - 1)
+			if above != .air && !isStructural(above) && !above.liquid { load += tileWeight(above) }
+			nodes[i].load = load
+			nodes[i].sup = sup[i]
+			if parent[i] >= 0 { nodes[parent[i]].load += load }
+		}
+		var fails: [(IntPair, Double)] = []
+		var crushed: [(IntPair, Double)] = []
+		var strained: [(IntPair, Double)] = []
+		for i in 0..<nodes.count {
+			let n: StructNode = nodes[i]
+			let p: IntPair = IntPair(x: n.x, y: n.y)
+			out.minX = min(out.minX, n.x)
+			out.maxX = max(out.maxX, n.x)
+			out.minY = min(out.minY, n.y)
+			out.maxY = max(out.maxY, n.y)
+			if n.sup <= 0 {
+				// nothing holds it: the lowest come down first
+				fails.append((p, Double(n.y)))
+				continue
+			}
+			let carried: Double = n.load - n.phys.weight
+			let f: Double = carried / max(0.1, n.phys.carry)
+			if f > 1.0 {
+				crushed.append((p, f))
+			} else if f > 0.7 || (n.sup == 1 && n.phys.span > 1) {
+				strained.append((p, max(0.7, f)))
+			}
+		}
+		crushed.sort { $0.1 > $1.1 }
+		fails.sort { $0.1 > $1.1 }
+		out.crushed = crushed.map { $0.0 }
+		out.fails = fails.map { $0.0 }
+		out.strained = strained
+		out.count = nodes.count
 		return out
 	}
 
-	/// Debug: makes it night and runs forty spawn attempts at once (the pacing between monsters is
-	/// skipped), then reports what came out and what stopped the rest
-	func debugSpawnTest() {
-		if world.dim == .overworld { debugSetTime(0.62) }
-		spawnLog = [:]
-		let before: Set<Int> = Set(mobs.map { $0.id })
-		for _ in 0..<40 {
-			spawnTimer = 0
-			monsterSpawnCD = 0
-			updateSpawning(0.0)
-		}
-		var made: [String: Int] = [:]
-		for m in mobs where !before.contains(m.id) && m.def.hostile { made[m.def.name, default: 0] += 1 }
-		let list: String = made.isEmpty ? "no monsters" : made.sorted { $0.value > $1.value }.map { joinText(String($0.value), " ", $0.key) }.joined(separator: ", ")
-		say(joinText("Spawn test: ", list), 4.0)
-		bumpHUD()
-	}
-
-	func debugStrikeNearby() {
-		if !settings.weatherOn || !settings.allowThunder {
-			say("Lightning is switched off in Settings.", 2.0)
-			return
-		}
-		let x: Double = pb.x + Double(facing) * 6.0
-		if let s = strikeSpot(x) { lightningStrike(s.0, s.1, rod: s.2) }
-	}
-
-	var weatherDebugLine: String {
-		let k: WeatherKind = weather.kind
-		let left: Int = Int(max(0, weather.stateDur - weather.stateT))
-		let next: String = weather.plan.first?.kind.name ?? "-"
-		return joinText(k.name, " ", String(left), "s → ", next, String(format: "  rain %.2f wind %.1f cl %.2f", weather.precip, weather.wind, weather.cloud))
+	/// The land holds structures up: a solid block that was not built, or the bottom of the world
+	func landAt(_ x: Int, _ y: Int) -> Bool {
+		if y >= world.H - 1 { return true }
+		let t: Tile = world.tile(x, y)
+		return t.solid && !world.isBuilt(x, y)
 	}
 }
 
-// MARK: - Ambient life
+// ===== p31d_rails =====
 
-extension WorldRenderer {
-	/// Fireflies over grass on clear nights; embers drifting up through the Umbral Realm. Drawn after
-	/// the lighting so they glow in the dark. A handful of shapes, no particles.
-	static func drawAmbientLife(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
-		if g.world.dim == .umbral {
-			var path: Path = Path()
-			for i in 0..<24 {
-				let fx: Double = hash2(i, 31, 13)
-				let rise: Double = 1.2 + hash2(i, 32, 13) * 1.6
-				let span: Double = v.hTiles + 4.0
-				let wy: Double = v.top + span - 2.0 - (hash2(i, 33, 13) * span + g.clock * rise).truncatingRemainder(dividingBy: span)
-				let wx: Double = v.left + fx * v.wTiles + sin(g.clock * 0.8 + Double(i) * 1.9) * 0.8
-				let s: Double = i % 5 == 0 ? 3.0 : 2.0
-				path.addRect(mkRect(v.sx(wx), v.sy(wy), s, s))
-			}
-			ctx.fill(path, with: .color(Color(hex: 0xFF9A4A, alpha: 0.55)))
-			return
-		}
-		let tp: Double = v.tp
-		for f in fireflySpots(g, v) {
-			let x: Double = v.sx(f.0)
-			let y: Double = v.sy(f.1)
-			let blink: Double = f.2
-			fillOval(&ctx, mkRect(x - tp * 0.22, y - tp * 0.22, tp * 0.44, tp * 0.44), Color(hex: 0xE8FF8A, alpha: 0.18 * blink))
-			fillRect(&ctx, mkRect(x - 1.5, y - 1.5, 3, 3), Color(hex: 0xF4FFC0, alpha: 0.9 * blink))
-		}
-	}
+// MARK: - Rails, the ore cart, trains and big parts
+// A rail wheel rolls almost freely along rails (and brakes only when the driver pulls against the
+// motion), and drags anywhere else. An ore cart put on a rail is a little vehicle of two crates on two
+// rail wheels: pushed, ridden, loaded, or pulled by an engine. Couplers that touch link two vehicles
+// into a train: each pulls and pushes the other at the coupler, and a tap on one lets go. A big wheel is
+// a part three cells across (Vehicle.spanOf maps its cells to its middle).
 
-	/// Where the fireflies are now (x and y in blocks, and how bright): at most one for every 6 columns,
-	/// each at a place of its own in the world (it drifts a little around it, but never follows the
-	/// player), over grass on clear nights in the overworld
-	static func fireflySpots(_ g: Game, _ v: View2D) -> [(Double, Double, Double)] {
-		var out: [(Double, Double, Double)] = []
-		if g.dayFactor > 0.3 || g.weatherRain > 0.5 || g.world.dim != .overworld { return out }
-		let c0: Int = Int(floor(v.left / 6.0)) - 1
-		let c1: Int = Int(floor((v.left + v.wTiles) / 6.0)) + 1
-		for cell in c0...max(c0, c1) {
-			if hash2(cell, 20, 9) > 0.55 { continue }
-			let i: Int = cell
-			let wx: Double = Double(cell) * 6.0 + hash2(cell, 21, 9) * 6.0 + sin(g.clock * 0.4 + Double(i)) * 1.2
-			let ix: Int = Int(floor(wx))
-			let b: Biome = g.gen.col(ix).biome
-			if !(b == .forest || b == .plains || b == .swamp || b == .jungle) { continue }
-			let ground: Double = Double(g.world.surfaceY(ix))
-			let wy: Double = ground - 1.0 - hash2(i, 22, 9) * 4.0 + sin(g.clock * 0.7 + Double(i) * 1.7) * 0.6
-			if wy >= Double(g.world.skyTop(ix)) || !v.visible(wx, wy, 1) { continue }
-			let blink: Double = 0.5 + 0.5 * sin(g.clock * 2.2 + Double(i) * 1.3)
-			if blink < 0.25 { continue }
-			out.append((wx, wy, blink))
-		}
-		return out
-	}
+/// A coupling between two vehicles (each keeps one, naming the other): this vehicle's coupler cell, the
+/// other vehicle and its coupler cell, and how far apart the two are held
+struct VLink: Codable {
+	var cell: PartCell
+	var other: Int
+	var oc: PartCell
+	var len: Double
 }
 
-// MARK: - Journal: places found, what they tell, and goals worth chasing
-
-struct JournalPlace: Codable {
-	var key: String
-	var name: String
-	var x: Int
-	var day: Int
-	var dim: Int
-}
-
-/// What the player has found and learned. Saved with the world (older saves start with an empty one).
-struct Journal: Codable {
-	var places: [JournalPlace] = []
-	/// lore entries unlocked, in the order they were found
-	var lore: [String] = []
-	var relics: Int = 0
-	/// names of things the player has crafted (for the goals list)
-	var crafted: [String] = []
-	/// storms lived through (nil in journals saved before the weather)
-	var storms: [StormRecord]? = nil
-
-	func has(_ key: String) -> Bool { return places.contains { $0.key == key } }
-	func hasKind(_ prefix: String) -> Bool { return places.contains { $0.key.hasPrefix(prefix) } }
-	func count(_ prefix: String) -> Int { return places.filter { $0.key.hasPrefix(prefix) }.count }
-}
-
-/// The story each kind of place tells, a line or two each
-func loreEntry(_ key: String) -> (String, String) {
-	switch key {
-	case "ruin.house": return ("A Ruined House", "A cellar ladder, a cold hearth, a child's carving of a bear above the door. Whoever lived here left in a hurry, and went down rather than out.")
-	case "ruin.tower": return ("A Ruined Tower", "The watch log's last entry: 'Lights under the hill again. Nobody goes down there now.'")
-	case "ruin.fort": return ("An Old Fort", "Every arrowhead in these walls points outward and down. Whatever they fought came up out of the caves.")
-	case "ruin.camp": return ("An Abandoned Camp", "Bedrolls for four, supplies for one. The tracks lead toward the mountains and do not come back.")
-	case "ruin.overgrown": return ("An Overgrown Ruin", "Roots have split a shrine stone. Its carving shows a door torn open in the sky, and a hooded figure standing in it.")
-	case "ruin.bunker": return ("A Buried Bunker", "Iron doors, rusted from the inside. Someone hoarded powder and shot for a war that never reached them.")
-	case "mine": return ("An Old Mine", "A tally scratched into a support beam stops at forty-one. Under it, in a different hand: 'The rock sings this deep.'")
-	case "grotto": return ("A Crystal Grotto", "The crystals hum when you stand still. Something set them here, and something keeps them.")
-	case "lair.bear": return ("The Bear's Den", "Claw marks ring the stones. The great bear sleeps on a seal it was set to guard, and the key to that seal sleeps with it.")
-	case "lair.rex": return ("The Bone Nest", "Ribs older than the hills. Whatever crowned itself with these bones still nests among them.")
-	case "portal": return ("The Sealed Gate", "A chamber built around a door, deep under the earth, and a key-shaped hollow worn smooth by many hands.")
-	case "umbral": return ("The Umbral Realm", "No sky, no sun, only ash and ember. The rift hums behind you. It is not the only door that was opened.")
-	case "citadel": return ("The Warden's Citadel", "Carved over the gate: HERE THE WARDEN KEEPS THE DOOR, HOLLOW SINCE THE RIFT TORE OPEN.")
-	case "sentinel": return ("The Sentinel", "It came apart into shards that still glow. It was not alive, but it was waiting, and it was told what to guard.")
-	case "warden": return ("The Hollow Warden", "There was nothing inside the armour. Its heart is warm and beats slowly. A rift forge could bind it into something worn.")
-	case "wx.lightning": return ("Notes on Lightning", "It strikes the highest thing near it: a tree top, a roof, a hill. There is a moment first, when the air crackles and your hair stands up. A copper rod standing high takes every strike within fourteen blocks safely into the ground.")
-	case "wx.wind": return ("Notes on Wind", "A strong wind carries arrows and loose things with it and leans on you as you walk. A vane shows where it blows from; a turbine stores it up.")
-	case "wx.hail": return ("Notes on Hail", "Most hail only bruises crops and flowers. Now and then it falls as big as eggs: then glass breaks and bare heads ache. A roof, or a helmet, is enough.")
-	case "wx.blizzard": return ("Notes on Blizzards", "It is the wind on you that does the harm. A fire or a heater, a roof and walls, a good coat: any of them buys time. Snow boots keep you on your feet.")
-	case "wx.cold": return ("Notes on the Cold", "Cold country, high ground and night all draw the warmth out of you, the wind and wet most of all. Stand by a fire to get it back.")
-	case "wx.tornado": return ("Notes on Tornadoes", "They grow out of the worst thunderstorms and travel with the wind. Underground, or behind reinforced walls, you will hear it pass and little more. Out in the open it will pick you up.")
-	case "wx.hurricane": return ("Notes on Hurricanes", "They come off the sea in walls of wind and rain. The calm in the middle is the eye; then the wind comes back from the other side. Sandbags hold back the sea, shutters save the windows.")
-	default: return ("", "")
-	}
-}
-
-struct JournalAim {
-	var title: String
-	var hint: String
-	var done: Bool
+/// The numbers of rails and trains
+enum Rails {
+	/// how a rail wheel rolls on rails, and drags off them
+	static let roll: Double = 0.004
+	static let offRail: Double = 0.35
+	/// how close two couplers link up, the most a coupling stretches before it breaks, and how long a
+	/// pair let go by hand waits before it can link again (seconds)
+	static let reach: Double = 1.35
+	static let snap: Double = 3.0
+	static let wait: Double = 2.0
+	/// how hard a coupling pulls a stretch back each step (of the stretch)
+	static let stiff: Double = 0.25
+	/// how hard rails hold a rail wheel that has come off them but is still over them (in its weight)
+	static let hold: Double = 2.5
 }
 
 extension Game {
-	/// Goals the world offers, in roughly the order they open up. None is required; each says how to
-	/// get going on it.
-	func journalAims() -> [JournalAim] {
-		let j: Journal = journal
-		let bear: Bool = defeated.contains { $0 >= 0 && $0 < 1_000_000 }
-		let rexDown: Bool = defeated.contains { $0 >= 1_000_000 && $0 < 2_000_000 }
-		let sentinel: Bool = defeated.contains { $0 >= 6_000_000 && $0 < 8_000_000 }
-		let sigil: Bool = j.crafted.contains(Gear.wardenSigil.name) || wearing(.wardenSigil) || inv.total(.gear(.wardenSigil)) > 0
-		return [
-			JournalAim(title: "Set up a workbench", hint: "Eight planks. Chop a tree with your hands or an axe, then make planks from the logs.", done: j.crafted.contains("Workbench")),
-			JournalAim(title: "Forge iron on an anvil", hint: "Smelt iron ore in a furnace, then build an anvil (6 iron bars, 4 stone) at the workbench.", done: j.crafted.contains("Anvil")),
-			JournalAim(title: "Explore an old mine", hint: "Look for a timber headframe over a covered shaft. The treasure map marks them.", done: j.hasKind("mine:")),
-			JournalAim(title: "Find a crystal grotto", hint: "Deep underground, sometimes with a cave mouth leading down.", done: j.hasKind("grotto:")),
-			JournalAim(title: "Defeat Ursavor", hint: "The great bear's den holds the Portal Key.", done: bear),
-			JournalAim(title: "Open the sealed gate", hint: "The Portal Key opens the rift chamber far below the surface. The treasure map narrows it down.", done: portalOpened),
-			JournalAim(title: "Defeat Tyrannax", hint: "Something nests among enormous bones in the jungle.", done: rexDown),
-			JournalAim(title: "Silence a Crystal Sentinel", hint: "Each grotto has a guardian. Its shards are worth the fight.", done: sentinel),
-			JournalAim(title: "Reach the Warden's citadel", hint: "In the Umbral Realm, several hundred blocks from the rift.", done: j.has("citadel")),
-			JournalAim(title: "Defeat the Hollow Warden", hint: "Watch the ground: its strikes are marked before they land.", done: defeated.contains(WorldGen.wardenKey)),
-			JournalAim(title: "Forge the Warden's Sigil", hint: "The Warden's heart, 4 voidium bars and 4 crystal shards at a rift forge.", done: sigil),
-			JournalAim(title: "Recover relic fragments (\(min(j.relics, 10))/10)", hint: "Found in ruins, mines, grottos and with the bosses.", done: j.relics >= 10),
-		]
+	/// A rail wheel's grip where it touches: on rails it rolls almost freely, braking only when told to;
+	/// off them its flange drags
+	func railGrip(_ tx: Int, _ ty: Int, _ braking: Bool, _ rider: Bool) -> Double {
+		let onRail: Bool = world.tile(tx, ty - 1) == .rail || world.tile(tx, ty) == .rail || world.tile(tx, ty + 1) == .rail
+		if onRail { return braking && rider ? 0.6 : Rails.roll }
+		return braking ? 0.7 : Rails.offRail
 	}
 
-	func discover(_ key: String, _ name: String, _ x: Int, lore: String) {
-		if journal.has(key) { return }
-		journal.places.append(JournalPlace(key: key, name: name, x: x, day: dayCount, dim: world.dim.rawValue))
-		var line: String = "Discovered: " + name + "."
-		if !lore.isEmpty && !journal.lore.contains(lore) {
-			journal.lore.append(lore)
-			line += " (New journal entry)"
-		}
-		say(line, 3.5)
-		sfx(.discovery, 0.8)
-		spawnParticles(pb.x, pb.y - pb.h - 0.4, 0xFFE070, 10, 2.5, 0.8, -3)
-		bumpHUD()
+	/// The top of the track under a rail wheel at a point: the ground under the rails, sloping evenly from
+	/// the middle of one column to the next where the rails rise or fall a block (a track built in steps
+	/// is a ramp to a rail wheel). nil where there are no rails near.
+	func railSurface(_ x: Double, _ y: Double) -> (Double, Double)? {
+		let tx: Int = Int(floor(x))
+		guard let h0 = railTop(tx, y) else { return nil }
+		let f: Double = x - (Double(tx) + 0.5)
+		let side: Int = f >= 0 ? 1 : -1
+		guard let h1 = railTop(tx + side, h0 - 0.5), abs(h1 - h0) <= 1.01 else { return (h0, 0) }
+		// height here, and how it falls per block to the right
+		return (h0 + (h1 - h0) * abs(f), (h1 - h0) * Double(side))
 	}
 
-	func addLore(_ key: String) {
-		if !journal.lore.contains(key) { journal.lore.append(key) }
+	/// The top of the ground under a rail in a column, near a height (a rail sits on the block below it)
+	func railTop(_ tx: Int, _ near: Double) -> Double? {
+		let ny: Int = Int(floor(near))
+		for dy in [0, -1, 1, 2] where world.tile(tx, ny + dy) == .rail { return Double(ny + dy + 1) }
+		return nil
 	}
 
-	/// Checks twice a second whether the player has walked into a place worth noting
-	func updateDiscoveries(_ dt: Double) {
-		discoverT -= dt
-		if discoverT > 0 || dead { return }
-		discoverT = 0.5
-		let px: Int = Int(floor(pb.x))
-		let py: Double = pb.y
-		if world.dim == .umbral {
-			if !journal.has("umbral") { discover("umbral", "The Umbral Realm", px, lore: "umbral") }
-			if let c = gen.citadel, abs(px - c.x) < 42 && abs(py - Double(c.floor)) < 14 {
-				discover("citadel", "The Warden's Citadel", c.x, lore: "citadel")
+	/// Where a rail wheel's sample meets the track: by the rails' smooth surface where there are rails,
+	/// else the land as for any wheel
+	func railPenetration(_ x: Double, _ y: Double) -> (Double, Double, Double)? {
+		guard let s = railSurface(x, y) else { return penetration(x, y, wheel: true) }
+		let depth: Double = y - s.0
+		if depth <= 0 { return nil }
+		let k: Double = sqrt(s.1 * s.1 + 1.0)
+		return (depth / k, s.1 / k, -1.0 / k)
+	}
+
+	/// Rails hold their wheels: a rail wheel in the air with rails under it (going down a step, over a
+	/// crest) is pulled down onto them, so a cart follows the track instead of tipping over the edge
+	func railHold(_ v: Vehicle, _ h: Double) {
+		var cells: [PartCell] = []
+		for (c, t) in v.parts where t == .railWheel { cells.append(c) }
+		if cells.isEmpty { return }
+		let share: Double = v.mass / Double(cells.count)
+		for c in cells {
+			let w: (Double, Double) = v.cellCenter(c)
+			let bx: Int = Int(floor(w.0))
+			let by: Int = Int(floor(w.1 + 0.56))
+			// (standing: the cell under the wheel is ground)
+			if world.tile(bx, by).solid { continue }
+			var over: Bool = false
+			var k: Int = 0
+			while k <= 1 && !over {
+				if world.tile(bx, by + k) == .rail { over = true }
+				k += 1
 			}
-			return
-		}
-		if world.dim != .overworld { return }
-		for r in gen.rareSites(overlapping: px - 20, px + 20) where abs(px - r.x) < 14 && abs(py - Double(gen.col(r.x).h)) < 14 {
-			let k: String = "\(r.kind)"
-			discover("ruin:\(r.cell)", rareName(r.kind), r.x, lore: "ruin." + k)
-		}
-		for m in gen.mineSites(overlapping: px - 6, px + 6) where px >= m.x - 3 && px <= m.x + 5 && py > Double(m.ground - 6) && py < Double(m.bottom + 2) {
-			discover("mine:\(m.cell)", "Old Mine", m.x, lore: "mine")
-		}
-		for gs in gen.grottoSites(overlapping: px - 2, px + 2) where abs(px - gs.x) < gs.rx && abs(py - Double(gs.floorY)) < Double(gs.ry + 2) {
-			discover("grotto:\(gs.cell)", "Crystal Grotto", gs.x, lore: "grotto")
-		}
-		for L in gen.lairCenters(near: px) where abs(px - L.cx) < 40 {
-			discover("lair:\(L.kind):\(L.k)", L.kind == .bear ? "The Bear's Den" : "The Bone Nest", L.cx, lore: L.kind == .bear ? "lair.bear" : "lair.rex")
-		}
-		if abs(px - gen.portalX) < 12 && abs(py - Double(gen.portalY)) < 10 {
-			discover("portal", "The Sealed Gate", gen.portalX, lore: "portal")
+			if over { v.push(w.0, w.1, 0, Rails.hold * gravityG * share * h) }
 		}
 	}
-}
 
-// MARK: - Animal life: herds, rest, water, predators and prey
-
-/// Animals that predators hunt
-func isPrey(_ k: MobKind) -> Bool {
-	switch k {
-	case .pig, .cow, .sheep, .chicken, .giraffe, .frog: return true
-	default: return false
-	}
-}
-
-extension Game {
-	/// Herding, sleeping at night, walking to water to drink and running from hunting predators. It
-	/// looks around about once a second (not every frame) and uses the creature grid for neighbours.
-	/// Returns true when it moved the animal this frame (the caller then skips plain wandering).
-	func animalLife(_ m: Mob, _ dt: Double) -> Bool {
-		if m.poseT > 0 { m.poseT -= dt }
-		if m.drinkT > 0 { m.drinkT -= dt }
-		m.thinkT -= dt
-		if m.thinkT <= 0 {
-			m.thinkT = Double.random(in: 0.8...1.4)
-			// a hunting predator close by: run
-			for o in mobsNear(m.b.x - 10, m.b.x + 10) where o.hp > 0 && o !== m && o.preyID != 0 && !o.tame {
-				if abs(o.b.x - m.b.x) < 10 && abs(o.b.y - m.b.y) < 4 {
-					m.t2 = 3.0
-					m.tx = o.b.x
-					m.goal = 0
-					return false
-				}
-			}
-			// in a downpour, hail or a gale, animals out in the open head for cover (a tree, a roof)
-			if m.goal == 0 && world.dim == .overworld && settings.weatherOn && abs(m.b.x - pb.x) < 60 {
-				let bad: Bool = precipAt(m.b.x) > 0.55 || wxHere.hail > 0.2 || abs(wxHere.wind) > 11 || weather.tornado != nil
-				if bad && rainReaches(m.b.x, m.b.y, m.b.h), let cx = coverNear(m, 14) {
-					m.goal = 3
-					m.goalX = cx
-				}
-			}
-			// the herd and the water hole wait for daylight; at night animals settle where they are
-			if m.goal == 0 && !(isNight && world.dim == .overworld) {
-				if m.drinkT <= 0 && Double.random(in: 0...1) < 0.15, let wx = waterNear(m, 12) {
-					m.goal = 1
-					m.goalX = wx
-				} else if Double.random(in: 0...1) < 0.3 {
-					// drift back toward the rest of the herd
-					var sum: Double = 0
-					var n: Int = 0
-					for o in mobsNear(m.b.x - 18, m.b.x + 18) where o.kind == m.kind && o !== m && o.hp > 0 && !o.tame {
-						sum += o.b.x
-						n += 1
-					}
-					if n > 0 {
-						let cx: Double = sum / Double(n)
-						if abs(cx - m.b.x) > 7 { m.goal = 2; m.goalX = cx }
-					}
-				}
-			}
-		}
-		if m.goal != 0 {
-			let dx: Double = m.goalX - m.b.x
-			if (abs(dx) < 1.2 && m.goal != 3) || abs(dx) < 0.5 || (m.goal == 2 && abs(dx) < 4) {
-				if m.goal == 3 {
-					// sheltering: stand still under cover a while
-					m.poseT = 6.0
-					m.st = 0
-				}
-				if m.goal == 1 {
-					// drinking: head down for a few seconds
-					m.drinkT = Double.random(in: 25...45)
-					m.poseT = 3.0
-					m.st = 0
-					m.t1 = 3.2
-				}
-				m.goal = 0
-			} else {
-				m.dir = dx > 0 ? 1 : -1
-				// the water itself reads as a drop just before the edge; that is where it was going
-				let edge: Bool = m.goal == 1 && abs(dx) < 2.5
-				if (cliffAhead(m, m.dir) && !edge) || (m.b.hitWall && !m.b.onGround) {
-					m.goal = 0
-				} else {
-					accelX(m, Double(m.dir) * m.def.speed * 0.6, 14, dt)
-					if m.b.hitWall && m.b.onGround { m.b.vy = -m.def.jump }
-					return true
-				}
-			}
-		}
-		if m.poseT > 0 {
-			accelX(m, 0, 18, dt)
-			return true
-		}
-		// at night farm animals mostly settle down and sleep
-		if isNight && world.dim == .overworld && m.kind != .frog {
-			if m.st == 1 && Double.random(in: 0...1) < 0.02 { m.st = 0; m.t1 = Double.random(in: 4...9) }
-			if m.st == 0 {
-				m.t1 -= dt
-				if m.t1 <= 0 { m.st = 1; m.t1 = Double.random(in: 0.8...1.6); m.dir = Bool.random() ? 1 : -1 }
-				accelX(m, 0, 18, dt)
+	/// An ore cart put on a rail: a little vehicle of two crates on two rail wheels
+	func placeOreCart(_ tx: Int, _ ty: Int) -> Bool {
+		var ry: Int = ty
+		if world.tile(tx, ry) != .rail {
+			if world.tile(tx, ry + 1) == .rail { ry += 1 } else {
+				say("Put the ore cart on a rail.", 1.6)
 				return true
 			}
+		}
+		var left: Int = tx
+		if world.tile(tx + 1, ry) != .rail && world.tile(tx - 1, ry) == .rail { left = tx - 1 }
+		for x in left...(left + 1) {
+			for y in (ry - 1)...ry where world.tile(x, y).solid {
+				say("No room for the cart here.", 1.5)
+				return true
+			}
+		}
+		if !inReach(Double(tx) + 0.5, Double(ry) + 0.5) { return true }
+		let v: Vehicle = Vehicle(id: newID(), first: .frame, x: 0, y: 0)
+		v.parts.removeAll()
+		v.parts[PartCell(dx: 0, dy: 0)] = .cargo
+		v.parts[PartCell(dx: 1, dy: 0)] = .cargo
+		v.parts[PartCell(dx: 0, dy: 1)] = .railWheel
+		v.parts[PartCell(dx: 1, dy: 1)] = .railWheel
+		v.recompute(keepAnchor: false)
+		v.placeBox(left: Double(left), bottom: Double(ry + 1))
+		vehicles.append(v)
+		if !isCreative { inv.removeAt(sel, 1) }
+		sfx(.place, 0.7)
+		say("An ore cart on the rails: push it, ride it, load it (tap it), or couple it to an engine.", 3.0)
+		bumpHUD()
+		return true
+	}
+
+	/// A big wheel: the cell tapped is its middle; all nine cells must be free, one of them next to the
+	/// vehicle. Where the land is in the way the vehicle is lifted (up to three blocks) if it fits higher.
+	/// True when the tap was for a vehicle.
+	func attachBigWheel() -> Bool {
+		for v in vehicles {
+			if aimX < v.b.left - 3 || aimX > v.b.right + 3 || aimY < v.b.top - 3 || aimY > v.b.y + 3 { continue }
+			let mid: PartCell = v.cellAt(aimX, aimY)
+			var cells: [PartCell] = []
+			var touches: Bool = false
+			var free: Bool = true
+			for dy in -1...1 {
+				for dx in -1...1 {
+					let k: PartCell = PartCell(dx: mid.dx + dx, dy: mid.dy + dy)
+					if v.parts[k] != nil { free = false }
+					if v.hasNeighbor(k) { touches = true }
+					cells.append(k)
+				}
+			}
+			if !touches { continue }
+			if useCD > 0 { return true }
+			useCD = 0.3
+			if !free {
+				say("A big wheel needs a free space three by three (the cell you tap is its middle).", 2.5)
+				return true
+			}
+			var lift: Int = 0
+			while lift <= 3 && bigWheelBlocked(v, cells, lift) { lift += 1 }
+			if lift > 3 {
+				say("The ground is in the way of the big wheel.", 2.0)
+				return true
+			}
+			if lift > 0 {
+				v.py -= Double(lift)
+				v.vy = 0
+				v.updateBox()
+			}
+			for k in cells {
+				v.parts[k] = .bigWheel
+				v.spanOf[k] = mid
+			}
+			v.recompute(keepAnchor: true)
+			v.kit = -1
+			v.asleep = false
+			if !isCreative { inv.removeAt(sel, 1) }
+			sfx(.place, 0.7)
+			swingT = 0.15
+			bumpHUD()
+			return true
 		}
 		return false
 	}
 
-	/// The nearest column with cover overhead (leaves, a roof) at about the animal's own level
-	func coverNear(_ m: Mob, _ r: Int) -> Double? {
-		let x0: Int = Int(floor(m.b.x))
-		let feet: Double = m.b.y
-		var k: Int = 1
-		while k <= r {
-			for side in [1, -1] {
-				let x: Int = x0 + side * k
-				if !rainReaches(Double(x) + 0.5, feet, m.b.h) && world.groundBelow(x, Int(floor(feet)) - 1) <= Int(floor(feet)) + 1 {
-					// a step further in, if that is covered too, so the whole body is under it
-					let deeper: Int = x + side
-					if !rainReaches(Double(deeper) + 0.5, feet, m.b.h) { return Double(deeper) + 0.5 }
-					return Double(x) + 0.5
-				}
-			}
-			k += 1
+	/// Whether the land is in the way of a vehicle and its new cells, lifted so many blocks
+	func bigWheelBlocked(_ v: Vehicle, _ extra: [PartCell], _ lift: Int) -> Bool {
+		var all: [PartCell] = Array(v.parts.keys)
+		all.append(contentsOf: extra)
+		for c in all {
+			let wp: (Double, Double) = v.cellPos(c)
+			let y: Double = wp.1 - Double(lift)
+			if world.boxSolid(wp.0 + 0.02, y + 0.02, wp.0 + 0.98, y + 0.98) { return true }
 		}
-		return nil
+		return false
 	}
 
-	/// The nearest surface water within reach, as the column to stand at beside it
-	func waterNear(_ m: Mob, _ r: Int) -> Double? {
-		let x0: Int = Int(floor(m.b.x))
-		let gy: Int = Int(floor(m.b.y))
-		var k: Int = 1
-		while k <= r {
-			for side in [1, -1] {
-				let x: Int = x0 + side * k
-				for dy in -2...2 where world.tile(x, gy + dy) == .water {
-					return Double(x - side) + 0.5
-				}
-			}
-			k += 2
+	// MARK: trains
+
+	/// Couplers that come within reach of each other link up (each vehicle keeps the link)
+	func formCouplings(_ dt: Double) {
+		var any: Bool = false
+		for v in vehicles where v.couplers > 0 {
+			if v.noCoupleT > 0 { v.noCoupleT -= dt }
+			any = true
 		}
-		return nil
-	}
-
-	/// Predators (wolves at night, big cats and bears any time the player isn't their target) run down
-	/// prey nearby, bite it, and rest after a kill. Returns true while it has prey to chase.
-	func hunt(_ m: Mob, _ dt: Double, _ allowed: Bool) -> Bool {
-		if m.poseT > 0 {
-			// resting after a meal
-			m.poseT -= dt
-			accelX(m, 0, 18, dt)
-			return true
-		}
-		var prey: Mob? = nil
-		if m.preyID != 0 {
-			if let o = m.prey, o.id == m.preyID, o.hp > 0, !o.removed { prey = o }
-			if prey == nil {
-				// the prey is gone: rest, and stay sated for a while
-				m.preyID = 0
-				m.poseT = 4.0
-				m.drinkT = 60.0
-				return true
-			}
-		}
-		m.thinkT -= dt
-		if prey == nil && allowed && m.thinkT <= 0 {
-			m.thinkT = Double.random(in: 1.5...3.0)
-			var bd: Double = 14
-			for o in mobsNear(m.b.x - 14, m.b.x + 14) where isPrey(o.kind) && o.hp > 0 && !o.tame && abs(o.b.y - m.b.y) < 4 {
-				let d: Double = abs(o.b.x - m.b.x)
-				if d < bd { bd = d; prey = o }
-			}
-			if let p = prey { m.preyID = p.id; m.prey = p }
-		}
-		guard let p = prey else { return false }
-		if !allowed || abs(p.b.x - m.b.x) > 26 { m.preyID = 0; return false }
-		chase(m, p.b.x, 1.05, dt)
-		if m.kind == .wolf && m.b.onGround && abs(p.b.x - m.b.x) < 4 && Double.random(in: 0...1) < 0.03 { m.b.vy = -11; m.b.vx = Double(m.dir) * 7 }
-		if m.cd <= 0 && abs(p.b.x - m.b.x) < m.b.w * 0.5 + p.b.w * 0.5 + 0.4 && abs(p.b.y - m.b.y) < 1.4 {
-			m.cd = 0.9
-			m.atkT = Mob.atkDur
-			hurtMob(p, m.def.dmg, Double(m.dir), 5, false)
-			// the herd scatters
-			for o in mobsNear(p.b.x - 10, p.b.x + 10) where o.kind == p.kind && o.hp > 0 { o.t2 = 3.0; o.tx = m.b.x }
-		}
-		return true
-	}
-}
-
-// MARK: - Telegraphed attacks and the newer creatures' behaviour
-
-/// Ground an attack is about to strike. Drawn as a pulsing warning that fills from the bottom as the
-/// moment comes, so every telegraphed blow reads the same way and can be stepped out of.
-struct DangerZone {
-	var x0: Double
-	var y0: Double
-	var x1: Double
-	var y1: Double
-	/// seconds until the strike, and the whole wind-up
-	var t: Double
-	var dur: Double
-	var color: UInt32
-}
-
-enum WardenAtk: Int {
-	case none, sweep, bolts, blink, pillars, summon
-}
-
-extension WorldGen {
-	/// the Hollow Warden's entry in the list of defeated bosses
-	static let wardenKey: Int = 9_000_001
-	/// a grotto's Crystal Sentinel in that list
-	static func sentinelKey(_ cell: Int) -> Int { return 7_000_000 + cell }
-}
-
-extension Game {
-	func warn(_ x0: Double, _ y0: Double, _ x1: Double, _ y1: Double, _ dur: Double, _ color: UInt32 = 0xFF3A2A) {
-		if dangerZones.count >= 24 { dangerZones.removeFirst() }
-		sfx(.warn, at: (x0 + x1) * 0.5, 0.6)
-		dangerZones.append(DangerZone(x0: min(x0, x1), y0: min(y0, y1), x1: max(x0, x1), y1: max(y0, y1), t: dur, dur: max(0.05, dur), color: color))
-	}
-
-	func updateDangerZones(_ dt: Double) {
-		if dangerZones.isEmpty { return }
-		for i in dangerZones.indices { dangerZones[i].t -= dt }
-		dangerZones.removeAll { $0.t <= 0 }
-	}
-
-	/// A creature's blow over a box; targets are pushed away from the creature
-	func mobAttackBox(_ m: Mob, _ x0: Double, _ y0: Double, _ x1: Double, _ y1: Double, dmg: Double, knock: Double, type: DamageType = .melee) {
-		var info = DamageInfo(amount: dmg, type: type, source: .mob(m, faction(of: m)))
-		info.knock = knock
-		info.originX = m.b.x
-		info.originY = m.b.cy
-		info.key = newID()
-		damageBox(min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1), info)
-	}
-
-	// MARK: cave crawler: fast, crouches and pounces
-
-	func updateCrawler(_ m: Mob, _ dt: Double, _ aggro: Bool, _ dist: Double, _ dyP: Double) {
-		let d: MobDef = m.def
-		switch m.st {
-		case 3:
-			// a short crouch before the pounce
-			m.t3 -= dt
-			accelX(m, 0, 50, dt)
-			m.dir = pb.x >= m.b.x ? 1 : -1
-			if m.t3 <= 0 {
-				m.st = 4
-				m.t3 = 0.7
-				m.cd = 0
-				m.b.vy = -8.5
-				m.b.vx = Double(m.dir) * 10.5
-				m.atkT = Mob.atkDur
-			}
-		case 4:
-			m.t3 -= dt
-			contactHurt(m, d.dmg * 1.3)
-			if (m.b.onGround && m.t3 < 0.55) || m.t3 <= 0 {
-				m.st = 0
-				m.cd = 1.3
-			}
-		default:
-			if aggro {
-				chase(m, m.aimX, 1.0, dt)
-				// scrambles up ledges
-				if m.b.hitWall && m.b.onGround { m.b.vy = -11.5 }
-				if m.ai == .chase && m.b.onGround && m.cd <= 0 && dist > 1.8 && dist < 4.6 && abs(dyP) < 2.0 {
-					m.st = 3
-					m.t3 = 0.28
-				}
-				if m.ai == .chase { contactHurt(m, d.dmg) }
-			} else {
-				wander(m, dt, 0.6)
-			}
-		}
-		stepMob(m, dt)
-	}
-
-	// MARK: stone golem: slow, armoured, slams the ground and throws rocks
-
-	func updateGolem(_ m: Mob, _ dt: Double, _ aggro: Bool, _ dist: Double, _ dyP: Double) {
-		let d: MobDef = m.def
-		switch m.st {
-		case 3:
-			// fists raised: the slam lands where the warning shows
-			m.t3 -= dt
-			accelX(m, 0, 40, dt)
-			if m.t3 <= 0 {
-				m.st = 4
-				m.t3 = 0.35
-				let x0: Double = m.dir > 0 ? m.b.x - 0.6 : m.b.x - 3.9
-				let x1: Double = m.dir > 0 ? m.b.x + 3.9 : m.b.x + 0.6
-				mobAttackBox(m, x0, m.b.y - 2.4, x1, m.b.y + 0.1, dmg: d.dmg, knock: 10)
-				m.atkT = Mob.atkDur
-				addShake(dist < 10 ? 0.2 : 0.06)
-				spawnParticles(m.b.x + Double(m.dir) * 2.2, m.b.y - 0.1, 0x8A8680, 10, 4.0, 0.5, 14)
-			}
-		case 4:
-			m.t3 -= dt
-			accelX(m, 0, 40, dt)
-			if m.t3 <= 0 { m.st = 0; m.cd = 1.6 }
-		case 5:
-			// a boulder held overhead
-			m.t3 -= dt
-			accelX(m, 0, 40, dt)
-			m.dir = pb.x >= m.b.x ? 1 : -1
-			if m.t3 <= 0 {
-				throwRock(m)
-				m.st = 4
-				m.t3 = 0.3
-				m.cd = 2.8
-			}
-		default:
-			if aggro {
-				chase(m, m.aimX, 1.0, dt)
-				if m.ai == .chase && m.cd <= 0 && m.b.onGround {
-					if dist < 3.3 && abs(dyP) < 2.4 {
-						m.st = 3
-						m.t3 = 0.75
-						m.dir = pb.x >= m.b.x ? 1 : -1
-						let x0: Double = m.dir > 0 ? m.b.x - 0.6 : m.b.x - 3.9
-						let x1: Double = m.dir > 0 ? m.b.x + 3.9 : m.b.x + 0.6
-						warn(x0, m.b.y - 2.4, x1, m.b.y, 0.75, 0xFF8A2A)
-					} else if dist > 4.5 && dist < 11 && Double.random(in: 0...(m.blockedT > 0 ? 0.3 : 1.0)) < 0.02
-								&& world.lineClear(m.b.x, m.b.top - 1.5, pb.x, pb.y - pb.h * 0.6) {
-						// lobbed, so it clears a low wall: thrown over anything it can see over
-						m.st = 5
-						m.t3 = 0.6
+		if !any { return }
+		for a in vehicles where a.couplers > 0 && a.noCoupleT <= 0 {
+			for (ca, ta) in a.parts where ta == .coupler && !a.links.contains(where: { $0.cell == ca }) {
+				let pa: (Double, Double) = a.cellCenter(ca)
+				for b in vehicles where b !== a && b.couplers > 0 && b.noCoupleT <= 0 {
+					if b.b.right < pa.0 - 2 || b.b.left > pa.0 + 2 || b.b.y < pa.1 - 2 || b.b.top > pa.1 + 2 { continue }
+					for (cb, tb) in b.parts where tb == .coupler && !b.links.contains(where: { $0.cell == cb }) {
+						let pb: (Double, Double) = b.cellCenter(cb)
+						let d: Double = sqrt((pb.0 - pa.0) * (pb.0 - pa.0) + (pb.1 - pa.1) * (pb.1 - pa.1))
+						if d > Rails.reach { continue }
+						let len: Double = max(1.0, d)
+						a.links.append(VLink(cell: ca, other: b.id, oc: cb, len: len))
+						b.links.append(VLink(cell: cb, other: a.id, oc: ca, len: len))
+						sfx(.hit, at: pa.0, 0.5)
+						if abs(pa.0 - self.pb.x) < 30 { say("Coupled.", 1.0) }
+						break
 					}
-				}
-				if m.ai == .chase { contactHurt(m, d.dmg * 0.5) }
-			} else {
-				wander(m, dt, 0.35)
-			}
-		}
-		stepMob(m, dt, stepUp: 1.0)
-	}
-
-	/// A lobbed boulder, aimed so its arc comes down on the player
-	func throwRock(_ m: Mob) {
-		let ox: Double = m.b.x + Double(m.dir) * 0.6
-		let oy: Double = m.b.top + 0.2
-		let dx: Double = pb.x - ox
-		let t: Double = clampD(abs(dx) / 9.0, 0.5, 1.3)
-		let grav: Double = 22.0
-		let vx: Double = dx / t
-		let vy: Double = ((pb.y - 0.8) - oy - 0.5 * grav * t * t) / t
-		var p = Projectile(kind: .rock, x: ox, y: oy, vx: vx, vy: vy, dmg: m.def.dmg * 0.8, fromPlayer: false, gravity: grav)
-		p.w = 0.6
-		p.life = 3.0
-		p.owner = m.id
-		p.source = .mob(m, faction(of: m))
-		p.uid = newID()
-		projectiles.append(p)
-		m.atkT = Mob.atkDur
-	}
-
-	// MARK: skeleton archer: keeps its distance and shoots arced arrows
-
-	func updateArcher(_ m: Mob, _ dt: Double, _ aggro: Bool, _ dist: Double, _ dyP: Double) {
-		switch m.st {
-		case 3:
-			// the draw: a clear moment to close in or take cover
-			m.t3 -= dt
-			accelX(m, 0, 40, dt)
-			m.dir = pb.x >= m.b.x ? 1 : -1
-			if m.t3 <= 0 {
-				if clearShot(m) {
-					shootArrowAtPlayer(m)
-					m.st = 6
-					m.t3 = 0.25
-				} else if m.t3 < -0.8 {
-					// the target went behind cover: the draw is let down, and next time it climbs for a
-					// better spot (see think)
-					m.st = 0
-					m.cd = 0.4
-					m.blockedT += 0.6
-				}
-			}
-		case 6:
-			m.t3 -= dt
-			accelX(m, 0, 40, dt)
-			if m.t3 <= 0 { m.st = 0; m.cd = Double.random(in: 1.4...2.2) }
-		default:
-			if aggro {
-				// keeps its distance from the moment it notices the player; shoots once it is fighting
-				let sees: Bool = m.sees && (m.ai == .chase || m.ai == .alert)
-				if dist < 5.0 && sees {
-					// too close: back off, hopping away now and then
-					flee(m, pb.x, dt, 1.1)
-					if m.b.onGround && Double.random(in: 0...1) < 0.025 { m.b.vy = -10; m.b.vx = Double(m.dir) * 5.5 }
-				} else if dist > 12.0 || !sees || m.blockedT > 0.5 || !m.b.onGround {
-					chase(m, m.aimX, 0.9, dt)
-				} else {
-					accelX(m, 0, 20, dt)
-					m.dir = pb.x >= m.b.x ? 1 : -1
-				}
-				if m.ai == .chase && m.cd <= 0 && sees && m.b.onGround && dist >= 3.0 && dist < 18 && abs(dyP) < 10 {
-					m.st = 3
-					m.t3 = 0.6
-				}
-			} else {
-				wander(m, dt, 0.4)
-			}
-		}
-		stepMob(m, dt)
-	}
-
-	/// A clear line from where a shot leaves to the player's chest, checked at the moment of release
-	func clearShot(_ m: Mob) -> Bool {
-		let ox: Double = m.b.x + Double(m.dir) * 0.6
-		return world.lineClear(ox, shotY(m), pb.x, shotAimY(m))
-	}
-
-	/// Where a creature's shot leaves (its shoulder) and the part of the player it aims for: the chest,
-	/// or the head when only the head shows over cover
-	func shotY(_ m: Mob) -> Double { return m.b.top + 0.45 }
-
-	func shotAimY(_ m: Mob) -> Double {
-		let ox: Double = m.b.x + Double(m.dir) * 0.6
-		let chest: Double = pb.y - pb.h * 0.55
-		if world.lineClear(ox, shotY(m), pb.x, chest) { return chest }
-		return pb.top + 0.25
-	}
-
-	func shootArrowAtPlayer(_ m: Mob) {
-		let ox: Double = m.b.x + Double(m.dir) * 0.6
-		let oy: Double = shotY(m)
-		let tx: Double = pb.x + pb.vx * 0.2
-		let ty: Double = shotAimY(m)
-		let grav: Double = 15.0
-		let dx: Double = tx - ox
-		let dy: Double = ty - oy
-		let flight: Double = max(0.15, sqrt(dx * dx + dy * dy) / 19.0)
-		var p = Projectile(kind: .arrow, x: ox, y: oy, vx: dx / flight, vy: dy / flight - 0.5 * grav * flight, dmg: m.def.dmg, fromPlayer: false, gravity: grav)
-		p.life = 3.0
-		p.w = 0.22
-		p.owner = m.id
-		p.source = .mob(m, faction(of: m))
-		p.uid = newID()
-		projectiles.append(p)
-	}
-
-	// MARK: mimic: a chest that bites
-
-	func updateMimic(_ m: Mob, _ dt: Double, _ aggro: Bool, _ dist: Double, _ dyP: Double) {
-		let d: MobDef = m.def
-		m.t1 -= dt
-		m.angry = aggro
-		if m.st == 3 {
-			// jaws wide before the lunge
-			m.t3 -= dt
-			accelX(m, 0, 30, dt)
-			if m.t3 <= 0 {
-				m.st = 4
-				m.t3 = 0.6
-				m.cd = 0
-				m.b.vy = -9.5
-				m.b.vx = Double(m.dir) * 9.0
-				m.atkT = Mob.atkDur
-			}
-		} else if m.st == 4 {
-			m.t3 -= dt
-			if abs(dyP) < 1.4 { contactHurt(m, d.dmg * 1.2) }
-			if (m.b.onGround && m.t3 < 0.45) || m.t3 <= 0 {
-				m.st = 0
-				m.cd = m.hp < m.maxHP * 0.4 ? 0.7 : 1.1
-			}
-		} else if aggro {
-			m.dir = pb.x >= m.b.x ? 1 : -1
-			if m.b.onGround {
-				m.b.vx *= 0.8
-				if m.cd <= 0 && dist < 5.0 && abs(dyP) < 2.2 {
-					m.st = 3
-					m.t3 = 0.3
-				} else if m.t1 <= 0 {
-					m.b.vy = -8.0
-					m.b.vx = Double(m.dir) * 5.0
-					m.t1 = 0.45
-				}
-			}
-			if abs(dyP) < 1.4 { contactHurt(m, d.dmg * 0.6) }
-		} else {
-			// sits still and passes for a chest again
-			accelX(m, 0, 20, dt)
-		}
-		stepMob(m, dt)
-	}
-
-	/// Some unopened chests underground in newer worlds are mimics: opening one wakes it instead
-	func tryMimic(_ x: Int, _ y: Int) -> Bool {
-		if world.dim != .overworld || gen.genVersion < 3 { return false }
-		if y < WorldGen.sea + 20 { return false }
-		// opened before, or placed by the player
-		if world.chests[world.chestKey(x, y)] != nil { return false }
-		if hash2(x, y, gen.seed &+ 909) >= 0.08 { return false }
-		// a grotto's altar chest has its own guardian
-		for s in gen.grottoSites(overlapping: x - 2, x + 2) where abs(x - s.x) <= 1 && abs(y - (s.floorY - 2)) <= 1 { return false }
-		let loot: [Stack] = world.removeChest(x, y)
-		world.set(x, y, .air)
-		let m: Mob = addMob(.mimic, Double(x) + 0.5, Double(y) + 1.0)
-		m.loot = loot
-		m.persistent = true
-		m.homeX = Double(x) + 0.5
-		m.homeY = Double(y) + 1.0
-		m.dir = pb.x >= m.b.x ? 1 : -1
-		m.st = 3
-		m.t3 = 0.45
-		m.angry = true
-		addShake(0.12)
-		spawnParticles(m.b.x, m.b.y - 0.5, 0xB98A4E, 8, 4.0, 0.4, 12)
-		say("The chest was a Mimic!", 2.5)
-		return true
-	}
-
-	// MARK: crystal sentinel: the grotto's guardian
-
-	func updateGuardians() {
-		let px: Int = Int(floor(pb.x))
-		for s in gen.grottoSites(overlapping: px - 60, px + 60) {
-			let key: Int = WorldGen.sentinelKey(s.cell)
-			if defeated.contains(key) { continue }
-			var existing: Mob? = nil
-			for m in mobs where m.kind == .sentinel && m.lair == key && m.hp > 0 { existing = m }
-			let dx: Double = abs(Double(s.x) + 0.5 - pb.x)
-			let dy: Double = abs(Double(s.floorY) - pb.y)
-			if existing == nil {
-				if dx < Double(s.rx) + 1 && dy < Double(s.ry) + 3 && !dead && world.isLoaded(s.x) {
-					let m: Mob = addMob(.sentinel, Double(s.x) + 0.5, Double(s.floorY) - 3.0)
-					m.lair = key
-					m.homeX = Double(s.x) + 0.5
-					m.homeY = Double(s.floorY)
-					m.persistent = true
-					m.phase = 1
-					m.t1 = 1.5
-					m.dir = pb.x >= m.b.x ? 1 : -1
-					say("A Crystal Sentinel wakes to guard the grotto!", 3.0)
-				}
-			} else if let e = existing, dx > 90 || dy > 60 {
-				// leaving resets the fight
-				e.hp = 0
-				e.removed = true
-			}
-		}
-	}
-
-	func updateSentinel(_ m: Mob, _ dt: Double) {
-		let floorY: Double = m.homeY
-		let toP: Double = pb.x - m.b.x
-		let dist: Double = abs(toP)
-		let dyP: Double = (pb.y - pb.h * 0.5) - m.b.cy
-		m.anim += dt * 2.5
-		if m.phase < 2 && m.hp < m.maxHP * 0.55 && m.st != 1 {
-			m.phase = 2
-			say("The Crystal Sentinel flares with light!", 2.5)
-			spawnParticles(m.b.x, m.b.cy, 0xD8FFFA, 24, 6.0, 0.7, 0)
-		}
-		var tx: Double = m.b.x
-		var ty: Double = floorY - 2.8 + sin(clock * 1.7 + Double(m.id % 7)) * 0.5
-		switch m.st {
-		case 1:
-			m.t2 -= dt
-			m.tele = m.t2
-			// dropping to the player's level before a dash
-			if m.atk == 3 { ty = m.ty }
-			if m.t2 <= 0 { m.tele = 0; executeSentinel(m) }
-		case 2:
-			m.t2 -= dt
-			if m.t2 <= 0 { m.st = 0; m.t1 = m.phase == 2 ? Double.random(in: 0.9...1.4) : Double.random(in: 1.4...2.2) }
-		case 5:
-			// dashing straight through
-			m.t2 -= dt
-			m.b.vx = Double(m.dir) * 15.0
-			m.b.vy = (m.ty - m.b.y) * 2.0
-			if abs(dyP) < 1.8 { contactHurt(m, m.def.dmg * 1.3) }
-			world.moveBody(&m.b, dt, stepUp: 0, dropThrough: false, decks: [])
-			if m.t2 <= 0 || m.b.hitWall || abs(m.b.x - m.homeX) > 24 {
-				m.st = 2
-				m.t2 = 0.6
-				m.b.vx *= 0.3
-			}
-			return
-		default:
-			m.dir = toP >= 0 ? 1 : -1
-			if dead {
-				tx = m.homeX
-			} else {
-				// keeps a few blocks off the player
-				tx = pb.x - Double(m.dir) * 4.5
-			}
-			m.t1 -= dt
-			if m.t1 <= 0 && !dead && dist < 28 { chooseSentinelAttack(m, dist) }
-		}
-		tx = clampD(tx, m.homeX - 20, m.homeX + 20)
-		let sp: Double = m.def.speed * (m.phase == 2 ? 1.25 : 1.0)
-		m.b.vx += (clampD((tx - m.b.x) * 1.8, -sp, sp) - m.b.vx) * min(1.0, dt * 3.0)
-		m.b.vy += (clampD((ty - m.b.y) * 2.0, -sp * 1.5, sp * 1.5) - m.b.vy) * min(1.0, dt * 3.0)
-		world.moveBody(&m.b, dt, stepUp: 0, dropThrough: false, decks: [])
-		if !dead && abs(dyP) < 1.6 { contactHurt(m, m.def.dmg * 0.5) }
-	}
-
-	func chooseSentinelAttack(_ m: Mob, _ dist: Double) {
-		let r: Double = Double.random(in: 0...1)
-		let fy: Double = m.homeY
-		m.dir = pb.x >= m.b.x ? 1 : -1
-		if m.phase == 2 && r < 0.4 {
-			// crystal spikes burst from the floor around the player
-			m.atk = 2
-			m.t2 = 0.95
-			var xs: [Double] = []
-			for k in -1...1 {
-				let sx: Double = clampD(pb.x + Double(k) * 3.0 + Double.random(in: -0.5...0.5), m.homeX - 24, m.homeX + 24)
-				xs.append(sx)
-				warn(sx - 0.7, fy - 3.0, sx + 0.7, fy, 0.95, 0x5AF0F0)
-			}
-			m.spots = xs
-		} else if r < 0.72 || dist > 9 {
-			// a fan of shards
-			m.atk = 1
-			m.t2 = 0.6
-		} else {
-			// a dash along the player's level
-			m.atk = 3
-			m.t2 = 0.6
-			m.ty = pb.y - 0.1
-			warn(m.b.x, m.ty - 2.1, m.b.x + Double(m.dir) * 14.0, m.ty, 0.6, 0x5AF0F0)
-		}
-		m.st = 1
-	}
-
-	func executeSentinel(_ m: Mob) {
-		let fy: Double = m.homeY
-		switch m.atk {
-		case 2:
-			for sx in m.spots {
-				mobAttackBox(m, sx - 0.7, fy - 3.0, sx + 0.7, fy + 0.1, dmg: 14, knock: 6, type: .impact)
-				spawnParticles(sx, fy - 0.5, 0x8AF0E8, 8, 5.0, 0.5, 6)
-			}
-			m.spots = []
-			addShake(0.12)
-			m.st = 2
-			m.t2 = 0.6
-		case 3:
-			m.st = 5
-			m.t2 = 0.75
-			m.atkT = Mob.atkDur
-		default:
-			let n: Int = m.phase == 2 ? 5 : 3
-			let ox: Double = m.b.x + Double(m.dir) * 0.8
-			let oy: Double = m.b.cy
-			let aim: Double = atan2((pb.y - pb.h * 0.55) - oy, pb.x - ox)
-			for k in 0..<n {
-				let a: Double = aim + (Double(k) - Double(n - 1) * 0.5) * 0.17
-				var p = Projectile(kind: .shard, x: ox, y: oy, vx: cos(a) * 13.0, vy: sin(a) * 13.0, dmg: 9, fromPlayer: false, gravity: 0)
-				p.life = 3.0
-				p.w = 0.25
-				p.owner = m.id
-				p.source = .mob(m, faction(of: m))
-				p.uid = newID()
-				projectiles.append(p)
-			}
-			m.atkT = Mob.atkDur
-			spawnParticles(ox, oy, 0xD8FFFA, 6, 3.0, 0.25, 0)
-			m.st = 2
-			m.t2 = 0.5
-		}
-	}
-
-	func onGuardianDefeated(_ m: Mob) {
-		if m.lair != 0 { defeated.insert(m.lair) }
-		dangerZones.removeAll()
-		addShake(m.kind == .warden ? 0.6 : 0.35)
-		spawnParticles(m.b.x, m.b.cy, m.kind == .warden ? 0xD8A8FF : 0x8AF0E8, 36, 8.0, 1.1, 6)
-		addLore(m.kind == .warden ? "warden" : "sentinel")
-		if m.kind == .warden {
-			say("The Hollow Warden falls. Its heart still beats - a rift forge could bind it into a sigil.", 7.0)
-		} else {
-			say("The Crystal Sentinel shatters. The grotto is yours.", 4.5)
-		}
-	}
-
-	// MARK: the Hollow Warden
-
-	func updateWardenSpawn() {
-		guard let c = gen.citadel else { return }
-		let key: Int = WorldGen.wardenKey
-		if defeated.contains(key) { return }
-		var existing: Mob? = nil
-		for m in mobs where m.kind == .warden && m.hp > 0 { existing = m }
-		let dx: Double = abs(Double(c.x) + 0.5 - pb.x)
-		let dy: Double = abs(Double(c.floor) - pb.y)
-		if existing == nil {
-			if dx < 30 && dy < 16 && !dead && world.isLoaded(c.throneX) {
-				let m: Mob = addMob(.warden, Double(c.throneX) + 0.5, Double(c.floor) - 0.4)
-				m.lair = key
-				m.homeX = Double(c.x) + 0.5
-				m.homeY = Double(c.floor)
-				m.persistent = true
-				m.phase = 1
-				m.t1 = 2.0
-				m.dir = pb.x >= m.b.x ? 1 : -1
-				say("The Hollow Warden rises from its throne.", 4.0)
-				sfx(.roar, at: m.b.x, 1.0)
-			}
-		} else if let e = existing, dx > 140 {
-			e.hp = 0
-			e.removed = true
-			dangerZones.removeAll()
-		}
-	}
-
-	func updateWarden(_ m: Mob, _ dt: Double) {
-		let floorY: Double = m.homeY
-		let toP: Double = pb.x - m.b.x
-		let dist: Double = abs(toP)
-		let dirP: Int = toP >= 0 ? 1 : -1
-		m.anim += dt * 2.0
-		let hpf: Double = m.hp / m.maxHP
-		let want: Int = hpf > 0.66 ? 1 : (hpf > 0.33 ? 2 : 3)
-		if want > m.phase && (m.st == 0 || m.st == 2) {
-			m.phase = want
-			m.st = 1
-			m.atk = WardenAtk.summon.rawValue
-			m.t2 = 1.3
-			m.spots = []
-			say(want == 2 ? "The Hollow Warden calls up its servants!" : "The Warden's lights burn white. The floor trembles.", 3.0)
-			addShake(0.3)
-		}
-		let quick: Double = m.phase == 3 ? 0.72 : (m.phase == 2 ? 0.86 : 1.0)
-		var tx: Double = m.b.x
-		let ty: Double = floorY - 0.4 + sin(clock * 1.4) * 0.25
-		switch m.st {
-		case 1:
-			m.t2 -= dt
-			m.tele = m.t2
-			if m.t2 <= 0 { m.tele = 0; executeWarden(m) }
-		case 2:
-			m.t2 -= dt
-			if m.t2 <= 0 { m.st = 0; m.t1 = Double.random(in: 1.0...1.7) * quick }
-		case 3:
-			// bolts, one after another
-			m.t2 -= dt
-			m.dir = dirP
-			if m.t2 <= 0 {
-				fireWardenBolt(m)
-				m.t3 -= 1
-				if m.t3 <= 0 { m.st = 2; m.t2 = 0.5 } else { m.t2 = m.phase == 1 ? 0.2 : 0.15 }
-			}
-		default:
-			m.dir = dirP
-			if dead { tx = m.homeX } else if dist > 4.2 { tx = pb.x - Double(dirP) * 3.6 } else if dist < 2.2 { tx = pb.x - Double(dirP) * 3.0 }
-			m.t1 -= dt
-			if m.t1 <= 0 && !dead && dist < 44 { chooseWardenAttack(m, dist) }
-		}
-		tx = clampD(tx, m.homeX - 37, m.homeX + 37)
-		let sp: Double = m.def.speed * (m.phase == 1 ? 1.0 : (m.phase == 2 ? 1.2 : 1.4))
-		m.b.vx += (clampD((tx - m.b.x) * 2.0, -sp, sp) - m.b.vx) * min(1.0, dt * 4.0)
-		m.b.vy += ((ty - m.b.y) * 3.0 - m.b.vy) * min(1.0, dt * 4.0)
-		world.moveBody(&m.b, dt, stepUp: 0, dropThrough: false, decks: [])
-		if !dead && dist < m.b.w * 0.5 + 0.5 && abs((pb.y - pb.h * 0.5) - m.b.cy) < 2.6 { contactHurt(m, 10) }
-	}
-
-	func startWardenSweep(_ m: Mob, _ tele: Double) {
-		m.atk = WardenAtk.sweep.rawValue
-		m.t2 = tele
-		let reach: Double = 7.0
-		let x0: Double = m.dir > 0 ? m.b.x - 0.8 : m.b.x - reach
-		let x1: Double = m.dir > 0 ? m.b.x + reach : m.b.x + 0.8
-		m.tx = x0
-		m.ty = x1
-		warn(x0, m.homeY - 3.6, x1, m.homeY, tele)
-		m.st = 1
-	}
-
-	func chooseWardenAttack(_ m: Mob, _ dist: Double) {
-		var r: Double = Double.random(in: 0...1)
-		let fy: Double = m.homeY
-		m.dir = pb.x >= m.b.x ? 1 : -1
-		// variety: in the last phase the void pillars come at least every third attack, and no attack
-		// is used three times running
-		if m.phase == 3 && m.sinceSignature >= 2 { r = 0 }
-		if m.repeatN >= 2 && m.lastAtk == WardenAtk.bolts.rawValue && dist >= 7.5 { r = m.phase >= 2 ? 0.4 : 0.0 }
-		if m.phase == 3 && r < 0.35 {
-			// void pillars erupt in a row across the hall
-			m.atk = WardenAtk.pillars.rawValue
-			m.t2 = 1.0
-			var xs: [Double] = []
-			for k in -2...2 {
-				let sx: Double = clampD(pb.x + Double(k) * 4.0, m.homeX - 38, m.homeX + 38)
-				xs.append(sx)
-				warn(sx - 0.8, fy - 8.0, sx + 0.8, fy, 1.0, 0xB060FF)
-			}
-			m.spots = xs
-			m.st = 1
-		} else if m.phase >= 2 && r < 0.62 && dist > 4.5 {
-			// vanishes and reappears on the far side of the player
-			m.atk = WardenAtk.blink.rawValue
-			m.t2 = 0.7
-			let side: Double = pb.x >= m.b.x ? 1.0 : -1.0
-			let dest: Double = clampD(pb.x + side * 3.2, m.homeX - 36, m.homeX + 36)
-			m.tx = dest
-			warn(dest - 1.6, fy - 4.6, dest + 1.6, fy, 0.7, 0xB060FF)
-			m.st = 1
-		} else if dist < 7.5 {
-			startWardenSweep(m, m.phase == 3 ? 0.6 : 0.8)
-		} else {
-			m.atk = WardenAtk.bolts.rawValue
-			m.t2 = 0.55
-			m.st = 1
-		}
-	}
-
-	func executeWarden(_ m: Mob) {
-		let fy: Double = m.homeY
-		if m.atk != WardenAtk.summon.rawValue {
-			m.repeatN = m.atk == m.lastAtk ? m.repeatN + 1 : 1
-			m.lastAtk = m.atk
-			m.sinceSignature = m.atk == WardenAtk.pillars.rawValue ? 0 : m.sinceSignature + 1
-		}
-		switch WardenAtk(rawValue: m.atk) ?? .none {
-		case .sweep:
-			mobAttackBox(m, m.tx, fy - 3.6, m.ty, fy + 0.1, dmg: m.def.dmg, knock: 12)
-			m.atkT = 0.45
-			addShake(0.16)
-			spawnParticles((m.tx + m.ty) * 0.5, fy - 1.0, 0xC8C8E0, 10, 6.0, 0.3, 4)
-			m.st = 2
-			m.t2 = 0.55
-		case .bolts:
-			m.st = 3
-			m.t3 = Double(m.phase == 1 ? 3 : 4)
-			m.t2 = 0
-		case .blink:
-			spawnParticles(m.b.x, m.b.cy, 0x8A4AE0, 16, 4.0, 0.6, -2)
-			m.b.x = m.tx
-			m.b.vx = 0
-			spawnParticles(m.b.x, m.b.cy, 0xD8A8FF, 16, 4.0, 0.6, -2)
-			m.dir = pb.x >= m.b.x ? 1 : -1
-			startWardenSweep(m, 0.42)
-		case .pillars:
-			for sx in m.spots {
-				mobAttackBox(m, sx - 0.8, fy - 8.0, sx + 0.8, fy + 0.1, dmg: 20, knock: 9, type: .impact)
-				for k in 0..<4 { spawnParticles(sx, fy - Double(k) * 2.0, 0xB070FF, 3, 2.5, 0.5, -6) }
-			}
-			m.spots = []
-			addShake(0.22)
-			m.st = 2
-			m.t2 = 0.8
-		case .summon:
-			for side in [-1.0, 1.0] {
-				let sx: Double = m.homeX + side * 28.0
-				_ = addMob(.imp, sx, fy - 0.05)
-				spawnParticles(sx, fy - 1.0, 0x8A4AE0, 14, 4.0, 0.6, -3)
-			}
-			m.st = 2
-			m.t2 = 0.6
-		case .none:
-			m.st = 0
-		}
-	}
-
-	func fireWardenBolt(_ m: Mob) {
-		let ox: Double = m.b.x + Double(m.dir) * 1.6
-		let oy: Double = m.b.y - 2.6
-		let aim: Double = atan2((pb.y - pb.h * 0.55) - oy, pb.x - ox)
-		// the last phase throws each bolt as a fan of three
-		let fan: [Double] = m.phase == 3 ? [-0.2, 0, 0.2] : [Double.random(in: -0.06...0.06)]
-		for off in fan {
-			let a: Double = aim + off
-			var p = Projectile(kind: .bolt, x: ox, y: oy, vx: cos(a) * 12.0, vy: sin(a) * 12.0, dmg: 13, fromPlayer: false, gravity: 0)
-			p.life = 3.5
-			p.w = 0.4
-			p.owner = m.id
-			p.source = .mob(m, faction(of: m))
-			p.uid = newID()
-			projectiles.append(p)
-		}
-		m.atkT = Mob.atkDur
-		spawnParticles(ox, oy, 0xD8A8FF, 4, 2.0, 0.25, 0)
-	}
-}
-
-func isHumanoid(_ k: MobKind) -> Bool {
-	switch k {
-	case .zombie, .skeleton, .pirate, .pirateGunner, .pirateCaptain, .imp, .archer: return true
-	default: return false
-	}
-}
-
-// ===== u05_menu =====
-
-extension DebugPanel {
-	/// Night monsters: what the spawner is doing and why, a forced test, and the AI overlay
-	var nightSection: some View {
-		let lines: [String] = game.spawnDebugLines()
-		return VStack(alignment: .leading, spacing: 6) {
-			section("MONSTERS")
-			Toggle("AI overlay (state, sight, range, why not attacking)", isOn: $game.showAI)
-			ForEach(0..<lines.count, id: \.self) { i in
-				Text(verbatim: lines[i]).font(.pixel(10, .semibold))
-			}
-			HStack(spacing: 6) {
-				SmallButton(title: "Night + spawn test") { game.debugSpawnTest() }
-				SmallButton(title: "Clear log") { game.spawnLog = [:]; game.bumpHUD() }
-			}
-		}
-	}
-
-	/// Sparkworks: what the simulation holds, and a kit of every part to try things out
-	var powerSection: some View {
-		VStack(alignment: .leading, spacing: 6) {
-			section("POWER")
-			Text(verbatim: game.powerDebugLine).font(.pixel(10, .semibold))
-			HStack(spacing: 6) {
-				SmallButton(title: "Power kit") { game.debugPowerKit() }
-				SmallButton(title: "Charge batteries") { game.debugChargeAll() }
-				SmallButton(title: "Show wiring") {
-					game.settings.showWires = game.settings.showWires == 1 ? 0 : 1
-					game.bumpHUD()
+					if a.links.contains(where: { $0.cell == ca }) { break }
 				}
 			}
 		}
 	}
 
-	/// Make any kind of weather start now (events come with their usual warning), or call down a bolt
-	var weatherSection: some View {
-		VStack(alignment: .leading, spacing: 6) {
-			section("WEATHER")
-			Text(verbatim: game.weatherDebugLine).font(.pixel(10, .semibold))
-			HStack(spacing: 6) {
-				SmallButton(title: "Clear") { game.debugForceWeather(.clear) }
-				SmallButton(title: "Rain") { game.debugForceWeather(.heavyRain) }
-				SmallButton(title: "Storm") { game.debugForceWeather(.thunderstorm) }
-				SmallButton(title: "Hail") { game.debugForceWeather(.hailstorm) }
-			}
-			HStack(spacing: 6) {
-				SmallButton(title: "Wind") { game.debugForceWeather(.windstorm) }
-				SmallButton(title: "Snow") { game.debugForceWeather(.snowfall) }
-				SmallButton(title: "Blizzard") { game.debugForceWeather(.blizzard) }
-			}
-			HStack(spacing: 6) {
-				SmallButton(title: "Tornado", color: Color(ui: 0x8A3A3A)) { game.debugForceWeather(.tornado) }
-				SmallButton(title: "Hurricane", color: Color(ui: 0x8A3A3A)) { game.debugForceWeather(.hurricane) }
-				SmallButton(title: "Strike") { game.debugStrikeNearby() }
-			}
-		}
-	}
-}
-
-// MARK: - Settings persistence
-
-enum SettingsStore {
-	static let key: String = "PixelRealm.settings.v2"
-
-	static func load() -> Settings {
-		if let d = UserDefaults.standard.data(forKey: key), let s = try? JSONDecoder().decode(Settings.self, from: d) {
-			return s
-		}
-		return Settings()
-	}
-
-	static func save(_ s: Settings) {
-		if let d = try? JSONEncoder().encode(s) { UserDefaults.standard.set(d, forKey: key) }
-	}
-}
-
-func seedFrom(_ text: String) -> UInt64 {
-	let t: String = text.trimmingCharacters(in: .whitespaces)
-	if t.isEmpty { return UInt64.random(in: 1...999_999_999) }
-	if let n = UInt64(t) { return n }
-	var h: UInt64 = 5381
-	for u in t.unicodeScalars { h = (h &* 33) &+ UInt64(u.value) }
-	return h
-}
-
-// MARK: - Animated title background
-
-final class MenuArt: @unchecked Sendable {
-	static let shared: MenuArt = MenuArt()
-	var player: SpriteSet
-	var wolf: SpriteSet
-	var zombie: SpriteSet
-	var slime: SpriteSet
-	var pig: SpriteSet
-	var bat: SpriteSet
-	var skeleton: SpriteSet
-	var key: Int = -1
-
-	init() {
-		player = lookSpriteSet(playerLook(PlayerLookChoice(Settings())), hitH: 1.8)
-		wolf = creatureSpriteSet(.wolf, 1)
-		zombie = creatureSpriteSet(.zombie, 0)
-		slime = creatureSpriteSet(.slime, 0)
-		pig = creatureSpriteSet(.pig, 0)
-		bat = creatureSpriteSet(.bat, 0)
-		skeleton = creatureSpriteSet(.skeleton, 0)
-	}
-
-	func setPlayer(_ s: Settings) {
-		let c: PlayerLookChoice = PlayerLookChoice(s)
-		if c.key == key { return }
-		key = c.key
-		player = lookSpriteSet(playerLook(c), hitH: 1.8)
-	}
-}
-
-struct MenuBackground: View {
-	var settings: Settings
-	var body: some View {
-		TimelineView(.animation) { tl in
-			Canvas { ctx, size in
-				MenuBackground.paint(&ctx, size, tl.date.timeIntervalSinceReferenceDate, settings)
-			}
-		}
-		.ignoresSafeArea()
-	}
-
-	static func paint(_ ctx: inout GraphicsContext, _ size: CGSize, _ t: Double, _ settings: Settings) {
-		let art: Art = Art.shared
-		let ma: MenuArt = MenuArt.shared
-		ma.setPlayer(settings)
-		let W: Double = Double(size.width)
-		let H: Double = Double(size.height)
-		let full: CGRect = mkRect(0, 0, W, H)
-		vGradient(&ctx, full, [Color(hex: 0x3E86D8), Color(hex: 0xC4E6FF)], 0, H)
-		let sunX: Double = W * 0.78
-		fillRect(&ctx, mkRect(sunX, 70, 56, 56), Color(hex: 0xFFD84A))
-		fillRect(&ctx, mkRect(sunX + 12.0, 82, 32, 32), Color(hex: 0xFFF2A0))
-		// a handful of the game's own clouds drifting past at different sizes and speeds
-		let clouds: CloudArt = CloudArt.shared
-		let pool: [Int] = clouds.classes[0] + clouds.classes[1] + clouds.classes[2] + clouds.classes[3]
-		let span: Double = W + 900.0
-		for i in 0..<7 {
-			let speed: Double = 8.0 + Double(i) * 3.0
-			var cx: Double = hash2(i, 1, 9) * span + t * speed
-			cx = cx.truncatingRemainder(dividingBy: span) - 450.0
-			let cy: Double = 30.0 + hash2(i, 2, 9) * H * 0.32
-			let kind: Int = pool[(i * 5 + 2) % pool.count]
-			let b: PixelBuf = clouds.shapes[kind]
-			let scale: Double = i % 2 == 0 ? 2.0 : 3.0
-			var cc: GraphicsContext = ctx
-			cc.opacity = 0.92
-			cc.draw(clouds.images[kind], in: mkRect((cx / scale).rounded() * scale, (cy / scale).rounded() * scale, Double(b.w) * scale, Double(b.h) * scale))
-		}
-		let ground: Double = H - 130.0
-		let ts: Double = 32.0
-		let off: Double = (t * 60.0).truncatingRemainder(dividingBy: ts)
-		let rows: [Tile] = [.grass, .dirt, .dirt, .stone, .stone]
-		var gx: Double = -ts - off
-		while gx < W + ts {
-			for (k, tile) in rows.enumerated() {
-				let y: Double = ground + ts * Double(k)
-				ctx.draw(art.tile(tile), in: mkRect(gx, y, ts, ts))
-			}
-			gx += ts
-		}
-		let v: View2D = View2D(tp: ts, left: 0, top: 0, wTiles: 100, hTiles: 100)
-		let stride: Double = t * 2.4
-		let gy: Double = ground / ts
-		let px: Double = W * 0.32 / ts
-		let zx: Double = px - 7.0 + sin(t) * 0.4
-		let kx: Double = px - 10.0 + sin(t * 0.7) * 0.3
-		WorldRenderer.drawSet(&ctx, v, ma.player, ma.player.anim.walkFrame(stride), false, false, px, gy)
-		WorldRenderer.drawSet(&ctx, v, ma.wolf, ma.wolf.anim.walkFrame(stride), false, false, px - 2.6, gy)
-		WorldRenderer.drawSet(&ctx, v, ma.zombie, ma.zombie.anim.walkFrame(stride), false, false, zx, gy)
-		WorldRenderer.drawSet(&ctx, v, ma.skeleton, ma.skeleton.anim.walkFrame(stride), false, false, kx, gy)
-		let hop: Double = abs(sin(t * 3.0)) * 0.7
-		let slimeFrame: Int = hop > 0.1 ? 1 : 0
-		WorldRenderer.drawSet(&ctx, v, ma.slime, slimeFrame, true, false, px + 7.5, gy - hop)
-		WorldRenderer.drawSet(&ctx, v, ma.pig, ma.pig.anim.walkFrame(stride), true, false, px + 4.0, gy)
-		let bx: Double = W * 0.55 / ts + sin(t * 0.8) * 3.5
-		let byy: Double = 5.5 + sin(t * 2.0) * 0.8
-		WorldRenderer.drawSet(&ctx, v, ma.bat, Int(t * 10.0), false, false, bx, byy)
-	}
-}
-
-// MARK: - Main menu
-
-enum MenuScreen {
-	case main, newWorld, load, character, settings, help
-	/// the Mod Creator (shown full screen)
-	case mods
-}
-
-struct MenuView: View {
-	@Binding var settings: Settings
-	/// open on the Mod Creator (coming back from a test world)
-	var openMods: Bool = false
-	var start: (Game) -> Void
-	@State var screen: MenuScreen = .main
-	@State var seedText: String = ""
-	@State var nameText: String = "My World"
-	@State var mode: GameMode = .survival
-	@State var infinite: Bool = false
-	@State var flat: Bool = false
-	@State var flatTrees: Bool = true
-	@State var flatStructures: Bool = true
-	@State var flatCaves: Bool = true
-	@State var splash: String = ""
-	@State var metas: [SaveMeta] = []
-	/// a world whose mods are not all installed, waiting for the player's choice
-	@State var missingMods: ModLoadCheck? = nil
-	let splashes: [String] = ["Now with pirates!", "Beware the Bear!", "Find the hidden gate!", "Ride a T-Rex!",
-							  "Build a car. Then a boat.", "Torches keep the dark away!", "Infinite worlds!", "Make your own mods!"]
-
-	var body: some View {
-		ZStack {
-			if screen == .mods {
-				ModCreatorView(test: { p in start(ModTest.makeWorld(p, settings: settings)) }, done: {
-					ThemeRT.refresh()
-					screen = .main
-				})
-			} else {
-				menuBody
-			}
-			if let mc = missingMods {
-				ModMissingView(check: mc, load: { loadAnyway(mc) }, cancel: { missingMods = nil })
-			}
-		}
-		.onAppear { if openMods { screen = .mods } }
-	}
-
-	var menuBody: some View {
-		ZStack {
-			menuBackdrop
-			ScrollView {
-				VStack(spacing: 14) {
-					Spacer(minLength: 24)
-					title
-					content
-						.frame(maxWidth: 420)
-						.padding(.horizontal, 24)
-					Text("v2.0 · all art generated in code").font(.pixel(11, .bold)).foregroundColor(Color.white.opacity(0.85))
-						.shadow(color: Color.black, radius: 0, x: 1, y: 1)
-					Spacer(minLength: 20)
-				}
-				.frame(maxWidth: .infinity)
-			}
-		}
-		.onAppear {
-			ThemeRT.refresh()
-			splash = splashes.randomElement() ?? ""
-			refreshSaves()
-		}
-	}
-
-	/// the game's sky and character, or a theme's own picture
-	@ViewBuilder
-	var menuBackdrop: some View {
-		if let bg = ThemeRT.current?.background, bg.valid, !bg.isBlank {
-			pixImage(bg.buf()).resizable().interpolation(.none).ignoresSafeArea()
-		} else {
-			MenuBackground(settings: settings)
-		}
-	}
-
-	var titleText: String {
-		let t: String = ThemeRT.current?.title ?? ""
-		return t.trimmingCharacters(in: .whitespaces).isEmpty ? "PIXEL REALM" : t
-	}
-
-	var subtitleText: String {
-		let t: String = ThemeRT.current?.subtitle ?? ""
-		return t.trimmingCharacters(in: .whitespaces).isEmpty ? splash : t
-	}
-
-	var title: some View {
-		VStack(spacing: 0) {
-			Text(verbatim: titleText)
-				.font(.system(size: 52, weight: .black, design: ThemeRT.design))
-				.foregroundColor(Color(ui: 0xFFE066))
-				.shadow(color: Color(ui: 0x7A4A00), radius: 0, x: 4, y: 4)
-				.shadow(color: Color.black, radius: 0, x: 6, y: 6)
-				.minimumScaleFactor(0.5)
-				.lineLimit(1)
-			Text(verbatim: subtitleText)
-				.font(.pixel(15))
-				.foregroundColor(Color(ui: 0xFFF58A))
-				.shadow(color: Color.black, radius: 0, x: 2, y: 2)
-				.rotationEffect(.degrees(-3))
-				.padding(.top, 6)
-		}
-		.padding(.bottom, 8)
-	}
-
-	@ViewBuilder
-	var content: some View {
-		switch screen {
-		case .main: mainButtons
-		case .newWorld: newWorldForm
-		case .load: loadList
-		case .character: CharacterView(settings: $settings, done: backToMain)
-		case .settings: SettingsView(settings: $settings, done: backToMain)
-		case .help: HelpView(done: backToMain)
-		case .mods: EmptyView()
-		}
-	}
-
-	func backToMain() {
-		SettingsStore.save(settings)
-		screen = .main
-	}
-
-	var continueTitle: String {
-		if let m = metas.first { return joinText("CONTINUE: ", m.name.uppercased()) }
-		return "CONTINUE"
-	}
-
-	var mainButtons: some View {
-		VStack(spacing: 10) {
-			if let m = metas.first {
-				PixelButton(title: continueTitle, color: Color(ui: 0x4E8A3E)) { load(m.slot) }
-			}
-			PixelButton(title: "NEW WORLD", color: Color(ui: 0x3E6FAA)) { screen = .newWorld }
-			if !metas.isEmpty {
-				PixelButton(title: "LOAD WORLD") { refreshSaves(); screen = .load }
-			}
-			HStack(spacing: 10) {
-				PixelButton(title: "CHARACTER", color: Color(ui: 0x8A5A2E)) { screen = .character }
-				PixelButton(title: "SETTINGS") { screen = .settings }
-			}
-			HStack(spacing: 10) {
-				PixelButton(title: "HOW TO PLAY") { screen = .help }
-				PixelButton(title: "MOD CREATOR", color: Color(ui: 0x6A3AA0)) { screen = .mods }
-			}
-		}
-	}
-
-	var worldBlurb: String {
-		if infinite { return "Endless world that streams in as you explore." }
-		if flat { return "A large world (4096 wide) with every biome." }
-		return "A large world (4096 wide) with every biome and ocean edges."
-	}
-
-	var terrainBlurb: String {
-		if !flat { return "Hills, mountains, caves and seas." }
-		return "Level ground everywhere, the same layers below: topsoil, stone, slate and deep rock with ores, on bedrock. The portal chamber is still buried deep below."
-	}
-
-	var flatDetail: String {
-		var parts: [String] = []
-		parts.append(flatTrees ? "Trees, plants and ponds (water level with the ground)." : "Bare ground: no trees, plants or ponds.")
-		parts.append(flatStructures ? "Ruins, old mines and the two boss lairs (open arenas)." : "No ruins, mines or boss lairs.")
-		parts.append(flatCaves ? "Caves open only deep below an unbroken crust." : "Solid underground: dig your own tunnels.")
-		return parts.joined(separator: " ")
-	}
-
-	var newWorldForm: some View {
-		VStack(spacing: 10) {
-			Text("NEW WORLD").font(.pixel(20)).foregroundColor(Color.white).shadow(color: Color.black, radius: 0, x: 2, y: 2)
-			TextField("World name", text: $nameText)
-				.font(.pixel(15, .bold))
-				.padding(10)
-				.background(Color.black.opacity(0.75))
-				.foregroundColor(Color.white)
-			HStack(spacing: 6) {
-				modeButton(.survival, "SURVIVAL", 0x4E8A3E)
-				modeButton(.creative, "CREATIVE", 0x3E6FAA)
-				modeButton(.hardcore, "HARDCORE", 0xA03030)
-			}
-			HStack(spacing: 6) {
-				PixelButton(title: "CLASSIC", color: pick(!infinite, 0x8A6A2E, 0x555555)) { infinite = false }
-				PixelButton(title: "INFINITE", color: pick(infinite, 0x8A6A2E, 0x555555)) { infinite = true }
-			}
-			Text(verbatim: worldBlurb)
-				.font(.pixel(11, .bold)).foregroundColor(Color.white).shadow(color: Color.black, radius: 0, x: 1, y: 1)
-				.multilineTextAlignment(.center)
-			HStack(spacing: 6) {
-				PixelButton(title: "NORMAL", color: pick(!flat, 0x4E7A3A, 0x555555)) { flat = false }
-				PixelButton(title: "FLAT", color: pick(flat, 0x4E7A3A, 0x555555)) { flat = true }
-			}
-			Text(verbatim: terrainBlurb)
-				.font(.pixel(11, .bold)).foregroundColor(Color.white).shadow(color: Color.black, radius: 0, x: 1, y: 1)
-				.multilineTextAlignment(.center)
-			if flat {
-				HStack(spacing: 6) {
-					PixelButton(title: flatTrees ? "NATURE ON" : "NATURE OFF", color: pick(flatTrees, 0x4E7A3A, 0x555555)) { flatTrees.toggle() }
-					PixelButton(title: flatStructures ? "BUILDINGS ON" : "BUILDINGS OFF", color: pick(flatStructures, 0x4E7A3A, 0x555555)) { flatStructures.toggle() }
-					PixelButton(title: flatCaves ? "CAVES ON" : "CAVES OFF", color: pick(flatCaves, 0x4E7A3A, 0x555555)) { flatCaves.toggle() }
-				}
-				Text(verbatim: flatDetail)
-					.font(.pixel(10, .bold)).foregroundColor(Color.white.opacity(0.85)).shadow(color: Color.black, radius: 0, x: 1, y: 1)
-					.multilineTextAlignment(.center)
-			}
-			TextField("Seed (optional)", text: $seedText)
-				.font(.pixel(15, .bold))
-				.padding(10)
-				.background(Color.black.opacity(0.75))
-				.foregroundColor(Color.white)
-			PixelButton(title: "CREATE", color: Color(ui: 0x4E8A3E)) { create() }
-			PixelButton(title: "BACK") { screen = .main }
-		}
-	}
-
-	func modeButton(_ m: GameMode, _ label: String, _ col: UInt32) -> some View {
-		let on: Bool = mode == m
-		let c: Color = pick(on, col, 0x555555)
-		return PixelButton(title: label, color: c) { mode = m }
-	}
-
-	var loadList: some View {
-		VStack(spacing: 8) {
-			Text("LOAD WORLD").font(.pixel(20)).foregroundColor(Color.white).shadow(color: Color.black, radius: 0, x: 2, y: 2)
-			ForEach(0..<metas.count, id: \.self) { i in
-				saveRow(metas[i])
-			}
-			PixelButton(title: "BACK") { screen = .main }
-		}
-	}
-
-	func saveRow(_ m: SaveMeta) -> some View {
-		let mins: Int = Int(m.playSeconds / 60.0)
-		let flatS: String = (m.options?.flat ?? false) ? " Flat" : ""
-		let kindS: String = joinText(m.infinite ? "Infinite" : "Classic", flatS)
-		let modeS: String = m.mode.title
-		let dayS: Int = Int(m.day)
-		let detail: String = "\(modeS) · \(kindS) · Day \(dayS) · \(mins) min"
-		return HStack(spacing: 8) {
-			VStack(alignment: .leading, spacing: 2) {
-				Text(m.name).font(.pixel(15)).foregroundColor(Color.white)
-				Text(detail).font(.pixel(10, .bold)).foregroundColor(Color.white.opacity(0.8))
-			}
-			Spacer()
-			SmallButton(title: "PLAY", color: Color(ui: 0x4E8A3E)) { load(m.slot) }
-			SmallButton(title: "DEL", color: Color(ui: 0xA03030)) {
-				SaveStore.delete(m.slot)
-				refreshSaves()
-			}
-		}
-		.padding(8)
-		.background(PixelBox(color: Color(ui: 0x3A3A3A)).opacity(0.92))
-	}
-
-	func refreshSaves() {
-		var list: [SaveMeta] = []
-		var dates: [Date] = []
-		for i in 0..<SaveStore.slotCount {
-			if let m = SaveStore.meta(i) {
-				list.append(m)
-				let attrs = try? FileManager.default.attributesOfItem(atPath: SaveStore.url(i).path)
-				dates.append((attrs?[.modificationDate] as? Date) ?? Date.distantPast)
-			}
-		}
-		// most recent first
-		var idx: [Int] = Array(0..<list.count)
-		idx.sort { dates[$0] > dates[$1] }
-		metas = idx.map { list[$0] }
-	}
-
-	func create() {
-		let seed: UInt64 = seedFrom(seedText)
-		let nm: String = nameText.trimmingCharacters(in: .whitespaces).isEmpty ? "My World" : nameText
-		var opts: WorldOptions = .standard
-		if flat {
-			opts.flat = true
-			opts.trees = flatTrees
-			opts.ponds = flatTrees
-			opts.structures = flatStructures
-			opts.caves = flatCaves
-		}
-		// the mods switched on now become part of the world (it remembers them from here on)
-		ModRuntime.activate(ModStore.enabledPacks(), world: nil)
-		let g = Game(mode: mode, infinite: infinite, seed: seed, settings: settings, options: opts)
-		g.worldName = nm
-		g.slot = SaveStore.freeSlot()
-		g.modInfo = ModRuntime.shared.active ? ModRuntime.shared.worldInfo() : nil
-		_ = g.saveNow()
-		start(g)
-	}
-
-	func load(_ slot: Int) {
-		if let s = SaveStore.read(slot) {
-			let mc: ModLoadCheck = ModLoadCheck.check(s)
-			if !mc.missing.isEmpty {
-				// never load a world without its mods behind the player's back
-				missingMods = mc
-				return
-			}
-			ModRuntime.activate(mc.packs, world: s.mods)
-			let g: Game = Game.load(s, settings: settings)
-			if !mc.changed.isEmpty {
-				g.say(joinText("Updated since this world was last played: ", mc.changed.joined(separator: ", "), ". New content appears in places not visited yet."), 6.0)
-			}
-			start(g)
-		} else {
-			refreshSaves()
-		}
-	}
-
-	/// Loads a world even though some of its mods are missing: their blocks and items are kept as
-	/// placeholders (nothing is deleted), so the world is whole again once the mods are back
-	func loadAnyway(_ mc: ModLoadCheck) {
-		missingMods = nil
-		ModRuntime.activate(mc.packs, world: mc.save.mods)
-		let g: Game = Game.load(mc.save, settings: settings)
-		start(g)
-	}
-}
-
-// MARK: - Character, settings, help
-
-struct CharacterView: View {
-	@Binding var settings: Settings
-	var done: () -> Void
-	var body: some View {
-		VStack(spacing: 10) {
-			topBar
-			ScrollView {
-				VStack(spacing: 12) {
-					preview
-					styleRow("HAIR", hairStyleNames, settings.hairStyle) { (i: Int) in settings.hairStyle = i }
-					colorRow("", hairChoices, settings.hair) { (i: Int) in settings.hair = i }
-					styleRow("SHIRT", shirtStyleNames, settings.shirtStyle) { (i: Int) in settings.shirtStyle = i }
-					colorRow("", shirtChoices, settings.shirtColor) { (i: Int) in settings.shirtColor = i }
-					styleRow("TROUSERS", pantsStyleNames, settings.pantsStyle) { (i: Int) in settings.pantsStyle = i }
-					colorRow("", pantsChoices, settings.pantsColor) { (i: Int) in settings.pantsColor = i }
-					colorRow("SCARF", scarfChoices, settings.scarf) { (i: Int) in settings.scarf = i }
-				}
-				.padding(.bottom, 20)
-			}
-		}
-	}
-
-	var topBar: some View {
-		HStack(spacing: 10) {
-			Text("CHARACTER").font(.pixel(20)).foregroundColor(Color.white).shadow(color: Color.black, radius: 0, x: 2, y: 2)
-			Spacer()
-			PixelButton(title: "DONE", color: Color(ui: 0x4E8A3E)) { done() }
-		}
-		.padding(.horizontal, 12)
-	}
-
-	/// The look as chosen, from the front and from the side, a few times its size
-	var preview: some View {
-		let imgs: (Image, Image) = Art.shared.previewPlayer(settings)
-		return HStack(spacing: 18) {
-			imgs.0.resizable().interpolation(.none).frame(width: 128, height: 152)
-			imgs.1.resizable().interpolation(.none).frame(width: 128, height: 152)
-		}
-		.padding(10)
-		.background(PixelBox(color: Color(ui: 0x5A7A9A)).opacity(0.9))
-	}
-
-	/// A colour to pick; colour 0 is "none" (no scarf), shown as a dark box with a cross
-	func swatch(_ c: UInt32, _ on: Bool) -> some View {
-		let edge: Color = pick(on, 0xFFFFFF, 0x000000)
-		let w: CGFloat = on ? 4 : 2
-		let none: Bool = c == 0
-		let fill: Color = Color(hex: none ? 0x2A2A32 : artGrade(c))
-		let mark: String = none ? "X" : ""
-		return Rectangle().fill(fill)
-			.frame(width: 38, height: 38)
-			.overlay(Text(verbatim: mark).font(.pixel(14, .bold)).foregroundColor(Color(hex: 0x9A9AA8)))
-			.overlay(Rectangle().stroke(edge, lineWidth: w))
-	}
-
-	func colorRow(_ label: String, _ cols: [UInt32], _ sel: Int, _ pick: @escaping (Int) -> Void) -> some View {
-		HStack(spacing: 6) {
-			Text(label).font(.pixel(13)).foregroundColor(Color.white).frame(width: 96, alignment: .leading)
-			ForEach(0..<cols.count, id: \.self) { (i: Int) in
-				Button {
-					pick(i)
-				} label: {
-					swatch(cols[i], i == sel)
-				}
-				.buttonStyle(.plain)
-			}
-			Spacer()
-		}
-		.padding(.horizontal, 12)
-	}
-
-	func styleRow(_ label: String, _ names: [String], _ sel: Int, _ pick: @escaping (Int) -> Void) -> some View {
-		HStack(spacing: 6) {
-			Text(label).font(.pixel(13)).foregroundColor(Color.white).frame(width: 96, alignment: .leading)
-			ForEach(0..<names.count, id: \.self) { (i: Int) in
-				SmallButton(title: names[i].uppercased(), color: i == sel ? Color(ui: 0x4E8A3E) : Color(ui: 0x555560)) { pick(i) }
-			}
-			Spacer()
-		}
-		.padding(.horizontal, 12)
-	}
-}
-
-struct SettingsView: View {
-	@Binding var settings: Settings
-	var rareLine: String {
-		let pct: Int = Int(settings.rareChance * 100.0)
-		return joinText("Abandoned structures (new worlds): ", String(pct), "% of sites")
-	}
-	var done: () -> Void
-	var toggles: some View {
-		VStack(alignment: .leading, spacing: 10) {
-			Toggle("On-screen touch controls", isOn: $settings.touchControls)
-			Toggle("Peaceful (no monsters)", isOn: $settings.peaceful)
-			Toggle("Show coordinates", isOn: $settings.showCoords)
-			Toggle("Smooth lighting", isOn: $settings.smoothLight)
-			Toggle("60 FPS (off = 30, smoother on older iPads)", isOn: $settings.fps60)
-			Toggle("Show FPS counter", isOn: $settings.showFPS)
-		}
-	}
-	var body: some View {
-		VStack(alignment: .leading, spacing: 12) {
-			Text("SETTINGS").font(.pixel(20))
-			toggles
-			Text(verbatim: joinText("Default zoom: ", String(settings.tilePx), " px per block")).font(.pixel(13, .bold))
-			Stepper("", value: $settings.tilePx, in: 16...56, step: 8)
-			Text(verbatim: rareLine).font(.pixel(13, .bold))
-			Slider(value: $settings.rareChance, in: 0.0...0.8, step: 0.02)
-			CameraSettingsSection(settings: $settings)
-			WeatherSettingsSection(settings: $settings)
-			NightSettingsSection(settings: $settings)
-			PixelButton(title: "DONE", color: Color(ui: 0x4E8A3E)) { done() }
-		}
-		.font(.pixel(14, .bold))
-		.foregroundColor(Color.white)
-		.padding(18)
-		.background(PixelBox(color: Color(ui: 0x2C2C30)).opacity(0.95))
-	}
-}
-
-/// Camera and comfort options, shared by the main settings screen and the pause menu
-struct CameraSettingsSection: View {
-	@Binding var settings: Settings
-	var onChange: () -> Void = {}
-
-	func label(_ s: String, _ v: Double) -> some View {
-		Text(verbatim: joinText(s, ": ", String(format: "%.2f", v))).font(.pixel(12, .bold))
-	}
-
-	var body: some View {
-		VStack(alignment: .leading, spacing: 6) {
-			Text("CAMERA & COMFORT").font(.pixel(15)).foregroundColor(Color(ui: 0xFFE066))
-			Toggle("Smooth camera", isOn: $settings.camSmoothOn)
-			if settings.camSmoothOn {
-				label("Follow tightness", settings.camFollow)
-				Slider(value: $settings.camFollow, in: 0.0...1.0, step: 0.05)
-			}
-			label("Dead zone (blocks)", settings.camDeadZone)
-			Slider(value: $settings.camDeadZone, in: 0.0...3.0, step: 0.1)
-			Toggle("Follow the player directly", isOn: $settings.camDirect)
-			Text("On: the camera stays right on the player, with no dead zone or look-ahead.").font(.pixel(10, .semibold)).foregroundColor(Color.white.opacity(0.7))
-			if !settings.camDirect {
-				Toggle("Look ahead while moving", isOn: $settings.camLookAhead)
-			}
-			Toggle("Screen shake", isOn: $settings.shakeOn)
-			if settings.shakeOn {
-				label("Shake intensity", settings.shakeIntensity)
-				Slider(value: $settings.shakeIntensity, in: 0.0...1.0, step: 0.05)
-			}
-			Toggle("Bow trajectory preview", isOn: $settings.showTrajectory)
-			Text("SOUND").font(.pixel(15)).foregroundColor(Color(ui: 0xFFE066))
-			Toggle("Sound", isOn: $settings.soundOn)
-			if settings.soundOn {
-				label("Effects volume", settings.sfxVolume)
-				Slider(value: $settings.sfxVolume, in: 0.0...1.0, step: 0.05)
-				label("Ambience volume", settings.ambienceVolume)
-				Slider(value: $settings.ambienceVolume, in: 0.0...1.0, step: 0.05)
-			}
-			SmallButton(title: "RESET CAMERA DEFAULTS") {
-				settings.resetCamera()
-				onChange()
-			}
-		}
-		.font(.pixel(13, .bold))
-		.foregroundColor(Color.white)
-	}
-}
-
-struct HelpView: View {
-	var done: () -> Void
-	let lines: [String] = [
-		"Move with the left stick (or A/D). JUMP button (W/Space). Pull the stick down to drop through platforms.",
-		"Touch the world to mine, attack, place or use the item in your hand. A blow goes where you touch: tap a foe (or near it) to hit it, tap above you to swing up. Hold to keep attacking a foe in reach.",
-		"The round attack stick on the right: touch and hold to attack, and let go to stop. With your thumb in the middle it aims for you: it picks the nearest hostile creature (not the cow beside it), turns you to face it and keeps hitting while it is in reach. Slide your thumb out to aim yourself in any direction, up, down or diagonal: blades swing that way, bows and guns shoot that way, slings and thrown flasks land further the further you push, pickaxes dig the first block that way and blocks go against it. It works at the same time as the walking stick and JUMP.",
-		"The ⇄ button (or Q) switches to the next weapon in your hotbar; from a tool it goes straight back to the weapon you used last.",
-		"Hotbar: tap a slot. BAG opens your inventory, armor and crafting. Hold a slot to split a stack.",
-		"Craft a workbench, then a furnace. Near the top you find coal, copper, saltpeter and (in some lands) tin; iron and silver lie deeper, gold, diamond and mythril deepest. Amethyst geodes are rare.",
-		"Smelt copper and tin ore together into bronze: crossbows, bolts, maces and lanterns. Saltpeter makes strong gunpowder and fire flasks. Silver makes a charm against the undead and, with amethyst, the storm rod.",
-		"Iron and better gear is forged on an anvil; machinery and vehicle parts at a tinker's bench; Umbral metals only at a rift forge. Tap a station to craft at it.",
-		"Weapons: swords sweep everything in front; spears reach far and run through two; hammers are slow and heavy and slow you as they swing; knives are quick, every third stab in a run hits double, and they cut deep from behind; clubs leave foes dazed.",
-		"Ranged: the bow is drawn and loosed; the sling throws any stone you carry; crossbows fire with a tap and reload themselves; the blunderbuss blasts a cone of pellets up close; the storm rod's lightning leaps between foes and recharges by itself. Thrown flasks and slung stones come down where you tap.",
-		"Two gear slots hold a headlamp, swift boots, a diving mask, a silver charm and more.",
-		"LOG (or J) opens your journal: places you have found, their stories and goals worth chasing.",
-		"Some old chests underground are not what they seem.",
-		"Torches, lanterns and campfires light the dark. Caves get darker and more dangerous the deeper you go.",
-		"Old mines (a timber headframe on the surface) run deep: galleries, storage rooms up short ladders, drifts down and up, dead ends, sometimes a great chamber. Look for chests in rooms and at dead ends; the best are hidden behind fallen rock.",
-		"Eat to stay fed. Cook meat at a campfire. Hunger at zero hurts you.",
-		"Skeleton knights block with shields. Pirates sail the seas and raid the coast.",
-		"Defeat Ursavor the giant bear to get a Portal Key and a Treasure Map. The map hints where the hidden gate is.",
-		"Beat Tyrannax the T-Rex and it becomes your companion. Tap it to ride.",
-		"Vehicles, the easy way: craft a Car Kit, Rowboat Kit or Motorboat Kit (Vehicles tab at a workbench) and tap the ground to place it. Stand next to it and press DRIVE. PACK UP puts it back in your bag.",
-		"Your own designs: place a Frame (car) or Hull Float (boat), then hold a part - green squares show where it fits. A checklist shows what is still missing. Coal or wood is fuel: hold it and tap the vehicle.",
-		"Planes, helicopters, airships, tanks and trucks: kits in the Vehicles tab, or build your own. Wings lift with speed (and stall when tilted too far), a tail elevator behind steers the nose, rotors need engines and a tail rotor, a balloon needs burners. Every part and block has weight: too heavy, and it will not fly.",
-		"Build anything onto a vehicle: hold a block near one and switch ON VEHICLE, then tap the green squares. Or build a whole ship from blocks in the world and tap it with the Vehicle Assembler: it becomes one vehicle (tap it parked to put it back).",
-		"Armed vehicles: cannons (gunpowder) and machine guns (bullets) aim with the attack stick. Shots, blasts and crashes break parts off; hold an iron bar and tap a part to mend it. An Autopilot holds speed and height (AUTO), or drives the points you MARK.",
-		"Zoom with + and −. The DBG button opens the debug menu. II pauses and saves.",
-		"Watch the ground in big fights: an attack's area pulses and fills up just before it lands. Step out of it.",
-		"Weather comes and goes: showers drift over the land with the wind, deserts stay dry, the cold country gets snow. A strong wind carries arrows and jumps with it and slows you walking into it.",
-		"In a thunderstorm keep off high, open ground. When the air crackles and the ground glows, lightning is about to strike there: move. A copper lightning rod standing in the open takes every strike within 14 blocks.",
-		"Tornadoes and hurricanes are rare and always come with a warning. Get underground or behind reinforced walls; sandbags hold back a hurricane's surge, shutters keep the wind off your windows.",
-		"In a blizzard the cold gets into you: a fire, a heater, a roof and walls or a winter coat keep you warm; snow boots stop you slipping. Large hail hurts: a roof or a helmet stops it.",
-		"Weather tab (workbench and up): a weather station shows the forecast (a Doppler station next to a charged wind turbine gives exact times and tracks tornadoes), a barometer reads the pressure, sirens sound for dangerous storms and rain barrels collect water for your crops. Every kind of weather can be switched off in Settings.",
-		"Nights are dangerous: monsters come out after dark and come looking for you, more of them on the Deadly setting (Settings, Nights). They keep away from lamplight and never spawn on the floors or roofs of buildings; a monster that sees you shouts (!) and charges. Undead burn at sunrise.",
-		"Sparkworks (Power tab): generators (a hand crank, a water wheel, solar panels, a fuel generator, a wind turbine, the Ember Dynamo) make power, measured in sparks. Power cable carries it to batteries and machines: hold a spool and drag to lay it through them. Nothing runs for free: when a line can't supply what is asked, machines stop and show a red bolt.",
-		"Pulse wire (amber or teal) carries on/off signals, separately from power: from levers, buttons, pressure plates, timers and sensors to lamps, steel gates, machines, wooden doors, storm shutters and sirens. Logic parts (relays, inverters, AND/OR/XOR/NAND/NOR gates, timers) point a way: they read the wire at their back or sides and send on the wire their arrow points to.",
-		"The Spark Probe: tap a device to see how it is doing and set it up (gate type, sensor range, timer period, a breaker's limit, a crafter's recipe, which way it faces); tap a wire to light up its whole network and see what it makes, uses and stores. Wire snips take wire back up. Settings, Power Wiring chooses when wiring is drawn.",
-		"Ideas: a proximity sensor set to the player opens a steel gate for you and not for monsters; a weather sensor closes the shutters when a storm comes; a daylight sensor lights the lamps at dusk; an auto drill, conveyor and collector bring ore to a chest; a breaker keeps one line from draining your batteries.",
-		"Keyboard: A/D move, W jump, S down, 1-0 hotbar, Q next weapon, E bag, M map, J journal, F attack/use, R reload, X dismount, +/- zoom, Esc pause."
-	]
-	var body: some View {
-		VStack(alignment: .leading, spacing: 10) {
-			Text("HOW TO PLAY").font(.pixel(20))
-			ForEach(0..<lines.count, id: \.self) { i in
-				Text(verbatim: joinText("• ", lines[i])).font(.pixel(12, .semibold))
-			}
-			PixelButton(title: "GOT IT", color: Color(ui: 0x4E8A3E)) { done() }
-		}
-		.foregroundColor(Color.white)
-		.padding(18)
-		.background(PixelBox(color: Color(ui: 0x2C2C30)).opacity(0.95))
-	}
-}
-
-// ===== u10_automation =====
-
-// MARK: - The receiver panel
-
-/// Setting up a vehicle's receivers (tap one): the channel they pick up from signal posts and the Logic
-/// Studio, and what the vehicle does while it is on. A remote control pairs with any vehicle that has one.
-struct ReceiverPanel: View {
-	@ObservedObject var game: Game
-	@ObservedObject var hud: HUDSignal
-
-	var body: some View {
-		VStack(spacing: 8) {
-			topBar
-			ScrollView { content }
-		}
-		.foregroundColor(Color(ui: 0xFFFFFF))
-		.padding(14)
-		.background(PixelBox(color: Color(ui: 0x2C2834)).opacity(0.97))
-		.frame(maxWidth: 620)
-		.padding(10)
-	}
-
-	var vehicle: Vehicle? { return game.vehicleByID(game.radioEdit) }
-
-	var topBar: some View {
-		HStack {
-			Text("RECEIVER").font(.pixel(20)).foregroundColor(Color(ui: 0xE8C040))
-			Spacer()
-			SmallButton(title: "DONE", color: Color(ui: 0x3A6A3A)) { game.closeRadio() }
-		}
-	}
-
-	@ViewBuilder
-	var content: some View {
-		if let v = vehicle {
-			VStack(alignment: .leading, spacing: 8) {
-				Text(verbatim: ReceiverPanel.help).font(.pixel(11, .semibold)).foregroundColor(Color(ui: 0xB8B0C8))
-				Text("Channel").font(.pixel(13, .bold))
-				ChoiceRows(options: ReceiverPanel.channelNames, selected: channelBind(v), columns: 5)
-				Text("While its channel is on").font(.pixel(13, .bold))
-				ChoiceRows(options: ReceiverPanel.actNames, selected: actBind(v), columns: 3)
-			}
-		} else {
-			Text("This vehicle is gone.").font(.pixel(13)).foregroundColor(Color(ui: 0xFFE070))
-		}
-	}
-
-	static let help: String = "Signal posts on the same channel (and the Logic Studio) turn it on. A remote control pairs with any vehicle that has a receiver."
-	static let channelNames: [String] = ["NONE"] + (1...Radio.channels).map { (n: Int) in String(n) }
-	static let actNames: [String] = RadioAct.allCases.map { (a: RadioAct) in a.name }
-
-	func channelBind(_ v: Vehicle) -> Binding<Int> {
-		let me: ReceiverPanel = self
-		return Binding<Int>(get: { v.channel }, set: { (n: Int) in me.game.setRadio(channel: n, act: RadioAct(rawValue: v.radioAct) ?? .forward) })
-	}
-
-	func actBind(_ v: Vehicle) -> Binding<Int> {
-		let me: ReceiverPanel = self
-		return Binding<Int>(get: { v.radioAct }, set: { (n: Int) in me.game.setRadio(channel: v.channel, act: RadioAct(rawValue: n) ?? .forward) })
-	}
-}
-
-// ===== u08_alchemy =====
-
-// MARK: - HUD: effects and suit energy
-
-/// The potion effects on the player: a small flask in the effect's colour and the seconds left
-struct EffectStrip: View {
-	let game: Game
-	/// the HUD's tick: a new value makes SwiftUI draw the strip again (it reads the game, which it does not watch)
-	var tick: Int = 0
-	var body: some View {
-		let list: [(ModEffectKind, Double)] = game.activeEffects()
-		return HStack(spacing: 4) {
-			ForEach(0..<list.count, id: \.self) { i in
-				EffectChip(kind: list[i].0, secs: list[i].1)
-			}
-		}
-	}
-}
-
-struct EffectChip: View {
-	let kind: ModEffectKind
-	let secs: Double
-	var body: some View {
-		let t: Int = Int(secs.rounded(.up))
-		let label: String = t >= 60 ? joinText(String(t / 60), "m") : joinText(String(t), "s")
-		return HStack(spacing: 2) {
-			Rectangle().fill(Color(hex: kind.color)).frame(width: 9, height: 9)
-				.overlay(Rectangle().stroke(Color.black, lineWidth: 1))
-			OutlinedText(text: label, size: 10, color: secs < 6 ? Color(ui: 0xFFB060) : Color.white)
-		}
-		.padding(.horizontal, 3)
-		.padding(.vertical, 2)
-		.background(Color.black.opacity(0.35))
-	}
-}
-
-/// The worn suit's energy, and the PACK button when it carries a cargo pack
-struct SuitBar: View {
-	let game: Game
-	/// the HUD's tick, so the bar redraws as the suit's energy changes
-	var tick: Int = 0
-	var body: some View {
-		let st: ExoStats = game.suitStats
-		let cap: Double = max(1, st.capacity)
-		let f: Double = clampD(game.suit.energy / cap, 0, 1)
-		let col: Color = f > 0.25 ? Color(ui: 0x60E0FF) : Color(ui: 0xFF8A40)
-		return HStack(spacing: 6) {
-			OutlinedText(text: "SUIT", size: 10, color: Color(ui: 0x9AD8F0))
-			ZStack(alignment: .leading) {
-				Rectangle().fill(Color.black.opacity(0.6)).frame(width: 110, height: 9)
-				Rectangle().fill(col).frame(width: CGFloat(110.0 * f), height: 9)
-			}
-			.overlay(Rectangle().stroke(Color.white.opacity(0.4), lineWidth: 1))
-			OutlinedText(text: joinText(String(Int(game.suit.energy)), "/", String(Int(cap))), size: 10)
-			if st.broken > 0 { OutlinedText(text: joinText(String(st.broken), " BROKEN"), size: 10, color: Color(ui: 0xFF8A40)) }
-			if st.has(.cargo) {
-				SmallButton(title: "PACK", color: Color(ui: 0x7A5A2A)) { game.openPack() }
-			}
-			if st.has(.cannon) || st.has(.laser) {
-				HoldButton(label: "SUIT FIRE", size: 58, color: Color(ui: 0x8A3A3A)) { (on: Bool) in game.suitFireHeld = on }
-			}
-		}
-	}
-}
-
-// MARK: - Infusion Crucible
-
-/// The Infusion Crucible: pick a piece of equipment, pick a compound, see what will change, confirm.
-/// The item never leaves its slot while this is open, so a slip of the finger can't lose it.
-struct InfusionPanel: View {
-	@ObservedObject var game: Game
-	@ObservedObject var hud: HUDSignal
-	@State var pick: Int = -1
-	@State var choice: Int = -1
-	@State var removing: Int = -1
-	@State var note: String = ""
-	@State var customChoice: Int = -1
-
-	var body: some View {
-		VStack(spacing: 10) {
-			HStack {
-				Text("INFUSION CRUCIBLE").font(.pixel(20)).foregroundColor(Color(ui: 0xC07CFF))
-				Spacer()
-				SmallButton(title: "MAKE COMPOUNDS", color: Color(ui: 0x5A4A8A)) { game.openCrafting(.infuser) }
-				SmallButton(title: "CLOSE", color: Color(ui: 0xA03030)) { close() }
-			}
-			Text("1 Choose equipment  ·  2 Choose an infusion  ·  3 Check what changes, then confirm")
-				.font(.pixel(11, .semibold)).foregroundColor(Color.white.opacity(0.7))
-				.frame(maxWidth: .infinity, alignment: .leading)
-			HStack(alignment: .top, spacing: 12) {
-				equipmentColumn.frame(width: 250)
-				infusionColumn.frame(width: 330)
-				previewColumn.frame(width: 300)
-			}
-			if !note.isEmpty {
-				Text(verbatim: note).font(.pixel(12, .semibold)).foregroundColor(Color(ui: 0xFFE070))
-			}
-		}
-		.foregroundColor(Color.white)
-		.padding(14)
-		.background(PixelBox(color: Color(ui: 0x2C2834)).opacity(0.97))
-		.frame(maxWidth: 940)
-		.padding(10)
-	}
-
-	func close() {
-		game.showInfuse = false
-		game.bumpHUD()
-	}
-
-	/// bag slots holding something that takes infusions
-	var candidates: [Int] {
-		var out: [Int] = []
-		for i in 0..<game.inv.slots.count {
-			if let s = game.inv.slots[i], infusionSlots(s.item) > 0, s.item.maxStack == 1 { out.append(i) }
-		}
-		return out
-	}
-
-	var equipmentColumn: some View {
-		let list: [Int] = candidates
-		let cols: [GridItem] = [GridItem(.adaptive(minimum: 46), spacing: 4)]
-		return VStack(alignment: .leading, spacing: 6) {
-			Text("EQUIPMENT").font(.pixel(13)).foregroundColor(Color(ui: 0xB8A8D8))
-			if list.isEmpty {
-				Text("Nothing in your bag can take an infusion yet: weapons, tools, armour and suit parts can (take worn armour off first).")
-					.font(.pixel(11, .semibold)).foregroundColor(Color.white.opacity(0.6))
-			}
-			ScrollView {
-				LazyVGrid(columns: cols, spacing: 4) {
-					ForEach(list, id: \.self) { i in
-						Button(action: {
-							pick = i
-							removing = -1
-							note = ""
-						}) {
-							SlotView(stack: game.inv.slots[i], selected: pick == i, size: 44)
-						}
-						.buttonStyle(.plain)
-					}
+	/// Every coupling pulls and pushes its two vehicles at the couplers toward the length it was made at
+	/// (worked out together a few times, as the contacts are); one stretched far past it breaks
+	func solveCouplings(_ h: Double) {
+		var round: Int = 0
+		while round < 4 {
+			for a in vehicles where !a.links.isEmpty {
+				for (i, l) in a.links.enumerated() where a.id < l.other {
+					guard let b = vehicleByID(l.other) else { a.links.remove(at: i); return }
+					coupleStep(a, b, l, h, round == 0)
 				}
 			}
-			.frame(maxHeight: 300)
-			if let s = picked { pickedInfo(s) }
+			round += 1
 		}
 	}
 
-	var picked: Stack? {
-		if pick < 0 || pick >= game.inv.slots.count { return nil }
-		guard let s = game.inv.slots[pick], infusionSlots(s.item) > 0 else { return nil }
-		return s
-	}
-
-	func pickedInfo(_ s: Stack) -> some View {
-		let slots: Int = infusionSlots(s.item)
-		let have: [Infusion] = s.infusions
-		return VStack(alignment: .leading, spacing: 4) {
-			Text(verbatim: s.item.name).font(.pixel(13))
-			Text(verbatim: joinText(String(s.inf?.count ?? 0), " of ", String(slots), " slots used")).font(.pixel(10, .semibold)).foregroundColor(Color.white.opacity(0.7))
-			ForEach((s.inf ?? []).filter { $0 >= customInfusionBase }, id: \.self) { n in
-				HStack(spacing: 6) {
-					Rectangle().fill(Color(hex: infusionColor(n))).frame(width: 10, height: 10)
-					Text(verbatim: infusionName(n)).font(.pixel(11)).foregroundColor(Color.white)
-					Spacer(minLength: 0)
-					SmallButton(title: "REMOVE", color: Color(ui: 0x5A4A4A)) { note = game.removeCustomInfusion(slot: pick, n) }
-				}
-			}
-			ForEach(0..<have.count, id: \.self) { k in
-				HStack(spacing: 6) {
-					Rectangle().fill(Color(hex: have[k].color)).frame(width: 10, height: 10)
-					Text(verbatim: have[k].name).font(.pixel(11)).foregroundColor(Color(ui: have[k].rarity.color))
-					Spacer(minLength: 0)
-					SmallButton(title: removing == have[k].rawValue ? "SURE?" : "REMOVE", color: Color(ui: removing == have[k].rawValue ? 0xC04030 : 0x5A4A4A)) {
-						if removing == have[k].rawValue {
-							note = game.removeInfusion(slot: pick, have[k])
-							removing = -1
-						} else {
-							removing = have[k].rawValue
-							note = "Removing it spends the compound; the item is unharmed. Tap SURE? to go ahead."
-						}
-					}
-				}
-			}
-		}
-		.padding(6)
-		.background(Color.black.opacity(0.25))
-	}
-
-	var infusionColumn: some View {
-		let all: [Infusion] = Infusion.allCases
-		return VStack(alignment: .leading, spacing: 6) {
-			Text("INFUSIONS").font(.pixel(13)).foregroundColor(Color(ui: 0xB8A8D8))
-			ScrollView {
-				VStack(spacing: 4) {
-					ForEach(all, id: \.self) { inf in infusionRow(inf) }
-					customRows
-				}
-			}
-			.frame(maxHeight: 420)
-		}
-	}
-
-	func infusionRow(_ inf: Infusion) -> some View {
-		let owned: Int = game.inv.total(.compound(inf))
-		let problem: String? = picked?.infuseProblem(inf)
-		let usable: Bool = (owned > 0 || game.isCreative) && problem == nil && picked != nil
-		let chosen: Bool = choice == inf.rawValue
-		return Button(action: {
-			choice = inf.rawValue
-			customChoice = -1
-			note = ""
-		}) {
-			HStack(spacing: 6) {
-				SlotView(stack: Stack(item: .compound(inf), count: max(1, owned)), selected: chosen, size: 34, dim: owned == 0)
-				VStack(alignment: .leading, spacing: 1) {
-					HStack(spacing: 4) {
-						Text(verbatim: inf.name).font(.pixel(12)).foregroundColor(Color(ui: inf.rarity.color))
-						Text(verbatim: inf.rarity.name).font(.pixel(9, .semibold)).foregroundColor(Color.white.opacity(0.5))
-					}
-					Text(verbatim: inf.blurb).font(.pixel(10, .semibold)).foregroundColor(Color.white.opacity(usable ? 0.85 : 0.5)).lineLimit(2)
-				}
-				Spacer(minLength: 0)
-				Text(verbatim: owned > 0 ? joinText("x", String(owned)) : "none").font(.pixel(10)).foregroundColor(Color.white.opacity(0.6))
-			}
-			.padding(4)
-			.background(chosen ? Color(ui: 0x4A3A6A) : Color.black.opacity(0.2))
-		}
-		.buttonStyle(.plain)
-	}
-
-	var previewColumn: some View {
-		let inf: Infusion? = Infusion(rawValue: choice)
-		return VStack(alignment: .leading, spacing: 6) {
-			Text("WHAT CHANGES").font(.pixel(13)).foregroundColor(Color(ui: 0xB8A8D8))
-			if let s = picked, customChoice >= 0, let r = ModRuntime.shared.infusion(customChoice) {
-				customPreview(s, r)
-			} else if let s = picked, let i = inf {
-				previewBody(s, i)
-			} else {
-				Text("Pick a piece of equipment and an infusion to see how it changes.")
-					.font(.pixel(11, .semibold)).foregroundColor(Color.white.opacity(0.6))
-			}
-		}
-	}
-
-	func previewBody(_ s: Stack, _ i: Infusion) -> some View {
-		let problem: String? = s.infuseProblem(i)
-		let owned: Int = game.inv.total(.compound(i))
-		var after: Stack = s
-		after.inf = (s.inf ?? []) + [i.rawValue]
-		let rows: [(String, String, String)] = game.infusionCompare(s, after)
-		let ok: Bool = problem == nil && (owned > 0 || game.isCreative)
-		return VStack(alignment: .leading, spacing: 5) {
-			Text(verbatim: joinText(s.item.name, " + ", i.name)).font(.pixel(12))
-			Text(verbatim: i.blurb).font(.pixel(10, .semibold)).foregroundColor(Color.white.opacity(0.8))
-			ForEach(0..<rows.count, id: \.self) { k in
-				HStack {
-					Text(verbatim: rows[k].0).font(.pixel(11, .semibold)).foregroundColor(Color.white.opacity(0.75))
-					Spacer(minLength: 4)
-					Text(verbatim: rows[k].1).font(.pixel(11)).foregroundColor(Color.white.opacity(0.6))
-					Text("→").font(.pixel(11)).foregroundColor(Color.white.opacity(0.6))
-					Text(verbatim: rows[k].2).font(.pixel(11)).foregroundColor(rows[k].1 == rows[k].2 ? Color.white : Color(ui: 0x7AF08A))
-				}
-			}
-			if let p = problem {
-				Text(verbatim: p).font(.pixel(11, .semibold)).foregroundColor(Color(ui: 0xFF9A7A))
-			} else if owned == 0 && !game.isCreative {
-				Text(verbatim: joinText("You have no ", i.name, " compound: make one with MAKE COMPOUNDS.")).font(.pixel(11, .semibold)).foregroundColor(Color(ui: 0xFF9A7A))
-			}
-			PixelButton(title: ok ? "CONFIRM INFUSION" : "CAN'T INFUSE", color: ok ? Color(ui: 0x6A4AA8) : Color(ui: 0x444444)) {
-				if !ok { return }
-				note = game.infuse(slot: pick, i)
-				choice = -1
-			}
-		}
-		.padding(6)
-		.background(Color.black.opacity(0.25))
-	}
-}
-
-extension Game {
-	/// Before-and-after numbers for an infusion preview: what a weapon, tool or armour piece does
-	func infusionCompare(_ a: Stack, _ b: Stack) -> [(String, String, String)] {
-		var rows: [(String, String, String)] = []
-		let cls: [InfuseClass] = infuseClasses(a.item)
-		func f1(_ v: Double) -> String { return String(format: "%.1f", v) }
-		func pct(_ v: Double) -> String { return joinText(String(Int((v * 100).rounded())), "%") }
-		if cls.contains(.melee) {
-			let p0: MeleeProfile = Game.infuseProfile(a.item.melee, a.inf ?? [])
-			let p1: MeleeProfile = Game.infuseProfile(a.item.melee, b.inf ?? [])
-			rows.append(("Damage", f1(p0.damage), f1(p1.damage)))
-			rows.append(("Swing every", joinText(String(format: "%.2f", p0.cooldown), " s"), joinText(String(format: "%.2f", p1.cooldown), " s")))
-			rows.append(("Reach", f1(p0.reach), f1(p1.reach)))
-			rows.append(("Critical chance", pct(p0.critChance), pct(p1.critChance)))
-			rows.append(("Knockback", f1(p0.knock), f1(p1.knock)))
-		}
-		if cls.contains(.ranged) {
-			var d0: Double = 1
-			var d1: Double = 1
-			if a.has(.honed) { d0 *= 1.2 }
-			if a.has(.voidrend) { d0 *= 1.15 }
-			if b.has(.honed) { d1 *= 1.2 }
-			if b.has(.voidrend) { d1 *= 1.15 }
-			rows.append(("Shot damage", pct(d0), pct(d1)))
-			rows.append(("Range", a.has(.longReach) ? "125%" : "100%", b.has(.longReach) ? "125%" : "100%"))
-		}
-		if cls.contains(.tool) {
-			rows.append(("Mining speed", a.has(.haste) ? "125%" : "100%", b.has(.haste) ? "125%" : "100%"))
-			rows.append(("Extra ore chance", a.has(.bountiful) ? "20%" : "0%", b.has(.bountiful) ? "20%" : "0%"))
-		}
-		if cls.contains(.armor) || cls.contains(.suit) {
-			var x: ArmorInf = ArmorInf()
-			x.add(a)
-			var y: ArmorInf = ArmorInf()
-			y.add(b)
-			rows.append(("Extra defence", f1(x.defense), f1(y.defense)))
-			if x.fireCut != y.fireCut { rows.append(("Fire and lava", joinText("-", pct(x.fireCut)), joinText("-", pct(y.fireCut)))) }
-			if x.coldCut != y.coldCut { rows.append(("Cold", joinText("-", pct(x.coldCut)), joinText("-", pct(y.coldCut)))) }
-			if x.stormCut != y.stormCut { rows.append(("Lightning and hail", joinText("-", pct(x.stormCut)), joinText("-", pct(y.stormCut)))) }
-			if x.speed != y.speed { rows.append(("Run speed", joinText("+", pct(x.speed)), joinText("+", pct(y.speed)))) }
-			if x.thorns != y.thorns { rows.append(("Blow returned", pct(x.thorns), pct(y.thorns))) }
-			if x.knockMul != y.knockMul { rows.append(("Knockback taken", pct(x.knockMul), pct(y.knockMul))) }
-			if x.regen != y.regen { rows.append(("Healing a minute", f1(x.regen * 60), f1(y.regen * 60))) }
-		}
-		rows.append(("Slots used", String(a.inf?.count ?? 0), String(b.inf?.count ?? 0)))
-		return rows
-	}
-
-	/// Opens the crafting screen at a station (the crucible's compounds, the assembly station's parts)
-	func openCrafting(_ s: Station) {
-		showInfuse = false
-		showExo = false
-		craftStation = s
-		showInventory = true
-		bumpHUD()
-	}
-
-	/// The effects on the player, for the HUD: kind and seconds left
-	func activeEffects() -> [(ModEffectKind, Double)] {
-		var out: [(ModEffectKind, Double)] = []
-		for k in ModEffectKind.allCases where k.timed && effects.time[k.rawValue] > 0 {
-			out.append((k, effects.time[k.rawValue]))
-		}
-		if mendCD > 0 { out.append((.heal, mendCD)) }
-		return out
-	}
-}
-
-// MARK: - Assembly Station: the suit designer
-
-/// A material a piece can be made of: one of the game's metals, or a mod's (by key)
-struct SuitMatChoice {
-	var mat: Int
-	var key: String
-	var name: String
-	var color: UInt32
-}
-
-/// The Assembly Station: the suit designer. The body is drawn large; tap with a placing tool to put
-/// down a plate or a frame piece, tap a piece to pick it and drag to move it, and set its size, turn,
-/// shape, thickness, metal and paint. Working parts (cores, jets, turrets...) come from the bag. The
-/// bill shows what the changes cost before BUILD makes them; nothing changes until then.
-struct ExoAssemblyPanel: View {
-	@ObservedObject var game: Game
-	@ObservedObject var hud: HUDSignal
-	@State var plan: SuitDesign = SuitDesign()
-	@State var started: Bool = false
-	@State var pick: Int = -1
-	/// 0 pick and move, 1 place plates, 2 place frame pieces
-	@State var tool: Int = 0
-	@State var matPick: Int = 0
-	@State var shapePick: Int = 0
-	@State var page: Int = 0
-	@State var pose: Int = 0
-	@State var undo: [SuitDesign] = []
-	@State var note: String = ""
-	@State var grabbing: Bool = false
-	@State var grabStart: CGPoint = .zero
-	@State var grabFrom: CGPoint = .zero
-	@State var colorOn: Bool = false
-	@State var paint: UInt32 = 0xC8CCD4
-	@State var templateMat: Int = 0
-
-	/// screen points to a suit unit on the canvas, and the strip of the frame it shows (suit units)
-	static let k: CGFloat = 6.5
-	static let cropX: Double = 6
-	static let cropW: Double = 54
-	static let tools: [String] = ["PICK / MOVE", "PLACE PLATES", "PLACE FRAMES"]
-	static let pages: [String] = ["PIECE", "PARTS", "SUIT"]
-	static let poses: [String] = ["STAND", "WALK", "STRIDE", "WIND UP", "STRIKE", "BLOCK", "SHOOT"]
-	static let thick: [String] = ["THIN", "DOUBLE", "TRIPLE"]
-
-	var body: some View {
-		VStack(spacing: 8) {
-			header
-			ScrollView {
-				HStack(alignment: .top, spacing: 12) {
-					leftColumn
-					rightColumn.frame(width: 380)
-				}
-				.padding(.bottom, 12)
-			}
-		}
-		.foregroundColor(Color.white)
-		.padding(12)
-		.background(PixelBox(color: Color(ui: 0x262A32)).opacity(0.97))
-		.frame(maxWidth: 1000)
-		.padding(8)
-		.onAppear { self.begin() }
-	}
-
-	func begin() {
-		if started { return }
-		started = true
-		plan = game.suit.d
-	}
-
-	var changed: Bool { return plan != game.suit.d }
-
-	var header: some View {
-		let st: ExoStats = ExoStats.of(plan)
-		let line: String = joinText(String(plan.pieces.count), " pieces · weight ", String(Int(st.weight.rounded())), " / ", String(Int(st.strength)), " · guards ", String(Int((st.guardAll * 100).rounded())), "%")
-		return HStack(spacing: 8) {
-			Text("ASSEMBLY STATION").font(.pixel(20)).foregroundColor(Color(ui: 0x60E0FF))
-			Text(verbatim: line).font(.pixel(11, .semibold)).foregroundColor(Color.white.opacity(0.75))
-			Spacer()
-			SmallButton(title: "MAKE PARTS", color: Color(ui: 0x4A5A3A)) { self.game.openCrafting(.assembly) }
-			SmallButton(title: "CLOSE", color: Color(ui: 0xA03030)) { self.close() }
-		}
-	}
-
-	func close() {
-		game.showExo = false
-		game.bumpHUD()
-	}
-
-	// MARK: the body and its pieces
-
-	var leftColumn: some View {
-		VStack(alignment: .leading, spacing: 8) {
-			ChoiceRows(options: ExoAssemblyPanel.tools, selected: $tool, columns: 3)
-			canvas
-			ChoiceRows(options: ExoAssemblyPanel.poses, selected: $pose, columns: 4)
-			billBox
-			buildRow
-			if !note.isEmpty { Text(verbatim: note).font(.pixel(12, .semibold)).foregroundColor(Color(ui: 0xFFE070)) }
-		}
-	}
-
-	/// The figure in its suit, large; touches place, pick and move pieces (on the body standing still)
-	var canvas: some View {
-		let k: CGFloat = ExoAssemblyPanel.k
-		let w: CGFloat = CGFloat(ExoAssemblyPanel.cropW) * k
-		let h: CGFloat = CGFloat(suitBodyH) * k
-		let img: Image = SuitPictures.shared.image(plan, pose == 0 ? 0 : clampI(pose, 0, 6), pick)
-		let fullW: CGFloat = CGFloat(humanW * suitUnit) * k
-		let off: CGFloat = -CGFloat(ExoAssemblyPanel.cropX) * k
-		return ZStack(alignment: .topLeading) {
-			Rectangle().fill(Color.black.opacity(0.35))
-			grid(w, h)
-			img.resizable().interpolation(.none).frame(width: fullW, height: h).offset(x: off, y: 0)
-		}
-		.frame(width: w, height: h)
-		.clipped()
-		.overlay(Rectangle().stroke(Color.white.opacity(0.25), lineWidth: 1))
-		.gesture(DragGesture(minimumDistance: 0).onChanged { (v: DragGesture.Value) in self.touchMoved(v.startLocation, v.location) }.onEnded { (v: DragGesture.Value) in self.touchEnded(v.startLocation, v.location) })
-	}
-
-	/// faint lines every sprite pixel, so pieces can be lined up
-	func grid(_ w: CGFloat, _ h: CGFloat) -> some View {
-		let k: CGFloat = ExoAssemblyPanel.k
-		let step: CGFloat = k * CGFloat(suitUnit)
-		return Canvas { ctx, size in
-			var p: Path = Path()
-			var x: CGFloat = 0
-			while x <= w {
-				p.addRect(CGRect(x: x, y: 0, width: 1, height: h))
-				x += step
-			}
-			var y: CGFloat = 0
-			while y <= h {
-				p.addRect(CGRect(x: 0, y: y, width: w, height: 1))
-				y += step
-			}
-			ctx.fill(p, with: .color(Color.white.opacity(0.06)))
-		}
-	}
-
-	/// a point on the canvas as a point on the body (suit units from the figure's left edge)
-	func bodyPoint(_ p: CGPoint) -> (Double, Double) {
-		let k: Double = Double(ExoAssemblyPanel.k)
-		let fx: Double = Double(p.x) / k + ExoAssemblyPanel.cropX
-		let fy: Double = Double(p.y) / k
-		return (fx - Double(humanOX * suitUnit), fy)
-	}
-
-	/// the outermost piece under a body point
-	func pieceAt(_ x: Double, _ y: Double) -> Int? {
-		var best: Int? = nil
-		var bestKey: Int = -1
-		for (i, p) in plan.pieces.enumerated() where p.covers(x, y) {
-			let key: Int = p.bone.layer * 1000 + i
-			if key > bestKey {
-				bestKey = key
-				best = i
-			}
-		}
-		return best
-	}
-
-	func touchMoved(_ start: CGPoint, _ now: CGPoint) {
-		if tool != 0 || pose != 0 { return }
-		if !grabbing {
-			grabbing = true
-			let b: (Double, Double) = bodyPoint(start)
-			if let i = pieceAt(b.0, b.1) {
-				pick = plan.pieces[i].id
-				remember()
-				grabStart = start
-				grabFrom = CGPoint(x: plan.pieces[i].x, y: plan.pieces[i].y)
-			} else {
-				pick = -1
-				grabStart = .zero
-			}
+	func coupleStep(_ a: Vehicle, _ b: Vehicle, _ l: VLink, _ h: Double, _ first: Bool) {
+		let pa: (Double, Double) = a.cellCenter(l.cell)
+		let pb: (Double, Double) = b.cellCenter(l.oc)
+		let dx: Double = pb.0 - pa.0
+		let dy: Double = pb.1 - pa.1
+		let d: Double = sqrt(dx * dx + dy * dy)
+		if d < 1e-6 { return }
+		if first && d > l.len + Rails.snap {
+			// pulled apart: the coupling gives
+			uncouple(a, l.cell)
 			return
 		}
-		guard grabStart != .zero, let i = plan.index(pick) else { return }
-		let k: Double = Double(ExoAssemblyPanel.k)
-		var p: SuitPiece = plan.pieces[i]
-		// moves snap to whole suit units
-		p.x = (Double(grabFrom.x) + Double(now.x - grabStart.x) / k).rounded()
-		p.y = (Double(grabFrom.y) + Double(now.y - grabStart.y) / k).rounded()
-		p.clamp()
-		plan.pieces[i] = p
-	}
-
-	func touchEnded(_ start: CGPoint, _ end: CGPoint) {
-		defer {
-			grabbing = false
-			grabStart = .zero
-		}
-		if pose != 0 {
-			note = "Pick STAND to change the suit (the other poses show how it moves)."
-			return
-		}
-		if tool == 0 { return }
-		let b: (Double, Double) = bodyPoint(end)
-		if plan.pieces.count >= SuitDesign.maxPieces {
-			note = joinText("A suit holds at most ", String(SuitDesign.maxPieces), " pieces.")
-			return
-		}
-		remember()
-		var p = SuitPiece()
-		p.kind = tool == 1 ? .plate : .frame
-		p.x = b.0.rounded()
-		p.y = b.1.rounded()
-		p.w = tool == 1 ? 6 : 4
-		p.h = tool == 1 ? 6 : 2
-		p.shape = SuitShape(rawValue: shapePick) ?? .box
-		applyMaterial(&p, matPick)
-		p.bone = SuitBody.bone(p.x, p.y)
-		p.id = plan.newID()
-		p.clamp()
-		plan.pieces.append(p)
-		pick = p.id
-		note = ""
-	}
-
-	func remember() {
-		undo.append(plan)
-		if undo.count > 60 { undo.removeFirst() }
-	}
-
-	// MARK: materials
-
-	var materials: [SuitMatChoice] {
-		var out: [SuitMatChoice] = []
-		for m in ExoMat.allCases { out.append(SuitMatChoice(mat: m.rawValue, key: "", name: m.name, color: m.color)) }
-		for k in ModRuntime.shared.suitMats.keys.sorted() {
-			if let i = ModRuntime.shared.suitMats[k] { out.append(SuitMatChoice(mat: 0, key: k, name: i.name, color: i.color)) }
-		}
-		return out
-	}
-
-	func applyMaterial(_ p: inout SuitPiece, _ i: Int) {
-		let list: [SuitMatChoice] = materials
-		let c: SuitMatChoice = list[clampI(i, 0, list.count - 1)]
-		p.mat = c.mat
-		p.modMat = c.key
-	}
-
-	func materialIndex(_ p: SuitPiece) -> Int {
-		let list: [SuitMatChoice] = materials
-		if !p.modMat.isEmpty { return list.firstIndex { $0.key == p.modMat } ?? 0 }
-		return list.firstIndex { $0.key.isEmpty && $0.mat == p.mat } ?? 0
-	}
-
-	// MARK: the right column
-
-	var rightColumn: some View {
-		VStack(alignment: .leading, spacing: 8) {
-			ChoiceRows(options: ExoAssemblyPanel.pages, selected: $page, columns: 3)
-			pageView
+		let nx: Double = dx / d
+		let ny: Double = dy / d
+		let aDyn: Bool = a.inStep || !a.asleep
+		let bDyn: Bool = b.inStep || !b.asleep
+		let ia: Double = aDyn ? 1.0 / a.mass : 0
+		let ib: Double = bDyn ? 1.0 / b.mass : 0
+		let iia: Double = aDyn ? 1.0 / a.inertia : 0
+		let iib: Double = bDyn ? 1.0 / b.inertia : 0
+		let rax: Double = pa.0 - a.px
+		let ray: Double = pa.1 - a.py
+		let rbx: Double = pb.0 - b.px
+		let rby: Double = pb.1 - b.py
+		let rna: Double = rax * ny - ray * nx
+		let rnb: Double = rbx * ny - rby * nx
+		let k: Double = ia + rna * rna * iia + ib + rnb * rnb * iib
+		if k <= 0 { return }
+		let va: (Double, Double) = a.pointVel(pa.0, pa.1)
+		let vb: (Double, Double) = b.pointVel(pb.0, pb.1)
+		let vrel: Double = (vb.0 - va.0) * nx + (vb.1 - va.1) * ny
+		let target: Double = -Rails.stiff * (d - l.len) / max(h, 1e-4)
+		let lam: Double = (target - vrel) / k
+		if abs(lam) < 1e-9 { return }
+		b.vx += lam * nx * ib
+		b.vy += lam * ny * ib
+		b.angVel += rnb * lam * iib
+		a.vx -= lam * nx * ia
+		a.vy -= lam * ny * ia
+		a.angVel -= rna * lam * iia
+		if abs(lam) * max(ia, ib) > 0.2 {
+			a.asleep = false
+			b.asleep = false
 		}
 	}
 
-	@ViewBuilder
-	var pageView: some View {
-		switch page {
-		case 1: partsPage
-		case 2: suitPage
-		default: piecePage
-		}
-	}
-
-	var piecePage: some View {
-		VStack(alignment: .leading, spacing: 8) {
-			newPieceBox
-			if let i = plan.index(pick) { pieceBox(i) } else {
-				Text("Tap a piece to pick it, or choose PLACE PLATES and tap the body.").font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-			}
-		}
-	}
-
-	/// what a placing tap puts down
-	var newPieceBox: some View {
-		let names: [String] = materials.map { $0.name }
-		return VStack(alignment: .leading, spacing: 6) {
-			Text("NEW PIECES").font(.pixel(12)).foregroundColor(ModUI.gold)
-			ChoiceRows(options: names, selected: $matPick, columns: 4)
-			ChoiceRows(options: SuitShape.allCases.map { $0.name }, selected: $shapePick, columns: 5)
-		}
-		.padding(8)
-		.background(PixelBox(color: ModUI.card))
-	}
-
-	func pb<T>(_ i: Int, _ kp: WritableKeyPath<SuitPiece, T>) -> Binding<T> {
-		let id: Int = plan.pieces[i].id
-		return Binding<T>(get: {
-			guard let j = self.plan.index(id) else { return self.plan.pieces[0][keyPath: kp] }
-			return self.plan.pieces[j][keyPath: kp]
-		}, set: { v in
-			guard let j = self.plan.index(id) else { return }
-			var p: SuitPiece = self.plan.pieces[j]
-			p[keyPath: kp] = v
-			p.clamp()
-			self.plan.pieces[j] = p
-		})
-	}
-
-	func pieceBox(_ i: Int) -> some View {
-		let p: SuitPiece = plan.pieces[i]
-		let title: String = game.suitPieceName(p).uppercased()
-		let wear: String = p.dmg > 0.001 ? joinText(" · worn ", String(Int((p.dmg * 100).rounded())), "%") : ""
-		let made: String = p.kind == .plate || p.kind == .frame ? joinText(suitMat(p).name, " ", p.kind.name.lowercased()) : p.kind.name
-		return VStack(alignment: .leading, spacing: 6) {
-			Text(verbatim: title).font(.pixel(13)).foregroundColor(ModUI.gold)
-			Text(verbatim: joinText(made, " on the ", p.bone.name.lowercased(), wear)).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-			sizeControls(i)
-			if p.kind == .plate || p.kind == .frame { makeControls(i) }
-			nudgeRow(i)
-			actionRow(i)
-		}
-		.padding(8)
-		.background(PixelBox(color: ModUI.card))
-	}
-
-	func sizeControls(_ i: Int) -> some View {
-		VStack(alignment: .leading, spacing: 4) {
-			StatSlider(label: "Width", value: pb(i, \.w), range: 1.0...30.0, step: 1, format: "%.0f")
-			StatSlider(label: "Height", value: pb(i, \.h), range: 1.0...30.0, step: 1, format: "%.0f")
-			StatSlider(label: "Turn", value: pb(i, \.rot), range: -180.0...180.0, step: 5, format: "%.0f°")
-			ChoiceRows(options: SuitShape.allCases.map { $0.name }, selected: shapeBind(i), columns: 5)
-			ChoiceRows(options: SuitBone.allCases.map { $0.name }, selected: boneBind(i), columns: 4)
-		}
-	}
-
-	func makeControls(_ i: Int) -> some View {
-		let names: [String] = materials.map { $0.name }
-		let painted: Bool = plan.pieces[i].color != 0
-		return VStack(alignment: .leading, spacing: 4) {
-			ChoiceRows(options: ExoAssemblyPanel.thick, selected: thickBind(i), columns: 3)
-			ChoiceRows(options: names, selected: matBind(i), columns: 4)
-			ModToggle(label: "Painted", help: "Off: the metal's own colour", isOn: paintedBind(i))
-			if painted { ModColorRow(label: "Paint", color: pb(i, \.color)) }
-		}
-	}
-
-	func nudgeRow(_ i: Int) -> some View {
-		HStack(spacing: 6) {
-			SmallButton(title: "\u{2190}") { self.nudge(i, -1, 0) }
-			SmallButton(title: "\u{2192}") { self.nudge(i, 1, 0) }
-			SmallButton(title: "\u{2191}") { self.nudge(i, 0, -1) }
-			SmallButton(title: "\u{2193}") { self.nudge(i, 0, 1) }
-			SmallButton(title: "TO FRONT") { self.layer(i, 1) }
-			SmallButton(title: "TO BACK") { self.layer(i, -1) }
-		}
-	}
-
-	func actionRow(_ i: Int) -> some View {
-		HStack(spacing: 6) {
-			SmallButton(title: "COPY", color: ModUI.blue) { self.duplicate(i, false) }
-			SmallButton(title: "MIRROR", color: ModUI.blue) { self.duplicate(i, true) }
-			SmallButton(title: "REMOVE", color: ModUI.red) { self.removePiece(i) }
-		}
-	}
-
-	func shapeBind(_ i: Int) -> Binding<Int> {
-		let b: Binding<SuitShape> = pb(i, \.shape)
-		return Binding<Int>(get: { b.wrappedValue.rawValue }, set: { b.wrappedValue = SuitShape(rawValue: $0) ?? .box })
-	}
-
-	func boneBind(_ i: Int) -> Binding<Int> {
-		let b: Binding<SuitBone> = pb(i, \.bone)
-		return Binding<Int>(get: { b.wrappedValue.rawValue }, set: { b.wrappedValue = SuitBone(rawValue: $0) ?? .torso })
-	}
-
-	func thickBind(_ i: Int) -> Binding<Int> {
-		let b: Binding<Int> = pb(i, \.thick)
-		return Binding<Int>(get: { b.wrappedValue - 1 }, set: { b.wrappedValue = $0 + 1 })
-	}
-
-	func matBind(_ i: Int) -> Binding<Int> {
-		let id: Int = plan.pieces[i].id
-		return Binding<Int>(get: {
-			guard let j = self.plan.index(id) else { return 0 }
-			return self.materialIndex(self.plan.pieces[j])
-		}, set: { v in
-			guard let j = self.plan.index(id) else { return }
-			var p: SuitPiece = self.plan.pieces[j]
-			self.applyMaterial(&p, v)
-			self.plan.pieces[j] = p
-		})
-	}
-
-	func paintedBind(_ i: Int) -> Binding<Bool> {
-		let b: Binding<UInt32> = pb(i, \.color)
-		let base: UInt32 = suitMat(plan.pieces[i]).color
-		return Binding<Bool>(get: { b.wrappedValue != 0 }, set: { on in b.wrappedValue = on ? base : 0 })
-	}
-
-	func nudge(_ i: Int, _ dx: Double, _ dy: Double) {
-		remember()
-		var p: SuitPiece = plan.pieces[i]
-		p.x += dx
-		p.y += dy
-		p.clamp()
-		plan.pieces[i] = p
-	}
-
-	/// moves a piece over (or under) the others on its part of the body
-	func layer(_ i: Int, _ dir: Int) {
-		remember()
-		let p: SuitPiece = plan.pieces.remove(at: i)
-		if dir > 0 { plan.pieces.append(p) } else { plan.pieces.insert(p, at: 0) }
-	}
-
-	/// a copy beside it, or mirrored to the other side of the body (the other arm or leg)
-	func duplicate(_ i: Int, _ mirror: Bool) {
-		if plan.pieces.count >= SuitDesign.maxPieces { return }
-		var p: SuitPiece = plan.pieces[i]
-		if p.kind == .core || p.kind == .module {
-			note = "Working parts come from the bag: add another from PARTS."
-			return
-		}
-		remember()
-		if mirror {
-			p.x = suitBodyW - p.x
-			p.rot = -p.rot
-			p.bone = p.bone.other
-		} else {
-			p.x += 3
-			p.y += 3
-		}
-		p.id = plan.newID()
-		p.dmg = 0
-		p.src = 0
-		p.clamp()
-		plan.pieces.append(p)
-		pick = p.id
-	}
-
-	func removePiece(_ i: Int) {
-		remember()
-		plan.pieces.remove(at: i)
-		pick = -1
-	}
-
-	// MARK: working parts from the bag
-
-	/// cores and working parts that can go on: those in the bag (all of them in creative)
-	var partChoices: [Stack] {
-		var out: [Stack] = []
-		if game.isCreative {
-			for c in ExoCore.allCases { out.append(Stack(item: .exoCore(c), count: 1)) }
-			for m in ExoModule.allCases { out.append(Stack(item: .exoModule(m), count: 1)) }
-			return out
-		}
-		let inPlan: [Stack] = Array(plan.items.values)
-		var used: [Stack] = inPlan
-		for s in game.inv.slots {
-			guard let st = s else { continue }
-			switch st.item {
-			case .exoCore, .exoModule:
-				if let j = used.firstIndex(of: st) { used.remove(at: j) } else { out.append(st) }
-			case .custom(let k):
-				if ModRuntime.shared.suitParts[k] != nil {
-					if let j = used.firstIndex(of: st) { used.remove(at: j) } else { out.append(st) }
-				}
-			default: break
-			}
-		}
-		return out
-	}
-
-	var partsPage: some View {
-		let list: [Stack] = partChoices
-		return VStack(alignment: .leading, spacing: 6) {
-			Text("Cores give energy; parts work: jets lift, wings glide, turrets shoot by themselves, cannons and lasers fire with SUIT FIRE. Each goes on where you put it.").font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-			if list.isEmpty { Text("No cores or suit parts in your bag. MAKE PARTS shows what can be made here.").font(.pixel(11, .semibold)).foregroundColor(Color(ui: 0xFF9060)) }
-			ForEach(0..<list.count, id: \.self) { (i: Int) in self.partRow(list[i]) }
-		}
-	}
-
-	func partRow(_ st: Stack) -> some View {
-		let info: String = partBlurb(st.item)
-		return HStack(spacing: 8) {
-			SlotView(stack: st, size: 38)
-			VStack(alignment: .leading, spacing: 2) {
-				Text(verbatim: st.item.name).font(.pixel(12)).foregroundColor(Color.white)
-				Text(verbatim: info).font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
-			}
-			Spacer(minLength: 0)
-			SmallButton(title: "ADD", color: ModUI.accent) { self.addPart(st) }
-		}
-		.padding(6)
-		.background(PixelBox(color: ModUI.card))
-	}
-
-	func partBlurb(_ it: Item) -> String {
-		switch it {
-		case .exoCore(let c): return joinText("Holds ", String(Int(c.capacity)), ", gives ", String(Int(c.output)), " a second")
-		case .exoModule(let m): return m.blurb
-		case .custom(let k): return ModRuntime.shared.suitParts[k].map { joinText("Works as: ", $0.works.name) } ?? ""
-		default: return ""
-		}
-	}
-
-	func addPart(_ st: Stack) {
-		if plan.pieces.count >= SuitDesign.maxPieces { return }
-		var p: SuitPiece
-		switch st.item {
-		case .exoCore(let c): p = SuitTemplates.core(c)
-		case .exoModule(let m): p = SuitTemplates.module(m)
-		case .custom(let k):
-			guard let mp = ModRuntime.shared.suitParts[k] else { return }
-			p = SuitTemplates.module(mp.works)
-			p.modPart = k
-		default: return
-		}
-		remember()
-		if !game.isCreative {
-			let g: Int = plan.newGroup()
-			plan.items[g] = st
-			p.src = g
-		}
-		p.id = plan.newID()
-		plan.pieces.append(p)
-		pick = p.id
-		page = 0
-	}
-
-	// MARK: the whole suit
-
-	var suitPage: some View {
-		let st: ExoStats = ExoStats.of(plan)
-		return VStack(alignment: .leading, spacing: 8) {
-			statsBox(st)
-			templateBox
-			modDesignBox
-			repairBox
-			wearRow
-		}
-	}
-
-	func statsBox(_ st: ExoStats) -> some View {
-		let energy: String = joinText("Energy ", String(Int(st.capacity)), " · gives ", String(Int(st.output)), "/s · refills ", String(format: "%.1f", st.recharge), "/s")
-		let move: String = joinText("Speed ", String(Int((st.speedMul * 100).rounded())), "% · jump ", String(Int((st.jumpMul * 100).rounded())), "%", st.has(.hover) ? joinText(" · jets lift ", String(Int((st.thrust * 100).rounded())), "%") : "")
-		let parts: String = st.modules.isEmpty ? "No working parts" : st.modules.map { $0.name }.joined(separator: ", ")
-		return VStack(alignment: .leading, spacing: 4) {
-			Text("HOW IT GUARDS").font(.pixel(12)).foregroundColor(ModUI.gold)
-			ForEach(SuitSection.allCases, id: \.self) { (s: SuitSection) in self.coverRow(s, st) }
-			Text(verbatim: energy).font(.pixel(11, .semibold)).foregroundColor(Color.white)
-			Text(verbatim: move).font(.pixel(11, .semibold)).foregroundColor(Color.white)
-			Text(verbatim: parts).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-			ForEach(0..<st.notes.count, id: \.self) { (k: Int) in
-				Text(verbatim: st.notes[k]).font(.pixel(10, .semibold)).foregroundColor(Color(ui: 0xFF9060))
-			}
-		}
-		.padding(8)
-		.background(PixelBox(color: ModUI.card))
-	}
-
-	func coverRow(_ s: SuitSection, _ st: ExoStats) -> some View {
-		let cov: Double = st.cover[s.rawValue]
-		let g: Double = st.guardBy[s.rawValue]
-		let label: String = joinText(s.name, ": covered ", String(Int((cov * 100).rounded())), "%, stops ", String(Int((g * 100).rounded())), "%")
-		return VStack(alignment: .leading, spacing: 1) {
-			Text(verbatim: label).font(.pixel(10, .semibold)).foregroundColor(Color.white)
-			ZStack(alignment: .leading) {
-				Rectangle().fill(Color.black.opacity(0.5)).frame(width: 300, height: 6)
-				Rectangle().fill(Color(hex: 0x60E0FF)).frame(width: CGFloat(300.0 * clampD(g, 0, 1)), height: 6)
-			}
-		}
-	}
-
-	var templateBox: some View {
-		let mats: [String] = ExoMat.allCases.map { $0.name }
-		return VStack(alignment: .leading, spacing: 6) {
-			Text("START FROM").font(.pixel(12)).foregroundColor(ModUI.gold)
-			ChoiceRows(options: mats, selected: $templateMat, columns: 4)
-			PlainGrid(count: SuitTemplates.names.count, per: 5) { (i: Int) in
-				SmallButton(title: SuitTemplates.names[i].uppercased(), color: ModUI.blue) { self.loadTemplate(i) }
-			}
-			Text("Plates of the chosen metal; parts it needs come from your bag.").font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
-		}
-		.padding(8)
-		.background(PixelBox(color: ModUI.card))
-	}
-
-	/// Replaces the plan with a ready-made design (its working parts only where the bag has them)
-	func loadTemplate(_ i: Int) {
-		remember()
-		let m: ExoMat = ExoMat(rawValue: clampI(templateMat, 0, ExoMat.allCases.count - 1)) ?? .iron
-		var t: SuitDesign = SuitTemplates.design(i, m)
-		var keep: [SuitPiece] = []
-		var items: [Int: Stack] = [:]
-		var bag: [Stack] = partChoices
-		var missing: [String] = []
-		for var p in t.pieces {
-			if p.kind == .core || p.kind == .module {
-				if !game.isCreative {
-					let want: Item = p.kind == .core ? .exoCore(ExoCore(rawValue: p.part) ?? .sparkCell) : .exoModule(ExoModule(rawValue: p.part) ?? .hover)
-					guard let j = bag.firstIndex(where: { $0.item == want }) else {
-						missing.append(want.name)
-						continue
-					}
-					var g: Int = 1
-					while items[g] != nil { g += 1 }
-					items[g] = bag.remove(at: j)
-					p.src = g
-				}
-			}
-			keep.append(p)
-		}
-		t.pieces = keep
-		t.items = items
-		// the parts already on the suit stay on (they are not lost by starting over)
-		for p in plan.pieces where p.kind == .core || p.kind == .module {
-			var q: SuitPiece = p
-			q.id = t.newID()
-			if p.src != 0, let st = plan.items[p.src] {
-				let g: Int = t.newGroup()
-				t.items[g] = st
-				q.src = g
-			}
-			t.pieces.append(q)
-		}
-		plan = t
-		pick = -1
-		note = missing.isEmpty ? "" : joinText("Not in your bag (left off): ", missing.joined(separator: ", "), ".")
-	}
-
-	var repairBox: some View {
-		let bill: [Item: Int] = game.suit.d.repairBill()
-		let text: String = bill.isEmpty ? "Every piece is whole." : bill.map { joinText(String($0.value), " ", $0.key.name) }.sorted().joined(separator: ", ")
-		let can: Bool = !bill.isEmpty
-		return VStack(alignment: .leading, spacing: 6) {
-			Text("MEND").font(.pixel(12)).foregroundColor(ModUI.gold)
-			Text(verbatim: text).font(.pixel(11, .semibold)).foregroundColor(Color.white)
-			if can { SmallButton(title: "MEND EVERY PIECE", color: ModUI.accent) { self.mend() } }
-		}
-		.padding(8)
-		.background(PixelBox(color: ModUI.card))
-	}
-
-	func mend() {
-		note = game.repairSuit()
-		// the plan keeps up with the mended suit (pieces it still has as they are)
-		var p: SuitDesign = plan
-		for k in p.pieces.indices { p.pieces[k].dmg = 0 }
-		plan = p
-	}
-
-	var wearRow: some View {
-		let worn: Bool = game.suit.worn
-		return HStack(spacing: 8) {
-			SmallButton(title: worn ? "TAKE OFF" : "PUT ON", color: worn ? Color(ui: 0x6A4A3A) : ModUI.accent) { self.wear() }
-		}
-	}
-
-	func wear() {
-		if game.suit.worn {
-			note = game.takeOffSuit()
-		} else {
-			if changed {
-				note = "BUILD the changes first."
-				return
-			}
-			note = game.wearSuit()
-		}
-	}
-
-	// MARK: the bill and building
-
-	var billBox: some View {
-		let b: SuitBill = game.suit.d.bill(to: plan)
-		let pay: String = b.payText()
-		var back: [String] = []
-		for (it, n) in b.back.sorted(by: { $0.key.name < $1.key.name }) { back.append(joinText(String(n), " ", it.name)) }
-		for st in b.give { back.append(st.item.name) }
-		let free: Bool = game.isCreative
-		return VStack(alignment: .leading, spacing: 3) {
-			Text(verbatim: pay.isEmpty ? "Costs nothing" : joinText("Costs: ", pay, free ? " (free in creative)" : "")).font(.pixel(11, .semibold)).foregroundColor(Color.white)
-			if !back.isEmpty { Text(verbatim: joinText("Gives back: ", back.joined(separator: ", "))).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim) }
-		}
-	}
-
-	var buildRow: some View {
-		let can: Bool = changed
-		return HStack(spacing: 8) {
-			SmallButton(title: "BUILD", color: can ? ModUI.accent : Color(ui: 0x3A3E48)) { self.build() }
-			SmallButton(title: "UNDO", color: undo.isEmpty ? Color(ui: 0x3A3E48) : Color(ui: 0x5A6270)) { self.undoLast() }
-			SmallButton(title: "START AGAIN", color: Color(ui: 0x5A6270)) { self.reset() }
-		}
-	}
-
-	func build() {
-		if !changed {
-			note = "Nothing has changed."
-			return
-		}
-		note = game.applyDesign(plan)
-		plan = game.suit.d
-		if plan.index(pick) == nil { pick = -1 }
-	}
-
-	func undoLast() {
-		guard let u = undo.popLast() else { return }
-		plan = u
-		if plan.index(pick) == nil { pick = -1 }
-	}
-
-	func reset() {
-		remember()
-		plan = game.suit.d
-		pick = -1
-		note = ""
-	}
-}
-
-// MARK: - Mod Creator: suits (materials, parts, designs)
-
-/// The SUITS tab: a mod's suit materials, its working parts (items placed on suits) and whole suit
-/// designs to start from
-struct SuitListView: View {
-	@ObservedObject var s: ModSession
-	var openMat: (String) -> Void
-	var openPart: (String) -> Void
-	var openDesign: (String) -> Void
-
-	var body: some View {
-		VStack(alignment: .leading, spacing: 8) {
-			Text("Suits are built piece by piece at an Assembly Station. A mod can add metals to build them from, working parts to put on them (each an item your recipes make), and whole designs to start from.")
-				.font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-			matSection
-			partSection
-			designSection
-		}
-	}
-
-	var matSection: some View {
-		let can: Bool = s.mod.suitMats.count < ModSuitLimits.mats
-		return ModSection(title: "MATERIALS") {
-			if can { SmallButton(title: "+ NEW MATERIAL", color: ModUI.accent) { self.addMat() } }
-			ForEach(s.mod.suitMats) { (m: ModSuitMat) in self.matRow(m) }
-		}
-	}
-
-	func matRow(_ m: ModSuitMat) -> some View {
-		let line: String = String(format: "Guards x%.1f · weight x%.1f · lasts x%.1f", m.protect, m.weight, m.durability)
-		return HStack(spacing: 8) {
-			Rectangle().fill(Color(hex: m.color & 0xFFFFFF)).frame(width: 28, height: 28).overlay(Rectangle().stroke(Color.black, lineWidth: 1))
-			VStack(alignment: .leading, spacing: 2) {
-				Text(verbatim: m.name).font(.pixel(13)).foregroundColor(Color.white)
-				Text(verbatim: line).font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
-			}
-			Spacer(minLength: 0)
-			SmallButton(title: "EDIT", color: ModUI.blue) { self.openMat(m.id) }
-			SmallButton(title: "\u{2715}", color: ModUI.red) { self.s.mod.suitMats.removeAll { $0.id == m.id }; self.s.touch() }
-		}
-	}
-
-	var partSection: some View {
-		let can: Bool = s.mod.suitParts.count < ModSuitLimits.parts
-		return ModSection(title: "WORKING PARTS", help: "Each is an item: give it a recipe on the RECIPES tab, then place it on a suit.") {
-			if can { SmallButton(title: "+ NEW PART", color: ModUI.accent) { self.addPart() } }
-			ForEach(s.mod.suitParts) { (p: ModSuitPart) in self.partRow(p) }
-		}
-	}
-
-	func partRow(_ p: ModSuitPart) -> some View {
-		let line: String = joinText("Works as a ", p.works.name.lowercased(), String(format: " · strength x%.1f · weight %.0f", p.power, p.weight))
-		return HStack(spacing: 8) {
-			Rectangle().fill(Color(hex: p.color & 0xFFFFFF)).frame(width: 28, height: 28).overlay(Rectangle().stroke(Color.black, lineWidth: 1))
-			VStack(alignment: .leading, spacing: 2) {
-				Text(verbatim: p.name).font(.pixel(13)).foregroundColor(Color.white)
-				Text(verbatim: line).font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
-			}
-			Spacer(minLength: 0)
-			SmallButton(title: "EDIT", color: ModUI.blue) { self.openPart(p.id) }
-			SmallButton(title: "\u{2715}", color: ModUI.red) { self.s.mod.suitParts.removeAll { $0.id == p.id }; self.s.touch() }
-		}
-	}
-
-	var designSection: some View {
-		ModSection(title: "DESIGNS", help: "Build a suit at an Assembly Station in a TEST world, then SAVE TO THIS MOD there. Players start from it at their own station.") {
-			if s.mod.suitDesigns.isEmpty { Text("No designs yet.").font(.pixel(11, .semibold)).foregroundColor(ModUI.dim) }
-			ForEach(s.mod.suitDesigns) { (d: ModSuitDesign) in self.designRow(d) }
-		}
-	}
-
-	func designRow(_ d: ModSuitDesign) -> some View {
-		let pic: Image = SuitPictures.shared.image(d.design, 0, -1)
-		return HStack(spacing: 8) {
-			pic.resizable().interpolation(.none).frame(width: 66, height: 51)
-			VStack(alignment: .leading, spacing: 2) {
-				Text(verbatim: d.name).font(.pixel(13)).foregroundColor(Color.white)
-				Text(verbatim: joinText(String(d.design.pieces.count), " pieces")).font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
-			}
-			Spacer(minLength: 0)
-			SmallButton(title: "EDIT", color: ModUI.blue) { self.openDesign(d.id) }
-			SmallButton(title: "\u{2715}", color: ModUI.red) { self.s.mod.suitDesigns.removeAll { $0.id == d.id }; self.s.touch() }
-		}
-	}
-
-	func addMat() {
-		var m = ModSuitMat()
-		m.id = s.mod.freshID("smat")
-		m.name = joinText("Metal ", String(s.mod.suitMats.count + 1))
-		s.mod.suitMats.append(m)
-		s.touch()
-		openMat(m.id)
-	}
-
-	func addPart() {
-		var p = ModSuitPart()
-		p.id = s.mod.freshID("spart")
-		p.name = joinText("Part ", String(s.mod.suitParts.count + 1))
-		s.mod.suitParts.append(p)
-		s.touch()
-		openPart(p.id)
-	}
-}
-
-/// Editing a mod's suit material: name, colour, its numbers, and what it is paid with
-struct SuitMatEditorView: View {
-	@ObservedObject var s: ModSession
-	let id: String
-	@State var picking: Bool = false
-
-	func b<T>(_ kp: WritableKeyPath<ModSuitMat, T>, _ d: T) -> Binding<T> { return s.bind(\ModPack.suitMats, id, kp, d) }
-	var mat: ModSuitMat { return s.mod.suitMats.first { $0.id == id } ?? ModSuitMat() }
-
-	static let numbers: [DSlider<ModSuitMat>] = [
-		DSlider(label: "Guards (iron 1)", kp: \.protect, lo: 0.2, hi: 3, sbHi: 6, step: 0.05, format: "%.2f"),
-		DSlider(label: "Weight (iron 1)", kp: \.weight, lo: 0.2, hi: 3, sbHi: 6, step: 0.05, format: "%.2f"),
-		DSlider(label: "Lasts (iron 1)", kp: \.durability, lo: 0.2, hi: 4, sbHi: 8, step: 0.05, format: "%.2f"),
-		DSlider(label: "Carries energy (iron 1)", kp: \.conduct, lo: 0.5, hi: 2, sbHi: 4, step: 0.05, format: "%.2f"),
-		DSlider(label: "Less fire, each piece", kp: \.fireCut, lo: 0, hi: 0.1, sbHi: 0.1, step: 0.01, format: "%.2f"),
-		DSlider(label: "Less cold, each piece", kp: \.coldCut, lo: 0, hi: 0.1, sbHi: 0.1, step: 0.01, format: "%.2f"),
-		DSlider(label: "Less lightning, each piece", kp: \.stormCut, lo: 0, hi: 0.1, sbHi: 0.1, step: 0.01, format: "%.2f")
-	]
-
-	var body: some View {
-		let m: ModSuitMat = mat
-		let costName: String = m.cost.map { ModPreview.name($0, s.catalog) } ?? "Iron Bar"
-		return VStack(spacing: 10) {
-			ModSection(title: m.name.uppercased()) {
-				ModTextField(label: "Name", text: b(\.name, ""), placeholder: "Starsteel")
-				ModColorRow(label: "Colour", color: b(\.color, 0x8AC8E8))
-			}
-			ModSection(title: "NUMBERS", help: "A plate's guard is 20% a layer times this; heavier suits are slower unless strong; lasting longer means more blows before a piece breaks.") {
-				sliders
-				IntSlider(label: "Drill tier (a drill of it bores up to)", value: b(\.drillTier, 4), range: 0...9)
-			}
-			ModSection(title: "PAID WITH", help: "Pieces cost units of this, by their size.") {
-				HStack(spacing: 8) {
-					Text(verbatim: costName).font(.pixel(13)).foregroundColor(Color.white)
-					Spacer(minLength: 0)
-					SmallButton(title: "CHOOSE...", color: ModUI.blue) { self.picking = true }
-					SmallButton(title: "IRON BARS") { self.b(\.cost, nil).wrappedValue = nil }
-				}
-			}
-		}
-		.modCover(s, picking ? 1 : nil) { self.picker }
-	}
-
-	var sliders: some View {
-		let sb: Bool = s.mod.sandbox
-		return VStack(alignment: .leading, spacing: 8) {
-			ForEach(0..<SuitMatEditorView.numbers.count, id: \.self) { (i: Int) in self.slider(SuitMatEditorView.numbers[i], sb) }
-		}
-	}
-
-	func slider(_ d: DSlider<ModSuitMat>, _ sb: Bool) -> StatSlider {
-		let r: ClosedRange<Double> = d.lo...(sb ? d.sbHi : d.hi)
-		return StatSlider(label: d.label, value: b(d.kp, 0), range: r, step: d.step, format: d.format)
-	}
-
-	var picker: some View {
-		ItemPickerView(catalog: s.catalog, title: "PAID WITH...", pick: { (it: Item) in
-			self.b(\.cost, nil).wrappedValue = it
-			self.picking = false
-		}, cancel: { self.picking = false })
-	}
-}
-
-/// Editing a mod's suit part: name and words, what it works as and how strongly, its weight, colour
-/// and icon
-struct SuitPartEditorView: View {
-	@ObservedObject var s: ModSession
-	let id: String
-
-	func b<T>(_ kp: WritableKeyPath<ModSuitPart, T>, _ d: T) -> Binding<T> { return s.bind(\ModPack.suitParts, id, kp, d) }
-	var part: ModSuitPart { return s.mod.suitParts.first { $0.id == id } ?? ModSuitPart() }
-
-	static let works: [String] = ExoModule.allCases.map { $0.name }
-
-	var body: some View {
-		let p: ModSuitPart = part
-		let top: Double = s.mod.sandbox ? 10 : 4
-		return VStack(spacing: 10) {
-			ModSection(title: p.name.uppercased()) {
-				ModTextField(label: "Name", text: b(\.name, ""), placeholder: "Plasma Lance")
-				ModTextField(label: "Description", text: b(\.desc, ""), placeholder: "Optional")
-			}
-			ModSection(title: "WORKS AS", help: p.works.blurb) {
-				ChoiceRows(options: SuitPartEditorView.works, selected: worksBind, columns: 4)
-				StatSlider(label: "Strength (the game's part is 1)", value: b(\.power, 1), range: 0.25...top, step: 0.05, format: "%.2f")
-				StatSlider(label: "Weight", value: b(\.weight, 2), range: 0.0...10.0, step: 0.5, format: "%.1f")
-			}
-			ModSection(title: "LOOK", help: "Its colour on the suit, and its icon (blank: the game part's icon in this colour).") {
-				ModColorRow(label: "Colour", color: b(\.color, 0x8A929E))
-				PixelEditorView(pixels: b(\.icon, ModPixels(w: 12, h: 12)), maxSide: 220, outlineDefault: true)
-			}
-		}
-	}
-
-	var worksBind: Binding<Int> {
-		let base: Binding<ExoModule> = b(\.works, .turret)
-		return Binding<Int>(get: { base.wrappedValue.rawValue }, set: { base.wrappedValue = ExoModule(rawValue: $0) ?? .turret })
-	}
-}
-
-/// A mod's saved suit design: its name and picture (designs are built at an Assembly Station)
-struct SuitDesignEditorView: View {
-	@ObservedObject var s: ModSession
-	let id: String
-
-	func b<T>(_ kp: WritableKeyPath<ModSuitDesign, T>, _ d: T) -> Binding<T> { return s.bind(\ModPack.suitDesigns, id, kp, d) }
-	var design: ModSuitDesign { return s.mod.suitDesigns.first { $0.id == id } ?? ModSuitDesign() }
-
-	var body: some View {
-		let d: ModSuitDesign = design
-		let st: ExoStats = ExoStats.of(d.design)
-		let line: String = joinText(String(d.design.pieces.count), " pieces · weight ", String(Int(st.weight.rounded())), " · guards ", String(Int((st.guardAll * 100).rounded())), "% on average")
-		let pic: Image = SuitPictures.shared.image(d.design, 0, -1)
-		return ModSection(title: d.name.uppercased(), help: "To change its pieces, build it again at an Assembly Station in a TEST world and save it over this one.") {
-			ModTextField(label: "Name", text: b(\.name, ""), placeholder: "Knight of the Deep")
-			pic.resizable().interpolation(.none).frame(width: 264, height: 204)
-			Text(verbatim: line).font(.pixel(11, .semibold)).foregroundColor(ModUI.dim)
-		}
-	}
-}
-
-extension ExoAssemblyPanel {
-	/// the mods' designs to start from
-	var modDesignBox: some View {
-		let list: [(String, SuitDesign)] = ModRuntime.shared.suitDesigns
-		let testing: Bool = !game.testMod.isEmpty
-		return VStack(alignment: .leading, spacing: 6) {
-			if !list.isEmpty {
-				Text("FROM MODS").font(.pixel(12)).foregroundColor(ModUI.gold)
-				ForEach(0..<list.count, id: \.self) { (i: Int) in
-					SmallButton(title: list[i].0.uppercased(), color: ModUI.blue) { self.loadDesign(list[i].1) }
-				}
-			}
-			if testing {
-				Text("This is a TEST world: keep this design in the mod.").font(.pixel(10, .semibold)).foregroundColor(ModUI.dim)
-				SmallButton(title: "SAVE TO THE MOD AS A DESIGN", color: ModUI.accent) { self.saveToMod() }
-			}
-		}
-	}
-
-	/// Starts from a mod's design (its working parts only where the bag has them)
-	func loadDesign(_ d0: SuitDesign) {
-		remember()
-		var t: SuitDesign = SuitDesign()
-		var bag: [Stack] = partChoices
-		var missing: [String] = []
-		for p0 in d0.pieces {
-			var p: SuitPiece = p0
-			p.dmg = 0
-			p.src = 0
-			if (p.kind == .core || p.kind == .module) && !game.isCreative {
-				let want: Item
-				if !p.modPart.isEmpty { want = .custom(p.modPart) } else if p.kind == .core { want = .exoCore(ExoCore(rawValue: p.part) ?? .sparkCell) } else { want = .exoModule(ExoModule(rawValue: p.part) ?? .hover) }
-				guard let j = bag.firstIndex(where: { $0.item == want }) else {
-					missing.append(want.name)
-					continue
-				}
-				let g: Int = t.newGroup()
-				t.items[g] = bag.remove(at: j)
-				p.src = g
-			}
-			p.id = t.newID()
-			t.pieces.append(p)
-		}
-		plan = t
-		pick = -1
-		note = missing.isEmpty ? "" : joinText("Not in your bag (left off): ", missing.joined(separator: ", "), ".")
-	}
-
-	/// Keeps the planned design in the mod being tested
-	func saveToMod() {
-		let mid: String = game.testMod
-		guard !mid.isEmpty, var p = ModStore.pack(mid) else { return }
-		if p.suitDesigns.count >= ModSuitLimits.designs {
-			note = joinText(p.name, " already holds the most suit designs a mod can.")
-			return
-		}
-		var d = ModSuitDesign()
-		d.id = p.freshID("suit")
-		d.name = joinText("Suit ", String(p.suitDesigns.count + 1))
-		var g: SuitDesign = plan
-		g.items = [:]
-		for k in g.pieces.indices {
-			g.pieces[k].src = 0
-			g.pieces[k].dmg = 0
-		}
-		d.design = g
-		p.suitDesigns.append(d)
-		note = ModStore.save(p) ? joinText("Saved as \u{201C}", d.name, "\u{201D} in ", p.name, ": rename it in the Mod Creator.") : "The mod could not be saved."
-	}
-}
-
-extension SlotView {
-	/// little squares in the corner, one in each infusion's colour
-	func infusionMarks(_ l: [Int]) -> some View {
-		let sz: CGFloat = max(3, size * 0.11)
-		return VStack {
-			HStack(spacing: 1) {
-				ForEach(0..<min(3, l.count), id: \.self) { k in
-					Rectangle().fill(Color(hex: infusionColor(l[k]))).frame(width: sz, height: sz)
-						.overlay(Rectangle().stroke(Color.black, lineWidth: 1))
-				}
-				Spacer(minLength: 0)
-			}
-			Spacer(minLength: 0)
-		}
-		.padding(2)
-		.frame(width: size, height: size)
-	}
-}
-
-extension WorldRenderer {
-	/// The suit's laser beams this frame: a bright core in a soft glow
-	static func drawSuitBeams(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
-		if g.suitBeams.isEmpty { return }
-		for b in g.suitBeams {
-			var p: Path = Path()
-			p.move(to: CGPoint(x: v.sx(b.0), y: v.sy(b.1)))
-			p.addLine(to: CGPoint(x: v.sx(b.2), y: v.sy(b.3)))
-			ctx.stroke(p, with: .color(Color(hex: 0xFF4A6A, alpha: 0.35)), lineWidth: CGFloat(max(3.0, v.tp * 0.2)))
-			ctx.stroke(p, with: .color(Color(hex: 0xFFD0DA, alpha: 0.95)), lineWidth: CGFloat(max(1.0, v.tp * 0.06)))
-		}
-	}
-
-	/// What a potion is doing to a creature, kept faint: a blue film while slowed, rising green bubbles
-	/// while poisoned, a grey shade while weakened, pink motes while it regenerates
-	static func drawMobStatus(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D, _ m: Mob) {
-		if m.slowT > 0 {
-			fillRect(&ctx, v.rect(m.b.left, m.b.top + m.b.h * 0.55, m.b.w, m.b.h * 0.45), Color(hex: 0x7AB8F0, alpha: 0.22))
-		}
-		if m.weakT > 0 {
-			fillRect(&ctx, v.rect(m.b.left, m.b.top, m.b.w, m.b.h * 0.5), Color(hex: 0x6A6478, alpha: 0.2))
-		}
-		if m.poisonT > 0 {
-			let sz: Double = max(3.0, v.tp * 0.12)
-			for k in 0..<2 {
-				let ph: Double = (g.clock * 0.9 + Double(k) * 0.5 + Double(m.id % 7) * 0.13).truncatingRemainder(dividingBy: 1.0)
-				let bx: Double = m.b.x + (k == 0 ? -0.25 : 0.25) * m.b.w
-				let by: Double = m.b.top + 0.2 - ph * 0.8
-				fillRect(&ctx, mkRect(v.sx(bx) - sz * 0.5, v.sy(by) - sz * 0.5, sz, sz), Color(hex: 0x8AE04A, alpha: 0.8 * (1.0 - ph)))
-			}
-		}
-		if m.regenT > 0 {
-			let sz: Double = max(3.0, v.tp * 0.1)
-			let ph: Double = (g.clock * 0.7 + Double(m.id % 5) * 0.2).truncatingRemainder(dividingBy: 1.0)
-			fillRect(&ctx, mkRect(v.sx(m.b.x) - sz * 0.5, v.sy(m.b.top - ph * 0.6) - sz * 0.5, sz, sz), Color(hex: 0xF07AB8, alpha: 0.8 * (1.0 - ph)))
+	/// Lets go of a coupling at a coupler (both vehicles forget it; they wait a moment before linking again)
+	func uncouple(_ v: Vehicle, _ c: PartCell) {
+		guard let i = v.links.firstIndex(where: { $0.cell == c }) else { return }
+		let l: VLink = v.links[i]
+		v.links.remove(at: i)
+		v.noCoupleT = Rails.wait
+		if let o = vehicleByID(l.other) {
+			o.links.removeAll { $0.other == v.id && $0.cell == l.oc }
+			o.noCoupleT = Rails.wait
 		}
 	}
 }

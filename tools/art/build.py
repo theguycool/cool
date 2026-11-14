@@ -109,7 +109,7 @@ def inject(path, marker, lines, indent="\t\t"):
 
 def game_files():
     """The game's parts, PixelRealm1.swift onwards (the art sheet is in one of them)"""
-    return sorted(glob.glob(os.path.join(ROOT, "PixelRealm[0-9].swift")))
+    return sorted(glob.glob(os.path.join(ROOT, "PixelRealm[0-9]*.swift")))
 
 
 def pack(write=True):

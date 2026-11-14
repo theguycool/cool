@@ -1,15 +1,2019 @@
-// PIXEL REALM v2, part 2 of 8: the Umbral Realm, the world, light and physics, bodies on vehicles, flowing liquids, the land painter,
-// the hand-drawn pictures kept as text, creatures and their kinds, vehicles, the game state, the player,
-// input and tools.
-// The game is eight files that go together in one Swift Playgrounds app: PixelRealm1.swift to
-// PixelRealm8.swift. Each goes in its own file in the app (delete ContentView.swift; MyApp.swift can
-// hold part 1). The hand-drawn pictures are kept as text in part 2 (a01_artsheet).
+// PIXEL REALM v2, part 2 of 10: villages and ruins, automation (turrets, the remote control, signals), the Umbral Realm, the world, light and
+// physics, bodies on vehicles, flowing liquids and the land painter.
+// The game is 10 files that go together in one Swift Playgrounds app: PixelRealm1.swift to
+// PixelRealm10.swift. Each goes in its own file in the app (delete ContentView.swift; MyApp.swift can
+// hold part 1). The hand-drawn pictures are kept as text in part 3 (a01_artsheet).
 
 import SwiftUI
 import AVFoundation
 #if canImport(UIKit)
 import UIKit
 #endif
+
+// ===== p08a_villages =====
+
+// MARK: - Structures: villages
+
+struct Palette {
+	var wall: Tile
+	var post: Tile
+	var roof: Tile
+	var floor: Tile
+	var path: Tile
+	/// free-standing uprights (porch, smithy, stall and well posts): trunk tiles, which can be walked
+	/// through, so a building never walls off the way along the ground
+	var beam: Tile
+	/// see WorldGen.passableStructures
+	var passable: Bool = true
+}
+
+func villagePalette(_ b: Biome, passable: Bool) -> Palette {
+	var p: Palette = villagePaletteBase(b)
+	p.passable = passable
+	if !passable { p.beam = p.post }
+	return p
+}
+
+func villagePaletteBase(_ b: Biome) -> Palette {
+	switch b {
+	case .desert: return Palette(wall: .sandstone, post: .sandstone, roof: .sandstone, floor: .sandstone, path: .sandstone, beam: .palmLog)
+	case .tundra: return Palette(wall: .planks, post: .log, roof: .snow, floor: .planks, path: .stone, beam: .log)
+	case .savanna: return Palette(wall: .planks, post: .log, roof: .hay, floor: .planks, path: .dirt, beam: .log)
+	case .jungle: return Palette(wall: .planks, post: .jungleLog, roof: .hay, floor: .planks, path: .mud, beam: .jungleLog)
+	default: return Palette(wall: .planks, post: .log, roof: .brick, floor: .planks, path: .dirt, beam: .log)
+	}
+}
+
+func buildHouse(_ ch: Chunk, _ x: Int, _ gy: Int, _ w: Int, _ ht: Int, _ pal: Palette, _ seed: UInt64) {
+	ch.fill(x - 1, gy - ht - w / 2 - 3, x + w, gy - 1, .air)
+	ch.fill(x, gy, x + w - 1, gy, pal.floor)
+	for yy in (gy - ht)...(gy - 1) {
+		ch.put(x, yy, pal.wall)
+		ch.put(x + w - 1, yy, pal.wall)
+	}
+	ch.put(x, gy - 1, pal.post); ch.put(x, gy - ht, pal.post)
+	ch.put(x + w - 1, gy - 1, pal.post); ch.put(x + w - 1, gy - ht, pal.post)
+	// a door in each end wall (the way along the ground always goes through a house), and a
+	// window above one of them
+	let doorLeft: Bool = hash2(x, 1, seed) < 0.5
+	let wx: Int = doorLeft ? x + w - 1 : x
+	if pal.passable {
+		for dx in [x, x + w - 1] { ch.put(dx, gy - 1, .doorClosed); ch.put(dx, gy - 2, .doorClosed) }
+		if ht >= 4 { ch.put(wx, gy - 3, .glass) }
+	} else {
+		let dx: Int = doorLeft ? x : x + w - 1
+		ch.put(dx, gy - 1, .doorClosed); ch.put(dx, gy - 2, .doorClosed)
+		ch.put(wx, gy - 3, .glass)
+	}
+	// background wall inside the house
+	let wk: UInt8 = pal.wall == .sandstone ? 7 : 5
+	ch.fillWall(x + 1, gy - ht, x + w - 2, gy - 1, wk)
+	// gabled roof
+	var k: Int = 0
+	while x - 1 + k <= x + w - k {
+		let yy: Int = gy - ht - 1 - k
+		for xx in (x - 1 + k)...(x + w - k) { ch.put(xx, yy, pal.roof) }
+		k += 1
+	}
+	ch.fillWall(x, gy - ht, x + w - 1, gy - ht, wk)
+	// interior
+	ch.put(x + w / 2, gy - ht + 1, .lantern)
+	let r: Double = hash2(x, 2, seed)
+	if r < 0.5 {
+		ch.put(x + 2, gy - 1, .workbench)
+		ch.put(x + w - 3, gy - 1, .chest)
+	} else {
+		ch.put(x + 2, gy - 1, .chest)
+		ch.put(x + w - 3, gy - 1, .furnace)
+	}
+	ch.put(x + w / 2, gy - 1, .platform)
+}
+
+func buildWell(_ ch: Chunk, _ x: Int, _ gy: Int, _ pal: Palette) {
+	ch.fill(x - 1, gy - 6, x + 5, gy - 1, .air)
+	ch.fill(x + 1, gy, x + 3, gy + 3, .water)
+	ch.fill(x, gy - 1, x, gy - 1, .brick)
+	ch.fill(x + 4, gy - 1, x + 4, gy - 1, .brick)
+	ch.fill(x, gy, x, gy + 3, .brick)
+	ch.fill(x + 4, gy, x + 4, gy + 3, .brick)
+	ch.fill(x, gy + 4, x + 4, gy + 4, .brick)
+	ch.fill(x, gy - 4, x, gy - 2, pal.beam)
+	ch.fill(x + 4, gy - 4, x + 4, gy - 2, pal.beam)
+	// a plank cover level with the lip, so the way through the village walks straight over the well
+	// (drop through it to reach the water)
+	if pal.passable { ch.fill(x + 1, gy - 1, x + 3, gy - 1, .platform) }
+	ch.fill(x - 1, gy - 5, x + 5, gy - 5, pal.wall)
+	ch.fill(x, gy - 6, x + 4, gy - 6, pal.roof)
+}
+
+func buildFarm(_ ch: Chunk, _ x: Int, _ gy: Int, _ w: Int, _ seed: UInt64) {
+	ch.fill(x - 1, gy - 4, x + w, gy - 1, .air)
+	for i in 0..<w {
+		let xx: Int = x + i
+		if i % 5 == 2 {
+			ch.put(xx, gy, .water)
+			ch.put(xx, gy + 1, .brick)
+		} else {
+			ch.put(xx, gy, .farmland)
+			let wheat: Bool = hash2(xx, 3, seed) < 0.6
+			ch.put(xx, gy - 1, wheat ? .wheat3 : .carrot3)
+		}
+	}
+	ch.put(x - 1, gy - 1, .log); ch.put(x + w, gy - 1, .log)
+	ch.put(x - 1, gy - 2, .lantern)
+}
+
+func buildSmithy(_ ch: Chunk, _ x: Int, _ gy: Int, _ w: Int, _ pal: Palette) {
+	ch.fill(x - 1, gy - 8, x + w, gy - 1, .air)
+	ch.fill(x, gy, x + w - 1, gy, .stone)
+	ch.fill(x, gy - 4, x, gy - 1, pal.beam)
+	ch.fill(x + w - 1, gy - 4, x + w - 1, gy - 1, pal.beam)
+	ch.fill(x - 1, gy - 5, x + w, gy - 5, pal.roof == .brick ? .planks : pal.roof)
+	ch.put(x + 2, gy - 1, .furnace)
+	ch.put(x + 4, gy - 1, .workbench)
+	ch.fillWall(x, gy - 4, x + w - 1, gy - 1, 5)
+	ch.put(x + w - 3, gy - 1, .chest)
+	ch.put(x + w / 2, gy - 4, .lantern)
+	ch.put(x + 1, gy - 1, .hay)
+}
+
+func buildStall(_ ch: Chunk, _ x: Int, _ gy: Int, _ w: Int, _ pal: Palette) {
+	ch.fill(x - 1, gy - 7, x + w, gy - 1, .air)
+	ch.fill(x, gy - 3, x, gy - 1, pal.beam)
+	ch.fill(x + w - 1, gy - 3, x + w - 1, gy - 1, pal.beam)
+	ch.fill(x - 1, gy - 4, x + w, gy - 4, pal.roof == .brick ? .hay : pal.roof)
+	ch.put(x + 1, gy - 1, .hay)
+	ch.put(x + 2, gy - 1, .chest)
+	ch.put(x + w - 2, gy - 1, .hay)
+}
+
+func buildTower(_ ch: Chunk, _ x: Int, _ gy: Int, _ w: Int, _ pal: Palette) {
+	let ht: Int = 14
+	ch.fill(x - 1, gy - ht - 4, x + w, gy - 1, .air)
+	ch.fill(x, gy, x + w - 1, gy, .brick)
+	ch.fill(x, gy - ht, x, gy - 1, .brick)
+	ch.fill(x + w - 1, gy - ht, x + w - 1, gy - 1, .brick)
+	ch.fill(x - 1, gy - ht - 1, x + w, gy - ht - 1, .brick)
+	var cr: Int = x - 1
+	while cr <= x + w {
+		ch.put(cr, gy - ht - 2, .brick)
+		cr += 2
+	}
+	// zig-zag platforms to climb
+	var yy: Int = gy - 2
+	var left: Bool = true
+	while yy > gy - ht {
+		if left { ch.fill(x + 1, yy, x + w - 3, yy, .platform) } else { ch.fill(x + 2, yy, x + w - 2, yy, .platform) }
+		left = !left
+		yy -= 2
+	}
+	ch.put(x, gy - 1, .doorClosed); ch.put(x, gy - 2, .doorClosed)
+	if pal.passable { ch.put(x + w - 1, gy - 1, .doorClosed); ch.put(x + w - 1, gy - 2, .doorClosed) }
+	ch.fillWall(x + 1, gy - ht, x + w - 2, gy - 1, 6)
+	ch.put(x + w / 2, gy - ht + 1, .lantern)
+	ch.put(x + w / 2, gy - 1, .torch)
+	ch.put(x + 1, gy - ht, .chest)
+}
+
+func buildLamp(_ ch: Chunk, _ x: Int, _ gy: Int) {
+	ch.fill(x, gy - 3, x, gy - 1, .log)
+	ch.put(x, gy - 4, .lantern)
+}
+
+func buildVillage(_ g: WorldGen, _ ch: Chunk, _ v: VillageSite) {
+	let x0: Int = ch.x0
+	if v.x + v.halfW + 14 < x0 || v.x - v.halfW - 14 > x0 + chunkW { return }
+	var rng = RNG(v.seed)
+	let gy: Int = v.ground
+	let pal: Palette = villagePalette(v.biome, passable: g.passableStructures)
+	let left: Int = v.x - v.halfW
+	let right: Int = v.x + v.halfW
+	ch.fill(left - 3, gy - 24, right + 3, gy - 1, .air)
+	for x in (left - 1)...(right + 1) {
+		ch.put(x, gy, pal.path)
+		if v.biome == .desert { ch.put(x, gy + 1, .sandstone) } else { ch.put(x, gy + 1, .dirt) }
+	}
+	buildWell(ch, v.x - 2, gy, pal)
+	var haveSmithy: Bool = false
+	var haveTower: Bool = false
+	var haveFarm: Bool = false
+	for side in 0..<2 {
+		let dir: Int = side == 0 ? -1 : 1
+		var cursor: Int = v.x + dir * 7
+		var guardCount: Int = 0
+		while abs(cursor - v.x) < v.halfW - 4 && guardCount < 12 {
+			guardCount += 1
+			let r: Double = rng.double()
+			var kind: Int = 0
+			if r < 0.28 { kind = 0 } else if r < 0.48 { kind = 1 } else if r < 0.62 { kind = 3 } else if r < 0.74 { kind = 4 } else if r < 0.86 { kind = 5 } else { kind = 6 }
+			if kind == 4 && haveSmithy { kind = 1 }
+			if kind == 6 && haveTower { kind = 0 }
+			if kind == 3 && haveFarm && side == 0 { kind = 1 }
+			var w: Int = 9
+			switch kind {
+			case 0: w = 9
+			case 1: w = 7
+			case 3: w = 12
+			case 4: w = 9
+			case 5: w = 6
+			default: w = 7
+			}
+			let bx: Int = dir < 0 ? cursor - w + 1 : cursor
+			if abs(bx - v.x) + w > v.halfW + 2 { break }
+			switch kind {
+			case 0: buildHouse(ch, bx, gy, w, 5, pal, rng.next())
+			case 1: buildHouse(ch, bx, gy, w, 4, pal, rng.next())
+			case 3: buildFarm(ch, bx, gy, w, rng.next()); haveFarm = true
+			case 4: buildSmithy(ch, bx, gy, w, pal); haveSmithy = true
+			case 5: buildStall(ch, bx, gy, w, pal)
+			default: buildTower(ch, bx, gy, w, pal); haveTower = true
+			}
+			let gap: Int = 2 + rng.int(3)
+			if gap >= 3 {
+				let lx: Int = dir < 0 ? bx - 1 - gap / 2 : bx + w + gap / 2
+				buildLamp(ch, lx, gy)
+			}
+			cursor = dir < 0 ? bx - gap - 1 : bx + w + gap
+		}
+	}
+	// flowers & hay near the well
+	ch.put(v.x - 4, gy - 1, .flowerR)
+	ch.put(v.x + 4, gy - 1, .flowerY)
+}
+
+// ===== p08b_ruins =====
+
+// MARK: - Structures: ruins, lairs, portal chamber
+
+func groundAtX(_ g: WorldGen, _ cols: [Col], _ off: Int, _ x: Int) -> Int {
+	let i: Int = x - off
+	if i >= 0 && i < cols.count { return cols[i].h }
+	return g.col(x).h
+}
+
+/// Level the ground between xa...xb to row gy and clear the air above
+func padGround(_ g: WorldGen, _ ch: Chunk, _ cols: [Col], _ off: Int, _ xa: Int, _ xb: Int, _ gy: Int, _ clearH: Int) {
+	for x in xa...xb {
+		if x < ch.x0 || x >= ch.x0 + chunkW { continue }
+		let h: Int = groundAtX(g, cols, off, x)
+		if h > gy { ch.fill(x, gy, x, h - 1, .dirt) }
+		if h < gy { ch.fill(x, h, x, gy - 1, .air) }
+		ch.fill(x, gy - clearH, x, gy - 1, .air)
+		ch.put(x, gy, .dirt)
+	}
+}
+
+func decay(_ ch: Chunk, _ xa: Int, _ ya: Int, _ xb: Int, _ yb: Int, _ p: Double, _ seed: UInt64) {
+	for x in xa...xb {
+		if x < ch.x0 || x >= ch.x0 + chunkW { continue }
+		for y in ya...yb {
+			let t: Tile = ch.at(x, y)
+			if !t.solid { continue }
+			if hash2(x, y, seed) < p { ch.put(x, y, .air) }
+			else if hash2(x, y, seed &+ 5) < 0.18 {
+				if t == .planks || t == .log { ch.put(x, y, .mossBrick) }
+			}
+		}
+	}
+}
+
+func scatterCobwebs(_ ch: Chunk, _ xa: Int, _ ya: Int, _ xb: Int, _ yb: Int, _ p: Double, _ seed: UInt64) {
+	for x in xa...xb {
+		for y in ya...yb {
+			if ch.at(x, y) == .air && hash2(x, y, seed) < p { ch.putIfAir(x, y, .cobweb) }
+		}
+	}
+}
+
+func buildRuinHouse(_ g: WorldGen, _ ch: Chunk, _ cols: [Col], _ off: Int, _ s: RareSite) {
+	let w: Int = 11
+	let x: Int = s.x - w / 2
+	let gy: Int = groundAtX(g, cols, off, s.x)
+	padGround(g, ch, cols, off, x - 2, x + w + 2, gy, 12)
+	buildHouse(ch, x, gy, w, 5, villagePalette(.plains, passable: g.passableStructures), s.seed)
+	decay(ch, x - 1, gy - 12, x + w, gy - 1, 0.28, s.seed &+ 1)
+	scatterCobwebs(ch, x + 1, gy - 5, x + w - 2, gy - 1, 0.18, s.seed &+ 2)
+	for k in 0..<4 { ch.putIfAir(x + 2 + k * 2, gy - 1, hash2(k, 1, s.seed) < 0.5 ? .tallGrass : .flowerY) }
+	// cellar reached through a hatch in the floor, with a spike trap
+	let hx: Int = x + w / 2
+	ch.fill(x + 1, gy + 1, x + w - 2, gy + 7, .mossBrick)
+	ch.fill(x + 2, gy + 2, x + w - 3, gy + 6, .air)
+	ch.put(hx, gy, .air); ch.put(hx, gy + 1, .air)
+	ch.fill(hx - 1, gy + 6, hx + 1, gy + 6, .spikes)
+	ch.put(x + 2, gy + 6, .chest)
+	ch.put(x + w - 3, gy + 6, .chest)
+	// the way back up: a ladder under a platform in the floor
+	if g.passableStructures {
+		ch.put(x + 3, gy, .platform)
+		ch.fill(x + 3, gy + 1, x + 3, gy + 6, .ladder)
+	}
+	ch.put(x + w / 2 + 2, gy + 2, .lantern)
+	ch.fill(x + 2, gy + 7, x + w - 3, gy + 7, .mossBrick)
+}
+
+func buildRuinTower(_ g: WorldGen, _ ch: Chunk, _ cols: [Col], _ off: Int, _ s: RareSite) {
+	let w: Int = 9
+	let x: Int = s.x - w / 2
+	let gy: Int = groundAtX(g, cols, off, s.x)
+	let ht: Int = 14 + Int(hash2(1, 1, s.seed) * 6.0)
+	padGround(g, ch, cols, off, x - 3, x + w + 2, gy, ht + 4)
+	ch.fill(x, gy - ht, x + w - 1, gy, .mossBrick)
+	ch.fill(x + 1, gy - ht + 1, x + w - 2, gy - 1, .air)
+	ch.fill(x, gy, x + w - 1, gy, .brick)
+	var yy: Int = gy - 3
+	var odd: Bool = true
+	while yy > gy - ht {
+		if odd { ch.fill(x + 1, yy, x + w - 4, yy, .platform) } else { ch.fill(x + 3, yy, x + w - 2, yy, .platform) }
+		odd = !odd
+		yy -= 3
+	}
+	if g.passableStructures {
+		for dx in [x, x + w - 1] { ch.fill(dx, gy - 3, dx, gy - 1, .air) }
+	} else {
+		ch.put(x, gy - 1, .air); ch.put(x, gy - 2, .air); ch.put(x, gy - 3, .air)
+	}
+	ch.put(x + w - 1, gy - ht + 4, .glass)
+	ch.put(x + w / 2, gy - 1, .chest)
+	ch.put(x + 2, gy - 1, .torch)
+	for k in 0..<ht {
+		let frac: Double = Double(k) / Double(ht)
+		decay(ch, x - 1, gy - k, x + w, gy - k, 0.04 + frac * 0.55, s.seed &+ UInt64(k))
+	}
+	scatterCobwebs(ch, x + 1, gy - ht, x + w - 2, gy - 4, 0.08, s.seed &+ 9)
+	for dx in -2...(w + 1) {
+		if hash2(dx, 3, s.seed) < 0.5 { ch.putIfAir(x + dx, gy - 1, .mossBrick) }
+		if hash2(dx, 4, s.seed) < 0.35 { ch.putIfAir(x + dx, gy - 2, .leaves) }
+	}
+}
+
+func buildRuinFort(_ g: WorldGen, _ ch: Chunk, _ cols: [Col], _ off: Int, _ s: RareSite) {
+	let x: Int = s.x - 17
+	let gy: Int = groundAtX(g, cols, off, s.x)
+	padGround(g, ch, cols, off, x - 2, x + 36, gy, 14)
+	// left wall block and right wall block with a collapsed gate between
+	ch.fill(x, gy - 8, x + 9, gy, .brick)
+	ch.fill(x + 1, gy - 7, x + 8, gy - 1, .air)
+	ch.fill(x + 25, gy - 6, x + 34, gy, .brick)
+	ch.fill(x + 26, gy - 5, x + 33, gy - 1, .air)
+	var cx: Int = x
+	while cx <= x + 9 { ch.put(cx, gy - 9, .brick); cx += 2 }
+	cx = x + 25
+	while cx <= x + 34 { ch.put(cx, gy - 7, .brick); cx += 2 }
+	// low connecting wall
+	ch.fill(x + 10, gy - 2, x + 24, gy, .mossBrick)
+	for k in 0...6 { ch.fill(x + 11 + k * 2, gy - 3, x + 11 + k * 2, gy - 3, .mossBrick) }
+	// rubble mounds (no higher than a jump where structures are passable)
+	let capH: Int = g.passableStructures ? 3 : 4
+	for dx in 8...14 { let hgt: Int = min(capH, max(0, 4 - abs(dx - 11))); ch.fill(x + dx, gy - hgt, x + dx, gy - 1, .stone) }
+	for dx in 22...28 { let hgt: Int = max(0, 3 - abs(dx - 25)); ch.fill(x + dx, gy - hgt, x + dx, gy - 1, .brick) }
+	// broken gateways through each wall block, so the fort can be walked through
+	if g.passableStructures { for wx in [x, x + 9, x + 25, x + 34] { ch.fill(wx, gy - 3, wx, gy - 1, .air) } }
+	// courtyard camp inside
+	ch.put(x + 17, gy - 1, .campfire)
+	ch.put(x + 20, gy - 1, .chest)
+	ch.put(x + 4, gy - 1, .chest)
+	ch.put(x + 4, gy - 6, .lantern)
+	ch.put(x + 29, gy - 1, .hay)
+	decay(ch, x - 1, gy - 10, x + 35, gy - 2, 0.30, s.seed)
+	scatterCobwebs(ch, x + 1, gy - 7, x + 34, gy - 2, 0.05, s.seed &+ 3)
+}
+
+func buildCamp(_ g: WorldGen, _ ch: Chunk, _ cols: [Col], _ off: Int, _ s: RareSite) {
+	let x: Int = s.x - 8
+	let gy: Int = groundAtX(g, cols, off, s.x)
+	padGround(g, ch, cols, off, x - 2, x + 18, gy, 8)
+	// tent
+	var k: Int = 0
+	while k < 5 {
+		ch.put(x + k, gy - 1 - k, .planks)
+		ch.put(x + 9 - k, gy - 1 - k, .planks)
+		k += 1
+	}
+	ch.put(x + 4, gy - 5, .planks); ch.put(x + 5, gy - 5, .planks)
+	ch.fill(x + 1, gy - 1, x + 8, gy - 1, .air)
+	// the tent flap is open on the fire side
+	if g.passableStructures { ch.put(x + 9, gy - 1, .air); ch.put(x + 8, gy - 2, .air) }
+	ch.put(x + 3, gy - 1, .hay)
+	ch.put(x + 7, gy - 1, .chest)
+	ch.put(x + 14, gy - 1, .campfire)
+	ch.put(x + 12, gy - 1, .log)
+	ch.put(x + 16, gy - 1, .log)
+	ch.put(x + 13, gy - 2, .fossil)
+	ch.put(x + 17, gy - 1, .deadBush)
+	scatterCobwebs(ch, x + 1, gy - 4, x + 8, gy - 2, 0.1, s.seed)
+}
+
+func buildOvergrown(_ g: WorldGen, _ ch: Chunk, _ cols: [Col], _ off: Int, _ s: RareSite) {
+	let x: Int = s.x - 12
+	let gy: Int = groundAtX(g, cols, off, s.x)
+	padGround(g, ch, cols, off, x - 2, x + 26, gy, 12)
+	ch.fill(x, gy, x + 24, gy, .mossBrick)
+	for p in 0..<5 {
+		let px: Int = x + 1 + p * 6
+		let ph: Int = 4 + Int(hash2(p, 1, s.seed) * 6.0)
+		if g.passableStructures {
+			// the shafts are crumbled to their back walls; their capitals still stand overhead
+			ch.fillWall(px, gy - ph + 1, px + 1, gy - 1, 6)
+			ch.fill(px, gy - ph, px + 1, gy - ph, .mossBrick)
+			if hash2(p, 3, s.seed) < 0.5 { ch.put(px, gy - 1, .mossBrick) }
+		} else {
+			ch.fill(px, gy - ph, px + 1, gy - 1, .mossBrick)
+		}
+		if hash2(p, 2, s.seed) < 0.6 && p < 4 { ch.fill(px + 2, gy - ph, px + 6, gy - ph, .mossBrick) }
+		for lv in 0..<6 {
+			let lx: Int = px - 1 + Int(hash2(lv, p, s.seed) * 4.0)
+			ch.putIfAir(lx, gy - ph - 1 - Int(hash2(p, lv, s.seed &+ 1) * 2.0), .leaves)
+		}
+	}
+	ch.put(x + 12, gy - 1, .chest)
+	ch.put(x + 11, gy - 1, .flowerR)
+	ch.put(x + 13, gy - 1, .flowerY)
+	ch.put(x + 9, gy - 1, .reed)
+	decay(ch, x, gy - 12, x + 24, gy - 2, 0.22, s.seed &+ 7)
+	for dx in 0...24 { if hash2(dx, 8, s.seed) < 0.5 { ch.putIfAir(x + dx, gy - 1, hash2(dx, 9, s.seed) < 0.5 ? .tallGrass : .mushroom) } }
+}
+
+func buildBunker(_ g: WorldGen, _ ch: Chunk, _ cols: [Col], _ off: Int, _ s: RareSite) {
+	let gy: Int = groundAtX(g, cols, off, s.x)
+	let y0: Int = gy + 60 + Int(hash2(2, 2, s.seed) * 90.0)
+	let x: Int = s.x - 14
+	ch.fill(x, y0 - 1, x + 28, y0 + 11, .mossBrick)
+	ch.fill(x + 1, y0, x + 27, y0 + 9, .air)
+	ch.fill(x, y0 + 10, x + 28, y0 + 10, .brick)
+	// inner divider with a cracked (hidden) door
+	ch.fill(x + 18, y0, x + 18, y0 + 9, .brick)
+	ch.fill(x + 18, y0 + 7, x + 18, y0 + 9, .crackedBrick)
+	// corridor with traps
+	for k in 0..<5 { ch.put(x + 4 + k * 3, y0 + 9, .spikes) }
+	ch.put(x + 2, y0 + 9, .chest)
+	ch.put(x + 14, y0 + 8, .torch)
+	ch.put(x + 7, y0 + 1, .lantern)
+	// treasure room
+	ch.put(x + 21, y0 + 9, .chest)
+	ch.put(x + 25, y0 + 9, .chest)
+	ch.put(x + 23, y0 + 1, .lantern)
+	ch.put(x + 20, y0 + 9, .torch)
+	ch.put(x + 22, y0 + 9, .glowCrystal)
+	scatterCobwebs(ch, x + 1, y0, x + 17, y0 + 4, 0.1, s.seed)
+}
+
+func buildRare(_ g: WorldGen, _ ch: Chunk, _ cols: [Col], _ off: Int, _ s: RareSite) {
+	switch s.kind {
+	case .house: buildRuinHouse(g, ch, cols, off, s)
+	case .tower: buildRuinTower(g, ch, cols, off, s)
+	case .fort: buildRuinFort(g, ch, cols, off, s)
+	case .camp: buildCamp(g, ch, cols, off, s)
+	case .overgrown: buildOvergrown(g, ch, cols, off, s)
+	case .bunker: buildBunker(g, ch, cols, off, s)
+	}
+}
+
+// MARK: lairs
+
+/// Row the boss stands on: the floor of the pit, or the ground of a flat world's open arena
+func lairFloorRow(_ g: WorldGen) -> Int { return g.options.flat ? WorldGen.flatSurface : WorldGen.sea - 10 + 9 }
+
+func buildLair(_ g: WorldGen, _ ch: Chunk, _ L: LairInfo) {
+	if g.options.flat {
+		buildFlatLair(g, ch, L)
+		return
+	}
+	let gy: Int = WorldGen.sea - 10
+	let cx: Int = L.cx
+	let kraw: UInt64 = UInt64(L.kind.rawValue + 1)
+	let kmul: UInt64 = kraw &* 7777
+	let seed: UInt64 = g.seed &+ kmul
+	let isRex: Bool = L.kind == .rex
+	for x in (cx - 52)...(cx + 52) {
+		if x < ch.x0 || x >= ch.x0 + chunkW { continue }
+		let d: Int = abs(x - cx)
+		var depth: Int = 0
+		if d <= 30 { depth = 9 } else if d <= 39 { depth = 9 - (d - 30) }
+		ch.fill(x, gy - 22, x, gy - 1, .air)
+		if depth > 0 { ch.fill(x, gy, x, gy + depth - 1, .air) }
+		// floor surface of the pit
+		if depth > 0 {
+			ch.put(x, gy + depth, isRex ? .mud : .stone)
+			ch.put(x, gy + depth + 1, isRex ? .mud : .stone)
+		} else {
+			ch.put(x, gy, isRex ? .jungleGrass : .grass)
+		}
+		let fy: Int = gy + depth - 1
+		if depth >= 8 && hash2(x, 1, seed) < 0.09 { ch.put(x, fy, .fossil) }
+		if depth >= 8 && hash2(x, 2, seed) < 0.05 { ch.put(x, fy - 1, .cobweb) }
+		if depth == 0 && hash2(x, 3, seed) < 0.12 { ch.put(x, gy - 1, isRex ? .tallGrass : .deadBush) }
+	}
+	// rim decorations: marker stones (low enough to jump where structures are passable; a full jump
+	// clears three blocks)
+	let rimH: Int = g.passableStructures ? 2 : 4
+	for side in [-1, 1] {
+		let rx: Int = cx + side * 44
+		ch.fill(rx, gy - rimH, rx, gy - 1, .stone)
+		ch.put(rx, gy - rimH - 1, .torch)
+		let rx2: Int = cx + side * 36
+		ch.put(rx2, gy - 1, .torch)
+	}
+	if isRex {
+		// the half-buried ribs of something enormous: two-block stubs curling over at the top, low
+		// enough that the nest floor can still be crossed with a jump
+		for side in [-1, 1] {
+			for rb in 0..<3 {
+				let bx: Int = cx + side * (14 + rb * 8)
+				if g.passableStructures {
+					ch.fill(bx, gy + 7, bx, gy + 8, .fossil)
+					ch.put(bx - side, gy + 7, .fossil)
+				} else {
+					// older worlds: full ribs arching over the nest
+					let top: Int = gy + 9 - 10 - rb
+					ch.fill(bx, top, bx, gy + 8, .fossil)
+					ch.put(bx - side, top - 1, .fossil)
+					ch.put(bx - 2 * side, top - 1, .fossil)
+				}
+			}
+		}
+		for k in 0..<10 { ch.putIfAir(cx - 24 + k * 5, gy + 7, .jungleLeaves) }
+	} else {
+		ch.fill(cx - 18, gy + 6, cx - 18, gy + 8, .stone)
+		ch.fill(cx + 18, gy + 6, cx + 18, gy + 8, .stone)
+		ch.put(cx - 18, gy + 5, .torch)
+		ch.put(cx + 18, gy + 5, .torch)
+	}
+	// treasure chest at the far edge of the pit floor
+	ch.put(cx + (isRex ? -27 : 27), gy + 8, .chest)
+}
+
+/// A flat world's lair: an open arena on the surface instead of a pit, paved and ringed with low
+/// marker stones, so the ground stays level. The boss fights on the surface (see lairFloorRow).
+func buildFlatLair(_ g: WorldGen, _ ch: Chunk, _ L: LairInfo) {
+	let gy: Int = WorldGen.flatSurface
+	let cx: Int = L.cx
+	let kraw: UInt64 = UInt64(L.kind.rawValue + 1)
+	let seed: UInt64 = g.seed &+ (kraw &* 7777)
+	let isRex: Bool = L.kind == .rex
+	for x in (cx - 52)...(cx + 52) {
+		if x < ch.x0 || x >= ch.x0 + chunkW { continue }
+		let d: Int = abs(x - cx)
+		ch.fill(x, gy - 22, x, gy - 1, .air)
+		if d <= 39 {
+			// the trampled arena floor
+			let worn: Bool = hash2(x, 4, seed) < (isRex ? 0.25 : 0.35)
+			ch.put(x, gy, isRex ? (worn ? .mossGrass : .mud) : (worn ? .crackedBrick : .stone))
+			ch.put(x, gy + 1, isRex ? .mud : .stone)
+			if d >= 4 && hash2(x, 1, seed) < 0.07 { ch.put(x, gy, .fossil) }
+		} else {
+			ch.put(x, gy, isRex ? .jungleGrass : .grass)
+			if hash2(x, 3, seed) < 0.12 { ch.put(x, gy - 1, isRex ? .tallGrass : .deadBush) }
+		}
+	}
+	for side in [-1, 1] {
+		let rx: Int = cx + side * 44
+		ch.fill(rx, gy - 2, rx, gy - 1, .stone)
+		ch.put(rx, gy - 3, .torch)
+		ch.put(cx + side * 36, gy - 1, .torch)
+	}
+	if isRex {
+		for side in [-1, 1] {
+			for rb in 0..<3 {
+				let bx: Int = cx + side * (14 + rb * 8)
+				ch.fill(bx, gy - 2, bx, gy - 1, .fossil)
+				ch.put(bx - side, gy - 2, .fossil)
+			}
+		}
+		for k in 0..<10 { ch.putIfAir(cx - 24 + k * 5, gy - 1, .tallGrass) }
+	} else {
+		for side in [-1, 1] {
+			ch.put(cx + side * 18, gy - 1, .stone)
+			ch.put(cx + side * 18, gy - 2, .torch)
+		}
+	}
+	ch.put(cx + (isRex ? -27 : 27), gy - 1, .chest)
+}
+
+// MARK: portal chamber
+
+func buildPortalChamber(_ g: WorldGen, _ ch: Chunk) {
+	let px: Int = g.portalX
+	let py: Int = g.portalY
+	ch.fill(px - 12, py - 10, px + 12, py + 7, .brick)
+	ch.fill(px - 10, py - 8, px + 10, py + 5, .air)
+	ch.fill(px - 12, py + 6, px + 12, py + 7, .obsidian)
+	// frame: 7 wide, 9 tall; interior 5x7
+	let fx: Int = px - 3
+	let fy: Int = py + 5
+	if g.genVersion >= 2 {
+		buildRift(ch, px, fy, .portalOff)
+	} else {
+		ch.fill(fx, fy - 8, fx + 6, fy - 8, .portalFrame)
+		ch.fill(fx, fy, fx + 6, fy, .portalFrame)
+		ch.fill(fx, fy - 8, fx, fy, .portalFrame)
+		ch.fill(fx + 6, fy - 8, fx + 6, fy, .portalFrame)
+		ch.fill(fx + 1, fy - 7, fx + 5, fy - 1, .portalOff)
+	}
+	// decorations: torches and mossy rubble
+	ch.put(px - 9, py + 4, .torch)
+	ch.put(px + 9, py + 4, .torch)
+	ch.put(px - 9, py - 4, .lantern)
+	ch.put(px + 9, py - 4, .lantern)
+	for k in 0..<8 {
+		let rx: Int = px - 10 + k * 3
+		if abs(rx - px) <= 3 { continue }
+		if hash2(rx, 1, g.seed) < 0.6 { ch.put(rx, py + 5, .mossBrick) }
+		if hash2(rx, 2, g.seed) < 0.3 { ch.put(rx, py + 4, .cobweb) }
+	}
+	ch.put(px - 7, py + 5, .glowCrystal)
+	ch.put(px + 7, py + 5, .glowCrystal)
+}
+
+func applyStructures(_ g: WorldGen, _ ch: Chunk, _ cols: [Col], _ off: Int) {
+	let x0: Int = ch.x0
+	let mid: Int = x0 + chunkW / 2
+	for L in g.lairCenters(near: mid) {
+		if abs(L.cx - mid) < 62 { buildLair(g, ch, L) }
+	}
+	for v in g.villages(overlapping: x0 - 14, x0 + chunkW + 14) { buildVillage(g, ch, v) }
+	for r in g.rareSites(overlapping: x0 - 30, x0 + chunkW + 30) { buildRare(g, ch, cols, off, r) }
+	if abs(g.portalX - mid) < 24 { buildPortalChamber(g, ch) }
+	for s in g.grottoSites(overlapping: x0, x0 + chunkW - 1) { buildGrotto(g, ch, s) }
+	for s in g.mineSites(overlapping: x0, x0 + chunkW - 1) { buildMine(g, ch, s) }
+}
+
+// MARK: - Crystal grottos, old mines and surface landmarks (generator version 3)
+
+/// A vaulted cavern deep underground, its walls studded with crystal, a guarded altar chest at the
+/// centre, a still pool, and a long stepped passage climbing from it toward the surface (in standard
+/// worlds it comes out as a cave mouth; flat worlds keep their crust whole, so there it ends sealed)
+struct GrottoSite {
+	var cell: Int
+	var x: Int
+	/// the row the cavern floor is on
+	var floorY: Int
+	var rx: Int
+	var ry: Int
+	/// the passage leaves the cavern on this side and climbs one row per column
+	var dir: Int
+	var passLen: Int
+	/// whether the passage reaches the surface
+	var open: Bool
+	var seed: UInt64
+	var passStartX: Int { return x + dir * (rx - 3) }
+	var minX: Int { return min(x - rx - 3, passStartX + min(0, dir * passLen) - 2) }
+	var maxX: Int { return max(x + rx + 3, passStartX + max(0, dir * passLen) + 2) }
+}
+
+/// An old mine: a timber headframe over a covered, laddered shaft, with galleries off it
+struct MineSite {
+	var cell: Int
+	/// left column of the three-wide shaft (the ladder runs up the middle column)
+	var x: Int
+	var ground: Int
+	/// floor rows of the galleries, top to bottom; the last one is the floor of the shaft
+	var levels: [Int]
+	var left: [Int]
+	var right: [Int]
+	var seed: UInt64
+	/// worlds made with generator version 4 or later: the whole network, laid out once
+	var plan: MinePlan? = nil
+	var bottom: Int { return levels.last ?? ground }
+	var minX: Int { if let p = plan { return p.minX - 2 }; return x - (left.max() ?? 0) - 3 }
+	var maxX: Int { if let p = plan { return p.maxX + 2 }; return x + 2 + (right.max() ?? 0) + 3 }
+	/// the lowest open row anywhere in the mine
+	var deepest: Int { return max(bottom, plan?.maxY ?? bottom) }
+}
+
+extension WorldGen {
+	static let grottoCell: Int = 700
+	static let mineCell: Int = 900
+	static let landmarkCell: Int = 72
+	/// the longest passage a grotto may have (the deepest floors lie about 280 rows down)
+	static let grottoReach: Int = 420
+
+	var hasGrottos: Bool { return genVersion >= 3 && hasStructures && (!options.flat || options.caves) }
+	var hasMines: Bool { return genVersion >= 3 && hasStructures }
+	var hasLandmarks: Bool { return genVersion >= 3 && hasTrees }
+
+	func grottoSite(cell c: Int) -> GrottoSite? {
+		if let v = cache.grottos[c] { return v }
+		let v: GrottoSite? = computeGrottoSite(cell: c)
+		cache.grottos[c] = v
+		return v
+	}
+
+	/// whether a grotto passage may come out of the ground at x: dry land with nothing built there
+	func caveMouthClear(_ x: Int) -> Bool {
+		let c: Col = col(x)
+		if c.biome == .ocean || c.h >= WorldGen.sea - 1 { return false }
+		if abs(x - spawnX) < 30 || abs(x - portalX) < 60 { return false }
+		if lairAt(x, radius: 140) != nil { return false }
+		for v in villages(overlapping: x - 20, x + 20) where abs(v.x - x) < v.halfW + 16 { return false }
+		for r in rareSites(overlapping: x - 40, x + 40) where abs(r.x - x) < 40 { return false }
+		return true
+	}
+
+	func computeGrottoSite(cell c: Int) -> GrottoSite? {
+		if !hasGrottos { return nil }
+		if hash2(c, 601, seed) > 0.6 { return nil }
+		let cw: Int = WorldGen.grottoCell
+		let x: Int = c * cw + 90 + Int(hash2(c, 602, seed) * Double(cw - 180))
+		if !infinite && (x < 260 || x > width - 260) { return nil }
+		if abs(x - portalX) < 240 { return nil }
+		let rx: Int = 17 + Int(hash2(c, 604, seed) * 9.0)
+		let ry: Int = 8 + Int(hash2(c, 605, seed) * 4.0)
+		let floorY: Int = 250 + Int(hash2(c, 603, seed) * 130.0)
+		let first: Int = hash2(c, 606, seed) < 0.5 ? -1 : 1
+		var site = GrottoSite(cell: c, x: x, floorY: floorY, rx: rx, ry: ry, dir: first, passLen: 0, open: false, seed: hashU(c, 607, seed))
+		// trace the passage up one row per column; try the other side if the first comes out badly
+		var best: (Int, Int, Bool)? = nil
+		for d in [first, -first] {
+			let sx: Int = x + d * (rx - 3)
+			var k: Int = 0
+			var result: (Int, Bool)? = nil
+			var checked: Bool = false
+			while k < WorldGen.grottoReach {
+				let px: Int = sx + d * k
+				if !infinite && (px < 40 || px > width - 40) { result = (max(0, k - 1), false); break }
+				let h: Int = col(px).h
+				let fk: Int = floorY - k
+				if options.flat {
+					// stop while the passage roof is still below the crust
+					if fk - 5 < h + WorldGen.flatCrust { result = (max(0, k - 1), false); break }
+				} else {
+					if !checked && fk <= h + 8 {
+						// the last stretch: open only onto clear, dry ground
+						checked = true
+						var clear: Bool = true
+						var j: Int = 0
+						while j <= 16 && clear { clear = caveMouthClear(px + d * j); j += 4 }
+						if !clear {
+							// generator 6: the passage stops short enough that its roof keeps four rows of
+							// ground over it, even where the land drops away just there
+							var kk: Int = k
+							if genVersion >= 6 {
+								while kk > 0 && floorY - kk - 4 <= col(sx + d * kk).h + 3 { kk -= 1 }
+							}
+							result = (kk, false)
+							break
+						}
+					}
+					if fk <= h { result = (k, true); break }
+				}
+				k += 1
+			}
+			let r: (Int, Bool) = result ?? (k, false)
+			if r.1 { best = (d, r.0, true); break }
+			if best == nil { best = (d, r.0, false) }
+		}
+		if let b = best {
+			site.dir = b.0
+			site.passLen = b.1
+			site.open = b.2
+		}
+		return site
+	}
+
+	func grottoSites(overlapping x0: Int, _ x1: Int) -> [GrottoSite] {
+		var out: [GrottoSite] = []
+		if !hasGrottos { return out }
+		let cw: Int = WorldGen.grottoCell
+		let c0: Int = floorDiv(x0 - WorldGen.grottoReach - 40, cw)
+		let c1: Int = floorDiv(x1 + WorldGen.grottoReach + 40, cw)
+		for c in c0...c1 {
+			if let s = grottoSite(cell: c), s.maxX >= x0 && s.minX <= x1 { out.append(s) }
+		}
+		return out
+	}
+
+	func mineSite(cell c: Int) -> MineSite? {
+		if let v = cache.mines[c] { return v }
+		let v: MineSite? = computeMineSite(cell: c)
+		cache.mines[c] = v
+		return v
+	}
+
+	func computeMineSite(cell c: Int) -> MineSite? {
+		if !hasMines { return nil }
+		if hash2(c, 621, seed) > (genVersion >= 4 ? 0.62 : 0.55) { return nil }
+		let cw: Int = WorldGen.mineCell
+		let ok: [Biome] = [.plains, .forest, .mountain, .tundra, .savanna, .desert]
+		// a few tries across the cell for a level spot to sink the shaft
+		func usable(_ x: Int) -> Col? {
+			if !infinite && (x < 320 || x > width - 320) { return nil }
+			if abs(x - spawnX) < 60 || abs(x - portalX) < 80 { return nil }
+			let base: Col = col(x)
+			if !ok.contains(base.biome) || base.h >= WorldGen.sea - 1 { return nil }
+			for d in -4...6 {
+				let cc: Col = col(x + d)
+				if cc.biome == .ocean || abs(cc.h - base.h) > 1 { return nil }
+			}
+			if lairAt(x, radius: 200) != nil { return nil }
+			if nearestVillageSimple(x) { return nil }
+			for r in rareSites(overlapping: x - 70, x + 70) where abs(r.x - x) < 70 { return nil }
+			return base
+		}
+		var found: (Int, Col)? = nil
+		for attempt in 0..<10 {
+			let x: Int = c * cw + 120 + Int(hash2(c, 622 + attempt * 3, seed) * Double(cw - 240))
+			if let b = usable(x) { found = (x, b); break }
+		}
+		guard let (x, base) = found else { return nil }
+		if genVersion >= 4 {
+			let (plan, levels, lefts, rights) = planMine(cell: c, x: x, ground: base.h)
+			var site = MineSite(cell: c, x: x, ground: base.h, levels: levels, left: lefts, right: rights, seed: hashU(c, 624, seed))
+			site.plan = plan
+			return site
+		}
+		let depth: Int = 60 + Int(hash2(c, 623, seed) * 100.0)
+		let n: Int = depth > 130 ? 3 : (depth > 90 ? 2 : 1)
+		var levels: [Int] = []
+		var left: [Int] = []
+		var right: [Int] = []
+		for k in 0..<n {
+			levels.append(base.h + depth * (k + 1) / n)
+			left.append(16 + Int(hash2(c, 630 + k, seed) * 40.0))
+			right.append(16 + Int(hash2(c, 640 + k, seed) * 40.0))
+		}
+		return MineSite(cell: c, x: x, ground: base.h, levels: levels, left: left, right: right, seed: hashU(c, 624, seed))
+	}
+
+	func mineSites(overlapping x0: Int, _ x1: Int) -> [MineSite] {
+		var out: [MineSite] = []
+		if !hasMines { return out }
+		let cw: Int = WorldGen.mineCell
+		let reach: Int = genVersion >= 4 ? 160 : 80
+		for c in floorDiv(x0 - reach, cw)...floorDiv(x1 + reach, cw) {
+			if let s = mineSite(cell: c), s.maxX >= x0 && s.minX <= x1 { out.append(s) }
+		}
+		return out
+	}
+}
+
+/// Water or lava touching carved-out space becomes stone, so nothing hangs in the air
+private func sealLiquid(_ ch: Chunk, _ x: Int, _ y: Int) {
+	if ch.at(x, y).liquid { ch.put(x, y, .stone) }
+}
+
+func buildGrotto(_ g: WorldGen, _ ch: Chunk, _ s: GrottoSite) {
+	let cx0: Int = ch.x0
+	let cx1: Int = ch.x0 + chunkW - 1
+	let rxD: Double = Double(s.rx)
+	let ryD: Double = Double(s.ry)
+	let fy: Int = s.floorY
+	let xa: Int = max(cx0, s.x - s.rx - 3)
+	let xb: Int = min(cx1, s.x + s.rx + 3)
+	if xa <= xb {
+		for x in xa...xb {
+			let u: Double = Double(x - s.x) / rxD
+			let wob: Double = 1.0 + (vnoise(Double(x) * 0.18, 3.0, s.seed) - 0.5) * 0.26
+			let inner: Double = wob * wob - u * u
+			let vaultD: Double = inner > 0 ? (sqrt(inner) / wob * ryD).rounded() : 0
+			let vault: Int = Int(vaultD)
+			let ow: Double = wob * 1.28
+			let outer: Double = ow * ow - u * u
+			let shellD: Double = outer > 0 ? (sqrt(outer) / ow * ryD * 1.2).rounded() + 1.0 : 0
+			let shell: Int = Int(shellD)
+			let side: Double = -Double(s.dir)
+			let along: Double = u * side
+			let pool: Bool = along > 0.45 && along < 0.8
+			// crystal-studded shell around the vault
+			if shell > 0 {
+				for y in (fy - shell - 1)...(fy + 1) {
+					if y >= fy - vault && y < fy { continue }
+					let t: Tile = ch.at(x, y)
+					if t.liquid { ch.put(x, y, .stone); continue }
+					if !t.solid || t == .bedrock { continue }
+					let r: Double = hash2(x, y, s.seed &+ 3)
+					if r < 0.22 { ch.put(x, y, .crystalOre) } else if r < 0.27 { ch.put(x, y, .glowCrystal) }
+				}
+			}
+			if vault <= 0 { continue }
+			for y in (fy - vault)..<fy { ch.put(x, y, .air) }
+			// a level floor (stone bridges any cave below), or the pool
+			if pool {
+				ch.put(x, fy, .water)
+				ch.put(x, fy + 1, .water)
+				if !ch.at(x, fy + 2).solid { ch.put(x, fy + 2, .stone) }
+				sealLiquid(ch, x, fy + 2)
+			} else if !ch.at(x, fy).solid || ch.at(x, fy) == .glowCrystal {
+				ch.put(x, fy, .stone)
+			}
+			// crystals hanging from the vault and standing on the floor
+			if vault > 4 && hash2(x, 1, s.seed &+ 5) < 0.14 { ch.put(x, fy - vault, .glowCrystal) }
+			if !pool && abs(x - s.x) > 7 && hash2(x, 2, s.seed &+ 5) < 0.08 { ch.put(x, fy - 1, .glowCrystal) }
+		}
+		// the altar, its chest, and two crystal pillars standing guard
+		for dx in -2...2 { ch.put(s.x + dx, fy - 1, .mossBrick) }
+		ch.put(s.x, fy - 2, .chest)
+		for side in [-1, 1] {
+			ch.put(s.x + side * 6, fy - 1, .glowCrystal)
+			ch.put(s.x + side * 6, fy - 2, .glowCrystal)
+		}
+	}
+	// the passage: four rows tall, climbing one row per column, lit by crystals in its roof
+	if s.passLen <= 0 { return }
+	let sx: Int = s.passStartX
+	for k in 0...s.passLen {
+		let px: Int = sx + s.dir * k
+		if px < cx0 || px > cx1 { continue }
+		let fk: Int = fy - k
+		for y in (fk - 4)...(fk - 1) where ch.at(px, y) != .bedrock { ch.put(px, y, .air) }
+		if !ch.at(px, fk).solid && k < s.passLen - 2 { ch.put(px, fk, .stone) }
+		sealLiquid(ch, px, fk)
+		sealLiquid(ch, px, fk - 5)
+		if k % 7 == 3 && ch.at(px, fk - 5).solid && ch.at(px, fk - 5) != .bedrock { ch.put(px, fk - 5, .glowCrystal) }
+		if s.open {
+			// near the mouth, clear away trunks and leaves left hanging over the cut
+			let h: Int = g.col(px).h
+			let lo: Int = max(1, h - 18)
+			let hi: Int = fk - 4
+			if fk - 5 <= h + 1 && lo < hi {
+				for y in lo..<hi {
+					let t: Tile = ch.at(px, y)
+					if isLogTile(t) || isLeafTile(t) { ch.put(px, y, .air) }
+				}
+			}
+		}
+	}
+}
+
+func buildMine(_ g: WorldGen, _ ch: Chunk, _ s: MineSite) {
+	let cx0: Int = ch.x0
+	let cx1: Int = ch.x0 + chunkW - 1
+	let gy: Int = s.ground
+	let bottom: Int = s.bottom
+	let sx: Int = s.x
+	let plankWall: UInt8 = 5
+	func clipped(_ a: Int, _ b: Int) -> ClosedRange<Int>? {
+		let lo: Int = max(a, cx0)
+		let hi: Int = min(b, cx1)
+		return lo <= hi ? lo...hi : nil
+	}
+	// the headframe: two timber posts (background walls, so they never block the way), a beam you
+	// can stand on, a lantern under it, torches either side
+	if let r = clipped(sx - 2, sx + 4) {
+		for x in r {
+			for y in (gy - 7)...(gy - 1) {
+				let t: Tile = ch.at(x, y)
+				if t.isPlant || isLogTile(t) || isLeafTile(t) { ch.put(x, y, .air) }
+			}
+		}
+	}
+	ch.fillWall(sx - 1, gy - 5, sx - 1, gy - 1, plankWall)
+	ch.fillWall(sx + 3, gy - 5, sx + 3, gy - 1, plankWall)
+	ch.fill(sx - 1, gy - 6, sx + 3, gy - 6, .platform)
+	ch.put(sx + 1, gy - 5, .lantern)
+	ch.put(sx - 2, gy - 1, .torch)
+	ch.put(sx + 4, gy - 1, .torch)
+	if let plan = s.plan {
+		// version 4: the shaft is covered with boards you drop through; the network lies below
+		if let r = clipped(sx, sx + 2) { for x in r { ch.put(x, gy, .platform) } }
+		// an ore cart left on a short run of rail by the headframe
+		if let r = clipped(sx + 5, sx + 9) {
+			for x in r where (ch.at(x, gy - 1) == .air || ch.at(x, gy - 1).isPlant) && ch.at(x, gy).solid { ch.put(x, gy - 1, x == sx + 7 ? .oreCart : .rail) }
+		}
+		buildMinePlan(g, ch, s, plan)
+		return
+	}
+	let galleryRows: Set<Int> = Set(s.levels.flatMap { [$0 - 3, $0 - 2, $0 - 1] })
+	// the shaft: covered with planks you can drop through, a ladder all the way down
+	if let r = clipped(sx, sx + 2) {
+		for x in r {
+			ch.put(x, gy, .platform)
+			for y in (gy + 1)..<bottom { ch.put(x, y, x == sx + 1 ? .ladder : .air) }
+			ch.put(x, bottom, .planks)
+			ch.fillWall(x, gy + 1, x, bottom - 1, plankWall)
+		}
+	}
+	// timber lining where the shaft passes through open cave or water
+	for x in [sx - 1, sx + 3] where x >= cx0 && x <= cx1 {
+		for y in (gy + 1)..<bottom where !galleryRows.contains(y) {
+			let t: Tile = ch.at(x, y)
+			if !t.solid || t.liquid { ch.put(x, y, .planks) }
+		}
+	}
+	// the galleries
+	for (i, f) in s.levels.enumerated() {
+		let xa: Int = sx - s.left[i]
+		let xb: Int = sx + 2 + s.right[i]
+		let depthBelow: Int = f - gy
+		if let r = clipped(xa, xb) {
+			for x in r {
+				let inShaft: Bool = x >= sx && x <= sx + 2
+				if inShaft {
+					// landings either side of the ladder at the upper galleries
+					if f != bottom && x != sx + 1 { ch.put(x, f, .platform) }
+					continue
+				}
+				let rel: Int = x < sx ? sx - x : x - (sx + 2)
+				for y in (f - 3)...(f - 1) { ch.put(x, y, .air) }
+				if !ch.at(x, f).solid || ch.at(x, f).liquid { ch.put(x, f, .planks) }
+				sealLiquid(ch, x, f - 4)
+				if rel % 6 == 3 {
+					// a timber support: posts behind, a beam overhead
+					ch.fillWall(x, f - 3, x, f - 1, plankWall)
+					ch.put(x, f - 4, .planks)
+				} else if rel % 12 == 7 {
+					ch.put(x, f - 1, .torch)
+				}
+				if rel % 6 == 4 && hash2(x, f + 1, s.seed) < 0.35 { ch.put(x, f - 3, .cobweb) }
+				// ore showing in the roof and floor
+				let r0: Double = hash2(x, f, s.seed &+ 7)
+				if r0 < 0.09 && rel % 6 != 3 {
+					let ores: [Tile] = depthBelow < 80 ? [.coal, .copper, .coal] : (depthBelow < 130 ? [.iron, .copper, .coal] : [.iron, .gold, .iron])
+					let ore: Tile = ores[Int(hash2(x, f, s.seed &+ 8) * 3.0) % 3]
+					let oy: Int = r0 < 0.05 ? f - 4 : f
+					if ch.at(x, oy).solid && ch.at(x, oy) != .planks { ch.put(x, oy, ore) }
+				}
+			}
+		}
+		// one end keeps a chest, the other has caved in
+		let chestLeft: Bool = hash2(i, 650, s.seed) < 0.5
+		if hash2(i, 651, s.seed) < 0.75 { ch.put(chestLeft ? xa + 1 : xb - 1, f - 1, .chest) }
+		let rubble: Int = chestLeft ? xb : xa
+		ch.put(rubble, f - 1, .stone)
+		ch.put(rubble, f - 2, .stone)
+	}
+}
+
+// MARK: - Old mines, version 4: a branching network round a laddered shaft
+
+/// Where a chest in a mine sits, which sets what it may hold: out in a gallery, in a side room or at
+/// a dead end, or hidden (behind fallen rock, or in a nook high in a chamber roof)
+enum MineSpot: Int {
+	case open, room, hidden
+}
+
+struct MineChest {
+	var x: Int
+	var y: Int
+	var spot: MineSpot
+	/// 0 for the top gallery, rising with depth (the great chamber counts one deeper)
+	var depth: Int
+}
+
+/// A column of open space carved out of the rock
+struct MineSpan {
+	var x: Int
+	var y0: Int
+	var y1: Int
+}
+
+struct MineTile {
+	var x: Int
+	var y: Int
+	var t: Tile
+}
+
+struct MineWall {
+	var x: Int
+	var y0: Int
+	var y1: Int
+}
+
+/// Everything a v4 mine is made of, worked out once per site: the spaces to carve, the floors to make
+/// sound, the timber walls behind, the fittings, the ore showing in the walls and the chests. Each
+/// chunk applies the part that falls inside it, in the same order, so a mine is seamless across chunks.
+struct MinePlan {
+	var carve: [MineSpan] = []
+	var floors: [MineTile] = []
+	var walls: [MineWall] = []
+	var tiles: [MineTile] = []
+	/// ore exposed in the rock face: only placed where the rock is still solid
+	var ores: [MineTile] = []
+	var chests: [MineChest] = []
+	var minX: Int = 0
+	var maxX: Int = 0
+	var maxY: Int = 0
+	/// how the mine is laid out (for tests, and to keep the variety honest)
+	var tunnels: Int = 0
+	var rooms: Int = 0
+	var chambers: Int = 0
+	var winzes: Int = 0
+	var deadEnds: Int = 0
+	/// where the great chamber is, if there is one (its centre column and floor row)
+	var chamberX: Int = 0
+	var chamberFloor: Int = 0
+}
+
+/// One gallery as laid out: where it starts, which way it runs and its floor row at each column
+struct MineRun {
+	var startX: Int
+	var dir: Int
+	var floors: [Int]
+	var depth: Int
+	func x(_ k: Int) -> Int { return startX + dir * k }
+}
+
+/// Builds a plan. Everything is drawn from the site's own seeded generator, so the same world seed
+/// always gives the same mine. Side workings are tried one at a time and kept only if the space they
+/// would open does not run into space already opened (apart from where they are meant to join),
+/// so no drift ever cuts across a gallery or lays its floor in someone else's way.
+struct MinePlanner {
+	var plan: MinePlan = MinePlan()
+	var rng: RNG
+	let shaftX: Int
+	let ground: Int
+	/// every open cell so far, for the overlap test
+	var open: Set<Int> = []
+
+	init(seed: UInt64, shaftX: Int, ground: Int) {
+		rng = RNG(seed)
+		self.shaftX = shaftX
+		self.ground = ground
+		plan.minX = shaftX - 3
+		plan.maxX = shaftX + 5
+	}
+
+	@inline(__always) static func key(_ x: Int, _ y: Int) -> Int { return x &* 4096 &+ y }
+
+	mutating func chance(_ p: Double) -> Bool { return rng.double() < p }
+	mutating func range(_ lo: Int, _ hi: Int) -> Int { return lo + rng.int(max(1, hi - lo + 1)) }
+
+	mutating func carve(_ x: Int, _ y0: Int, _ y1: Int) {
+		if y1 < y0 { return }
+		plan.carve.append(MineSpan(x: x, y0: y0, y1: y1))
+		plan.minX = min(plan.minX, x - 1)
+		plan.maxX = max(plan.maxX, x + 1)
+		plan.maxY = max(plan.maxY, y1 + 1)
+	}
+
+	mutating func tile(_ x: Int, _ y: Int, _ t: Tile) { plan.tiles.append(MineTile(x: x, y: y, t: t)) }
+	mutating func floor(_ x: Int, _ y: Int) { plan.floors.append(MineTile(x: x, y: y, t: .planks)) }
+	mutating func wall(_ x: Int, _ y0: Int, _ y1: Int) { plan.walls.append(MineWall(x: x, y0: y0, y1: y1)) }
+	mutating func ore(_ x: Int, _ y: Int, _ t: Tile) { plan.ores.append(MineTile(x: x, y: y, t: t)) }
+
+	/// chests go in last, each on sound floor (see buildMinePlan)
+	mutating func chest(_ x: Int, _ y: Int, _ spot: MineSpot, _ depth: Int) {
+		if plan.chests.contains(where: { abs($0.x - x) <= 1 && $0.y == y }) { return }
+		plan.chests.append(MineChest(x: x, y: y, spot: spot, depth: depth))
+	}
+
+	/// marks everything carved since `from` as open
+	mutating func commit(_ from: Int) {
+		var i: Int = from
+		while i < plan.carve.count {
+			let sp: MineSpan = plan.carve[i]
+			for y in sp.y0...sp.y1 { open.insert(MinePlanner.key(sp.x, y)) }
+			i += 1
+		}
+	}
+
+	/// Lays out a side working with `body`; keeps it only if what it carves (and the floor and fittings
+	/// it lays) stays clear of space opened before, except inside the joint (`jx0...jx1` x `jy0...jy1`)
+	@discardableResult
+	mutating func attempt(_ jx0: Int, _ jx1: Int, _ jy0: Int, _ jy1: Int, _ body: (inout MinePlanner) -> Void) -> Bool {
+		let snap: MinePlan = plan
+		let c0: Int = plan.carve.count
+		let f0: Int = plan.floors.count
+		let t0: Int = plan.tiles.count
+		body(&self)
+		func clash(_ x: Int, _ y: Int) -> Bool {
+			if x >= jx0 && x <= jx1 && y >= jy0 && y <= jy1 { return false }
+			return open.contains(MinePlanner.key(x, y))
+		}
+		var bad: Bool = false
+		var i: Int = c0
+		while i < plan.carve.count && !bad {
+			let sp: MineSpan = plan.carve[i]
+			for y in (sp.y0 - 1)...(sp.y1 + 1) where clash(sp.x, y) || clash(sp.x - 1, y) || clash(sp.x + 1, y) { bad = true; break }
+			i += 1
+		}
+		// a floor plank or a fitting laid inside space that is already open would be in the way
+		var j: Int = f0
+		while j < plan.floors.count && !bad { if clash(plan.floors[j].x, plan.floors[j].y) { bad = true }; j += 1 }
+		var k: Int = t0
+		while k < plan.tiles.count && !bad { if clash(plan.tiles[k].x, plan.tiles[k].y) { bad = true }; k += 1 }
+		if bad {
+			plan = snap
+			return false
+		}
+		commit(c0)
+		return true
+	}
+
+	/// The ore that shows in a mine's rock face at row y, following the same depth bands as the ore in
+	/// the open ground: coal, copper, tin and saltpeter up top, iron and silver from the middle depths,
+	/// gold only deep down, and a little amethyst in between
+	mutating func oreFor(_ y: Int) -> Tile {
+		let r: Double = rng.double()
+		if y < 205 { return r < 0.45 ? .coal : (r < 0.75 ? .copper : (r < 0.92 ? .tin : .saltpeter)) }
+		if y < 300 { return r < 0.22 ? .coal : (r < 0.38 ? .copper : (r < 0.5 ? .tin : (r < 0.8 ? .iron : (r < 0.95 ? .silver : .amethyst)))) }
+		return r < 0.15 ? .coal : (r < 0.55 ? .iron : (r < 0.8 ? .silver : .gold))
+	}
+
+	/// A run of gallery from x0 out to x1 (either way) whose floor drifts up and down a row at a
+	/// time, with timber sets, torches, rails, cobwebs and ore along it
+	mutating func gallery(from x0: Int, to x1: Int, floor f0: Int, depth: Int, rails: Bool, lit: Double) -> MineRun {
+		let dir: Int = x1 >= x0 ? 1 : -1
+		let n: Int = abs(x1 - x0) + 1
+		var floors: [Int] = []
+		var f: Int = f0
+		var nextStep: Int = range(7, 15)
+		let support: Int = range(5, 7)
+		let torchGap: Int = range(10, 15)
+		var lastTorch: Int = -range(2, 6)
+		var k: Int = 0
+		while k < n {
+			let x: Int = x0 + dir * k
+			// the floor drifts a row now and then, never far from the level's own height
+			if k == nextStep && k > 3 && k < n - 3 {
+				let d: Int = chance(0.5) ? 1 : -1
+				if abs(f + d - f0) <= 3 { f += d }
+				nextStep = k + range(7, 15)
+			}
+			floors.append(f)
+			let tall: Bool = k > 0 && floors[k - 1] != f
+			carve(x, f - (tall ? 4 : 3), f - 1)
+			floor(x, f)
+			var torch: Bool = false
+			if k % support == support / 2 && k > 1 {
+				// a timber set: posts behind, a beam overhead (a few have rotted away)
+				if chance(0.85) {
+					wall(x, f - 3, f - 1)
+					tile(x, f - 4 - (tall ? 1 : 0), .planks)
+				} else {
+					wall(x, f - 2, f - 1)
+				}
+			} else if k - lastTorch >= torchGap && chance(lit) {
+				tile(x, f - 1, .torch)
+				lastTorch = k
+				torch = true
+			} else if chance(0.05 + 0.03 * Double(depth)) {
+				tile(x, f - 3, .cobweb)
+			}
+			if rails && !torch && k > 2 && !tall && chance(0.92) { tile(x, f - 1, .rail) }
+			// ore showing in the roof and floor
+			if chance(0.085) { ore(x, chance(0.55) ? f - 4 - (tall ? 1 : 0) : f, oreFor(f)) }
+			k += 1
+		}
+		plan.tunnels += 1
+		return MineRun(startX: x0, dir: dir, floors: floors, depth: depth)
+	}
+
+	/// A storage room above the gallery, reached by a short ladder through its roof
+	mutating func storageRoom(_ x: Int, _ f: Int, _ depth: Int) {
+		let w: Int = range(6, 9)
+		let x0: Int = x - w / 2
+		let x1: Int = x0 + w - 1
+		let rf: Int = f - 5
+		let h: Int = 4
+		for xx in x0...x1 {
+			carve(xx, rf - h, rf - 1)
+			floor(xx, rf)
+			wall(xx, rf - h, rf - 1)
+		}
+		// the hatch: a ladder from the gallery up through the room's floor
+		carve(x, rf, f - 4)
+		for y in rf...(f - 1) { tile(x, y, .ladder) }
+		// crates stacked along the walls, a lantern, and the chest in a corner
+		let crateLeft: Bool = chance(0.5)
+		let cx: Int = crateLeft ? x0 : x1
+		tile(cx, rf - 1, .crate)
+		if chance(0.6) { tile(cx, rf - 2, .crate) }
+		let other: Int = crateLeft ? x1 : x0
+		tile(other, rf - 1, .crate)
+		tile(x, rf - h, .lantern)
+		chest(crateLeft ? x0 + 1 : x1 - 1, rf - 1, .room, depth)
+		plan.rooms += 1
+	}
+
+	/// An abandoned work area: the gallery opens up, a workbench and furnace stand cold, a cart sits
+	/// off its rails; sometimes a chest of the crew's things
+	mutating func workArea(_ run: MineRun, _ k0: Int, _ w: Int) {
+		let f: Int = run.floors[k0]
+		for j in 0..<w {
+			let xx: Int = run.x(k0 + j)
+			carve(xx, f - 5, f - 4)
+			wall(xx, f - 5, f - 1)
+		}
+		tile(run.x(k0 + 1), f - 1, .workbench)
+		tile(run.x(k0 + 2), f - 1, .furnace)
+		tile(run.x(k0 + w - 2), f - 1, .oreCart)
+		tile(run.x(k0 + w / 2), f - 5, .lantern)
+		if chance(0.5) { chest(run.x(k0 + w - 3), f - 1, .room, run.depth) }
+		plan.rooms += 1
+	}
+
+	/// A ladder down from the gallery to a short drift that runs off one way and ends blind
+	mutating func winze(_ x: Int, _ f: Int, _ depth: Int, _ drop: Int) {
+		let bottom: Int = f + drop
+		carve(x, f, bottom - 1)
+		for y in f...(bottom - 1) { tile(x, y, .ladder) }
+		let dir: Int = chance(0.5) ? 1 : -1
+		let len: Int = range(12, 24)
+		let run: MineRun = gallery(from: x, to: x + dir * len, floor: bottom, depth: depth + 1, rails: false, lit: 0.3)
+		plan.winzes += 1
+		deadEnd(run.x(len), run.floors.last ?? bottom, dir, depth + 1)
+	}
+
+	/// A ladder up through the gallery roof to a short drift above it that ends blind
+	mutating func raise(_ x: Int, _ f: Int, _ depth: Int, _ rise: Int) {
+		let top: Int = f - rise
+		carve(x, top - 3, f - 4)
+		for y in (top - 1)...(f - 1) { tile(x, y, .ladder) }
+		let dir: Int = chance(0.5) ? 1 : -1
+		let len: Int = range(10, 20)
+		let run: MineRun = gallery(from: x + dir, to: x + dir * len, floor: top, depth: depth, rails: false, lit: 0.3)
+		plan.winzes += 1
+		deadEnd(run.x(len - 1), run.floors.last ?? top, dir, depth)
+	}
+
+	/// A sloping drift carried on past the end of a gallery, climbing or falling a row every two
+	/// columns, to a dead end
+	mutating func ramp(_ x: Int, _ f: Int, _ dir: Int, _ depth: Int) {
+		let rise: Int = chance(0.5) ? -1 : 1
+		let rows: Int = range(4, 7)
+		var ff: Int = f
+		for k in 0..<(rows * 2) {
+			if k % 2 == 1 { ff += rise }
+			let xx: Int = x + dir * k
+			carve(xx, ff - 3 - (k % 2 == 1 ? 1 : 0), ff - 1)
+			floor(xx, ff)
+		}
+		let x1: Int = x + dir * (rows * 2)
+		let len: Int = range(5, 12)
+		let run: MineRun = gallery(from: x1, to: x1 + dir * len, floor: ff, depth: depth, rails: false, lit: 0.2)
+		deadEnd(run.x(len), run.floors.last ?? ff, dir, depth)
+	}
+
+	/// The blind end of a drift at x: bare rock and a cart, or a chest left behind, or a fall of rock
+	/// that hides a little pocket with a chest in it (dig through to find it)
+	mutating func deadEnd(_ x: Int, _ f: Int, _ dir: Int, _ depth: Int) {
+		plan.deadEnds += 1
+		let r: Double = rng.double()
+		if r < 0.3 {
+			chest(x - dir, f - 1, .room, depth)
+		} else if r < 0.55 {
+			attempt(x, x, f - 4, f) { p in p.collapse(x, f, dir, depth) }
+		} else if r < 0.75 {
+			tile(x - dir, f - 1, .oreCart)
+		}
+		// otherwise just the rock face
+	}
+
+	/// rubble two or three blocks thick at the end of a drift, then the pocket beyond it
+	mutating func collapse(_ x: Int, _ f: Int, _ dir: Int, _ depth: Int) {
+		let thick: Int = range(2, 3)
+		for j in 1...thick {
+			let xx: Int = x + dir * j
+			carve(xx, f - 3, f - 1)
+			for y in (f - 3)...(f - 1) { tile(xx, y, rubble()) }
+			floor(xx, f)
+		}
+		let p0: Int = x + dir * (thick + 1)
+		for j in 0..<4 {
+			carve(p0 + dir * j, f - 3, f - 1)
+			floor(p0 + dir * j, f)
+		}
+		chest(p0 + dir * 3, f - 1, .hidden, depth)
+		tile(p0 + dir * 1, f - 3, .cobweb)
+	}
+
+	/// what a collapse is made of: broken stone, earth and rotten timber
+	mutating func rubble() -> Tile {
+		let r: Double = rng.double()
+		return r < 0.45 ? .stone : (r < 0.8 ? .dirt : .planks)
+	}
+
+	/// The great chamber on the lowest level: a tall hall over the gallery shored up with timber, a
+	/// scaffold half-way up with a chest on it, ore-rich walls, and a nook high in the roof with
+	/// something tucked away (only reached by building up to it)
+	mutating func chamber(_ run: MineRun, _ kc: Int, _ hw: Int) {
+		let f: Int = run.floors[kc]
+		let cx: Int = run.x(kc)
+		let h: Int = range(9, 12)
+		for dx in -hw...hw {
+			let x: Int = cx + dx
+			let u: Double = Double(dx) / Double(hw)
+			let top: Int = f - 3 - Int((Double(h - 3) * (1.0 - u * u)).rounded())
+			carve(x, top, f - 4)
+			if abs(dx) % 7 == 3 && abs(dx) < hw - 1 { wall(x, top, f - 1) }
+			if chance(0.3) { ore(x, top - 1, oreFor(top)) }
+		}
+		for y in (f - 6)...(f - 1) where chance(0.4) {
+			ore(cx - hw - 1, y, oreFor(y))
+			ore(cx + hw + 1, y, oreFor(y))
+		}
+		// the scaffold: a walkway half-way up with a ladder at one end
+		let sy: Int = f - 5
+		let s0: Int = cx - hw / 2
+		let s1: Int = cx + hw / 2
+		for x in s0...s1 { tile(x, sy, .platform) }
+		for y in sy...(f - 1) { tile(s0, y, .ladder) }
+		chest(s1 - 1, sy - 1, .room, run.depth + 1)
+		tile(cx, f - h + 1, .lantern)
+		// the nook: a hollow just above the roof's high point
+		if chance(0.6) {
+			let ny: Int = f - h - 1
+			carve(cx + 2, ny - 1, ny)
+			carve(cx + 3, ny - 1, ny)
+			floor(cx + 3, ny + 1)
+			chest(cx + 3, ny, .hidden, run.depth + 1)
+		}
+		plan.chambers += 1
+		plan.chamberX = cx
+		plan.chamberFloor = f
+	}
+}
+
+extension WorldGen {
+	/// Lays out a version-4 mine at `x` (left column of the three-wide shaft) on ground row `ground`
+	func planMine(cell c: Int, x: Int, ground: Int) -> (MinePlan, [Int], [Int], [Int]) {
+		var p = MinePlanner(seed: hashU(c, 700, seed), shaftX: x, ground: ground)
+		let depth: Int = 60 + p.rng.int(100)
+		let nLevels: Int = depth > 135 ? 4 : (depth > 95 ? 3 : 2)
+		var levels: [Int] = []
+		for k in 0..<nLevels {
+			var f: Int = ground + depth * (k + 1) / nLevels
+			if k < nLevels - 1 { f += p.range(-3, 3) }
+			levels.append(f)
+		}
+		let bottom: Int = levels.last ?? (ground + depth)
+		// the shaft: three wide, a ladder up the middle, covered over at the top
+		for xx in x...(x + 2) {
+			p.carve(xx, ground + 1, bottom - 1)
+			p.wall(xx, ground + 1, bottom - 1)
+		}
+		for y in (ground + 1)...(bottom - 1) { p.tile(x + 1, y, .ladder) }
+		for xx in x...(x + 2) { p.floor(xx, bottom) }
+		// first every level's landing and its two galleries
+		var lefts: [Int] = []
+		var rights: [Int] = []
+		var runs: [(MineRun, MineRun)] = []
+		for (i, f) in levels.enumerated() {
+			let left: Int = p.range(24, 64)
+			let right: Int = p.range(24, 64)
+			lefts.append(left)
+			rights.append(right)
+			let rails: Bool = i < 2 && p.chance(0.7)
+			let lit: Double = max(0.25, 0.9 - 0.2 * Double(i))
+			for xx in x...(x + 2) { p.carve(xx, f - 3, f - 1) }
+			if f != bottom {
+				p.tile(x, f, .platform)
+				p.tile(x + 2, f, .platform)
+			}
+			let l: MineRun = p.gallery(from: x - 1, to: x - left, floor: f, depth: i, rails: rails, lit: lit)
+			let r: MineRun = p.gallery(from: x + 3, to: x + 2 + right, floor: f, depth: i, rails: rails, lit: lit)
+			runs.append((l, r))
+		}
+		p.commit(0)
+		// the great chamber, on the lowest level, along its longer gallery
+		if p.chance(0.66), let last = runs.last {
+			let run: MineRun = last.0.floors.count >= last.1.floors.count ? last.0 : last.1
+			if run.floors.count >= 30 {
+				let hw: Int = p.range(9, min(13, (run.floors.count - 10) / 2))
+				let kc: Int = p.range(hw + 4, run.floors.count - hw - 4)
+				let cx: Int = run.x(kc)
+				// the hall opens round its own gallery, whose floor wanders a few rows: all of that is the joint
+				p.attempt(cx - hw - 2, cx + hw + 2, run.floors[kc] - 8, run.floors[kc] + 4) { q in q.chamber(run, kc, hw) }
+			}
+		}
+		// then the side workings along each gallery, each kept only if it fits
+		for (i, pair) in runs.enumerated() {
+			for run in [pair.0, pair.1] {
+				let n: Int = run.floors.count
+				var k: Int = p.range(8, 13)
+				while k < n - 6 {
+					let gx: Int = run.x(k)
+					let gf: Int = run.floors[k]
+					let r: Double = p.rng.double()
+					var used: Int = 0
+					if r < 0.24 {
+						if p.attempt(gx - 1, gx + 1, gf - 6, gf) { q in q.storageRoom(gx, gf, i) } { used = 10 }
+					} else if r < 0.42 {
+						let drop: Int = p.range(8, 13)
+						if p.attempt(gx - 1, gx + 1, gf - 4, gf + 1) { q in q.winze(gx, gf, i, drop) } { used = 9 }
+					} else if r < 0.56 {
+						let rise: Int = p.range(7, 10)
+						if p.attempt(gx - 1, gx + 1, gf - 5, gf) { q in q.raise(gx, gf, i, rise) } { used = 9 }
+					} else if r < 0.7 {
+						let w: Int = p.range(6, 8)
+						if k + w < n - 2 && (0..<w).allSatisfy({ run.floors[k + $0] == gf }) {
+							let xa: Int = min(run.x(k), run.x(k + w - 1))
+							let xb: Int = max(run.x(k), run.x(k + w - 1))
+							if p.attempt(xa - 1, xb + 1, gf - 4, gf) { q in q.workArea(run, k, w) } { used = w + 2 }
+						}
+					}
+					k += max(used, p.range(5, 9)) + p.range(3, 7)
+				}
+				// the far end: a slope carried on to a dead end, or the dead end itself
+				let endX: Int = run.x(n - 1)
+				let endF: Int = run.floors.last ?? levels[i]
+				if p.chance(0.4) {
+					let ja: Int = min(endX, endX + run.dir)
+					let jb: Int = max(endX, endX + run.dir)
+					if !p.attempt(ja, jb, endF - 4, endF + 1, { q in q.ramp(endX + run.dir, endF, run.dir, i) }) {
+						p.deadEnd(endX, endF, run.dir, i)
+					}
+				} else {
+					p.deadEnd(endX, endF, run.dir, i)
+				}
+			}
+		}
+		return (p.plan, levels, lefts, rights)
+	}
+}
+
+/// Builds the part of a version-4 mine that falls in this chunk: carve, seal any water or lava that
+/// would pour in, make the floors sound, timber behind, fittings, ore in the rock face, then chests
+func buildMinePlan(_ g: WorldGen, _ ch: Chunk, _ s: MineSite, _ plan: MinePlan) {
+	let cx0: Int = ch.x0
+	let cx1: Int = ch.x0 + chunkW - 1
+	@inline(__always) func inside(_ x: Int) -> Bool { return x >= cx0 && x <= cx1 }
+	for sp in plan.carve where sp.x >= cx0 - 1 && sp.x <= cx1 + 1 {
+		if inside(sp.x) { for y in sp.y0...sp.y1 { ch.put(sp.x, y, .air) } }
+	}
+	for sp in plan.carve where sp.x >= cx0 - 1 && sp.x <= cx1 + 1 {
+		for y in sp.y0...sp.y1 {
+			if ch.at(sp.x - 1, y).liquid { ch.put(sp.x - 1, y, .stone) }
+			if ch.at(sp.x + 1, y).liquid { ch.put(sp.x + 1, y, .stone) }
+		}
+		if ch.at(sp.x, sp.y0 - 1).liquid { ch.put(sp.x, sp.y0 - 1, .stone) }
+		if ch.at(sp.x, sp.y1 + 1).liquid { ch.put(sp.x, sp.y1 + 1, .stone) }
+	}
+	for f in plan.floors where inside(f.x) {
+		let t: Tile = ch.at(f.x, f.y)
+		if !t.solid || t.liquid { ch.put(f.x, f.y, f.t) }
+	}
+	let plankWall: UInt8 = 5
+	for w in plan.walls where inside(w.x) { ch.fillWall(w.x, w.y0, w.x, w.y1, plankWall) }
+	for t in plan.tiles where inside(t.x) { ch.put(t.x, t.y, t.t) }
+	for o in plan.ores where inside(o.x) {
+		let t: Tile = ch.at(o.x, o.y)
+		if t == .stone || t == .slate || t == .deepRock || t == .sandstone { ch.put(o.x, o.y, o.t) }
+	}
+	for c in plan.chests where inside(c.x) {
+		let below: Tile = ch.at(c.x, c.y + 1)
+		if !(below.solid || below == .platform) || below.liquid { ch.put(c.x, c.y + 1, .planks) }
+		ch.put(c.x, c.y, .chest)
+	}
+}
+
+/// The small set pieces scattered over the land
+enum Landmark {
+	case boulder, mossyBoulder, snowBoulder, fallenLog, fallenJungleLog, mossyLog, meadow, mushroomRing
+	case bones, sandstoneRuin, iceSpikes, cairn, termiteMound, reeds
+
+	var halfWidth: Int {
+		switch self {
+		case .boulder, .mossyBoulder, .snowBoulder, .termiteMound: return 2
+		case .fallenLog, .fallenJungleLog, .mossyLog, .bones, .sandstoneRuin, .reeds: return 4
+		case .meadow: return 6
+		case .mushroomRing, .iceSpikes: return 3
+		case .cairn: return 1
+		}
+	}
+
+	static func pick(_ b: Biome, _ r: Double) -> Landmark? {
+		switch b {
+		case .plains: return r < 0.4 ? .boulder : (r < 0.75 ? .meadow : .fallenLog)
+		case .forest: return r < 0.45 ? .fallenLog : (r < 0.7 ? .mossyBoulder : .mushroomRing)
+		case .jungle: return r < 0.5 ? .fallenJungleLog : .meadow
+		case .savanna: return r < 0.45 ? .boulder : (r < 0.75 ? .bones : .termiteMound)
+		case .desert: return r < 0.55 ? .bones : .sandstoneRuin
+		case .tundra: return r < 0.6 ? .iceSpikes : .snowBoulder
+		case .swamp: return r < 0.55 ? .mossyLog : .reeds
+		case .mountain: return r < 0.65 ? .boulder : .cairn
+		case .ocean, .umbral: return nil
+		}
+	}
+}
+
+/// One landmark (or none) per 72 columns, picked by biome. Each is at most three blocks tall, so it
+/// can always be walked or hopped over, and each only goes on level, dry ground away from buildings.
+func placeLandmarks(_ g: WorldGen, _ ch: Chunk, _ colAt: (Int) -> Col, _ blocked: (Int) -> Bool) {
+	let x0: Int = ch.x0
+	let cw: Int = WorldGen.landmarkCell
+	for c in floorDiv(x0 - 8, cw)...floorDiv(x0 + chunkW + 8, cw) {
+		if hash2(c, 701, g.seed) > 0.5 { continue }
+		let lx: Int = c * cw + 8 + Int(hash2(c, 702, g.seed) * Double(cw - 16))
+		if lx + 6 < x0 || lx - 6 >= x0 + chunkW { continue }
+		if !g.infinite && (lx < 24 || lx > g.width - 24) { continue }
+		if abs(lx - g.spawnX) < 14 { continue }
+		let base: Col = colAt(lx)
+		guard let kind = Landmark.pick(base.biome, hash2(c, 703, g.seed)) else { continue }
+		let hw: Int = kind.halfWidth
+		var ok: Bool = true
+		for d in -hw...hw {
+			let cc: Col = colAt(lx + d)
+			if cc.biome == .ocean || cc.h >= WorldGen.sea - 1 || abs(cc.h - base.h) > 1 || blocked(lx + d) { ok = false; break }
+		}
+		if !ok { continue }
+		let seed: UInt64 = hashU(c, 704, g.seed)
+		// writes over air and small plants only, so trunks and buildings stay as they are
+		func place(_ d: Int, _ up: Int, _ t: Tile) {
+			let x: Int = lx + d
+			let y: Int = colAt(x).h - up
+			let cur: Tile = ch.at(x, y)
+			if cur == .air || (cur.isPlant && cur != .torch && cur != .lantern) { ch.put(x, y, t) }
+		}
+		func plant(_ d: Int, _ t: Tile) {
+			let x: Int = lx + d
+			let h: Int = colAt(x).h
+			if x < x0 || x >= x0 + chunkW { return }
+			if !ch.at(x, h).solid { return }
+			if ch.at(x, h - 1) == .air || ch.at(x, h - 1) == .tallGrass { ch.put(x, h - 1, t) }
+		}
+		func rnd(_ k: Int) -> Double { return hash2(lx, k, seed) }
+		switch kind {
+		case .boulder, .mossyBoulder, .snowBoulder:
+			let cap: Tile = kind == .mossyBoulder ? .mossGrass : (kind == .snowBoulder ? .snow : .stone)
+			let wide: Bool = rnd(1) < 0.5
+			for d in -2...2 {
+				if abs(d) == 2 && !wide { continue }
+				let hgt: Int = abs(d) == 2 || (abs(d) == 1 && !wide) ? 1 : 2
+				for k in 1...hgt { place(d, k, k == hgt ? cap : .stone) }
+			}
+		case .fallenLog, .fallenJungleLog, .mossyLog:
+			let len: Int = 4 + Int(rnd(1) * 4.0)
+			let start: Int = -len / 2
+			let wood: Tile = kind == .fallenJungleLog ? .jungleLogBlock : (rnd(3) < 0.35 && kind == .fallenLog ? .birchLogBlock : .logBlock)
+			for d in start..<(start + len) { place(d, 1, wood) }
+			if rnd(2) < 0.6 || kind == .mossyLog { place(start + 1, 2, .mushroom) }
+			if kind == .mossyLog { place(start + len - 2, 2, .mushroom) }
+			plant(start - 1, .tallGrass)
+			plant(start + len, .tallGrass)
+		case .meadow:
+			for d in -6...6 {
+				let r: Double = rnd(10 + d)
+				plant(d, r < 0.36 ? .flowerR : (r < 0.72 ? .flowerY : .tallGrass))
+			}
+		case .mushroomRing:
+			for d in [-3, -2, 2, 3] { plant(d, .mushroom) }
+			plant(0, .tallGrass)
+		case .bones:
+			for d in -3...3 { place(d, 1, .fossil) }
+			for d in [-2, 0, 2] { place(d, 2, .fossil) }
+			place(4, 1, .fossil)
+			place(4, 2, .fossil)
+		case .sandstoneRuin:
+			for d in [-3, 3] {
+				place(d, 1, .sandstone)
+				if rnd(d + 5) < 0.7 { place(d, 2, .sandstone) }
+			}
+			for d in -1...1 { place(d, 1, .sandstone) }
+			if rnd(4) < 0.3 { place(0, 2, .chest) }
+		case .iceSpikes:
+			for (d, hgt) in [(-2, 2), (0, 3), (2, 2)] where rnd(d + 7) < 0.85 || d == 0 {
+				for k in 1...hgt { place(d, k, .ice) }
+			}
+		case .cairn:
+			for k in 1...3 { place(0, k, .stone) }
+			place(0, 4, .torch)
+			place(-1, 1, .stone)
+			place(1, 1, .stone)
+		case .termiteMound:
+			for (d, hgt) in [(-2, 1), (-1, 2), (0, 3), (1, 2), (2, 1)] {
+				for k in 1...hgt { place(d, k, .dirt) }
+			}
+		case .reeds:
+			for d in -4...4 where rnd(20 + d) < 0.7 { plant(d, .reed) }
+		}
+	}
+}
+
+// ===== p35_automation =====
+
+// MARK: - Automation: guns that fire by themselves, remote control, signals
+
+/// How a vehicle's gun fires (saved by number: only add at the end)
+enum GunMode: Int, CaseIterable {
+	case driver, auto, buttonA, buttonB, buttonC, signal
+	var name: String {
+		switch self {
+		case .driver: return "fires with its driver's attack"
+		case .auto: return "a turret: fires by itself at monsters it can see"
+		case .buttonA: return "fires while button A is held"
+		case .buttonB: return "fires while button B is held"
+		case .buttonC: return "fires while button C is held"
+		case .signal: return "fires while its receiver's channel is on"
+		}
+	}
+}
+
+/// What a vehicle's receivers do while their channel is on (saved by number: only add at the end)
+enum RadioAct: Int, CaseIterable {
+	case forward, back, route, buttonA, buttonB, buttonC
+	var name: String {
+		switch self {
+		case .forward: return "Drive forward"
+		case .back: return "Drive back"
+		case .route: return "Run its route"
+		case .buttonA: return "Hold button A"
+		case .buttonB: return "Hold button B"
+		case .buttonC: return "Hold button C"
+		}
+	}
+}
+
+/// A mod gun block's own shot (its number among the mod shots, -1: the game's), speed, damage and
+/// shots a second (0: the game part's own)
+struct ModGunRT {
+	var shot: Int = -1
+	var speed: Double = 0
+	var damage: Double = 0
+	var rate: Double = 0
+}
+
+/// The numbers of automation
+enum Radio {
+	/// how far a turret looks for something to shoot (blocks)
+	static let turretRange: Double = 16.0
+	/// how far either side of its own way a gun can turn (radians)
+	static let gunArc: Double = 1.4
+	/// how far a remote control reaches its vehicle (blocks)
+	static let remoteRange: Double = 200.0
+	/// how many signal channels there are
+	static let channels: Int = 8
+	/// how many vehicles at work far from the player keep their land loaded, and how many chunks of
+	/// land may be loaded for them in a frame
+	static let farVehicles: Int = 8
+	static let farLoads: Int = 2
+}
+
+extension Game {
+	/// The vehicle the player has their hands on: the one they sit in, or the one their remote drives
+	var drivenVehicle: Vehicle? { return inVehicle ?? remoteVehicle }
+
+	/// Whether the player drives this vehicle (from its seat or by remote), or the machine it is a section of
+	func playerDrives(_ v: Vehicle) -> Bool {
+		guard let d = drivenVehicle else { return false }
+		if d === v { return true }
+		if v.parentID == 0 && v.joints.isEmpty { return false }
+		return machineRoot(v) === machineRoot(d)
+	}
+
+	/// The guns on a vehicle and every section of the machine it belongs to
+	func machineGuns(_ v: Vehicle) -> Int {
+		if v.parentID == 0 && v.joints.isEmpty { return v.cannons + v.guns }
+		var n: Int = 0
+		for p in machineSections(machineRoot(v)) { n += p.cannons + p.guns }
+		return n
+	}
+
+	// MARK: signals
+
+	/// Once a frame, before the vehicles move: the channels as the posts and the Logic Studio set them,
+	/// and every vehicle with receivers doing what its channel says
+	func radioControls(_ dt: Double) {
+		for i in 0..<Radio.channels {
+			let on: Bool = postChannels[i] || logicChannels[i]
+			if on && !channels[i] { fireLogic(.channelOn, number: Double(i + 1)) }
+			channels[i] = on
+		}
+		for v in vehicles where v.receivers > 0 || v.signalOn || v.signalDrive {
+			let listening: Bool = v.receivers > 0 && v.channel > 0
+			let on: Bool = listening && channels[clampI(v.channel - 1, 0, Radio.channels - 1)]
+			let was: Bool = v.signalOn
+			v.signalOn = on
+			let act: RadioAct = RadioAct(rawValue: v.radioAct) ?? .forward
+			// (a driver at the controls has the say over a signal)
+			let free: Bool = !v.rider
+			var drive: Bool = false
+			if on && free && (act == .forward || act == .back) {
+				drive = true
+				v.throttle = act == .forward ? 1.0 : -1.0
+				v.asleep = false
+			}
+			if v.signalDrive && !drive && free && v.auto == 0 { v.throttle = 0 }
+			v.signalDrive = drive
+			if act == .route && listening {
+				if on && !was && v.autopilots > 0 && v.route.count >= 2 {
+					v.auto = 2
+					v.routeAt = nearestWaypoint(v)
+					v.asleep = false
+				}
+				if !on && was && v.auto == 2 {
+					v.auto = 0
+					if free {
+						v.throttle = 0
+						v.pitch = 0
+					}
+				}
+			}
+			if on != was { v.asleep = false }
+		}
+	}
+
+	/// The receiver panel sets the vehicle's channel and what its receivers do
+	func setRadio(channel: Int, act: RadioAct) {
+		guard let v = vehicleByID(radioEdit) else { return }
+		v.channel = clampI(channel, 0, Radio.channels)
+		v.radioAct = act.rawValue
+		v.asleep = false
+		bumpHUD()
+	}
+
+	/// DONE on the receiver panel
+	func closeRadio() {
+		showRadio = false
+		radioEdit = 0
+		bumpHUD()
+	}
+
+	/// Whether a signal channel (1 to 8) is on
+	func channelIsOn(_ n: Int) -> Bool {
+		if n < 1 || n > Radio.channels { return false }
+		return channels[n - 1] || postChannels[n - 1] || logicChannels[n - 1]
+	}
+
+	/// The Logic Studio turns a channel (1 to 8) on or off
+	func setLogicChannel(_ n: Int, _ on: Bool) {
+		if n < 1 || n > Radio.channels { return }
+		logicChannels[n - 1] = on
+	}
+
+	/// The buttons A, B and C held for a vehicle or its machine: the driver's own, and any a receiver's
+	/// signal holds
+	func machineButtonsHeld(_ v: Vehicle, _ driving: Bool) -> [Bool] {
+		var out: [Bool] = driving ? jointButtons : [false, false, false]
+		let parts: [Vehicle] = v.parentID == 0 && v.joints.isEmpty ? [v] : machineSections(machineRoot(v))
+		for p in parts where p.signalOn {
+			let i: Int = p.radioAct - RadioAct.buttonA.rawValue
+			if i >= 0 && i < 3 { out[i] = true }
+		}
+		return out
+	}
+
+	/// Whether a receiver on a vehicle or its machine has its channel on
+	func machineSignalOn(_ v: Vehicle) -> Bool {
+		if v.parentID == 0 && v.joints.isEmpty { return v.signalOn }
+		return machineSections(machineRoot(v)).contains { (p: Vehicle) in p.signalOn }
+	}
+
+	/// What a vehicle sensor sees: a vehicle with a cell within its range (any, one being driven, or one
+	/// with nobody at its controls)
+	func vehicleNearSensor(_ cx: Double, _ cy: Double, _ r: Double, _ mode: Int) -> Bool {
+		for v in vehicles {
+			if v.b.right < cx - r - 1 || v.b.left > cx + r + 1 || v.b.y < cy - r - 1 || v.b.top > cy + r + 1 { continue }
+			let driven: Bool = machineRoot(v).rider || v.rider
+			if mode == 1 && !driven { continue }
+			if mode == 2 && driven { continue }
+			for (c, _) in v.parts {
+				let p: (Double, Double) = v.cellCenter(c)
+				if hypot(p.0 - cx, p.1 - cy) <= r + 0.5 { return true }
+			}
+		}
+		return false
+	}
+
+	// MARK: vehicles at work far away
+
+	/// A vehicle at work on its own: an autopilot with nobody at the controls, or a remote driving it
+	func vehicleWorking(_ v: Vehicle) -> Bool {
+		let root: Vehicle = machineRoot(v)
+		if root.id == remoteID || root.signalDrive || v.signalDrive { return true }
+		return root.auto != 0 && !root.rider
+	}
+
+	/// The land round each vehicle at work stays loaded however far it goes from the player, and the land
+	/// ahead of it is loaded as it goes (a little each frame), so an autopilot runs its route anywhere
+	func keepWorkingLand(_ keep: inout Set<Int>) {
+		var budget: Int = Radio.farLoads
+		var n: Int = 0
+		for v in vehicles where vehicleWorking(v) {
+			n += 1
+			if n > Radio.farVehicles { break }
+			let reach: Double = 8.0 + abs(v.vx) * 1.5
+			let c0: Int = floorDiv(Int(floor(v.b.left - reach)), chunkW)
+			let c1: Int = floorDiv(Int(floor(v.b.right + reach)), chunkW)
+			var c: Int = c0
+			while c <= c1 {
+				keep.insert(c)
+				if budget > 0 && world.chunks[c] == nil && world.inRange(c) {
+					world.loadChunk(c)
+					budget -= 1
+				}
+				c += 1
+			}
+		}
+	}
+
+	// MARK: the remote control
+
+	/// The vehicle the remote drives now
+	var remoteVehicle: Vehicle? { return remoteID == 0 ? nil : vehicleByID(remoteID) }
+
+	/// Receivers on a vehicle and every section of its machine
+	func machineReceivers(_ v: Vehicle) -> Int {
+		if v.parentID == 0 && v.joints.isEmpty { return v.receivers }
+		var n: Int = 0
+		for p in machineSections(machineRoot(v)) { n += p.receivers }
+		return n
+	}
+
+	/// Whether the remote still reaches a vehicle: it is here, it has a receiver, and it is near enough
+	func remoteCanReach(_ v: Vehicle) -> Bool {
+		if v.parts.isEmpty || machineReceivers(v) == 0 { return false }
+		return hypot(v.px - pb.x, v.py - pb.y) <= Radio.remoteRange
+	}
+
+	/// The remote in use: on a vehicle within reach it pairs with it (if it has a receiver); anywhere else
+	/// it takes the paired vehicle's controls
+	func useRemote() {
+		if useCD > 0 { return }
+		useCD = 0.3
+		if let (v, _) = vehicleAtPoint(aimX, aimY), inReach(aimX, aimY) {
+			let root: Vehicle = machineRoot(v)
+			if machineReceivers(root) == 0 {
+				say("It needs a receiver to answer a remote: build one onto it.", 2.5)
+				return
+			}
+			remotePair = root.id
+			sfx(.tap, 0.6)
+			say("Paired. Use the remote away from it to drive it from afar; JUMP lets go.", 3.0)
+			return
+		}
+		startRemote()
+	}
+
+	/// Takes the paired vehicle's controls from where the player stands
+	func startRemote() {
+		guard let v = vehicleByID(remotePair) else {
+			say(remotePair == 0 ? "Pair the remote first: use it on a vehicle with a receiver." : "The paired vehicle is not here.", 2.5)
+			return
+		}
+		if inVehicle != nil || mounted != nil {
+			say("Get out first: the remote drives from outside.", 2.0)
+			return
+		}
+		if !remoteCanReach(v) {
+			say(machineReceivers(v) == 0 ? "Its receiver is gone." : "Too far away for the remote.", 2.0)
+			return
+		}
+		remoteID = v.id
+		v.rider = true
+		v.asleep = false
+		v.holdY = v.py
+		say("Driving by remote. JUMP lets go.", 2.5)
+		bumpHUD()
+	}
+
+	/// The stick drives the vehicle the remote holds, as if from its seat; JUMP lets go
+	func driveRemote(_ v: Vehicle, _ ix: Double, _ jump: Bool, _ dt: Double) {
+		if jump {
+			endRemote("Remote off.")
+			return
+		}
+		v.throttle = ix
+		var up: Double = -stickY
+		if abs(up) < 0.15 { up = 0 }
+		v.pitch = clampD(up, -1, 1)
+		if v.auto != 0 { autopilotSteer(v, ix, up, dt) }
+		if abs(v.throttle) > 0.05 || abs(v.pitch) > 0.05 { v.asleep = false }
+	}
+
+	/// Lets go of the remote (the vehicle keeps its autopilot, if it is on)
+	func endRemote(_ why: String? = nil) {
+		if let v = vehicleByID(remoteID), inVehicle !== v {
+			v.rider = false
+			if v.auto == 0 {
+				v.throttle = 0
+				v.pitch = 0
+			}
+		}
+		remoteID = 0
+		if let w = why { say(w, 2.0) }
+		bumpHUD()
+	}
+
+	/// A gun cell's own shot, speed, damage and rate when it is a mod's gun block (none: the game part's own)
+	func modGun(_ v: Vehicle, _ c: PartCell) -> ModGunRT {
+		guard let b = v.blocks[c], b.isMod, let d = ModRuntime.shared.blockDef(b) else { return ModGunRT() }
+		return ModGunRT(shot: ModRuntime.shared.blockShot(b), speed: d.shotSpeed, damage: d.shotDamage, rate: d.fireRate)
+	}
+
+	/// A tap on a gun (not while driving): the next way of firing, round and back to the driver's
+	func cycleGunMode(_ v: Vehicle, _ c: PartCell) {
+		let n: Int = GunMode.allCases.count
+		let next: Int = ((v.gunMode[c] ?? 0) + 1) % n
+		if next == 0 { v.gunMode[c] = nil } else { v.gunMode[c] = next }
+		let m: GunMode = GunMode(rawValue: next) ?? .driver
+		say(joinText(v.parts[c] == .cannon ? "Cannon: " : "Machine gun: ", m.name, "."), 2.5)
+		sfx(.tap, 0.5)
+		v.asleep = false
+		bumpHUD()
+	}
+
+	/// What a turret shoots at: the nearest threat it can see within its reach and its arc, where it
+	/// will be when the shot gets there
+	func turretTarget(_ v: Vehicle, _ c: PartCell, _ o: (Double, Double), _ base: Double) -> (Double, Double)? {
+		let r: Double = Radio.turretRange
+		var best: Mob? = nil
+		var bd: Double = r * r
+		for m in mobsNear(o.0 - r, o.0 + r) where m.hp > 0 && !m.removed && !m.downed && !m.tame && isThreat(m) {
+			let dx: Double = m.b.x - o.0
+			let dy: Double = m.b.cy - o.1
+			let d: Double = dx * dx + dy * dy
+			if d >= bd { continue }
+			if abs(remainder(atan2(dy, dx) - base, 2.0 * Double.pi)) > Radio.gunArc + 0.05 { continue }
+			if !world.lineClear(o.0, o.1, m.b.x, m.b.cy) { continue }
+			bd = d
+			best = m
+		}
+		guard let m = best else { return nil }
+		let lead: Double = sqrt(bd) / 40.0
+		return (m.b.x + m.b.vx * lead, m.b.cy + m.b.vy * lead)
+	}
+}
 
 // ===== p09_umbral =====
 
@@ -4158,6323 +6162,5 @@ final class SectionPainter: @unchecked Sendable {
 				}
 			}
 		}
-	}
-}
-
-// ===== a01_artsheet =====
-
-// MARK: - The hand-drawn pictures, kept as text
-// Creatures and blocks are drawn at 16 pixels to a block with the tools in tools/art (parts laid over
-// each other, a dark line round each), and packed here as text: pictures in a string cost the build far
-// less than the same pictures as code. A picture's pixels run row after row, repeats written as a
-// count: "12.3ab" is twelve clear pixels, three of colour a and one of colour b.
-
-enum ArtSheet {
-	/// A creature starts on a line "name|width|height|row of the soles|column of the middle|colours|
-	/// poses"; the lines after it that start with "+" hold its frames, one after another with "/" between
-	static let creatureText: String = """
-		// <art:creatures> written by tools/art/build.py pack from tools/art/creatures: change the drawings, not this
-		archer|34|34|31|13.5|a17191E,b574736,c392F24,d93B6A4,e71A09D,f3A5357,g507272,h1A1418,iD87067,j381E26,kE7E2C9,l7F8B66,m5A6641,nE4DCCD,o9A7A54,p3E4833,q2C342B,r72573B,s677186,t3F4C5F,u2C3544,v212633,w494048,x3A3238,y2A242C,z1E1A20|idle:0;walk:1,2,3,4;windup:5;strike:5;shoot:5
-		+14.5a28.a5b2a25.a8ba23.ac3b5da23.ac2b2d4ea23.acb2e4fea23.acg2e2hih2ea22.a2g7ega23.ag2ejkjkja24.a2ge5ja23.2a2fgkjk2ga22.a3l5f2a22.a2lm5fanoa20.a2lmf2lf2manaoa19.al2mf2mfmp
-		+an2aoa18.a3mfmp3fan2aoa18.ap2mfmp2edfn2aoa18.a2p2mfq2gefn2ara19.a2p2m4fana2ra19.qpqmpmqa.an2ara18.a3qp3qa.an2aoa18.asqt2quq2.an2aoa18.a6vuv2an2aoa18.as2tuv2uv2anaoa19.as2
-		+tuv2uv2anoa21.a2tuv2uva.2a22.a2tuv2uva25.at2uvu2va25.aeg2agfa26.aeg2agfa25.a4wv3xa24.a4wyv2xza24.4av4a50./14.5a28.a5b2a25.a8ba23.ac3b5da23.ac2b2d4ea23.acb2e4fea23.acg2e2h
-		+ih2ea22.a2g7ega23.ag2ejkjkja24.a2ge5ja23.2a2fgkjk2ga22.a3l5f2a22.a2lm5fanoa20.a2lmf2lf2manaoa19.al2mf2mfmpan2aoa18.a3mfmp3fan2aoa18.ap2mfmp2edfn2aoa18.a2p2mfq2gefn2ara19.
-		+a2p2m4fana2ra19.qpqmpmqa.an2ara18.a3qp3qa.an2aoa18.asqt2quq2.an2aoa18.a6vuv2an2aoa18.a2s2tuvuv2anaoa20.as2tu2va.anoa22.a2t2uva2.2a23.vs2tuv28.av2tua28.avega29.aveg2a28.av
-		+4wa27.av3wya28.a3va52./48.5a28.a5b2a25.a8ba23.ac3b5da23.ac2b2d4ea23.acb2e4fea23.acg2e2hih2ea22.a2g7ega23.ag2ejkjkja24.a2ge5ja23.2a2fgkjk2ga22.a3l5f2a22.a2lm5fanoa20.a2lmf
-		+2lf2manaoa19.al2mf2mfmpan2aoa18.a3mfmp3fan2aoa18.ap2mfmp2edfn2aoa18.a2p2mfq2gefn2ara19.a2p2m4fana2ra19.qpqmpmqa.an2ara18.a3qp3qa.an2aoa18.vsqt2quqv2an2aoa18.a6vuv2an2aoa1
-		+8.as2tuvtuv2anaoa20.a2tuvt2uvanoa21.a2tu2a2uv3a22.at2u2agfva24.aega.agfa25.aeg2a3xa24.a4wv3xza23.a4wyv3a25.5a54./14.5a28.a5b2a25.a8ba23.ac3b5da23.ac2b2d4ea23.acb2e4fea23.
-		+acg2e2hih2ea22.a2g7ega23.ag2ejkjkja24.a2ge5ja23.2a2fgkjk2ga22.a3l5f2a22.a2lm5fanoa20.a2lmf2lf2manaoa19.al2mf2mfmpan2aoa18.a3mfmp3fan2aoa18.ap2mfmp2edfn2aoa18.a2p2mfq2gefn
-		+2ara19.a2p2m4fana2ra19.qpqmpmqa.an2ara18.a3qp3qa.an2aoa18.asqt2quq2.an2aoa18.a6vuv2an2aoa18.as2tuvt2uvanaoa18.as2tu2at2uvanoa19.a2t2ua.a2u2v2a19.as2tua2.at2uva20.a2tua4.a
-		+2uva20.aega5.agfa21.aega5.agf2a20.a3wa4.a4xa19.a3wya3.a3xza20.4a5.4a48./48.5a28.a5b2a25.a8ba23.ac3b5da23.ac2b2d4ea23.acb2e4fea23.acg2e2hih2ea22.a2g7ega23.ag2ejkjkja24.a2g
-		+e5ja23.2a2fgkjk2ga22.a3l5f2a22.a2lm5fanoa20.a2lmf2lf2manaoa19.al2mf2mfmpan2aoa18.a3mfmp3fan2aoa18.ap2mfmp2edfn2aoa18.a2p2mfq2gefn2ara19.a2p2m4fana2ra19.qpqmpmqa.an2ara18.
-		+a3qp3qa.an2aoa18.vsqt2quqv2an2aoa18.a6vuv2an2aoa18.a2stuv2uv2anaoa20.as2tuvuv2anoa22.a2tuvuva.2a23.aegu3va26.aegvgfa26.a3wvgfa26.a3wyv2xa26.2a2v3xza28.5a50./14.5a28.a5b2a
-		+25.a8ba23.ac3b5da23.ac2b2d4ea23.acb2e4fea23.acg2e2hih2ea22.a2g7ega23.ag2ejkjkja3.a20.a2ge5ja2.aoa18.2a2fgkjk2ga.anaoa16.a3l6fa.an2aoa15.a2l2m5f2a3f2aoa14.a2l2mf4lmfe3defr
-		+a14.al2maf4m2p5egfa14.a4mf3pqf2g2ega2gf14.ap4m4f.2a3fg2fa14.a2p4m2pa4.anfaoa15.a2p3mpqa5.anaoa15.qpqmpmqa7.aoa15.a3qp3qa8.a16.asqt2quq26.a6vuva24.as2tuv2uva24.as2tuvuva26
-		+.a2tu3va26.a2tu2va27.at2uva28.aegva29.aegva28.a4wva27.a4wyva27.2a3va53.
-		bat|24|16|13|12|a14111C,b6F6582,c403854,d2D283D,e5B4D6E,f2C263A,g827495,hDB6E6E,i3F364F,jFFFFFF|idle:0;fly:0,1,2,1
-		+.a18.a3.aba16.aba2.acba14.abca2.a2cba12.ab2ca2.ad2cba10.ab2cda3.ad2cba2.a4.2ab2cda5.ad2cb2aea2.aef2cda7.a2dc2a2e2a2ef2da9.3a.aeg2egef2a14.aeh2ehea17.a4ea18.ai2eia19.a2ja2
-		+1.2a59./105.a4.a9.7a.aea2.aef6a2.7b2a2e2a2ef6ba.d5cb2aeg2egef5cda.adadadc2aeh2ehefdadada3.a.a.2a2.a4e3a.a.a12.ai2eia19.a2ja21.2a83./81.a4.a17.aea2.aea16.a2e2a2ea12.3a.aeg
-		+2egef2a9.a2dc2aeh2ehef2da7.ad2cba.a4efb2cda5.ad2cba2.ai2ei2ab2cda3.ad2cba4.a2ja2.ab2cda2.a2cba6.2a4.ab2ca2.acba14.abca2.aba16.aba3.a18.a27.
-		bear|46|26|23|16|a1C1518,bA08061,c422F2C,d815F48,e5B4237,fFFFFFF,g1A1316,hCBB393,i1E1519,jBA9C77,k816B57,l251A18,mE7DFC9,nEFEAD9,o834248|idle:0;walk:1,2,3,4;strike:5
-		+106.8a34.4a8b2ac2a25.4a13bc3da22.2a16bcd3ed6a15.a18bcd2e2d6b2a12.a3b17dc2d10ba10.a2b14de3dc3b4d3e3dba9.ab15de2dc2b7dfg4d2a8.a17dedcb8d2g4h2ia7.a17dedc11d4j2ia7.ae17dece9d
-		+e6ja7.ae19dce7d2e5ka9.ae19dce6de5la10.a5dc8dc5d2c2e4d2e3ja11.a5dc8ec5d3c7e3a12.a4de10c4dec2e3c4a15.a4de6c3ac4dec3eca19.a3d2ec2e2ca3.a3d2ec2e2ca19.a3d2ec2e2ca3.a3d2ec2e2ca
-		+19.a4d2ec2e2ca2.a4d2ec2e2ca18.a5dec3eca2.a5dec3eca18.acmcmcm2cmcma2.acmcmcm2cmcma19.5ac5a4.5ac5a63./106.8a34.4a8b2ac2a25.4a13bc3da22.2a16bcd3ed6a15.a18bcd2e2d6b2a12.a3b17
-		+dc2d10ba10.a2b14de3dc3b4d3e3dba9.ab15de2dc2b7dfg4d2a8.a17dedcb8d2g4h2ia7.a17dedc11d4j2ia7.ae17dece9de6ja7.ae19dce7d2e5ka9.ae19dce6de5la11.ac5dc4dc5dc2ec2e4d2e3ja13.c5dc4e
-		+c5dcea2c7e3a14.a4de6c4deca.ae5c2a17.a4de2c3ac4dea2.a4eca19.a3d2eca3.a3d2ea2.a3e2ca19.a3d2eca3.a3d2ea2.a3e2ca19.a4d2eca2.a4d2ea.a4e2ca18.a5deca2.a5dea.a5eca18.acmcmcmca2.a
-		+cmcmcma.acmcmcma19.a5ca4.6a3.6a61./60.8a34.4a8b2ac2a25.4a13bc3da22.2a16bcd3ed6a15.a18bcd2e2d6b2a12.a3b17dc2d10ba10.a2b14de3dc3b4d3e3dba9.ab15de2dc2b7dfg4d2a8.a17dedcb8d2g
-		+4h2ia7.a17dedc11d4j2ia7.ae17dece9de6ja7.ae19dce7d2e5ka9.ae19dce6de5la11.a2e11dc5d2c2e4d2e3ja11.a5dc8ec5d3c7e3a12.a5d10c4dec2e3c4a15.a4de6c3ac4dec3eca19.a4dec2e2ca3.a3d2ec
-		+3eca19.a3d2ec2e2ca3.a3d2ec2e2ca19.a3d2ec3e2ca2.a4d2ece2ca19.a4d2ec3eca2.a5dec2e2ca18.a5de2cmcma2.acmcmcmc3eca18.acmcmcmc4a4.4a2cmcmcma19.6a14.6a63./106.8a34.4a8b2ac2a25.4
-		+a13bc3da22.2a16bcd3ed6a15.a18bcd2e2d6b2a12.a3b17dc2d10ba10.a2b14de3dc3b4d3e3dba9.ab15de2dc2b7dfg4d2a8.a17dedcb8d2g4h2ia7.a17dedc11d4j2ia7.ae17dece9de6ja7.ae19dce7d2e5ka9.
-		+ae19dce6de5la8.a5dc12dc4dc2e4d2e3ja9.a5dc12ec5dc7e3a10.a4deca12c4de2c6a13.a4dea.a7c3ac4deca19.a3d2ea2.a3e2ca3.a3d2eca19.a3d2ea2.a3e2ca3.a3d2eca19.a4d2ea.a4e2ca2.a4d2eca18
-		+.a5dea.a5eca2.a5deca18.acmcmcma.acmcmcma2.acmcmcmca19.6a3.6a4.a5ca65./60.8a34.4a8b2ac2a25.4a13bc3da22.2a16bcd3ed6a15.a18bcd2e2d6b2a12.a3b17dc2d10ba10.a2b14de3dc3b4d3e3dba
-		+9.ab15de2dc2b7dfg4d2a8.a17dedcb8d2g4h2ia7.a17dedc11d4j2ia7.ae17dece9de6ja7.ae19dce7d2e5ka9.ae19dce6de5la10.a5dc13d2ec2e4d2e3ja11.a5dc8ec5d3c7e3a12.a4de10c5dc2e3c4a15.a4de
-		+6c3ac4dec3eca19.a3d2ec3eca3.a4dec2e2ca19.a3d2ec2e2ca3.a3d2ec2e2ca19.a4d2ece2ca3.a3d2ec3e2ca18.a5dec2e2ca2.a4d2ec3eca18.acmcmcmc3eca2.a5de2cmcma19.4a2cmcmcma2.acmcmcmc4a25
-		+.6a4.6a68./106.8a34.4a8b3a.3a23.4a15bc3da20.2a18bcd3ed6a13.a20bcd2e2d6b2a10.a3b19dc2d10ba8.a2b14de5dc3b4d3e3dba7.ab15de4dc2b7dfg4d2a6.a17de3dcb8d2g4h2ia5.a17de3dc11d4j2ia
-		+5.ae17de2dce9dejnjnja6.ae21dce7d2e5oa7.ae15dc5dce6d2e5oa6.a5dc11dc5d2ce5d2ejnjnja6.a5dc11ec4decec2e3d2e4ja7.a4de13c4de2c2a6e3ka8.a4de2a7c3ac3d2e2ca.9a9.a3d2ea.a3e2ca3.a3d
-		+2e2ca19.a3d2ea.a4e2ca2.a4d2eca19.a4d2e2a5eca2.a5de2ca18.a5de2acmcmcma2.acmcmcm2ca18.acmcmcma.6a4.a6cma19.6a14.6a64.
-		bearBoss|112|92|88|50|a120D10,bDDD5BF,cD1C7AD,d978E7E,e120C10,f493B36,g6B5D53,h322727,i90857C,j231B1D,kBC8B7F,lEFE3AF,mD6AA63,n9F876F,o1A1115,p846B56,q5D4A3E,r231A1C,sE3DBC9,t978E7F,uEFEAD9,v552930,w834248,xE4DCCD|idle:0;walk:1,2,3,4;rear:5;strike:6
-		+3533.a110.aba108.a2bca102.a3.d2b2cda7.3a90.aba2edb2c2da.a4.a3fa83.a4.a2bcd2g5d.aba2.af3hf7a75.aba.ed2b2c2d3fi2gd2bca.af2h2f7g3a65.a5.a2bcdgdb2c3d5fd2b2cd3a2f12ga55.a7.aba
-		+3.a2b2c2dg5d6fdb2c2dj4g11f2ga45.a7.aba5.a2bca2.ab2c3d13f4dj2g16fga43.aba5.a2bca3.d2b2c2d2e5d17fj2g9fk8fga41.a2bca3ed2b2c2d2edb2c3d4g15fi3fj2g11fk4h4fga38.ed2b2c2digdb2c3d
-		+3g5d3g11fi9fjg12fklm8f2a35.egdb2c3d3g5d3g14fi15fjg13fk2mf6n2oa33.e3g5d20fi21fj15fk7n3oa32.e2g21fi27fj16f8p2oa31.e2g16fi26fh3fi2fjh14fh10pa30.e2g11fi24fh5fifh6fjh13f2h9pa3
-		+0.e2g6fi30fi15fjh11f2h9qa31.egfi28fhfi22fjh10fh9oa32.e15fh7fh3fi24fh4fjh8f2h8pa33.e7fh7fh5fi22fh7fh5fj2h6f3h6qa33.eg7fh7fi20fh7fh14f2j9h6a34.eg28fh7fh24f4j5a40.e21fh7fh28
-		+fh5fge44.eg13fh7fh28fh7fh6fe44.eg5fh7fh28fh7fh14fe44.e6fh28fh7fh22fe44.e27fh7fh28fhfe44.e19fh7fh28f2h6fhfe44.e11fh7fh24f17h2f2hfe44.e2hfh7fh28f21hf4he44.e7h25fh4f29he44.e
-		+66he44.ej63h2je44.e2j61h3je45.ej61h2je46.ej60h2je48.ej54h7je48.e4j50h7je49.e5j37h19je49.e7j5h8j18h22je51.e2j9f31j9f8je52.j11f30j9fh4j3r53.a11fh29j9fh2j2rhja53.a11fh29j8f2
-		+hjr2h2ja54.a9f2h29j8f2hj3h2ja55.a7f2hj6r21jej8f2hj3h2ja55.a7fhj5hja21e2.a7f2hj3h2ja55.a7fhj5hja23.a7f2hj3h2ja55.a6f2hj4h2ja23.a7f2hj3h2ja55.a6f2hj4h2ja23.a7f2hj3h2ja55.a6
-		+f2hj4h2ja23.a7f2hj3h2ja55.a6f2hj4h2ja23.a8f2hj3h2ja54.a7f2hj4h2ja22.a9fhj4hja54.a8fhj5hja22.a9fhj4hja54.a9fhj5hja21.a10h6ja54.a10h7ja21.aststststsjststsa55.aststststsjtst
-		+stsa23.6a3j6a57.7a2j7a192./3533.a110.aba108.a2bca102.a3.d2b2cda7.3a90.aba2edb2c2da.a4.a3fa83.a4.a2bcd2g5d.aba2.af3hf7a75.aba.ed2b2c2d3fi2gd2bca.af2h2f7g3a65.a5.a2bcdgdb2c
-		+3d5fd2b2cd3a2f12ga55.a7.aba3.a2b2c2dg5d6fdb2c2dj4g11f2ga45.a7.aba5.a2bca2.ab2c3d13f4dj2g16fga43.aba5.a2bca3.d2b2c2d2e5d17fj2g9fk8fga41.a2bca3ed2b2c2d2edb2c3d4g15fi3fj2g11
-		+fk4h4fga38.ed2b2c2digdb2c3d3g5d3g11fi9fjg12fklm8f2a35.egdb2c3d3g5d3g14fi15fjg13fk2mf6n2oa33.e3g5d20fi21fj15fk7n3oa32.e2g21fi27fj16f8p2oa31.e2g16fi26fh3fi2fjh14fh10pa30.e2
-		+g11fi24fh5fifh6fjh13f2h9pa30.e2g6fi30fi15fjh11f2h9qa31.egfi28fhfi22fjh10fh9oa32.e15fh7fh3fi24fh4fjh8f2h8pa33.e7fh7fh5fi22fh7fh5fj2h6f3h6qa33.eg7fh7fi20fh7fh14f2j9h6a34.eg
-		+28fh7fh24f4j5a40.e21fh7fh28fh5fge44.eg13fh7fh28fh7fh6fe44.eg5fh7fh28fh7fh14fe44.e6fh28fh7fh22fe44.e27fh7fh28fhfe44.e19fh7fh28f2h6fhfe44.e11fh7fh24f17h2f2hfe44.e2hfh7fh28f
-		+21hf4he44.e7h25fh4f29he44.e66he44.ej63h2je44.e2j61h3je45.ej61h2je46.ej60h2je48.ej54h7je48.e4j50h7je49.e5j37h19je49.e7j5h8j18h22je51.e5j9f25j9f11jra51.2e2j11f24j9fh7j3rhja
-		+52.ej11fh23j9fh5j2r4hja53.j11fh23j8f2h4jr5h2ja54.j9f2h23j8f2h2j2r6h2ja55.a7f2hjr2e20j8f2hjr8h2ja55.a7fhja3.20ej7f2ha.a7h2ja55.a7fhja23.a7f2ha.a7h2ja55.a6f2hja23.a7f2ha.a7
-		+h2ja55.a6f2hja23.a7f2ha.a7h2ja55.a6f2hja23.a7f2ha.a7h2ja55.a6f2hja23.a8f2h2a8h2ja54.a7f2hja22.a9fh2a9hja54.a8fhja22.a9fh2a9hja54.a9fhja21.a10h2a10ja54.a10hja21.aststststs
-		+a.aststststsa55.aststststsja23.9a3.9a57.a8ja195./3645.a110.aba108.a2bca102.a3.d2b2cda7.3a90.aba2edb2c2da.a4.a3fa83.a4.a2bcd2g5d.aba2.af3hf7a75.aba.ed2b2c2d3fi2gd2bca.af2h
-		+2f7g3a65.a5.a2bcdgdb2c3d5fd2b2cd3a2f12ga55.a7.aba3.a2b2c2dg5d6fdb2c2dj4g11f2ga45.a7.aba5.a2bca2.ab2c3d13f4dj2g16fga43.aba5.a2bca3.d2b2c2d2e5d17fj2g9fk8fga41.a2bca3ed2b2c2
-		+d2edb2c3d4g15fi3fj2g11fk4h4fga38.ed2b2c2digdb2c3d3g5d3g11fi9fjg12fklm8f2a35.egdb2c3d3g5d3g14fi15fjg13fk2mf6n2oa33.e3g5d20fi21fj15fk7n3oa32.e2g21fi27fj16f8p2oa31.e2g16fi26
-		+fh3fi2fjh14fh10pa30.e2g11fi24fh5fifh6fjh13f2h9pa30.e2g6fi30fi15fjh11f2h9qa31.egfi28fhfi22fjh10fh9oa32.e15fh7fh3fi24fh4fjh8f2h8pa33.e7fh7fh5fi22fh7fh5fj2h6f3h6qa33.eg7fh7f
-		+i20fh7fh14f2j9h6a34.eg28fh7fh24f4j5a40.e21fh7fh28fh5fge44.eg13fh7fh28fh7fh6fe44.eg5fh7fh28fh7fh14fe44.e6fh28fh7fh22fe44.e27fh7fh28fhfe44.e19fh7fh28f2h6fhfe44.e11fh7fh24f1
-		+7h2f2hfe44.e2hfh7fh28f21hf4he44.e7h25fh4f29he44.e66he44.ej63h2je44.e2j61h3je45.ej61h2je46.ej60h2je48.ej54h7je48.e4j50h7je49.e5j37h19je49.e3j9f8j18h5j9f8je51.ej11f30j9fh7j
-		+e52.j11fh29j9fh4j3r53.a11fh29j8f2h2j2r2ja54.a9f2h29j8f2hjr2h2ja55.a7f2h30j8f2hj3h2ja55.a7fhj7r21j2ej7f2hj3h2ja55.a7fhj5hja21e2.a7f2hj3h2ja55.a6f2hj4h2ja23.a7f2hj3h2ja55.a
-		+6f2hj4h2ja23.a7f2hj3h2ja55.a6f2hj4h2ja23.a7f2hj3h2ja55.a6f2hj4h2ja23.a8f2hj3h2ja54.a7f2hj4h2ja22.a9fhj4hja54.a8fhj5hja22.a9fhj4hja54.a9fhj5hja21.a10h6ja54.a10h7ja21.astst
-		+ststsjststsa55.aststststsjtststsa23.6a3j6a57.7a2j7a192./3533.a110.aba108.a2bca102.a3.d2b2cda7.3a90.aba2edb2c2da.a4.a3fa83.a4.a2bcd2g5d.aba2.af3hf7a75.aba.ed2b2c2d3fi2gd2b
-		+ca.af2h2f7g3a65.a5.a2bcdgdb2c3d5fd2b2cd3a2f12ga55.a7.aba3.a2b2c2dg5d6fdb2c2dj4g11f2ga45.a7.aba5.a2bca2.ab2c3d13f4dj2g16fga43.aba5.a2bca3.d2b2c2d2e5d17fj2g9fk8fga41.a2bca3
-		+ed2b2c2d2edb2c3d4g15fi3fj2g11fk4h4fga38.ed2b2c2digdb2c3d3g5d3g11fi9fjg12fklm8f2a35.egdb2c3d3g5d3g14fi15fjg13fk2mf6n2oa33.e3g5d20fi21fj15fk7n3oa32.e2g21fi27fj16f8p2oa31.e2
-		+g16fi26fh3fi2fjh14fh10pa30.e2g11fi24fh5fifh6fjh13f2h9pa30.e2g6fi30fi15fjh11f2h9qa31.egfi28fhfi22fjh10fh9oa32.e15fh7fh3fi24fh4fjh8f2h8pa33.e7fh7fh5fi22fh7fh5fj2h6f3h6qa33.
-		+eg7fh7fi20fh7fh14f2j9h6a34.eg28fh7fh24f4j5a40.e21fh7fh28fh5fge44.eg13fh7fh28fh7fh6fe44.eg5fh7fh28fh7fh14fe44.e6fh28fh7fh22fe44.e27fh7fh28fhfe44.e19fh7fh28f2h6fhfe44.e11fh
-		+7fh24f17h2f2hfe44.e2hfh7fh28f21hf4he44.e7h25fh4f29he44.e66he44.ej63h2je44.e2j61h3je45.ej61h2je46.ej60h2je48.ej54h7je48.e4j50h7je49.e5j37h19je49.e7j5h8j18h22je50.a9f37j9f5
-		+je49.a11f36j9fhj3e50.a11fh35j9fhj53.a11fh35j8f2hj54.a9f2h35j8f2hj55.a7f2hj2e7r21j4ej8f2hj55.a7fha3.a6h3r18e5.j7f2hj55.a7fha3.a7hja23.j7f2hj55.a6f2ha3.a6h2ja23.j7f2hj55.a6
-		+f2ha3.a6h2ja23.j7f2hj55.a6f2ha3.a6h2ja23.j7f2hj55.a6f2ha3.a6h2ja23.j8f2hj54.a7f2ha2.a7h2ja22.j9fhj54.a8fha2.a8hja22.j9fhj54.a9fha.a9hja21.j10hj54.a10ha.a10ja21.jststststs
-		+j55.aststststsa2.aststststsa23.9j57.9a4.9a189./3645.a110.aba108.a2bca102.a3.d2b2cda7.3a90.aba2edb2c2da.a4.a3fa83.a4.a2bcd2g5d.aba2.af3hf7a75.aba.ed2b2c2d3fi2gd2bca.af2h2f
-		+7g3a65.a5.a2bcdgdb2c3d5fd2b2cd3a2f12ga55.a7.aba3.a2b2c2dg5d6fdb2c2dj4g11f2ga45.a7.aba5.a2bca2.ab2c3d13f4dj2g16fga43.aba5.a2bca3.d2b2c2d2e5d17fj2g9fk8fga41.a2bca3ed2b2c2d2
-		+edb2c3d4g15fi3fj2g11fk4h4fga38.ed2b2c2digdb2c3d3g5d3g11fi9fjg12fklm8f2a35.egdb2c3d3g5d3g14fi15fjg13fk2mf6n2oa33.e3g5d20fi21fj15fk7n3oa32.e2g21fi27fj16f8p2oa31.e2g16fi26fh
-		+3fi2fjh14fh10pa30.e2g11fi24fh5fifh6fjh13f2h9pa30.e2g6fi30fi15fjh11f2h9qa31.egfi28fhfi22fjh10fh9oa32.e15fh7fh3fi24fh4fjh8f2h8pa33.e7fh7fh5fi22fh7fh5fj2h6f3h6qa33.eg7fh7fi2
-		+0fh7fh14f2j9h6a34.eg28fh7fh24f4j5a40.e21fh7fh28fh5fge44.eg13fh7fh28fh7fh6fe44.eg5fh7fh28fh7fh14fe44.e6fh28fh7fh22fe44.e27fh7fh28fhfe44.e19fh7fh28f2h6fhfe44.e11fh7fh24f17h
-		+2f2hfe44.e2hfh7fh28f21hf4he44.e7h25fh4f29he44.e66he44.ej63h2je44.e2j61h3je45.ej61h2je46.ej60h2je48.ej54h7je48.e4j50h7je49.e5j37h19je49.e3j9f8j18h5j9f8je51.ej11f30j9fh7je5
-		+2.j11fh29j9fh4j3r53.a11fh29j8f2h2j2r2ja54.a9f2h29j8f2hjr2h2ja55.a7f2h30j8f2hj3h2ja55.a7fhj7r21j2ej7f2hj3h2ja55.a7fhj5hja21e2.a7f2hj3h2ja55.a6f2hj4h2ja23.a7f2hj3h2ja55.a6f
-		+2hj4h2ja23.a7f2hj3h2ja55.a6f2hj4h2ja23.a7f2hj3h2ja55.a6f2hj4h2ja23.a8f2hj3h2ja54.a7f2hj4h2ja22.a9fhj4hja54.a8fhj5hja22.a9fhj4hja54.a9fhj5hja21.a10h6ja54.a10h7ja21.aststst
-		+stsjststsa55.aststststsjtststsa23.6a3j6a57.7a2j7a192./1304.3a108.a3fa106.af3hf7a99.af2h2f7g3a96.2a2f12ga94.a4g11f2ga92.a2g16fga90.a2g9fk8fga88.a2g11fk4h4fga82.a4.ag12fklm
-		+8f2a79.aba3.jg13fk2mf6n2oa77.a2bca.aj15fk7n3oa76.a2b2c2dbj16f8p2oa72.a3.ab2c2d2bjh14fhpupupupupa72.aba3.4adbcjh13f2h8va72.a2bca5.2a4jh11f2h8wva71.a2b2cda3.a6fjh10fh9wva71
-		+.ab2c2da2.a8fjh8f2h8wva71.2e5d3ej8fhjh7f2hupupupu2pa68.a.e4g6fj8f2hj2h5f2h8pa68.abd3g9fj8fh3j8h5q2a68.a2bcd10fifj7f2hjg5j8a69.a2b2c2d3fi5fh2fj7fhjgea.a73.a4.ab2c3d9fh3fj6
-		+fhjfe75.aba2.2e5d14fj7hjie74.a2bcde3g18fjstststsjfge72.a2b2c2d2g16fi2fjsjsjsjsjfge66.a5.db2c3d12fifh7fjfjfjfj3fge64.aba2.2eg5d7fi7fh17fge56.a6.a2bcde4g5fi5fh24fife55.aba4
-		+.a2b2c2d2gfi32fh5fe54.a2bca3edb2c3d28fh7fh5fe52.ed2b2c2di2g5d21fh7fh13fe51.egdb2c3d3g18fh7fh21fe50.e3g5d20fifh28fhe49.e2g21fi28fh7fhe48.e2g16fi26fh7fh5fh2fe47.e2g11fi24fh
-		+7fh8f2h3f3he46.e2g6fi22fh7fh14f10he46.egfi20fh7fh21f11he46.e15fh7fh23f17he46.e7fh7fh28f19hje45.eg7fh7fi20fh6f19h2je45.eg28fh7fh5f19h3je45.e21fh7fh10f22h2je45.eg13fh7fh15f
-		+24h2je46.eg5fh7fh22f22hjh3je46.e6fh28f23h5je47.e27fh5f23h7je47.e19fh7fh2f25h8je47.e11fh7fh6f28h8je48.e2hfh7fh9f29h11je49.e7h11f29h12j2e50.e44h14je52.ej40h16je53.e2j36h18j
-		+e55.ej35h18je56.ej32h20je58.ej27h20j4e59.e4j20h21j3e63.e5j13h24j3e66.e7j5h27j3e70.e2j9f24j3e74.j11f19j4e77.a11fh14j4e81.a11fh10j4e86.a9f2h4j4r2e91.a7f2hj4r2ja94.a7fhj5hja
-		+95.a7fhj5hja95.a6f2hj4h2ja95.a6f2hj4h2ja95.a6f2hj4h2ja95.a6f2hj4h2ja95.a7f2hj4h2ja94.a8fhj5hja94.a9fhj5hja93.a10h7ja93.aststststsjtststsa95.7a2j7a192./3533.a110.aba108.a2
-		+bca102.a3.d2b2cda100.aba2edb2c2da.a5.3a84.a4.a2bcd2g5d.aba3.a3fa82.aba.ed2b2c2d3fi2gd2bca.af3hf7a68.a5.a2bcdgdb2c3d5fd2b2cd2af2h2f7gaxa56.a7.aba3.a2b2c2dg5d6fdb2c2d3a2f8g
-		+2x2ga46.a7.aba5.a2bca2.ab2c3d13f5dj4g5f3x3f2ga44.aba5.a2bca3.d2b2c2d2e5d18fj2g4f4x8fga42.a2bca3ed2b2c2d2edb2c3d4g15fi4fj2g3f2x4fk8fga39.ed2b2c2digdb2c3d3g5d3g11fi9fj2g11f
-		+k4h4fga37.egdb2c3d3g5d3g14fi15fjg12fklm8f2a34.e3g5d20fi21fjg13fk2mf6n2oa32.e2g21fi27fj15fk7n3oa31.e2g16fi26fh3fi2fj16f8p2oa30.e2g11fi24fh5fifh6fjh14fhpupupupupa30.e2g6fi3
-		+0fi10f5jh13f2h8va31.egfi28fhfi14f2j5fjh11f2h8wva31.e15fh7fh3fi19fj8fjh10fh9wva31.e7fh7fh5fi22fhfj10fjh8f2h8wva31.eg7fh7fi20fh7fhfj7f4hjh7f2hupupupu2pa31.eg28fh7fh10fj5h7j
-		+2h5f2h8pa32.e21fh7fh19f5j4fh2f2j8h5q2a32.eg13fh7fh28fh7fh4f3j10a34.eg5fh7fh28fh7fh14fe44.e6fh28fh7fh22fe44.e27fh7fh28fhfe44.e19fh7fh28f2h6fhfe44.e11fh7fh24f17h2f2hfe44.e2
-		+hfh7fh28f21hf4he44.e7h25fh4f29he44.e66he44.ej63h2je44.e2j61h3je45.ej61h2je46.ej60h2je48.ej54h7je48.e4j50h7je49.e5j37h19je49.e7j5h8j18h22je51.e3j9f47je52.ej11f43j3r54.a11f
-		+h40j2rhja54.a11fh39jr2h2ja55.a9f2h37j2r3h2ja56.a7f2hj5r21j7e4r5h2ja56.a7fhj4hja21e8.a7h2ja56.a7fhj4hja29.a7h2ja56.a6f2hj3h2ja29.a7h2ja56.a6f2hj3h2ja29.a7h2ja56.a6f2hj3h2j
-		+a29.a7h2ja56.a6f2hj3h2ja29.a8h2ja55.a7f2hj3h2ja28.a9hja55.a8fhj4hja28.a9hja55.a9fhj4hja27.a10ja55.a10h6ja27.aststststsa56.aststststsjststsa29.9a58.6a3j6a192.
-		cat|24|17|14|10.5|a211713,bC89961,cD3AB75,dA2744B,e83C66E,f6B4C39,g15111A,hDD909C,iEEDEC0,j926D49,kCEBA9B|idle:0;walk:1,2,3,4
-		+13.a5.a6.2a8.aba3.aba4.abca7.a2b3a2bca2.abca8.a2b3c3ba2.aba9.abdbd2bdba2.aba9.abe3be2ba2.abd9afbg3bg2ba3.abf9cf2bh3ba5.fc2bd2bd2bdbf4ia6.a3bd2bd2bd2bf3a7.aj10bja11.f2bf3i
-		+f2b2fa11.a2b3faf2bfja11.a2bfja.a2bfja11.a2ifka.a2ifka12.4a3.4a33./13.a5.a6.2a8.aba3.aba4.abca7.a2b3a2bca2.abca8.a2b3c3ba2.aba9.abdbd2bdba2.aba9.abe3be2ba2.abd9afbg3bg2ba3
-		+.abf9cf2bh3ba5.fc2bd2bd2bdbf4ia6.a3bd2bd2bd2bf3a7.aj10bja11.af2bfif2b3fja11.f2bfaf2bfa2ja11.f2bf.a2b2a2ja11.f2if.a2i2a2ka12.2f3.2a2.2a32./2.2a8.aba3.aba4.abca7.a2b3a2bca2
-		+.abca8.a2b3c3ba2.aba9.abdbd2bdba2.aba9.abe3be2ba2.abd9afbg3bg2ba3.abf9cf2bh3ba5.fc2bd2bd2bdbf4ia6.a3bd2bd2bd2bf3a7.aj10bja11.aj5if2bfa12.a2b3faf2bfja11.a2bfja.a2bfja11.a2
-		+bfka.a2ifja11.a2ifa3.af2ka12.2a7.2a33./13.a5.a6.2a8.aba3.aba4.abca7.a2b3a2bca2.abca8.a2b3c3ba2.aba9.abdbd2bdba2.aba9.abe3be2ba2.abd9afbg3bg2ba3.abf9cf2bh3ba5.fc2bd2bd2bdb
-		+f4ia6.a3bd2bd2bd2bf3a7.aj10bja10.a2bf5if2bf11.a2b5faf2bf11.a2b2a2ja.f2bf11.a2i2a2ka.f2if12.2a2.2a3.2f34./2.2a8.aba3.aba4.abca7.a2b3a2bca2.abca8.a2b3c3ba2.aba9.abdbd2bdba2
-		+.aba9.abe3be2ba2.abd9afbg3bg2ba3.abf9cf2bh3ba5.fc2bd2bd2bdbf4ia6.a3bd2bd2bd2bf3a7.aj10bja11.f2bf4ikj2fa11.a2b3faf2bfja11.a2bfja.a2bfja11.a2ifja.a2bfka12.af2ka.a2ifa15.2a3
-		+.2a35.
-		chicken|18|18|15|7.5|a241D22,bC56661,cFAF8F0,d1E1519,eD0AC64,fB5ADB7,gAE874F,h974A50,iDAD4D1|idle:0;walk:1,2,3,4;alt:5
-		+8.a2baba12.a4ba12.a4ca5.a5.a3cdcea3.aca2.2af4cega3.a2c2a3cf3cba4.a7cf3caha3.ai3c2i2c3f.a4.ai2c4i3ca7.ai2c2i4ca7.a2i6cia8.a7ia10.a4faea11.a3faea12.7a11.a2ea3ea11.6a24./8.a
-		+2baba12.a4ba12.a4ca5.a5.a3cdcea3.aca2.2af4cega3.a2c2a3cf3cba4.a7cf3caha3.ai3c2i2c3f.a4.ai2c4i3ca7.ai2c2i4ca7.a2i6cia8.a7ia10.a3faea12.2afaea14.5a13.2a3ea13.4a25./8.a4ba12
-		+.a4ca5.a5.a3cdcea3.aca2.2af4cega3.a2c2a3cf3cba4.a7cf3caha3.ai3c2i2c3f.a4.ai2c4i3ca7.ai2c2i4ca7.a2i6cia8.a7ia10.a5fa12.a3faea12.4aea12.a2e4a12.3a3ea14.3a24./8.a2baba12.a4b
-		+a12.a4ca5.a5.a3cdcea3.aca2.2af4cega3.a2c2a3cf3cba4.a7cf3caha3.ai3c2i2c3f.a4.ai2c4i3ca7.ai2c2i4ca7.a2i6cia8.a7ia10.a5faea10.3f3aea10.4a.4a9.a3e2a3ea9.3a2.3a23./8.a4ba12.a4
-		+ca5.a5.a3cdcea3.aca2.2af4cega3.a2c2a3cf3cba4.a7cf3caha3.ai3c2i2c3f.a4.ai2c4i3ca7.ai2c2i4ca7.a2i6cia8.a7ia10.a4faea11.a3faea12.ae5a11.4a3ea10.a3e3a12.3a27./73.a16.aca2.4a9
-		+.a2c2a4c4a.a3.a9cf2baba2.ai3c2i3cf4ba2.ai2c4i2cf4ca3.ai2c2i2cf3cdcea2.a2i5cf4cega3.a5iaef3cba5.a4faef3caha5.a3f3af2a.a7.a2ea3ea11.6a24.
-		cinderBat|24|16|13|12|a1D110F,bC4836F,cB36F51,d7C4D3A,e48302A,f24181C,g755E60,hDFCB78,i322121,jFFFFFF|idle:0;fly:0,1,2,1
-		+.a18.a3.aba16.aba2.acba14.abca2.a2cba12.ab2ca2.ad2cba10.ab2cda3.ad2cba2.a4.2ab2cda5.ad2cb2aea2.aef2cda7.a2dc2a2e2a2ef2da9.3a.aeg2egef2a14.aeh2ehea17.a4ea18.ai2eia19.a2ja2
-		+1.2a59./105.a4.a9.7a.aea2.aef6a2.7b2a2e2a2ef6ba.d5cb2aeg2egef5cda.adadadc2aeh2ehefdadada3.a.a.2a2.a4e3a.a.a12.ai2eia19.a2ja21.2a83./81.a4.a17.aea2.aea16.a2e2a2ea12.3a.aeg
-		+2egef2a9.a2dc2aeh2ehef2da7.ad2cba.a4efb2cda5.ad2cba2.ai2ei2ab2cda3.ad2cba4.a2ja2.ab2cda2.a2cba6.2a4.ab2ca2.acba14.abca2.aba16.aba3.a18.a27.
-		cow|34|24|21|14|a1E1B22,bE3D9C1,cBCAE90,dAEA7B4,e38343E,fF6F2EA,g1E1519,hE6A9B0,iD7D1D3,j824C5C,kC4818F,lCA8B98,mEAB5BC,n3A3038|idle:0;walk:1,2,3,4;alt:5
-		+22.2a31.a2ba29.abc5a12.13ad3e5f2a8.2a14fd3e6fa6.a4f4e6f2efde4fg3fa4.a4f6e4f4ed5fgf2ha3.ai4f6e5f3ed6f3ha2.aia5f4e7f2efdi3f2hjha2.aia12f2e5fd2i2f4ha2.aia11f4e5fd3i3ka3.aiai
-		+10f4e4fi7a4.aia2i10f2e4f2ia10.ae2a3i12f3ia11.ae2a3fd7id3f3dia11.a.a3f9d3f2d2ia13.a2fi5d3ad2fid2ida13.a2fidlmla3.a2fid2ida13.a2fidilda3.a2fid2ida13.a2fid2ida3.a2fid2ida13.
-		+a3nd3na3.a3nd3na13.a3nd3na3.a3nd3na14.3a.3a5.3a.3a45./22.2a31.a2ba29.abc5a12.13ad3e5f2a8.2a14fd3e6fa6.a4f4e6f2efde4fg3fa4.a4f6e4f4ed5fgf2ha3.ai4f6e5f3ed6f3ha2.aia5f4e7f2e
-		+fdi3f2hjha2.aia12f2e5fd2i2f4ha2.aia11f4e5fd3i3ka3.aiai10f4e4fi7a4.aia2i10f2e4f2ia10.ae2a3i12f3ia11.aea.ad3fd3id3fdi3d3ia9.a3.d3f5d3f2d3a3ia13.d2fi3dad2fida2.a2ida13.d2fid
-		+a2.a2fia3.a2ida13.d2fid3.a2fia3.a2ida13.d2fid3.a2fia3.a2ida13.d3nd3.a3na3.a3na13.d3nd3.a3na3.a3na14.3d5.3a5.3a43./21.a2ba29.abc5a12.13ad3e5f2a8.2a14fd3e6fa6.a4f4e6f2efde4
-		+fg3fa4.a4f6e4f4ed5fgf2ha3.ai4f6e5f3ed6f3ha2.aia5f4e7f2efdi3f2hjha2.aia12f2e5fd2i2f4ha2.aia11f4e5fd3i3ka3.aiai10f4e4fi7a4.aia2i10f2e4f2ia10.ae2a3i12f3ia11.aea.a2d8id3f2da1
-		+3.a.a3f9d3f2d2ia13.a3f5d3ad2fid3ia13.a2fidlmla3.a2fid2ida13.a2fidilda3.a2fid2ida13.a2fid2ida3.a2fid2ida13.a2fid3na3.a3nd2ida13.a3nd3na3.a3nd3na13.a3n4a5.4a3na14.3a13.3a45
-		+./22.2a31.a2ba29.abc5a12.13ad3e5f2a8.2a14fd3e6fa6.a4f4e6f2efde4fg3fa4.a4f6e4f4ed5fgf2ha3.ai4f6e5f3ed6f3ha2.aia5f4e7f2efdi3f2hjha2.aia12f2e5fd2i2f4ha2.aia11f4e5fd3i3ka3.ai
-		+ai10f4e4fi7a4.aia2i10f2e4f2ia10.ae2a3i12f3ia11.ad3f2d10id3fd13.d3fda11d3fd13.a2fia.7d3ad2fid13.a2fia2.amlida3.d2fid13.a2fia3.l2ida3.d2fid13.a2fia3.a2ida3.d2fid13.a3na3.a3
-		+na3.d3nd13.a3na3.a3na3.d3nd14.3a5.3a5.3d47./21.a2ba29.abc5a12.13ad3e5f2a8.2a14fd3e6fa6.a4f4e6f2efde4fg3fa4.a4f6e4f4ed5fgf2ha3.ai4f6e5f3ed6f3ha2.aia5f4e7f2efdi3f2hjha2.aia
-		+12f2e5fd2i2f4ha2.aia11f4e5fd3i3ka3.aiai10f4e4fi7a4.aia2i10f2e4f2ia10.ae2a3i12f3ia11.ae2a3fd11i3dia11.a.a3f9d3f2d2ia13.a2fi5d3ad3fd2ida13.a2fidlmla3.a2fid2ida13.a2fidilda3
-		+.a2fid2ida13.a2fid2ida3.a2fid2ida13.a3nd2ida3.a2fid3na13.a3nd3na3.a3nd3na14.4a3na3.a3n4a19.3a5.3a49./108.15a17.2a15fa15.a4f4e6f2e2fa13.a4f6e4f4e2fa11.ai4f6e5f3e2fa10.aia5
-		+f4e7f2e2f3a8.aia12f2e6fd2ba7.aia11f4e4fdbc5a4.aiai10f4e3fd3e5f2a2.aia2i10f2e4fid3e6fa.ae2a3i12f3i2ae4fg3f2ae2a3fd7id3f3did5fgf2ha.a.a3f9d3f2d2id6f3ha3.a2fi5d3ad2fid2id2ai
-		+3f2hjha3.a2fidlmla3.a2fid2id2a2i2f4ha3.a2fidilda3.a2fid2ida.a3i3ka4.a2fid2ida3.a2fid2ida2.6a5.a3nd3na3.a3nd3na13.a3nd3na3.a3nd3na14.3a.3a5.3a.3a45.
-		crawler|36|18|14|18|a281F2E,b4F3F58,c17121C,d35293E,e8A7696,f695374,gB4A5AD,hC96962,iECAEA2,j493A54,kD2C7B1,l968878,m130E18|idle:0;walk:1,2,3,4;strike:5
-		+149.ab3.ab.2c2.2c2.db3.ab13.ab3.dbc2e2c2e2cebc2.db2c10.ababcdbeb2f2e2f2ebfbcdbebec9.abab2ebfb8fbfbdebfbfec8.abcebfb2fbfg4fb2fbdbfhb2fec7.abefbfb2fb6fb2fbdb2fbhifc6.abcj2f
-		+bj3fbj3fbj3fbj3fb2fkc5.ab.c2jb14jbd2jfbjlkc5.ab2.cdb14db.2cjbclc6.ab3.ab13cab3.db.c6.ab3.ab15.ab3.ab7.2m3.2m15.2m3.2m77./151.b3.a.2c2.2c2.2cb3.a12.a2.b2.bdc2e2c2ecde2b2.b
-		+d2c10.2a.2bc2be2f2e2f2efbebcb3ec8.a2.bc2b2fb8fb2f2bfb2fec7.a2.be2bgfb2fg4fb3f2bfbi2fec6.a.cb2fb3fb6fb3f2bfbfhifc5.a2.cbf2bj3fbj3fbj3f2b2fb3fkc4.a3.bjb16jdbjbfjlkc4.a3.bcb
-		+14d2c.bcbjdlc5.a2.b2.bd12cd3.b.bcac5.a3.b.b.a13.a3.b.b.a5.m3.m.m.m13.m3.m.m.m76./113.ab3.ab.2c2.2c2.db3.ab13.ab3.dbc2e2c2e2cebc2.db2c10.ababcdbeb2f2e2f2ebfbcdbebec9.abab2
-		+ebfb8fbfbdebfbfec8.abcebfb2fbfg4fb2fbdbfhb2fec7.abefbfb2fb6fb2fbdb2fbhifc6.abcj2fbj3fbj3fbj3fbj3fb2fkc5.ab.c2jb14jbd2jfbjlkc5.ab2.cdb14db.2cjbclc6.ab3.ab13cab3.db.c6.ab3.
-		+ab15.ab3.ab7.ab3.ab15.ab3.ab7.2m3.2m15.2m3.2m77./150.a5.b2c2.2c2.cd5.b12.ba2.a2cb2e2c2e2cbec.ac2bc11.2bacd2e2bf2e2f2ebfecdebebc9.ba.b2efbfb6fbfbfdeb2fbec8.bacb2fgbfbfg4fb
-		+fbfdbfhibfec7.bdefb2fb2fb4fb2fbfdb3fhbfc6.b.dj2fbjb2fbj3fbj2f2bj4fbfkc5.b.ac4jb11jbjd2j2fjbkc5.b.a.dc2db11dbcacd2jcbc6.ba2.a.cb12cb.a.a2c.b6.b.a.a3.b13.b.a.a3.b5.m.m.m3.m
-		+13.m.m.m3.m75./113.ab3.ab.2c2.2c2.db3.ab13.ab3.dbc2e2c2e2cebc2.db2c10.ababcdbeb2f2e2f2ebfbcdbebec9.abab2ebfb8fbfbdebfbfec8.abcebfb2fbfg4fb2fbdbfhb2fec7.abefbfb2fb6fb2fbdb
-		+2fbhifc6.abcj2fbj3fbj3fbj3fbj3fb2fkc5.ab.c2jb14jbd2jfbjlkc5.ab2.cdb14db.2cjbclc6.ab3.ab13cab3.db.c6.ab3.ab15.ab3.ab7.ab3.ab15.ab3.ab7.2m3.2m15.2m3.2m77./62.4c3.c27.c4ec.c
-		+kc23.abce2fbfecklc13.2c2.2c2.cdbab2fbibfelc11.3c2e2c2e2c2eb.d3bfhbfc10.2c3e2f2e2f2efbe2cjbm2fbfc9.c2e12fbfecdbj2fjbc8.cebfg2fbfg4fgb3feb2c2jclmc6.cebfb2fbfb6fb4fb2.2c.clc
-		+6.cjb2fbfb2fb4fb4fbc6.c7.ab4jb13jc14.ab.2cdb12d2c14.ab3.ab13c16.ab3.ab28.2m3.2m100.
-		crow|20|18|15|9.5|a0F0F16,b5F5F79,c46465C,d2E2E3F,e1E1E2A,fE2CD81,gA7A7AF,h73737D,i898993|idle:0;fly:0,1,2,1
-		+9.2a17.abca15.ab3ca13.ab4ca12.ab4cda11.ab4c2da11.a4c2de2a8.a2.a4de3ba6.aea2.2a2e4bd2a4.a2e4a2d2bf2d2ga4.a2e10dh2ga4.ae10d3a6.a9da10.ae5dea12.2a2i3a15.2a50./111.3a8.a7.a3b
-		+a6.a2e4a5ebd2a4.ae2b7cded2ga4.aeb5c2de2dh2ga4.a2e4d2e3d3a6.ad4e4da10.ae5dea12.2a2i3a15.2a70./91.3a8.a7.a3ba6.aea4.2a4bd2a4.a2e2a4e2bf2d2ga4.a3e4de4dh2ga4.ae4c2de3d3a6.eb4
-		+c2deda10.eb4cdea12.eb4ce14.ab2cda15.abda17.2a49.
-		elephant|64|46|40|26|a1D1B26,bAFB1B9,c4A4A5B,d9598A9,e686979,fAF93A3,gFFFFFF,h1E1519,iA39983,jF1ECDB,k3B3747,lC8BFA4,mD9D3C6,nAEA89F|idle:0;walk:1,2,3,4;strike:5
-		+295.7a35.16a4.2a7b2a28.5a16b4a11b2a23.3a23bc14ba15.2a3.2a25b6c9d2ba13.adea.a9b18dc5bc10dba11.adea.a4b23dcb5dbc10dba10.ade2a3b24dcb7dbc10da10.adec2b25dcb2d4f4dcdgh7da9.ade
-		+cb26dcbd7f2dcd2h7da9.adcb27dc2d8fdc11da8.adcb7de19dc2d7f2dc11da8.adc8de19dc2d6f2dec5de5da9.ac9de17dece2d5f2dec2d3i6da9.ac9de17dece3d3f2dec2di3j2i3dea8.akce28dce7dec2di2l3
-		+j2idia9.ace28dc2e5dec4ei3l3jiji10.c2e28dc2e3d2ec4a.ai2l4ji11.a2e28dc5ea7.a2i3lia12.a3e25d2e4ca8.abd3iea13.a6e17d6e2a11.ab5ea14.2a25e2a13.ab3dea13.a8d14c8dc5ea5.ab4dea13.a
-		+7de7c6ac7dec4eca5.ab5ea13.a7dec4eca6.a7dec4eca5.ab3dea14.a6d2ec3e2ca6.a6d2ec3e2ca5.ab3dea14.ab5d2ec3e2ca6.ab5d2ec3e2ca5.ab4ea14.ab5d2ec3e2ca6.ab5d2ec3e2ca6.ab3dea13.ab2de
-		+2d2e2c2e2ca6.ab2de2d2e2c2e2ca6.ab3dea13.ab3ded2ecece2ca6.ab3ded2ecece2ca7.ab3ea13.ab5d2ec3e2ca6.ab5d2ec3e2ca7.ab3dea12.ab5d2ec3e2ca6.ab5d2ec3e2ca7.ab4da12.ab5d2ec3e2ca6.a
-		+b5d2ec3e2ca8.a2e2da12.ab5d2ec3e2ca6.ab5d2ec3e2ca9.a2ea13.ab6dec4eca6.ab6dec4eca10.2a14.a8dec4eca5.a8dec4eca25.amdmdm3decn3eca5.amdmdm3decn3eca26.6a3c6a7.6a3c6a278./295.7a
-		+35.16a4.2a7b2a28.5a16b4a11b2a23.3a23bc14ba15.2a3.2a25b6c9d2ba13.adea.a9b18dc5bc10dba11.adea.a4b23dcb5dbc10dba10.ade2a3b24dcb7dbc10da10.adec2b25dcb2d4f4dcdgh7da9.adecb26dc
-		+bd7f2dcd2h7da9.adcb27dc2d8fdc11da8.adcb7de19dc2d7f2dc11da8.adc8de19dc2d6f2dec5de5da9.ac9de17dece2d5f2dec2d3i6da9.ac9de17dece3d3f2dec2di3j2i3dea8.akce28dce7dec2di2l3j2idia
-		+9.ace28dc2e5dec4ei3l3jiji10.c2e28dc2e3d2ec4a.ai2l4ji11.a2e28dc5ea7.a2i3lia12.a3e25d2e4ca8.abd3iea13.a6e17d6e2a11.ab5ea14.2a25e2a13.ab3dea15.a8d10c8d2a8ea3.ab4dea15.a7de3c
-		+6ac7de2a7eca3.ab5ea15.a7de2ca6.a7de2a7eca3.ab3dea16.a6d2e2ca6.a6d2e2a6e2ca3.ab3dea16.ab5d2e2ca6.ab5d2e2ad5e2ca3.ab4ea16.ab5d2e2ca6.ab5d2e2ad5e2ca4.ab3dea15.ab2de2d2e2ca6.
-		+ab2de2d2e2ad2ec2e2ca4.ab3dea15.ab3ded2e2ca6.ab3ded2e2ad3ece2ca5.ab3ea15.ab5d2e2ca6.ab5d2e2ad5e2ca5.ab3dea14.ab5d2e2ca6.ab5d2e2ad5e2ca5.ab4da14.ab5d2e2ca6.ab5d2e2ad5e2ca6.
-		+a2e2da14.ab5d2e2ca6.ab5d2e2ad5e2ca7.a2ea15.ab6de2ca6.ab6de2ad6eca8.2a16.a8de2ca5.a8dec8eca25.amdmdm3de2ca5.amdmdm3decnenen3eca26.2a7c2a7.9a.9a276./231.7a35.16a4.2a7b2a28.
-		+5a16b4a11b2a23.3a23bc14ba15.2a3.2a25b6c9d2ba13.adea.a9b18dc5bc10dba11.adea.a4b23dcb5dbc10dba10.ade2a3b24dcb7dbc10da10.adec2b25dcb2d4f4dcdgh7da9.adecb26dcbd7f2dcd2h7da9.ad
-		+cb27dc2d8fdc11da8.adcb7de19dc2d7f2dc11da8.adc8de19dc2d6f2dec5de5da9.ac9de17dece2d5f2dec2d3i6da9.ac9de17dece3d3f2dec2di3j2i3dea8.akce28dce7dec2di2l3j2idia9.ace28dc2e5dec4e
-		+i3l3jiji10.c2e28dc2e3d2ec4a.ai2l4ji11.a2e28dc5ea7.a2i3lia12.a3e25d2e4ca8.abd3iea13.a6e17d6e2a11.ab5ea14.2a25e2a13.ab3dea17.2a17c8da11.ab4dea13.a8d7c6ac7dec5ea5.ab5ea13.a7
-		+dec4eca6.a7dec4eca5.ab3dea14.a7dec3e2ca6.a6d2ec4eca5.ab3dea14.a6d2ec3e2ca6.ab5d2ec3e2ca5.ab4ea14.ab5d2ec3e2ca6.ab5d2ec3e2ca6.ab3dea13.ab5d2e2c2e2ca6.ab2de2d2ec3e2ca6.ab3d
-		+ea13.ab2de2d2ecece2ca6.ab3ded2e2c2e2ca7.ab3ea13.ab3ded2ec3e2ca6.ab5d2ecece2ca7.ab3dea12.ab5d2ec3e2ca6.ab5d2ec3e2ca7.ab4da12.ab5d2ec3e2ca6.ab5d2ec3e2ca8.a2e2da12.ab5d2ec3e
-		+2ca6.ab5d2ec3e2ca9.a2ea13.ab5d2ec4eca6.ab6dec3e2ca10.2a14.ab6dec5eca5.a8dec3eca26.a8decn3eca5.amdmdm3dec4eca25.amdmdm3dec5a7.5a4cen3eca26.9a19.9a278./295.7a35.16a4.2a7b2a
-		+28.5a16b4a11b2a23.3a23bc14ba15.2a3.2a25b6c9d2ba13.adea.a9b18dc5bc10dba11.adea.a4b23dcb5dbc10dba10.ade2a3b24dcb7dbc10da10.adec2b25dcb2d4f4dcdgh7da9.adecb26dcbd7f2dcd2h7da9
-		+.adcb27dc2d8fdc11da8.adcb7de19dc2d7f2dc11da8.adc8de19dc2d6f2dec5de5da9.ac9de17dece2d5f2dec2d3i6da9.ac9de17dece3d3f2dec2di3j2i3dea8.akce28dce7dec2di2l3j2idia9.ace28dc2e5de
-		+c4ei3l3jiji10.c2e28dc2e3d2ec4a.ai2l4ji11.a2e28dc5ea7.a2i3lia12.a3e25d2e4ca8.abd3iea13.a6e17d6e2a11.ab5ea14.2a25e2a13.ab3dea11.a8d18c8dcea7.ab4dea11.a7de11c6ac7de2ca7.ab5e
-		+a11.a7de2a7eca6.a7de2ca7.ab3dea12.a6d2e2a6e2ca6.a6d2e2ca7.ab3dea12.ab5d2e2ad5e2ca6.ab5d2e2ca7.ab4ea12.ab5d2e2ad5e2ca6.ab5d2e2ca8.ab3dea11.ab2de2d2e2ad2ec2e2ca6.ab2de2d2e2
-		+ca8.ab3dea11.ab3ded2e2ad3ece2ca6.ab3ded2e2ca9.ab3ea11.ab5d2e2ad5e2ca6.ab5d2e2ca9.ab3dea10.ab5d2e2ad5e2ca6.ab5d2e2ca9.ab4da10.ab5d2e2ad5e2ca6.ab5d2e2ca10.a2e2da10.ab5d2e2a
-		+d5e2ca6.ab5d2e2ca11.a2ea11.ab6de2ad6eca6.ab6de2ca12.2a12.a8dec8eca5.a8de2ca25.amdmdm3decnenen3eca5.amdmdm3de2ca26.9a.9a7.2a7c2a280./231.7a35.16a4.2a7b2a28.5a16b4a11b2a23.
-		+3a23bc14ba15.2a3.2a25b6c9d2ba13.adea.a9b18dc5bc10dba11.adea.a4b23dcb5dbc10dba10.ade2a3b24dcb7dbc10da10.adec2b25dcb2d4f4dcdgh7da9.adecb26dcbd7f2dcd2h7da9.adcb27dc2d8fdc11d
-		+a8.adcb7de19dc2d7f2dc11da8.adc8de19dc2d6f2dec5de5da9.ac9de17dece2d5f2dec2d3i6da9.ac9de17dece3d3f2dec2di3j2i3dea8.akce28dce7dec2di2l3j2idia9.ace28dc2e5dec4ei3l3jiji10.c2e2
-		+8dc2e3d2ec4a.ai2l4ji11.a2e28dc5ea7.a2i3lia12.a3e25d2e4ca8.abd3iea13.a6e17d6e2a11.ab5ea14.2a25e2a13.ab3dea13.a8d18cac8ea5.ab4dea13.a7de7c6ac8dc4eca5.ab5ea13.a7dec4eca6.a7d
-		+ec4eca5.ab3dea14.a6d2ec4eca6.a7dec3e2ca5.ab3dea14.ab5d2ec3e2ca6.a6d2ec3e2ca5.ab4ea14.ab5d2ec3e2ca6.ab5d2ec3e2ca6.ab3dea13.ab2de2d2ec3e2ca6.ab5d2e2c2e2ca6.ab3dea13.ab3ded2
-		+e2c2e2ca6.ab2de2d2ecece2ca7.ab3ea13.ab5d2ecece2ca6.ab3ded2ec3e2ca7.ab3dea12.ab5d2ec3e2ca6.ab5d2ec3e2ca7.ab4da12.ab5d2ec3e2ca6.ab5d2ec3e2ca8.a2e2da12.ab5d2ec3e2ca6.ab5d2ec
-		+3e2ca9.a2ea13.ab6dec3e2ca6.ab5d2ec4eca10.2a14.a8dec3eca6.ab6dec5eca25.amdmdm3dec4eca5.a8decn3eca26.5a4cen3eca5.amdmdm3dec5a33.9a7.9a284./103.7a55.2a7b2a8.3a41.a11b2a5.ab2
-		+da21.16a2.a14ba3.ab3dea15.5a16ba6c9d2ba2.ab2d2ea12.3a22bc5bc10db2ab3dea6.2a3.2a24bcb5dbc10d2bded2ea5.adea.a9b16dcb7dbc14dea5.adea.a4b21dcb2d4f4dcdgh7ded2ea5.ade2a3b23dcbd
-		+7f2dcd2h9dea6.adec2b25dc2d8fdc9ded2ea6.adecb26dc2d7f2dc10d2ea7.adcb27dc2d6f2dec2d3ie3d2ea8.adcb7de19dce2d5f2decdi3j2i3ea9.adc8de19dce3d3f2dec2di2l3j2i2a10.ac9de17dedce7de
-		+c3di3l3jaja9.ac9de17dedc2e5dec4eaia2l4ja8.akce29dc2e3d2ec4a3.2a3la10.ace30dc5eca9.3a12.c2e30d5ca26.a2e30d3ea28.a3e25d4e2a30.a6e17d6e2a33.2a25e2a37.2a18c8da31.a8d8c6ac7dec
-		+4ea26.a7dec5eca6.a7dec3eca26.a7dec4e2ca6.a6d2ec3eca26.a6d2ec4e2ca6.ab5d2ec2e2ca26.ab5d2ec4e2ca6.ab5d2ec2e2ca26.ab5d2ecec2e2ca6.ab2de2d2ec2e2ca26.ab2de2d2ec2ece2ca6.ab3ded
-		+2ec2e2ca26.ab3ded2ec4e2ca6.ab5d2e2ce2ca26.ab5d2ec4e2ca6.ab5d2ec2e2ca26.ab5d2ec4e2ca6.ab5d2ec2e2ca26.ab5d2ec4e2ca6.ab5d2ec2e2ca26.ab5d2ec5eca6.ab6dec2e2ca26.ab6dec6eca5.a8
-		+dec2eca26.a8decen3eca5.amdmdm3dec3eca25.amdmdm3dec6a7.4a5cn3eca26.9a19.9a278.
-		emberSlime|26|20|17|13|a382019,bD49D6C,cFFFFFF,dCB8A5D,e986348,f291712,g734738,h412820,iE2CD81|idle:0;hop:1;strike:2
-		+113.8a16.2a8b2a13.a3b2c5b2d2a10.a2b3c2b8da8.a2b2cb11dea6.a3b14dea6.ab3dfc6dfc3d2ea4.ab4d2f6d2f3d2ea4.ab17d2ea4.a17d2ega4.a7d6h4d2ega4.ae2d2i12d2ega5.a3e12d2ega7.ag14ega9.
-		+16a31./10.6a18.2a6b2a15.a3b2c3b2da13.a2b3cb6da12.ab2cb7dea11.a3b9dea11.ab2dfc4dfc2dea10.ab2d2f4d2f2dea10.ab12dea10.a12d2ea10.a5d4h3d2ea10.a2d2i8d2ea10.ae11dega11.ae9d2ega
-		+11.a2e8dega13.a10ea15.a8ga17.8a61./140.8a16.2a8b3a11.2a3b2c5b3d2a8.a3b3cb10d2a5.a3b2cb6dfc5dea3.a3b7dfcd2f5dea3.ab9d2f7d2ea2.ab11d7hd2ea2.ab10dhchchc2hdega2.a11d8hdega2.a
-		+e2d2i7dhchchc2dega3.a2e16d2ega4.ag17ega6.19a28.
-		fish|18|10|8|9|a1B2638,b364D6A,c80AED4,d6799C6,e4A6D90,fFFFFFF,g15111A,hDBC36E,iD8E8F8|idle:0;fly:0,1
-		+20.a4.5a7.aba.2a5c2a5.a2ba2c6dc2a3.aeb8dfgdca2.aeb2d2h7dea2.a2bae7ie2a3.aba.2a5e2a6.a4.5a24./25.5a9.a.2a5c2a6.aba2c6dc2a3.abe8dfgdca2.abe2d2h7dea3.abae7ie2a5.a.2a5e2a11.5
-		+a24.
-		frog|20|13|10|10|a182F22,bFFFFFF,c15111A,d66A85D,e87BC72,f335737,g477A48,hDDE4AE,i32583B|idle:0;hop:1
-		+46.2a4.2a11.a2ba2.a2ba9.abcbd2adbcba8.a4d2e4da7.a12da6.ad10fda6.agd8hdga6.a2gda4had2ga6.a2ia.4a.a2ia7.2a8.2a24./8.2a4.2a11.a2ba2.a2ba9.abcbd2adbcba6.2ae3d2e5da5.ae13da3.a
-		+g4d8fda3.ag2dagd6hdga4.a2da.agd4a2da5.aia3.aia3.aia6.a5.a5.a65.
-		giraffe|40|62|58|12|a231912,b644A34,c38291E,dCFB474,eD9C286,f6D5942,g957F56,h15111A,iFFFFFF,jECDEB5,k473126,l97704A,m7B5A3B,n392C24|idle:0;walk:1,2,3,4;alt:5
-		+22.a.a36.ababa35.acac2a33.a2d4e2a30.a7d2e2a28.fg3dhi4dja26.aefg7djka26.aedfg4d4ja26.aedlf4g3ja26.ae3dgf6a27.ael2dga33.ae3dga33.ae3dga33.aed2lga33.aed2lga32.ae3dga33.ael2d
-		+ga33.ae3dga33.ae3dga33.aed2lga33.aed2lga32.ae3dga33.ael2dga33.ae3dga33.ae3dga33.aed2lga33.aed2lga32.fe3dga28.5afel2dgf24.4a5efe3dgf20.a.2a4e2d2l2d5fa19.adf2ed2l3d2l7da19.
-		+afe3d2l6d2l4da19.af7d2l3d2l4da19.af2d2l3d2l7dlda19.afgd2l7d2l5da19.afg10d2l4dga19.acf2gd11jdga20.a2cfdldf5gfdld2fga20.3adld4f2afdldfmga22.a2dgfgfa2.a2dgfgfa22.a2dgfgfa2.a
-		+2dgfgfa22.adlgfmfa2.adlgfmfa22.a2dgfgfa2.a2dgfgfa22.a2dgfgfa2.a2dgfgfa22.a2dgfgfa2.a2dgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aed
-		+gfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.a3nf2na2.a3nf2n
-		+a22.a3nf2na2.a3nf2na23.6a4.6a100./22.a.a36.ababa35.acac2a33.a2d4e2a30.a7d2e2a28.fg3dhi4dja26.aefg7djka26.aedfg4d4ja26.aedlf4g3ja26.ae3dgf6a27.ael2dga33.ae3dga33.ae3dga33.
-		+aed2lga33.aed2lga32.ae3dga33.ael2dga33.ae3dga33.ae3dga33.aed2lga33.aed2lga32.ae3dga33.ael2dga33.ae3dga33.ae3dga33.aed2lga33.aed2lga32.fe3dga28.5afel2dgf24.4a5efe3dgf20.a.
-		+2a4e2d2l2d5fa19.adf2ed2l3d2l7da19.afe3d2l6d2l4da19.af7d2l3d2l4da19.af2d2l3d2l7dlda19.afgd2l7d2l5da19.afg10d2l4dga19.acf2gd11jdga20.a2c3fdldfgfdldf2gfgmga18.2a.afdldfafdld
-		+f3agmga21.af2dga.a2dga2.a2gfa21.af2dga.a2dga2.a2gfa21.afdlga.adlga2.agmfa21.af2dga.a2dga2.a2gfa21.af2dga.a2dga2.a2gfa21.af2dga.a2dga2.a2gfa21.afedga.aedga2.adgfa21.afedga
-		+.aedga2.adgfa21.afedga.aedga2.adgfa21.afedga.aedga2.adgfa21.afedga.aedga2.adgfa21.afedga.aedga2.adgfa21.afedga.aedga2.adgfa21.afedga.aedga2.adgfa21.afedga.aedga2.adgfa21.
-		+afedga.aedga2.adgfa21.afedga.aedga2.adgfa21.af3na.a3na2.a3na21.af3na.a3na2.a3na22.a2fa3.3a4.3a98./21.ababa35.acac2a33.a2d4e2a30.a7d2e2a28.fg3dhi4dja26.aefg7djka26.aedfg4d
-		+4ja26.aedlf4g3ja26.ae3dgf6a27.ael2dga33.ae3dga33.ae3dga33.aed2lga33.aed2lga32.ae3dga33.ael2dga33.ae3dga33.ae3dga33.aed2lga33.aed2lga32.ae3dga33.ael2dga33.ae3dga33.ae3dga3
-		+3.aed2lga33.aed2lga32.fe3dga28.5afel2dgf24.4a5efe3dgf20.a.2a4e2d2l2d5fa19.adf2ed2l3d2l7da19.afe3d2l6d2l4da19.af7d2l3d2l4da19.af2d2l3d2l7dlda19.afgd2l7d2l5da19.afg10d2l4dg
-		+a19.acf2gd11jdga20.a2cfa8gfdldfa22.3adld4f2afdldfmga22.adldfgfa2.a2dgfmga22.a2dgfgfa2.a2dgfgfa22.a2dgfmfa2.adlgfgfa22.adlgfgfa2.a2dgfmfa22.a2dgfgfa2.a2dgfgfa22.a2dgfgfa2.
-		+a2dgfgfa22.a2dgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.ae
-		+dgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgf2na2.a3nfgfa22.a3nf2na2.a3nf2na22.a3nf2a4.2af3na23.3a10.3a100./22.a.a36.ababa35.acac2a33.a2d4
-		+e2a30.a7d2e2a28.fg3dhi4dja26.aefg7djka26.aedfg4d4ja26.aedlf4g3ja26.ae3dgf6a27.ael2dga33.ae3dga33.ae3dga33.aed2lga33.aed2lga32.ae3dga33.ael2dga33.ae3dga33.ae3dga33.aed2lga
-		+33.aed2lga32.ae3dga33.ael2dga33.ae3dga33.ae3dga33.aed2lga33.aed2lga32.fe3dga28.5afel2dgf24.4a5efe3dgf20.a.2a4e2d2l2d5fa19.adf2ed2l3d2l7da19.afe3d2l6d2l4da19.af7d2l3d2l4da
-		+19.af2d2l3d2l7dlda19.afgd2l7d2l5da19.afg10d2l4dga19.acf2gd11jdga20.afdldf9gfdlda21.fdldf2a5fa2fdlda21.a2dga2.a2gfa.af2dga21.a2dga2.a2gfa.af2dga21.adlga2.agmfa.afdlga21.a2
-		+dga2.a2gfa.af2dga21.a2dga2.a2gfa.af2dga21.a2dga2.a2gfa.af2dga21.aedga2.adgfa.afedga21.aedga2.adgfa.afedga21.aedga2.adgfa.afedga21.aedga2.adgfa.afedga21.aedga2.adgfa.afedg
-		+a21.aedga2.adgfa.afedga21.aedga2.adgfa.afedga21.aedga2.adgfa.afedga21.aedga2.adgfa.afedga21.aedga2.adgfa.afedga21.aedga2.adgfa.afedga21.a3na2.a3na.af3na21.a3na2.a3na.af3n
-		+a22.3a4.3a3.a2fa101./21.ababa35.acac2a33.a2d4e2a30.a7d2e2a28.fg3dhi4dja26.aefg7djka26.aedfg4d4ja26.aedlf4g3ja26.ae3dgf6a27.ael2dga33.ae3dga33.ae3dga33.aed2lga33.aed2lga32
-		+.ae3dga33.ael2dga33.ae3dga33.ae3dga33.aed2lga33.aed2lga32.ae3dga33.ael2dga33.ae3dga33.ae3dga33.aed2lga33.aed2lga32.fe3dga28.5afel2dgf24.4a5efe3dgf20.a.2a4e2d2l2d5fa19.adf
-		+2ed2l3d2l7da19.afe3d2l6d2l4da19.af7d2l3d2l4da19.af2d2l3d2l7dlda19.afgd2l7d2l5da19.afg10d2l4dga19.acf2gd11jdga20.a2cfdldf10gfga20.3adld4f2afdldfmga22.a2dgfmga2.adldfgfa22.
-		+a2dgfgfa2.a2dgfgfa22.adlgfgfa2.a2dgfmfa22.a2dgfmfa2.adlgfgfa22.a2dgfgfa2.a2dgfgfa22.a2dgfgfa2.a2dgfgfa22.aedgfgfa2.a2dgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.ae
-		+dgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.a3nf
-		+gfa2.aedgf2na22.a3nf2na2.a3nf2na23.2af3na2.a3nf2a27.3a4.3a103./1094.6a29.5a6ea24.4a5e2d2l2d6a15.a.2a4e2d2l3d2l2dfe3dga13.adf2ed2l3d2l7dfed2lga13.afe3d2l6d2l3dfed2lga14.af
-		+7d2l3d2l2dfe3dga15.af2d2l3d2l7dfel2dga15.afgd2l7d2l3dfe3dga15.afg10d2l2dfe3dg2a.a13.acf2gd10jfed2lg2ababa12.a2cfdldf5gfdlfed2lg2acac2a12.3adld4f2afdld4f2a2d4e2a12.a2dgfgf
-		+a2.a2dgfgf2a7d2e2a10.a2dgfgfa2.a2dgfgf2ag3dhi4dja9.adlgfmfa2.adlgfmfa.ag7djka9.a2dgfgfa2.a2dgfgfa2.ag4d4ja9.a2dgfgfa2.a2dgfgfa3.a4g3ja10.a2dgfgfa2.a2dgfgfa4.7a11.aedgfgfa
-		+2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.
-		+aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.a3nf2na2.a3nf2na22.a3nf2na2.a3nf2na23.6a4.6a100.
-		golem|48|50|45|20|a16141A,b62824B,c839D65,d9C988F,e455C38,f7D7973,g3D3B40,h242227,i2E2C30,j565454,k86DFDA,lE5FAF8,m6DC3BD,nC4F4EE,o252326,p88837B,q5D5A56|idle:0;walk:1,2,3,4;windup:5;strike:6;throw:7
-		+832.5a40.3a2b2cb2a36.2a2b2c2b2c2ba34.ad2beb3d2bcbda32.a4d7f4da.5a24.a2d14fdg5da23.ad9f4h2fgd5fda21.a2d5fi2fh4dhgd7fda20.ad7fihd4fdg7ifja20.ad8fh5fjg6fklja20.a9fh5fjg8fja2
-		+0.a9fhj3f2jgj2f5ija20.a5fi4fhj4hfg7ja21.a6fi4fh3dhfm5g2a22.aj9fhd3fjh2nmfja24.aj9fh4fjhmnf2ja24.aj9fh4fjh2f3ja24.a2j8f7hf4ja25.a2j7fh5dh3jga26.a3j5fhd5fdhj2ga27.a7jh6fjh2
-		+ga29.a4j2gh5fijh2a31.6gh6fjh33.a2fi2fhj4fijh33.a5fjh5jha33.aj4f2j5hga33.ad5fjg4jga33.a6fjg4jga33.a7fjg4jga33.6a2g6a166./832.5a40.3a2b2cb2a36.2a2b2c2b2c2ba34.ad2beb3d2bcbd
-		+a32.a4d7f4da.5a24.a2d14fdg5da23.ad9f4h2fgd5fda21.a2d5fi2fh4dhgd7fda20.ad7fihd4fdg7ifja20.ad8fh5fjg6fklja20.a9fh5fjg8fja20.a9fhj3f2jgj2f5ija20.a5fi4fh2j3hfg7ja21.a6fi4f2h3
-		+dhm5g2a22.aj10fhd3fjhnmfja24.aj10fh4fjhnf2ja24.aj10fh4fjhf3ja24.a2j9fhj5h4ja25.a2j9fh5dhjga26.a3j7fhd5fdhga27.a9jh6fjha29.a4j3gjh5fijh31.a7gh6fja33.g2fi2fhj4fija33.a5fjh5
-		+ja34.aj4f2j3h2a35.ad5fj2ga37.a6fj2ga37.a7fj2ga37.2a6g2a168./880.5a40.3a2b2cb2a36.2a2b2c2b2c2ba34.ad2beb3d2bcbda32.a4d7f4da.5a24.a2d14fdg5da23.ad9f4h2fgd5fda21.a2d5fi2fh4d
-		+hgd7fda20.ad7fihd4fdg7ifja20.ad8fh5fjg6fklja20.a9fh5fjg8fja20.a9fhj3f2jgj2f5ija20.a5fi4fhj4hfg7ja21.a6fi4fh3dhfm5g2a22.aj9fhd3fjh2nmfja24.aj9fh4fjhmnf2ja24.aj9fh4fjh2f3ja
-		+24.a2j8f7hf4ja25.a2j7fh5dh3jga26.a3j5fhd5fdhj2ga27.a7jh6fjh2ga29.a4j2gh5fijh2a31.6gh6fjh33.a5fhj4fijh33.aj4fjh5jha33.ad5fj5hga33.a6fjg4jga33.a7fjg4jga33.6a2g6a166./832.5a
-		+40.3a2b2cb2a36.2a2b2c2b2c2ba34.ad2beb3d2bcbda32.a4d7f4da.5a24.a2d14fdg5da23.ad9f4h2fgd5fda21.a2d5fi2fh4dhgd7fda20.ad7fihd4fdg7ifja20.ad8fh5fjg6fklja20.a9fh5fjg8fja20.a9fh
-		+j3f2jgj2f5ija20.a5fi4f4hjhfg7ja21.a6fi3fh3dh2fm5g2a22.aj8fhd3fjhm2nmfja24.aj8fh4fjhfmnf2ja24.aj8fh4fjh3f3ja24.a2j7f5hjh2f4ja25.a2j5fh5dh2f3jga26.a3j3fhd5fdh3j2ga27.a5jh6f
-		+jhj3ga28.ag4jh5fijh4g29.af4gh6fjh3ga29.a2fi2fhj4fijh2jga29.a5fjh5jh2j2ga29.aj4f2jha3h3j2ga29.ad5fja.af5jga29.a6fja.a6jga29.a7fj2a7jga29.8a2.8a164./880.5a40.3a2b2cb2a36.2a
-		+2b2c2b2c2ba34.ad2beb3d2bcbda32.a4d7f4da.5a24.a2d14fdg5da23.ad9f4h2fgd5fda21.a2d5fi2fh4dhgd7fda20.ad7fihd4fdg7ifja20.ad8fh5fjg6fklja20.a9fh5fjg8fja20.a9fhj3f2jgj2f5ija20.a
-		+5fi4fhj4hfg7ja21.a6fi4fh3dhfm5g2a22.aj9fhd3fjh2nmfja24.aj9fh4fjhmnf2ja24.aj9fh4fjh2f3ja24.a2j8f7hf4ja25.a2j7fh5dh3jga26.a3j5fhd5fdhj2ga27.a7jh6fjh2ga29.a4j2gh5fijh2a31.6g
-		+h6fjh33.a5fhj4fijh33.aj4fjh5jha33.ad5fj5hga33.a6fjg4jga33.a7fjg4jga33.6a2g6a166./160.5a42.a5fa40.af4j3h2a37.a4jh5da36.a3jhd5fda35.a3jh6fja35.ag2jh5fija36.a2gh6fja37.3hj4f
-		+ija36.af2jh5ja37.a4j5h38.a3jhd3fja37.ag2jh4fja37.a3gh4fja35.a2g2bchj2f2ja33.2a2b2c2b2h3jh33.ad2beb2dhdf3hda31.a4d4fh5fjh.5a24.a2d7fh5fjhg5da23.ad8fhj3f2jgd5fda21.a2d5fi3f
-		+h4jgd7fda20.ad7fi3f4hg7ifja20.ad8fi6fg6fklja20.a16fg8fja20.a16fgj2f5ija20.a5fi11fg7ja21.a6fi10fm5g2a22.aj15fm2nmfja24.aj16fmnf2ja24.aj18f3ja24.a2j16f4ja25.a2j14f3jga26.a3
-		+j11f4j2ga27.a15j3ga29.a4j3g5j3g2a31.15g33.a6fjg4jga33.a2fi3fjgo3jga33.a5f2jg3j2ga33.aj4f2jg3j2ga33.ad5fjg4jga33.a6fjg4jga33.a7fjg4jga33.6a2g6a166./928.5a40.3a2b2cb2a36.2a
-		+2b2c2b2c2ba34.ad2beb3d2bcbda32.a4d7f4da.5a24.a2d14fdg5da23.ad15fgd5fda21.a2d5fi6f2hgd7fda20.ad7fi4fh2dg7ifja20.ad8fi2fhd2fg6fklja20.a12fh3fg8fja20.a12fh3fgj2f5ija20.a5fi6
-		+fhj3fg7ja21.a6fi6fh3jh6ga22.aj13f4h4fja23.aj16fh4fjh23.aj16fhj2f2jha22.a2j16fh3j4h2a20.a2j14f2j4h5da19.a3j11f4j2ghd5fda19.a15j4gh6fja20.a4j3g5j5gjh5fija21.a13g2a2gh6fja22
-		+.aj4f2jgj2ga2.2ahj4fija22.ad5fjg2jga5.a5ja23.a6fjg2jga2.p3.2ap2a3.p20.a7fjg2jga2.p3.p.p3.p22.4a4g4a167./832.5a40.3a2b2cb2a17.4a15.2a2b2c2b2c2ba15.a4pa13.ad2beb3d2bcbda13.
-		+a5pqa11.a4d7f4da.5a6.a4p2qa10.a2d14fdg5da6.a4qa11.ad15fgd5fda6.4a11.a2d5fi8fgd7fda20.ad7fi5f2hg7ifjg3a17.ad8fi3fh2dg6fkljg3da16.a12fhd2fg8fjg3fda15.a12fh3fgj2f5ijg3fja15.
-		+a5fi6fh4fg7jg3fija15.a6fi5fhj3fj7g5fja15.aj12fh4jhj2fjhj4fija15.aj13f4hnh3j2a5ja16.aj18fj3h2.5a17.a2j16f4ja25.a2j14f3jga26.a3j11f4j2ga27.a15j3ga29.a4j3g5j3g2a31.15g33.a2f
-		+i3fjgo3jga33.a5f2jg3j2ga33.aj4f2jg3j2ga33.ad5fjg4jga33.a6fjg4jga33.a7fjg4jga33.6a2g6a166.
-		grizzly|50|28|25|18|a181114,bB3A593,c8F755A,d372727,e694F3C,f4B372F,gFFFFFF,h1A1316,iC2AB8D,j1E1519,kAC916F,l786352,m1F1515,nE7DFC9,oEFEAD9,p834248|idle:0;walk:1,2,3,4;strike:5
-		+117.8a39.3a8b2a34.3a13b2a28.4a3c14b2da24.2a8c10b2cd3ea21.2a21cde3fe6a14.a4c19ede2f2e6c2a11.a3c17ef4ed2e10ca10.a2c18ef3ed3c4e3f3eca9.ac20efed2c7egh4e2a8.a21efedc8e2h4i2ja7
-		+.a22efd11e4k2ja7.af22edf9ef6ka7.af23edf7e2f5la9.af23edf6ef5ma10.a5ed11ed5edfd2f4e2f3ka11.a5ed11fd5e2dfd7f3a12.a4ef13d4efd3f3d4a15.a4ef7d5ad4efd4fda19.a3e2fd3f2da5.a3e2fd3
-		+f2da19.a3e2fd3f2da5.a3e2fd3f2da19.a4e2fd3f2da4.a4e2fd3f2da18.a5efd4fda4.a5efd4fda18.adndndndndndna4.adndndndndndna19.12a6.12a67./117.8a39.3a8b2a34.3a13b2a28.4a3c14b2da24.
-		+2a8c10b2cd3ea21.2a21cde3fe6a14.a4c19ede2f2e6c2a11.a3c17ef4ed2e10ca10.a2c18ef3ed3c4e3f3eca9.ac20efed2c7egh4e2a8.a21efedc8e2h4i2ja7.a22efd11e4k2ja7.af22edf9ef6ka7.af23edf7e
-		+2f5la9.af23edf6ef5ma11.ad5ed7ed5ed3fd2f4e2f3ka13.d5ed7fd5edf3ad7f3a14.a4ef9d4efda2.af5d2a17.a4ef3d5ad4efa3.a4fda19.a3e2f2da5.a3e2fa3.a3f2da19.a3e2f2da5.a3e2fa3.a3f2da19.a
-		+4e2f2da4.a4e2fa2.a4f2da18.a5ef2da4.a5efa2.a5fda18.adndndndna4.adndndna2.adndndna19.2a4d2a6.6a4.6a65./67.8a39.3a8b2a34.3a13b2a28.4a3c14b2da24.2a8c10b2cd3ea21.2a21cde3fe6a1
-		+4.a4c19ede2f2e6c2a11.a3c17ef4ed2e10ca10.a2c18ef3ed3c4e3f3eca9.ac20efed2c7egh4e2a8.a21efedc8e2h4i2ja7.a22efd11e4k2ja7.af22edf9ef6ka7.af23edf7e2f5la9.af23edf6ef5ma11.a2f14e
-		+d5edfd2f4e2f3ka11.a5ed11fd5e2dfd7f3a12.a5e13d4efd3f3d4a15.a4ef7d5ad4efd4fda19.a4efd3f2da5.a3e2fd4fda19.a3e2fd3f2da5.a3e2fd3f2da19.a3e2fd4f2da4.a4e2fd2f2da19.a4e2fd4fda4.a
-		+5efd3f2da18.a5efdndndna4.adndndnd4fda18.adndndnd5a6.5a2dndndna19.6a18.6a67./117.8a39.3a8b2a34.3a13b2a28.4a3c14b2da24.2a8c10b2cd3ea21.2a21cde3fe6a14.a4c19ede2f2e6c2a11.a3c
-		+17ef4ed2e10ca10.a2c18ef3ed3c4e3f3eca9.ac20efed2c7egh4e2a8.a21efedc8e2h4i2ja7.a22efd11e4k2ja7.af22edf9ef6ka7.af23edf7e2f5la9.af23edf6ef5ma8.a5ed15ed5ed2f4e2f3ka9.a5ed15fd5
-		+e2d7f3a10.a4efda15d4ef3d6a13.a4efa.2a7d5ad4ef2da19.a3e2fa3.a3f2da5.a3e2f2da19.a3e2fa3.a3f2da5.a3e2f2da19.a4e2fa2.a4f2da4.a4e2f2da18.a5efa2.a5fda4.a5ef2da18.adndndna2.adnd
-		+ndna4.adndndndna19.6a4.6a6.2a4d2a69./67.8a39.3a8b2a34.3a13b2a28.4a3c14b2da24.2a8c10b2cd3ea21.2a21cde3fe6a14.a4c19ede2f2e6c2a11.a3c17ef4ed2e10ca10.a2c18ef3ed3c4e3f3eca9.ac
-		+20efed2c7egh4e2a8.a21efedc8e2h4i2ja7.a22efd11e4k2ja7.af22edf9ef6ka7.af23edf7e2f5la9.af23edf6ef5ma10.a5ed16e3fd2f4e2f3ka11.a5ed11fd5e2dfd7f3a12.a4ef13d5ed3f3d4a15.a4ef7d5a
-		+d4efd4fda19.a3e2fd4fda5.a4efd3f2da19.a3e2fd3f2da5.a3e2fd3f2da19.a4e2fd2f2da5.a3e2fd4f2da18.a5efd3f2da4.a4e2fd4fda18.adndndnd4fda4.a5efdndndna19.5a2dndndna4.adndndnd5a26.6
-		+a6.6a73./117.8a39.3a8b2a34.3a13b2a28.4a3c14bc4a22.2a8c10b4cd3ea19.2a23cde3fe6a12.a4c21ede2f2e6c2a9.a3c17ef6ed2e10ca8.a2c18ef5ed3c4e3f3eca7.ac20ef3ed2c7egh4e2a6.a21ef3edc8
-		+e2h4i2ja5.a22ef2ed11e4k2ja5.af24edf9efkokoka6.af25edf7e2f5pa7.af18ed5e2df6e2f5pa6.a5ed14ed5edfdf5e2fkokoka6.a5ed14fd4efd2fd2f3e2f4ka7.a4ef16d4efdfd2a6f3la8.a4ef3a7d5ad3e2
-		+fdfda.9a9.a3e2fa2.a3f2da5.a3e2f3da19.a3e2fa2.a4f2da4.a4e2f2da19.a4e2fa.a5fda4.a5ef3da18.a5efa.adndndna4.adndndndfda18.adndndna2.6a6.2a4dndna19.6a18.6a68.
-		imp|34|34|31|13.5|a17191E,b381E1E,c251414,dC4826C,eB76659,f5A3834,g804A43,h1A1418,iD9C769,j381E26,kE7E2C9,l7D5C57,m562D2F,n3C2128,o2B1A23,p2A242C,q6F4F58,r472428,s321A20,t23141A,u494048,v3A3238,w1E1A20|idle:0;walk:1,2,3,4;windup:5;strike:6;shoot:5
-		+12.a7.a24.aba5.aba23.a2b5a2ba23.acb6dba23.ac4d4ea23.ac3e4fea23.acg2e2hih2ea22.a2g7ega23.ag2ejkjkja24.a2ge5ja23.2a2fgkjk2gf2a20.a3l7f2ega18.a2l2m11fa16.a2l2mf4lmfe3defa15.
-		+al3mf4m2n5ega15.a4mf3nof2g2ega2ga12.a.an4m4f.5ag2a12.ap2a2n4m2na6.a13.aega.a2n3mnoa19.aega2.onomnmoa19.aega2.a3on3oa19.a2e2a.aqor2oso21.aegp2a6tsta20.3a.aq2rst2sta24.aq2r
-		+st2sta25.a2rst2sta25.a2rst2sta25.ar2sts2ta25.aeg2agfa26.aeg2agfa25.a4ut3va24.a4upt2vwa24.4at4a50./12.a7.a24.aba5.aba23.a2b5a2ba23.acb6dba23.ac4d4ea23.ac3e4fea23.acg2e2hih
-		+2ea22.a2g7ega23.ag2ejkjkja24.a2ge5ja23.2a2fgkjk2gf2a20.a3l7f2ega18.a2l2m11fa16.a2l2mf4lmfe3defa15.al3mf4m2n5ega15.a4mf3nof2g2ega2ga12.a.an4m4f.5ag2a12.ap2a2n4m2na6.a13.ae
-		+ga.a2n3mnoa19.aega2.onomnmoa19.aega2.a3on3oa19.a2e2a.aqor2oso21.aegp2a6tsta20.3a.a2q2rststa25.aq2rs2ta27.a2r2sta27.tq2rst28.at2rsa28.atega29.ateg2a28.at4ua27.at3upa28.a3t
-		+a52./46.a7.a24.aba5.aba23.a2b5a2ba23.acb6dba23.ac4d4ea23.ac3e4fea23.acg2e2hih2ea22.a2g7ega23.ag2ejkjkja24.a2ge5ja23.2a2fgkjk2gf2a20.a3l7f2ega18.a2l2m11fa16.a2l2mf4lmfe3de
-		+fa15.al3mf4m2n5ega15.a4mf3nof2g2ega2ga12.a.an4m4f.5ag2a12.ap2a2n4m2na6.a13.aega.a2n3mnoa19.aega2.onomnmoa19.aega2.a3on3oa19.a2e2a.tqor2osota19.aegp2a6tsta20.3a.aq2rstrsta
-		+25.a2rstr2sta24.a2rs2a2sta24.ar2s2agfta24.aega.agfa25.aeg2a3va24.a4ut3vwa23.a4upt3a25.5a54./12.a7.a24.aba5.aba23.a2b5a2ba23.acb6dba23.ac4d4ea23.ac3e4fea23.acg2e2hih2ea22.
-		+a2g7ega23.ag2ejkjkja24.a2ge5ja23.2a2fgkjk2gf2a20.a3l7f2ega18.a2l2m11fa16.a2l2mf4lmfe3defa15.al3mf4m2n5ega15.a4mf3nof2g2ega2ga12.a.an4m4f.5ag2a12.ap2a2n4m2na6.a13.aega.a2n
-		+3mnoa19.aega2.onomnmoa19.aega2.a3on3oa19.a2e2a.aqor2oso21.aegp2a6tsta20.3a.aq2rstr2sta22.aq2rs2ar2sta22.a2r2sa.a2s2ta20.aq2rsa2.ar2sta20.a2rsa4.a2sta20.aega5.agfa21.aega5
-		+.agf2a20.a3ua4.a4va19.a3upa3.a3vwa20.4a5.4a48./46.a7.a24.aba5.aba23.a2b5a2ba23.acb6dba23.ac4d4ea23.ac3e4fea23.acg2e2hih2ea22.a2g7ega23.ag2ejkjkja24.a2ge5ja23.2a2fgkjk2gf2
-		+a20.a3l7f2ega18.a2l2m11fa16.a2l2mf4lmfe3defa15.al3mf4m2n5ega15.a4mf3nof2g2ega2ga12.a.an4m4f.5ag2a12.ap2a2n4m2na6.a13.aega.a2n3mnoa19.aega2.onomnmoa19.aega2.a3on3oa19.a2e2
-		+a.tqor2osota19.aegp2a6tsta20.3a.a2qrst2sta25.aq2rststa26.a2rststa26.aegs3ta26.aegtgfa26.a3utgfa26.a3upt2va26.2a2t3vwa28.5a50./11.a7.a24.aba5.aba23.a2b5a2ba23.acb6dba23.ac
-		+4d4ea23.ac3e4fef.a21.acg2e2hih2e2fa20.a2g7e2f2a21.ag2ejkj2fdeaga20.f2gej2fd2e2ga20.2o4flm2eg2a20.a2l2f2lmnfga21.a2lf2l2mnf2a21.a2lmfm2nofa23.al3m4fna23.a7m2na22.2an5m2na2
-		+2.apo2n4m2na21.aeg2a2n3mnoa20.aega.anomnmoa20.aega2.3on4o20.a2e2a.aor2osoa21.aegp2a6tsta20.3a.aq2rst2sta24.aq2rststa26.a2rs3ta26.a2rs2ta27.ar2sta28.aegta29.aegta28.a4uta2
-		+7.a4upta27.2a3ta53./48.a7.a24.aba5.aba23.a2b5a2ba23.acb6dba23.ac4d4ea23.ac3e4fea23.acg2e2hih2ea22.a2g7ega23.ag2ekjkjka24.a2ge5ja22.2af2ge5ja21.a3l2fgkjk2ga20.a2l3m6fa20.a
-		+2l3m7f21.al3mf2lm2f2ea.a18.a4mf3mne3fafa14.a2.an3mf3no2e2d3f13.apa.a2n3m3f2g3edfga11.aega2.a2n3mnofa2g2e2ga10.aega2.aonomnmoa2.2agaga10.aega2.aq3on3oa4.a.a11.a2e2a.tqror2
-		+otoa19.aegp2a6tsta20.3a2.aq2rs2ta27.a2r2sta27.tq2rst28.at2rsa28.atega29.ateg2a28.at4ua27.at3upa28.a3ta52.
-		mimic|22|22|18|11|a291F18,bC5A374,cA9895F,d856A46,e898D96,fD3BD68,gECE0A2,h685137,iD9C769,j15111A,kFFFFFF,l462026,m70333B,nD17985|idle:0;hop:1,2;strike:3
-		+202.14a7.a14ba6.a14ca6.a14da6.a6e2f6ea6.a6cfg6ca6.a14ca6.acd10cdca6.a14ca6.a14ha7.14a48./92.14a7.a14ba6.a2cij6cij2ca6.a14da6.aka2ka2ka2ka2k2a6.al12mla6.al4m5n3mla6.al4m5n
-		+3mla6.2ak2ak2ak2ak2aka6.a6e2f6ea6.a6cfg6ca6.a14ca6.acd10cdca6.a14ca6.a14ha7.14a48./48.14a7.a14ba6.a2cij6cij2ca6.a14da6.aka2ka2ka2ka2k2a6.al12mla6.al12mla6.al12mla6.al4m5n
-		+3mla6.al4m5n3mla6.2ak2ak2ak2ak2aka6.a6e2f6ea6.a6cfg6ca6.a14ca6.acd10cdca6.a14ca6.a14ha7.14a48./114.14a7.a14ba6.a2cij6cij2ca6.a14da6.aka2ka2ka2ka2k2a6.al12m2a6.al11ma2na5.
-		+2ak2ak2ak2ak2a3na4.a6e2f5ea2na4.a6cfg6c2a5.a14ca6.acd10cdca6.a14ca6.a14ha7.14a48.
-		pig|30|18|16|11.5|a38202A,bE29DA7,cF2C4BD,d9C5D74,eC47C8E,f1E1519,gFFFFFF,hF0B4B4,i83495D,j5A3644|idle:0;walk:1,2,3,4;alt:5
-		+48.2a17.9a.a2ba14.2a9cdbe2b3a10.a11cdbeb4ca7.2a2c10bd8ca5.aea11bd2c3bfg2b3a2.aeae11bdc4b2f2b3ha.ae2a11bd8b2hiha2.a2e11bde7b4ha3.2ae11bde5bd2hiha4.a2e10bed2e4b2d2a6.d3bd3e
-		+d3b3d5e2a8.a3b5d3b2ded4a10.a2be5d2bededa14.a2beded2a2bededa14.a3jd2j2a3jd2ja15.6a2.6a11./48.2a17.9a.a2ba14.2a9cdbe2b3a10.a11cdbeb4ca7.2a2c10bd8ca5.aea11bd2c3bfg2b3a2.aeae
-		+11bdc4b2f2b3ha.ae2a11bd8b2hiha2.a2e11bde7b4ha3.2ae11bde5bd2hiha4.a2e10bed2e4b2d2a6.aed3bd3bd2e2d5e2a9.2d3bd3b4de3d2a11.ad2bed2bed3a2eda13.ad2bed2bea2.a2eda13.ad3jd3ja2.a3
-		+ja14.a2da.3a4.3a9./18.2a17.9a.a2ba14.2a9cdbe2b3a10.a11cdbeb4ca7.2a2c10bd8ca5.aea11bd2c3bfg2b3a2.aeae11bdc4b2f2b3ha.ae2a11bd8b2hiha2.a2e11bde7b4ha3.2ae11bde5bd2hiha4.a2e10
-		+bed2e4b2d2a6.a7ed3b3d5e2a8.a3b5d3b2ded4a10.a3b5d2bed2ea14.a2beded2a2bededa14.a2bed2j2a3jdeda14.a3jd2a2.2ad3ja15.3a8.3a11./48.2a17.9a.a2ba14.2a9cdbe2b3a10.a11cdbeb4ca7.2a2
-		+c10bd8ca5.aea11bd2c3bfg2b3a2.aeae11bdc4b2f2b3ha.ae2a11bd8b2hiha2.a2e11bde7b4ha3.2ae11bde5bd2hiha4.a2e10bed2e4b2d2a4.a3bd7ed3bd5e2a6.a3b9d3b6a8.a2bed2a6d2bea13.a2bea2.a2e3
-		+d2bea13.a3ja2.a3j2d3ja14.3a4.3a.a2da12./18.2a17.9a.a2ba14.2a9cdbe2b3a10.a11cdbeb4ca7.2a2c10bd8ca5.aea11bd2c3bfg2b3a2.aeae11bdc4b2f2b3ha.ae2a11bd8b2hiha2.a2e11bde7b4ha3.2a
-		+e11bde5bd2hiha4.a2e10bed2e4b2d2a6.d3bd8e2d5e2a8.a3b5d3b2ded4a10.a2be5d3bdeda14.a2beded2a2bededa14.a3jded2a2bed2ja15.2ad3j2a3jd2a19.3a2.3a14./67.9a19.2a9c2a16.a13ca13.2a2c
-		+13bda10.aea14bd2ba8.aeae13bdbe2b3a5.ae2a13bdbeb4ca5.a2e13bd8ca5.2ae11bd2c3bfg2b3a4.a2e10bdc4b2f2b3ha4.d3bd3ed3bd8b2hiha4.a3b5d3bde7b4ha4.a2be5d2be2de5bd2hiha4.a2beded2a2b
-		+eded2e4b2d2a5.a3jd2j2a3jd2jd5e2a8.6a2.6a.5a5.
-		pirate|32|38|33|16|a7D6153,bAF7B72,c9A605D,d15131A,e704546,f503236,g18151D,h14121A,iB59378,jA17962,k825F4E,lE5DCC5,m676162,nDFD8C5,oB1756A,p4C2A2E,q99524E,r6C3A3B,s969189,t392C24,u8F7E68,v352B2C,w8C7245,x675545,yC5A766,zE6EAF0,AA6AEBB,B4A3C35,CCCAB8E,D2A2124,E645A52,F221A21,G1C1620,HE6EBF5|idle:0;walk:1,2,3,4;windup:5;strike:6;block:7
-		+109.6a25.a4b2ca22.da2b6ca20.d2e8cea18.defe4c2ge2ah17.defae3ce2a2gih17.def2a3ea2i2gih18.deai3aj5ih19.d.h9ih22.h7ijh23.h6jh24.h5kh24.hl3mknm23.hopoqrpqrp22.hlm2nsm2sm22.hqp
-		+2qrp2rp22.hnmn2sm2sm22.hrpoqrpr2p22.hsmlnsms2m22.hrp2qrpt2p23.3mij3mh22.hu2v2pwdv23.hu2xdyzAd23.hu2xBdzAd24.huxBdAzd24.huxBvdzAd23.h2xBvdAzd23.hCijvjdAd23.hCijvjkd23.hD2E
-		+FvDGh23.h4DFvFGh23.3h2v3h108./109.6a25.a4b2ca22.da2b6ca20.d2e8cea18.defe4c2ge2ah17.defae3ce2a2gih17.def2a3ea2i2gih18.deai3aj5ih19.d.h9ih22.h7ijh23.h6jh24.h5kh24.h3m2knmh2
-		+2.hpoqrp2qrph21.m2n2smn2smh20.hoq2rp2q2rph20.hlnsm3n2smh20.p2qrp3qr2ph20.mijm4ns2mh21.2pwdty2t2ph21.dyzAd4mkh21.hdzAd4vh22.hdAzdB2vh24.hdzAdvh26.dAzdBv25.hvdAdBh25.hxvdxB
-		+h25.hivCijh25.hivCijh25.hFvD2EFh24.hFv3DFh25.2h2v2h109./141.6a25.a4b2ca22.da2b6ca20.d2e8cea18.defe4c2ge2ah17.defae3ce2a2gih17.def2a3ea2i2gih18.deai3aj5ih19.d.h9ih22.h7ijh
-		+23.h6jh24.h5kh24.hl3mknm23.hopoqrpqrp22.hlm2nsm2sm22.hqp2qrp2rp22.hnmn2sm2sm22.hrpoqrpr2p22.hsmlnsms2m22.hrp2qrpt2p22.h3mij3mh22.hu2v2pwdv23.hu2xdyzAdh23.huxBdzAdh23.huxB
-		+dAzdh23.h2xBvdzAd23.hCijvdAzd23.hCijvDdAd22.hD2EFv2Fdh22.h4DFv2h24.5h111./109.6a25.a4b2ca22.da2b6ca20.d2e8cea18.defe4c2ge2ah17.defae3ce2a2gih17.def2a3ea2i2gih18.deai3aj5i
-		+h19.d.h9ih22.h7ijh23.h6jh24.h5kh24.hl3mknh23.hopoqrpqrh22.hlm2n2smsh22.h2qpqrorph22.h3nml2nsm22.hr3qpoqrp22.hs4nmijm22.hr3tyt2pwd22.6mdyzAd20.hu6vdzAd20.hu2xBv2BdAzd19.hu
-		+2xBvx2BvdzAd18.hux2B2hxBvdAzd17.hu2xBh.hx2BvdAd17.huxBh3.hxBvhd18.hCijh3.hijkh19.hCijh3.hijkh19.hD2EFh2.hF2DGh18.h3DFh2.h3FGh19.4h4.4h106./141.6a25.a4b2ca22.da2b6ca20.d2e
-		+8cea18.defe4c2ge2ah17.defae3ce2a2gih17.def2a3ea2i2gih18.deai3aj5ih19.d.h9ih22.h7ijh23.h6jh24.h5kh24.hl3mknm23.hopoqrpqrp22.hlm2nsm2sm22.hqp2qrp2rp22.hnmn2sm2sm22.hrpoqrpr
-		+2p22.hsmlnsms2m22.hrp2qrpt2p22.h3mij3mh22.hu2v2pwdv23.h2uxdyzAd24.hu2xdzAd25.huxdAzd25.huxBdzAd24.hCijdAzd23.hD2EFvdAd23.h3DFvGd25.h3v2FGh26.5h108./108.6a25.a4b2ca22.da2b
-		+6ca20.d2e8cea18.defe4c2ge2ah16.2defae3ce2a2gih15.dzaef2a3ea2i2gih15.dAzaeai3aj5ih16.dAza.h9ih17.dAz2dh7ijh18.dAz2mh6jh20.dpijp5kh21.hlnsml3knm20.hoq2rp5qrp19.hn2sm5n2sm19
-		+.h2qrp5q2rp20.2hm6n2sm22.hr5qr2p22.hs5ns2m22.hr3ty2t2p23.h7mv23.hu6vh23.hu2xBvBvh23.hu2xB2vh25.huxB2vh25.vuxBvh26.v2xBv27.vCijv27.vCijv26.hD2EFvh25.h4DFv26.h4v111./142.6a
-		+25.a4b2ca22.da2b6ca20.d2e8cea18.defe4c2ge2ah17.defae3ce2a2gih17.def2a3ea2i2gih18.deai3aj5ih19.d.h9ih22.h7ijk3H20.h6jh4.3H16.h5k2h8.2H13.h2l3mnm3.d7.H11.h2opoqr3ph2p8d11.h
-		+lnm2ns2l2nijm7z11.h3qp2r2q2r2jp7A11.h4n5mh2m8d11.hr5qr2p2.d19.hs5ns2m22.hr3ty2t2p22.h8mh22.hu7v24.hu2xBvh26.vux2Bv25.hvu2xBh25.hxvuxBh25.hivCijh25.hivCijh25.hFvD2EFh24.hF
-		+v3DFh25.2h2v2h109./109.6a25.a4b2ca22.da2b6ca20.d2e8cea18.defe4c2ge2ah2.2d13.defae3ce2a2gih.dzAd12.def2a3ea2i2gihdzAd14.deai3aj5idzAd16.d.h8idzAd20.h6i2pyd22.h4jmijmd22.hk
-		+3poqrp22.hlmlnsnsh22.h2op2qr3p22.hl2nm2smsm22.h4q2p2rp22.h6n2sm22.hr5qr2p22.hs5ns2m22.hr3ty2t2p23.8mh22.hu7v23.hu2xBvBvh23.hu2xBvBvh24.huxBvBvh24.huxBvBvh24.h2xBvBvh24.hC
-		+ijvjkh24.hCijvjkh23.hD2EFvDGh23.h4DFvFGh23.3h2v3h108.
-		pirateCaptain|32|38|33|16|a15131A,b666162,c2C2C38,dB4A071,e7D6153,f14121A,g483429,hA17962,iB59378,j0B0B12,k291E20,l825F4E,mA96D65,n46262C,o8D4747,p633337,q442B30,r855151,s5F3A3E,t1F1D2A,u696465,v8C7245,w2F2F3D,xC5A766,yE6EAF0,zA6AEBB,A252430,B1E1A20,C5C554F,D1A161F,E18141E,FA0716A,GE6EBF5|idle:0;walk:1,2,3,4;windup:5;strike:6;block:7
-		+13.5a25.2a5b2a21.2a2b6cba.a17.ada10cada16.ad12cda17.a12da19.12e20.f8g2hf20.f6gihjif20.f4gh3i2ef20.f2gi2h2ie2ke21.fg3i2e4ka21.f2ie6ka22.f2he4ka23.f3le2ka23.fm3nl2e23.fmnmo
-		+pnopn22.fmn2opn2pn22.fon2opn2pn22.fono2pn2pn22.fpnmopnp2n22.fpnmopnp2n22.npn2opn2qn21.ar3nihnrsq21.atu2t2nvasa21.atu2waxyz2a21.atu2wAayz2a21.artuwAazya22.astuwAtayza22.at
-		+2wAtazya23.fuwAtAaza23.fuwAtAta23.fB2CDtBEf23.f4BDtDEf23.3f2t3f108./13.5a25.2a5b2a21.2a2b6cba.a17.ada10cada16.ad12cda17.a12da19.12e20.f8g2hf20.f6gihjif20.f4gh3i2ef20.f2gi
-		+2h2ie2ke21.fg3i2e4ka21.f2ie6ka22.f2he4ka23.f3le2ka23.f3n2l2ef22.fnmopn2opnf21.n2o2pno2pnf20.fmo2pn2o2pnf20.fmopn3o2pnf20.n2opn3op2nf20.nihn4op2nf21.2nva2o3qnf20.2axyzaqFr
-		+sqf20.atayzaq2rsq21.atazyaq2rsa21.artayzarsqa21.arsazya2qa22.as2tazaAf24.atwtawAf25.fwtuwAf25.fwtuwAf25.fDtB2CDf24.fDt3BDf25.2f2t2f109./45.5a25.2a5b2a21.2a2b6cba.a17.ada1
-		+0cada16.ad12cda17.a12da19.12e20.f8g2hf20.f6gihjif20.f4gh3i2ef20.f2gi2h2ie2ke21.fg3i2e4ka21.f2ie6ka22.f2he4ka23.f3le2ka23.fm3nl2e23.fmnmopnopn22.fmn2opn2pn22.fon2opn2pn22.
-		+fono2pn2pn22.fpnmopnp2n22.fpnmopnp2n22.npn2opn2qn21.at3nihnrsq21.atu2t2nvasa21.atu2waxyzaq21.artuwAayzaq21.artuwAazyaf21.ast2wAtayza22.atuwAtazya23.fuwAtBaza22.fB2CDt2Daf
-		+22.f4BDt2f24.5f111./13.5a25.2a5b2a21.2a2b6cba.a17.ada10cada16.ad12cda17.a12da19.12e20.f8g2hf20.f6gihjif20.f4gh3i2ef20.f2gi2h2ie2ke21.fg3i2e4ka21.f2ie6ka22.f2he4ka23.f3le2
-		+ka23.fm3nl2e23.fmnmopnopf22.fmn2o2pnpf22.f2onopmpnf22.f3onm2opn22.fp3onmopn22.fp4onihn22.n2p3oq2nva20.ar4nqFaxyza19.atu3tq2rayza19.atu2wAq2razya19.tu2wAtqrsqayza18.tuw2A2
-		+f3qazya17.fu2wAf.fw2Ataza17.fuwAf3.fwAtfa18.fuwAf3.fwAtf19.fuwAf3.fwAtf19.fB2CDf2.fD2BEf18.f3BDf2.f3DEf19.4f4.4f106./45.5a25.2a5b2a21.2a2b6cba.a17.ada10cada16.ad12cda17.a
-		+12da19.12e20.f8g2hf20.f6gihjif20.f4gh3i2ef20.f2gi2h2ie2ke21.fg3i2e4ka21.f2ie6ka22.f2he4ka23.f3le2ka23.fm3nl2e23.fmnmopnopn22.fmn2opn2pn22.fon2opn2pn22.fono2pn2pn22.fpnmop
-		+np2n22.fpnmopnp2n22.npn2opn2qn21.at3nihnrsq21.atu2t2nvasa21.at2uwaxyz2a21.artu2wayz2a21.arstuwazya22.asqtuwAayza22.2afuwAazya23.fB2CDtaza23.f3BDtEa25.f3t2DEf26.5f108./12.
-		+5a25.2a5b2a21.2a2b6cba.a17.ada10cada16.ad12cda17.a12da19.12e20.f8g2hf16.a3.f6gihjif15.aya2.f4gh3i2ef15.azya.f2gi2h2ie2ke16.azya.fg3i2e4ka16.azy2af2ie6ka17.azy2nf2he4ka19.
-		+anihn3le2ka20.fmopnm3l2e20.fmo2pn5opn19.fo2pn5o2pn19.f2opn5o2pn20.2fn6o2pn22.fp5op2n22.fp5op2n22.n2p3o3qn21.ar4nqFrsq21.artu2tq2rsq21.artu2wq2rsq21.artu2wqrsqa21.arstuwA3
-		+q22.asqtuwAtf24.2at2wAt27.tuwAt27.tuwAt26.fB2CDtf25.f4BDt26.f4t111./46.5a25.2a5b2a21.2a2b6cba.a17.ada10cada16.ad12cda17.a12da19.12e20.f8g2hf20.f6gihjif20.f4gh3i2ef20.f2gi
-		+2h2ie2ke21.fg3i2e4ka21.f2ie6ke2G20.f2he4ka3.3G16.f4le2ka7.2G13.f2m3noea2.a7.G11.f2mnmop3nf2n8a11.fmon2op2m2oihn7y11.f3on2p2o2p2hn7z11.f4o5nf2n8a11.fp5op2n2.a19.fp5op2n22.
-		+n2p3o3qn21.at4nqFrsq21.atu3tq2rsa21.artu2wq2rsa21.arstuwqrsqa21.ar2tu2w2qa22.astwtuwAf24.atwtuwAf25.fwtuwAf25.fDtB2CDf24.fDt3BDf25.2f2t2f109./13.5a25.2a5b2a21.2a2b6cba.a1
-		+7.ada10cada16.ad12cda17.a12da19.12e20.f8g2hf2.2a16.f6gihjif.ayza15.f4gh3i2efayza16.f2gi2h2ie2kayza18.fg3i2e2kayza20.f2ie3k2nxa22.f2heknihna22.fl3nmopn22.fmnmopopf22.f2mn2
-		+op3n22.fm2on2pnpn22.f4o2n2pn22.f6o2pn22.fp5op2n22.fp5op2n22.n2p3o3qn21.ar4nqFrsq21.atu3tq2rsa21.atu2wAq2rsa21.atu2wAqrsqa21.artuwAt3q22.astuwAtAtf23.at2wAtAtf24.fuwAtAtf2
-		+4.fuwAtAtf23.fB2CDtBEf23.f4BDtDEf23.3f2t3f108.
-		pirateGunner|32|38|33|16|a7D6153,b6C798E,c495A77,d15131A,e374258,f2B3043,g14121A,h0B0B12,iB59378,jA17962,k291E20,l825F4E,m7688A4,n2D364F,o516994,p3B4A6B,q392C24,r847663,s2F2629,t4A4E57,u584A3D,v3F3530,w2A2C34,x2A2124,y645A52,z221A21,A1C1620,BC5A766,CECE2A2,DD9AB69,EC47758|idle:0;walk:1,2,3,4;shoot:5;fire:6;strike:6
-		+109.6a25.a4b2ca22.da2b6ca20.d2e8cea18.defe4c3e2ag17.defae3ce3ahig17.def2a3ea3ihig18.deai3aj5ig19.d.g6i3kg22.g7ijg23.g6jg24.g5lg24.gm3nlon23.gmnmopnopn22.gmn2opn2pn22.gon2
-		+opn2pn22.gono2pn2pn22.gpnmopnp2n22.gpnmopnp2n22.gpn2opnq2n23.3nij3ng22.gr2s2ntds23.gr2ud2tdg23.gr2uvdtdg24.gruvdwdg24.gruvsdsg24.g2uvsvsg24.gruvsvsg24.gruvsvsg23.gx2yzsxA
-		+g23.g4xzszAg23.3g2s3g108./109.6a25.a4b2ca22.da2b6ca20.d2e8cea18.defe4c3e2ag17.defae3ce3ahig17.def2a3ea3ihig18.deai3aj5ig19.d.g6i3kg22.g7ijg23.g6jg24.g5lg24.g3n2long22.gnm
-		+opn2opng21.n2o2pno2png20.gmo2pn2o2png20.gmopn3o2png20.g2opn3op2ng20.nijn4op2ng21.2ntdqB2q2ng21.d2td5nlg21.gdtd5sg22.gdwduv2sg24.gd2uvsg26.sru2vs25.gsr2uvg25.gusruvg25.gus
-		+ruvg25.gusruvg25.gzsx2yzg24.gzs3xzg25.2g2s2g109./141.6a25.a4b2ca22.da2b6ca20.d2e8cea18.defe4c3e2ag17.defae3ce3ahig17.def2a3ea3ihig18.deai3aj5ig19.d.g6i3kg22.g7ijg23.g6jg2
-		+4.g5lg24.gm3nlon23.gmnmopnopn22.gmn2opn2pn22.gon2opn2pn22.gono2pn2pn22.gpnmopnp2n22.gpnmopnp2n22.gpn2opnq2n22.g3nij3ng22.gr2s2ntds23.gr2ud2tdsg23.gruvdtdsg23.gruvdwdsg23.
-		+g2uvsdvsg23.gruvsuvsg23.gruvs2xAg22.gx2yzs2zAg22.g4xzs2g24.5g111./109.6a25.a4b2ca22.da2b6ca20.d2e8cea18.defe4c3e2ag17.defae3ce3ahig17.def2a3ea3ihig18.deai3aj5ig19.d.g6i3k
-		+g22.g7ijg23.g6jg24.g5lg24.gm3nlog23.gmnmopnopg22.gmn2o2pnpg22.g2onopmpng22.g3onm2opn22.gp3onmopn22.gp4onijn22.gp3qBq2ntd22.6nd2td21.gr6sdtd21.gr2uvs2vdwd20.gr2uvsu2vsd21.
-		+gru2v2guv2sg19.gr2uvg.gu2vsg19.gruvg3.guvsg19.gruvg3.guvsg19.gruvg3.guvsg19.gx2yzg2.gz2xAg18.g3xzg2.g3zAg19.4g4.4g106./141.6a25.a4b2ca22.da2b6ca20.d2e8cea18.defe4c3e2ag17
-		+.defae3ce3ahig17.def2a3ea3ihig18.deai3aj5ig19.d.g6i3kg22.g7ijg23.g6jg24.g5lg24.gm3nlon23.gmnmopnopn22.gmn2opn2pn22.gon2opn2pn22.gono2pn2pn22.gpnmopnp2n22.gpnmopnp2n22.gpn
-		+2opnq2n22.g3nij3ng22.gr2s2ntds23.g2rud2tdg24.gr2udtdg25.grudwdg25.gruvdsg25.gruv2sg24.gx2yz2sg24.g3xzsAg25.g3s2zAg26.5g108./109.6a25.a4b2ca22.da2b6ca20.d2e8cea18.defe4c3e
-		+2ag17.defae3ce3ahig17.def2a3ea3ihig18.deai3aj5ig19.d.g6i3kg22.g7ijg23.g6jg24.g6l24.g2m3non3g6d14.g2mnmop6n4twd13.gmon2op2m2oijnt3d14.g3on2p2o2p2jnd17.g4o5ng2nd18.gp5opng2
-		+2.gp5opng22.gp3qB2qng23.8n23.gr6sg23.gr2uvsvsg23.gr2uv2sg25.gruv2sg25.sruvsg26.s2uvs27.sruvs27.sruvs26.gx2yzsg25.g4xzs26.g4s111./108.6a25.a4b2ca22.da2b6ca20.d2e8cea18.def
-		+e4c3e2ag17.defae3ce3ahig17.def2a3ea3ihig18.deai3aj5ig19.d.g6i3kg22.g7ijg23.g6jg24.g6l24.g2m3non3g6d.C12.g2mnmop6n4tw2CD11.gmon2op2m2oijnt3dDCE11.g3on2p2o2p2jnd4.D12.g4o5n
-		+g2nd18.gp5opng22.gp5opng22.gp3qB2q2n23.g7ng23.gr6sg23.gr2uvsvsg23.gr2uv2sg25.gruv2sg25.sruvsg26.s2uvs27.sruvs27.sruvs26.gx2yzsg25.g4xzs26.g4s111.
-		player|32|38|33|16|a14121A,bCCAB8E,cB59378,dA17962,e0B0B12,f825F4E,gF0F002,hF0F001,iF0F003,jF0F004,k6A4242|idle:0;walk:1,2,3,4;windup:5;strike:6;block:7;shoot:8;front:9
-		+109.6a25.a6ba23.a4b4ca21.a2b8ca20.ab7c2da20.a3c2d2cdeca20.a2cdfd3ceca20.a3c2d5ca21.a9ca22.a7cda23.a6da24.a5fa24.ab4fcf23.abfbcdfcdf22.abf2cdfcdf22.acf2cdf2df22.acfc2df2df
-		+22.adfbcdfc2f22.adfbcdfc2f22.adf2cd4f23.3fcd3fa22.ab7f23.ab2cdfdfa23.ab2cdfdfa24.abcdfdfa24.abcdfdfa24.a2cdfdfa24.abcdfdfa24.abcdfdfa23.ag2hifgja23.a4gifija23.3a2f3a108./
-		+109.6a25.a6ba23.a4b4ca21.a2b8ca20.ab7c2da20.a3c2d2cdeca20.a2cdfd3ceca20.a3c2d5ca21.a9ca22.a7cda23.a6da24.a5fa24.a5fcfa22.afbcdf2cdfa21.f2c2df2cdfa20.abc2df2c2dfa20.abcdf3
-		+c2dfa20.a2cdf4c2fa20.acdf5c2fa21.2fd4c3fa22.9fa21.ab7fa22.a2b2cd2fa24.ab2cdfa26.fbc2df25.afb2cda25.acfbcda25.acfbcda25.acfbcda25.aifg2hia24.aif3gia25.2a2f2a109./141.6a25.
-		+a6ba23.a4b4ca21.a2b8ca20.ab7c2da20.a3c2d2cdeca20.a2cdfd3ceca20.a3c2d5ca21.a9ca22.a7cda23.a6da24.a5fa24.ab4fcf23.abfbcdfcdf22.abf2cdfcdf22.acf2cdf2df22.acfc2df2df22.adfbcd
-		+fc2f22.adfbcdfc2f22.adf2cd4f22.a3fcd3fa22.ab7f23.ab2cdf2dfa23.abcdf2dfa23.abcdfcdfa23.a2cdfcdfa23.abcdfcdfa23.abcdf2gja22.ag2hif2ija22.a4gif2a24.5a111./109.6a25.a6ba23.a4
-		+b4ca21.a2b8ca20.ab7c2da20.a3c2d2cdeca20.a2cdfd3ceca20.a3c2d5ca21.a9ca22.a7cda23.a6da24.a5fa24.ab4fca23.abfbcdfcda22.abf2c2dfda22.a2cfcdbdfa22.a3cfb2cdf22.ad3cfbcdf22.ad4c
-		+fcdf22.a2d4c2fa23.8f23.ab6fa23.ab2cdf2dfa21.ab2cdfc2dfa21.abc2d2acd2fa19.ab2cda.ac2dfa19.abcda3.acdfa19.abcda3.acdfa19.abcda3.acdfa19.ag2hia2.ai2gja18.a3gia2.a3ija19.4a4.
-		+4a106./141.6a25.a6ba23.a4b4ca21.a2b8ca20.ab7c2da20.a3c2d2cdeca20.a2cdfd3ceca20.a3c2d5ca21.a9ca22.a7cda23.a6da24.a5fa24.ab4fcf23.abfbcdfcdf22.abf2cdfcdf22.acf2cdf2df22.acf
-		+c2df2df22.adfbcdfc2f22.adfbcdfc2f22.adf2cd4f22.a3fcd3fa22.ab7f23.a2b2cd2fa24.ab2cd2fa25.abcd2fa25.abcd2fa25.abcd2fa24.ag2hi2fa24.a3gifja25.a3f2ija26.5a108./108.6a25.a6ba2
-		+3.a4b4ca21.a2b8ca20.ab7c2da20.a3c2d2cdeca20.a2cdfd3ceca20.a3c2d5ca21.a9ca22.a7cda21.3a6da21.acd6fa21.abcdfc3fcf20.abc2df5cdf19.ac2df6cdf19.a2cdf5c2df20.2af6c2df22.ad6c2f2
-		+2.ad6c2f22.a2d4c3f23.a8f23.ab6fa23.ab2cdfdfa23.ab2cd2fa25.abcd2fa25.fbcdfa26.f2cdf27.fbcdf27.fbcdf26.ag2hifa25.a4gif26.a4f111./142.6a25.a6ba23.a4b4ca21.a2b8ca20.ab7c2da20
-		+.a3c2d2cdeca20.a2cdfd3ceca20.a3c2d5ca21.a9ca22.a7cda23.a6da23.a5f2a23.abc3fcf23.abcfbcd3f3a19.abcf2cd2b3cda18.a3cf2d2c4da18.a4c5f3a19.ad6c2f22.ad6c2f22.a2d4c3f22.a8fa22.a
-		+b7f24.ab2cdfa26.fbc2df25.afb2cda25.acfbcda25.acfbcda25.acfbcda25.aifg2hia24.aif3gia25.2a2f2a109./109.6a25.a6ba23.a4b4ca21.a2b8ca20.ab7c2da20.a3c2d2cdeca20.a2cdfd3ceca20.a
-		+3c2d5ca21.a9ca22.a6c2fa23.a4dfcda23.a4fbcda22.abfbcdcda22.abcf2cd3f22.ab2cf2dfdf22.a4c2f2df22.a6c2df22.ad6c2f22.ad6c2f22.a2d4c3f23.8fa22.ab7f23.ab2cdfdfa23.ab2cdfdfa24.ab
-		+cdfdfa24.abcdfdfa24.a2cdfdfa24.abcdfdfa24.abcdfdfa23.ag2hifgja23.a4gifija23.3a2f3a108./109.6a25.a6ba23.a4b4ca21.a2b8ca20.ab7c2da20.a3c2d2cdeca20.a2cdfd3ceca20.a3c2d5ca21.
-		+a9ca22.a7cda23.a6da24.a6f24.abc3fcf6a17.abcfbcd6fdfa16.abcf2cd2b3cd2fa16.a3cf2d2c4dfa17.a4c5f3a19.ad6cfa22.ad6cfa22.a2d4c2fa23.8f23.ab6fa23.ab2cdfdfa23.ab2cd2fa25.abcd2fa
-		+25.fbcdfa26.f2cdf27.fbcdf27.fbcdf26.ag2hifa25.a4gif26.a4f111./108.8a23.a8ba21.a4b6ca20.ab9ca20.ab9ca20.ad8cda20.adce4cecda20.adce4cecda20.a10ca20.ad3c2k3cda21.ad6cda22.a8
-		+fa20.2ab9c2a17.ab11c2da16.ab11c2da16.ab11cdba16.ab11cdba16.ab10cdbca16.abcd7c2dbca16.a2c10dcda16.acd10acda16.acdfb6cbfcda17.af2b2c2d2c2bfa19.a2bcd2adc2ba20.a2bcd2adc2ba20
-		+.a2bcd2adc2ba20.ab2cd2ad2cba20.a2bcd2adc2ba20.a2bcd2adc2ba20.a2hgi2ai2gha20.a3gi2ai3ga21.4a2.4a107.
-		player_hair_0|32|38|33|16|aF00001,bF00002|idle:0;walk:1,2,3,4;windup:5;strike:6;block:7;shoot:8;front:9
-		+141.6a25.a7b23.10b22.8b24.6b26.4b28.2b31.b851./141.6a25.a7b23.10b22.8b24.6b26.4b28.2b31.b851./173.6a25.a7b23.10b22.8b24.6b26.4b28.2b31.b819./141.6a25.a7b23.10b22.8b24.6b2
-		+6.4b28.2b31.b851./173.6a25.a7b23.10b22.8b24.6b26.4b28.2b31.b819./140.6a25.a7b23.10b22.8b24.6b26.4b28.2b31.b852./174.6a25.a7b23.10b22.8b24.6b26.4b28.2b31.b818./141.6a25.a7
-		+b23.10b22.8b24.6b26.4b28.2b31.b851./141.6a25.a7b23.10b22.8b24.6b26.4b28.2b31.b851./140.8a23.a9b22.10b22.b8.b22.b8.b939.
-		player_hair_1|32|38|33|16|a14121A,bF00001,cF00002,dF00003|idle:0;walk:1,2,3,4;windup:5;strike:6;block:7;shoot:8;front:9
-		+12.a3.a26.aba.aba.a22.abcbabc2aba21.ab2cb3cbcba20.a10ca19.a11ca19.a9cd23.6cd25.5c27.3c29.2c883./12.a3.a26.aba.aba.a22.abcbabc2aba21.ab2cb3cbcba20.a10ca19.a11ca19.a9cd23.6
-		+cd25.5c27.3c29.2c883./44.a3.a26.aba.aba.a22.abcbabc2aba21.ab2cb3cbcba20.a10ca19.a11ca19.a9cd23.6cd25.5c27.3c29.2c851./12.a3.a26.aba.aba.a22.abcbabc2aba21.ab2cb3cbcba20.a1
-		+0ca19.a11ca19.a9cd23.6cd25.5c27.3c29.2c883./44.a3.a26.aba.aba.a22.abcbabc2aba21.ab2cb3cbcba20.a10ca19.a11ca19.a9cd23.6cd25.5c27.3c29.2c851./11.a3.a26.aba.aba.a22.abcbabc2
-		+aba21.ab2cb3cbcba20.a10ca19.a11ca19.a9cd23.6cd25.5c27.3c29.2c884./45.a3.a26.aba.aba.a22.abcbabc2aba21.ab2cb3cbcba20.a10ca19.a11ca19.a9cd23.6cd25.5c27.3c29.2c850./12.a3.a2
-		+6.aba.aba.a22.abcbabc2aba21.ab2cb3cbcba20.a10ca19.a11ca19.a9cd23.6cd25.5c27.3c29.2c883./12.a3.a26.aba.aba.a22.abcbabc2aba21.ab2cb3cbcba20.a10ca19.a11ca19.a9cd23.6cd25.5c2
-		+7.3c29.2c883./11.a3.a3.a22.aba.aba.aba21.acbabcbabcba20.a2cb3cb3ca19.ab10cba18.a12ca20.c8.c1003.
-		player_hair_2|32|38|33|16|aF00001,bF00002,c14121A,dF00003,e825F4E|idle:0;walk:1,2,3,4;windup:5;strike:6;block:7;shoot:8;front:9
-		+141.6a25.a7b23.10b20.c10bd20.c8b23.c5bd25.c4bd26.c3bd27.c3bd27.c2b2d27.c2bde27.cb2de28.cde30.e660./141.6a25.a7b23.10b20.c10bd20.c8b23.c5bd25.c4bd26.c3bd27.c3bd27.c2b2d27.
-		+c2bde27.cb2d29.cd692./173.6a25.a7b23.10b20.c10bd20.c8b23.c5bd25.c4bd26.c3bd27.c3bd27.c2b2d27.c2bde27.cb2de28.cde30.e628./141.6a25.a7b23.10b20.c10bd20.c8b23.c5bd25.c4bd26.
-		+c3bd27.c3bd27.c2b2d27.c2bde27.cb2de28.cde30.e660./173.6a25.a7b23.10b20.c10bd20.c8b23.c5bd25.c4bd26.c3bd27.c3bd27.c2b2d27.c2bde27.cb2de28.cde30.e628./140.6a25.a7b23.10b20.
-		+c10bd20.c8b23.c5bd25.c4bd26.c3bd27.c3bd27.cb2ed27.ce30.e727./174.6a25.a7b23.10b20.c10bd20.c8b23.c5bd25.c4bd26.c3bd27.c3bd27.c2b2d27.c2bd28.cb2de28.ede30.e627./141.6a25.a7
-		+b23.10b20.c10bd20.c8b23.c5bd25.c4bd26.c3bd27.c3bd27.c2b2d27.c2bde27.cb2de28.cde30.e660./141.6a25.a7b23.10b20.c10bd20.c8b23.c5bd25.c4bd26.c3bd27.c3bd27.c2b2d27.c2bde27.cb2
-		+de28.cde30.e660./140.8a23.a9b22.10b20.c12bc18.c2b8.2bc18.c2b8.2bc18.c2b8.2bc18.cbd8.dbc18.cbd8.dbc18.cd10.dc19.c10.c746.
-		player_hair_3|32|38|33|16|aF00001,bF00002,c14121A,dF00003|idle:0;walk:1,2,3,4;windup:5;strike:6;block:7;shoot:8;front:9
-		+141.6a25.a7b21.c.10b19.ca10b19.ca2bd6b21.c2bd.4b23.cbd2.2b25.cdc2.b27.c823./141.6a25.a7b21.c.10b19.ca10b19.ca2bd6b21.c2bd.4b23.cbd2.2b25.cdc2.b27.c823./173.6a25.a7b21.c.1
-		+0b19.ca10b19.ca2bd6b21.c2bd.4b23.cbd2.2b25.cdc2.b27.c791./141.6a25.a7b21.c.10b19.ca10b19.ca2bd6b21.c2bd.4b23.cbd2.2b25.cdc2.b27.c823./173.6a25.a7b21.c.10b19.ca10b19.ca2bd
-		+6b21.c2bd.4b23.cbd2.2b25.cdc2.b27.c791./140.6a25.a7b21.c.10b19.ca10b19.ca2bd6b21.c2bd.4b23.cbd2.2b25.cdc2.b27.c824./174.6a25.a7b21.c.10b19.ca10b19.ca2bd6b21.c2bd.4b23.cbd
-		+2.2b25.cdc2.b27.c790./141.6a25.a7b21.c.10b19.ca10b19.ca2bd6b21.c2bd.4b23.cbd2.2b25.cdc2.b27.c823./141.6a25.a7b21.c.10b19.ca10b19.ca2bd6b21.c2bd.4b23.cbd2.2b25.cdc2.b27.c8
-		+23./140.8a23.a9b22.10b22.b8.b971.
-		player_hair_4|32|38|33|16|aF00002,bF00003|idle:0;walk:1,2,3,4;windup:5;strike:6;block:7;shoot:8;front:9
-		+141.6a25.a6ba23.a8b23.a6b25.a3b28.ab915./141.6a25.a6ba23.a8b23.a6b25.a3b28.ab915./173.6a25.a6ba23.a8b23.a6b25.a3b28.ab883./141.6a25.a6ba23.a8b23.a6b25.a3b28.ab915./173.6a
-		+25.a6ba23.a8b23.a6b25.a3b28.ab883./140.6a25.a6ba23.a8b23.a6b25.a3b28.ab916./174.6a25.a6ba23.a8b23.a6b25.a3b28.ab882./141.6a25.a6ba23.a8b23.a6b25.a3b28.ab915./141.6a25.a6b
-		+a23.a8b23.a6b25.a3b28.ab915./140.8a23.a8ba22.b8.b1003.
-		player_hair_5|32|38|33|16|a14121A,bF00001,cF00002,dF00003,e825F4E|idle:0;walk:1,2,3,4;windup:5;strike:6;block:7;shoot:8;front:9
-		+45.5a26.a5b2a23.ab6cba21.ab9ca19.ab10cda18.a10cd20.a8cd22.a6cd24.a5cd25.a4cd27.a2cd29.ad31.a787./45.5a26.a5b2a23.ab6cba21.ab9ca19.ab10cda18.a10cd20.a8cd22.a6cd24.a5cd25.a
-		+4cd27.a2cd29.ad31.a787./77.5a26.a5b2a23.ab6cba21.ab9ca19.ab10cda18.a10cd20.a8cd22.a6cd24.a5cd25.a4cd27.a2cd29.ad31.a755./45.5a26.a5b2a23.ab6cba21.ab9ca19.ab10cda18.a10cd2
-		+0.a8cd22.a6cd24.a5cd25.a4cd27.a2cd29.ad31.a787./77.5a26.a5b2a23.ab6cba21.ab9ca19.ab10cda18.a10cd20.a8cd22.a6cd24.a5cd25.a4cd27.a2cd29.ad31.a755./44.5a26.a5b2a23.ab6cba21.
-		+ab9ca19.ab10cda18.a10cd20.a8cd22.a6cd24.a5cd25.a4cd27.a2cd29.ad31.e788./78.5a26.a5b2a23.ab6cba21.ab9ca19.ab10cda18.a10cd20.a8cd22.a6cd24.a5cd25.a4cd27.a2cd29.ad31.a754./4
-		+5.5a26.a5b2a23.ab6cba21.ab9ca19.ab10cda18.a10cd20.a8cd22.a6cd24.a5cd25.a4cd27.a2cd29.ad31.a787./45.5a26.a5b2a23.ab6cba21.ab9ca19.ab10cda18.a10cd20.a8cd22.a6cd24.a5cd25.a4
-		+cd27.a2cd29.ad31.a787./45.6a24.2a6b2a21.a2b6c2ba19.ab10cba18.a12ca18.a12ca18.a2c8.2ca18.ac10.ca937.
-		player_helm|32|38|33|16|aF000F4,bF000F1,cF000F2,dF000F3|idle:0;walk:1,2,3,4;windup:5;strike:6;block:7;shoot:8;front:9
-		+109.6a25.a6ba23.ab6cda21.ab8cda20.ab6c2da21.a5c2d2a22.a4c2da24.ac2d3a26.3a850./109.6a25.a6ba23.ab6cda21.ab8cda20.ab6c2da21.a5c2d2a22.a4c2da24.ac2d3a26.3a850./141.6a25.a6b
-		+a23.ab6cda21.ab8cda20.ab6c2da21.a5c2d2a22.a4c2da24.ac2d3a26.3a818./109.6a25.a6ba23.ab6cda21.ab8cda20.ab6c2da21.a5c2d2a22.a4c2da24.ac2d3a26.3a850./141.6a25.a6ba23.ab6cda21
-		+.ab8cda20.ab6c2da21.a5c2d2a22.a4c2da24.ac2d3a26.3a818./108.6a25.a6ba23.ab6cda21.ab8cda20.ab6c2da21.a5c2d2a22.a4c2da24.ac2d3a26.3a851./142.6a25.a6ba23.ab6cda21.ab8cda20.ab
-		+6c2da21.a5c2d2a22.a4c2da24.ac2d3a26.3a817./109.6a25.a6ba23.ab6cda21.ab8cda20.ab6c2da21.a5c2d2a22.a4c2da24.ac2d3a26.3a850./109.6a25.a6ba23.ab6cda21.ab8cda20.ab6c2da21.a5c2
-		+d2a22.a4c2da24.ac2d3a26.3a850./108.8a23.a8ba21.ab8cda20.ab8cda20.a2c6d2ca20.acd6adca21.2a6.2a907.
-		player_pants_0|32|38|33|16|a0000F1,b0000F4,c0000F2,d0000F3|idle:0;walk:1,2,3,4;windup:5;strike:6;block:7;shoot:8;front:9
-		+780.a2b2.3b24.a2cdbdb25.a2cdbdb26.acdbdb26.acdbdb26.2cdbdb26.acdbdb26.acdbdb29.b32.b29.2b111./780.a7b24.2a2cd2b26.a2cdb27.bac2db26.ba2cd27.cbacd27.cbacd27.cbacd28.b31.b32
-		+.2b111./812.a2b2.3b24.a2cdb2db25.acdb2db25.acdbcdb25.2cdbcdb25.acdbcdb25.acdb31.b32.b142./780.a6b25.a2cdb2db23.a2cdbc2db23.ac2d2.cd2b21.a2cd3.c2db21.acd5.cdb21.acd5.cdb21
-		+.acd5.cdb203./812.a2b2.3b24.2a2cd2b26.a2cd2b27.acd2b27.acd2b27.acd2b30.2b30.b28.3b143./755.b24.a6b25.a2cdbdb25.a2cd2b27.acd2b26.bacdb27.b2cdb27.bacdb27.bacdb31.b32.b27.4b
-		+111./812.a7b25.a2cdb27.bac2db26.ba2cd27.cbacd27.cbacd27.cbacd28.b31.b32.2b111./780.a7b24.a2cdbdb25.a2cdbdb26.acdbdb26.acdbdb26.2cdbdb26.acdbdb26.acdbdb29.b32.b29.2b111./7
-		+80.a6b25.a2cdbdb25.a2cd2b27.acd2b26.bacdb27.b2cdb27.bacdb27.bacdb31.b32.b27.4b111./780.a6ca23.2a2c2d2c2a22.2acd2.dc2a22.2acd2.dc2a22.2acd2.dc2a22.a2cd2.d2ca22.2acd2.dc2a2
-		+2.2acd2.dc2a203.
-		player_pants_1|32|38|33|16|a0000F1,b0000F4,c0000F2,d0000F3|idle:0;walk:1,2,3,4;windup:5;strike:6;block:7;shoot:8;front:9
-		+780.a2b2.3b24.a2cdbdb25.a2cdbdb29.b31.b31.b31.b31.b31.b32.b29.2b111./780.a7b24.2a2cd2b26.a2cdb27.b4.b26.b32.b31.b31.b31.b31.b32.2b111./812.a2b2.3b24.a2cdb2db28.b31.b31.b3
-		+1.b31.b31.b32.b142./780.a6b25.a2cdb2db23.a2cdbc2db364./812.a2b2.3b24.2a2cd2b30.b31.b31.b31.b31.b31.b28.3b143./755.b24.a6b25.a2cdbdb25.a2cd2b30.b27.b3.b27.b3.b27.b3.b27.b3
-		+.b31.b32.b27.4b111./812.a7b25.a2cdb27.b4.b26.b32.b31.b31.b31.b31.b32.2b111./780.a7b24.a2cdbdb25.a2cdbdb29.b31.b31.b31.b31.b31.b32.b29.2b111./780.a6b25.a2cdbdb25.a2cd2b30.
-		+b27.b3.b27.b3.b27.b3.b27.b3.b31.b32.b27.4b111./780.a6ca23.2a2c2d2c2a22.2acd2.dc2a363.
-		player_pants_2|32|38|33|16|a0000F1,b0000F4,c0000F2,d0000F3|idle:0;walk:1,2,3,4;windup:5;strike:6;block:7;shoot:8;front:9
-		+780.a2b2.3b24.a2cdbdb25.a2cdbdb26.acdbdb26.acdbdb26.2cdbdb29.b31.b31.b32.b29.2b111./780.a7b24.2a2cd2b26.a2cdb27.bac2db26.ba2cd27.cbacd28.b31.b31.b31.b32.2b111./812.a2b2.3
-		+b24.a2cdb2db25.acdb2db25.acdbcdb25.2cdbcdb28.b31.b31.b32.b142./780.a6b25.a2cdb2db23.a2cdbc2db23.ac2d2.cd2b21.a2cd3.c2db21.acd5.cdb267./812.a2b2.3b24.2a2cd2b26.a2cd2b27.ac
-		+d2b27.acd2b30.b31.b31.b28.3b143./755.b24.a6b25.a2cdbdb25.a2cd2b27.acd2b26.bacdb27.b2cdb27.b3.b27.b3.b31.b32.b27.4b111./812.a7b25.a2cdb27.bac2db26.ba2cd27.cbacd28.b31.b31.
-		+b31.b32.2b111./780.a7b24.a2cdbdb25.a2cdbdb26.acdbdb26.acdbdb26.2cdbdb29.b31.b31.b32.b29.2b111./780.a6b25.a2cdbdb25.a2cd2b27.acd2b26.bacdb27.b2cdb27.b3.b27.b3.b31.b32.b27.
-		+4b111./780.a6ca23.2a2c2d2c2a22.2acd2.dc2a22.2acd2.dc2a22.2acd2.dc2a22.a2cd2.d2ca267.
-		player_scarf|32|38|33|16|a14121A,b825F4E,c00F0F2,d00F0F1,e00F0F3,f00F0F4|idle:0;walk:1,2,3,4;windup:5;strike:6;block:7;shoot:8;front:9
-		+395.ab29.acdb27.ae3c27.a2efe3.f23.aef30.a661./395.ab29.acdb27.ae3c27.a2ef3.ef23.aef30.a661./427.ab29.acdb27.ae3c27.a2efe3.f23.aef30.a629./395.ab29.acdb27.ae3c27.a2efe3.f2
-		+3.aef30.a661./427.ab29.acdb27.ae3c27.a2efe3.f23.aef30.a629./394.ab29.a3b27.ab30.b4.3ef28.3f688./428.ab29.acdb27.ae3c4.b22.a2efe3.f23.aef30.f628./395.ab29.acdb27.ae3c27.a2
-		+efe27.aef.f28.a661./395.ab29.acdb27.ae3c27.a2ef2e26.aef.f28.a661./427.b8.b56.2fce2f27.fcef29.2f655.
-		player_shirt_0|32|38|33|16|a00F001,b00F004,c00F002,d00F003|idle:0;walk:1,2,3,4;windup:5;strike:6;block:7;shoot:8;front:9
-		+493.a3b.cb24.abacdbcdb23.ab2cdb2db23.cb2cdb2db23.cbc2db2db23.db3.bd2b23.db3.bd2b23.db3.4b23.3b2.3b27.2b431./493.3b2.cb24.bacdb2cdb22.b2c2dbc2db25.db2c2db25.b3c2db25.b3cd2
-		+b24.b4cd2b22.2bd4c3b23.8b460./525.a3b.cb24.abacdbcdb23.ab2cdb2db23.cb2cdb2db23.cbc2db2db23.db3.bd2b23.db3.bd2b23.db3.4b23.3b2.3b27.2b399./493.a3b.c25.abacdbcd24.ab2c2dbd2
-		+4.2cbcd2.b24.3cb4.b23.d3cb3.b23.d4cb2.b23.2d4c2b24.8b460./525.a3b.cb24.abacdbcdb23.ab2cdb2db23.cb2cdb2db23.cbc2db2db23.db3.bd2b23.db3.bd2b23.db3.4b23.3b2.3b27.2b399./460.
-		+b31.ba3.cb24.db5cdb20.c2db5c2db20.2cdb5c2db22.b6c2db23.d5cd2b23.d5cd2b23.2d4c3b24.7b461./525.2a3bcb24.2abacd3b23.acb2cd26.3cb2d26.4c5b23.d5cd2b23.d5cd2b23.2d4c3b23.8b428.
-		+/403.2b29.b28.3b27.abacd26.2ab2cd3b23.a2cb2dbdb23.4c2b2db23.6c2db23.d5cd2b23.d5cd2b23.2d4c3b23.8b460./493.2a3bcb24.2abacd6b20.acb2cd6.b19.3cb2d6.b19.4c5b23.d5cdb24.d5cdb2
-		+4.2d4c2b24.8b460./491.2a8c20.2a10c2d18.a10cb2d18.acb8cbac18.acb8cbac20.bd6cdb22.b2d4c2db22.b8db23.8d23.10b21.b10.b394.
-		player_shirt_1|32|38|33|16|a00F001,b00F004,c00F002,d00F003|idle:0;walk:1,2,3,4;windup:5;strike:6;block:7;shoot:8;front:9
-		+493.a3b.cb24.abacdbcdb23.ab2cdb2db23.cb2cdb2db23.cbc2db2db23.dbacdbd2b23.dbacdbd2b23.db2cd4b23.3b2.3b27.2b431./493.3b2.cb24.bacdb2cdb22.b2c2dbc2db22.ac2db2c2db22.acdb3c2d
-		+b22.2cdb3cd2b24.b4cd2b22.2bd4c3b23.8b460./525.a3b.cb24.abacdbcdb23.ab2cdb2db23.cb2cdb2db23.cbc2db2db23.dbacdbd2b23.dbacdbd2b23.db2cd4b23.3b2.3b27.2b399./493.a3b.c25.abacd
-		+bcd24.ab2c2dbd24.2cbcdadb24.3cba2cdb23.d3cbacdb23.d4cb2.b23.2d4c2b24.8b460./525.a3b.cb24.abacdbcdb23.ab2cdb2db23.cb2cdb2db23.cbc2db2db23.dbacdbd2b23.dbacdbd2b23.db2cd4b23
-		+.3b2.3b27.2b399./460.b28.acdba3.cb21.ac2db5cdb20.c2db5c2db20.2cdb5c2db22.b6c2db23.d5cd2b23.d5cd2b23.2d4c3b24.7b461./525.2a3bcb24.2abacd3b23.acb2cd2a2c22.3cb2d2c2d22.4c5b2
-		+3.d5cd2b23.d5cd2b23.2d4c3b23.8b428./403.2b29.b28.3bacd24.abacdcd24.2ab2cd3b23.a2cb2dbdb23.4c2b2db23.6c2db23.d5cd2b23.d5cd2b23.2d4c3b23.8b460./493.2a3bcb24.2abacd6b20.acb2
-		+cd2a2c2.b19.3cb2d2c2d2.b19.4c5b23.d5cdb24.d5cdb24.2d4c2b24.8b460./491.2a8c20.2a10c2d18.a10cb2d18.acb8cbac18.acb8cbac18.acbd6cdbac18.acb2d4c2dbac18.2cb8dbcd21.8d23.10b21.b
-		+10.b394.
-		player_shirt_2|32|38|33|16|aCCAB8E,b00F004,c00F001,d00F003,e00F002,fB59378|idle:0;walk:1,2,3,4;windup:5;strike:6;block:7;shoot:8;front:9
-		+498.ab32.b23.c5.2db23.e5.2db23.e5.2db23.d5.d2b23.d5.d2b23.d5.3b23.2b4.2b460./498.ab29.e2.b28.e2db27.2e2db26.3e2db26.3ed2b25.4ed2b24.d4e3b23.8b460./530.ab32.b23.c5.2db23.e
-		+5.2db23.e5.2db23.d5.d2b23.d5.d2b23.d5.3b23.2b4.2b428./498.a57.c6.d24.2e30.3e29.d3e28.d4e27.2d4e26.8b460./530.ab32.b23.c5.2db23.e5.2db23.e5.2db23.d5.d2b23.d5.d2b23.d5.3b23
-		+.2b4.2b428./493.a3.ab26.c3e2.b24.5e2db24.5e2db23.6e2db23.d5ed2b23.d5ed2b23.2d4e3b24.7b461./526.a3.ab56.ce30.3e29.4e28.d5ed2b23.d5ed2b23.2d4e3b23.8b428./532.b23.c2e4.db23.
-		+4e2.2db23.6e2db23.d5ed2b23.d5ed2b23.2d4e3b23.8b460./494.a3.ab56.ce30.3e29.4e28.d5edb24.d5edb24.2d4e2b24.8b460./493.6e.a22.c8e22.c9eb22.b8ebaf20.b8ebaf20.bd6edb22.b2d4e2db
-		+22.b8db23.8d23.10b21.b10.b394.
-		player_shirt_3|32|38|33|16|a825F4E,b14121A,c00F001,d00F002,e00F003,f00F004|idle:0;walk:1,2,3,4;windup:5;strike:6;block:7;shoot:8;front:9
-		+363.a30.bca28.bc2da27.b2d2e28.b2e4f.df23.3fcdefdef23.cf2def2ef23.df2def2ef23.dfd2ef2ef23.efcdefe2f23.efcdefe2f23.2f2de4f23.3f2.3f27.2f431./363.a30.bca28.bc2da27.b2d2e28.b
-		+2e3f2.df23.2fcdef2def22.f2d2efd2ef22.cd2efd3ef22.cde4f2ef22.2def3de2f24.5fe2f22.10f23.8f460./395.a30.bca28.bc2da27.b2d2e28.b2e4f.df23.3fcdefdef23.cf2def2ef23.df2def2ef23.
-		+dfd2ef2ef23.efcdefe2f23.efcdefe2f23.2f2de4f23.3f2.3f27.2f399./363.a30.bca28.bc2da27.b2d2e28.b2e4f.d24.3fcdefde24.cf2d2efe24.2dfdecef24.2d2fc2def23.edfdfcdef23.ed4f2.f23.8
-		+f24.8f460./395.a30.bca28.bc2da27.b2d2e28.b2e4f.df23.3fcdefdef23.cf2def2ef23.df2def2ef23.dfd2ef2ef23.efcdefe2f23.efcdefe2f23.2f2de4f23.3f2.3f27.2f399./362.a30.bca28.bc2fa2
-		+7.bf2.f28.cde2f3.df21.cd2ef2dc2def20.d2ef3dcd2ef20.2def4d3ef22.f2d4f2ef23.edf3de2f23.ed4fe2f23.9f24.7f461./395.ba29.bcda27.bc2dea26.b2d2ef27.b2e5fdf23.4fcde3f23.cdf2de2c2
-		+d22.3df2e2d2e22.2d7f23.edf3de2f23.ed4fe2f23.9f23.8f428./363.a30.bca6.2f20.bc2da4.f22.b2d2e.3fcde21.b2e2fcdede23.4f2de3f23.c2df2efef23.4d2f2ef23.2d4f2ef23.edf3de2f23.ed4fe
-		+2f23.9f23.8f460./363.a30.bca28.bc2da27.b2d2e28.b2e5fdf23.4fcde6f20.cdf2de2c2d2.f19.3df2e2d2e2.f19.2d7f23.edf3def24.ed4fef24.8f24.8f460./459.f8.f22.c8fd20.2c2dc4dc2d2e18.c
-		+3dc4dcdf2e18.cdf8dfcd18.cdf2d4f2dfcd18.cdfedf2dfdefcd18.cdf2e4f2efcd18.2d10fde21.8f23.10f21.f10.f394.
-		polarBear|52|26|23|18|a212633,bEFEBE2,c707984,dE9E5D7,eA1A4A6,fFFFFFF,g1A1316,h1E1519,i3E4349,j8992A6,k3A3A43,lEFEAD9,m834248|idle:0;walk:1,2,3,4;strike:5
-		+112.15a34.3a15b3a2.2a25.2a21bac2da23.a23bcd2ed7a15.a4b20dcde2d7b3a12.a2b23dcd12ba10.a2b19de3dc3b4d3e4dba9.ab20de2dc2b7dfg5db2a7.ab21dedcb8d2g6d2ha6.a22dedc17d2ha6.ae23dce
-		+9de7da7.ae24dce7d2e6ia9.ae24dc2e5d2e4d2a11.c5dc11dc5dce2c7e4a13.a5dc11ec5d2c2e3c4a17.a4de13c4dec4eca21.a4de7c5ac4dec4eca21.a3d2ec3e2ca5.a3d2ec3e2ca21.a3d2ec3e2ca5.a3d2ec3
-		+e2ca21.a4d2ec3e2ca4.a4d2ec3e2ca20.a5dec4eca4.a5dec4eca20.ajkjkjkckjkjka4.ajkjkjkckjkjka21.12a6.12a71./112.15a34.3a15b3a2.2a25.2a21bac2da23.a23bcd2ed7a15.a4b20dcde2d7b3a12
-		+.a2b23dcd12ba10.a2b19de3dc3b4d3e4dba9.ab20de2dc2b7dfg5db2a7.ab21dedcb8d2g6d2ha6.a22dedc17d2ha6.ae23dce9de7da7.ae24dce7d2e6ia9.ae24dc2e5d2e4d2a11.aec5dc7dc5dc3e2c7e4a14.ac
-		+5dc7ec5dc4ae5c2a19.a4de9c4dec3.a4eca21.a4de3c5ac4dea3.a4eca21.a3d2e2ca5.a3d2ea3.a3e2ca21.a3d2e2ca5.a3d2ea3.a3e2ca21.a4d2e2ca4.a4d2ea2.a4e2ca20.a5de2ca4.a5dea2.a5eca20.ajk
-		+jkjkcka4.ajkjkjka2.ajkjkjka21.2a4c2a6.6a4.6a69./60.15a34.3a15b3a2.2a25.2a21bac2da23.a23bcd2ed7a15.a4b20dcde2d7b3a12.a2b23dcd12ba10.a2b19de3dc3b4d3e4dba9.ab20de2dc2b7dfg5d
-		+b2a7.ab21dedcb8d2g6d2ha6.a22dedc17d2ha6.ae23dce9de7da7.ae24dce7d2e6ia9.ae24dc2e5d2e4d2a11.a2e15dc5dce2c7e4a13.a5dc11ec5d2c2e3c4a17.a5d13c4dec5ea21.a4de7c5ac4dec4eca21.a4d
-		+ec3e2ca5.a3d2ec4eca21.a3d2ec3e2ca5.a3d2ec3e2ca21.a3d2ec4e2ca4.a4d2ec2e2ca21.a4d2ec4eca4.a5dec3e2ca20.a5deckjkjka4.ajkjkjkc4eca20.ajkjkjkc5a6.5acjkjkjka21.6a18.6a71./112.1
-		+5a34.3a15b3a2.2a25.2a21bac2da23.a23bcd2ed7a15.a4b20dcde2d7b3a12.a2b23dcd12ba10.a2b19de3dc3b4d3e4dba9.ab20de2dc2b7dfg5db2a7.ab21dedcb8d2g6d2ha6.a22dedc17d2ha6.ae23dce9de7d
-		+a7.ae24dce7d2e6ia9.ae24dc2e5d2e4d2a9.a5dc15dc5d2c7e4a11.a5dc15ec5dcec6a15.a4de17c4de2ca21.a4de4a7c5ac4de2ca21.a3d2ea3.a3e2ca5.a3d2e2ca21.a3d2ea3.a3e2ca5.a3d2e2ca21.a4d2ea
-		+2.a4e2ca4.a4d2e2ca20.a5dea2.a5eca4.a5de2ca20.ajkjkjka2.ajkjkjka4.ajkjkjkcka21.6a4.6a6.2a4c2a73./60.15a34.3a15b3a2.2a25.2a21bac2da23.a23bcd2ed7a15.a4b20dcde2d7b3a12.a2b23d
-		+cd12ba10.a2b19de3dc3b4d3e4dba9.ab20de2dc2b7dfg5db2a7.ab21dedcb8d2g6d2ha6.a22dedc17d2ha6.ae23dce9de7da7.ae24dce7d2e6ia9.ae24dc2e5d2e4d2a11.c5dc16d3e2c7e4a13.a5dc11ec5d2c2e
-		+3c4a17.a4de13c5dc4eca21.a4de7c5ac4dec4eca21.a3d2ec4eca5.a4dec3e2ca21.a3d2ec3e2ca5.a3d2ec3e2ca21.a4d2ec2e2ca5.a3d2ec4e2ca20.a5dec3e2ca4.a4d2ec4eca20.ajkjkjkc4eca4.a5deckjk
-		+jka21.5acjkjkjka4.ajkjkjkc5a28.6a6.6a77./112.15a34.3a15b3a4.2a23.2a21b2a.a2da21.a25bcd2ed7a13.a4b20d2bcde2d7b3a10.a2b25dcd12ba8.a2b19de5dc3b4d3e4dba7.ab20de4dc2b7dfg5db2a
-		+5.ab21de3dcb8d2g6d2ha4.a22de3dc17d2ha4.ae25dce9dedldldl2a5.ae26dce7d2e6ma7.ae19dc5d2ce6d2e6ma7.a5dc14dc5d3ce5d2edldldla7.a5dc14ec4dec2ec2e3d2e5da8.a4de16c4decec3a7e3a9.a4
-		+dec2a7c5ac3d2ececa2.7a12.a3d2ea2.a3e2ca5.a3d2e3ca21.a3d2ea2.a4e2ca4.a4d2e2ca21.a4d2ea.a5eca4.a5de3ca20.a5dea.ajkjkjka4.ajkjkjkceca20.ajkjkjka2.6a6.2a4ckjka21.6a18.6a72.
-		rex|130|84|79|62|a11140D,bE4DCC9,cDAD1B9,d9D9585,e727B56,f4E5739,gD87967,hECC7A2,i141010,j252C21,k353D2B,lEFEAD9,mD0CAAA,n87816A,o10140C,p2C3225,q242C20,rE3DBC9,s978E7F,t834248,u552930|idle:0;walk:1,2,3,4;windup:5;strike:6
-		+2816.a7.a120.aba5.aba4.a114.acba3.abca3.aba114.acba.ab2ca2.abca114.a2cbab3cb2ab2ca115.a2cb5c2b2cda116.6a6d2b2a118.2a2b2c2b2c2b4a113.a16e3a109.a2e15f3e2a106.ae20f2ea104.ae
-		+23fe2a101.ae13fgh11fia100.ae13f2g12fa100.a28fa99.ajk16f11ka97.2aejk16filililililia96.a2efj2k15fklklklklklka95.ae4fjk25mka94.ae6fjk23nka73.9o13.a8fj23ka67.7op7ep4o7.2ok9f3
-		+j20a65.3o6e2p7f2p3e7o2e2k8fmka84.o2pe6f2p7f2p3f4e2pe2f2k7f2mka82.2oe2p7f2p7f2p7f2p3f3k5fmnka81.2o2ef2p6f2p7f3p7f2p4f3k3fmnka80.2o2e3fp7f2p7f2p8f2p5f6k2a75.6o2e4f2p7f2p7f2
-		+p7f2p7f5k74.3o4e2p6fp7f2p8f2p7f2p9f2ko72.2o3e4f2p6fp7f2p7f2p8f2p7f2k2mo70.2o2p6f2p6f2p4f6k6f2p7f2p7fk4mo68.2o2e2p5f2p7fp3f2k6e2k4f2p7f2p6fk5mo65.3o2e2fp6f2p6fkf3k2e6f2ek1
-		+2f2p4f2k4m2no58.7o3e3fp5f14ke10f2k16f2k3m4no54.4o5e2p5f2p2f17k11f18k4m5no50.4o2p2e4f2p6f17kj3k10f3k5m10k5m3n2o46.5o4fp6f2p5f6k16j2k9f3k19m2n2o47.o2p5f2p4f10k23j2k7f3k19m2
-		+nq49.o5f15k9j14o4j2k5f3k19m3nqj2a46.o23j6o14.5o2k3f3k2n17m3nqj2fka46.23o26.3a3k22nqkj2fka100.o21noarkj2fka100.2o18no.arajrfka102.o16no3.a.jrara103.16o7.a.a93.a5fkj2kja118
-		+.a5fkj2kja119.a4fkj2kja119.a4fkj2kja119.a3f2kjk2ja120.a3fkj2kja120.a3fkj2kja120.a3fkj2kja120.a3fkj2kja119.a4fkj2kja118.a6fkj2kja116.a8fkj2kja114.a10fkj2kja113.arsrsrsrsrs
-		+jsrsa115.4a6j4a456./2816.a7.a120.aba5.aba4.a114.acba3.abca3.aba114.acba.ab2ca2.abca114.a2cbab3cb2ab2ca115.a2cb5c2b2cda116.6a6d2b2a118.2a2b2c2b2c2b4a113.a16e3a109.a2e15f3e
-		+2a106.ae20f2ea104.ae23fe2a101.ae13fgh11fia100.ae13f2g12fa100.a28fa99.ajk16f11ka97.2aejk16filililililia96.a2efj2k15fklklklklklka95.ae4fjk25mka94.ae6fjk23nka75.7o13.a8fj23k
-		+a68.8o6ep4o7.2ok9f3j20a66.3o5e2pe6f2p3e7o2e2k8fmka84.2op2e5f2p7f2p3f4e2pe2f2k7f2mka83.oe2p7f2p7f2p7f2p3f3k5fmnka82.2oef2p6f3p6f3p7f2p4f3k3fmnka81.2o2e2fp7f2p7f2p8f2p5f6k2
-		+a80.2o2e3f2p7f2p7f2p7f2p7f5k76.6ope5f2p6f2p8f2p7f2p9f2ko74.2o5e2p6fp7f2p7f2p8f2p7f2k2mo72.2o2e5fp6f2p5f6k5f2p7f2p7fk4mo70.2o2p6f2p6fp4f2k6e2k3f2p7f2p6fk5mo68.2o2e2p5f2p8f
-		+4k2e6f2ek11f2p4f2k4m2no66.2o2e2fp6f2p5f6ke10f2k15f2k3m4no60.6o2e3fp4f16k11f17k4m5no56.4o3e2pe4f2p2f18k10f3k4m10k5m3n2o54.3o4e2f2p6f16k5j2k9f3k18m2n2o52.4oe2p5f2p5f6k18j2k
-		+7f3k18m2nq50.4o4f2p5f8k25j2k5f3k18m3nqj2a46.o2p5fp3f10k8j20o2k3f3kn17m3nqj2fka45.o4f8k11j6o21.2a4k21nqkj2fka45.o12j11o31.o21noarkj2fka45.12o43.o19no.arajrfka101.2o16no3.a
-		+.jrara103.16o7.a.a95.j5fkj121.akj5fka120.a2kj5fka119.a3kj5fka118.a4kj4fka119.a3kj4fka119.a2kj4fka121.akj4fka121.aj4fka123.j4fkj122.a6fkj120.a8fkj118.a10fkj117.arsrsrsrsrs
-		+j119.3a7j457./2686.a7.a120.aba5.aba4.a114.acba3.abca3.aba114.acba.ab2ca2.abca114.a2cbab3cb2ab2ca115.a2cb5c2b2cda116.6a6d2b2a118.2a2b2c2b2c2b4a113.a16e3a109.a2e15f3e2a106.
-		+ae20f2ea104.ae23fe2a101.ae13fgh11fia100.ae13f2g12fa100.a28fa99.ajk16f11ka97.2aejk16filililililia96.a2efj2k15fklklklklklka95.ae4fjk25mka94.ae6fjk23nka73.9o13.a8fj23ka67.7o
-		+p7ep4o7.2ok9f3j20a65.3o6e2p7f2p3e7o2e2k8fmka84.o2pe6f2p7f2p3f4e2pe2f2k7f2mka82.2oe2p7f2p7f2p7f2p3f3k5fmnka81.2o2ef2p6f2p7f3p7f2p4f3k3fmnka80.2o2e3fp7f2p7f2p8f2p5f6k2a75.6
-		+o2e4f2p7f2p7f2p7f2p7f5k74.3o4e2p6fp7f2p8f2p7f2p9f2ko72.2o3e4f2p6fp7f2p7f2p8f2p7f2k2mo70.2o2p6f2p6f2p4f6k6f2p7f2p7fk4mo68.2o2e2p5f2p7fp3f2k6e2k4f2p7f2p6fk5mo65.3o2e2fp6f2p
-		+6fkf3k2e6f2ek12f2p4f2k4m2no58.7o3e3fp5f14ke10f2k16f2k3m4no54.4o5e2p5f2p2f17k11f18k4m5no50.4o2p2e4f2p6f17kj3k10f3k5m10k5m3n2o46.5o4fp6f2p5f6k16j2k9f3k19m2n2o47.o2p5f2p4f10
-		+k23j2k7f3k19m2nq49.o5f15k9j14o4j2k5f3k19m3nqj2a46.o23j6o14.5o2k3f3k2n17m3nqj2fka46.23o26.3a3k22nqkj2fka100.o21noarkj2fka100.2o18no.arajrfka102.o16no3.a.jrara103.16o7.a.a2
-		+23.a5fkj2kja118.a5fkj2kja119.a4fkj2kja119.a4fkj2kja119.a3f2kjk2ja120.a3fkj2kja120.a3fkj2kja120.a3fkj2kja120.a3fkj2kja119.a4fkj2kja118.a6fkj2kja116.a8fkj2kja114.a10fkj2kja
-		+113.arsrsrsrsrsjsrsa115.4a6j4a456./2816.a7.a120.aba5.aba4.a114.acba3.abca3.aba114.acba.ab2ca2.abca114.a2cbab3cb2ab2ca115.a2cb5c2b2cda116.6a6d2b2a118.2a2b2c2b2c2b4a113.a16
-		+e3a109.a2e15f3e2a106.ae20f2ea104.ae23fe2a101.ae13fgh11fia100.ae13f2g12fa100.a28fa99.ajk16f11ka97.2aejk16filililililia96.a2efj2k15fklklklklklka95.ae4fjk25mka94.ae6fjk23nka
-		+71.12o12.a8fj23ka66.6oe2p7e2p3o7.2ok9f3j20a65.2o6ef2p7f2p3e7o2e2k8fmka83.2o2p7f2p7f2p3f4e2pe2f2k7f2mka81.2o2e2p6f3p7f2p7f2p3f3k5fmnka80.2o2e2f2p6f2p7f2p8f2p4f3k3fmnka75.6
-		+o2e4fp7f2p7f2p8f2p5f6k2a73.3o3e2pe5f2p7f2p7f2p7f2p7f5k72.3o3e3f2p6fp7f2p8f2p7f2p9f2ko70.2o2pe5f2p6f2p7f2p7f2p8f2p7f2k2mo68.2o2e2p5f2p7f2p3f6k7f2p7f2p7fk4mo65.3o2e2fp6f2p9
-		+f3k6e2k5f2p7f2p6fk5mo55.10o3e3fp6f5k3f5k2e6f2ek13f2p4f2k4m2no51.4op7e2p5f2p3f15ke10f3k16f2k3m4no45.6o3fp7f2p6f20k11f19k4m5no44.o2p5f2p7f2p4f9k7j3k3jk10f3k7m8k6m3n2o45.o6f
-		+17k21j2k9f3k20m2n2o47.o12j8k11j7o7j2k7f3k20m2nq50.12o10j9o7.8o2k5f3kn19m3nqj2a59.10o25.2k3f3k4n16m3nqj2fka94.5ak23nqkj2fka100.2o20noarkj2fka101.o18no.arajrfka102.2o14n2o3
-		+.a.jrara104.14o8.a.a91.a5fk2a5kja113.a5fka2.a5kja112.a4fka4.a5kja111.a4fka5.a5kja110.a4fka6.a4kja111.a3fka6.a4kja111.a4fka4.a4kja113.a3fka4.a4kja113.a4fka2.a4kja115.a4fka
-		+.a4kja115.a5fkj6kja114.a6fkj6kja113.a7fkj6kja112.arsrsrsrjsrsrsrsa114.5a2j8a453./2686.a7.a120.aba5.aba4.a114.acba3.abca3.aba114.acba.ab2ca2.abca114.a2cbab3cb2ab2ca115.a2c
-		+b5c2b2cda116.6a6d2b2a118.2a2b2c2b2c2b4a113.a16e3a109.a2e15f3e2a106.ae20f2ea104.ae23fe2a101.ae13fgh11fia100.ae13f2g12fa100.a28fa99.ajk16f11ka97.2aejk16filililililia96.a2ef
-		+j2k15fklklklklklka95.ae4fjk25mka94.ae6fjk23nka73.9o13.a8fj23ka67.7op7ep4o7.2ok9f3j20a65.3o6e2p7f2p3e7o2e2k8fmka84.o2pe6f2p7f2p3f4e2pe2f2k7f2mka82.2oe2p7f2p7f2p7f2p3f3k5fm
-		+nka81.2o2ef2p6f2p7f3p7f2p4f3k3fmnka80.2o2e3fp7f2p7f2p8f2p5f6k2a75.6o2e4f2p7f2p7f2p7f2p7f5k74.3o4e2p6fp7f2p8f2p7f2p9f2ko72.2o3e4f2p6fp7f2p7f2p8f2p7f2k2mo70.2o2p6f2p6f2p4f6
-		+k6f2p7f2p7fk4mo68.2o2e2p5f2p7fp3f2k6e2k4f2p7f2p6fk5mo65.3o2e2fp6f2p6fkf3k2e6f2ek12f2p4f2k4m2no58.7o3e3fp5f14ke10f2k16f2k3m4no54.4o5e2p5f2p2f17k11f18k4m5no50.4o2p2e4f2p6f1
-		+7kj3k10f3k5m10k5m3n2o46.5o4fp6f2p5f6k16j2k9f3k19m2n2o47.o2p5f2p4f10k23j2k7f3k19m2nq49.o5f15k9j14o4j2k5f3k19m3nqj2a46.o23j6o14.5o2k3f3k2n17m3nqj2fka46.23o26.3a3k22nqkj2fka
-		+100.o21noarkj2fka100.2o18no.arajrfka102.o16no3.a.jrara103.16o7.a.a223.a5fkj2kja118.a5fkj2kja119.a4fkj2kja119.a4fkj2kja119.a3f2kjk2ja120.a3fkj2kja120.a3fkj2kja120.a3fkj2kj
-		+a120.a3fkj2kja119.a4fkj2kja118.a6fkj2kja116.a8fkj2kja114.a10fkj2kja113.arsrsrsrsrsjsrsa115.4a6j4a456./2423.a7.a120.aba5.aba4.a114.acba3.abca3.aba114.acba.ab2ca2.abca114.a
-		+2cbab3cb2ab2ca115.a2cb5c2b2cda116.6a6d2b2a118.2a2b2c2b2c2b4a113.a16e3a109.a2e15f3e2a106.ae20f2ea104.ae23fe2a101.ae13fgh11fia100.ae13f2g12fa100.a28fa100.ak16f11ka100.jk16f
-		+lililililila98.2ajk14f12ta98.a2ej2k12f2t10ua98.ae3fjk11f2t9u2a98.ae5fjk9f2t10u2a98.a7fjk9m13ta97.a8fjk8nlililililililia77.8o11.ak8fjk21na69.8o7ep4o7.2k7f2mj20ka68.2o6e2p7
-		+f2p3e7o3k5fmnk21a67.2ope6f2p7f2p3f4e2pef3k3fmnka86.2oe2p7f2p7f2p7f2p3f8k86.o2ef2p6f3p6f3p7f2p4f5kfo84.2oe3fp7f2p7f2p8f2p10fo79.5o2e3f2p7f2p7f2p7f2p11fo76.3o2e2pe5f2p6f2p8
-		+f2p7f2p9f2ko73.3o3e2f2p6fp7f2p7f2p8f2p7f2k2mo71.2op2e4f2p6f2p4f6k6f2p7f2p7fk4mo69.2oe2p5f2p7fp3f2k6e2k4f2p7f2p6fk5mo67.2o2efp6f2p8f3k2e6f2ek12f2p4f2k4m2no64.3o2e2f2p6f5k2
-		+f5ke10f2k16f2k3m4no57.7op2e4fp4f15k11f18k4m5no54.3o6ep6fpf19k10f3k5m10k5m3n2o51.4o2pe5f2p5f9k6j2k4j2k9f3k19m2n2o48.5o4fp6f2p3f6k19j2k7f3k19m2nq49.o2p5f2p3f10k11j6o8j2k5f3
-		+k19m3nqj2a46.o5f14k8j6o6.9o2k3f3k2n17m3nqj2fka45.o21j6o22.3a3k22nqkj2fka46.21o33.o21noarkj2fka100.o19no.arajrfka101.2o16no3.a.jrara103.16o7.a.a93.a5fk2ja120.a5fkja122.j4f
-		+kj123.j4fkj123.j3f2kj124.j3fkj124.j3fkja123.a3fkja123.a3fk2ja121.a4fkjkja119.a6fkjkja117.a8fkjkja115.a10fkjkja114.arsrsrsrsrsjsra116.6a4j3a457./3341.a7.a120.aba5.aba4.a11
-		+4.acba3.abca3.aba114.acba.ab2ca2.abca114.a2cbab3cb2ab2ca115.a2cb5c2b2cda116.6a6d2b2a118.2a2b2c2b2c2b4a113.a16e3a109.a2e15f3e2a106.ae20f2ea104.ae23fe2a101.ae13fgh11fia96.4
-		+aje13f2g12fa94.2a4ej28fa93.a2e4fjk16f11ka92.ke6fjk16flililililila66.10o14.oke7fjk14f12ta60.7o2p7ep4o7.3oek8fj2k12f2t10ua59.2o7e2p7f2p3e7o3efk9fjk11f2t9u2a58.2o2p7f2p7f2p3
-		+f4e2pe4f2k8fmjk9f2t10u2a56.2o2e2p7f2p7f2p7f2p5f2k7f2mkjk9m13ta54.o2e2f2p6f2p7f3p7f2p5f3k5fmnka.ak8nlililililililia50.3oe4fp7f2p7f2p8f2p6f3k3fmnka3.ak21na44.6op2e4f2p7f2p7
-		+f2p7f2p8f6k2a5.a20ka42.3o5e2p6fp7f2p8f2p7f2p9f3k2a8.20a41.2op2e5fp6f2p7f2p7f2p8f2p7f2k2mo69.2oe2p6f2p6f2p5f6k5f2p7f2p7fk4mo66.3o2efp6f2p11f3k6e2k3f2p7f2p6fk5mo59.7o3e2f2p
-		+6f2p5f7k2e6f2ek11f2p4f2k4m2no54.5o4e2pe5fp4f16ke10f2k15f2k3m4no49.5o2p3e3f2p6fp21k11f17k4m5no45.4o5fp6f2p6f17k4j2k10f3k4m10k5m3n2o45.o2p5f2p5f12k20j2k9f3k18m2n2o47.o4f17k
-		+26j2k7f3k18m2nq49.o26j19o3j2k5f3k18m3nqj2a47.26o19.4o2k3f3k2n16m3nqj2fka96.3a3k21nqkj2fka100.o21noarkj2fka100.2o18no.arajrfka102.2o15no3.a.jrara94.j5fkj2.15o7.a.a94.akj5f
-		+ka120.a2kj5fka119.a3kj5fka118.a4kj4fka119.a3kj4fka119.a2kj4fka121.akj4fka121.aj4fka123.j4fkj122.a6fkj120.a8fkj118.a10fkj117.arsrsrsrsrsj119.3a7j457.
-		scorpion|32|19|16|13|a291B15,bC2A16E,cB28B5A,d7F613D,e381F1C,f5F4536,g816244,hD87067|idle:0;walk:1,2,3,4;strike:5
-		+69.4a27.a4ba25.abcd2cba23.ab2c2a2cba22.acda2.acda22.a2ca3.acea20.abca4.a2ea9.3a8.acd5a3f10ab2ca7.a2cf2bd2bd2bd3bfb4c2aca7.afb2cd2cd2cd4c2fg5ca8.a3cd2cd2cd2ch3cfa3ga9.ag14
-		+cga.3a11.a14ga17.a12fa19.af2af2af2afa21.a2.a2.a2.a47./69.4a27.a4ba25.abcd2cba23.ab2c2a2cba22.acda2.acda22.a2ca3.acea20.abca4.a2ea9.3a8.acd5a3f10ab2ca7.a2cf2bd2bd2bd3bfb4c
-		+2aca7.afb2cd2cd2cd4c2fg5ca8.a3cd2cd2cd2ch3cfa3ga9.ag14cga.3a11.a14ga17.2a12f20.af2af2af2afa21.a2.a2.a2.a46./37.4a27.a4ba25.abcd2cba23.ab2c2a2cba22.acda2.acda22.a2ca3.acea
-		+20.abca4.a2ea9.3a8.acd5a3f10ab2ca7.a2cf2bd2bd2bd3bfb4c2aca7.afb2cd2cd2cd4c2fg5ca8.a3cd2cd2cd2ch3cfa3ga9.ag14cga.3a11.a14ga17.a12fa19.ac2ac2ac2aca20.af2af2af2afa21.a2.a2.a
-		+2.a47./69.4a27.a4ba25.abcd2cba23.ab2c2a2cba22.acda2.acda22.a2ca3.acea20.abca4.a2ea9.3a8.acd5a3f10ab2ca7.a2cf2bd2bd2bd3bfb4c2aca7.afb2cd2cd2cd4c2fg5ca8.a3cd2cd2cd2ch3cfa3g
-		+a9.ag14cga.3a11.a14ga17.a3fa5fa3f19.afa.afafa.afa20.a3.a.a3.a46./37.4a27.a4ba25.abcd2cba23.ab2c2a2cba22.acda2.acda22.a2ca3.acea20.abca4.a2ea9.3a8.acd5a3f10ab2ca7.a2cf2bd2
-		+bd2bd3bfb4c2aca7.afb2cd2cd2cd4c2fg5ca8.a3cd2cd2cd2ch3cfa3ga9.ag14cga.3a11.a14ga17.a12fa19.ac2ac2ac2aca20.af2af2af2afa21.a2.a2.a2.a47./69.8a23.a8b2a20.abcd2cd2cdcb2a17.ab2
-		+c7a2cdb2a15.acda7.2a2c2ea14.a2ca9.2a2ea13.abca12.2a3.3a8.acd18ab2ca7.a2cf2bd2bd2bd3bfb4c2aca7.afb2cd2cd2cd4c2fg5ca8.a3cd2cd2cd2ch3cfa3ga9.ag14cga.3a11.a14ga17.a12fa19.af2
-		+af2af2afa21.a2.a2.a2.a47.
-		sentinel|50|42|36|22|a1A1F2F,bA6C3DD,c8EB2D1,d647A96,eF2FAFD,f566882,g86D4DF,hC4F1F4,iFFFFFF,j49556F,kA8E2EE|idle:0;fly:0,1;charge:2;strike:3
-		+21.a48.aba46.abcda46.ada48.a32.a48.aba46.abcda14.2a30.ada14.a2ba30.a14.aeb2ca43.aeb3cfa41.aeb4cdfa39.aeb6cdfa37.aeb8cdfa30.a4.aeb10cdfa28.aba3.aeb11cda4.a22.aecda2.a2b5c2
-		+g4cda3.aba20.aeb2cda.ab5cg2hg3cda2.aecda19.ab3cda.ab4cgh2ihg2cda.aeb2cda18.ab3cda.ab4cgh2ihg2cda.ab3cda18.ab3cda.ab5cg2hg3cda.ab3cda19.abcda2.ab6c2g4cda.ab3cda20.ada3.ad1
-		+2cja2.abcda22.a4.a2d10c2ja3.ada29.a2d8c2ja5.a31.a2d6c2ja39.a2d4c2ja41.a2d2c2ja43.a2d2ja32.a12.adja32.aba12.2a32.abcda46.ada48.a442./421.2a47.a2ba45.aeb2ca12.a30.aeb3cfa10
-		+.aba28.aeb4cdfa8.abcda26.aeb6cdfa8.ada26.aeb8cdfa8.a26.aeb10cdfa4.a24.a4.aeb11cda3.aba22.aba3.a2b5c2g4cda2.aecda20.aecda2.ab5cg2hg3cda.aeb2cda18.aeb2cda.ab4cgh2ihg2cda.ab
-		+3cda18.ab3cda.ab4cgh2ihg2cda.ab3cda18.ab3cda.ab5cg2hg3cda.ab3cda18.ab3cda.ab6c2g4cda2.abcda20.abcda2.ad12cja3.ada22.ada3.a2d10c2ja4.a24.a5.a2d8c2ja37.a2d6c2ja39.a2d4c2ja4
-		+1.a2d2c2ja9.a33.a2d2ja9.aba33.adja9.abcda33.2a11.ada48.a464./271.2a47.a2ba45.aeb2ca35.a7.aeb3cfa8.a24.aba5.aeb4cdfa6.aba22.abcda3.aeb2c2g2cdfa4.abcda22.ada3.aeb2cg2hg2cdf
-		+a4.ada24.a3.aeb2cgh2ihg2cdfa4.a29.aebcgh4ihg2cda33.2a2bcg6ig2cd2a31.abjbcgh6ihgcdjba29.aecjbcg8igcjecda27.aebcjbcg8igjeb2cda26.ab2cjbcgh6ihgjb3cda26.ab2cjb2cg6igcjb3cda26
-		+.ab2cjd2cgh4ihgcjb3cda27.abcj2d2cgh2ihg2c2jbcda29.ad2a2d2cg2hg2c2j2ada31.a2.a2d2c2g2c2ja2.a36.a2d4c2ja41.a2d2c2ja35.a7.a2d2ja8.a26.aba7.adja8.aba24.abcda7.2a8.abcda24.ada
-		+19.ada26.a21.a566./372.2a47.a2ba45.aeb2ca43.aeb3cfa41.aeb4cdfa39.aeb6cdfa37.aeb8cdfa4.2a29.aeb10cdfa2.a2b3a26.aeb11cda.aeb3cd2a24.a2b5c2g4cd2aeb6cda3.k19.ab5cg2hg3cda.ad4
-		+cd2a2.k.i.k17.ab4cgh2ihg2cda2.2a2d2a5.3i18.ab4cgh2ihg2cda4.2a5.k5ik16.ab5cg2hg3cda5.2a6.3i18.ab6c2g4cda4.a2b3a2.k.i.k17.ad12cja3.aeb3cd2a2.k19.a2d10c2ja2.aeb6cda22.a2d8c2
-		+ja4.ad4cd2a24.a2d6c2ja6.2a2d2a27.a2d4c2ja9.2a30.a2d2c2ja43.a2d2ja45.adja47.2a576.
-		sheep|30|22|19|12|a1E1B24,bF6F2EA,c3A3541,d6B6675,e524C59,fDCD6D3,gFFFFFF,h16141A,i2A2530,jB9B1BB|idle:0;walk:1,2,3,4;alt:5
-		+64.2a.3a.3a.2a2.2a11.2a2ba3ba3ba2ba3c2a8.a15b2c2d2e3a4.a2bf14bcd6ea3.a9bf7bc3egh3ea2.a17bc8ea2.abf12bf3bc5ecia2.a19bc4ecia2.aj4bf13bj5ca3.a2j16b2j5a5.a3j12b3ja11.a3ja4ja4
-		+ja2ja13.acdec3j.2acdecjca13.adececa3.adececa13.adececa3.adececa13.adececa3.adececa13.a2e3ca3.a2e3ca13.a2ic2ia3.a2ic2ia14.2a.2a5.2a.2a40./64.2a.3a.3a.2a2.2a11.2a2ba3ba3ba2
-		+ba3c2a8.a15b2c2d2e3a4.a2bf14bcd6ea3.a9bf7bc3egh3ea2.a17bc8ea2.abf12bf3bc5ecia2.a19bc4ecia2.aj4bf13bj5ca3.a2j16b2j5a5.a3j12b3ja11.a3ja4ja4ja2ja13.2ajcdeca.cdec.3aeca12.acd
-		+ea2.adea3.aeca12.acdea2.adea3.aeca12.acdea2.adea3.aeca12.ac2ea2.a2ea3.a2ca12.ac2ia2.a2ia3.a2ia13.aca4.2a5.2a38./34.2a.3a.3a.2a2.2a11.2a2ba3ba3ba2ba3c2a8.a15b2c2d2e3a4.a2b
-		+f14bcd6ea3.a9bf7bc3egh3ea2.a17bc8ea2.abf12bf3bc5ecia2.a19bc4ecia2.aj4bf13bj5ca3.a2j16b2j5a5.a3j12b3ja11.a3ja4ja4ja2ja13.3a.4j.2acdeca15.adececa3.adececa13.adececa3.adecec
-		+a13.adececa3.adececa13.ade3ca3.a2ececa13.a2ec2ia3.a2i3ca13.a2i3a5.3a2ia14.2a11.2a40./64.2a.3a.3a.2a2.2a11.2a2ba3ba3ba2ba3c2a8.a15b2c2d2e3a4.a2bf14bcd6ea3.a9bf7bc3egh3ea2.
-		+a17bc8ea2.abf12bf3bc5ecia2.a19bc4ecia2.aj4bf13bj5ca3.a2j16b2j5a5.a3j12b3ja11.a3ja4ja4ja2ja12.adec.2a2jcj2ajcdea12.adea3.aeca2.acdea12.adea3.aeca2.acdea12.adea3.aeca2.acde
-		+a12.a2ea3.a2ca2.ac2ea12.a2ia3.a2ia2.ac2ia13.2a5.2a4.aca41./34.2a.3a.3a.2a2.2a11.2a2ba3ba3ba2ba3c2a8.a15b2c2d2e3a4.a2bf14bcd6ea3.a9bf7bc3egh3ea2.a17bc8ea2.abf12bf3bc5ecia2
-		+.a19bc4ecia2.aj4bf13bj5ca3.a2j16b2j5a5.a3j12b3ja11.a3ja4ja4ja2ja13.acdec3a.4a.2jca13.adececa3.adececa13.adececa3.adececa13.adececa3.adececa13.a2ececa3.ade3ca13.a2i3ca3.a2
-		+ec2ia14.3a2ia3.a2i3a18.2a5.2a43./64.2a.3a.3a.2a15.2a2ba3ba3ba2b2a12.a17ba10.a2bf16ba9.a9bf10ba8.a20ba8.abf12bf5ba8.a20bca7.aj4bf13b3c2a5.a2j16b2c2d2e3a3.a3j12b3jcd6ea3.a3
-		+ja4ja4ja2j2a3egh3ea3.acdec3j.2acdecj2c8ea4.adececa3.adecec2a5ecia4.adececa3.adececa.a4ecia4.adececa3.adececa2.a4ca5.a2e3ca3.a2e3ca3.4a6.a2ic2ia3.a2ic2ia14.2a.2a5.2a.2a40.
-		sheep_1|30|22|19|12|a1E1B24,b3A3541,c6B6675,d524C59,eEFD6C8,fFFFFFF,g16141A,hE2C3B5,i2A2530,jC4A197,kA28079|idle:0;walk:1,2,3,4;alt:5
-		+79.2a27.a2b2a12.13ab2c2d3a7.2a12eabc6da5.a15eb3dfg3da3.a2e14hb8da3.a17hb5dbia3.a18hb4dbia3.aj15h2j2a4ba4.a2j12h3ja2.4a6.a15ja14.2a11k2a16.acdb3k3abcdbdba13.acdbdba3.acdbd
-		+ba13.acdbdba3.acdbdba13.acdbdba3.acdbdba13.a2d3ba3.a2d3ba13.a2ib2ia3.a2ib2ia14.2a.2a5.2a.2a40./79.2a27.a2b2a12.13ab2c2d3a7.2a12eabc6da5.a15eb3dfg3da3.a2e14hb8da3.a17hb5db
-		+ia3.a18hb4dbia3.aj15h2j2a4ba4.a2j12h3ja2.4a6.a15ja14.2a11k2a17.kbcdb2abcdb3.adba12.abcda2.acda3.adba12.abcda2.acda3.adba12.abcda2.acda3.adba12.ab2da2.a2da3.a2ba12.ab2ia2.
-		+a2ia3.a2ia13.aba4.2a5.2a38./49.2a27.a2b2a12.13ab2c2d3a7.2a12eabc6da5.a15eb3dfg3da3.a2e14hb8da3.a17hb5dbia3.a18hb4dbia3.aj15h2j2a4ba4.a2j12h3ja2.4a6.a15ja14.2a11k2a17.2a4k
-		+3abcda16.acdbdba3.acdbdba13.acdbdba3.acdbdba13.acdbdba3.acdbdba13.acd3ba3.a2dbdba13.a2db2ia3.a2i3ba13.a2i3a5.3a2ia14.2a11.2a40./79.2a27.a2b2a12.13ab2c2d3a7.2a12eabc6da5.a
-		+15eb3dfg3da3.a2e14hb8da3.a17hb5dbia3.a18hb4dbia3.aj15h2j2a4ba4.a2j12h3ja2.4a6.a15ja14.2a11k2a14.acdb3a4k2akbcda12.acda3.adba2.abcda12.acda3.adba2.abcda12.acda3.adba2.abcd
-		+a12.a2da3.a2ba2.ab2da12.a2ia3.a2ia2.ab2ia13.2a5.2a4.aba41./49.2a27.a2b2a12.13ab2c2d3a7.2a12eabc6da5.a15eb3dfg3da3.a2e14hb8da3.a17hb5dbia3.a18hb4dbia3.aj15h2j2a4ba4.a2j12h
-		+3ja2.4a6.a15ja14.2a11k2a16.acdb8a.adba13.acdbdba3.acdbdba13.acdbdba3.acdbdba13.acdbdba3.acdbdba13.a2dbdba3.acd3ba13.a2i3ba3.a2db2ia14.3a2ia3.a2i3a18.2a5.2a43./125.12a16.2
-		+a12e2a13.a16ea11.a2e15ha11.a18ha10.a18h3a8.aj15h2j3b2a6.a2j12h3j2b2c2d3a4.a15ja.ac6da4.2a11k2a2.a3dfg3da4.acdb3k3abcdbd2b8da4.acdbdba3.acdbdb2a5dbia4.acdbdba3.acdbdba.a4d
-		+bia4.acdbdba3.acdbdba2.a4ba5.a2d3ba3.a2d3ba3.4a6.a2ib2ia3.a2ib2ia14.2a.2a5.2a.2a40.
-		skeleton|42|42|36|18|a17151C,bDBE1E9,cA8B0BD,d7B8391,e555C6A,fF7F3E5,gE3DBC7,hF3F6FA,i2A2732,jB2B9C7,k92DDE8,lB9B09C,mFDFDF2,n887D73,o977A49,pCCB36B,qA98960,r644933,s806044,t846547,uE6EBF5,vA6B1C3,w644A34|idle:0;walk:1,2,3,4;windup:5;strike:6;block:7;shoot:6
-		+226.5a35.2a5b2a32.a2b7ca30.a2b8cda29.ad9ed2a29.af9gaha28.af3g3i3gahja27.a3g3iki2gahja27.a4g3igigahja27.al9gahja28.al2gmimimlahja28.a8i2ahja29.algmimimlahja29.an6l2ahja25.
-		+2a.a2f6n.ahja24.adcnfginfgn2gao2pa24.acq2afgngln2g2arsa24.act2agingl4narsa24.act2afgnf5gapa25.act2ag2in6la26.adt2af3g4n2a28.ada.aigl2in32.a.af5ga34.a6n35.aglnlna35.aglnln
-		+a35.af2gn2la34.aglnlna35.aglnlna35.aglnlna35.abcdndea33.ab3cdndea33.3a2n3a188./226.5a35.2a5b2a32.a2b7ca30.a2b8cda29.ad9eda.a28.af9g2aha27.af3g3i3g2ahja26.a3g3iki2g2ahja26
-		+.a4g3igig2ahja26.al9g2ahja27.al2gmimiml2ahja27.a8ia.ahja28.algmimiml2ahja28.an6la.ahja24.2a.a2f6n2.ahja23.adcnfg2infgng2ao2pa23.acq2af2gnglnga.arsa23.act2ag2ingl3n2arsa23
-		+.act2af2gnf5gapa24.act2ag3in6la25.adt2af4g3n3a27.ada.aigl2ia32.a.af5ga34.a6n36.aglna37.agl2n37.anf2ga36.angla36.al2ngla35.al2ngla35.acnb2cda34.acnb2cda35.2a2n2a189./268.5
-		+a35.2a5b2a32.a2b7ca30.a2b8cda29.ad9ed2a29.af9gaha28.af3g3i3gahja27.a3g3iki2gahja27.a4g3igigahja27.al9gahja28.al2gmimimlahja28.a8i2ahja29.algmimimlahja29.an6l2ahja25.2a.a2
-		+f6n.ahja24.adcnfginfgn2gao2pa24.acq2afgngln2g2arsa24.act2agingl4narsa24.act2afgnf5gapa25.act2ag2in6la26.adt2af3g4n2a28.ada.aigl2in32.a.nf5ga34.a6na34.agla.alna33.af2g2ag2
-		+la32.agla.alna33.agla.alna33.agl2acdea33.abcdnc2dea31.ab3cdn3a33.5a191./226.5a35.2a5b2a32.a2b7ca30.a2b8cda29.ad9eda30.af8gaha29.af3g3i2gahja28.a3g3ikigahja28.a4g3igiahja2
-		+8.al8gahja29.al2gmimimahja29.a8iahja30.algmimimahja30.an6lahja26.2a.a2f6nahja25.adcnfgnfgnigao2pa25.acq2afngln3garsa25.act2agngl4narsa25.act2afnf5gapa26.act2agin6la27.adt
-		+2af2g5na29.ada.aigl2ina31.a.af5gn34.a6n34.agla.alna33.agla.aln2a31.af2ga2.ag2la30.agla3.alna30.agla5.alna29.agla5.alna29.abcda3.ac2dea28.ab2cda2.ac2dea29.4a4.4a186./268.5
-		+a35.2a5b2a32.a2b7ca30.a2b8cda29.ad9ed2a29.af9gaha28.af3g3i3gahja27.a3g3iki2gahja27.a4g3igigahja27.al9gahja28.al2gmimimlahja28.a8i2ahja29.algmimimlahja29.an6l2ahja25.2a.a2
-		+f6n.ahja24.adcnfginfgn2gao2pa24.acq2afgngln2g2arsa24.act2agingl4narsa24.act2afgnf5gapa25.act2ag2in6la26.adt2af3g4n2a28.ada.aigl2in32.a.nf5ga35.6n37.aglna37.af2gna36.aglna
-		+37.aglna36.abcdna36.ab2cdna36.4ndea36.5a188./52.2a39.apsa37.aropa36.ahproa35.ahjo4a.5a27.ahj2a.afgn5b2a24.ahja3.aglfn6ca22.ahja4.anglfn5cda21.aja5.adnglfn4eda22.a7.afngln
-		+5ga30.afg2n3i3ga30.a3g3iki2ga30.a4g3igiga30.al9ga31.al2gmimimla31.a8ia33.algmimimla32.an6la29.2a.a2f6n29.adcnfg5i2ga28.acq2af7ga28.act2ag6ila28.act2af7ga28.act2ag6ila28.a
-		+dt2af6ga30.ada.aigl2in32.a.af5ga35.6na35.agl2na36.agl2na36.af2gna36.aglna37.ngln38.ngln38.nbcdn36.ab3cdn36.a4n191./270.5a35.2a5b2a32.a2b7ca30.a2b8cda29.ad9eda30.af9ga30.a
-		+f3g3i3ga30.a3g3iki2ga30.a4g3igiga.3u26.al9ga3.2u26.al2gmimimla4.vu25.a8ia6.vu25.algmimimla6.v24.2an6la28.2a.a2fg5na28.adcnfg2i6n11a17.acq2afgnf2gfg2ao9ja16.act2agin4lap2r
-		+p9ha15.act2af2g5n2ao10a16.act2ag6ila.a26.adt2af6ga30.ada.aigl2in32.2anf5ga34.a4n2a35.agl2n37.anf2ga36.angla36.al2ngla35.al2ngla35.acnb2cda34.acnb2cda35.2a2n2a189./226.5a3
-		+5.na5b2a32.n2b7ca30.a2b8cda29.ad9eda30.nf9ga30.nf3g3i3ga30.n3g3iki2ga30.n4g3igiga30.nl9ga30.anl2gmimimla30.an7i5a27.aopnlgmimad3cda27.ar2n3lad2q3tda26.an2f3nacq4tda26.nfg
-		+2i2nac2tbcwea27.nfgnfgac2tcdwea27.aginglac3t2wea27.af2g2nadt4wda27.ag5iad3wda28.af6ga3da30.aigl2in.3a30.af5ga34.a6n35.aglnlna35.aglnlna35.af2gn2la34.aglnlna35.aglnlna35.a
-		+glnlna35.abcdndea33.ab3cdndea33.3a2n3a188.
-		slime|26|20|17|13|a1C362E,b97CC84,cFFFFFF,d7ABD6B,e548751,f15231C,g3B6241,h213724|idle:0;hop:1;strike:2
-		+113.8a16.2a8b2a13.a3b2c5b2d2a10.a2b3c2b8da8.a2b2cb11dea6.a3b14dea6.ab3dfc6dfc3d2ea4.ab4d2f6d2f3d2ea4.ab17d2ea4.a17d2ega4.a7d6h4d2ega4.ae16d2ega5.a3e12d2ega7.ag14ega9.16a3
-		+1./10.6a18.2a6b2a15.a3b2c3b2da13.a2b3cb6da12.ab2cb7dea11.a3b9dea11.ab2dfc4dfc2dea10.ab2d2f4d2f2dea10.ab12dea10.a12d2ea10.a5d4h3d2ea10.a12d2ea10.ae11dega11.ae9d2ega11.a2e8
-		+dega13.a10ea15.a8ga17.8a61./140.8a16.2a8b3a11.2a3b2c5b3d2a8.a3b3cb10d2a5.a3b2cb6dfc5dea3.a3b7dfcd2f5dea3.ab9d2f7d2ea2.ab11d7hd2ea2.ab10dhchchc2hdega2.a11d8hdega2.ae11dhch
-		+chc2dega3.a2e16d2ega4.ag17ega6.19a28.
-		tiger|46|24|20|20|a1E1510,bCB925D,cD5A46E,d291D1A,e6D4937,fDBC86E,g15111A,hF5EEDF,iD4838F,j956847,k392121,lD3C8B9,mFFFFFF,n8C464E|idle:0;walk:1,2,3,4;strike:5
-		+75.2a5.2a9.2a25.a2ba3.a2ba7.acba23.ab2db3ab2dba6.aba24.a4b3c4bca5.ada8.16a.acbd3bd4bca4.a2b2a4.2a16cec8bf3ba5.abdb4a2c2bd3bd3bd3bdbebd7bg2bha6.2abdbec4bd3bd3bd3bdbe7b5hia
-		+8.2aec5bd3bd3bd3bdbejd4b6ha11.a21bej4b2h3kha11.a3bd4bd4bd4bd3be3j6ha12.aj2bd4bd4bd4bd4b2e5j2a14.e3be12he3b3e6a16.abdbe12lebdbedja21.a2bj5e8ae2bjejea21.abdjejdea8.abdjedea
-		+21.a2bje2jea8.a2bjejea21.a2bje2jea8.a2bjejea21.a3he3la8.a3he2la21.a2hle3la8.a2hle2la22.3a.3a10.6a107./75.2a5.2a9.2a25.a2ba3.a2ba7.acba23.ab2db3ab2dba6.aba24.a4b3c4bca5.ad
-		+a8.16a.acbd3bd4bca4.a2b2a4.2a16cec8bf3ba5.abdb4a2c2bd3bd3bd3bdbebd7bg2bha6.2abdbec4bd3bd3bd3bdbe7b5hia8.2aec5bd3bd3bd3bdbejd4b6ha11.a21bej4b2h3kha11.a3bd4bd4bd4bd3be3j6ha
-		+12.aj2bd4bd4bd4bd4b2e5j2a14.aje3be8he3be2j2ej2e3a17.aebdbe8lebdbe3ajdja21.e2bje8ae2bje2.a2jea21.ebdje8.abdja2.ajdea21.e2bje8.a2bja2.a2jea21.e2bje8.a2bja2.a2jea21.e3he8.a3
-		+ha2.a3la21.e2hle8.a2hla2.a3la22.3e10.3a4.3a105./29.2a5.2a9.2a25.a2ba3.a2ba7.acba23.ab2db3ab2dba6.aba24.a4b3c4bca5.ada8.16a.acbd3bd4bca4.a2b2a4.2a16cec8bf3ba5.abdb4a2c2bd3
-		+bd3bd3bdbebd7bg2bha6.2abdbec4bd3bd3bd3bdbe7b5hia8.2aec5bd3bd3bd3bdbejd4b6ha11.a21bej4b2h3kha11.a3bd4bd4bd4bd3be3j6ha12.aj2bd4bd4bd4bd4b2e5j2a14.a2j14he3be2a.5a16.a3be12le
-		+bdbe2ja21.abdb5e8ae2bjedja21.a2bjejdea8.abdjejea21.abdje2jea8.a2bjedea21.a2bje2jea8.a2bjejea21.a2bje3la8.a3hejea21.a3he3la8.a2hle2la21.a2hl4a10.2ae3la22.3a17.3a107./75.2a
-		+5.2a9.2a25.a2ba3.a2ba7.acba23.ab2db3ab2dba6.aba24.a4b3c4bca5.ada8.16a.acbd3bd4bca4.a2b2a4.2a16cec8bf3ba5.abdb4a2c2bd3bd3bd3bdbebd7bg2bha6.2abdbec4bd3bd3bd3bdbe7b5hia8.2ae
-		+c5bd3bd3bd3bdbejd4b6ha11.a21bej4b2h3kha11.a3bd4bd4bd4bd3be3j6ha12.aj2bd4bd4bd4bd4b2e5j2a12.a3be16he3be.5a14.abdbej15lebdba20.a2bj4a5e7a2e2bja20.abdja3.ajdea7.aebdja20.a2b
-		+ja3.a2jea7.ae2bja20.a2bja3.a2jea7.ae2bja20.a3ha3.a3la7.ae3ha20.a2hla3.a3la7.ae2hla21.3a5.3a9.a2ea108./29.2a5.2a9.2a25.a2ba3.a2ba7.acba23.ab2db3ab2dba6.aba24.a4b3c4bca5.ad
-		+a8.16a.acbd3bd4bca4.a2b2a4.2a16cec8bf3ba5.abdb4a2c2bd3bd3bd3bdbebd7bg2bha6.2abdbec4bd3bd3bd3bdbe7b5hia8.2aec5bd3bd3bd3bdbejd4b6ha11.a21bej4b2h3kha11.a3bd4bd4bd4bd3be3j6ha
-		+12.aj2bd4bd4bd4bd4b2e5j2a14.e3be15h2j2e6a16.abdbe12le3bedja21.a2bj5e8aebdbejea21.abdje2jea8.a2bjedea21.a2bjejdea8.abdjejea21.a2bje2jea8.a2bjejea21.a3he2jea8.a2bje2la21.a2
-		+hle3la8.a3he2la22.4a3la8.a2hle2a27.3a10.3a110./77.2a5.2a7.2a27.a2ba3.a2ba5.acba25.ab2db3ab2dba4.aba26.a4b3c4bca3.ada8.16a3.acbd3bd4bca2.a2b2a4.2a16c3ac8bf3bha2.abdb4a2c2b
-		+d3bd3bd3bdb2cebd7bg2bhia3.2abdbec4bd3bd3bd3bd3be7bhmhmhma6.2aec5bd3bd3bd3bd3bejd4bh5na9.a23bej4bh5na9.a3bd4bd4bd4bd5be3jbhmhmhma9.aj2bd4bd4bd4bd4bj3a3j4ha10.a3be15he3be3.
-		+7a11.abdbe15lebdbe21.a2bje2a5e8ae2bje21.abdja2.ajdea8.ebdje21.a2bja2.a2jea8.e2bje21.a2bja2.a2jea8.e2bje21.a3ha2.a3la8.e3he21.a2hla2.a3la8.e2hle22.3a4.3a10.3e108.
-		warden|84|94|90|42|a120E18,b6A6F7E,c989EAD,dD6DAE3,eF3F5F9,f100C18,g57473A,h392E25,i625773,j3B3148,k292233,l0C0912,mCEA8EE,nFCEEFC,o2B2D38,p818493,q5A5E6C,r3E404D,sD9C4F4,tA481CE,u1C1825,v1B1525,wC096E9,xEFE0FA|idle:0;fly:0,1;windup:2;strike:3;cast:4
-		+723.12a71.a2b2c7de5a67.a2b2c8d4e2a66.2a2b5a2c4d3ea64.fgh2a5.5a2d2ea64.fghf11.2ad2ea63.fghf13.a2ea63.fghf14.aea63.fghf15.a64.fghf80.fghf66.2a12.fghf65.a2ia11.fghf64.ai2jia
-		+10.fghf63.ai4jia9.fghf62.ai6jia8.fghf61.ai8jka7.fghf60.ai6j4lka6.fghf59.ai6j6lka5.fghf59.ai5j7lka5.fghf58.ai5j5lmnlka5.fghf58.ai5j8lka5.fghf58.ai5j4lm3lka5.fghf58.ak6j6l2
-		+ka5.fghf58.ak7j4l2ka6.fghf59.a2kjk2j6oa7.fghf60.ak2a2o5pq2a6.fghf61.2ao4p5qra5.fghf60.2ao2p7q3ra4.fghf59.apo2p7q2roa5.fghf58.a2po8q3r2o5.fghf58.ap2qo7r4oa5.3of57.ap4q10or
-		+a4.a2qro57.a9qs4q2ra3.ap2q2ra56.ar8qt4q2ra3.a3qroa56.a2r11q2roa4.aqr2o58.a2r10q2roa4.a2qro59.a11r2oa4.ap3qoa57.2a13o6a2qr2oa56.a3i2j2k5jk5jku2ar3o56.a3i3jk5j2k5jkua.3of56
-		+.a3i3j2k5jk6jkuafghf56.a3i3j2k5jk6jkuafghf55.a3i3j2k5j2k6jkuafghf55.a3i3j2k6j2k6jk2ughf55.a3i3j2k6j2k6jk2ughf54.a3i4j2k5j2k7jk2ughf54.a3i4j2k5j2k7jk2ughf54.a3i4j2k6j2k7jk
-		+2uhf54.a3i4j2k6j2k7jk2uhf53.a4i3j2k7j2k7jk2uhf53.a4i3j2k7j2k7jk2uhf53.a4i4j2k6j2k8jk2uf53.a4i4j2k6j2k8jk2uf52.a4i4j2k7j2k8jk2uf52.a4i4j2k7j2k8jk2uf52.a4i4j2k7j3k8jk2u52.a
-		+4i4j2k7j3k8jk2u52.a4i4j2k7j3k8jk2u51.a4i4j3k7j2k9jk2u51.a4i4j3k7j2k9jk2u51.a4i5j2k7j3k9jkua50.a4i5j2k7j3k9jkua49.a4i5j2k8j3k9jkua49.a4i5j2k8j3k9jkua49.a4i5j2k8j3k9jkua49.
-		+a4i5j3k8j2k10jkua48.a4i5j3k8j2k10jkua47.a5i4j3k8j3k10jkua47.a5i4j3k8j3k10jkua47.a5i4j3k8j3k10jkua47.a5i5j2k9j3k10jkua46.a5i5j2k9j3k10jkua45.a5i5j3k8j3k11jkua45.a5i5j3k8j3
-		+k11jkua45.a5i5j3k8j3k11jkua45.a5i5j3k9j3k11jkua44.a5i5j3k9j3k11jkua44.a5i5j3k9j3k11jkua43.a2ia2i2ja2j2ka4ja4ja3kja4ja4jaua43.a2iaia2jaja2kaja2jaja2jakakjaja2jaja2jaua43.a
-		+i2aiaj2ajaj2akaj2ajaj2akak2ajaj2ajaj2aka43.aia.2aja.2aja.2aja.2aja.2aka.2aja.2aja.a45.a4.a4.a4.a4.a4.a4.a4.a197./807.12a71.a2b2c7de5a67.a2b2c8d4e2a66.2a2b5a2c4d3ea64.fgh2
-		+a5.5a2d2ea64.fghf11.2ad2ea63.fghf13.a2ea63.fghf14.aea63.fghf15.a64.fghf80.fghf66.2a12.fghf65.a2ia11.fghf64.ai2jia10.fghf63.ai4jia9.fghf62.ai6jia8.fghf61.ai8jka7.fghf60.ai
-		+6j4lka6.fghf59.ai6j6lka5.fghf59.ai5j7lka5.fghf58.ai5j5lmnlka5.fghf58.ai5j8lka5.fghf58.ai5j4lm3lka5.fghf58.ak6j6l2ka5.fghf58.ak7j4l2ka6.fghf59.a2kjk2j6oa7.fghf60.ak2a2o5pq
-		+2a6.fghf61.2ao4p5qra5.fghf60.2ao2p7q3ra4.fghf59.apo2p7q2roa5.fghf58.a2po8q3r2o5.fghf58.ap2qo7r4oa5.3of57.ap4q10ora4.a2qro57.a9qs4q2ra3.ap2q2ra56.ar8qt4q2ra3.a3qroa56.a2r1
-		+1q2roa4.aqr2o58.a2r10q2roa4.a2qro59.a11r2oa4.ap3qoa57.2a13o6a2qr2oa56.a3i2j2k5jk5jku2ar3o56.a3i3jk5j2k5jkua.3of56.a3i3j2k5jk6jkuafghf56.a3i3j2k5jk6jkuafghf55.a3i3j2k5j2k6
-		+jkuafghf55.a3i3j2k6j2k6jk2ughf55.a3i3j2k6j2k6jk2ughf54.a3i4j2k5j2k7jk2ughf54.a3i4j2k5j2k7jk2ughf54.a3i4j2k6j2k7jk2uhf54.a3i4j2k6j2k7jk2uhf53.a4i3j2k7j2k7jk2uhf53.a4i3j2k7
-		+j2k7jk2uhf53.a4i4j2k6j2k8jk2uf53.a4i4j2k6j2k8jk2uf52.a4i4j2k7j2k8jk2uf52.a4i4j2k7j2k8jk2uf52.a4i4j2k7j3k8jk2u52.a4i4j2k7j3k8jk2u52.a4i4j2k7j3k8jk2u51.a4i4j3k7j2k9jk2u51.a
-		+4i4j3k7j2k9jk2u51.a4i5j2k7j3k9jkua51.a4i5j2k7j3k9jkua49.a4i5j2k8j3k9jkua49.a4i5j2k8j3k9jkua49.a4i5j2k8j3k9jkua49.a4i5j3k8j2k10jkua48.a4i5j3k8j2k10jkua47.a5i4j3k8j3k10jkua
-		+47.a5i4j3k8j3k10jkua47.a5i4j3k8j3k10jkua47.a5i5j2k9j3k10jkua47.a5i5j2k9j3k10jkua45.a5i5j3k8j3k11jkua45.a5i5j3k8j3k11jkua45.a5i5j3k8j3k11jkua45.a5i5j3k9j3k11jkua44.a5i5j3k
-		+9j3k11jkua44.a5i5j3k9j3k11jkua44.a4ia4ja2k2ja4ja2j2ka4ja4jajkua44.aia2iaja2jaka2jaja2jaja2kaja2jaja2jajaua44.aiai2ajaj2akak2ajaj2ajak2ajaj2ajaj2ajaka45.2aia.2aja.2aka.2aj
-		+a.2aka.2aja.2aja.2aka47.a4.a4.a4.a4.a4.a4.a4.a108./695.3a79.2a2eda76.2a2e2dca75.a2e2dc2ahf73.ae2dc2afghf72.ae2dca3.fghf70.ae2d2a4.fghf69.ae2da7.fghf68.aeda9.fghf66.aeda10
-		+.fghf66.aea12.fghf66.a13.fghf5.2a74.fghf3.a2ia74.fghf.ai2jia73.fghfai4jia73.fgui6jia72.fui8jka71.ai6j4lka69.ai6j6lka68.ai5j7lka67.ai5j5lmnlka67.ai5j8lka67.ai5j4lm3lka67.a
-		+k6j6l2ka67.ak7j4l2ka69.a2kjk2j6oa71.ak2a2o5pq2a71.2ao4p5qra69.2ao2p7q3ra67.apo2p7q2r2oa66.a2po8qr2o2pqa65.ap2qo7ro2p2qra64.ap4q7op2q2ra65.a9qsop2qr2o66.ar8qop2q2r2o66.a2r
-		+7qo2q5of66.a2r7q4or2of67.a9r5oghf65.2a13oa4u63.a3i2j2k5jk5jkua61.a3i3jk5j2k5jk2u61.a3i3j2k5jk6jkua60.a3i3j2k5jk6jk2u59.a3i3j2k5j2k6jkua59.a3i3j2k6j2k6jkua58.a3i3j2k6j2k6j
-		+kua57.a3i4j2k5j2k7jkua57.a3i4j2k5j2k7jkua57.a3i4j2k6j2k7jkua56.a3i4j2k6j2k7jkua55.a4i3j2k7j2k7jkua55.a4i3j2k7j2k7jkua55.a4i4j2k6j2k8jkua54.a4i4j2k6j2k8jkua53.a4i4j2k7j2k8
-		+jkua53.a4i4j2k7j2k8jkua53.a4i4j2k7j3k8jkua52.a4i4j2k7j3k8jkua52.a4i4j2k7j3k8jkua51.a4i4j3k7j2k9jkua51.a4i4j3k7j2k9jkua51.a4i5j2k7j3k9jkua49.a4i5j2k7j3k9jkua49.a4i5j2k8j3k
-		+9jkua49.a4i5j2k8j3k9jkua49.a4i5j2k8j3k9jkua49.a4i5j3k8j2k10jkua48.a4i5j3k8j2k10jkua47.a5i4j3k8j3k10jkua47.a5i4j3k8j3k10jkua47.a5i4j3k8j3k10jkua47.a5i5j2k9j3k10jkua46.a5i5
-		+j2k9j3k10jkua45.a5i5j3k8j3k11jkua45.a5i5j3k8j3k11jkua45.a5i5j3k8j3k11jkua45.a5i5j3k9j3k11jkua44.a5i5j3k9j3k11jkua44.a5i5j3k9j3k11jkua43.a3iai3jaj3ka4ja4ja2k2ja4ja3jka45.a
-		+2iaia2jaja2kaja2jaja2jaka2jaja2jajajk2a44.ai2aiaj2ajak2ajaj2ajaj2akaj2ajaj2ajaj2aua43.aia.2aja.2aka.2aja.2aja.2aja.2aja.2aja.a45.a4.a4.a4.a4.a4.a4.a4.a197./1717.2a81.a2ia
-		+79.ai2jia77.ai4jia75.ai6jia73.ai8jka71.ai6j4lka69.ai6j6lka68.ai5j7lka67.ai5j5lmnlka67.ai5j8lka67.ai5j4lm3lka67.ak6j6l2ka67.ak7j4l2ka69.a2kjkj2v5oa71.ak2avghv3pq2a71.2aopv
-		+ghv4qra69.2ao2pqvghv2q3ra67.apo2p3qvgh2vroa67.a2po6qv6o67.ap2qo5ro2p2q2o4a62.ap4q5op9qra61.a9qo2q4r5qoa60.ar8qt6or2oq2oa60.a2r9q2o2r6oa62.a2r10q2roafg2of63.a11r2oa2.f2ghf
-		+61.2a13o4avfghf59.a3i2j2k5jk5jkuafghf57.a3i3jk5j2k5jkua.fghf56.a3i3j2k5jk6jkua.fghf55.a3i3j2k5jk6jkua2.fghf3.2w48.a3i3j2k5j2k6jkua3.fghf4.2w46.a3i3j2k6j2k6jkua3.fgh2f4.3w
-		+43.a3i3j2k6j2k6jkua4.f2ghf6.4w38.a3i4j2k5j2k7jkua5.2fghf9.4w34.a3i4j2k5j2k7jkua7.fghf46.a3i4j2k6j2k7jkua7.fghf45.a3i4j2k6j2k7jkua8.fghf43.a4i3j2k7j2k7jkua9.fghf42.a4i3j2k
-		+7j2k7jkua10.fgh2f40.a4i4j2k6j2k8jkua10.f2gha39.a4i4j2k6j2k8jkua11.2faea37.a4i4j2k7j2k8jkua13.a2e2a35.a4i4j2k7j2k8jkua14.a2ed3a32.a4i4j2k7j3k8jkua14.a2e3d8a24.a4i4j2k7j3k8
-		+jkua15.2a6d3c2ba23.a4i4j2k7j3k8jkua17.3a2d3c3ba22.a4i4j3k7j2k9jkua20.4a2b2a23.a4i4j3k7j2k9jkua24.2a25.a4i5j2k7j3k9jkua51.a4i5j2k7j3k9jkua49.a4i5j2k8j3k9jkua49.a4i5j2k8j3k
-		+9jkua49.a4i5j2k8j3k9jkua49.a4i5j3k8j2k10jkua48.a4i5j3k8j2k10jkua47.a5i4j3k8j3k10jkua47.a5i4j3k8j3k10jkua47.a5i4j3k8j3k10jkua47.a5i5j2k9j3k10jkua47.a5i5j2k9j3k10jkua45.a5i
-		+5j3k8j3k11jkua45.a5i5j3k8j3k11jkua45.a5i5j3k8j3k11jkua45.a5i5j3k9j3k11jkua44.a5i5j3k9j3k11jkua44.a5i5j3k9j3k11jkua44.a4ia4ja2k2ja4ja2j2ka4ja4jajkua44.aia2iaja2jaka2jaja2j
-		+aja2kaja2jaja2jajaua44.aiai2ajaj2akak2ajaj2ajak2ajaj2ajaj2ajaka45.2aia.2aja.2aka.2aja.2aka.2aja.2aja.2aka47.a4.a4.a4.a4.a4.a4.a4.a108./615.12a71.a2b2c7de5a67.a2b2c8d4e2a6
-		+6.2a2b5a2c4d3ea64.fgh2a5.5a2d2ea64.fghf11.2ad2ea63.fghf13.a2ea63.fghf14.aea63.fghf15.a64.fghf80.fghf80.fghf6.2a72.fghf5.a2ia71.fghf4.ai2jia70.fghf3.ai4jia69.fghf2.ai6jia6
-		+8.fghf.ai8jka67.fghfai6j4lka66.fghui6j6lka65.fghui5j7lka65.fgui5j5lmnlka65.fgui5j8lka65.fgui5j4lm3lka65.fguk6j6l2ka65.fguk7j4l2ka66.fghu2kjk2j6oa67.fghfak2a2o5pq2a66.fghf
-		+.2ao4p5qra65.fghf2ao2p7q3ra8.w.w53.fghopo2p7q2roa8.w3xw52.fgo2po7q3or2o7.w2xn2xw51.fgop2qo5ro2pq3o3a5.w3xw52.fop4q5op3qr5q3a3.w.w53.fo9qo2q4r5qpqa58.for8qt7o2ro2qoa58.fo2
-		+r9q2o2ro3ar2oa59.fgo2r10q2roa2.3a60.fgho11r2oa66.fg2u13o5a62.fu3i2j2k5jk5jkua61.u3i3jk5j2k5jkua61.u3i3j2k5jk6jkua60.u3i3j2k5jk6jkua59.a3i3j2k5j2k6jkua59.a3i3j2k6j2k6jkua5
-		+8.a3i3j2k6j2k6jkua57.a3i4j2k5j2k7jkua57.a3i4j2k5j2k7jkua57.a3i4j2k6j2k7jkua56.a3i4j2k6j2k7jkua55.a4i3j2k7j2k7jkua55.a4i3j2k7j2k7jkua55.a4i4j2k6j2k8jkua54.a4i4j2k6j2k8jkua
-		+53.a4i4j2k7j2k8jkua53.a4i4j2k7j2k8jkua53.a4i4j2k7j3k8jkua52.a4i4j2k7j3k8jkua52.a4i4j2k7j3k8jkua51.a4i4j3k7j2k9jkua51.a4i4j3k7j2k9jkua51.a4i5j2k7j3k9jkua50.a4i5j2k7j3k9jku
-		+a49.a4i5j2k8j3k9jkua49.a4i5j2k8j3k9jkua49.a4i5j2k8j3k9jkua49.a4i5j3k8j2k10jkua48.a4i5j3k8j2k10jkua47.a5i4j3k8j3k10jkua47.a5i4j3k8j3k10jkua47.a5i4j3k8j3k10jkua47.a5i5j2k9j
-		+3k10jkua46.a5i5j2k9j3k10jkua45.a5i5j3k8j3k11jkua45.a5i5j3k8j3k11jkua45.a5i5j3k8j3k11jkua45.a5i5j3k9j3k11jkua44.a5i5j3k9j3k11jkua44.a5i5j3k9j3k11jkua43.a2ia2i2ja2j2ka4ja4j
-		+a3kja4ja4jaua43.a2iaia2jaja2kaja2jaja2jakakjaja2jaja2jaua43.ai2aiaj2ajaj2akaj2ajaj2akak2ajaj2ajaj2aka43.aia.2aja.2aja.2aja.2aja.2aka.2aja.2aja.a45.a4.a4.a4.a4.a4.a4.a4.a2
-		+81.
-		wolf|34|21|18|14.5|a17171E,b898D9A,cABABAE,d5E606D,e41424F,fD8BE67,g15111A,hCBCED6,i1A1418,j888993,kFFFFFF,l8C464E|idle:0;walk:1,2,3,4;strike:5
-		+21.a3.a10.2a16.aba.aba8.a2ca14.abdbabdba6.ac2bca13.a3bc3bca5.ac4ba.11ae2c6bca5.ad3b2e10cec5bfg3ba5.adbe2c10be9b3ha5.aec12bebd5b4hia6.e14bed3b6ha7.a15be4d2j3a8.ad15b3e3a12
-		+.a2d11h2d2a16.a2be8je2beda16.abd4e5aebd2ea16.abdedea5.abd2ea16.abdedea5.abd2ea16.abdedea5.abd2ea16.abdedea5.abd2ea16.a5ea5.a4ea17.2a.2a7.4a46./21.a3.a10.2a16.aba.aba8.a2c
-		+a14.abdbabdba6.ac2bca13.a3bc3bca5.ac4ba.11ae2c6bca5.ad3b2e10cec5bfg3ba5.adbe2c10be9b3ha5.aec12bebd5b4hia6.e14bed3b6ha7.a15be4d2j3a8.ad15b3e3a12.a2d11h2d2a17.2e2be4je2be3a
-		+2da15.aebde4aebde2.adea15.aebda4.abda2.adea15.aebda4.abda2.adea15.aebda4.abda2.adea15.aebda4.abda2.adea15.a3ea4.a2ea2.a2ea16.aea6.2a4.2a44./2.2a16.aba.aba8.a2ca14.abdbabd
-		+ba6.ac2bca13.a3bc3bca5.ac4ba.11ae2c6bca5.ad3b2e10cec5bfg3ba5.adbe2c10be9b3ha5.aec12bebd5b4hia6.e14bed3b6ha7.a15be4d2j3a8.ad15b3e3a12.a2d11h2d2a17.2ad8je2be18.a2b4e5aebded
-		+a16.abdedea5.abd2ea16.abdedea5.abd2ea16.abdedea5.abd2ea16.abdedea5.abd2ea16.abd3ea5.a4ea16.a2e3a7.a3ea17.2a12.2a46./21.a3.a10.2a16.aba.aba8.a2ca14.abdbabdba6.ac2bca13.a3b
-		+c3bca5.ac4ba.11ae2c6bca5.ad3b2e10cec5bfg3ba5.adbe2c10be9b3ha5.aec12bebd5b4hia6.e14bed3b6ha7.a15be4d2j3a8.ad15b3e3a12.a2d11h2d2a14.a2bead9jde2ba14.abda.2a4e3a3ebda14.abda3
-		+.adea3.adebda14.abda3.adea3.adebda14.abda3.adea3.adebda14.abda3.adea3.adebda14.a2ea3.a2ea3.a4ea15.2a5.2a5.4a46./2.2a16.aba.aba8.a2ca14.abdbabdba6.ac2bca13.a3bc3bca5.ac4ba
-		+.11ae2c6bca5.ad3b2e10cec5bfg3ba5.adbe2c10be9b3ha5.aec12bebd5b4hia6.e14bed3b6ha7.a15be4d2j3a8.ad15b3e3a12.a2d11h2d2a16.a2be9jd2eda16.abd4e5ae2b2ea16.abdedea5.abd2ea16.abde
-		+dea5.abd2ea16.abdedea5.abd2ea16.abdedea5.abd2ea16.a3edea5.abd2ea17.3a2ea5.a3ea21.2a7.2a48./23.a3.a8.2a18.aba.aba6.a2ca16.abdbabdba4.ac2bca15.a3bc3bca3.ac4ba.12a.a2c6bc2a2
-		+.ad3b2e12cec5bfg3bha2.adbe2c12be9b3hi3.aec14bebd5bkhkhka4.e16bed4b5la5.a17be2d2bkhkhka5.ad16bdea2d3hja7.a2d11h2d2a2.6a7.a2bed9jde2ba15.abd3a4e4a2ebda15.abda2.adea4.aebda1
-		+5.abda2.adea4.aebda15.abda2.adea4.aebda15.abda2.adea4.aebda15.a2ea2.a2ea4.a3ea16.2a4.2a6.aea46.
-		wolf_1|34|21|18|14.5|a231A14,bB8976E,cC9AD88,d836950,e5F4A3B,f291D18,g15111A,hB85B5B,iE5D4B5,j864343,k1A1418,l9F8F7E,mFFFFFF,n8C464E|idle:0;walk:1,2,3,4;strike:5
-		+21.a3.a10.2a16.aba.aba8.a2ca14.abdbabdba6.ac2bca13.a3bc3bca5.ac4ba.11ae2c6bca5.ad3b2e10cec5bfg3ba5.adbe2c10beh8b3ia5.aec12behj5b4ika6.e14bed3b6ia7.a15be4d2l3a8.ad15b3e3a1
-		+2.a2d11i2d2a16.a2be8le2beda16.abd4e5aebd2ea16.abdedea5.abd2ea16.abdedea5.abd2ea16.abdedea5.abd2ea16.abdedea5.abd2ea16.a5ea5.a4ea17.2a.2a7.4a46./21.a3.a10.2a16.aba.aba8.a2
-		+ca14.abdbabdba6.ac2bca13.a3bc3bca5.ac4ba.11ae2c6bca5.ad3b2e10cec5bfg3ba5.adbe2c10beh8b3ia5.aec12behj5b4ika6.e14bed3b6ia7.a15be4d2l3a8.ad15b3e3a12.a2d11i2d2a17.2e2be4le2be
-		+3a2da15.aebde4aebde2.adea15.aebda4.abda2.adea15.aebda4.abda2.adea15.aebda4.abda2.adea15.aebda4.abda2.adea15.a3ea4.a2ea2.a2ea16.aea6.2a4.2a44./2.2a16.aba.aba8.a2ca14.abdba
-		+bdba6.ac2bca13.a3bc3bca5.ac4ba.11ae2c6bca5.ad3b2e10cec5bfg3ba5.adbe2c10beh8b3ia5.aec12behj5b4ika6.e14bed3b6ia7.a15be4d2l3a8.ad15b3e3a12.a2d11i2d2a17.2ad8le2be18.a2b4e5aeb
-		+deda16.abdedea5.abd2ea16.abdedea5.abd2ea16.abdedea5.abd2ea16.abdedea5.abd2ea16.abd3ea5.a4ea16.a2e3a7.a3ea17.2a12.2a46./21.a3.a10.2a16.aba.aba8.a2ca14.abdbabdba6.ac2bca13.
-		+a3bc3bca5.ac4ba.11ae2c6bca5.ad3b2e10cec5bfg3ba5.adbe2c10beh8b3ia5.aec12behj5b4ika6.e14bed3b6ia7.a15be4d2l3a8.ad15b3e3a12.a2d11i2d2a14.a2bead9lde2ba14.abda.2a4e3a3ebda14.a
-		+bda3.adea3.adebda14.abda3.adea3.adebda14.abda3.adea3.adebda14.abda3.adea3.adebda14.a2ea3.a2ea3.a4ea15.2a5.2a5.4a46./2.2a16.aba.aba8.a2ca14.abdbabdba6.ac2bca13.a3bc3bca5.a
-		+c4ba.11ae2c6bca5.ad3b2e10cec5bfg3ba5.adbe2c10beh8b3ia5.aec12behj5b4ika6.e14bed3b6ia7.a15be4d2l3a8.ad15b3e3a12.a2d11i2d2a16.a2be9ld2eda16.abd4e5ae2b2ea16.abdedea5.abd2ea16
-		+.abdedea5.abd2ea16.abdedea5.abd2ea16.abdedea5.abd2ea16.a3edea5.abd2ea17.3a2ea5.a3ea21.2a7.2a48./23.a3.a8.2a18.aba.aba6.a2ca16.abdbabdba4.ac2bca15.a3bc3bca3.ac4ba.12a.a2c6
-		+bc2a2.ad3b2e12cec5bfg3bia2.adbe2c12beh8b3ik3.aec14behj5bmimima4.e16bed4b5na5.a17be2d2bmimima5.ad16bdea2d3ila7.a2d11i2d2a2.6a7.a2bed9lde2ba15.abd3a4e4a2ebda15.abda2.adea4.
-		+aebda15.abda2.adea4.aebda15.abda2.adea4.aebda15.abda2.adea4.aebda15.a2ea2.a2ea4.a3ea16.2a4.2a6.aea46.
-		wraith|28|28|24|13|a150F1E,b826AA1,c5F4981,d100C16,eEFE9AF,fD9C769,g42325C,h2F2443,i9893AF,jD5D1E4|idle:0;fly:0,1;strike:2
-		+37.6a20.2a6b2a17.a2b7cba15.ab11ca14.ab2c6d3ca13.ab3c5ded3ca12.ab3cdf3dfd3ca12.ab4c5d4cga12.a5c3d5c2ga11.a13cga11.ab13c2ga10.ab13cga11.a14cga11.a14c2ga10.a14cga11.ag13c2ga
-		+10.ag13c2ga11.ag12c2ga11.ag11c2ga12.ag2ca5ca2c2ga13.agc2a3c2ac2ga14.aga.agcga.aga16.a2.ag2a3.a21.a100./65.6a20.2a6b2a17.a2b7cba15.ab11ca14.ab2c6d3ca13.ab3c5ded3ca12.ab3cd
-		+f3dfd3ca12.ab4c5d4cga12.a5c3d5c2ga11.a13cga11.ab13c2ga10.ab13cga11.a14cga11.a14c2ga10.a14cga11.ag13c2ga10.ag13c2ga11.ag12c2ga11.ag12c2ga12.ag2ca5cac2ga13.agca.a3c2acga15.
-		+aga.agca2.aga16.a3.aga3.a22.a70./38.6a20.2a6b2a17.a2b7cba15.ab11ca14.ab2c6d3ca13.ab3c5ded3ca12.ab3cdf3dfd3ca12.ab4c5d4cga12.a5c3d5c2gh11.a7c4h2cghia9.ab6chb3c5hia8.ab6ch6
-		+c2jhia8.a7chg4c2jijh9.a8ch3g2hjhja9.a9c3h2ch2a10.ag13c2ga10.ag13c2ga11.ag12c2ga11.ag11c2ga12.ag2ca5ca2c2ga13.agc2a3c2ac2ga14.aga.agcga.aga16.a2.ag2a3.a21.a99.
-		zombie|34|34|31|13.5|a17191E,b37462E,c242E1E,d9AB978,e7FA964,f3E5A3E,g5A794D,h1A1418,iD87067,j381E26,kE7E2C9,l6FA098,m4A8382,n365C60,o294248,p6C719B,q494F7D,r343858,s262940,t494048,u3A3238,v2A242C,w1E1A20|idle:0;walk:1,2,3,4;windup:5;strike:6
-		+14.5a28.a5b2a25.a8ba23.ac3b5da23.ac2b2d4ea23.acb2e4fea23.acg2e2hih2ea22.a2g7ega23.ag2ejkjkja24.a2ge5ja23.2a2fgkjk2gf2a20.a3l7f2ega18.a2l2m11fa16.a2l2mf4lmfe3defa15.al3mf4
-		+m2n5ega15.a4mf3nof2g2ega2ga14.an4m4f.5ag2a15.a2n4m2na6.a18.a2n3mnoa25.onomnmoa25.a3on3oa25.apoq2oro26.a6srsa24.ap2qrs2rsa24.ap2qrs2rsa25.a2qrs2rsa25.a2qrs2rsa25.aq2rsr2sa
-		+25.aeg2agfa26.aeg2agfa25.a4ts3ua24.a4tvs2uwa24.4as4a50./14.5a28.a5b2a25.a8ba23.ac3b5da23.ac2b2d4ea23.acb2e4fea23.acg2e2hih2ea22.a2g7ega23.ag2ejkjkja24.a2ge5ja23.2a2fgkjk2
-		+gf2a20.a3l7f2ega18.a2l2m11fa16.a2l2mf4lmfe3defa15.al3mf4m2n5ega15.a4mf3nof2g2ega2ga14.an4m4f.5ag2a15.a2n4m2na6.a18.a2n3mnoa25.onomnmoa25.a3on3oa25.apoq2oro26.a6srsa24.a2p
-		+2qrsrsa25.ap2qr2sa27.a2q2rsa27.sp2qrs28.as2qra28.asega29.aseg2a28.as4ta27.as3tva28.a3sa52./48.5a28.a5b2a25.a8ba23.ac3b5da23.ac2b2d4ea23.acb2e4fea23.acg2e2hih2ea22.a2g7ega
-		+23.ag2ejkjkja24.a2ge5ja23.2a2fgkjk2gf2a20.a3l7f2ega18.a2l2m11fa16.a2l2mf4lmfe3defa15.al3mf4m2n5ega15.a4mf3nof2g2ega2ga14.an4m4f.5ag2a15.a2n4m2na6.a18.a2n3mnoa25.onomnmoa2
-		+5.a3on3oa25.spoq2orosa24.a6srsa24.ap2qrsqrsa25.a2qrsq2rsa24.a2qr2a2rsa24.aq2r2agfsa24.aega.agfa25.aeg2a3ua24.a4ts3uwa23.a4tvs3a25.5a54./14.5a28.a5b2a25.a8ba23.ac3b5da23.a
-		+c2b2d4ea23.acb2e4fea23.acg2e2hih2ea22.a2g7ega23.ag2ejkjkja24.a2ge5ja23.2a2fgkjk2gf2a20.a3l7f2ega18.a2l2m11fa16.a2l2mf4lmfe3defa15.al3mf4m2n5ega15.a4mf3nof2g2ega2ga14.an4m
-		+4f.5ag2a15.a2n4m2na6.a18.a2n3mnoa25.onomnmoa25.a3on3oa25.apoq2oro26.a6srsa24.ap2qrsq2rsa22.ap2qr2aq2rsa22.a2q2ra.a2r2sa20.ap2qra2.aq2rsa20.a2qra4.a2rsa20.aega5.agfa21.aeg
-		+a5.agf2a20.a3ta4.a4ua19.a3tva3.a3uwa20.4a5.4a48./48.5a28.a5b2a25.a8ba23.ac3b5da23.ac2b2d4ea23.acb2e4fea23.acg2e2hih2ea22.a2g7ega23.ag2ejkjkja24.a2ge5ja23.2a2fgkjk2gf2a20.
-		+a3l7f2ega18.a2l2m11fa16.a2l2mf4lmfe3defa15.al3mf4m2n5ega15.a4mf3nof2g2ega2ga14.an4m4f.5ag2a15.a2n4m2na6.a18.a2n3mnoa25.onomnmoa25.a3on3oa25.spoq2orosa24.a6srsa24.a2pqrs2r
-		+sa25.ap2qrsrsa26.a2qrsrsa26.aegr3sa26.aegsgfa26.a3tsgfa26.a3tvs2ua26.2a2s3uwa28.5a50./13.5a28.a5b2a25.a8ba23.ac3b5da23.ac2b2d4ea23.acb2e4fef.a21.acg2e2hih2e2fa20.a2g7e2f2
-		+a21.ag2ejkj2fdeaga20.f2gej2fd2e2ga20.2o4flm2eg2a20.a2l2f2lmnfga21.a2lf2l2mnf2a21.a2lmfm2nofa23.al3m4fna23.a7m2na23.an5m2na24.a2n4m2na25.a2n3mnoa25.anomnmoa26.3on4o26.aoq2
-		+oroa26.a6srsa24.ap2qrs2rsa24.ap2qrsrsa26.a2qr3sa26.a2qr2sa27.aq2rsa28.aegsa29.aegsa28.a4tsa27.a4tvsa27.2a3sa53./50.5a28.a5b2a25.a8ba23.ac3b5da23.ac2b2d4ea23.acb2e4fea23.a
-		+cg2e2hih2ea22.a2g7ega23.ag2ekjkjka24.a2ge5ja22.2af2ge5ja21.a3l2fgkjk2ga20.a2l3m6fa20.a2l3m7f21.al3mf2lm2f2ea.a18.a4mf3mne3fafa17.an3mf3no2e2d3f17.a2n3m3f2g3edfga17.a2n3mn
-		+ofa2g2e2ga16.aonomnmoa2.2agaga16.ap3on3oa4.a.a17.spqoq2osoa24.a6srsa25.ap2qr2sa27.a2q2rsa27.sp2qrs28.as2qra28.asega29.aseg2a28.as4ta27.as3tva28.a3sa52.
-		zombie_1|34|34|31|13.5|a17191E,b837451,c574D36,dC8B98B,eBCA97D,f5A5848,g81785D,h1A1418,iD6AA63,j381E26,kE7E2C9,lB1A17D,m9D8761,n6C5E49,o4B4238,p918778,q75694F,r504839,s37312C,t494048,u3A3238,v2A242C,w1E1A20|idle:0;walk:1,2,3,4;windup:5;strike:6
-		+14.5a28.a5b2a25.a8ba23.ac3b5da23.ac2b2d4ea23.acb2e4fea23.acg2e2hih2ea22.a2g7ega23.ag2ejkjkja24.a2ge5ja23.2a2fgkjk2gf2a20.a3l7f2ega18.a2l2m11fa16.a2l2mf4lmfe3defa15.al3mf4
-		+m2n5ega15.a4mf3nof2g2ega2ga14.an4m4f.5ag2a15.a2n4m2na6.a18.a2n3mnoa25.onomnmoa25.a3on3oa25.apoq2oro26.a6srsa24.ap2qrs2rsa24.ap2qrs2rsa25.a2qrs2rsa25.a2qrs2rsa25.aq2rsr2sa
-		+25.aeg2agfa26.aeg2agfa25.a4ts3ua24.a4tvs2uwa24.4as4a50./14.5a28.a5b2a25.a8ba23.ac3b5da23.ac2b2d4ea23.acb2e4fea23.acg2e2hih2ea22.a2g7ega23.ag2ejkjkja24.a2ge5ja23.2a2fgkjk2
-		+gf2a20.a3l7f2ega18.a2l2m11fa16.a2l2mf4lmfe3defa15.al3mf4m2n5ega15.a4mf3nof2g2ega2ga14.an4m4f.5ag2a15.a2n4m2na6.a18.a2n3mnoa25.onomnmoa25.a3on3oa25.apoq2oro26.a6srsa24.a2p
-		+2qrsrsa25.ap2qr2sa27.a2q2rsa27.sp2qrs28.as2qra28.asega29.aseg2a28.as4ta27.as3tva28.a3sa52./48.5a28.a5b2a25.a8ba23.ac3b5da23.ac2b2d4ea23.acb2e4fea23.acg2e2hih2ea22.a2g7ega
-		+23.ag2ejkjkja24.a2ge5ja23.2a2fgkjk2gf2a20.a3l7f2ega18.a2l2m11fa16.a2l2mf4lmfe3defa15.al3mf4m2n5ega15.a4mf3nof2g2ega2ga14.an4m4f.5ag2a15.a2n4m2na6.a18.a2n3mnoa25.onomnmoa2
-		+5.a3on3oa25.spoq2orosa24.a6srsa24.ap2qrsqrsa25.a2qrsq2rsa24.a2qr2a2rsa24.aq2r2agfsa24.aega.agfa25.aeg2a3ua24.a4ts3uwa23.a4tvs3a25.5a54./14.5a28.a5b2a25.a8ba23.ac3b5da23.a
-		+c2b2d4ea23.acb2e4fea23.acg2e2hih2ea22.a2g7ega23.ag2ejkjkja24.a2ge5ja23.2a2fgkjk2gf2a20.a3l7f2ega18.a2l2m11fa16.a2l2mf4lmfe3defa15.al3mf4m2n5ega15.a4mf3nof2g2ega2ga14.an4m
-		+4f.5ag2a15.a2n4m2na6.a18.a2n3mnoa25.onomnmoa25.a3on3oa25.apoq2oro26.a6srsa24.ap2qrsq2rsa22.ap2qr2aq2rsa22.a2q2ra.a2r2sa20.ap2qra2.aq2rsa20.a2qra4.a2rsa20.aega5.agfa21.aeg
-		+a5.agf2a20.a3ta4.a4ua19.a3tva3.a3uwa20.4a5.4a48./48.5a28.a5b2a25.a8ba23.ac3b5da23.ac2b2d4ea23.acb2e4fea23.acg2e2hih2ea22.a2g7ega23.ag2ejkjkja24.a2ge5ja23.2a2fgkjk2gf2a20.
-		+a3l7f2ega18.a2l2m11fa16.a2l2mf4lmfe3defa15.al3mf4m2n5ega15.a4mf3nof2g2ega2ga14.an4m4f.5ag2a15.a2n4m2na6.a18.a2n3mnoa25.onomnmoa25.a3on3oa25.spoq2orosa24.a6srsa24.a2pqrs2r
-		+sa25.ap2qrsrsa26.a2qrsrsa26.aegr3sa26.aegsgfa26.a3tsgfa26.a3tvs2ua26.2a2s3uwa28.5a50./13.5a28.a5b2a25.a8ba23.ac3b5da23.ac2b2d4ea23.acb2e4fef.a21.acg2e2hih2e2fa20.a2g7e2f2
-		+a21.ag2ejkj2fdeaga20.f2gej2fd2e2ga20.2o4flm2eg2a20.a2l2f2lmnfga21.a2lf2l2mnf2a21.a2lmfm2nofa23.al3m4fna23.a7m2na23.an5m2na24.a2n4m2na25.a2n3mnoa25.anomnmoa26.3on4o26.aoq2
-		+oroa26.a6srsa24.ap2qrs2rsa24.ap2qrsrsa26.a2qr3sa26.a2qr2sa27.aq2rsa28.aegsa29.aegsa28.a4tsa27.a4tvsa27.2a3sa53./50.5a28.a5b2a25.a8ba23.ac3b5da23.ac2b2d4ea23.acb2e4fea23.a
-		+cg2e2hih2ea22.a2g7ega23.ag2ekjkjka24.a2ge5ja22.2af2ge5ja21.a3l2fgkjk2ga20.a2l3m6fa20.a2l3m7f21.al3mf2lm2f2ea.a18.a4mf3mne3fafa17.an3mf3no2e2d3f17.a2n3m3f2g3edfga17.a2n3mn
-		+ofa2g2e2ga16.aonomnmoa2.2agaga16.ap3on3oa4.a.a17.spqoq2osoa24.a6srsa25.ap2qr2sa27.a2q2rsa27.sp2qrs28.as2qra28.asega29.aseg2a28.as4ta27.as3tva28.a3sa52.
-		zombie_2|34|34|31|13.5|a17191E,b324955,c213038,d93B6A4,e71A09D,f3A5357,g507272,h1A1418,i78D6DF,j381E26,kE7E2C9,l789179,m506D59,n394C44,o283636,p677186,q3F4C5F,r2C3544,s212633,t494048,u3A3238,v2A242C,w1E1A20|idle:0;walk:1,2,3,4;windup:5;strike:6
-		+14.5a28.a5b2a25.a8ba23.ac3b5da23.ac2b2d4ea23.acb2e4fea23.acg2e2hih2ea22.a2g7ega23.ag2ejkjkja24.a2ge5ja23.2a2fgkjk2gf2a20.a3l7f2ega18.a2l2m11fa16.a2l2mf4lmfe3defa15.al3mf4
-		+m2n5ega15.a4mf3nof2g2ega2ga14.an4m4f.5ag2a15.a2n4m2na6.a18.a2n3mnoa25.onomnmoa25.a3on3oa25.apoq2oro26.a6srsa24.ap2qrs2rsa24.ap2qrs2rsa25.a2qrs2rsa25.a2qrs2rsa25.aq2rsr2sa
-		+25.aeg2agfa26.aeg2agfa25.a4ts3ua24.a4tvs2uwa24.4as4a50./14.5a28.a5b2a25.a8ba23.ac3b5da23.ac2b2d4ea23.acb2e4fea23.acg2e2hih2ea22.a2g7ega23.ag2ejkjkja24.a2ge5ja23.2a2fgkjk2
-		+gf2a20.a3l7f2ega18.a2l2m11fa16.a2l2mf4lmfe3defa15.al3mf4m2n5ega15.a4mf3nof2g2ega2ga14.an4m4f.5ag2a15.a2n4m2na6.a18.a2n3mnoa25.onomnmoa25.a3on3oa25.apoq2oro26.a6srsa24.a2p
-		+2qrsrsa25.ap2qr2sa27.a2q2rsa27.sp2qrs28.as2qra28.asega29.aseg2a28.as4ta27.as3tva28.a3sa52./48.5a28.a5b2a25.a8ba23.ac3b5da23.ac2b2d4ea23.acb2e4fea23.acg2e2hih2ea22.a2g7ega
-		+23.ag2ejkjkja24.a2ge5ja23.2a2fgkjk2gf2a20.a3l7f2ega18.a2l2m11fa16.a2l2mf4lmfe3defa15.al3mf4m2n5ega15.a4mf3nof2g2ega2ga14.an4m4f.5ag2a15.a2n4m2na6.a18.a2n3mnoa25.onomnmoa2
-		+5.a3on3oa25.spoq2orosa24.a6srsa24.ap2qrsqrsa25.a2qrsq2rsa24.a2qr2a2rsa24.aq2r2agfsa24.aega.agfa25.aeg2a3ua24.a4ts3uwa23.a4tvs3a25.5a54./14.5a28.a5b2a25.a8ba23.ac3b5da23.a
-		+c2b2d4ea23.acb2e4fea23.acg2e2hih2ea22.a2g7ega23.ag2ejkjkja24.a2ge5ja23.2a2fgkjk2gf2a20.a3l7f2ega18.a2l2m11fa16.a2l2mf4lmfe3defa15.al3mf4m2n5ega15.a4mf3nof2g2ega2ga14.an4m
-		+4f.5ag2a15.a2n4m2na6.a18.a2n3mnoa25.onomnmoa25.a3on3oa25.apoq2oro26.a6srsa24.ap2qrsq2rsa22.ap2qr2aq2rsa22.a2q2ra.a2r2sa20.ap2qra2.aq2rsa20.a2qra4.a2rsa20.aega5.agfa21.aeg
-		+a5.agf2a20.a3ta4.a4ua19.a3tva3.a3uwa20.4a5.4a48./48.5a28.a5b2a25.a8ba23.ac3b5da23.ac2b2d4ea23.acb2e4fea23.acg2e2hih2ea22.a2g7ega23.ag2ejkjkja24.a2ge5ja23.2a2fgkjk2gf2a20.
-		+a3l7f2ega18.a2l2m11fa16.a2l2mf4lmfe3defa15.al3mf4m2n5ega15.a4mf3nof2g2ega2ga14.an4m4f.5ag2a15.a2n4m2na6.a18.a2n3mnoa25.onomnmoa25.a3on3oa25.spoq2orosa24.a6srsa24.a2pqrs2r
-		+sa25.ap2qrsrsa26.a2qrsrsa26.aegr3sa26.aegsgfa26.a3tsgfa26.a3tvs2ua26.2a2s3uwa28.5a50./13.5a28.a5b2a25.a8ba23.ac3b5da23.ac2b2d4ea23.acb2e4fef.a21.acg2e2hih2e2fa20.a2g7e2f2
-		+a21.ag2ejkj2fdeaga20.f2gej2fd2e2ga20.2o4flm2eg2a20.a2l2f2lmnfga21.a2lf2l2mnf2a21.a2lmfm2nofa23.al3m4fna23.a7m2na23.an5m2na24.a2n4m2na25.a2n3mnoa25.anomnmoa26.3on4o26.aoq2
-		+oroa26.a6srsa24.ap2qrs2rsa24.ap2qrsrsa26.a2qr3sa26.a2qr2sa27.aq2rsa28.aegsa29.aegsa28.a4tsa27.a4tvsa27.2a3sa53./50.5a28.a5b2a25.a8ba23.ac3b5da23.ac2b2d4ea23.acb2e4fea23.a
-		+cg2e2hih2ea22.a2g7ega23.ag2ekjkjka24.a2ge5ja22.2af2ge5ja21.a3l2fgkjk2ga20.a2l3m6fa20.a2l3m7f21.al3mf2lm2f2ea.a18.a4mf3mne3fafa17.an3mf3no2e2d3f17.a2n3m3f2g3edfga17.a2n3mn
-		+ofa2g2e2ga16.aonomnmoa2.2agaga16.ap3on3oa4.a.a17.spqoq2osoa24.a6srsa25.ap2qr2sa27.a2q2rsa27.sp2qrs28.as2qra28.asega29.aseg2a28.as4ta27.as3tva28.a3sa52.
-		// </art:creatures>
-		"""
-
-	/// A block is one line: "name|flips|colours|pixels" (16 x 16). The flips say how the land painter
-	/// may vary the block from place to place so a wall of it is not wallpaper: "h" mirrored, "hv" also
-	/// turned top to bottom, nothing for a block that must always be drawn as it is.
-	static let tileText: String = """
-		// <art:tiles> written by tools/art/build.py pack from tools/art/tiles: change the drawings, not this
-		amethyst|hv|a8D8D97,bA3A3AD,c604180,d777783,eD8BDF2,f5C5C69,gFFFFFF,h996EC6|4a3b12abcb4a2d7acec2a2d2fc4afceghcad2fcecb2ace4hcadceghc2adc3hc4achc4adchc2b4ac7ac3b4ad3a2d3a2b2ac2dfd2a2fd5acecfd3adfcd3aceghc5acec2ace4hc2baceghcbac3hc3b2achc3bachcab5ac2ab3acd13ad2fd4a
-		ashStone|hv|a493B47,b5B4A59,c3B2F3A,d2C212A|4a3b12a3b4a2c12a2c2dc4adc5ac2dc2ab2a2dc5a2c2a2b2acdc8a2b4ac3a2b13a3b4ac3a2c3a2b3a2cdc2a2dc6ac2dc3ac2dc5acdc5a2c6ac3a2b6ab6a3b5a3b5ab8ab3a2c13ac2dc4a
-		birchLeaves|h|a779556,b97B26B,c617C46,d50693C|3a2b13a2b7ac13a3c2a2b4ac5ac2a2b4a3c2.13ac3.9ab4ad.3ac4a2b9a3ca2b11ac10a2b9ac4ab9a3c8ac2.3ac9a2c3.5a2b7ac2.4ab5a2b11ac2ab2a
-		birchLog||a79736B,bFFFFFF,cE5E2D8,dBCB6AC,e3A3632|a2b10c2d2a2b2c3e5c2d2a2b10c2d2ab8c3e2d2a2b10c2d2a2b10c2d2ab3e8c2d2a2b10c2d2a2b5c2e3c2d2a2b10c2d2ab11c2d2a2bc2e7c2d2a2b8c2e2d2a2b10c2d2a2b5c3e2c2d2a2b10c2da
-		birchLogBlock||a79736B,bFFFFFF,cE5E2D8,dBCB6AC,e3A3632|a2b10c2d2a2b2c3e5c2d2a2b10c2d2ab8c3e2d2a2b10c2d2a2b10c2d2ab3e8c2d2a2b10c2d2a2b5c2e3c2d2a2b10c2d2ab11c2d2a2bc2e7c2d2a2b8c2e2d2a2b10c2d2a2b5c3e2c2d2a2b10c2da
-		brick||aB57363,b898583,cBE7E6A,d9E5F53,eA7685A,f824B44|7ab7cb7db7eb7fb7f17b3cb7ab4c3eb7db4e3fb7fb4f16b7ab7ab7db7db7fb7f17b3ab7cb4a3db7eb4d3fb7fb4f16b
-		chest||a291F18,bC5A374,cA9895F,d856A46,e898D96,fD3BD68,gECE0A2,h685137|81.14a.a14b2a14c2a14d2a6e2f6e2a6cfg6c2a14c2acd10cdc2a14c2a14ha.14a.
-		coal|hv|a8D8D97,bA3A3AD,c16161C,d777783,e4A4A55,f2A2A32,g5C5C69|4a3b12ab3c3a2d7ace2fc2d2gd4agdc5fcgd2cb2a2gdc4fcdcefc2adgda4c2ac2fc3ad3a2b4a2c4a2ca3b4ad3adcefc2b3a2dgd2agc3fc3ad3c3adgc2fc3ace2fc3a2d2c4ac5fc5ab4ac3fc5a3b4a3c7ab3a2d13ad2gd4a
-		copper|hv|a8D8D97,bA3A3AD,c7F573D,d777783,eDAA77C,fB9825C,g5C5C69|4a3b11a3cb4a2d5ac2efc2a2dg2c4ace3fcadgcefcb2ac5fcadc2fcb2adc3fc4a2cb4ad3c2b13a3ba3cd3a2d3a2bac2efcd2a2g2c4ace4fcadcefc3ac5fc2ac2fc4ac4fc3a2cab4a4cb5a3b5ab8a2c2a2d9acefcd2gd4a
-		crackedBrick||aA19080,b685A4E,cAB9989,d8A7969,e938272,f6D5E52|7ab7cb7db7eb7fb7f17b3cb7ab4c3eb7db4e3fb7fb4f16b7ab7ab7db7db7fb7f17b3ab7cb4a3db7eb4d3fb7fb4f16b
-		crystalOre|hv|a5E6676,b72798B,c458288,d4D5464,eE5FAFA,f90DDD7,g3C4250|4a3b12a2b2c3a2d8acefc2d2gd4agdacefcd2gd2cb2a2gce2fca2dcefc2adgc2fc4acefc3ada2c2b2ace2fc6a3b2ac2fc2a2da2c2b3ad2cd2a2gcefc3ad2gd3adgcefc3a2cd5ace2fc2acefca2b2ac2fcb2acefc3b3a2c3bce2fcb8abac2fc13a2cgd4a
-		deepRock|hv|a3E3945,b4E4857,c322D39,d25202C|4a3b12a3b4a2c12a2c2dc4adc5ac2dc2ab2a2dc5a2c2a2b2acdc8a2b4ac3a2b13a3b4ac3a2c3a2b3a2cdc2a2dc6ac2dc3ac2dc5acdc5a2c6ac3a2b6ab6a3b5a3b5ab8ab3a2c13ac2dc4a
-		diamond|hv|a8D8D97,bA3A3AD,c42828D,d777783,eB6EDF1,f5C5C69,gFFFFFF,h6AC4C9|4a3b12abcb4a2d7acec2a2d2fc4afceghcad2fcecb2ace4hcadceghc2adc3hc4achc4adchc2b4ac7ac3b4ad3a2d3a2b2ac2dfd2a2fd5acecfd3adfcd3aceghc5acec2ace4hc2baceghcbac3hc3b2achc3bachcab5ac2ab3acd13ad2fd4a
-		dirt|hv|a82614A,b70513E,c916F54,d5A4032,eA88A6A|6a2b10ac4a2b15ad3ac19a2b9a2b4abd4ae4a2b15ad7ac19a2b15abd2ac4a2b15abd22ae4ac22a2b5abd8a2b3a2b
-		dryGrass|h|aCEC581,bB3A966,c928751,d70673E,e82614A,f70513E,g5A4032,h916F54,iA88A6A|2ab4ab4ab3aba4ba4ba22bc5bc6bcb3c3b2c5b3cde2cbcde2c2bcdcd3e3c3ed2cd7ed6ed12e2f15efg2eh4e2f15efg22ei4eh22e2f5efg8e2f3e2f
-		emberOre|hv|a493B47,b5B4A59,c935940,d3B2F3A,eDFC178,fD28D5D,g2C212A|4a3b11a3cb4a2d5ac2efc2a2dg2c4ace3fcadgcefcb2ac5fcadc2fcb2adc3fc4a2cb4ad3c2b13a3ba3cd3a2d3a2bac2efcd2a2g2c4ace4fcadcefc3ac5fc2ac2fc4ac4fc3a2cab4a4cb5a3b5ab8a2c2a2d9acefcd2gd4a
-		flowerR||a1C1820,bC96763,cE1897E,dDFCB78,e5E9A51,f3E733F|54.2a13.a2ba11.ab2cba9.abc2dcba9.ab2cba11.a2ba13.aea.2a8.3ae2a2ea6.a2eaeaefa8.af3e2a10.afea13.aea13.aea7.
-		flowerY||a1C1820,bCDB25F,cE4D486,dBE9056,e5E9A51,f3E733F|54.2a13.a2ba11.ab2cba9.abc2dcba9.ab2cba11.a2ba13.aea.2a8.3ae2a2ea6.a2eaeaefa8.af3e2a10.afea13.aea13.aea7.
-		furnace||a777783,bA3A3AD,c5C5C69,d221D24,eC37756,fD49E61,gDCBF71,hEEE3A8,i8D8D97|.14a.a14b2ab12ac2aba10cac2abac8dcac2abac2d5edcac2abacdef2gfedcac2abacdeg2hgedcac2abac2de2fe2dcac2abac8dcac2aba10cac2ab12ac2abaididididi2ac2abaididididi2ac2a14ca.14a.
-		gold|hv|a8D8D97,bA3A3AD,c967B45,d777783,eFFFFFF,fE9DB96,gCFB764,h5C5C69|4a3b12a2cb4ade6acfgc2a2defe4ahc2gc2ad2he2ab2a2h2c4a2d2a2b2adhd5a2ca2b4ad3a2bcfgc5ae3a3bc3gc3aefe2a2b2ac2gcd2ahed6ad2cd3ad2hd2c3adhd5a2dcfgc2ad2a2cb4ac3gc3acfgc5a3c4ac2gc6ab3a2da2c10ad2hd4a
-		grass|h|a8BAF65,b66924F,c497341,d345734,e82614A,f70513E,g5A4032,h916F54,iA88A6A|2ab4ab4ab3aba4ba4ba22bc5bc6bcb3c3b2c5b3cde2cbcde2c2bcdcd3e3c3ed2cd7ed6ed12e2f15efg2eh4e2f15efg22ei4eh22e2f5efg8e2f3e2f
-		iron|hv|a8D8D97,bA3A3AD,c7B5B50,d777783,eDDBEA2,fBB967D,g5C5C69|4a3b10a4cb4a2d5ac2efc2a2d2g2c3ace3fcad2gcefc2agc3fc2adce2fc2adg3c4ac2fc4ad3a2b3a2c8a3b4ad3a2d2a4c2a2dgd2a2gdc2e2fcd2gd2cad2gce3fcdgdcefca2dac4fc2ac2fc5a4c3ab2c2a2ca3b5ab3acefcab3a2d5ac2fc4ad2gd4a
-		jungleGrass|h|a79C470,b519C57,c3A7547,d2A5537,e534234,f46372A,g372A21,h61513F,i6A5A48|2ab4ab4ab3aba4ba4ba22bc5bc6bcb3c3b2c5b3cde2cbcde2c2bcdcd3e3c3ed2cd7ed6ed12e2f15efg2eh4e2f15efg22ei4eh22e2f5efg8e2f3e2f
-		jungleLeaves|h|a43804D,b659B58,c366840,d2D5636|3a2b13a2b7ac13a3c2a2b4ac5ac2a2b4a3c2.13ac3.9ab4ad.3ac4a2b9a3ca2b11ac10a2b9ac4ab9a3c8ac2.3ac9a2c3.5a2b7ac2.4ab5a2b11ac2ab2a
-		jungleLog||a2F2819,b7E6E4A,c625438,d463B26,e493F2A|a2b2cd3cd2c3e2a2b2cd6cd2e2ab7cd2cd2e2a2bcd4cd3c2e2a2bcd8c2e2a2bcd2cd4cd2e2ab5cd4cd2e2a2b4cd2cd2c2e2a2b2cd4cd2c2e2a2b2cd7c2e2ab3cd2cd3cd2e2a2b5cd3cd2e2a2bcd3cd4c2e2a2bcd6cdc2e2ab5cd3cdc2e2a2b4cd5c2ea
-		jungleLogBlock||a2F2819,b7E6E4A,c625438,d463B26,e493F2A|a2b2cd3cd2c3e2a2b2cd6cd2e2ab7cd2cd2e2a2bcd4cd3c2e2a2bcd8c2e2a2bcd2cd4cd2e2ab5cd4cd2e2a2b4cd2cd2c2e2a2b2cd4cd2c2e2a2b2cd7c2e2ab3cd2cd3cd2e2a2b5cd3cd2e2a2bcd3cd4c2e2a2bcd6cdc2e2ab5cd3cdc2e2a2b4cd5c2ea
-		leaves|h|a557F47,b739C59,c42663B,d365733|3a2b13a2b7ac13a3c2a2b4ac5ac2a2b4a3c2.13ac3.9ab4ad.3ac4a2b9a3ca2b11ac10a2b9ac4ab9a3c8ac2.3ac9a2c3.5a2b7ac2.4ab5a2b11ac2ab2a
-		log||a3C2C21,b907253,c735840,d58412F,e5A4332|a2b2cd3cd2c3e2a2b2cd6cd2e2ab7cd2cd2e2a2bcd4cd3c2e2a2bcd8c2e2a2bcd2cd4cd2e2ab5cd4cd2e2a2b4cd2cd2c2e2a2b2cd4cd2c2e2a2b2cd7c2e2ab3cd2cd3cd2e2a2b5cd3cd2e2a2bcd3cd4c2e2a2bcd6cdc2e2ab5cd3cdc2e2a2b4cd5c2ea
-		logBlock||a3C2C21,b907253,c735840,d58412F,e5A4332|a2b2cd3cd2c3e2a2b2cd6cd2e2ab7cd2cd2e2a2bcd4cd3c2e2a2bcd8c2e2a2bcd2cd4cd2e2ab5cd4cd2e2a2b4cd2cd2c2e2a2b2cd4cd2c2e2a2b2cd7c2e2ab3cd2cd3cd2e2a2b5cd3cd2e2a2bcd3cd4c2e2a2bcd6cdc2e2ab5cd3cdc2e2a2b4cd5c2ea
-		mossBrick||a8BA174,b4D5C41,c96AC7E,d73885F,e7D9269,f576B4A|7ab7cb7db7eb7fb7f17b3cb7ab4c3eb7db4e3fb7fb4f16b7ab7ab7db7db7fb7f17b3ab7cb4a3db7eb4d3fb7fb4f16b
-		mossGrass|h|a96A765,b75884D,c586A3B,d3E4D2D,e534234,f46372A,g372A21,h61513F,i6A5A48|2ab4ab4ab3aba4ba4ba22bc5bc6bcb3c3b2c5b3cde2cbcde2c2bcdcd3e3c3ed2cd7ed6ed12e2f15efg2eh4e2f15efg22ei4eh22e2f5efg8e2f3e2f
-		mud|hv|a534234,b46372A,c61513F,d372A21,e6A5A48|6a2b10ac4a2b15ad3ac19a2b9a2b4abd4ae4a2b15ad7ac19a2b15abd2ac4a2b15abd22ae4ac22a2b5abd8a2b3a2b
-		mythril|hv|a8D8D97,bA3A3AD,c534B98,d777783,eB5ADEF,f7F76DE,g5C5C69|4a3b12a2b2c3a2d8acefc2d2gd4agdacefcd2gd2cb2a2gce2fca2dcefc2adgc2fc4acefc3ada2c2b2ace2fc6a3b2ac2fc2a2da2c2b3ad2cd2a2gcefc3ad2gd3adgcefc3a2cd5ace2fc2acefca2b2ac2fcb2acefc3b3a2c3bce2fcb8abac2fc13a2cgd4a
-		palmLog||a5A4733,bB2966E,c957B58,d776043,e7D6549|a2b2cd3cd2c3e2a2b2cd6cd2e2ab7cd2cd2e2a2bcd4cd3c2e2a2bcd8c2e2a2bcd2cd4cd2e2ab5cd4cd2e2a2b4cd2cd2c2e2a2b2cd4cd2c2e2a2b2cd7c2e2ab3cd2cd3cd2e2a2b5cd3cd2e2a2bcd3cd4c2e2a2bcd6cdc2e2ab5cd3cdc2e2a2b4cd5c2ea
-		palmLogBlock||a5A4733,bB2966E,c957B58,d776043,e7D6549|a2b2cd3cd2c3e2a2b2cd6cd2e2ab7cd2cd2e2a2bcd4cd3c2e2a2bcd8c2e2a2bcd2cd4cd2e2ab5cd4cd2e2a2b4cd2cd2c2e2a2b2cd4cd2c2e2a2b2cd7c2e2ab3cd2cd3cd2e2a2b5cd3cd2e2a2bcd3cd4c2e2a2bcd6cdc2e2ab5cd3cdc2e2a2b4cd5c2ea
-		pineLeaves|h|a3B6554,b558469,c305345,d27463A|3a2b13a2b7ac13a3c2a2b4ac5ac2a2b4a3c2.13ac3.9ab4ad.3ac4a2b9a3ca2b11ac10a2b9ac4ab9a3c8ac2.3ac9a2c3.5a2b7ac2.4ab5a2b11ac2ab2a
-		planks||aC7A87D,b765C40,cB19068,d56402D,e9C7E58|5ab10a4cdb4c3e4c3ecb10c16b12ab3a3c3e5cdb11c2e2cb3c16b2ab13acdb4c3e8cb9c3ec16b9ab6a2c3e3cdb15cb2c3ec16b
-		saltpeter|hv|a8D8D97,bA3A3AD,c88857B,d777783,eFFFFFF,fD9D5CA,g5C5C69|4a3b11a5c3a2d5ac2e4fcd2gd4ag6cd2gd2cb2a2gd5ad2cefc2adgd4a2c2e2fc3ad3abce4f2c6a3b5c3a2d3a2b3a2dgd2a2gd4c2ad2gd3adgc2e2f2cdgd5ace6fc3a2c3a7c2a2cefc4a3b3ace3fc5ab3a2d4c9ad2gd4a
-		sand|hv|aD6C590,bE5D7A7,cAF9869,dC6B27C|18a5b7ac4a4d3a3b5ac7a3d19a3b5ac4a3b3d10a3d6a4b7ac4a4d2ac22a3b13a3d5ac14a4b2ac9a4d6a3b7ac5a3d9a
-		sandstone|hv|aC3AD7C,bD3BF8F,cB09A6B,d998459|4a3b12a3b4a2c12a2c2dc4adc5ac2dc2ab2a2dc5a2c2a2b2acdc8a2b4ac3a2b13a3b4ac3a2c3a2b3a2cdc2a2dc6ac2dc3ac2dc5acdc5a2c6ac3a2b6ab6a3b5a3b5ab8ab3a2c13ac2dc4a
-		silver|hv|a8D8D97,bA3A3AD,c777783,d6A7381,eFFFFFF,fC2C9D5,g5C5C69|4a3b12a3b4ac2d11ac2defd3agc4a2de2fdab2a2gca2de2fd2a2b2acgcde2fd3a2b4acadfdb13ad2b4a2d2a2c3a2b3a2ded2a2gc5a2defd3acg2d2a2de2fd5adef2de2fd3a2b2adf2e2fd4a3b3a5d5ab8ab3a2c13ac2gc4a
-		slate|hv|a5E6676,b72798B,c4D5464,d3C4250|4a3b12a3b4a2c12a2c2dc4adc5ac2dc2ab2a2dc5a2c2a2b2acdc8a2b4ac3a2b13a3b4ac3a2c3a2b3a2cdc2a2dc6ac2dc3ac2dc5acdc5a2c6ac3a2b6ab6a3b5a3b5ab8ab3a2c13ac2dc4a
-		snow|hv|aF0F6FC,bFFFFFF,cC1D1E6,dD8E4F3|18a5b7ac4a4d3a3b5ac7a3d19a3b5ac4a3b3d10a3d6a4b7ac4a4d2ac22a3b13a3d5ac14a4b2ac9a4d6a3b7ac5a3d9a
-		stone|hv|a8D8D97,bA3A3AD,c777783,d5C5C69|4a3b12a3b4a2c12a2c2dc4adc5ac2dc2ab2a2dc5a2c2a2b2acdc8a2b4ac3a2b13a3b4ac3a2c3a2b3a2cdc2a2dc6ac2dc3ac2dc5acdc5a2c6ac3a2b6ab6a3b5a3b5ab8ab3a2c13ac2dc4a
-		tallGrass||a8BAF65,b66924F,c497341|114.a9.a5.b3.a5.ba3.ab2.ab2.a2.ab3.ab2.ab.ab.a2b.2a2ba.2b.ab.a2baba3ba2ba2ba21bc2bc2bc3bc2bc2b16c
-		tin|hv|a8D8D97,bA3A3AD,c7D8691,d777783,eF1F5F8,fC6CFD7,g5C5C69|4a3b11a3cb4a2d5ac2efc2a2dg2c4ace3fcadgcefcb2ac5fcadc2fcb2adc3fc4a2cb4ad3c2b13a3ba3cd3a2d3a2bac2efcd2a2g2c4ace4fcadcefc3ac5fc2ac2fc4ac4fc3a2cab4a4cb5a3b5ab8a2c2a2d9acefcd2gd4a
-		torch||a1C1820,bE2CD81,cEEE3A8,dFFFFFF,eD49E61,f8E6E4D,g684E37|23.a14.aba12.abcba11.abdcba9.aec2dcea8.aecd2cea9.ae2cea11.a2ea12.afga12.afga12.afga12.afga12.afga12.afga12.afga6.
-		voidOre|hv|a493B47,b5B4A59,c65418B,d3B2F3A,eE0B2F0,fAB6FDB,g2C212A|4a3b12a2b2c3a2d8acefc2d2gd4agdacefcd2gd2cb2a2gce2fca2dcefc2adgc2fc4acefc3ada2c2b2ace2fc6a3b2ac2fc2a2da2c2b3ad2cd2a2gcefc3ad2gd3adgcefc3a2cd5ace2fc2acefca2b2ac2fcb2acefc3b3a2c3bce2fcb8abac2fc13a2cgd4a
-		workbench||a98A0AD,bCED4DD,c898D96,dC2C8D1,e9C7E58,fC7A87D,gB19068,h765C40|52.ab5.3c5.a2ba4.cdc6.2e6.e3.16f16g16h.eh10.eh2.eh.8e.eh2.eh.8h.eh2.eh10.eh2.eh10.eh2.eh10.eh2.eh10.eh.
-		// </art:tiles>
-		"""
-
-	/// Colours of a picture: "aF0A0B0,b1E1418" gives each letter its colour
-	static func palette(_ s: Substring) -> [UInt8: UInt32] {
-		var out: [UInt8: UInt32] = [:]
-		for e in s.split(separator: ",") {
-			guard let k = e.utf8.first, let v = UInt32(e.dropFirst(), radix: 16) else { continue }
-			out[k] = v
-		}
-		return out
-	}
-
-	/// Unpacks one picture of w x h pixels
-	static func unpack(_ s: Substring, _ w: Int, _ h: Int, _ pal: [UInt8: UInt32]) -> PixelBuf {
-		var b = PixelBuf(w: w, h: h)
-		var lut: [UInt32] = [UInt32](repeating: 0, count: 128)
-		for (k, v) in pal where k < 128 { lut[Int(k)] = 0xFF000000 | v }
-		let n: Int = w * h
-		var i: Int = 0
-		var run: Int = 0
-		for c in s.utf8 {
-			if c >= 48 && c <= 57 {
-				run = run * 10 + Int(c) - 48
-				continue
-			}
-			let count: Int = max(1, run)
-			run = 0
-			let v: UInt32 = c == 46 ? 0 : lut[Int(c & 127)]
-			var k: Int = 0
-			while k < count && i < n {
-				b.px[i] = v
-				i += 1
-				k += 1
-			}
-		}
-		return b
-	}
-}
-
-/// One creature's drawing as ArtSheet keeps it (its frames are unpacked when first asked for)
-struct SheetArt {
-	var w: Int
-	var h: Int
-	var foot: Int
-	var cx: Double
-	var pal: [UInt8: UInt32]
-	var poses: [String: [Int]]
-	var packed: [Substring]
-}
-
-enum CreatureSheet {
-	static let arts: [String: SheetArt] = parse(ArtSheet.creatureText)
-
-	static func parse(_ s: String) -> [String: SheetArt] {
-		var out: [String: SheetArt] = [:]
-		var name: String = ""
-		var cur: SheetArt? = nil
-		var body: String = ""
-		func close() {
-			guard var a = cur else { return }
-			a.packed = Substring(body).split(separator: "/")
-			out[name] = a
-			cur = nil
-			body = ""
-		}
-		for raw in s.split(separator: "\n") {
-			let line: Substring = raw.drop(while: { (c: Character) -> Bool in c == "\t" || c == " " })
-			if line.isEmpty || line.hasPrefix("//") { continue }
-			if line.hasPrefix("+") {
-				body.append(contentsOf: line.dropFirst())
-				continue
-			}
-			close()
-			let f: [Substring] = line.split(separator: "|", omittingEmptySubsequences: false)
-			guard f.count >= 7, let w = Int(f[1]), let h = Int(f[2]), let foot = Int(f[3]), let cx = Double(f[4]) else { continue }
-			var poses: [String: [Int]] = [:]
-			for e in f[6].split(separator: ";") {
-				let kv: [Substring] = e.split(separator: ":")
-				if kv.count != 2 { continue }
-				poses[String(kv[0])] = kv[1].split(separator: ",").compactMap { Int($0) }
-			}
-			name = String(f[0])
-			cur = SheetArt(w: w, h: h, foot: foot, cx: cx, pal: ArtSheet.palette(f[5]), poses: poses, packed: [])
-		}
-		close()
-		return out
-	}
-
-	static func has(_ name: String) -> Bool { return arts[name] != nil }
-
-	/// A drawing's frames, unpacked
-	static func frames(_ name: String) -> [PixelBuf] {
-		guard let a = arts[name] else { return [] }
-		return a.packed.map { ArtSheet.unpack($0, a.w, a.h, a.pal) }
-	}
-
-	/// How a drawing's frames are used: its poses by name
-	static func anim(_ a: SheetArt) -> CreatureAnim {
-		var an = CreatureAnim()
-		an.walk = a.poses["walk"] ?? []
-		if let x = a.poses["alt"]?.first { an.idleAlt = x }
-		if let x = a.poses["strike"]?.first { an.attack = x }
-		if let x = a.poses["hop"]?.first {
-			an.hop = true
-			an.hopFrame = x
-		}
-		if let c = a.poses["fly"] { an.cycle = c }
-		for (k, v) in a.poses {
-			if let f0 = v.first { an.poses[k] = f0 }
-		}
-		return an
-	}
-
-	/// A creature's look from its drawing (nil when it has not been drawn by hand yet)
-	static func look(_ name: String) -> CreatureLook? {
-		guard let a = arts[name], !a.packed.isEmpty else { return nil }
-		return CreatureLook(frames: frames(name), anim: anim(a), scale: fineScale, foot: a.foot + 1, cx: a.cx, fine: true)
-	}
-}
-
-/// The hand-drawn blocks, by tile number
-enum TileSheet {
-	static let parsed: ([UInt8: PixelBuf], [UInt8: Int]) = parse(ArtSheet.tileText)
-	static var bufs: [UInt8: PixelBuf] { return parsed.0 }
-	/// how each may be varied from place to place: bit 1 mirrored, bit 2 turned top to bottom
-	static var flips: [UInt8: Int] { return parsed.1 }
-
-	static func parse(_ s: String) -> ([UInt8: PixelBuf], [UInt8: Int]) {
-		var byName: [String: Tile] = [:]
-		for t in Tile.allCases { byName[String(describing: t)] = t }
-		var out: [UInt8: PixelBuf] = [:]
-		var fl: [UInt8: Int] = [:]
-		for raw in s.split(separator: "\n") {
-			let line: Substring = raw.drop(while: { (c: Character) -> Bool in c == "\t" || c == " " })
-			if line.isEmpty || line.hasPrefix("//") { continue }
-			let f: [Substring] = line.split(separator: "|", omittingEmptySubsequences: false)
-			guard f.count >= 4, let t = byName[String(f[0])] else { continue }
-			out[t.rawValue] = ArtSheet.unpack(f[3], tileArtPx, tileArtPx, ArtSheet.palette(f[2]))
-			fl[t.rawValue] = (f[1].contains("h") ? 1 : 0) | (f[1].contains("v") ? 2 : 0)
-		}
-		return (out, fl)
-	}
-}
-
-// ===== p13a_mobdefs =====
-
-// MARK: - Mob definitions
-
-enum MobKind: Int, Codable, CaseIterable {
-	case pig, cow, sheep, chicken, crow, giraffe, frog, fish
-	case elephant, bear, grizzly, polarBear, tiger, wolf, cat
-	case zombie, skeleton, slime, bat, scorpion, wraith
-	case villager, pirate, pirateGunner, pirateCaptain
-	case imp, emberSlime, cinderBat
-	case bearBoss, rex
-	/// appended, so saved creature kinds keep their numbers
-	case crawler, golem, archer, sentinel, mimic, warden
-	/// a creature from a player's mod (which one: `Mob.cslot`, see ModRuntime)
-	case custom
-
-	/// wild hunters that roam by day as well: they have their own small number in the spawner, so
-	/// they never use up the night's monsters
-	var isPredator: Bool { return self == .grizzly || self == .polarBear || self == .tiger || self == .scorpion }
-
-	/// monsters run by `think` (senses, memory, chase, search, return) around their own attacks
-	var thinks: Bool {
-		switch self {
-		case .zombie, .skeleton, .pirate, .pirateCaptain, .pirateGunner, .imp, .slime, .emberSlime,
-			 .bat, .cinderBat, .wraith, .crawler, .golem, .archer, .custom: return true
-		default: return false
-		}
-	}
-}
-
-enum Behavior: Int {
-	case passive, skittish, defensive, hostile, ranged, flyer, swimmer, boss
-}
-
-struct MobDef {
-	var name: String
-	var w: Double
-	var h: Double
-	var hp: Double
-	var speed: Double
-	var dmg: Double
-	var behavior: Behavior
-	var flying: Bool = false
-	var aggro: Double = 14
-	var jump: Double = 12
-	var hostile: Bool = false
-}
-
-/// Mob definitions are built once into a table: building a MobDef (it holds a String) on every
-/// lookup was one of the hottest calls in the AI loop in debug builds.
-var mobDefTable: [MobDef] = MobKind.allCases.map { makeMobDef($0) }
-
-@inline(__always) func mobDef(_ k: MobKind) -> MobDef { return mobDefTable[k.rawValue] }
-
-func makeMobDef(_ k: MobKind) -> MobDef {
-	switch k {
-	case .pig: return MobDef(name: "Pig", w: 0.9, h: 0.7, hp: 10, speed: 1.6, dmg: 0, behavior: .passive)
-	case .cow: return MobDef(name: "Cow", w: 1.3, h: 1.1, hp: 14, speed: 1.4, dmg: 0, behavior: .passive)
-	case .sheep: return MobDef(name: "Sheep", w: 1.1, h: 0.95, hp: 12, speed: 1.5, dmg: 0, behavior: .passive)
-	case .chicken: return MobDef(name: "Chicken", w: 0.6, h: 0.6, hp: 5, speed: 1.8, dmg: 0, behavior: .skittish)
-	case .crow: return MobDef(name: "Crow", w: 0.6, h: 0.5, hp: 4, speed: 3.6, dmg: 0, behavior: .flyer, flying: true)
-	case .giraffe: return MobDef(name: "Giraffe", w: 1.6, h: 3.2, hp: 30, speed: 3.4, dmg: 0, behavior: .skittish)
-	case .frog: return MobDef(name: "Frog", w: 0.5, h: 0.4, hp: 3, speed: 2.0, dmg: 0, behavior: .skittish, jump: 9)
-	case .fish: return MobDef(name: "Fish", w: 0.7, h: 0.4, hp: 3, speed: 2.2, dmg: 0, behavior: .swimmer)
-	case .elephant: return MobDef(name: "Elephant", w: 2.8, h: 2.4, hp: 80, speed: 2.4, dmg: 7, behavior: .defensive, aggro: 10)
-	case .bear: return MobDef(name: "Brown Bear", w: 1.8, h: 1.2, hp: 42, speed: 2.8, dmg: 5, behavior: .defensive, aggro: 11)
-	case .grizzly: return MobDef(name: "Grizzly Bear", w: 2.0, h: 1.4, hp: 70, speed: 3.4, dmg: 7, behavior: .hostile, aggro: 12, hostile: true)
-	case .polarBear: return MobDef(name: "Polar Bear", w: 2.0, h: 1.4, hp: 64, speed: 3.2, dmg: 7, behavior: .hostile, aggro: 12, hostile: true)
-	case .tiger: return MobDef(name: "Tiger", w: 1.7, h: 1.0, hp: 48, speed: 4.6, dmg: 6, behavior: .hostile, aggro: 14, jump: 15, hostile: true)
-	case .wolf: return MobDef(name: "Wolf", w: 1.2, h: 0.9, hp: 24, speed: 4.0, dmg: 3, behavior: .defensive, aggro: 11, jump: 14)
-	case .cat: return MobDef(name: "Cat", w: 0.7, h: 0.6, hp: 10, speed: 3.0, dmg: 0, behavior: .skittish, jump: 13)
-	case .zombie: return MobDef(name: "Zombie", w: 0.7, h: 1.7, hp: 30, speed: 1.8, dmg: 4, behavior: .hostile, aggro: 16, hostile: true)
-	case .skeleton: return MobDef(name: "Skeleton Knight", w: 0.7, h: 1.8, hp: 38, speed: 2.1, dmg: 5, behavior: .hostile, aggro: 15, hostile: true)
-	case .slime: return MobDef(name: "Slime", w: 0.9, h: 0.7, hp: 18, speed: 2.6, dmg: 3, behavior: .hostile, aggro: 12, jump: 11, hostile: true)
-	case .bat: return MobDef(name: "Cave Bat", w: 0.6, h: 0.4, hp: 6, speed: 4.2, dmg: 2, behavior: .flyer, flying: true, aggro: 12, hostile: true)
-	case .scorpion: return MobDef(name: "Scorpion", w: 1.2, h: 0.6, hp: 26, speed: 2.6, dmg: 4, behavior: .hostile, aggro: 11, hostile: true)
-	case .wraith: return MobDef(name: "Wraith", w: 0.9, h: 1.5, hp: 44, speed: 2.8, dmg: 6, behavior: .flyer, flying: true, aggro: 18, hostile: true)
-	case .villager: return MobDef(name: "Villager", w: 0.7, h: 1.7, hp: 20, speed: 1.4, dmg: 0, behavior: .passive)  // retired: never spawns
-	case .pirate: return MobDef(name: "Pirate", w: 0.7, h: 1.8, hp: 48, speed: 2.5, dmg: 6, behavior: .hostile, aggro: 20, hostile: true)
-	case .pirateGunner: return MobDef(name: "Pirate Gunner", w: 0.7, h: 1.8, hp: 40, speed: 1.9, dmg: 5, behavior: .ranged, aggro: 20, hostile: true)
-	case .pirateCaptain: return MobDef(name: "Pirate Captain", w: 0.8, h: 1.9, hp: 140, speed: 2.5, dmg: 8, behavior: .hostile, aggro: 22, hostile: true)
-	case .imp: return MobDef(name: "Umbral Imp", w: 0.7, h: 1.5, hp: 34, speed: 2.6, dmg: 5, behavior: .ranged, aggro: 18, hostile: true)
-	case .emberSlime: return MobDef(name: "Ember Slime", w: 1.0, h: 0.8, hp: 36, speed: 2.8, dmg: 5, behavior: .hostile, aggro: 12, jump: 12, hostile: true)
-	case .cinderBat: return MobDef(name: "Cinder Bat", w: 0.6, h: 0.4, hp: 14, speed: 4.6, dmg: 4, behavior: .flyer, flying: true, aggro: 14, hostile: true)
-	case .bearBoss: return MobDef(name: "Ursavor, Warden of the Gate", w: 5.2, h: 3.9, hp: 900, speed: 3.0, dmg: 10, behavior: .boss, aggro: 60, hostile: true)
-	case .rex: return MobDef(name: "Tyrannax the Bonecrown", w: 7.0, h: 4.4, hp: 1400, speed: 3.4, dmg: 13, behavior: .boss, aggro: 60, hostile: true)
-	case .crawler: return MobDef(name: "Cave Crawler", w: 1.1, h: 0.6, hp: 22, speed: 4.4, dmg: 4, behavior: .hostile, aggro: 13, jump: 11.5, hostile: true)
-	case .golem: return MobDef(name: "Stone Golem", w: 1.5, h: 2.2, hp: 150, speed: 1.15, dmg: 8, behavior: .hostile, aggro: 12, jump: 9, hostile: true)
-	case .archer: return MobDef(name: "Bow Zombie", w: 0.7, h: 1.7, hp: 30, speed: 2.3, dmg: 4, behavior: .ranged, aggro: 20, hostile: true)
-	case .sentinel: return MobDef(name: "Crystal Sentinel", w: 1.4, h: 2.0, hp: 320, speed: 3.0, dmg: 7, behavior: .boss, flying: true, aggro: 30, hostile: true)
-	case .mimic: return MobDef(name: "Mimic", w: 1.0, h: 0.95, hp: 90, speed: 3.2, dmg: 7, behavior: .hostile, aggro: 16, jump: 12, hostile: true)
-	case .warden: return MobDef(name: "The Hollow Warden", w: 3.0, h: 4.6, hp: 2200, speed: 2.6, dmg: 11, behavior: .boss, flying: true, aggro: 60, hostile: true)
-	case .custom: return MobDef(name: "Custom Creature", w: 0.8, h: 1.6, hp: 20, speed: 2, dmg: 4, behavior: .hostile, hostile: true)
-	}
-}
-
-// MARK: - Drops
-
-func mobDrops(_ k: MobKind, _ rng: inout RNG, _ sheared: Bool) -> [Stack] {
-	var out: [Stack] = []
-	func add(_ it: Item, _ lo: Int, _ hi: Int, _ p: Double) {
-		if rng.double() < p { out.append(Stack(item: it, count: lo + rng.int(max(1, hi - lo + 1)))) }
-	}
-	switch k {
-	case .pig: add(.food(.rawMeat), 1, 3, 1.0)
-	case .cow: add(.food(.rawMeat), 2, 4, 1.0); add(.mat(.leather), 1, 2, 0.8)
-	case .sheep: add(.food(.rawMeat), 1, 2, 1.0); if !sheared { add(.mat(.wool), 1, 3, 0.9) }
-	case .chicken: add(.food(.rawMeat), 1, 1, 0.9); add(.mat(.feather), 1, 3, 0.9)
-	case .crow: add(.mat(.feather), 1, 2, 0.8)
-	case .giraffe: add(.food(.rawMeat), 2, 4, 1.0); add(.mat(.leather), 2, 4, 0.9)
-	case .frog: add(.mat(.string), 0, 1, 0.1)
-	case .fish: add(.food(.rawFish), 1, 1, 1.0)
-	case .elephant: add(.food(.rawMeat), 4, 7, 1.0); add(.mat(.tusk), 1, 2, 0.8); add(.mat(.leather), 2, 4, 0.9)
-	case .bear: add(.food(.rawMeat), 2, 4, 1.0); add(.mat(.fur), 1, 3, 0.9); add(.mat(.claw), 1, 1, 0.3)
-	case .grizzly: add(.food(.rawMeat), 3, 5, 1.0); add(.mat(.fur), 2, 4, 1.0); add(.mat(.claw), 1, 2, 0.6)
-	case .polarBear: add(.food(.rawMeat), 3, 5, 1.0); add(.mat(.fur), 2, 4, 1.0); add(.mat(.claw), 1, 2, 0.5)
-	case .tiger: add(.food(.rawMeat), 2, 4, 1.0); add(.mat(.leather), 1, 3, 0.9); add(.mat(.claw), 1, 2, 0.6)
-	case .wolf: add(.food(.rawMeat), 1, 2, 0.9); add(.mat(.fur), 1, 2, 0.6); add(.mat(.bone), 1, 2, 0.4)
-	case .cat: add(.mat(.string), 1, 2, 0.5)
-	case .zombie: add(.food(.rawMeat), 0, 1, 0.3); add(.mat(.string), 0, 2, 0.3); add(.food(.carrot), 1, 1, 0.08); add(.mat(.ironBar), 1, 1, 0.04)
-	case .skeleton: add(.mat(.bone), 1, 3, 0.9); add(.ammo(.arrow), 2, 6, 0.5); add(.sword(.stone), 1, 1, 0.06); add(.mat(.coal), 1, 3, 0.4)
-	case .slime: add(.mat(.string), 1, 2, 0.4); add(.block(.torch), 1, 3, 0.3)
-	case .bat: add(.mat(.string), 0, 1, 0.2)
-	case .scorpion: add(.mat(.claw), 1, 1, 0.5); add(.food(.rawMeat), 1, 1, 0.5)
-	case .wraith: add(.mat(.mythrilOre), 1, 2, 0.4); add(.mat(.goldBar), 1, 2, 0.3)
-	case .villager: break
-	case .pirate: add(.mat(.goldBar), 1, 2, 0.5); add(.ammo(.bullet), 2, 6, 0.4); add(.mat(.gunpowder), 1, 3, 0.5); add(.sword(.iron), 1, 1, 0.1); add(.gadget(.bomb), 1, 2, 0.15)
-	case .pirateGunner: add(.mat(.goldBar), 1, 2, 0.5); add(.ammo(.bullet), 3, 8, 0.7); add(.mat(.gunpowder), 1, 4, 0.7); add(.gun(.pistol), 1, 1, 0.12)
-	case .pirateCaptain: add(.mat(.goldBar), 4, 8, 1.0); add(.mat(.diamond), 1, 3, 0.8); add(.gun(.rifle), 1, 1, 0.4); add(.ammo(.bullet), 8, 16, 1.0)
-	case .imp: add(.mat(.emberOre), 1, 2, 0.5); add(.mat(.coal), 2, 4, 0.6)
-	case .emberSlime: add(.mat(.emberOre), 1, 3, 0.6); add(.block(.torch), 2, 5, 0.5)
-	case .cinderBat: add(.mat(.emberOre), 0, 1, 0.3)
-	case .bearBoss:
-		add(.mat(.fur), 6, 10, 1.0); add(.mat(.claw), 3, 5, 1.0); add(.mat(.goldBar), 6, 12, 1.0)
-		add(.mat(.diamond), 3, 6, 1.0); add(.food(.cookedMeat), 6, 10, 1.0)
-		add(.armor(.chest, .gold), 1, 1, 0.5)
-	case .rex:
-		add(.mat(.bone), 10, 20, 1.0); add(.mat(.tusk), 2, 4, 1.0); add(.mat(.goldBar), 6, 12, 1.0)
-		add(.mat(.mythrilBar), 2, 5, 1.0); add(.food(.cookedMeat), 6, 10, 1.0)
-	case .crawler: add(.mat(.string), 1, 3, 0.8); add(.mat(.claw), 1, 1, 0.25)
-	case .golem:
-		add(.block(.stone), 4, 8, 1.0); add(.mat(.ironOre), 1, 3, 0.6); add(.mat(.crystalShard), 1, 2, 0.35)
-		add(.mat(.relicFragment), 1, 1, 0.1)
-	case .archer: add(.food(.rawMeat), 0, 1, 0.3); add(.mat(.string), 0, 2, 0.4); add(.ammo(.arrow), 3, 8, 0.8); add(.bow, 1, 1, 0.05)
-	case .sentinel:
-		add(.mat(.crystalShard), 8, 14, 1.0); add(.mat(.diamond), 2, 4, 1.0); add(.block(.glowCrystal), 4, 8, 1.0)
-		add(.mat(.relicFragment), 2, 3, 1.0); add(.gear(.headlamp), 1, 1, 0.35)
-	case .mimic: add(.mat(.goldBar), 2, 5, 1.0); add(.mat(.relicFragment), 1, 1, 0.8); add(.mat(.diamond), 1, 2, 0.35)
-	case .warden:
-		add(.mat(.umbralHeart), 1, 1, 1.0); add(.mat(.voidBar), 6, 10, 1.0); add(.mat(.diamond), 4, 8, 1.0)
-		add(.mat(.emberBar), 4, 8, 1.0); add(.mat(.relicFragment), 3, 3, 1.0)
-	case .custom:
-		// a custom creature's drops come from its mod (see dropModLoot)
-		break
-	}
-	return out
-}
-
-// MARK: - Spawn rules
-
-enum SpawnPlace { case surface, cave, ocean, umbral }
-enum SpawnWhen { case any, day, night }
-
-struct SpawnRule {
-	var kind: MobKind
-	var weight: Double
-	var place: SpawnPlace
-	var when: SpawnWhen
-	var biomes: [Biome]
-	var group: Int
-	var minY: Int = 0
-	var maxY: Int = 9999
-	/// a custom creature's slot (-1 for the game's creatures), how many of it may be about at once, and
-	/// whether it appears high in the sky
-	var slot: Int = -1
-	var maxNearby: Int = 99
-	var sky: Bool = false
-}
-
-let spawnRules: [SpawnRule] = [
-	// surface, passive and wild animals by biome
-	SpawnRule(kind: .pig, weight: 5, place: .surface, when: .any, biomes: [.plains, .forest], group: 2),
-	SpawnRule(kind: .cow, weight: 5, place: .surface, when: .any, biomes: [.plains, .forest], group: 2),
-	SpawnRule(kind: .sheep, weight: 5, place: .surface, when: .any, biomes: [.plains, .forest, .mountain], group: 3),
-	SpawnRule(kind: .chicken, weight: 4, place: .surface, when: .day, biomes: [.plains, .forest, .savanna], group: 3),
-	SpawnRule(kind: .crow, weight: 3, place: .surface, when: .any, biomes: [.plains, .forest, .desert, .savanna, .swamp, .mountain], group: 2),
-	SpawnRule(kind: .giraffe, weight: 5, place: .surface, when: .any, biomes: [.savanna], group: 2),
-	SpawnRule(kind: .elephant, weight: 3, place: .surface, when: .any, biomes: [.savanna, .jungle], group: 1),
-	SpawnRule(kind: .tiger, weight: 3, place: .surface, when: .any, biomes: [.jungle, .savanna], group: 1),
-	SpawnRule(kind: .bear, weight: 3, place: .surface, when: .any, biomes: [.forest, .mountain], group: 1),
-	SpawnRule(kind: .grizzly, weight: 2, place: .surface, when: .any, biomes: [.mountain, .forest], group: 1),
-	SpawnRule(kind: .polarBear, weight: 4, place: .surface, when: .any, biomes: [.tundra], group: 1),
-	SpawnRule(kind: .wolf, weight: 3, place: .surface, when: .night, biomes: [.tundra, .forest, .plains], group: 3),
-	SpawnRule(kind: .frog, weight: 5, place: .surface, when: .any, biomes: [.swamp], group: 2),
-	SpawnRule(kind: .scorpion, weight: 5, place: .surface, when: .any, biomes: [.desert], group: 1),
-	// surface hostile
-	SpawnRule(kind: .zombie, weight: 7, place: .surface, when: .night, biomes: [], group: 2),
-	SpawnRule(kind: .slime, weight: 3, place: .surface, when: .night, biomes: [.plains, .forest, .jungle, .swamp], group: 1),
-	// oceans
-	SpawnRule(kind: .fish, weight: 8, place: .ocean, when: .any, biomes: [], group: 4),
-	// caves
-	SpawnRule(kind: .skeleton, weight: 6, place: .cave, when: .any, biomes: [], group: 2, minY: 150),
-	SpawnRule(kind: .zombie, weight: 2, place: .cave, when: .any, biomes: [], group: 1, minY: 140),
-	SpawnRule(kind: .slime, weight: 3, place: .cave, when: .any, biomes: [], group: 2, minY: 140),
-	SpawnRule(kind: .bat, weight: 4, place: .cave, when: .any, biomes: [], group: 3, minY: 150),
-	SpawnRule(kind: .wraith, weight: 2, place: .cave, when: .any, biomes: [], group: 1, minY: 380),
-	SpawnRule(kind: .crawler, weight: 4, place: .cave, when: .any, biomes: [], group: 2, minY: 140),
-	SpawnRule(kind: .archer, weight: 3, place: .cave, when: .any, biomes: [], group: 1, minY: 150),
-	SpawnRule(kind: .golem, weight: 1.5, place: .cave, when: .any, biomes: [], group: 1, minY: 260),
-	SpawnRule(kind: .archer, weight: 2, place: .surface, when: .night, biomes: [], group: 1),
-	SpawnRule(kind: .skeleton, weight: 2, place: .surface, when: .night, biomes: [.plains, .desert, .tundra, .mountain, .savanna], group: 1),
-	SpawnRule(kind: .crawler, weight: 2, place: .surface, when: .night, biomes: [.jungle, .swamp, .forest], group: 2),
-	// umbral realm
-	SpawnRule(kind: .imp, weight: 5, place: .umbral, when: .any, biomes: [], group: 1),
-	SpawnRule(kind: .wraith, weight: 3, place: .umbral, when: .any, biomes: [], group: 1),
-	SpawnRule(kind: .emberSlime, weight: 5, place: .umbral, when: .any, biomes: [], group: 2),
-	SpawnRule(kind: .cinderBat, weight: 4, place: .umbral, when: .any, biomes: [], group: 3)
-]
-
-// MARK: - Mob instance
-
-final class Mob {
-	let id: Int
-	var kind: MobKind
-	var b: Body
-	var hp: Double
-	var maxHP: Double
-	var dir: Int = 1
-	var anim: Double = 0
-	var hurtT: Double = 0
-	var cd: Double = 0
-	var t1: Double = 0
-	var t2: Double = 0
-	var t3: Double = 0
-	var st: Int = 0
-	var variant: Int = 0
-	var tame: Bool = false
-	var angry: Bool = false
-	var persistent: Bool = false
-	var sheared: Bool = false
-	var blocking: Bool = false
-	var boat: Int = -1
-	var raiding: Bool = false
-	var burn: Double = 0
-	var stuckT: Double = 0
-	var lastX: Double = 0
-	var homeX: Double = 0
-	var homeY: Double = 0
-	var mounted: Bool = false
-	var downed: Bool = false
-	var lair: Int = 0
-	var phase: Int = 0
-	var tele: Double = 0
-	var atk: Int = 0
-	var tx: Double = 0
-	var ty: Double = 0
-	var regrow: Double = 0
-	var knock: Double = 0
-	/// time folded in while far-away AI updates were skipped
-	var aiAccum: Double = 0
-	/// set when the mob should leave the list at the end of the frame
-	var removed: Bool = false
-	/// white hit flash, death animation and knockback lean
-	var flash: Double = 0
-	var deathT: Double = -1
-	var lean: Double = 0
-	/// hazard and damage bookkeeping (see the damage system)
-	var hazardT: Double = 0
-	var lastAttacker: Int = 0
-	var lastHitByPlayer: Double = -100
-	var hitStamps: [Int: Double] = [:]
-	var fallPeak: Double = 0
-	var burnTick: Double = 0
-	/// facing shown on screen, the turn animation and the attack lunge (visual only; the AI uses `dir`)
-	var face: Int = 0
-	var turnT: Double = 0
-	var atkT: Double = 0
-	/// a mimic's hoard (dropped when it dies) and the spots a telegraphed attack will strike
-	var loot: [Stack] = []
-	var spots: [Double] = []
-	/// animal life: when to look around next, a place it is heading for (1 water, 2 its herd),
-	/// a thirst timer, the prey it is hunting and a pose to hold (grazing, drinking)
-	var thinkT: Double = 0
-	/// boss attack variety: the last attack, how often in a row, and attacks since the signature move
-	var lastAtk: Int = 0
-	var repeatN: Int = 0
-	var sinceSignature: Int = 0
-	var goal: Int = 0
-	var goalX: Double = 0
-	var drinkT: Double = 0
-	var preyID: Int = 0
-	weak var prey: Mob? = nil
-	var poseT: Double = 0
-	/// dazed by a club: stands reeling, then can't be dazed again for a moment
-	var daze: Double = 0
-	var dazeGuard: Double = 0
-	/// hostile AI (see `think`): its state and how long it has been in it, whether it can see the
-	/// player (rechecked a few times a second), where it last saw them and how long ago, where it is
-	/// heading, how long it has been pushing against a wall, and why it did not attack (for the overlay)
-	var ai: MobAI = .idle
-	var aiT: Double = 0
-	var sees: Bool = false
-	var losT: Double = 0
-	var seenX: Double = 0
-	var seenY: Double = 0
-	var lostT: Double = 99
-	var aimX: Double = 0
-	var blockedT: Double = 0
-	var progX: Double = 0
-	var leapT: Double = 0
-	var leapReq: Bool = false
-	var why: AttackBlock = .none
-	/// came out at night to look for the player; how long it has been far away and forgotten
-	var hunter: Bool = false
-	var farT: Double = 0
-	/// a custom creature's slot in ModRuntime.mobs (-1 for the game's own creatures)
-	var cslot: Int = -1
-	/// custom creatures: each attack's cooldown, the creature it guards, the monster it fights or runs
-	/// from (and timers for looking for them), its home biome, the blow under way (its key, target and
-	/// whether that is the player) and how long a water creature has been on land
-	var modCD: [Double] = []
-	weak var ward: Mob? = nil
-	var wardT: Double = 0
-	weak var foe: Mob? = nil
-	weak var threat: Mob? = nil
-	var foeT: Double = 0
-	var homeBiome: Int = -1
-	var biomeT: Double = 0
-	var strayed: Bool = false
-	var atkKey: Int = 0
-	var atkX: Double = 0
-	var atkY: Double = 0
-	var vsPlayer: Bool = true
-	var dryT: Double = 0
-	/// potion effects: slowed (by how much), poisoned (damage a second, and whether the player gets the
-	/// credit), weakened, regenerating; and their timers
-	var slowT: Double = 0
-	var slowAmt: Double = 0
-	var poisonT: Double = 0
-	var poisonDps: Double = 0
-	var poisonTick: Double = 0
-	var poisonByPlayer: Bool = false
-	var weakT: Double = 0
-	var regenT: Double = 0
-	var regenRate: Double = 0
-	var regenAcc: Double = 0
-	/// mutation: doses taken, the size its body has grown to and how much harder it hits
-	var mut: Int = 0
-	var mutSize: Double = 1
-	var mutDmg: Double = 1
-	/// custom creatures' fights (Mod Creator phases): the phase it is in (0: none yet) and its numbers
-	/// there, how long it can't be hurt, how long it has been fighting, how many helpers it has called,
-	/// the creature it helps (its id), whether a summoning called it, and how long the player has been gone
-	var mphase: Int = 0
-	var phaseSpeed: Double = 1
-	var phaseDmg: Double = 1
-	var phaseCD: Double = 1
-	var phaseDef: Double = 0
-	var phaseShield: Double = 0
-	var fightT: Double = 0
-	var helpersCalled: Int = 0
-	var helperOf: Int = -1
-	var summoned: Bool = false
-	var leaveT: Double = 0
-	static let turnDur: Double = 0.14
-	static let atkDur: Double = 0.28
-
-	init(id: Int, kind: MobKind, x: Double, y: Double) {
-		self.id = id
-		self.kind = kind
-		let d: MobDef = mobDef(kind)
-		self.b = Body(x: x, y: y, w: d.w, h: d.h)
-		self.hp = d.hp
-		self.maxHP = d.hp
-		self.homeX = x
-		self.homeY = y
-		self.lastX = x
-		self.dir = Int.random(in: 0...1) == 0 ? -1 : 1
-		self.t1 = Double.random(in: 0.5...3.0)
-	}
-
-	var def: MobDef {
-		if kind == .custom, let r = ModRuntime.shared.mob(cslot) { return r.mdef }
-		return mobDef(kind)
-	}
-	var x: Double { return b.x }
-	var y: Double { return b.y }
-	/// a boss or guardian kind (worked out once: this is checked for every creature every frame)
-	private(set) lazy var bossKind: Bool = Mob.isBossKind(kind, cslot)
-	/// bosses never become tame, except the T-rex, which then stops being one
-	var isBoss: Bool { return bossKind && !tame }
-
-	static func isBossKind(_ k: MobKind, _ slot: Int) -> Bool {
-		switch k {
-		case .bearBoss, .rex, .sentinel, .warden: return true
-		case .custom: return ModRuntime.shared.mob(slot)?.boss ?? false
-		default: return false
-		}
-	}
-}
-
-/// What a hostile creature is doing. Attack and recover come from its attack routine (a wind-up, the
-/// blow, the moment after); the rest are decided by `think`.
-enum MobAI: UInt8 {
-	case idle, alert, chase, search, back, retreat
-	var name: String {
-		switch self {
-		case .idle: return "idle"
-		case .alert: return "alert"
-		case .chase: return "chase"
-		case .search: return "search"
-		case .back: return "return"
-		case .retreat: return "regroup"
-		}
-	}
-}
-
-/// Why a creature that wants to hit the player has not (shown by the AI overlay)
-enum AttackBlock: UInt8 {
-	case none, notSeen, outOfRange, cooldown, noSight, tooHigh, blocked, peaceful, playerGone
-	var name: String {
-		switch self {
-		case .none: return ""
-		case .notSeen: return "hasn't seen you"
-		case .outOfRange: return "out of range"
-		case .cooldown: return "cooling down"
-		case .noSight: return "no line of sight"
-		case .tooHigh: return "can't reach that height"
-		case .blocked: return "path blocked"
-		case .peaceful: return "peaceful"
-		case .playerGone: return "player dead"
-		}
-	}
-}
-
-struct MobSave: Codable {
-	var kind: Int
-	var x: Double
-	var y: Double
-	var hp: Double
-	var maxHP: Double
-	var tame: Bool
-	var variant: Int
-	var downed: Bool
-	var lair: Int
-	/// mutation doses (nil in saves from before mutation, and for creatures that never mutated)
-	var mut: Int? = nil
-}
-
-// ===== p13b_vehicles =====
-
-// MARK: - Vehicles (player built) and pirate ships
-
-struct PartCell: Hashable, Codable {
-	var dx: Int
-	var dy: Int
-}
-
-struct VPartSave: Codable {
-	var dx: Int
-	var dy: Int
-	var type: Int
-	/// the block of a block cell (or the look of a mod block working as a part); nil for plain parts
-	var tile: Int? = nil
-	/// damage the cell has taken (nil: none)
-	var dmg: Double? = nil
-	/// a wing's tilt (nil: none)
-	var tilt: Int? = nil
-	/// a cell of a part bigger than one cell: the part's middle cell (dx, dy)
-	var span: [Int]? = nil
-}
-
-/// A point on an autopilot's route (world coordinates)
-struct VWaypoint: Codable {
-	var x: Double
-	var y: Double
-}
-
-struct VehicleSave: Codable {
-	var id: Int
-	var parts: [VPartSave]
-	/// centre of mass (saves with `rot`), or the bottom-centre of the box (older saves)
-	var x: Double
-	var y: Double
-	var fuel: Double
-	var dir: Int
-	var kit: Int?
-	/// rotation in radians; nil in saves made before vehicles could rotate
-	var rot: Double? = nil
-	/// the autopilot's mode and route (nil: off, none)
-	var auto: Int? = nil
-	var route: [VWaypoint]? = nil
-	/// the driver's seat (dx, dy) and the back walls (dx, dy, wall), when there are any
-	var seat: [Int]? = nil
-	var walls: [[Int]]? = nil
-	/// how full the ballast tanks are (nil: empty)
-	var ballast: Double? = nil
-	/// its couplings to other vehicles (a train)
-	var links: [VLink]? = nil
-	/// its joints, the section it hangs from, and its walk
-	var joints: [VJoint]? = nil
-	var parent: Int? = nil
-	var gait: Double? = nil
-	/// how its guns fire (dx, dy, mode)
-	var gunModes: [[Int]]? = nil
-	/// its receivers' channel, and what they do while it is on
-	var channel: Int? = nil
-	var radioAct: Int? = nil
-}
-
-/// Displaced volume per part (how much it floats)
-func partVolume(_ p: PartType) -> Double {
-	switch p {
-	case .hull: return 4.0
-	case .frame: return 0.3
-	case .fuelTank: return 0.25
-	case .seat: return 0.1
-	default: return 0.0
-	}
-}
-
-/// Mining power of a drill part: (tier it can break, speed)
-func drillPower(_ p: PartType) -> (Int, Double) {
-	switch p {
-	case .drill: return (4, 4.6)
-	case .diamondDrill: return (7, 8.5)
-	case .voidDrill: return (9, 13.0)
-	default: return (0, 0)
-	}
-}
-
-func isDrill(_ p: PartType) -> Bool { return p == .drill || p == .diamondDrill || p == .voidDrill }
-
-/// Parts that point somewhere (their open side): thrusters, the tail rotor and the guns
-func isFacingPart(_ p: PartType) -> Bool {
-	return p == .airProp || p == .jet || p == .tailRotor || p == .cannon || p == .autoGun
-}
-
-/// One cell taken off a vehicle: what it was, and its block if it was one
-struct VCell {
-	var cell: PartCell
-	var type: PartType
-	var tile: Tile?
-}
-
-/// A player-built vehicle: a rigid body made of 1x1 parts. It has a centre of mass, a rotation and
-/// an angular velocity, and every part collides, floats and drives at its rotated position, so
-/// what you see is exactly what touches the world.
-final class Vehicle {
-	let id: Int
-	var parts: [PartCell: PartType] = [:]
-	/// world-space bounding box of the rotated parts (kept for spawning, decks, pick tests)
-	var b: Body
-	// rigid body state
-	var px: Double = 0
-	var py: Double = 0
-	var vx: Double = 0
-	var vy: Double = 0
-	var angle: Double = 0
-	var angVel: Double = 0
-	/// centre of mass in cell coordinates (cell (0,0) spans 0...1)
-	var comX: Double = 0.5
-	var comY: Double = 0.5
-	var inertia: Double = 1
-	var fuel: Double = 0
-	var dir: Int = 1
-	var minX: Int = 0
-	var maxX: Int = 0
-	var minY: Int = 0
-	var maxY: Int = 0
-	var mass: Double = 1
-	var buoyancy: Double = 0
-	var engines: Int = 0
-	var wheels: Int = 0
-	var propellers: Int = 0
-	var paddles: Int = 0
-	var tanks: Int = 0
-	var drills: Int = 0
-	var offroadWheels: Int = 0
-	var headlights: Int = 0
-	var hasSeat: Bool = false
-	var hasSteering: Bool = false
-	var throttle: Double = 0
-	var wheelRot: Double = 0
-	var rider: Bool = false
-	var propRot: Double = 0
-	var drillRot: Double = 0
-	var drilling: Bool = false
-	var smoke: Double = 0
-	/// contacts touched in the last physics step (wheels on the ground, any part on the ground)
-	var wheelContacts: Int = 0
-	var contacts: Int = 0
-	var submerged: Double = 0
-	var sleepT: Double = 0
-	var asleep: Bool = false
-	/// physics time not yet simulated (vehicles step at a fixed rate)
-	var physAccum: Double = 0
-	/// direction each drill faces in vehicle space, and its mining progress
-	var drillDir: [PartCell: (Int, Int)] = [:]
-	var drillWork: [PartCell: (Int, Int, Double)] = [:]
-	/// the kit this vehicle came from (-1 = built part by part, or changed since)
-	var kit: Int = -1
-	/// the block in each block cell (and the look of a mod block that works as a part)
-	var blocks: [PartCell: Tile] = [:]
-	/// damage each cell has taken (see vehicleCellHP); a cell that takes its fill breaks off
-	var dmg: [PartCell: Double] = [:]
-	/// which way each thruster, gun and tail rotor points in vehicle space (its open side)
-	var face: [PartCell: (Int, Int)] = [:]
-	// parts of aircraft, airships, tanks and armed vehicles
-	var wings: Int = 0
-	var elevators: Int = 0
-	var airProps: Int = 0
-	var jets: Int = 0
-	var rotors: Int = 0
-	var tailRotors: Int = 0
-	var envelopes: Int = 0
-	var burners: Int = 0
-	var tracks: Int = 0
-	var armors: Int = 0
-	var cannons: Int = 0
-	var guns: Int = 0
-	var autopilots: Int = 0
-	var receivers: Int = 0
-	var hasCockpit: Bool = false
-	/// something that works in the air (wings, thrusters, rotors, balloons): the flight model runs
-	var aero: Bool = false
-	/// the pilot's up/down input (-1...1, up is positive): elevators, rotor pitch, burner heat
-	var pitch: Double = 0
-	/// main rotor blade pitch (0...1) and the air heat in the balloon (0...1)
-	var collective: Double = 0
-	var heat: Double = 0
-	/// the end the nose is at, along the vehicle's own x axis (1 or -1)
-	var fwd: Int = 1
-	/// for the instruments: last step's lift and thrust, and whether a wing has stalled
-	var liftNow: Double = 0
-	var thrustNow: Double = 0
-	var stall: Bool = false
-	var airspeed: Double = 0
-	/// the steepest angle the air meets a wing at (radians)
-	var alpha: Double = 0
-	/// a turn to face the other way in progress (0...1; 0 = none) and the speed it started from
-	var turnT: Double = 0
-	var turnVX: Double = 0
-	var turned: Bool = false
-	/// each gun's reload and the way its barrel points (world angle)
-	var gunCD: [PartCell: Double] = [:]
-	var aimAng: [PartCell: Double] = [:]
-	/// autopilot: 0 off, 1 cruise, 2 route; what cruise holds; the marked route and the next point
-	var auto: Int = 0
-	var holdThr: Double = 0
-	var holdY: Double = 0
-	var holdVX: Double = 0
-	var route: [VWaypoint] = []
-	var routeAt: Int = 0
-	/// time the rotor blades have been striking the ground (they break)
-	var bladeHit: Double = 0
-	/// the elevator trim the flight model finds by itself (so a plane holds its attitude hands-off), and
-	/// the cyclic's (so a helicopter holds its tilt)
-	var trim: Double = 0
-	var cycI: Double = 0
-	/// the wind at the vehicle this frame (blocks per second, signed)
-	var windX: Double = 0
-	/// flashes red for a moment when hit
-	var hitT: Double = 0
-	/// how strong each mod block working as a part is at its work (1: the game part's own)
-	var boost: [PartCell: Double] = [:]
-	/// the engines' power (a mod engine can be stronger or weaker than the game's)
-	var enginePower: Double = 0
-	/// what each cell is to somebody walking on the vehicle (see Vehicle.walkKind), over the cells' box
-	var walkGrid: [UInt8] = []
-	var gridW: Int = 0
-	var gridH: Int = 0
-	/// how far its furthest corner is from its centre of mass (blocks)
-	var radius: Double = 1
-	/// what each cell is to another vehicle meeting it (solid, stood on from above, or nothing)
-	var meetGrid: [UInt8] = []
-	/// being stepped in this frame's physics (it moves when pushed); the vehicle it rests on (0: none)
-	var inStep: Bool = false
-	var restOn: Int = 0
-	/// what other vehicles met of it in this frame (their samples in its cells), and one that it rests
-	/// on that found it so
-	var touched: Int = 0
-	var leanOn: Int = 0
-	/// the seat the driver sat down in (with several seats)
-	var seatAt: PartCell? = nil
-	/// back walls behind cells, inside the vehicle's box (the same numbers as the land's walls)
-	var walls: [PartCell: UInt8] = [:]
-	/// counts every change to how it looks (its cached picture is redrawn when this moves on), and that
-	/// picture (see VehicleArt)
-	var artRev: Int = 0
-	var artImage: Image? = nil
-	var artKey: Int = -1
-	/// thrusters, guns and drills with no open side to work from (they wait for one)
-	var boxed: Set<PartCell> = []
-	/// how much room each rotor's blades have (1: all of it; parts in the row above take some), and
-	/// the rotors' lift in all (in rotors)
-	var rotorRoom: [PartCell: Double] = [:]
-	var rotorLift: Double = 0
-	/// the propellers, paddles and tail rotors that are free to push
-	var openProps: Int = 0
-	var openPaddles: Int = 0
-	var openTails: Int = 0
-	/// flight and water: each wing's tilt (steps of Aero.tiltStep; saved), flaps, air brakes, tailplanes
-	/// and ballast tanks, how full the ballast tanks are (0 air ... 1 water), and how far the air brakes
-	/// are open
-	var tilt: [PartCell: Int] = [:]
-	var flaps: Int = 0
-	var airBrakes: Int = 0
-	var stabilizers: Int = 0
-	var ballasts: Int = 0
-	var ballast: Double = 0
-	var brakeOpen: Double = 0
-	/// the cells inside it that are under the surface of what it floats in, and how flooded each is
-	/// (0 dry air ... 1 full); worked out a few times a second (see updateHullAir)
-	var hullAir: [PartCell: Double] = [:]
-	var hullT: Double = 0
-	/// parts bigger than one cell: every cell of one, mapped to its middle cell (where it is counted,
-	/// weighs and is drawn); the couplers, and the links to other vehicles they make (a train)
-	var spanOf: [PartCell: PartCell] = [:]
-	var couplers: Int = 0
-	var railWheels: Int = 0
-	var links: [VLink] = []
-	/// a moment after being uncoupled by hand, before its couplers link again
-	var noCoupleT: Double = 0
-	/// its joints to the sections built on beyond them, the section it hangs from (0: none), and how far
-	/// round its walk is (a mech)
-	var joints: [VJoint] = []
-	var parentID: Int = 0
-	var gait: Double = 0
-	/// a machine section's places on the land from its last step, worked out again with its joints
-	/// (not saved)
-	var heldContacts: [VContact] = []
-	/// how each gun fires (GunMode's number; none: with the driver's attack)
-	var gunMode: [PartCell: Int] = [:]
-	/// the signal channel its receivers pick up (1 to 8; 0: none) and what it does while that channel is
-	/// on (RadioAct's number)
-	var channel: Int = 0
-	var radioAct: Int = 0
-	/// its channel is on now, and that signal is driving it (not saved)
-	var signalOn: Bool = false
-	var signalDrive: Bool = false
-	/// how far into its stride a mech's legs swing (rises as it walks, falls back as it stops) and the
-	/// way it last walked (not saved)
-	var gaitAmp: Double = 0
-	var gaitDir: Double = 1
-	/// its collision samples, kept until it changes
-	var sampleCache: [VSample] = []
-	var sampleKey: Int = -1
-
-	init(id: Int, first: PartType, x: Double, y: Double) {
-		self.id = id
-		self.b = Body(x: x, y: y, w: 1, h: 1)
-		parts[PartCell(dx: 0, dy: 0)] = first
-		recompute(keepAnchor: false)
-		placeBox(left: x - 0.5, bottom: y)
-	}
-
-	// MARK: transforms
-
-	var cosA: Double { return cos(angle) }
-	var sinA: Double { return sin(angle) }
-
-	/// vehicle-space point (cell units) to world
-	func toWorld(_ lx: Double, _ ly: Double) -> (Double, Double) {
-		let ox: Double = lx - comX
-		let oy: Double = ly - comY
-		let c: Double = cosA
-		let s: Double = sinA
-		return (px + ox * c - oy * s, py + ox * s + oy * c)
-	}
-
-	/// world point to vehicle space (cell units)
-	func toLocal(_ wx: Double, _ wy: Double) -> (Double, Double) {
-		let dx: Double = wx - px
-		let dy: Double = wy - py
-		let c: Double = cosA
-		let s: Double = sinA
-		return (dx * c + dy * s + comX, -dx * s + dy * c + comY)
-	}
-
-	func cellCenter(_ c: PartCell) -> (Double, Double) {
-		return toWorld(Double(c.dx) + 0.5, Double(c.dy) + 0.5)
-	}
-
-	/// top-left of the cell's (unrotated) box around its rotated centre
-	func cellPos(_ c: PartCell) -> (Double, Double) {
-		let p: (Double, Double) = cellCenter(c)
-		return (p.0 - 0.5, p.1 - 0.5)
-	}
-
-	func cellAt(_ wx: Double, _ wy: Double) -> PartCell {
-		let l: (Double, Double) = toLocal(wx, wy)
-		return PartCell(dx: Int(floor(l.0)), dy: Int(floor(l.1)))
-	}
-
-	/// Places an unrotated vehicle so its parts' box has this left edge and bottom
-	func placeBox(left: Double, bottom: Double) {
-		angle = 0
-		px = left + (comX - Double(minX))
-		py = bottom - (Double(maxY + 1) - comY)
-		updateBox()
-	}
-
-	/// Recomputes the world bounding box from the rotated part corners
-	func updateBox() {
-		var x0: Double = 1e9, x1: Double = -1e9, y0: Double = 1e9, y1: Double = -1e9
-		let c: Double = cosA
-		let s: Double = sinA
-		for (cell, _) in parts {
-			let corners: [(Double, Double)] = [(0, 0), (1, 0), (0, 1), (1, 1)]
-			for k in corners {
-				let ox: Double = Double(cell.dx) + k.0 - comX
-				let oy: Double = Double(cell.dy) + k.1 - comY
-				let wx: Double = px + ox * c - oy * s
-				let wy: Double = py + ox * s + oy * c
-				x0 = min(x0, wx); x1 = max(x1, wx); y0 = min(y0, wy); y1 = max(y1, wy)
-			}
-		}
-		b.w = max(0.1, x1 - x0)
-		b.h = max(0.1, y1 - y0)
-		b.x = (x0 + x1) * 0.5
-		b.y = y1
-		b.vx = vx
-		b.vy = vy
-	}
-
-	func recompute(keepAnchor: Bool) {
-		// remember where one surviving cell is, so the rest of the vehicle stays put in the world
-		var anchor: PartCell? = nil
-		var anchorW: (Double, Double) = (0, 0)
-		if keepAnchor, let c0 = parts.keys.first {
-			anchor = c0
-			anchorW = cellCenter(c0)
-		}
-		var x0: Int = 0, x1: Int = 0, y0: Int = 0, y1: Int = 0
-		var first: Bool = true
-		mass = 0
-		buoyancy = 0
-		engines = 0; wheels = 0; propellers = 0; paddles = 0; tanks = 0; drills = 0; offroadWheels = 0; headlights = 0
-		wings = 0; elevators = 0; airProps = 0; jets = 0; rotors = 0; tailRotors = 0; envelopes = 0; burners = 0
-		tracks = 0; armors = 0; cannons = 0; guns = 0; autopilots = 0; receivers = 0
-		flaps = 0; airBrakes = 0; stabilizers = 0; ballasts = 0; couplers = 0; railWheels = 0
-		spanOf = spanOf.filter { parts[$0.key] != nil }
-		hasSeat = false
-		hasSteering = false
-		hasCockpit = false
-		blocks = blocks.filter { parts[$0.key] != nil }
-		dmg = dmg.filter { parts[$0.key] != nil }
-		var mx: Double = 0
-		var my: Double = 0
-		for (c, t) in parts {
-			if first { x0 = c.dx; x1 = c.dx; y0 = c.dy; y1 = c.dy; first = false }
-			x0 = min(x0, c.dx); x1 = max(x1, c.dx); y0 = min(y0, c.dy); y1 = max(y1, c.dy)
-			// (the outer cells of a big part are counted and weighed at its middle)
-			if let k = spanOf[c], k != c { continue }
-			let pm: Double = cellMass(c, t)
-			mass += pm
-			mx += pm * (Double(c.dx) + 0.5)
-			my += pm * (Double(c.dy) + 0.5)
-			buoyancy += partVolume(t)
-			countPart(t)
-		}
-		aero = wings + elevators + airProps + jets + rotors + envelopes + airBrakes + stabilizers > 0
-		tilt = tilt.filter { parts[$0.key] != nil }
-		joints = joints.filter { parts[$0.cell] != nil }
-		hullAir = hullAir.filter { parts[$0.key] == nil || Vehicle.walkKind(parts[$0.key]!, blocks[$0.key]) != cellSolid }
-		// back walls weigh a little where they are
-		for (c, k) in walls {
-			let wm: Double = vehicleWallMass(k)
-			mass += wm
-			mx += wm * (Double(c.dx) + 0.5)
-			my += wm * (Double(c.dy) + 0.5)
-		}
-		minX = x0; maxX = x1; minY = y0; maxY = y1
-		mass = max(0.3, mass)
-		comX = mx / mass
-		comY = my / mass
-		// moment of inertia: each part as a 1x1 plate around the centre of mass
-		var inert: Double = 0
-		for (c, t) in parts {
-			let ox: Double = Double(c.dx) + 0.5 - comX
-			let oy: Double = Double(c.dy) + 0.5 - comY
-			inert += cellMass(c, t) * (ox * ox + oy * oy + 1.0 / 6.0)
-		}
-		inertia = max(0.2, inert)
-		var far: Double = 0.5
-		for (c, _) in parts {
-			let ox: Double = abs(Double(c.dx) + 0.5 - comX) + 0.5
-			let oy: Double = abs(Double(c.dy) + 0.5 - comY) + 0.5
-			far = max(far, sqrt(ox * ox + oy * oy))
-		}
-		radius = far
-		findFacings()
-		findBoxedParts()
-		boost.removeAll()
-		for (c, b) in blocks where b.isMod && parts[c] != .block {
-			if let d = ModRuntime.shared.blockDef(b) { boost[c] = d.vehPower }
-		}
-		enginePower = 0
-		for (c, t) in parts where t == .engine { enginePower += boost[c] ?? 1.0 }
-		// drills face the open side of their cell
-		drillDir.removeAll()
-		for (c, t) in parts where isDrill(t) {
-			let free: (PartCell) -> Bool = { self.parts[$0] == nil }
-			if free(PartCell(dx: c.dx + 1, dy: c.dy)) && !free(PartCell(dx: c.dx - 1, dy: c.dy)) { drillDir[c] = (1, 0) }
-			else if free(PartCell(dx: c.dx - 1, dy: c.dy)) && !free(PartCell(dx: c.dx + 1, dy: c.dy)) { drillDir[c] = (-1, 0) }
-			else if free(PartCell(dx: c.dx, dy: c.dy + 1)) { drillDir[c] = (0, 1) }
-			else if free(PartCell(dx: c.dx + 1, dy: c.dy)) { drillDir[c] = (1, 0) }
-			else { drillDir[c] = (0, -1) }
-		}
-		drillWork = drillWork.filter { parts[$0.key] != nil }
-		buildWalkGrid()
-		if let a = anchor, parts[a] != nil {
-			// put the anchor cell back where it was
-			let ox: Double = Double(a.dx) + 0.5 - comX
-			let oy: Double = Double(a.dy) + 0.5 - comY
-			let c: Double = cosA
-			let s: Double = sinA
-			px = anchorW.0 - (ox * c - oy * s)
-			py = anchorW.1 - (ox * s + oy * c)
-		}
-		asleep = false
-		updateBox()
-	}
-
-	/// How much one cell weighs: a part's own mass, or the weight of the block it is (stone 2.5)
-	func cellMass(_ c: PartCell, _ t: PartType) -> Double {
-		if let b = blocks[c] { return vehicleBlockMass(b, t) }
-		return t.mass
-	}
-
-	func countPart(_ t: PartType) {
-		switch t {
-		case .engine: engines += 1
-		case .wheel: wheels += 1
-		case .offroadWheel: wheels += 1; offroadWheels += 1
-		case .track: wheels += 1; tracks += 1
-		case .headlight: headlights += 1
-		case .propeller: propellers += 1
-		case .paddle: paddles += 1
-		case .fuelTank: tanks += 1
-		case .seat: hasSeat = true
-		case .steering: hasSteering = true
-		case .cockpit: hasSeat = true; hasSteering = true; hasCockpit = true
-		case .drill, .diamondDrill, .voidDrill: drills += 1
-		case .wing: wings += 1
-		case .elevator: elevators += 1
-		case .airProp: airProps += 1
-		case .jet: jets += 1
-		case .rotor: rotors += 1
-		case .tailRotor: tailRotors += 1
-		case .envelope: envelopes += 1
-		case .burner: burners += 1
-		case .armor: armors += 1
-		case .cannon: cannons += 1
-		case .autoGun: guns += 1
-		case .autopilot: autopilots += 1
-		case .receiver: receivers += 1
-		case .flap: wings += 1; flaps += 1
-		case .airBrake: airBrakes += 1
-		case .stabilizer: stabilizers += 1
-		case .ballast: ballasts += 1
-		case .railWheel: wheels += 1; railWheels += 1
-		case .bigWheel: wheels += 1; offroadWheels += 1
-		case .coupler: couplers += 1
-		default: break
-		}
-	}
-
-	/// Thrusters, guns and tail rotors point out of their open side: left or right for thrusters and
-	/// tail rotors (the side away from the centre when both are open), any side for guns (up first
-	/// when the top is open, so a turret on a roof looks up and round)
-	func findFacings() {
-		face.removeAll()
-		for (c, t) in parts where isFacingPart(t) {
-			let r: Bool = parts[PartCell(dx: c.dx + 1, dy: c.dy)] == nil
-			let l: Bool = parts[PartCell(dx: c.dx - 1, dy: c.dy)] == nil
-			let u: Bool = parts[PartCell(dx: c.dx, dy: c.dy - 1)] == nil
-			let d: Bool = parts[PartCell(dx: c.dx, dy: c.dy + 1)] == nil
-			let away: Int = Double(c.dx) + 0.5 >= comX ? 1 : -1
-			var f: (Int, Int) = (away, 0)
-			if r && l { f = (away, 0) } else if r { f = (1, 0) } else if l { f = (-1, 0) }
-			else if t == .cannon || t == .autoGun { f = u ? (0, -1) : (d ? (0, 1) : (away, 0)) }
-			if (t == .cannon || t == .autoGun) && u && !(r || l) { f = (0, -1) }
-			face[c] = f
-		}
-	}
-
-	/// Parts that need room to work: a thruster needs one end open (left or right), a gun any side, a
-	/// drill a side or its underside; a rotor lifts by how much of its blades' row (two cells either side
-	/// above it) is clear
-	func findBoxedParts() {
-		boxed.removeAll()
-		rotorRoom.removeAll()
-		rotorLift = 0
-		openProps = 0
-		openPaddles = 0
-		openTails = 0
-		for (c, t) in parts {
-			let r: Bool = parts[PartCell(dx: c.dx + 1, dy: c.dy)] == nil
-			let l: Bool = parts[PartCell(dx: c.dx - 1, dy: c.dy)] == nil
-			let u: Bool = parts[PartCell(dx: c.dx, dy: c.dy - 1)] == nil
-			let d: Bool = parts[PartCell(dx: c.dx, dy: c.dy + 1)] == nil
-			switch t {
-			case .propeller, .paddle, .airProp, .jet, .tailRotor:
-				if !(r || l) { boxed.insert(c); continue }
-				if t == .propeller { openProps += 1 }
-				if t == .paddle { openPaddles += 1 }
-				if t == .tailRotor { openTails += 1 }
-			case .cannon, .autoGun:
-				if !(r || l || u || d) { boxed.insert(c) }
-			case .drill, .diamondDrill, .voidDrill:
-				if !(r || l || d || u) { boxed.insert(c) }
-			case .rotor:
-				var free: Int = 0
-				for k in -2...2 where parts[PartCell(dx: c.dx + k, dy: c.dy - 1)] == nil { free += 1 }
-				let room: Double = Double(free) / 5.0
-				rotorRoom[c] = room
-				rotorLift += room
-			default:
-				break
-			}
-		}
-	}
-
-	var fuelCapacity: Double { return Double(tanks) * 60.0 + (engines > 0 || jets > 0 || burners > 0 ? 8.0 : 0.0) }
-	var isBoat: Bool { return buoyancy > 0 }
-	var canDriveOnLand: Bool { return wheels >= 2 && engines > 0 }
-	var canSail: Bool { return buoyancy >= mass * 0.8 && ((engines > 0 && propellers > 0) || paddles > 0) }
-	var topY: Double { return b.y - b.h }
-	var speed: Double { return sqrt(vx * vx + vy * vy) }
-	/// roughly upright (flat enough to stand on, to place kits next to, and so on)
-	var upright: Bool { return abs(remainder(angle, 2.0 * Double.pi)) < 0.35 }
-
-	func hasNeighbor(_ c: PartCell) -> Bool {
-		let n: [PartCell] = [PartCell(dx: c.dx + 1, dy: c.dy), PartCell(dx: c.dx - 1, dy: c.dy), PartCell(dx: c.dx, dy: c.dy + 1), PartCell(dx: c.dx, dy: c.dy - 1)]
-		for k in n { if parts[k] != nil { return true } }
-		return false
-	}
-
-	func canAttach(_ c: PartCell, _ t: PartType) -> Bool {
-		if parts[c] != nil { return false }
-		if !hasNeighbor(c) { return false }
-		if isWheelPart(t) {
-			// wheels hang below the body: something must be directly above, nothing below
-			if parts[PartCell(dx: c.dx, dy: c.dy - 1)] == nil { return false }
-			if parts[PartCell(dx: c.dx, dy: c.dy + 1)] != nil { return false }
-		}
-		if t == .steering {
-			let n: [PartCell] = [PartCell(dx: c.dx + 1, dy: c.dy), PartCell(dx: c.dx - 1, dy: c.dy), PartCell(dx: c.dx, dy: c.dy + 1), PartCell(dx: c.dx, dy: c.dy - 1)]
-			var ok: Bool = false
-			for k in n { if parts[k] == .seat { ok = true } }
-			if !ok { return false }
-		}
-		if t == .propeller || t == .paddle || t == .airProp || t == .jet || t == .tailRotor {
-			// must sit at the edge of the vehicle
-			let side: [PartCell] = [PartCell(dx: c.dx + 1, dy: c.dy), PartCell(dx: c.dx - 1, dy: c.dy)]
-			var free: Bool = false
-			for k in side { if parts[k] == nil { free = true } }
-			if !free { return false }
-		}
-		if t == .rotor {
-			// on top, with room for the blades: nothing in the row above, two cells either side
-			for k in -2...2 where parts[PartCell(dx: c.dx + k, dy: c.dy - 1)] != nil { return false }
-		}
-		// nothing goes where a rotor's blades turn
-		for k in -2...2 where parts[PartCell(dx: c.dx + k, dy: c.dy + 1)] == .rotor { return false }
-		if t == .cannon || t == .autoGun {
-			// a gun needs one open side to fire from
-			let n: [PartCell] = [PartCell(dx: c.dx + 1, dy: c.dy), PartCell(dx: c.dx - 1, dy: c.dy), PartCell(dx: c.dx, dy: c.dy - 1), PartCell(dx: c.dx, dy: c.dy + 1)]
-			var free: Bool = false
-			for k in n { if parts[k] == nil { free = true } }
-			if !free { return false }
-		}
-		if isDrill(t) {
-			// a drill needs one open side to bore into
-			let n: [PartCell] = [PartCell(dx: c.dx + 1, dy: c.dy), PartCell(dx: c.dx - 1, dy: c.dy), PartCell(dx: c.dx, dy: c.dy + 1)]
-			var free: Bool = false
-			for k in n { if parts[k] == nil { free = true } }
-			if !free { return false }
-		}
-		return true
-	}
-
-	/// Removes a part, returning every part that is no longer connected (including the removed one)
-	func removePart(_ c: PartCell) -> [PartType] {
-		return cutAway(c).map { $0.type }
-	}
-
-	/// The groups of cells that hang together (side by side), largest first
-	func connectedGroups() -> [[PartCell]] {
-		var seen: Set<PartCell> = []
-		var out: [[PartCell]] = []
-		for start in parts.keys where !seen.contains(start) {
-			var group: [PartCell] = []
-			var stack: [PartCell] = [start]
-			while let cur = stack.popLast() {
-				if seen.contains(cur) { continue }
-				seen.insert(cur)
-				group.append(cur)
-				let n: [PartCell] = [PartCell(dx: cur.dx + 1, dy: cur.dy), PartCell(dx: cur.dx - 1, dy: cur.dy), PartCell(dx: cur.dx, dy: cur.dy + 1), PartCell(dx: cur.dx, dy: cur.dy - 1)]
-				for k in n where parts[k] != nil && !seen.contains(k) { stack.append(k) }
-			}
-			out.append(group)
-		}
-		out.sort { $0.count > $1.count }
-		return out
-	}
-
-	/// Removes a cell and everything no longer joined to the part that stays (the group holding `keep`
-	/// if it survives, otherwise the largest), returning what came off (the removed cell first)
-	func cutAway(_ c: PartCell, keep: PartCell? = nil) -> [VCell] {
-		var out: [VCell] = []
-		if let mid = spanOf[c] {
-			// a part bigger than one cell comes away whole (given back once, from its middle)
-			for (k, m) in spanOf where m == mid {
-				if k == mid, let t = parts[k] { out.append(VCell(cell: k, type: t, tile: blocks[k])) }
-				parts[k] = nil
-				blocks[k] = nil
-				dmg[k] = nil
-				spanOf[k] = nil
-			}
-			if parts.isEmpty { return out }
-		}
-		if let t = parts[c] { out.append(VCell(cell: c, type: t, tile: blocks[c])) }
-		parts[c] = nil
-		blocks[c] = nil
-		dmg[c] = nil
-		if parts.isEmpty { return out }
-		let groups: [[PartCell]] = connectedGroups()
-		var stay: [PartCell] = groups[0]
-		if let k = keep, parts[k] != nil {
-			for g in groups where g.contains(k) { stay = g }
-		}
-		let staySet: Set<PartCell> = Set(stay)
-		for k in Array(parts.keys) where !staySet.contains(k) {
-			let outer: Bool = spanOf[k] != nil && spanOf[k] != k
-			if let t = parts[k], !outer { out.append(VCell(cell: k, type: t, tile: blocks[k])) }
-			parts[k] = nil
-			blocks[k] = nil
-			dmg[k] = nil
-			spanOf[k] = nil
-		}
-		return out
-	}
-
-	func save() -> VehicleSave {
-		var ps: [VPartSave] = []
-		for (c, t) in parts {
-			var e = VPartSave(dx: c.dx, dy: c.dy, type: t.rawValue)
-			if let b = blocks[c] { e.tile = Int(b.rawValue) }
-			if let d = dmg[c], d > 0 { e.dmg = d }
-			if let k = tilt[c], k != 0 { e.tilt = k }
-			if let m = spanOf[c] { e.span = [m.dx, m.dy] }
-			ps.append(e)
-		}
-		var s = VehicleSave(id: id, parts: ps, x: px, y: py, fuel: fuel, dir: dir, kit: kit, rot: angle)
-		if auto != 0 { s.auto = auto }
-		if !route.isEmpty { s.route = route }
-		if let c = seatAt { s.seat = [c.dx, c.dy] }
-		if ballast > 0.001 { s.ballast = ballast }
-		if !links.isEmpty { s.links = links }
-		if !joints.isEmpty { s.joints = joints }
-		if parentID != 0 { s.parent = parentID }
-		if gait != 0 { s.gait = gait }
-		if !gunMode.isEmpty { s.gunModes = gunMode.map { [$0.key.dx, $0.key.dy, $0.value] } }
-		if channel != 0 { s.channel = channel }
-		if radioAct != 0 { s.radioAct = radioAct }
-		if !walls.isEmpty { s.walls = walls.map { [$0.key.dx, $0.key.dy, Int($0.value)] } }
-		return s
-	}
-
-	static func restore(_ s: VehicleSave) -> Vehicle {
-		let v = Vehicle(id: s.id, first: .frame, x: s.x, y: s.y)
-		v.parts.removeAll()
-		for p in s.parts {
-			let c: PartCell = PartCell(dx: p.dx, dy: p.dy)
-			let t: PartType = PartType(rawValue: p.type) ?? .frame
-			v.parts[c] = t
-			if let tr = p.tile, tr >= 0, tr < 256, let b = Tile(rawValue: UInt8(tr)) { v.blocks[c] = b }
-			else if t == .block { v.blocks[c] = .planks }
-			if let d = p.dmg { v.dmg[c] = d }
-			if let k = p.tilt, k != 0 { v.tilt[c] = clampI(k, -Aero.tiltSteps, Aero.tiltSteps) }
-			if let m = p.span, m.count == 2 { v.spanOf[c] = PartCell(dx: m[0], dy: m[1]) }
-		}
-		if v.parts.isEmpty { v.parts[PartCell(dx: 0, dy: 0)] = .frame }
-		v.auto = s.auto ?? 0
-		v.route = s.route ?? []
-		if let c = s.seat, c.count == 2 { v.seatAt = PartCell(dx: c[0], dy: c[1]) }
-		v.ballast = clampD(s.ballast ?? 0, 0, 1)
-		v.links = s.links ?? []
-		v.parentID = s.parent ?? 0
-		v.gait = s.gait ?? 0
-		for w in s.walls ?? [] where w.count == 3 && w[2] > 0 && w[2] < 256 { v.walls[PartCell(dx: w[0], dy: w[1])] = UInt8(w[2]) }
-		v.recompute(keepAnchor: false)
-		if let r = s.rot {
-			v.px = s.x
-			v.py = s.y
-			v.angle = r
-			v.updateBox()
-		} else {
-			// older save: x, y were the bottom-centre of an unrotated box
-			let w: Double = Double(v.maxX - v.minX + 1)
-			v.placeBox(left: s.x - w * 0.5, bottom: s.y)
-		}
-		v.fuel = s.fuel
-		v.dir = s.dir
-		v.kit = s.kit ?? -1
-		v.joints = (s.joints ?? []).filter { v.parts[$0.cell] != nil }
-		for g in s.gunModes ?? [] where g.count == 3 && g[2] > 0 {
-			let c: PartCell = PartCell(dx: g[0], dy: g[1])
-			if v.parts[c] != nil { v.gunMode[c] = clampI(g[2], 0, GunMode.allCases.count - 1) }
-		}
-		v.channel = clampI(s.channel ?? 0, 0, Radio.channels)
-		v.radioAct = clampI(s.radioAct ?? 0, 0, RadioAct.allCases.count - 1)
-		return v
-	}
-}
-
-// MARK: - Pirate ships
-
-final class PirateShip {
-	let id: Int
-	var x: Double
-	var dir: Int
-	var hp: Double = 180
-	var maxHP: Double = 180
-	var crew: [Int] = []
-	var state: Int = 0
-	var t: Double = 0
-	var looted: Bool = false
-	var bob: Double = 0
-	var patrolMin: Double
-	var patrolMax: Double
-	var sink: Double = 0
-	var hitT: Double = 0
-	var speed: Double = 0
-
-	static let deckHalf: Double = 4.0
-	static let spriteW: Double = 9.5
-	static let spriteH: Double = 5.0
-	static let waterRow: Double = 3.6
-	static let deckRow: Double = 2.625
-
-	init(id: Int, x: Double, dir: Int, pMin: Double, pMax: Double) {
-		self.id = id
-		self.x = x
-		self.dir = dir
-		self.patrolMin = pMin
-		self.patrolMax = pMax
-	}
-
-	/// y of the deck standing line in tiles
-	func deckY(_ seaY: Double) -> Double {
-		return seaY - PirateShip.waterRow + PirateShip.deckRow + sink + sin(bob) * 0.12
-	}
-}
-
-// ===== p14a_game =====
-
-// MARK: - Game state
-
-enum GameMode: String, Codable {
-	case survival, creative, hardcore
-	var title: String { return rawValue.capitalized }
-}
-
-struct Settings: Codable {
-	/// the player's look (the character screen): hair colour and style, shirt colour and style, trouser
-	/// colour and style, scarf (each a place in its list: hairChoices, hairStyleNames, ...)
-	var hair: Int = 0
-	var scarf: Int = 0
-	var hairStyle: Int = 0
-	var shirtColor: Int = 0
-	var shirtStyle: Int = 0
-	var pantsColor: Int = 0
-	var pantsStyle: Int = 0
-	var touchControls: Bool = true
-	var peaceful: Bool = false
-	var showCoords: Bool = true
-	var tilePx: Int = 24
-	var rareChance: Double = 0.28
-	var smoothLight: Bool = true
-	/// true = 60 frames per second, false = 30 (smoother on older iPads)
-	var fps60: Bool = true
-	var showFPS: Bool = false
-	// camera
-	var camSmoothOn: Bool = true
-	/// 0 = loose and floaty, 1 = tight
-	var camFollow: Double = 0.55
-	/// tiles the player can move before the camera starts to follow
-	var camDeadZone: Double = 0.8
-	var camLookAhead: Bool = true
-	/// the camera stays on the player: no dead zone, no look-ahead, a quick smooth follow
-	var camDirect: Bool = false
-	var shakeOn: Bool = true
-	var shakeIntensity: Double = 0.5
-	var showTrajectory: Bool = true
-	// sound
-	var soundOn: Bool = true
-	var sfxVolume: Double = 0.7
-	var ambienceVolume: Double = 0.5
-	// weather: a master switch, a switch for each kind, what it may damage, how strong and how often
-	// severe weather is, alerts, how much is drawn, and gentler lightning
-	var weatherOn: Bool = true
-	var allowRain: Bool = true
-	var allowThunder: Bool = true
-	var allowWind: Bool = true
-	var allowTornado: Bool = true
-	var allowHurricane: Bool = true
-	var allowBlizzard: Bool = true
-	var allowHail: Bool = true
-	var weatherHurtsPlayer: Bool = true
-	var weatherHurtsBlocks: Bool = true
-	var weatherHurtsCreatures: Bool = true
-	/// 0.25 (gentle) ... 1.5 (fierce)
-	var weatherIntensity: Double = 1.0
-	/// how often severe weather comes: 0 rare, 1 normal, 2 frequent
-	var severeFrequency: Int = 1
-	var weatherAlerts: Bool = true
-	/// 0.2 ... 1: how many raindrops, flakes and stones are drawn
-	var weatherParticles: Double = 1.0
-	/// lightning lights the scene gently instead of flashing it (strikes still happen)
-	var reduceFlashes: Bool = false
-	/// how dangerous nights are: 0 calm, 1 normal, 2 deadly (how many monsters, how quickly they come)
-	var nightDanger: Int = 1
-	/// how wiring is drawn: 0 only while a wiring tool or the probe is in hand, 1 always, 2 always but faint
-	var showWires: Int = 0
-	/// structural physics: built blocks need support and can only carry so much (see updateStructures)
-	var structural: Bool = false
-	/// vehicles take damage (shots, blasts, crashes) and parts break off
-	var vehicleDamage: Bool = true
-
-	var shakeScale: Double { return shakeOn ? shakeIntensity : 0 }
-
-	mutating func resetWeather() {
-		let d: Settings = Settings()
-		weatherOn = d.weatherOn
-		allowRain = d.allowRain
-		allowThunder = d.allowThunder
-		allowWind = d.allowWind
-		allowTornado = d.allowTornado
-		allowHurricane = d.allowHurricane
-		allowBlizzard = d.allowBlizzard
-		allowHail = d.allowHail
-		weatherHurtsPlayer = d.weatherHurtsPlayer
-		weatherHurtsBlocks = d.weatherHurtsBlocks
-		weatherHurtsCreatures = d.weatherHurtsCreatures
-		weatherIntensity = d.weatherIntensity
-		severeFrequency = d.severeFrequency
-		weatherAlerts = d.weatherAlerts
-		weatherParticles = d.weatherParticles
-		reduceFlashes = d.reduceFlashes
-	}
-
-	static let cameraDefaults: Settings = Settings()
-
-	mutating func resetCamera() {
-		let d: Settings = Settings.cameraDefaults
-		camSmoothOn = d.camSmoothOn
-		camFollow = d.camFollow
-		camDeadZone = d.camDeadZone
-		camLookAhead = d.camLookAhead
-		camDirect = d.camDirect
-		shakeOn = d.shakeOn
-		shakeIntensity = d.shakeIntensity
-		tilePx = d.tilePx
-	}
-
-	init() {}
-
-	// Missing keys (settings saved by an older version) fall back to the defaults
-	init(from decoder: Decoder) throws {
-		let c = try decoder.container(keyedBy: CodingKeys.self)
-		hair = (try? c.decodeIfPresent(Int.self, forKey: .hair)) ?? 0
-		scarf = (try? c.decodeIfPresent(Int.self, forKey: .scarf)) ?? 0
-		hairStyle = (try? c.decodeIfPresent(Int.self, forKey: .hairStyle)) ?? 0
-		shirtColor = (try? c.decodeIfPresent(Int.self, forKey: .shirtColor)) ?? 0
-		shirtStyle = (try? c.decodeIfPresent(Int.self, forKey: .shirtStyle)) ?? 0
-		pantsColor = (try? c.decodeIfPresent(Int.self, forKey: .pantsColor)) ?? 0
-		pantsStyle = (try? c.decodeIfPresent(Int.self, forKey: .pantsStyle)) ?? 0
-		// settings from before the look had styles: their hair and scarf lists were in another order,
-		// so the look starts afresh as the player's own drawing (black hair, no scarf)
-		if (try? c.decodeIfPresent(Int.self, forKey: .hairStyle)) == nil {
-			hair = 0
-			scarf = 0
-		}
-		touchControls = (try? c.decodeIfPresent(Bool.self, forKey: .touchControls)) ?? true
-		peaceful = (try? c.decodeIfPresent(Bool.self, forKey: .peaceful)) ?? false
-		showCoords = (try? c.decodeIfPresent(Bool.self, forKey: .showCoords)) ?? true
-		tilePx = (try? c.decodeIfPresent(Int.self, forKey: .tilePx)) ?? 24
-		rareChance = (try? c.decodeIfPresent(Double.self, forKey: .rareChance)) ?? 0.28
-		smoothLight = (try? c.decodeIfPresent(Bool.self, forKey: .smoothLight)) ?? true
-		fps60 = (try? c.decodeIfPresent(Bool.self, forKey: .fps60)) ?? true
-		showFPS = (try? c.decodeIfPresent(Bool.self, forKey: .showFPS)) ?? false
-		camSmoothOn = (try? c.decodeIfPresent(Bool.self, forKey: .camSmoothOn)) ?? true
-		camFollow = (try? c.decodeIfPresent(Double.self, forKey: .camFollow)) ?? 0.55
-		camDeadZone = (try? c.decodeIfPresent(Double.self, forKey: .camDeadZone)) ?? 0.8
-		camLookAhead = (try? c.decodeIfPresent(Bool.self, forKey: .camLookAhead)) ?? true
-		camDirect = (try? c.decodeIfPresent(Bool.self, forKey: .camDirect)) ?? false
-		shakeOn = (try? c.decodeIfPresent(Bool.self, forKey: .shakeOn)) ?? true
-		shakeIntensity = (try? c.decodeIfPresent(Double.self, forKey: .shakeIntensity)) ?? 0.5
-		showTrajectory = (try? c.decodeIfPresent(Bool.self, forKey: .showTrajectory)) ?? true
-		soundOn = (try? c.decodeIfPresent(Bool.self, forKey: .soundOn)) ?? true
-		sfxVolume = (try? c.decodeIfPresent(Double.self, forKey: .sfxVolume)) ?? 0.7
-		ambienceVolume = (try? c.decodeIfPresent(Double.self, forKey: .ambienceVolume)) ?? 0.5
-		weatherOn = (try? c.decodeIfPresent(Bool.self, forKey: .weatherOn)) ?? true
-		allowRain = (try? c.decodeIfPresent(Bool.self, forKey: .allowRain)) ?? true
-		allowThunder = (try? c.decodeIfPresent(Bool.self, forKey: .allowThunder)) ?? true
-		allowWind = (try? c.decodeIfPresent(Bool.self, forKey: .allowWind)) ?? true
-		allowTornado = (try? c.decodeIfPresent(Bool.self, forKey: .allowTornado)) ?? true
-		allowHurricane = (try? c.decodeIfPresent(Bool.self, forKey: .allowHurricane)) ?? true
-		allowBlizzard = (try? c.decodeIfPresent(Bool.self, forKey: .allowBlizzard)) ?? true
-		allowHail = (try? c.decodeIfPresent(Bool.self, forKey: .allowHail)) ?? true
-		weatherHurtsPlayer = (try? c.decodeIfPresent(Bool.self, forKey: .weatherHurtsPlayer)) ?? true
-		weatherHurtsBlocks = (try? c.decodeIfPresent(Bool.self, forKey: .weatherHurtsBlocks)) ?? true
-		weatherHurtsCreatures = (try? c.decodeIfPresent(Bool.self, forKey: .weatherHurtsCreatures)) ?? true
-		weatherIntensity = clampD((try? c.decodeIfPresent(Double.self, forKey: .weatherIntensity)) ?? 1.0, 0.25, 1.5)
-		severeFrequency = clampI((try? c.decodeIfPresent(Int.self, forKey: .severeFrequency)) ?? 1, 0, 2)
-		weatherAlerts = (try? c.decodeIfPresent(Bool.self, forKey: .weatherAlerts)) ?? true
-		weatherParticles = clampD((try? c.decodeIfPresent(Double.self, forKey: .weatherParticles)) ?? 1.0, 0.2, 1.0)
-		reduceFlashes = (try? c.decodeIfPresent(Bool.self, forKey: .reduceFlashes)) ?? false
-		nightDanger = clampI((try? c.decodeIfPresent(Int.self, forKey: .nightDanger)) ?? 1, 0, 2)
-		showWires = clampI((try? c.decodeIfPresent(Int.self, forKey: .showWires)) ?? 0, 0, 2)
-		structural = (try? c.decodeIfPresent(Bool.self, forKey: .structural)) ?? false
-		vehicleDamage = (try? c.decodeIfPresent(Bool.self, forKey: .vehicleDamage)) ?? true
-	}
-}
-
-/// The HUD and panels watch this instead of the whole game, so they only redraw when something they show changes.
-final class HUDSignal: ObservableObject, @unchecked Sendable {
-	@Published var tick: Int = 0
-}
-
-/// The world canvas watches this; it changes once per game step.
-final class FrameTicker: ObservableObject, @unchecked Sendable {
-	@Published var frame: Int = 0
-}
-
-struct IntPair: Hashable {
-	var x: Int
-	var y: Int
-}
-
-final class Game: ObservableObject, @unchecked Sendable {
-	/// a number no other game in this run has (what the render cache knows a world by)
-	let serial: Int = Game.nextSerial()
-	static var serialCount: Int = 0
-	static func nextSerial() -> Int {
-		serialCount += 1
-		return serialCount
-	}
-	// UI refresh signals
-	let hud: HUDSignal = HUDSignal()
-	let ticker: FrameTicker = FrameTicker()
-	var lastHudKey: Int = 0
-	var renderFPS: Double = 0
-	@Published var showInventory: Bool = false
-	@Published var showDebug: Bool = false
-	@Published var showMap: Bool = false
-	@Published var showJournal: Bool = false
-	@Published var paused: Bool = false
-	@Published var openChest: IntPair? = nil
-	@Published var message: String? = nil
-	@Published var dead: Bool = false
-	@Published var craftStation: Station = .hand
-
-	// setup
-	var world: World
-	var settings: Settings
-	var mode: GameMode
-	var worldName: String = "World"
-	var slot: Int = 0
-	var seedValue: UInt64
-
-	// time
-	var timeOfDay: Double = 0.06
-	/// seconds of a whole day (12 minutes, or a mod's day length rule)
-	var dayLength: Double { return 60.0 * ModRuntime.shared.rule(.day) }
-	var dayCount: Int = 1
-	var clock: Double = 0
-	var playSeconds: Double = 0
-	var messageT: Double = 0
-	var hudAccum: Int = 0
-
-	// player
-	var pb: Body
-	var facing: Int = 1
-	var hp: Double = 20
-	var maxHP: Double = 20
-	var hunger: Double = 20
-	var air: Double = 10
-	var hurtT: Double = 0
-	var invuln: Double = 0
-	var deathT: Double = 0
-	var inv: Inventory = Inventory()
-	var sel: Int = 0
-	var spawnX: Double = 0
-	var spawnY: Double = 0
-	var kills: Int = 0
-	var coyote: Double = 0
-	var jumpBuf: Double = 0
-	var dropT: Double = 0
-	/// time left in a vault out of water onto a ledge
-	var vaultT: Double = 0
-	var starveT: Double = 0
-	var regenT: Double = 0
-	var lastVy: Double = 0
-	var walkAnim: Double = 0
-	/// how long the player has stood still with nothing in hand at work (the sprite turns to face out
-	/// of the screen after a moment)
-	var restT: Double = 0
-	var fallPeak: Double = 0
-
-	// cheats / debug
-	var flying: Bool = false
-	var noclip: Bool = false
-	var godMode: Bool = false
-	var freezeTime: Bool = false
-	var monstersEnabled: Bool = true
-	var speedMult: Double = 1.0
-	var showHitboxes: Bool = false
-	/// debug: each hostile's AI state, what it knows of the player and why it is not attacking
-	var showAI: Bool = false
-	var showChunks: Bool = false
-	var fullBright: Bool = false
-	var infiniteReach: Bool = false
-	/// debug: multiplies the health of newly spawned creatures
-	var mobHealthMult: Double = 1.0
-	/// debug: individual systems can be paused to isolate problems
-	var pauseMobs: Bool = false
-	var pauseBosses: Bool = false
-	var pauseSpawning: Bool = false
-	var pauseProjectiles: Bool = false
-	var pauseVehicles: Bool = false
-	var pauseWorldTicks: Bool = false
-	var pauseParticles: Bool = false
-	/// debug: the creature picked with "Select at cursor"
-	weak var debugSelected: Mob? = nil
-	/// lairs whose boss stays away until the player has left the area (after "Delete all entities")
-	var suppressedLairs: Set<Int> = []
-
-	// tool use
-	var swingT: Double = 0
-	var swingDur: Double = 0.25
-	var swingDir: Int = 1
-	var useCD: Double = 0
-	var bowCharge: Double = 0
-	var reloadT: Double = 0
-	var reloadSlot: Int = -1
-	var mineX: Int = 0
-	var mineY: Int = 0
-	var mineP: Double = 0
-	var mining: Bool = false
-	var muzzleT: Double = 0
-	var recoilT: Double = 0
-	var bowRecoil: Double = 0
-	var eatT: Double = 0
-
-	// input state (set by the UI layer)
-	var stick: Double = 0
-	var stickY: Double = 0
-	var keyL: Bool = false
-	var keyR: Bool = false
-	var jumpHeld: Bool = false
-	var jumpPrev: Bool = false
-	var downHeld: Bool = false
-	var useHeld: Bool = false
-	var usePressedFlag: Bool = false
-	var useReleasedFlag: Bool = false
-	var aimX: Double = 0
-	var aimY: Double = 0
-	var aimValid: Bool = false
-	var useWasHeld: Bool = false
-	var lavaT: Double = 0
-	var drownT: Double = 0
-	var hardcoreOver: Bool = false
-	var pendingInteract: Bool = false
-	var downTime: Double = 0
-	var pointerStartX: Double = 0
-	var pointerStartY: Double = 0
-	var carry: Stack? = nil
-	var placeCD: Double = 0
-	var decksCache: [Deck] = []
-	var mineNeed: Double = 1
-
-	// camera and view
-	var camX: Double = 0
-	/// where the camera is heading (dead zone applied); camX/camY ease toward it
-	var camTX: Double = 0
-	var camTY: Double = 0
-	var camLead: Double = 0
-	var camY: Double = 0
-	var viewW: Double = 1024
-	var viewH: Double = 768
-	var tilePx: Int = 24
-	var shake: Double = 0
-
-	// entities
-	var mobs: [Mob] = []
-	var projectiles: [Projectile] = []
-	var drops: [DropItem] = []
-	/// doors the player walked through, closing behind them (see updateWalkDoors)
-	var walkDoors: [WalkDoor] = []
-	var particles: [Particle] = []
-	/// leaves falling from the trees on screen (see updateLeafFall)
-	var leafFlakes: [LeafFlake] = []
-	var floats: [FloatText] = []
-	var vehicles: [Vehicle] = []
-	var ships: [PirateShip] = []
-	var nextID: Int = 1
-	var spawnTimer: Double = 2.0
-	/// Sparkworks networks and their live state
-	let power: PowerSim = PowerSim()
-	/// time before the next monster may come out on the surface (sets the pace of a night)
-	var monsterSpawnCD: Double = 0
-	/// debug: how spawn attempts ended, by reason, and the last one
-	var spawnLog: [String: Int] = [:]
-	var spawnLast: String = ""
-	var shipTimer: Double = 20.0
-	var fallingBlocks: [FallingBlock] = []
-	/// placing a held block as a wall instead (the HUD's WALL switch)
-	var wallMode: Bool = false
-	/// the item in hand while the use button is held, and whether that hold used it up (see updateUse)
-	var lastUsedItem: Item? = nil
-	var handEmptied: Bool = false
-	/// the chair or sofa the player is sitting on
-	var seat: IntPair? = nil
-	/// a chair or sofa built on a vehicle the player sits on (the vehicle is the one they ride)
-	var seatAboard: PartCell? = nil
-	/// the buttons A, B and C for joints, while held; the joint being set up (its panel is open)
-	var jointButtons: [Bool] = [false, false, false]
-	var jointEdit: JointRef? = nil
-	@Published var showJoint: Bool = false
-	/// the vehicle the remote control is paired with, and the one it drives now (0: none)
-	var remotePair: Int = 0
-	var remoteID: Int = 0
-	/// the signal channels (1 to 8 as the player sees them): on from powered signal posts (worked out
-	/// with the machines), or as the Logic Studio set them
-	var channels: [Bool] = [Bool](repeating: false, count: Radio.channels)
-	var postChannels: [Bool] = [Bool](repeating: false, count: Radio.channels)
-	var logicChannels: [Bool] = [Bool](repeating: false, count: Radio.channels)
-	/// the vehicle whose receiver is being set up (its panel is open)
-	var radioEdit: Int = 0
-	@Published var showRadio: Bool = false
-	/// doors on vehicles the player opened by walking into them
-	var vehicleDoors: [VehicleDoor] = []
-	/// the lift cars of this dimension, and those left in the others
-	var lifts: [Lift] = []
-	var liftStash: [[Lift]] = [[Lift]](repeating: [], count: dimCount)
-	/// structural physics: changes waiting to be looked at, a moment's wait to gather them, and the
-	/// blocks under strain (drawn cracked)
-	var structQueue: [IntPair] = []
-	var structT: Double = 0
-	var stress: [Int: Double] = [:]
-	var decayZones: [DecayZone] = []
-	/// short-lived lights from explosions (fed into the light map as moving lights, then removed)
-	var flashes: [LightFlash] = []
-	/// ground about to be struck by a telegraphed attack (drawn as a warning)
-	var dangerZones: [DangerZone] = []
-	var journal: Journal = Journal()
-	var discoverT: Double = 0
-	var guardianT: Double = 0
-	/// weather (see WeatherSim): the simulation, what it brings to where the player stands, and the
-	/// short-lived things it puts in the world
-	var weather: WeatherSim = WeatherSim()
-	var wxHere: LocalWeather = LocalWeather()
-	/// kept for the code that reads them: how hard rain or snow falls on the player, and whether it is snow
-	var weatherRain: Double = 0
-	var weatherSnow: Bool = false
-	/// where the player last stood in the overworld (the weather is judged there while they are away)
-	var wxHomeX: Double = 0
-	var coastCache: [Int: (Double, Double)] = [:]
-	var bolts: [LightningBolt] = []
-	var thunderQueue: [PendingThunder] = []
-	var strikeMark: StrikeMark? = nil
-	var strikeAcc: Double = 0
-	var playerStrikeCD: Double = 0
-	var skyFlash: Double = 0
-	var hailPool: [HailStone] = []
-	var hailAcc: Double = 0
-	var hailHitT: Double = 0
-	var hailBroken: Int = 0
-	/// how much warmth the player has lost to the cold (0 fine ... 1 freezing), and what keeps it in
-	var bodyCold: Double = 0
-	var coldHurtT: Double = 0
-	var coldWarned: Bool = false
-	var warmthNear: Double = 0
-	var warmthT: Double = 0
-	/// 0 open, 1 under a roof, 2 indoors, 3 underground or in a storm shelter (see shelterAt)
-	var shelterLevel: Int = 0
-	var wxCellT: Double = 0
-	/// the wind's hold on the player this frame (see updateWeatherForces)
-	var wxWalk: Double = 0
-	var wxAirDrift: Double = 0
-	var wxRest: Double = 0
-	var wxAccelX: Double = 0
-	var wxAccelY: Double = 0
-	var wxSlip: Double = 0
-	var wxSlow: Double = 1
-	/// thrown by a tornado: a hard landing hurts less
-	var flingT: Double = 0
-	var wxDebrisT: Double = 0
-	var tornadoAcc: Double = 0
-	var tornadoGround: Double = 0
-	var hurricaneAcc: Double = 0
-	var surgeT: Double = 0
-	/// time not yet spent on the liquids' flow (see updateFlow), and the beat of a mod liquid's harm
-	var flowAccum: Double = 0
-	var liquidHarmT: Double = 0
-	var swampT: Double = 0
-	var wxDevT: Double = 0
-	var wxNoteT: Double = 0
-	/// the present severe spell actually reached the player (it then goes in the journal)
-	var stormFelt: Bool = false
-	var sirenLevel: Double = 0
-	/// the warning strip under the top bar (0 none, 1 advisory, 2 warning)
-	var wxBanner: String = ""
-	var wxBannerLevel: Int = 0
-	/// the weather station whose screen is open
-	var stationAt: DeviceSpot? = nil
-	@Published var showWeather: Bool = false
-	/// a Sparkworks device's panel, and which device
-	@Published var showPower: Bool = false
-	var powerAt: ChestKey? = nil
-	/// the last cell a wire drag reached, the network the probe lit up
-	var wireLast: IntPair? = nil
-	var wireSoundT: Double = 0
-	var inspect: PowerInspect? = nil
-	/// the landing squash and the last frame's water state (for splashes)
-	var landT: Double = 0
-	var wasInWater: Bool = false
-	let mobGrid: MobGrid = MobGrid()
-	var frameNo: Int = 0
-
-	// combat: the blow a heavy weapon is winding up, the brief freeze when a hit lands, the foe the
-	// aim is locked onto, a knife's run of quick hits, the trails, lightning and fire on screen
-	var strikeT: Double = 0
-	var strikeSel: Int = -1
-	var strikeItem: Item? = nil
-	weak var strikeTarget: Mob? = nil
-	var hitStopT: Double = 0
-	weak var lockTarget: Mob? = nil
-	var lockT: Double = 0
-	var comboN: Int = 0
-	var comboT: Double = -10
-	var slashes: [SlashFX] = []
-	var arcs: [ArcFX] = []
-	var fireZones: [FireZone] = []
-	var rodT: Double = 0
-	/// a finger is on the world (it aims for itself; the action button only keeps the action going)
-	var touchActive: Bool = false
-	/// a panel, the pause menu or death is covering the controls (their held state is dropped)
-	var inputBlocked: Bool = false
-	var lastWeaponSel: Int = -1
-	/// what the last melee blow hit (for the feedback and the tests)
-	var lastStrikeHits: Int = 0
-
-	// damage bookkeeping
-	var playerHitStamps: [Int: Double] = [:]
-	var playerBurn: Double = 0
-	var playerBurnTick: Double = 0
-	/// the mods this world uses (see ModRuntime; nil for a world without mods)
-	var modInfo: ModWorldInfo? = nil
-	/// the id of the mod being tried out in a mod test world ("" in a real world)
-	var testMod: String = ""
-	/// structure capture: picking two corners on the world, then the save panel (see startCapture)
-	@Published var capturing: Bool = false
-	@Published var showCapture: Bool = false
-	/// the Mod Test tools (test worlds only)
-	@Published var showModTest: Bool = false
-	var capA: (Int, Int)? = nil
-	var capB: (Int, Int)? = nil
-	/// effects from potions, food and armour (see PlayerEffects)
-	var effects: PlayerEffects = PlayerEffects()
-	/// seconds before mending potions heal fully again
-	var mendCD: Double = 0
-	/// smoke clouds and the rings of bursting potions
-	var smokes: [SmokeCloud] = []
-	var rings: [BurstRing] = []
-	/// the exosuit, a counter bumped whenever it changes, and the numbers worked out from it
-	var suit: ExoSuit = ExoSuit()
-	var suitRev: Int = 0
-	var suitStatsRev: Int = -1
-	var suitStatsCache: ExoStats = ExoStats()
-	/// energy a second the suit's running modules are drawing this frame, and what is running
-	var suitLoad: Double = 0
-	var suitLastLoad: Double = 0
-	var suitHover: Bool = false
-	/// the suit's guns: each one's wait before it can fire again (by piece), the lasers' beams this frame,
-	/// whether its FIRE control is held, and when it may next say a piece broke
-	var suitGunCD: [Int: Double] = [:]
-	var suitBeams: [(Double, Double, Double, Double)] = []
-	var suitFireHeld: Bool = false
-	var suitSayT: Double = 0
-	var suitSprinting: Bool = false
-	var suitLit: Bool = false
-	var suitEmptyWarned: Bool = false
-	/// armour infusions summed over what is worn, and the key of what was worn then
-	var armorInfCache: ArmorInf = ArmorInf()
-	var armorInfKey: Int = 0
-	@Published var showInfuse: Bool = false
-	/// when each custom infusion last gave its effect (by number)
-	var infTriggerCD: [Int: Double] = [:]
-	@Published var showExo: Bool = false
-	/// a healing shrine rests between uses
-	var healerCD: Double = 0
-	/// debug multipliers: damage the player deals / takes
-	var dmgOutMult: Double = 1.0
-	var dmgInMult: Double = 1.0
-
-	// lighting
-	var light: LightMap = LightMap()
-	/// the light around a spot a creature might appear at (see glowForSpawn)
-	let spawnLight: LightMap = LightMap()
-	var lightDark: [UInt32] = []
-	var lightGlow: [UInt32] = []
-	var lightRev: Int = 0
-	var lightTimer: Double = 0
-
-	// bosses & progress
-	var defeated: Set<Int> = []
-	var rex: Mob? = nil
-	var activeBoss: Mob? = nil
-	var bossBarName: String = ""
-	var bossBarFrac: Double = 0
-	var gotMap: Bool = false
-	var portalOpened: Bool = false
-	var portalT: Double = 0
-	var portalCool: Double = 0
-	/// set by a portal trip: the rift will not pull the player again until they have stepped out of it
-	var portalNeedsExit: Bool = false
-	var riftCheckT: Double = 0
-	var fadeT: Double = 0
-	var mounted: Mob? = nil
-	var inVehicle: Vehicle? = nil
-	/// the places a vehicle touches the land in the physics step being worked out (kept to save making a list each step)
-	var vContacts: [VContact] = []
-	/// the ON VEHICLE switch: blocks in hand are built onto the nearest vehicle instead of the world
-	var vehicleBuild: Bool = false
-	/// fuel tanks that burst this frame (they go off next frame, so one blast cannot run into itself)
-	var vehBlasts: [(Double, Double)] = []
-	/// keeps vehicle warnings (out of ammunition and the like) from repeating every frame
-	var vehSayT: Double = 0
-	var vehicleStash: [[Vehicle]] = [[Vehicle]](repeating: [], count: dimCount)
-	/// where the player came from into a custom dimension (to go back there)
-	var dimReturn: DimReturn? = nil
-	/// the Logic Studio's running scripts, and the variables of the world's mods ("mod:name")
-	var logic: LogicVM = LogicVM()
-	var logicVars: [String: Double] = [:]
-	var mapCache: TreasureMap? = nil
-	var hintT: Double = 0
-	var autosaveT: Double = 0
-
-	// streaming stats
-	var loadRadius: Int = 5
-	var lastStreamCX: Int = Int.min
-	var chunksLoadedLast: Int = 0
-	var tickMs: Double = 0
-	var tickWorstMs: Double = 0
-
-	/// A new world, with the land around its spawn made. A world being loaded passes `loadSpawn: false`:
-	/// its land comes from the save, around where the player was (making the spawn's land first only
-	/// to throw it away cost a dozen chunks every time a world was loaded).
-	init(mode: GameMode, infinite: Bool, seed: UInt64, settings: Settings, genVersion: Int = WorldGen.currentVersion, options: WorldOptions = .standard, loadSpawn: Bool = true) {
-		self.mode = mode
-		self.settings = settings
-		self.seedValue = seed
-		let gen = WorldGen(seed: seed, infinite: infinite, rareChance: settings.rareChance, genVersion: genVersion, options: options)
-		self.world = World(gen: gen)
-		self.tilePx = settings.tilePx
-		self.pb = Body(x: Double(gen.spawnX) + 0.5, y: 100, w: 0.7, h: 1.8)
-		if loadSpawn {
-			world.loadAround(centerX: gen.spawnX, radius: 6)
-			let sy: Int = world.surfaceY(gen.spawnX)
-			pb.y = Double(sy)
-		}
-		spawnX = pb.x
-		spawnY = pb.y
-		camX = pb.x
-		camY = pb.y - 2
-		setupStartingKit()
-		timeOfDay = 0.06
-		// the weather has its own random numbers, started from the world's seed
-		weather.rngS = seed ^ 0x57EA_7E12_9B3D_0451
-		weather.fxS = seed ^ 0x0FF5_E7FA_CE12_7731
-		wxHomeX = pb.x
-	}
-
-	func setupStartingKit() {
-		applyHealthRule(newWorld: true)
-		if mode == .creative {
-			flying = false
-			return
-		}
-		_ = inv.add(.block(.torch), 4)
-		giveStartItems()
-	}
-
-	var gen: WorldGen { return world.gen }
-	var isCreative: Bool { return mode == .creative }
-	var viewTilesW: Double { return viewW / Double(tilePx) }
-	var viewTilesH: Double { return viewH / Double(tilePx) }
-
-	func newID() -> Int {
-		nextID += 1
-		return nextID
-	}
-
-	func say(_ s: String, _ t: Double = 3.0) {
-		message = s
-		messageT = t
-		hud.tick &+= 1
-	}
-
-	func bumpHUD() {
-		hud.tick &+= 1
-	}
-
-	// MARK: time of day
-
-	/// 1 = full day, 0 = deep night
-	var dayFactor: Double {
-		let t: Double = timeOfDay
-		if world.dim != .overworld {
-			if let d = customDim, !d.def.ceiling { return customDayFactor(d) }
-			return 0
-		}
-		if t < 0.50 { return 1.0 }
-		if t < 0.58 { return 1.0 - smooth((t - 0.50) / 0.08) }
-		if t < 0.92 { return 0.0 }
-		return smooth((t - 0.92) / 0.08)
-	}
-
-	/// How bright the open sky is (0 dark ... 15 noon): night light from the moon, daylight from the sun
-	/// (a mod's sun or moon can give more or less of it)
-	var skyLevel: Int {
-		if world.dim != .overworld {
-			guard let d = customDim, !d.def.ceiling else { return 0 }
-			// a sun or moon switched off still lights the sky as the game's would
-			let sb: Double = d.def.sun ? (d.def.sunBody?.bright ?? 1.0) : 1.0
-			let mb: Double = d.def.moon ? (d.def.moonBody?.bright ?? 1.0) : 1.0
-			let lv: Double = clampD(d.def.light, 0, 1) * skyLight(sb, mb)
-			return Int(clampD(lv, 0, 15).rounded())
-		}
-		let rt: ModRuntime = ModRuntime.shared
-		if rt.overSun == nil && rt.overMoon == nil { return Int((6.0 + 9.0 * dayFactor).rounded()) }
-		let lv: Double = skyLight(rt.overSun?.bright ?? 1.0, rt.overMoon?.bright ?? 1.0)
-		return Int(clampD(lv, 0, 15).rounded())
-	}
-
-	/// Open sky's light (15 at noon, 6 at midnight with the game's sun and moon): a sun's brightness
-	/// scales the daylight it adds, a moon's the light of the night (never the day's)
-	func skyLight(_ sun: Double, _ moon: Double) -> Double {
-		let nights: Double = ModRuntime.shared.rule(.nights)
-		let night: Double = 6.0 * (dayFactor + (1.0 - dayFactor) * moon * nights)
-		return night + 9.0 * dayFactor * sun
-	}
-
-	var isNight: Bool { return dayFactor < 0.35 }
-
-	// MARK: items
-
-	func giveItem(_ it: Item, _ n: Int, extra: Int = 0) {
-		let left: Int = inv.add(it, n, extra: extra)
-		if left > 0 {
-			spawnDrop(Stack(item: it, count: left, extra: extra), pb.x, pb.y - 1.0, Double(facing) * 3.0, -4.0)
-		}
-		bumpHUD()
-	}
-
-	func spawnDrop(_ s: Stack, _ x: Double, _ y: Double, _ vx: Double, _ vy: Double, heldBack: Bool = false) {
-		if s.count <= 0 { return }
-		var d: DropItem = DropItem(stack: s, x: x, y: y, vx: vx, vy: vy)
-		d.heldBack = heldBack
-		drops.append(d)
-	}
-
-	func spawnParticles(_ x: Double, _ y: Double, _ color0: UInt32, _ n: Int, _ speed: Double, _ life: Double = 0.6, _ grav: Double = 18) {
-		if particles.count > 160 { return }
-		let color: UInt32 = artGrade(color0)
-		for _ in 0..<n {
-			let a: Double = Double.random(in: 0...(2 * Double.pi))
-			let s: Double = Double.random(in: 0.3...1.0) * speed
-			particles.append(Particle(x: x, y: y, vx: cos(a) * s, vy: sin(a) * s - speed * 0.3, life: life * Double.random(in: 0.6...1.2), maxLife: life, color: color, size: Double.random(in: 0.08...0.18), gravity: grav))
-		}
-	}
-
-	func floatText(_ s: String, _ x: Double, _ y: Double, _ color: UInt32 = 0xFFFFFF) {
-		if floats.count > 14 { floats.removeFirst() }
-		floats.append(FloatText(x: x, y: y, text: s, life: 1.0, color: color))
-	}
-
-	// MARK: selected item helpers
-
-	var heldStack: Stack? { return inv.slots[sel] }
-	var heldItem: Item? { return inv.slots[sel]?.item }
-
-	func setSel(_ i: Int) {
-		let n: Int = clampI(i, 0, Inventory.hotbarCount - 1)
-		if n != sel, let it = heldItem, it.isWeapon { lastWeaponSel = sel }
-		// switching while the attack control is down must not fire the new weapon in the same instant
-		if n != sel && actState.held { useCD = max(useCD, 0.15) }
-		sel = n
-		bowCharge = 0
-		mining = false
-		mineP = 0
-		// a blow being wound up is dropped with the weapon; a knife's run starts over
-		strikeT = 0
-		comboN = 0
-		bumpHUD()
-	}
-
-}
-
-// ===== p14b_player =====
-
-// MARK: - Master tick, player movement, survival, camera, streaming, lighting
-
-extension Game {
-	func tick(_ rawDt: Double) {
-		if paused { return }
-		let dt: Double = min(max(rawDt, 0.001), 0.05) * (freezeTime ? 1.0 : 1.0)
-		let t0: Double = Date().timeIntervalSinceReferenceDate
-		clock += dt
-		if !dead { playSeconds += dt }
-		if messageT > 0 {
-			messageT -= dt
-			if messageT <= 0 { message = nil }
-		}
-		updateTime(dt)
-		updateInputGate()
-		mobGrid.rebuild(mobs)
-		updateLifts(dt)
-		decksCache = (ships.isEmpty && lifts.isEmpty) ? [] : buildDecks()
-		updatePointerTimers(dt)
-		updateInputEdges()
-		updatePlayer(dt)
-		updateUse(dt)
-		updateEffects(dt)
-		updateModPlay(dt)
-		updateLogic(dt)
-		// a landed blow holds the creatures still for a frame or two (the player keeps moving), which
-		// is what makes a hit feel like it connected
-		let frozen: Bool = hitStopT > 0
-		if frozen { hitStopT -= dt }
-		if !pauseMobs && !frozen { updateMobs(dt) }
-		updateDangerZones(dt)
-		updateDiscoveries(dt)
-		if !pauseBosses && !frozen { updateBosses(dt) }
-		if !pauseSpawning { updateSpawning(dt) }
-		if !pauseProjectiles { updateProjectiles(dt) }
-		updateCombatFX(dt)
-		if !pauseWorldTicks {
-			updateFallingBlocks(dt)
-			updateStructures(dt)
-			updateFlow(dt)
-		}
-		updateDrops(dt)
-		if !pauseVehicles { updateVehicles(dt) }
-		// everybody aboard a vehicle is where it now has them
-		syncRiders()
-		if !pauseMobs { updateShips(dt) }
-		if !pauseWorldTicks { updateWorldTicks(dt) }
-		updatePortal(dt)
-		updateAutosave(dt)
-		if !pauseParticles {
-			updateParticles(dt)
-			updateLeafFall(dt)
-		}
-		updateFlashes(dt)
-		updateWeather(dt)
-		if !pauseWorldTicks { updatePower(dt) }
-		updatePowerUI(dt)
-		updateAudio()
-		updateStreaming()
-		updateCamera(dt)
-		updateLight(dt)
-		hudAccum += 1
-		if hudAccum >= 5 {
-			hudAccum = 0
-			let k: Int = hudKey()
-			if k != lastHudKey || showDebug {
-				lastHudKey = k
-				hud.tick &+= 1
-			}
-		}
-		let t1: Double = Date().timeIntervalSinceReferenceDate
-		tickMs = tickMs * 0.9 + (t1 - t0) * 1000.0 * 0.1
-		tickWorstMs = max(tickWorstMs * 0.995, (t1 - t0) * 1000.0)
-		Perf.shared.endFrame()
-	}
-
-	/// Screen shake, scaled (or disabled) by the camera settings
-	func addShake(_ amount: Double) {
-		shake = max(shake, amount * settings.shakeScale)
-	}
-
-	func updateTime(_ dt: Double) {
-		if freezeTime { return }
-		// the world's clock runs on in a custom dimension with day and night (it used to stop there,
-		// so a dimension entered at night stayed dark for good)
-		if world.dim != .overworld {
-			guard let d = customDim, d.def.cycle, !d.def.ceiling else { return }
-		}
-		timeOfDay += dt / dayLength
-		if timeOfDay >= 1.0 {
-			timeOfDay -= 1.0
-			dayCount += 1
-		}
-	}
-
-	func updateInputEdges() {
-		if useHeld && !usePressedFlag && !useWasHeld { usePressedFlag = true }
-		useWasHeld = useHeld
-	}
-
-	// MARK: player
-
-	func updatePlayer(_ dt: Double) {
-		if dead {
-			deathT += dt
-			return
-		}
-		if invuln > 0 { invuln -= dt }
-		if hurtT > 0 { hurtT -= dt }
-		if shake > 0 { shake = max(0, shake - dt * 1.5) }
-		var ix: Double = stick
-		if keyL { ix -= 1.0 }
-		if keyR { ix += 1.0 }
-		ix = clampD(ix, -1.0, 1.0)
-		if abs(ix) < 0.08 { ix = 0 }
-		var jumpPressed: Bool = jumpHeld && !jumpPrev
-		jumpPrev = jumpHeld
-		if remoteID != 0 {
-			if let rv = remoteVehicle, remoteCanReach(rv) {
-				driveRemote(rv, ix, jumpPressed, dt)
-			} else {
-				endRemote("The remote lost the vehicle.")
-			}
-			// (the player's hands are on the remote: they stand where they are)
-			ix = 0
-			jumpPressed = false
-		}
-		if let v = inVehicle {
-			driveVehicle(v, ix, jumpPressed, dt)
-			return
-		}
-		if let r = mounted {
-			rideRex(r, ix, jumpPressed, dt)
-			return
-		}
-		if seat != nil && stayInSeat(ix, jumpPressed) {
-			lastVy = 0
-			return
-		}
-		if seatAboard != nil && stayInSeatAboard(ix, jumpPressed) {
-			lastVy = 0
-			return
-		}
-		var runMax: Double = 7.4 * speedMult * ModRuntime.shared.rule(.walk) * (wearing(.swiftBoots) ? 1.18 : 1.0) * wxSlow * (1.0 + effects.value(.speed) / 100.0) * (1.0 + armorInf.speed) * suitSpeedMul
-		// heavy weapons commit you to the blow: slower on your feet while it lasts
-		if swingT > 0 || strikeT > 0, let it = heldItem, it.isMeleeWeapon { runMax *= it.melee.moveScale }
-		// a mod's sticky block holds the player back
-		let sticky: Bool = inStickyBlock()
-		if sticky { runMax *= 0.35 }
-		if ix != 0 {
-			facing = ix > 0 ? 1 : -1
-		}
-		if swingT > 0 || useHeld {
-			if aimValid {
-				facing = aimFacing()
-			}
-		}
-		if flying || noclip {
-			let tx: Double = ix * 13.0 * speedMult
-			var ty: Double = 0
-			if jumpHeld { ty = -10.0 }
-			if downHeld || stickY > 0.55 { ty = 10.0 }
-			pb.vx += (tx - pb.vx) * min(1.0, dt * 9.0)
-			pb.vy += (ty - pb.vy) * min(1.0, dt * 9.0)
-			if noclip {
-				pb.x += pb.vx * dt
-				pb.y += pb.vy * dt
-			} else {
-				world.moveBody(&pb, dt, stepUp: 0, dropThrough: true, decks: [])
-			}
-			walkAnim += abs(pb.vx) * dt * 0.5
-			lastVy = pb.vy
-			checkHazards(dt)
-			return
-		}
-		let inWater: Bool = pb.inWater
-		let inLava: Bool = pb.inLava
-		// climbing out of water: pushing against a bank or a ledge with jump held vaults onto it, if the
-		// top is within reach (water used to pin the player under any ledge above its surface). Decided
-		// before swimming, so the swim limits on rising speed do not cancel the vault.
-		if (inWater || inLava) && vaultT <= 0 && jumpHeld && ix != 0 && pb.hitWall && ledgeWithinReach(ix > 0 ? 1 : -1) {
-			vaultT = 0.32
-			pb.vy = -13.0
-		}
-		if vaultT > 0 { vaultT -= dt }
-		let swimming: Bool = (inWater || inLava) && vaultT <= 0
-		// ladders: while the body overlaps one the player climbs (jump or up to climb, down to descend)
-		if !swimming, let lc = ladderSpot() {
-			let climbUp: Bool = jumpHeld || stickY < -0.45
-			let climbDown: Bool = downHeld || stickY > 0.45
-			let vyT: Double = climbUp ? -5.2 : (climbDown ? 5.2 : 0.0)
-			pb.vy += (vyT - pb.vy) * min(1.0, dt * 16.0)
-			var tx: Double = ix * runMax * 0.7
-			// while climbing with no sideways input the body settles onto the rungs
-			if ix == 0 && (climbUp || climbDown) { tx = (lc - (pb.ride != 0 ? pb.rlx : pb.x)) * 8.0 }
-			pb.vx += (tx - pb.vx) * min(1.0, dt * 14.0)
-			moveThing(&pb, dt, stepUp: 1.0, dropThrough: climbDown, decks: allDecks(), mass: playerMass, falls: false)
-			coyote = 0.11
-			jumpBuf = 0
-			fallPeak = 0
-			walkAnim += (abs(pb.vy) + abs(pb.vx)) * dt * 0.55
-			lastVy = pb.vy
-			checkHazards(dt)
-			updateSurvival(dt, ix)
-			return
-		}
-		// the wind (see updateWeatherForces) helps or holds back a walk, carries a jump, and in a gale
-		// pushes even a player standing still; snow and wet ground make the footing slippery. All of
-		// these are zero in calm weather, so movement is then exactly as it always was.
-		let windT: Double = swimming ? 0 : (pb.onGround ? wxWalk : wxAirDrift)
-		let swimMul: Double = (effects.value(.breathing) > 0 && !inLava) ? 0.85 : 0.55
-		let target: Double = ix * runMax * (swimming ? swimMul : 1.0) + (ix != 0 ? windT : 0)
-		let grip: Double = pb.onGround ? 1.0 - 0.6 * wxSlip : 1.0
-		let accel: Double = (pb.onGround ? 72.0 : 40.0) * grip
-		if ix != 0 {
-			if pb.vx < target { pb.vx = min(target, pb.vx + accel * dt) } else { pb.vx = max(target, pb.vx - accel * dt) }
-		} else {
-			let rest: Double = swimming ? 0 : (pb.onGround ? wxRest : wxAirDrift)
-			let fr: Double = (pb.onGround ? 90.0 * (1.0 - 0.8 * wxSlip) : 12.0) * dt
-			if pb.vx > rest { pb.vx = max(rest, pb.vx - fr) } else { pb.vx = min(rest, pb.vx + fr) }
-		}
-		// a tornado's pull and lift (bounded; zero without one)
-		if wxAccelX != 0 || wxAccelY != 0 {
-			pb.vx = clampD(pb.vx + wxAccelX * dt, -16, 16)
-			pb.vy = clampD(pb.vy + wxAccelY * dt, -14, terminalV)
-			if wxAccelY < -8 { pb.onGround = false }
-		}
-		if pb.onGround { coyote = 0.11 } else { coyote -= dt }
-		if jumpPressed { jumpBuf = 0.13 } else { jumpBuf -= dt }
-		if jumpBuf > 0 && coyote > 0 && !swimming {
-			// a jump boost raises the jump's height by its percentage
-			pb.vy = -15.9 * sqrt((1.0 + effects.value(.jump) / 100.0) * ModRuntime.shared.rule(.jump)) * suitJumpMul()
-			coyote = 0
-			jumpBuf = 0
-			pb.onGround = false
-			spawnParticles(pb.x, pb.y, 0xB0A890, 4, 2.5, 0.35, 10)
-		}
-		if swimming {
-			pb.vy += (inLava ? 14.0 : 11.0) * dt
-			if jumpHeld { pb.vy = max(pb.vy - 52.0 * dt, -6.5) }
-			pb.vy = clampD(pb.vy, -8.0, inLava ? 3.0 : 6.0)
-		} else {
-			var g: Double = gravityG
-			if !jumpHeld && pb.vy < -5.0 { g *= 2.6 }
-			pb.vy = min(pb.vy + g * dt, terminalV)
-		}
-		if sticky {
-			pb.vy = clampD(pb.vy, -5.0, 2.2)
-			fallPeak = 0
-		}
-		if (downHeld || stickY > 0.6) { dropT = 0.22 }
-		if dropT > 0 { dropT -= dt }
-		let decks: [Deck] = allDecks()
-		let wasAir: Bool = !pb.onGround
-		let peak: Double = pb.vy
-		moveThing(&pb, dt, stepUp: 1.0, dropThrough: dropT > 0, decks: decks, mass: playerMass, falls: !swimming)
-		if pb.deck >= 0 && pb.deck < decks.count {
-			let dk: Deck = decks[pb.deck]
-			pb.x += dk.vx * dt
-		}
-		doorTouch(ix)
-		updateWalkDoors(dt)
-		vehicleDoorTouch(ix)
-		updateVehicleDoors(dt)
-		if !pb.onGround && pb.vy > 0 { fallPeak = max(fallPeak, pb.vy) }
-		if pb.onGround && wasAir {
-			if fallPeak > 20.0 && !swimming && mode != .creative && !godMode {
-				var dmg: Double = (fallPeak - 20.0) * 1.15 * ModRuntime.shared.rule(.falls)
-				// thrown by a tornado: a hard landing, but one that can be lived through
-				if flingT > 0 { dmg = settings.weatherHurtsPlayer ? min(dmg, 3.0) : 0 }
-				if dmg > 0 { damagePlayer(dmg, from: pb.x, knock: 0, ignoreArmor: true) }
-				addShake(0.3)
-			}
-			if fallPeak > 9.0 { spawnParticles(pb.x, pb.y, 0xB0A890, 6, 3.0, 0.4, 10) }
-			if fallPeak > 6.0 { sfx(.land, clampD((fallPeak - 6.0) / 14.0, 0.2, 1.0)); landT = 0.12 }
-			fallPeak = 0
-		}
-		if pb.onGround || swimming { fallPeak = 0 }
-		_ = peak
-		walkAnim += abs(pb.vx) * dt * 0.55
-		let still: Bool = pb.onGround && abs(pb.vx) < 0.15 && abs(ix) < 0.1 && swingT <= 0 && !mining && bowCharge <= 0 && hurtT <= 0
-		restT = still && seat == nil ? restT + dt : 0
-		lastVy = pb.vy
-		checkHazards(dt)
-		updateSurvival(dt, ix)
-	}
-
-	/// Column of a ladder the body is on (its centre within a third of a block of the ladder), or nil.
-	/// The tile right under the feet counts too, so a climb carries on until the player stands at the
-	/// top, and a ladder going down a hole can be walked across.
-	func ladderColumn() -> Int? {
-		let cx: Int = Int(floor(pb.x))
-		let frac: Double = pb.x - Double(cx)
-		var cols: [Int] = [cx]
-		if frac < 0.34 { cols.append(cx - 1) } else if frac > 0.66 { cols.append(cx + 1) }
-		let y0: Int = Int(floor(pb.top + 0.1))
-		let y1: Int = Int(floor(pb.y + 0.05))
-		for tx in cols {
-			var y: Int = y0
-			while y <= y1 {
-				let t: Tile = world.tile(tx, y)
-				if t == .ladder { return tx }
-				// a mod's climbable block works the same way
-				if t.isMod && ModRuntime.shared.climbTiles.contains(t.rawValue) { return tx }
-				// a platform laid over the top of a ladder (a hatch) is climbed through and stepped onto
-				if t == .platform && world.tile(tx, y + 1) == .ladder { return tx }
-				y += 1
-			}
-		}
-		return nil
-	}
-
-	func onLadder() -> Bool { return ladderColumn() != nil }
-
-	/// Whether the player's body is in a mod's sticky block
-	func inStickyBlock() -> Bool {
-		let st: Set<UInt8> = ModRuntime.shared.stickyTiles
-		if st.isEmpty { return false }
-		let hw: Double = pb.w * 0.5
-		let x0: Int = Int(floor(pb.x - hw + 0.02))
-		let x1: Int = Int(floor(pb.x + hw - 0.02))
-		let y0: Int = Int(floor(pb.top + 0.02))
-		let y1: Int = Int(floor(pb.y - 0.02))
-		if x1 < x0 || y1 < y0 { return false }
-		for ty in y0...y1 {
-			for tx in x0...x1 where st.contains(world.tile(tx, ty).rawValue) { return true }
-		}
-		return false
-	}
-
-	/// A ledge in front of the player whose top is at most about 2.5 blocks above the feet, with room
-	/// to stand on it
-	func ledgeWithinReach(_ dir: Int) -> Bool {
-		let fx: Int = Int(floor(pb.x + Double(dir) * (pb.w * 0.5 + 0.15)))
-		let feet: Int = Int(floor(pb.y - 0.05))
-		var k: Int = 0
-		while k <= 3 {
-			let row: Int = feet - k
-			if !world.solid(fx, row) && !world.solid(fx, row - 1) && world.solid(fx, row + 1) {
-				return pb.y - Double(row + 1) <= 2.6
-			}
-			k += 1
-		}
-		return false
-	}
-
-	func checkHazards(_ dt: Double) {
-		if mode == .creative || godMode { return }
-		// spikes underfoot, cactus touched from the side (cactus is solid, so test a slightly wider box)
-		if let t = world.boxHurts(pb.left + 0.05, pb.top + 0.1, pb.right - 0.05, pb.y - 0.02) ?? world.boxHurts(pb.left - 0.04, pb.top + 0.2, pb.right + 0.04, pb.y - 0.1) {
-			if t == .spikes || t == .cactus || t.isMod {
-				let dmg: Double = t.isMod ? (ModRuntime.shared.blockDef(t)?.power ?? 4) : (t == .spikes ? 6 : 3)
-				var info = DamageInfo(amount: dmg, type: .hazard, source: .environment)
-				info.originX = pb.x + Double(-facing)
-				info.knock = 5
-				_ = hurtPlayer(info)
-			}
-		}
-		if world.tile(Int(floor(pb.x)), Int(floor(pb.y - 0.5))) == .campfire { playerBurn = max(playerBurn, 1.2) }
-		if pb.inLava {
-			let charm: Bool = wearing(.emberCharm)
-			playerBurn = max(playerBurn, charm ? 1.0 : 2.5)
-			lavaT += dt
-			if lavaT > 0.35 {
-				lavaT = 0
-				var info = DamageInfo(amount: charm ? 2 : 5, type: .lava, source: .environment)
-				info.originX = pb.x
-				_ = hurtPlayer(info)
-			}
-		} else {
-			lavaT = 0
-		}
-		updatePlayerBurn(dt)
-		modLiquidEffects(dt)
-	}
-
-	/// Whether the player's head is under water (below the surface of a part-full cell too), and not in
-	/// the dry air inside a vehicle
-	func headUnderWater() -> Bool {
-		let hy: Double = pb.y - pb.h * 0.92
-		let hx: Int = Int(floor(pb.x))
-		let hyI: Int = Int(floor(hy))
-		let t: Tile = world.tile(hx, hyI)
-		if !t.liquid || t == .lava || Liquids.hotTable[Int(t.rawValue)] { return false }
-		if hy - Double(hyI) < 1.0 - world.liquidAmount(hx, hyI) { return false }
-		if pb.ride != 0, let v = vehicleByID(pb.ride), v.dryAt(pb.rlx, pb.rly - pb.h * 0.92) { return false }
-		return true
-	}
-
-	func updateSurvival(_ dt: Double, _ ix: Double) {
-		if mode == .creative { return }
-		// air
-		let headY: Int = Int(floor(pb.y - pb.h * 0.92))
-		// a Deepbreath Draught or a sealed suit keeps the air coming
-		if headUnderWater() && effects.value(.breathing) <= 0 && !suitHas(.seal) {
-			air -= dt * (wearing(.divingMask) ? 1.0 / 3.0 : 1.0)
-			if air <= 0 {
-				air = 0
-				drownT += dt
-				if drownT >= 1.0 {
-					drownT = 0
-					damagePlayer(2, from: pb.x, knock: 0, ignoreArmor: true)
-				}
-			}
-		} else {
-			air = min(10.0, air + dt * 5.0)
-			drownT = 0
-		}
-		// hunger
-		let rate: Double = (ix != 0 ? 0.030 : 0.016) * (pb.inWater ? 1.3 : 1.0)
-		hunger = max(0, hunger - rate * ModRuntime.shared.rule(.hunger) * dt)
-		if hunger <= 0 {
-			starveT += dt
-			if starveT >= 3.0 {
-				starveT = 0
-				if hp > 1 || mode == .hardcore { damagePlayer(1, from: pb.x, knock: 0, ignoreArmor: true) }
-			}
-		} else {
-			starveT = 0
-		}
-		// a frozen body does not heal until it has warmed up
-		let healRule: Double = ModRuntime.shared.rule(.healing)
-		if hunger >= 14 && hp < maxHP && bodyCold < 0.9 && healRule > 0 {
-			regenT += dt
-			let period: Double = (hunger >= 18 ? 0.9 : 1.6) / healRule
-			if regenT >= period {
-				regenT = 0
-				hp = min(maxHP, hp + 1)
-				hunger = max(0, hunger - 0.12)
-				bumpHUD()
-			}
-		} else {
-			regenT = 0
-		}
-	}
-
-	func damagePlayer(_ dmg: Double, from sx: Double, knock: Double = 6, ignoreArmor: Bool = false) {
-		if dead || godMode || mode == .creative { return }
-		if invuln > 0 && !ignoreArmor { return }
-		let hurtRule: Double = ModRuntime.shared.rule(.hurt)
-		if hurtRule <= 0 { return }
-		var d: Double = dmg * hurtRule
-		if !ignoreArmor { d *= 1.0 - armorShare(totalDefense) }
-		d = max(1.0, d.rounded())
-		hp -= d
-		if remoteID != 0 { endRemote("Hurt: you let go of the remote.") }
-		sfx(.hurt, 0.8)
-		invuln = 0.55
-		hurtT = 0.35
-		if knock > 0 {
-			let dirk: Double = pb.x >= sx ? 1.0 : -1.0
-			pb.vx = dirk * knock
-			pb.vy = -6.0
-		}
-		floatText("-" + String(Int(d)), pb.x, pb.y - pb.h - 0.3, 0xFF5050)
-		addShake(0.2)
-		bumpHUD()
-		if hp <= 0 { die() }
-	}
-
-	/// The share of a blow that armour takes: 4% a point, at most 80% (never invincible)
-	func armorShare(_ defense: Double) -> Double {
-		return min(0.8, max(0, defense) * 0.04)
-	}
-
-	func heal(_ amount: Double) {
-		hp = min(maxHP, hp + amount)
-		bumpHUD()
-	}
-
-	func die() {
-		if dead { return }
-		dropBagOnDeath()
-		dead = true
-		hp = 0
-		deathT = 0
-		mounted = nil
-		if let v = inVehicle { v.rider = false }
-		inVehicle = nil
-		if remoteID != 0 { endRemote() }
-		spawnParticles(pb.x, pb.y - 1, 0xC03030, 24, 6.0, 0.9, 16)
-		say(mode == .hardcore ? "You died. Your hardcore world is lost." : "You died!", 5.0)
-		if mode == .hardcore { hardcoreOver = true }
-		bumpHUD()
-	}
-
-	func respawn() {
-		if mode == .hardcore && hardcoreOver { return }
-		if world.dim != .overworld { travelTo(.overworld, arriveX: spawnX, arriveY: spawnY, silent: true) }
-		dimReturn = nil
-		dead = false
-		hp = maxHP
-		hunger = max(hunger, 14)
-		air = 10
-		pb.x = spawnX
-		pb.y = spawnY
-		pb.vx = 0
-		pb.vy = 0
-		pb.ride = 0
-		invuln = 3.0
-		fallPeak = 0
-		world.loadAround(centerX: Int(spawnX), radius: 3)
-		let sy: Int = world.surfaceY(Int(spawnX))
-		pb.y = Double(sy)
-		camX = pb.x
-		camY = pb.y - 2
-		say("Respawned.", 2.0)
-		bumpHUD()
-	}
-
-	// MARK: camera, streaming, light
-
-	/// Camera follow: a dead zone around the player, optional look-ahead in the direction of travel
-	/// (eased so turning around does not jerk the view), and frame-rate independent exponential smoothing.
-	func updateCamera(_ dt: Double) {
-		let st: Settings = settings
-		// Carried by a vehicle (driving it, or standing on it), the view is carried along with it, so
-		// the smoothing below only ever has the player's own movement to follow. Without this the view
-		// fell further behind the faster a vehicle went, and at a few hundred blocks a second lost it.
-		// (driving by remote, the view goes with the vehicle, not the player)
-		let rv: Vehicle? = remoteVehicle
-		var carrier: Vehicle? = inVehicle ?? rv
-		if carrier == nil && pb.ride != 0 { carrier = vehicleByID(pb.ride) }
-		if let cv = carrier {
-			let pv: (Double, Double) = rv != nil ? (cv.vx, cv.vy) : cv.pointVel(pb.x, pb.y)
-			camX += pv.0 * dt
-			camTX += pv.0 * dt
-			camY += pv.1 * dt
-			camTY += pv.1 * dt
-		}
-		// look ahead: further when driving fast, eased in and out
-		var leadTarget: Double = 0
-		if st.camLookAhead && !st.camDirect {
-			if let v = carrier {
-				leadTarget = clampD(v.vx * 0.35, -6.0, 6.0)
-			} else if abs(pb.vx) > 1.0 {
-				leadTarget = Double(facing) * 1.6
-			}
-		}
-		camLead += (leadTarget - camLead) * min(1.0, dt * 2.5)
-		let fx: Double = (rv?.px ?? pb.x) + camLead
-		let fy: Double = rv != nil ? (rv?.py ?? pb.y) : pb.y - 1.6
-		// the target only moves once the player leaves the dead zone around it
-		let dz: Double = st.camDirect ? 0 : clampD(st.camDeadZone, 0, 4)
-		if fx > camTX + dz { camTX = fx - dz } else if fx < camTX - dz { camTX = fx + dz }
-		let dzy: Double = dz * 0.75
-		if fy > camTY + dzy { camTY = fy - dzy } else if fy < camTY - dzy { camTY = fy + dzy }
-		if abs(camTX - camX) > 40 || abs(camTY - camY) > 40 || !st.camSmoothOn {
-			// teleports, respawns and "smoothing off" snap straight to the target
-			camX = camTX
-			camY = camTY
-		} else {
-			let rate: Double = st.camDirect ? 12.0 : 2.5 + clampD(st.camFollow, 0, 1) * 11.5
-			let k: Double = 1.0 - exp(-rate * dt)
-			camX += (camTX - camX) * k
-			camY += (camTY - camY) * k
-		}
-		let halfW: Double = viewTilesW * 0.5
-		let halfH: Double = viewTilesH * 0.5
-		if !gen.infinite {
-			if viewTilesW < Double(gen.width) { camX = clampD(camX, halfW, Double(gen.width) - halfW) }
-		}
-		let Hh: Double = Double(world.H)
-		camY = clampD(camY, halfH - 14.0, Hh - halfH + 1.0)
-	}
-
-	func updateStreaming() {
-		let need: Int = Int(ceil(viewTilesW * 0.5 / Double(chunkW))) + 2
-		loadRadius = need
-		var keep: Set<Int> = []
-		for m in mobs where m.persistent || m.isBoss || m.tame {
-			keep.insert(floorDiv(Int(floor(m.b.x)), chunkW))
-		}
-		for v in vehicles { keep.insert(floorDiv(Int(floor(v.b.x)), chunkW)) }
-		keepWorkingLand(&keep)
-		let cx: Int = Int(floor(camX))
-		let n: Int = world.stream(centerX: cx, radius: loadRadius, hysteresis: 3, budget: 1, keep: keep)
-		chunksLoadedLast = n
-		// keep the player's own chunk always available
-		let pc: Int = floorDiv(Int(floor(pb.x)), chunkW)
-		if world.chunks[pc] == nil { world.loadChunk(pc) }
-	}
-
-	func heldLightLevel() -> Int {
-		if let it = heldItem, case .custom(let k) = it, let r = ModRuntime.shared.item(k), r.def.light > 0 { return r.def.light }
-		if let it = heldItem, case .block(let t) = it {
-			let l: Int = t.light
-			if l >= 9 { return l - 2 }
-		}
-		return 0
-	}
-
-	func updateLight(_ dt: Double) {
-		lightTimer -= dt
-		// dynamic lights
-		var dyn: [(Int, Int, Int)] = []
-		let pcx: Int = Int(floor(pb.x))
-		let pcy: Int = Int(floor(pb.y - pb.h * 0.6))
-		var hl: Int = heldLightLevel()
-		hl = max(hl, wearing(.headlamp) ? 11 : 5)
-		hl = max(hl, Int(effects.value(.glow)))
-		if suitLit { hl = max(hl, 12) }
-		dyn.append((pcx, pcy, hl))
-		for m in mobs {
-			var lv: Int = 0
-			switch m.kind {
-			case .emberSlime: lv = 9
-			case .imp: lv = 8
-			case .wraith: lv = 6
-			case .cinderBat: lv = 6
-			case .bearBoss, .rex: lv = m.isBoss ? 6 : 0
-			case .sentinel: lv = 9
-			case .warden: lv = 10
-			case .custom: lv = clampI(ModRuntime.shared.mob(m.cslot)?.def.glow ?? 0, 0, 12)
-			default: lv = 0
-			}
-			if m.burn > 0 { lv = max(lv, 6) }
-			if lv > 0 { dyn.append((Int(floor(m.b.x)), Int(floor(m.b.y - m.b.h * 0.5)), lv)) }
-		}
-		for p in projectiles where p.mod >= 0 && p.mod < ModRuntime.shared.shots.count {
-			let gl: Int = ModRuntime.shared.shots[p.mod].glow
-			if gl > 0 { dyn.append((Int(floor(p.x)), Int(floor(p.y)), gl)) }
-		}
-		for p in projectiles where p.kind == .fireball || p.kind == .bomb {
-			// fireballs glow; a bomb's lit fuse gives a small light
-			dyn.append((Int(floor(p.x)), Int(floor(p.y)), p.kind == .fireball ? 10 : 5))
-		}
-		for f in flashes {
-			let lv: Int = f.level
-			if lv > 0 { dyn.append((Int(floor(f.x)), Int(floor(f.y)), lv)) }
-		}
-		for z in fireZones { dyn.append((Int(floor(z.x)), Int(floor(z.y - 0.6)), 11)) }
-		for s in ships {
-			dyn.append((Int(floor(s.x)) - 3, Int(floor(s.deckY(Double(WorldGen.sea)))) - 2, 10))
-			dyn.append((Int(floor(s.x)) + 3, Int(floor(s.deckY(Double(WorldGen.sea)))) - 2, 10))
-		}
-		for v in vehicles where v.rider && v.engines > 0 && v.fuel > 0 {
-			dyn.append((Int(floor(v.b.x + Double(v.dir) * (v.b.w * 0.5 + 1.0))), Int(floor(v.b.y - v.b.h * 0.5)), 10))
-		}
-		// lamps and torches built onto a vehicle light it up wherever it goes
-		for v in vehicles where !v.blocks.isEmpty {
-			for (cell, b) in v.blocks where b.light > 0 {
-				let p: (Double, Double) = v.cellCenter(cell)
-				dyn.append((Int(floor(p.0)), Int(floor(p.1)), b.light))
-			}
-		}
-		// headlights throw a beam ahead of a driven vehicle
-		for v in vehicles where v.rider && v.headlights > 0 {
-			for (cell, t) in v.parts where t == .headlight {
-				let d: Double = Double(v.dir)
-				for (k, lv) in [(0.0, 10), (2.5, 14), (5.0, 13), (7.5, 11)] {
-					let p: (Double, Double) = v.toWorld(Double(cell.dx) + 0.5 + d * k, Double(cell.dy) + 0.5)
-					dyn.append((Int(floor(p.0)), Int(floor(p.1)), lv))
-				}
-			}
-		}
-		let nightVision: Bool = effects.value(.nightVision) > 0
-		var key: Int = dyn.count &+ (nightVision ? 7919 : 0)
-		for d in dyn { key = key &* 31 &+ d.0 &* 7 &+ d.1 &* 13 &+ d.2 }
-		// window
-		let vw: Int = Int(ceil(viewTilesW)) + 2
-		let vh: Int = Int(ceil(viewTilesH)) + 2
-		let vx0: Int = Int(floor(camX - viewTilesW * 0.5)) - 1
-		let vy0: Int = Int(floor(camY - viewTilesH * 0.5)) - 1
-		let covered: Bool = light.covers(vx0 - 3, vy0 - 3, vx0 + vw + 3, vy0 + vh + 3)
-		// only edits that touch the light window matter (crops growing far away do not)
-		var edited: Bool = false
-		if world.editAny {
-			let ex0: Int = light.ox - 1
-			let ex1: Int = light.ox + light.w
-			let ey0: Int = light.oy - 1
-			let ey1: Int = light.oy + light.h
-			if world.editX1 >= ex0 && world.editX0 <= ex1 && world.editY1 >= ey0 && world.editY0 <= ey1 {
-				edited = true
-			} else {
-				world.editAny = false
-			}
-		}
-		let layoutChanged: Bool = light.layoutUsed != world.layoutVersion
-		let needsStatic: Bool = !light.valid || !covered || light.skyUsed != skyLevel || light.dimUsed != world.dim.rawValue || edited || layoutChanged
-		let amb: Double = ambientLight()
-		if !needsStatic {
-			// only moving lights changed: cheap partial relight
-			if light.dynUsed == key { return }
-			let t0: Double = perfNow()
-			light.applyDynamic(dyn)
-			light.dynUsed = key
-			light.buildPixels(&lightDark, &lightGlow, amb, 1.0 - dayFactor)
-			lightRev &+= 1
-			Perf.shared.lightDyn += 1
-			Perf.shared.lightMs = Perf.smooth(Perf.shared.lightMs, perfNow() - t0)
-			return
-		}
-		if lightTimer > 0 && light.valid && covered && light.dimUsed == world.dim.rawValue { return }
-		let t0: Double = perfNow()
-		lightTimer = 0.04
-		let m: Int = 17
-		var ox: Int = vx0 - m
-		ox = floorDiv(ox, 4) * 4
-		var oy: Int = vy0 - m
-		oy = floorDiv(oy, 4) * 4
-		var w: Int = (vx0 + vw + m) - ox + 4
-		w = (w / 4 + 1) * 4
-		var h: Int = (vy0 + vh + m) - oy + 4
-		h = (h / 4 + 1) * 4
-		light.compute(world, ox, oy, w, h, skyLevel, dyn)
-		light.dynUsed = key
-		light.buildPixels(&lightDark, &lightGlow, amb, 1.0 - dayFactor)
-		lightRev &+= 1
-		Perf.shared.lightMs = Perf.smooth(Perf.shared.lightMs, perfNow() - t0)
-	}
-
-	/// The least light anywhere: the dimension's own glow (a cavern dimension glows as brightly as its
-	/// maker set its light, as it has no sky to light it), or more with an Owlsight Draught
-	func ambientLight() -> Double {
-		var amb: Double = fullBright ? 1.0 : (world.dim == .umbral ? 0.2 : (world.dim.isCustom ? 0.12 : 0.07))
-		if !fullBright, let d = customDim, d.def.ceiling { amb = max(amb, 0.12 + 0.22 * clampD(d.def.light, 0, 1)) }
-		if effects.value(.nightVision) > 0 { amb = max(amb, 0.5) }
-		return amb
-	}
-
-	// MARK: random world ticks (crops, grass)
-
-	func updateWorldTicks(_ dt: Double) {
-		let n: Int = 7
-		let px: Int = Int(floor(pb.x))
-		let py: Int = Int(floor(pb.y))
-		for _ in 0..<n {
-			let x: Int = px + Int.random(in: -40...40)
-			let y: Int = py + Int.random(in: -26...26)
-			let t: Tile = world.tile(x, y)
-			// rain falling on a crop (not snow) helps it along
-			var grow: Double = 0.35
-			if t.isPlant && weatherRain > 0.2 && !weatherSnow && y < world.rainTop(x) + 1 { grow = 0.35 + 0.3 * weatherRain }
-			switch t {
-			case .wheat1: if Double.random(in: 0...1) < grow { world.set(x, y, .wheat2) }
-			case .wheat2: if Double.random(in: 0...1) < grow { world.set(x, y, .wheat3) }
-			case .carrot1: if Double.random(in: 0...1) < grow { world.set(x, y, .carrot2) }
-			case .carrot2: if Double.random(in: 0...1) < grow { world.set(x, y, .carrot3) }
-			case .sapling: if Double.random(in: 0...1) < grow * 0.4 { growSapling(x, y) }
-			case .dirt:
-				if world.dim == .overworld && y < world.skyTop(x) + 1 && world.tile(x, y - 1) == .air {
-					let a: Tile = world.tile(x - 1, y)
-					let b: Tile = world.tile(x + 1, y)
-					if a == .grass || b == .grass { if Double.random(in: 0...1) < 0.2 { world.set(x, y, .grass) } }
-				}
-			case .grass:
-				if world.tile(x, y - 1).opaque && Double.random(in: 0...1) < 0.3 { world.set(x, y, .dirt) }
-			default: break
-			}
-		}
-		updateLeafDecay(dt)
-		// lantern/torch/crop support is checked when neighbours change (see breakTile)
-	}
-
-	/// Open air or a wild plant a growing tree may take the place of (never a torch or anything built)
-	func treeRoom(_ t: Tile) -> Bool {
-		return t == .air || t == .tallGrass || t == .flowerR || t == .flowerY || t == .deadBush
-	}
-
-	/// A sapling grows into a tree that suits the land it stands in: a pine in snow and on mountains, a
-	/// tall jungle tree, a flat-topped savanna tree, a low swamp tree, a birch or an oak elsewhere (in a
-	/// custom dimension, a tree of its region's own log and leaves). It grows as tall as the room above
-	/// it allows, and waits while there is not room for its smallest kind. True when it grew.
-	@discardableResult
-	func growSapling(_ x: Int, _ y: Int) -> Bool {
-		if world.tile(x, y) != .sapling || !world.isSoil(world.tile(x, y + 1)) { return false }
-		let r: Double = Double.random(in: 0..<1)
-		var log: Tile = .log
-		var leaves: Tile = .leaves
-		// 0 oak, 1 birch, 2 pine, 3 jungle, 4 savanna, 5 swamp
-		var shape: Int = 0
-		if let d = customDim {
-			let z: ModDimZoneRT = d.zones[d.zoneIndex(x)]
-			if !z.designs.isEmpty { return growDesign(d, z, x, y) }
-			log = z.log
-			leaves = z.leaves
-		} else {
-			switch biomeAt(Double(x)) {
-			case .tundra, .mountain: shape = 2; leaves = .pineLeaves
-			case .jungle: shape = 3; log = .jungleLog; leaves = .jungleLeaves
-			case .savanna: shape = 4
-			case .swamp: shape = 5; leaves = .jungleLeaves
-			default: if r < 0.3 { shape = 1; log = .birchLog; leaves = .birchLeaves }
-			}
-		}
-		let wants: [Int] = [4 + Int(r * 4.0), 6 + Int(r * 4.0), 6 + Int(r * 5.0), 9 + Int(r * 6.0), 5 + Int(r * 3.0), 4 + Int(r * 2.0)]
-		let least: [Int] = [4, 5, 6, 8, 5, 4]
-		// free cells straight up from the sapling (its own cell counts): the trunk and two above it
-		var room: Int = 1
-		while room < wants[shape] + 2 && treeRoom(world.tile(x, y - room)) { room += 1 }
-		let th: Int = min(wants[shape], room - 2)
-		if th < least[shape] { return false }
-		let gy: Int = y + 1
-		for k in 1...th { world.set(x, gy - k, log) }
-		func leaf(_ lx: Int, _ ly: Int) {
-			if treeRoom(world.tile(lx, ly)) { world.set(lx, ly, leaves) }
-		}
-		let top: Int = gy - th
-		switch shape {
-		case 1:
-			for dy in -4...0 {
-				let w: Int = (dy == -4 || dy == 0) ? 1 : 2
-				for dx in -w...w { leaf(x + dx, top + dy) }
-			}
-			leaf(x, top - 5)
-		case 2:
-			var layer: Int = 0
-			while layer < th - 1 {
-				let w: Int = min(3, 1 + layer / 2)
-				for dx in -w...w { leaf(x + dx, top - 1 + layer) }
-				layer += 1
-			}
-			leaf(x, top - 2)
-		case 3:
-			for dy in -3...1 {
-				for dx in -4...4 where !(abs(dx) == 4 && abs(dy + 1) > 1) && abs(dx) + abs(dy + 1) <= 6 { leaf(x + dx, top + dy) }
-			}
-		case 4:
-			for dx in -4...4 { leaf(x + dx, top) }
-			for dx in -2...2 { leaf(x + dx, top - 1) }
-		case 5:
-			for dx in -3...3 {
-				leaf(x + dx, top)
-				if abs(dx) < 3 { leaf(x + dx, top - 1) }
-			}
-		default:
-			for dy in -3...1 {
-				for dx in -2...2 where !(abs(dx) == 2 && (dy == -3 || dy == 1)) { leaf(x + dx, top + dy) }
-			}
-		}
-		spawnParticles(Double(x) + 0.5, Double(top) + 0.5, 0x56A83F, 8, 3.0, 0.6, 10)
-		return true
-	}
-
-	/// A sapling in a region with tree designs grows into one of them that suits the ground under it,
-	/// as tall as the room above allows (it waits while even its smallest won't fit). True when it grew.
-	func growDesign(_ d: ModDimRT, _ z: ModDimZoneRT, _ x: Int, _ y: Int) -> Bool {
-		let below: Tile = world.tile(x, y + 1)
-		guard let tr = d.pickDesign(z, below, Double.random(in: 0..<1)) else { return false }
-		let gy: Int = y + 1
-		let seed: UInt64 = UInt64.random(in: 0...UInt64.max)
-		let painted: Bool = tr.def.shape == .painted
-		let least: Int = painted ? 1 : clampI(tr.def.minHeight, 1, 24)
-		var h: Int = painted ? 1 : max(least, clampI(tr.def.maxHeight, 1, 24))
-		while h >= least {
-			let cells: [TreeCell] = TreeShapes.cells(tr.def, h, seed)
-			// every cell of its trunk and branches has to be free (the sapling's own cell counts)
-			var fits: Bool = !cells.isEmpty
-			for c in cells where c.part != 3 {
-				let t: Tile = world.tile(x + c.dx, gy - c.dy)
-				let own: Bool = c.dx == 0 && c.dy == 1
-				if !(own || treeRoom(t)) || gy - c.dy < 2 {
-					fits = false
-					break
-				}
-			}
-			if fits {
-				world.set(x, y, .air)
-				var top: Int = y
-				for c in cells {
-					let cx: Int = x + c.dx
-					let cy: Int = gy - c.dy
-					if cy < 2 || !treeRoom(world.tile(cx, cy)) { continue }
-					world.set(cx, cy, tr.tile(c.part))
-					top = min(top, cy)
-				}
-				spawnParticles(Double(x) + 0.5, Double(top) + 0.5, 0x56A83F, 8, 3.0, 0.6, 10)
-				return true
-			}
-			h -= 1
-		}
-		return false
-	}
-}
-
-// ===== p14c_input =====
-
-// MARK: - Pointer input, interaction, inventory operations, crafting
-
-extension Game {
-	// MARK: pointer (world coordinates in tiles)
-
-	func pointerDown(_ wx: Double, _ wy: Double) {
-		aimX = wx
-		aimY = wy
-		aimValid = true
-		if capturing {
-			if !showCapture { captureTap(wx, wy) }
-			return
-		}
-		downTime = 0
-		usePressedFlag = false
-		touchActive = true
-		// with a weapon out, a tap on a foe is an attack, even if a door or chest is behind it
-		let fight: Bool = (heldItem?.isWeapon ?? false) && hostileAt(wx, wy)
-		if !fight && isInteractive(wx, wy) {
-			pendingInteract = true
-			useHeld = false
-		} else {
-			pendingInteract = false
-			useHeld = true
-			useWasHeld = false
-		}
-		pointerStartX = wx
-		pointerStartY = wy
-	}
-
-	func pointerMove(_ wx: Double, _ wy: Double) {
-		aimX = wx
-		aimY = wy
-		aimValid = true
-		if capturing { return }
-		if pendingInteract {
-			let dx: Double = wx - pointerStartX
-			let dy: Double = wy - pointerStartY
-			if dx * dx + dy * dy > 0.5 {
-				pendingInteract = false
-				useHeld = true
-			}
-		}
-	}
-
-	func pointerUp() {
-		touchActive = false
-		if capturing {
-			useHeld = false
-			pendingInteract = false
-			return
-		}
-		if pendingInteract {
-			if downTime < 0.3 { interact(aimX, aimY) }
-			pendingInteract = false
-		}
-		// the action button may still be held: then it carries on (and aims for itself again)
-		if actState.held { return }
-		if useHeld { useReleasedFlag = true }
-		useHeld = false
-		useWasHeld = false
-	}
-
-	/// A wild animal (bear, elephant, wolf, grizzly, polar bear, tiger, scorpion): neutral to the player
-	func isWildAnimal(_ k: MobKind) -> Bool {
-		switch k {
-		case .elephant, .bear, .wolf, .grizzly, .polarBear, .tiger, .scorpion: return true
-		default: return false
-		}
-	}
-
-	/// A wild hunter the player has hurt lately (it fights back for twelve seconds)
-	func wildProvoked(_ m: Mob) -> Bool {
-		return clock - m.lastHitByPlayer < 12.0
-	}
-
-	/// A creature that is out to hurt the player: monsters and enemies, and animals once angered
-	func isThreat(_ m: Mob) -> Bool {
-		if m.angry { return true }
-		if isWildAnimal(m.kind) { return wildProvoked(m) }
-		return m.def.hostile
-	}
-
-	/// a hostile (or angered) creature under or right next to a point
-	func hostileAt(_ wx: Double, _ wy: Double) -> Bool {
-		for m in mobsNear(wx - 4, wx + 4) where m.hp > 0 && !m.tame && isThreat(m) {
-			if wx >= m.b.left - 0.4 && wx <= m.b.right + 0.4 && wy >= m.b.top - 0.4 && wy <= m.b.y + 0.4 { return true }
-		}
-		return false
-	}
-
-	func updatePointerTimers(_ dt: Double) {
-		if pendingInteract {
-			downTime += dt
-			if downTime >= 0.3 {
-				pendingInteract = false
-				useHeld = true
-				useWasHeld = false
-			}
-		}
-	}
-
-	func reachDistance() -> Double {
-		if infiniteReach { return 60 }
-		return isCreative ? 8.0 : 5.5
-	}
-
-	func inReach(_ x: Double, _ y: Double) -> Bool {
-		let dx: Double = x - pb.x
-		let dy: Double = y - (pb.y - pb.h * 0.6)
-		let r: Double = reachDistance()
-		return dx * dx + dy * dy <= r * r
-	}
-
-	// MARK: interactive targets
-
-	func mobAtPoint(_ wx: Double, _ wy: Double, _ pad: Double) -> Mob? {
-		var best: Mob? = nil
-		var bd: Double = 1e9
-		for m in mobs {
-			if m.hp <= 0 { continue }
-			let x0: Double = m.b.left - pad
-			let x1: Double = m.b.right + pad
-			let y0: Double = m.b.top - pad
-			let y1: Double = m.b.y + pad
-			if wx >= x0 && wx <= x1 && wy >= y0 && wy <= y1 {
-				let d: Double = abs(wx - m.b.x) + abs(wy - m.b.cy)
-				if d < bd { bd = d; best = m }
-			}
-		}
-		return best
-	}
-
-	func vehicleAtPoint(_ wx: Double, _ wy: Double) -> (Vehicle, PartCell)? {
-		for v in vehicles {
-			if wx < v.b.left - 0.2 || wx > v.b.right + 0.2 || wy < v.b.top - 0.2 || wy > v.b.y + 0.2 { continue }
-			// pick in the vehicle's own (rotated) grid
-			let c: PartCell = v.cellAt(wx, wy)
-			if v.parts[c] != nil { return (v, c) }
-		}
-		return nil
-	}
-
-	/// A vehicle cell with a back wall under a point (in its box)
-	func vehicleWallAtPoint(_ wx: Double, _ wy: Double) -> (Vehicle, PartCell)? {
-		for v in vehicles where !v.walls.isEmpty {
-			if wx < v.b.left - 0.2 || wx > v.b.right + 0.2 || wy < v.b.top - 0.2 || wy > v.b.y + 0.2 { continue }
-			let c: PartCell = v.cellAt(wx, wy)
-			if v.walls[c] != nil { return (v, c) }
-		}
-		return nil
-	}
-
-	func shipChestAt(_ wx: Double, _ wy: Double) -> PirateShip? {
-		for s in ships {
-			if s.looted { continue }
-			let dy: Double = s.deckY(Double(WorldGen.sea))
-			if abs(wx - (s.x - 2.5)) < 1.2 && abs(wy - (dy - 0.6)) < 1.4 { return s }
-		}
-		return nil
-	}
-
-	func isInteractive(_ wx: Double, _ wy: Double) -> Bool {
-		let tx: Int = Int(floor(wx))
-		let ty: Int = Int(floor(wy))
-		let t: Tile = world.tile(tx, ty)
-		// with wire in hand every tap lays or cuts wire, even over a door or a lever
-		if holdingWireSpool { return false }
-		if case .gadget(.probe)? = heldItem { return t.isPower || world.wireAt(tx, ty) != 0 }
-		if t.isPower { return true }
-		if t.isMod {
-			guard let b = ModRuntime.shared.blockDef(t) else { return true }
-			if b.function != .none && b.function != .bounce && b.function != .trap { return true }
-		}
-		switch t {
-		case .chest, .workbench, .furnace, .campfire, .portalOff, .doorClosed, .doorOpen, .anvil, .tinkerBench, .riftForge, .alchemyStill, .infuser, .exoStation: return true
-		case .weatherStation, .dopplerStation, .stormSiren, .lightningRod, .windTurbine, .rainBarrel, .rainCistern, .weatherVane, .heater, .shutterClosed, .shutterOpen: return true
-		case .chair, .sofa, .bedL, .bedR, .cabinet, .wardrobe, .liftButton: return true
-		default: break
-		}
-		if liftAt(wx, wy) != nil { return true }
-		if let m = mobAtPoint(wx, wy, 0.15) {
-			if m.tame { return true }
-		}
-		if vehicleAtPoint(wx, wy) != nil {
-			if let it = heldItem, case .part = it { return false }
-			if let it = heldItem, case .gadget(let g) = it, g == .wrench { return false }
-			return true
-		}
-		if shipChestAt(wx, wy) != nil { return true }
-		return false
-	}
-
-	func interact(_ wx: Double, _ wy: Double) {
-		let tx: Int = Int(floor(wx))
-		let ty: Int = Int(floor(wy))
-		if !inReach(wx, wy) && !(mobAtPoint(wx, wy, 0.2)?.tame ?? false) {
-			say("Too far away.", 1.2)
-			return
-		}
-		let t: Tile = world.tile(tx, ty)
-		if case .gadget(.probe)? = heldItem {
-			probeAt(wx, wy)
-			return
-		}
-		if case .gadget(.wrench)? = heldItem, wrenchLift(wx, wy) { return }
-		if t == .exoStation {
-			openExo()
-			return
-		}
-		if t.isPower && t != .windTurbine {
-			usePowerDevice(tx, ty, t)
-			return
-		}
-		if t.isMod && interactModBlock(tx, ty, t) { return }
-		switch t {
-		case .chest:
-			if tryMimic(tx, ty) { return }
-			let firstLook: Bool = world.chests[world.chestKey(tx, ty)] == nil
-			sfx(.chestOpen, 0.7)
-			spawnParticles(Double(tx) + 0.5, Double(ty) + 0.3, 0xC8A878, 5, 2.0, 0.4, 6)
-			if firstLook && world.chestItems(tx, ty).contains(where: { MineLoot.isExceptional($0.item) }) {
-				// a rare find: it should feel like one
-				sfx(.rareLoot, 0.8)
-				spawnParticles(Double(tx) + 0.5, Double(ty) + 0.2, 0xFFE070, 16, 3.5, 0.9, -3)
-				addLightFlash(Double(tx) + 0.5, Double(ty) + 0.3, peak: 10, dur: 0.8, radius: 1.8, color: 0xFFD860)
-				say("Something rare glints in this chest!", 2.5)
-			}
-			openChest = IntPair(x: tx, y: ty)
-			showInventory = true
-			bumpHUD()
-			return
-		case .workbench:
-			craftStation = .bench
-			showInventory = true
-			bumpHUD()
-			return
-		case .furnace:
-			craftStation = .furnace
-			showInventory = true
-			bumpHUD()
-			return
-		case .campfire:
-			craftStation = .campfire
-			showInventory = true
-			bumpHUD()
-			return
-		case .anvil, .tinkerBench, .riftForge:
-			craftStation = t == .anvil ? .anvil : (t == .tinkerBench ? .tinker : .forge)
-			showInventory = true
-			bumpHUD()
-			return
-		case .alchemyStill:
-			craftStation = .still
-			showInventory = true
-			sfx(.splash, 0.3)
-			bumpHUD()
-			return
-		case .infuser:
-			openInfuser()
-			return
-		case .portalOff:
-			tryOpenPortal(tx, ty)
-			return
-		case .doorClosed, .doorOpen:
-			toggleDoor(tx, ty)
-			return
-		case .weatherStation, .dopplerStation, .stormSiren, .lightningRod, .windTurbine, .rainBarrel, .rainCistern, .weatherVane, .heater, .shutterClosed, .shutterOpen:
-			useWeatherDevice(tx, ty, t)
-			return
-		case .chair, .sofa:
-			sitOn(tx, ty)
-			return
-		case .bedL, .bedR:
-			sleepIn(tx, ty)
-			return
-		case .cabinet, .wardrobe:
-			openStorage(tx, ty)
-			return
-		case .liftButton:
-			callLift(tx, ty)
-			return
-		default: break
-		}
-		if let l = liftAt(wx, wy) {
-			rideLiftTap(l, wy)
-			return
-		}
-		if let m = mobAtPoint(wx, wy, 0.2) {
-			interactMob(m)
-			return
-		}
-		if let (v, c) = vehicleAtPoint(wx, wy) {
-			interactVehicle(v, c)
-			return
-		}
-		if let s = shipChestAt(wx, wy) {
-			lootShip(s)
-			return
-		}
-	}
-
-	func interactMob(_ m: Mob) {
-		switch m.kind {
-		case .rex:
-			if m.tame { mountRex(m) }
-		case .wolf, .cat:
-			if m.tame {
-				m.st = m.st == 7 ? 0 : 7
-				say(m.st == 7 ? "Your pet will stay here." : "Your pet follows you.", 2.0)
-			}
-		default: break
-		}
-	}
-
-	func tryOpenPortal(_ tx: Int, _ ty: Int) {
-		let key: Item = .gadget(.portalKey)
-		if !isCreative && inv.total(key) < 1 {
-			say("The portal is sealed. It needs a Portal Key.", 3.0)
-			return
-		}
-		if !isCreative { _ = inv.remove(key, 1) }
-		// flood fill all dormant portal tiles
-		var stack: [IntPair] = [IntPair(x: tx, y: ty)]
-		var count: Int = 0
-		while let p = stack.popLast() {
-			if world.tile(p.x, p.y) != .portalOff { continue }
-			world.set(p.x, p.y, .portalOn)
-			count += 1
-			if count > 80 { break }
-			stack.append(IntPair(x: p.x + 1, y: p.y))
-			stack.append(IntPair(x: p.x - 1, y: p.y))
-			stack.append(IntPair(x: p.x, y: p.y + 1))
-			stack.append(IntPair(x: p.x, y: p.y - 1))
-		}
-		portalOpened = true
-		spawnParticles(Double(tx) + 0.5, Double(ty) + 0.5, 0xF0A848, 40, 7.0, 1.2, 0)
-		addShake(0.5)
-		say("The rift tears open! Walk into it to cross to the Umbral Realm.", 5.0)
-		sfx(.portal, 1.0)
-		bumpHUD()
-	}
-
-	func lootShip(_ s: PirateShip) {
-		if !s.crew.isEmpty {
-			var alive: Bool = false
-			for id in s.crew { for m in mobs { if m.id == id && m.hp > 0 { alive = true } } }
-			if alive {
-				say("Defeat the crew first!", 2.0)
-				return
-			}
-		}
-		s.looted = true
-		var rng = RNG(UInt64(truncatingIfNeeded: s.id) &* 7919 &+ gen.seed)
-		giveItem(.mat(.goldBar), 3 + rng.int(6))
-		giveItem(.ammo(.bullet), 8 + rng.int(14))
-		giveItem(.mat(.gunpowder), 2 + rng.int(5))
-		if rng.double() < 0.35 { giveItem(.gun(.pistol), 1) }
-		if rng.double() < 0.5 { giveItem(.mat(.diamond), 1 + rng.int(3)) }
-		giveItem(.food(.cookedFish), 2 + rng.int(4))
-		say("You looted the pirate treasure!", 3.0)
-		spawnParticles(s.x - 2.5, s.deckY(Double(WorldGen.sea)) - 1, 0xF5D142, 20, 5.0, 0.9, 12)
-	}
-
-	// MARK: inventory operations (used by the UI)
-
-	func tapSlot(_ i: Int) {
-		if let h = carry {
-			// place carried stack
-			if let s = inv.slots[i] {
-				if s.item == h.item && h.item.maxStack > 1 {
-					let room: Int = h.item.maxStack - s.count
-					let put: Int = min(room, h.count)
-					var ns: Stack = s
-					ns.count += put
-					inv.slots[i] = ns
-					if h.count - put > 0 {
-						var c: Stack = h
-						c.count = h.count - put
-						carry = c
-					} else {
-						carry = nil
-					}
-				} else {
-					inv.slots[i] = h
-					carry = s
-				}
-			} else {
-				inv.slots[i] = h
-				carry = nil
-			}
-		} else if let s = inv.slots[i] {
-			carry = s
-			inv.slots[i] = nil
-		}
-		bumpHUD()
-	}
-
-	func splitSlot(_ i: Int) {
-		if carry != nil { return }
-		if let s = inv.slots[i], s.count > 1 {
-			let half: Int = s.count / 2
-			var a: Stack = s
-			a.count = s.count - half
-			var b: Stack = s
-			b.count = half
-			inv.slots[i] = a
-			carry = b
-			bumpHUD()
-		}
-	}
-
-	// MARK: drag and drop
-
-	enum SlotRef: Hashable {
-		case inv(Int)
-		case armor(Int)
-		case chest(Int)
-		case drop
-		/// creative mode: back to the creative menu
-		case trash
-	}
-
-	func stackAt(_ r: SlotRef) -> Stack? {
-		switch r {
-		case .inv(let i): return i >= 0 && i < inv.slots.count ? inv.slots[i] : nil
-		case .armor(let i): return i >= 0 && i < inv.armor.count ? inv.armor[i] : nil
-		case .chest(let i):
-			guard let p = openChest else { return nil }
-			let items: [Stack] = world.chestItems(p.x, p.y)
-			return i >= 0 && i < items.count ? items[i] : nil
-		case .drop, .trash: return nil
-		}
-	}
-
-	private func tapRef(_ r: SlotRef) {
-		switch r {
-		case .inv(let i): tapSlot(i)
-		case .armor(let i): tapArmorSlot(i)
-		case .chest(let i): if let p = openChest { chestTapSlot(p.x, p.y, i) }
-		case .drop: dropCarried()
-		case .trash: discardCarried()
-		}
-	}
-
-	/// Drags the stack in `from` onto `to`: places, merges or swaps using the same rules as tapping, so
-	/// armour only goes into its own slot and chests keep their limits. Anything that cannot land goes
-	/// back where it came from (or into the bag).
-	func dragStack(from: SlotRef, to: SlotRef?) {
-		if carry != nil { returnCarried() }
-		if stackAt(from) == nil { return }
-		tapRef(from)
-		guard carry != nil else { return }
-		if let to = to, to != from {
-			tapRef(to)
-		}
-		if carry != nil {
-			// put the remainder (or the swapped stack) back into the slot the drag started from
-			switch from {
-			case .chest:
-				if let p = openChest { chestTapSlot(p.x, p.y, Int.max) }
-			default:
-				if stackAt(from) == nil { tapRef(from) }
-			}
-		}
-		if carry != nil { returnCarried() }
-		bumpHUD()
-	}
-
-	func sortBag() {
-		returnCarried()
-		inv.sortBag()
-		say("Bag sorted.", 1.2)
-		bumpHUD()
-	}
-
-	/// Folds partial stacks together across the bag and hotbar
-	func stackAll() {
-		returnCarried()
-		let n: Int = inv.mergeStacks()
-		say(n > 0 ? "Stacks merged." : "Nothing to merge.", 1.2)
-		bumpHUD()
-	}
-
-	/// Creative mode: the held stack goes back to the creative menu (it leaves the bag). In survival it
-	/// is thrown away instead, as with DROP.
-	func discardCarried() {
-		if carry == nil { return }
-		if !isCreative {
-			dropCarried()
-			return
-		}
-		carry = nil
-		sfx(.tap, 0.5)
-		bumpHUD()
-	}
-
-	/// Moves every bag stack (not the hotbar) whose item the open chest already holds into that chest
-	func quickStack() {
-		guard let p = openChest else { return }
-		var items: [Stack] = world.chestItems(p.x, p.y)
-		var moved: Int = 0
-		for i in Inventory.hotbarCount..<inv.slots.count {
-			guard var s = inv.slots[i] else { continue }
-			if !items.contains(where: { $0.item == s.item }) { continue }
-			// top up existing chest stacks first, then use free chest slots
-			if s.item.maxStack > 1 {
-				for k in 0..<items.count where items[k].item == s.item && items[k].extra == s.extra && items[k].inf == s.inf && items[k].count < s.item.maxStack && s.count > 0 {
-					let put: Int = min(s.item.maxStack - items[k].count, s.count)
-					items[k].count += put
-					s.count -= put
-					moved += put
-				}
-			}
-			if s.count > 0 && items.count < 27 {
-				items.append(s)
-				moved += s.count
-				s.count = 0
-			}
-			inv.slots[i] = s.count > 0 ? s : nil
-		}
-		world.setChestItems(p.x, p.y, items)
-		say(moved > 0 ? "Stored \(moved) items in the chest." : "Nothing here matches the chest.", 1.5)
-		bumpHUD()
-	}
-
-	func dropCarried() {
-		if let c = carry {
-			spawnDrop(c, pb.x + Double(facing) * 0.8, pb.y - 1.2, Double(facing) * 4.0, -4.0, heldBack: true)
-			carry = nil
-			bumpHUD()
-		}
-	}
-
-	func returnCarried() {
-		if let c = carry {
-			let left: Int = inv.add(c.item, c.count, extra: c.extra, inf: c.inf)
-			if left > 0 { spawnDrop(Stack(item: c.item, count: left, extra: c.extra, inf: c.inf), pb.x, pb.y - 1.0, 2.0, -3.0) }
-			carry = nil
-			bumpHUD()
-		}
-	}
-
-	/// Whether an item may go into armour slot `i`: armour into its own slot, gear into either gear slot
-	func fitsArmorSlot(_ it: Item, _ i: Int) -> Bool {
-		switch it {
-		case .armor(let slot, _): return slot.rawValue == i && !(suit.worn && i < 3)
-		case .gear: return i >= Inventory.firstGearSlot && i < inv.armor.count
-		case .custom(let k):
-			guard let r = ModRuntime.shared.item(k), r.def.kind == .armor else { return false }
-			return r.def.slot == i && !(suit.worn && i < 3)
-		default: return false
-		}
-	}
-
-	func tapArmorSlot(_ i: Int) {
-		if i < 0 || i >= inv.armor.count { return }
-		if let h = carry {
-			if fitsArmorSlot(h.item, i) {
-				let old: Stack? = inv.armor[i]
-				inv.armor[i] = h
-				carry = old
-			}
-		} else if let s = inv.armor[i] {
-			carry = s
-			inv.armor[i] = nil
-		}
-		bumpHUD()
-	}
-
-	func quickEquip(_ i: Int) {
-		guard let s = inv.slots[i] else { return }
-		var target: Int = -1
-		switch s.item {
-		case .armor(let slot, _): target = slot.rawValue
-		case .gear(let g):
-			// the same piece already worn is swapped out; otherwise the first free gear slot, else the first
-			target = Inventory.firstGearSlot
-			var free: Int = -1
-			for k in Inventory.firstGearSlot..<inv.armor.count {
-				if let w = inv.armor[k], case .gear(let x) = w.item, x == g { free = k; break }
-				if inv.armor[k] == nil && free < 0 { free = k }
-			}
-			if free >= 0 { target = free }
-		case .custom(let k):
-			guard let r = ModRuntime.shared.item(k), r.def.kind == .armor else { return }
-			target = clampI(r.def.slot, 0, 2)
-		default: return
-		}
-		if target < 0 || target >= inv.armor.count { return }
-		let old: Stack? = inv.armor[target]
-		inv.armor[target] = s
-		inv.slots[i] = old
-		bumpHUD()
-	}
-
-	func wearing(_ g: Gear) -> Bool { return inv.wearing(g) }
-
-	// chest transfer
-	func chestTapSlot(_ cx: Int, _ cy: Int, _ idx: Int) {
-		var items: [Stack] = world.chestItems(cx, cy)
-		if let h = carry {
-			if idx < items.count {
-				let s: Stack = items[idx]
-				if s.item == h.item && h.item.maxStack > 1 {
-					var ns: Stack = s
-					let put: Int = min(h.item.maxStack - s.count, h.count)
-					ns.count += put
-					items[idx] = ns
-					if h.count - put > 0 { var c: Stack = h; c.count = h.count - put; carry = c } else { carry = nil }
-				} else {
-					items[idx] = h
-					carry = s
-				}
-			} else if items.count < 27 {
-				items.append(h)
-				carry = nil
-			}
-		} else if idx < items.count {
-			carry = items[idx]
-			items.remove(at: idx)
-		}
-		world.setChestItems(cx, cy, items)
-		bumpHUD()
-	}
-
-	func chestQuickMove(_ cx: Int, _ cy: Int, _ idx: Int) {
-		var items: [Stack] = world.chestItems(cx, cy)
-		if idx >= items.count { return }
-		let s: Stack = items[idx]
-		let left: Int = inv.add(s.item, s.count, extra: s.extra, inf: s.inf)
-		if left == 0 { items.remove(at: idx) } else { items[idx].count = left }
-		world.setChestItems(cx, cy, items)
-		bumpHUD()
-	}
-
-	func chestStore(_ cx: Int, _ cy: Int, _ slotIndex: Int) {
-		guard let s = inv.slots[slotIndex] else { return }
-		var items: [Stack] = world.chestItems(cx, cy)
-		if items.count >= 27 { say("Chest is full.", 1.5); return }
-		items.append(s)
-		inv.slots[slotIndex] = nil
-		world.setChestItems(cx, cy, items)
-		bumpHUD()
-	}
-
-	// MARK: crafting
-
-	func stationAvailable(_ s: Station) -> Bool {
-		if s == .hand { return true }
-		if isCreative { return true }
-		let px: Int = Int(floor(pb.x))
-		let py: Int = Int(floor(pb.y - 1))
-		for dy in -4...3 {
-			for dx in -5...5 {
-				let t: Tile = world.tile(px + dx, py + dy)
-				// a mod block that works as this station
-				if t.isMod, let b = ModRuntime.shared.blockDef(t), b.function == .station, b.station == s.rawValue { return true }
-				switch s {
-				case .bench: if t == .workbench { return true }
-				case .furnace: if t == .furnace { return true }
-				case .campfire: if t == .furnace || t == .campfire { return true }
-				case .anvil: if t == .anvil { return true }
-				case .tinker: if t == .tinkerBench { return true }
-				case .forge: if t == .riftForge { return true }
-				case .still: if t == .alchemyStill { return true }
-				case .infuser: if t == .infuser { return true }
-				case .assembly: if t == .exoStation { return true }
-				case .hand: return true
-				}
-			}
-		}
-		return false
-	}
-
-	func canCraft(_ r: Recipe) -> Bool {
-		if !recipeStationOK(r) { return false }
-		if !inv.canAfford(r.cost) { return false }
-		return inv.canFit(r.out, r.outCount)
-	}
-
-	func craft(_ r: Recipe) {
-		if !canCraft(r) {
-			if !recipeStationOK(r) { say("Needs a " + recipeStationName(r) + " nearby.", 2.0) }
-			return
-		}
-		for c in r.cost { _ = inv.remove(c.item, c.n) }
-		if !journal.crafted.contains(r.out.name) { journal.crafted.append(r.out.name) }
-		sfx(.craft, 0.6)
-		// a new storm rod comes charged; firearms and crossbows still need loading
-		let ex: Int = r.out == .gun(.stormRod) ? GunType.stormRod.magazine : 0
-		let left: Int = inv.add(r.out, r.outCount, extra: ex)
-		if left > 0 { spawnDrop(Stack(item: r.out, count: left, extra: ex), pb.x, pb.y - 1, 2, -3) }
-		floatText("+" + String(r.outCount) + " " + r.out.name, pb.x, pb.y - 2.2, 0xFFE070)
-		bumpHUD()
-	}
-
-	// MARK: creative palette
-
-	/// Everything the creative palette offers: the game's items, then those of the world's mods
-	func creativeItems() -> [Item] {
-		return allGameItems() + ModRuntime.shared.paletteItems()
-	}
-
-	func creativeGive(_ it: Item) {
-		let n: Int = it.maxStack > 1 ? it.maxStack : 1
-		giveItem(it, n, extra: gunLoad(it))
-		bumpHUD()
-	}
-
-	func gunLoad(_ it: Item) -> Int {
-		if case .gun(let g) = it { return g.magazine }
-		if case .custom(let k) = it, let r = ModRuntime.shared.item(k), r.def.kind == .gun { return r.def.magazine }
-		return 0
-	}
-}
-
-/// Every item of the game itself (no mod content), in palette order
-func allGameItems() -> [Item] {
-	var out: [Item] = []
-	for t in Tile.allCases {
-		if t.isMod { continue }
-		switch t {
-		case .bedR, .stairWoodL, .stairStoneL, .stairBrickL: continue
-		case .air, .water, .lava, .bedrock, .portalFrame, .portalOff, .portalOn, .wheat1, .wheat2, .carrot1, .carrot2, .doorOpen,
-			 .logBlock, .jungleLogBlock, .palmLogBlock, .birchLogBlock, .shutterOpen, .lampOn, .gateOpen: continue
-		default: out.append(.block(t))
-		}
-	}
-	for tier in Tier.allCases {
-		for k in ToolType.allCases { out.append(.tool(k, tier)) }
-		out.append(.sword(tier))
-		out.append(.spear(tier))
-		out.append(.hammer(tier))
-		if tier != .wood { out.append(.knife(tier)) }
-		for s in ArmorSlot.allCases { out.append(.armor(s, tier)) }
-	}
-	for g in Gear.allCases { out.append(.gear(g)) }
-	out.append(.bow)
-	out.append(.sling)
-	for c in ClubKind.allCases { out.append(.club(c)) }
-	for r in Relic.allCases { out.append(.relic(r)) }
-	for gt in GunType.allCases { out.append(.gun(gt)) }
-	for a in AmmoType.allCases { out.append(.ammo(a)) }
-	for g in Gadget.allCases { out.append(.gadget(g)) }
-	for k in wallKinds { out.append(.wall(k)) }
-	for p in PartType.allCases where p != .block { out.append(.part(p)) }
-	for f in Food.allCases { out.append(.food(f)) }
-	for m in Mat.allCases { out.append(.mat(m)) }
-	out.append(contentsOf: featureItems())
-	return out
-}
-
-// ===== p14d_tools =====
-
-// MARK: - Item use: mining, placing, melee, ranged weapons, eating, farming
-
-func toolClass(_ t: Tile) -> ToolType {
-	if t.isMod { return Tile.modToolTable[Int(t.rawValue - Tile.modBase)] }
-	switch t {
-	case .log, .jungleLog, .palmLog, .logBlock, .jungleLogBlock, .palmLogBlock, .planks, .workbench, .chest, .platform, .leaves, .jungleLeaves, .cactus, .hay, .reed, .lantern, .torch, .ladder, .tinkerBench,
-		 .birchLog, .birchLogBlock, .birchLeaves, .pineLeaves, .weatherStation, .rainBarrel, .shutterClosed, .shutterOpen:
-		return .axe
-	case .chair, .table, .bedL, .bedR, .cabinet, .wardrobe, .shelf, .bookshelf, .sofa, .stairWoodR, .stairWoodL:
-		return .axe
-	case .dirt, .grass, .sand, .snow, .mud, .dryGrass, .jungleGrass, .mossGrass, .farmland, .sandbag:
-		return .shovel
-	default:
-		return .pickaxe
-	}
-}
-
-func isLogTile(_ t: Tile) -> Bool {
-	// a mod tree's pass-through trunk counts too (felled by an axe, keeping its leaves alive)
-	if t.isMod { return ModRuntime.shared.treeRole(t) == 1 }
-	return t == .log || t == .jungleLog || t == .palmLog || t == .birchLog
-}
-
-func isLeafTile(_ t: Tile) -> Bool {
-	if t.isMod { return ModRuntime.shared.treeRole(t) == 2 }
-	return t == .leaves || t == .jungleLeaves || t == .birchLeaves || t == .pineLeaves
-}
-
-/// Which way a stair rises: 1 to the right, 2 to the left, 0 for anything that is not a stair
-func stairSide(_ t: Tile) -> UInt8 {
-	switch t {
-	case .stairWoodR, .stairStoneR, .stairBrickR: return 1
-	case .stairWoodL, .stairStoneL, .stairBrickL: return 2
-	default: return 0
-	}
-}
-
-/// The stair facing the other way (the same tile for anything else)
-func stairMirror(_ t: Tile) -> Tile {
-	switch t {
-	case .stairWoodR: return .stairWoodL
-	case .stairWoodL: return .stairWoodR
-	case .stairStoneR: return .stairStoneL
-	case .stairStoneL: return .stairStoneR
-	case .stairBrickR: return .stairBrickL
-	case .stairBrickL: return .stairBrickR
-	default: return t
-	}
-}
-
-/// Furniture that stores things like a chest (its contents live in World.chests)
-func isStorageFurniture(_ t: Tile) -> Bool { return t == .cabinet || t == .wardrobe }
-
-/// Furniture the player can sit on
-func isSeat(_ t: Tile) -> Bool { return t == .chair || t == .sofa || (t.isMod && ModRuntime.shared.seatTiles.contains(t.rawValue)) }
-
-/// Sand, and the mod blocks that fall like it
-func fallsLikeSand(_ t: Tile) -> Bool { return t == .sand || (t.isMod && ModRuntime.shared.fallTiles.contains(t.rawValue)) }
-
-struct DecayZone {
-	var x: Int
-	var y: Int
-	var t: Double
-}
-
-extension Game {
-	/// Any trunk tile within r tiles (keeps a tree's canopy alive)
-	func logNear(_ x: Int, _ y: Int, _ r: Int) -> Bool {
-		for dy in -r...r {
-			for dx in -r...r where isLogTile(world.tile(x + dx, y + dy)) { return true }
-		}
-		return false
-	}
-
-	/// Where a trunk was cut, leaves that no longer have a trunk nearby wither over the next half
-	/// minute. Only around cut trees, so leafy ruin decorations are left alone.
-	func updateLeafDecay(_ dt: Double) {
-		if decayZones.isEmpty { return }
-		var keep: [DecayZone] = []
-		for z0 in decayZones {
-			var z: DecayZone = z0
-			z.t -= dt
-			for _ in 0..<4 {
-				let x: Int = z.x + Int.random(in: -7...7)
-				let y: Int = z.y + Int.random(in: -10...4)
-				let t: Tile = world.tile(x, y)
-				if isLeafTile(t) && !logNear(x, y, 4) { breakTile(x, y, false) }
-			}
-			if z.t > 0 { keep.append(z) }
-		}
-		decayZones = keep
-	}
-}
-
-extension Game {
-	func updateUse(_ dt: Double) {
-		if useCD > 0 { useCD -= dt }
-		if swingT > 0 { swingT -= dt } else { swingDur = 0.25 }
-		if muzzleT > 0 { muzzleT -= dt }
-		if bowRecoil > 0 { bowRecoil -= dt }
-		if eatT > 0 { eatT -= dt }
-		if placeCD > 0 { placeCD -= dt }
-		if lockT > 0 { lockT -= dt }
-		if let t = lockTarget, t.hp <= 0 || t.removed { lockTarget = nil }
-		// (driving, or with the hands on a remote, nothing in hand is used)
-		if dead || inVehicle != nil || remoteID != 0 {
-			mining = false
-			usePressedFlag = false
-			useReleasedFlag = false
-			strikeT = 0
-			return
-		}
-		// a heavy blow lands at the end of its wind-up, if the same weapon is still in hand
-		if strikeT > 0 {
-			strikeT -= dt
-			if strikeT <= 0 {
-				strikeT = 0
-				if sel == strikeSel && heldItem == strikeItem { resolveMelee(strikeItem) }
-			}
-		}
-		updateReload(dt)
-		let pressed: Bool = usePressedFlag
-		usePressedFlag = false
-		let released: Bool = useReleasedFlag
-		useReleasedFlag = false
-		if !aimValid { return }
-		let held: Item? = heldItem
-		if !useHeld {
-			mining = false
-			mineP = max(0, mineP - dt * 2.0)
-			wireLast = nil
-		}
-		// bow release logic works on edges
-		if case .bow? = held {
-			handleBow(dt, pressed, released)
-			return
-		} else if case .custom(let k)? = held, let r = ModRuntime.shared.item(k), r.def.kind == .bow {
-			handleModBow(r, dt, pressed, released)
-			return
-		} else if bowCharge > 0 {
-			bowCharge = 0
-		}
-		if !useHeld {
-			handEmptied = false
-			lastUsedItem = nil
-			return
-		}
-		guard let it = held else {
-			// a stack used up while the button is held (the last ladder or block placed) does not turn
-			// the hold into mining with bare hands: that waits for the next press
-			if lastUsedItem != nil { handEmptied = true }
-			lastUsedItem = nil
-			if !handEmptied { useBareHand(dt, pressed) }
-			return
-		}
-		lastUsedItem = it
-		// a custom dimension's gate, then a mod's summoning item (tried before the item's own use)
-		if pressed && world.dim.isCustom && tryReturnGate() { return }
-		if pressed && !logicRT.isEmpty && tryLogicTap() { return }
-		if pressed && !ModRuntime.shared.summons.isEmpty && trySummonWith(it) { return }
-		switch it {
-		case .block(let t): usePlaceBlock(t, dt)
-		case .tool(let k, let tr): useToolItem(k, tr, dt, pressed)
-		case .sword, .spear, .hammer, .knife, .club, .relic: useMeleeWeapon(it, pressed)
-		case .gun(let g): useGun(g, pressed)
-		case .sling: useSling(pressed)
-		case .food(let f): useFood(f, pressed)
-		case .mat(let m):
-			if m == .seeds { usePlant(.wheat1, it, pressed) }
-			if m == .vial { useVial(pressed) }
-		case .part(let p): usePart(p, pressed)
-		case .gadget(let g): useGadget(g, pressed)
-		case .wall(let k): usePlaceWall(k)
-		case .armor, .gear:
-			if pressed { quickEquip(sel); say("Equipped.", 1.0) }
-		case .custom(let k): useModItem(k, dt, pressed)
-		case .potion(let p): usePotion(p, pressed)
-		case .compound:
-			if pressed { say("Work it into equipment at an Infusion Crucible.", 1.8) }
-		case .exoPart, .exoPlate, .exoCore, .exoModule:
-			if pressed { say("Fit it to your suit at an Assembly Station.", 1.8) }
-		default: break
-		}
-	}
-
-	// MARK: bare hands & tools
-
-	func useBareHand(_ dt: Double, _ pressed: Bool) {
-		if pressed && world.dim.isCustom && tryReturnGate() { return }
-		if pressed && !logicRT.isEmpty && tryLogicTap() { return }
-		if let m = mobUnderAim(Item.bareHands) {
-			if pressed || (useCD <= 0 && !meleeCandidates(Item.bareHands).isEmpty) { startMelee(nil, target: m) }
-			return
-		}
-		let tx: Int = Int(floor(aimX))
-		let ty: Int = Int(floor(aimY))
-		mineStep(tx, ty, nil, nil, dt)
-	}
-
-	func useToolItem(_ k: ToolType, _ tr: Tier, _ dt: Double, _ pressed: Bool) {
-		let it: Item = .tool(k, tr)
-		let tx: Int = Int(floor(aimX))
-		let ty: Int = Int(floor(aimY))
-		// pointing at a creature means fighting it, not digging the block behind it
-		if let m = mobUnderAim(infusedMelee(it)) {
-			if pressed || (useCD <= 0 && !meleeCandidates(infusedMelee(it)).isEmpty) { startMelee(it, target: m) }
-			return
-		}
-		if k == .hoe {
-			if useCD <= 0 {
-				let t: Tile = world.tile(tx, ty)
-				if (t == .grass || t == .dirt || t == .dryGrass || t == .mossGrass) && inReach(Double(tx) + 0.5, Double(ty) + 0.5) && !world.tile(tx, ty - 1).solid {
-					world.set(tx, ty, .farmland)
-					// plants on top of the tilled tile are removed
-					if world.tile(tx, ty - 1).isPlant { world.set(tx, ty - 1, .air) }
-					useCD = 0.25
-					swingT = 0.2
-					swingDir = facing
-					spawnParticles(Double(tx) + 0.5, Double(ty), 0x6B4626, 6, 2.5, 0.4, 12)
-					return
-				}
-			}
-		}
-		mineStep(tx, ty, k, tr, dt, speed: OverrideRT.shared.toolSpeed(.tool(k, tr)))
-	}
-
-	/// A melee weapon in hand. A fresh press always swings (toward the aim, or the foe under it); held
-	/// down it keeps swinging, but only while a foe is actually in reach, so holding on empty ground or
-	/// on a foe that is still too far away never wastes swings.
-	func useMeleeWeapon(_ it: Item, _ pressed: Bool) {
-		let p: MeleeProfile = infusedMelee(it)
-		let target: Mob? = mobUnderAim(p)
-		if let t = target {
-			// the touch landed on (or close to) a foe: the blow goes at it
-			aimX = t.b.x
-			aimY = t.b.cy
-		}
-		if !pressed {
-			// held: nothing to do while the weapon recovers (this runs every frame). Held on the attack
-			// stick it swings again as soon as the weapon is ready; a finger held on the world swings
-			// only while something is actually in reach
-			if useCD > 0 || strikeT > 0 { return }
-			let onStick: Bool = actState.held && !touchActive
-			if !onStick && meleeCandidates(p).isEmpty { return }
-		}
-		startMelee(it, target: target)
-	}
-
-	/// Swings the item right now, ignoring its cooldown and wind-up (used by debug tools and tests)
-	func swingEmpty(_ it: Item?) {
-		useCD = 0
-		strikeT = 0
-		if startMelee(it) && strikeT > 0 {
-			strikeT = 0
-			resolveMelee(it)
-		}
-	}
-
-	/// The foe the player is pointing at: under the aim, or close to it (fingers are not precise),
-	/// near enough to be worth swinging at
-	func mobUnderAim(_ p: MeleeProfile) -> Mob? {
-		if !aimValid { return nil }
-		let pad: Double = 0.9
-		var best: Mob? = nil
-		var bd: Double = 1e9
-		for m in mobsNear(aimX - 6, aimX + 6) {
-			if m.hp <= 0 || m.removed || m.tame || m.downed { continue }
-			let x0: Double = m.b.left - pad
-			let x1: Double = m.b.right + pad
-			let y0: Double = m.b.top - pad
-			let y1: Double = m.b.y + pad
-			if aimX < x0 || aimX > x1 || aimY < y0 || aimY > y1 { continue }
-			let reach: Double = boxDistance(m, shoulderX, shoulderY)
-			if reach > max(p.reach + 1.5, 4.0) { continue }
-			var d: Double = abs(aimX - m.b.x) + abs(aimY - m.b.cy)
-			if !isThreat(m) { d += 2.0 }
-			if d < bd { bd = d; best = m }
-		}
-		return best
-	}
-
-	// MARK: mining & breaking
-
-	func mineStep(_ tx: Int, _ ty: Int, _ kind: ToolType?, _ tier: Tier?, _ dt: Double, speed toolSpeed: Double? = nil) {
-		let t: Tile = world.tile(tx, ty)
-		if t == .air && mineWall(tx, ty, kind, tier, dt) { return }
-		if t == .air || t.liquid {
-			mining = false
-			mineP = 0
-			if useCD <= 0 && kind != nil && kind != .hoe {
-				swingT = 0.2
-				swingDir = aimFacing()
-				facing = swingDir
-				useCD = 0.3
-			}
-			return
-		}
-		let def: TileDef = t.def
-		if def.hard >= 9999 {
-			if useCD <= 0 { say("That can't be broken.", 1.2); useCD = 0.6 }
-			return
-		}
-		if !inReach(Double(tx) + 0.5, Double(ty) + 0.5) {
-			mining = false
-			mineP = 0
-			return
-		}
-		let cls: ToolType = toolClass(t)
-		// a suit's drill arm bores anything up to its metal's tier, whatever is in hand
-		let drill: Int = suitDrillTier()
-		if def.tier > 0 && !isCreative {
-			// a tier asks for a strong enough tool of the block's own kind (a pickaxe for the game's ores)
-			var pt: Int = (kind == cls) ? (tier?.rawValue ?? 0) : 0
-			if drill > pt { pt = drill }
-			if pt < def.tier {
-				mining = false
-				if useCD <= 0 {
-					let tn: String = cls.name.lowercased()
-					say(kind == cls ? "This needs a stronger " + tn + "." : "You need a " + tn + " for that.", 1.5)
-					useCD = 0.8
-					swingT = 0.2
-					swingDir = aimFacing()
-				}
-				return
-			}
-		}
-		if mineX != tx || mineY != ty || !mining {
-			if mineX != tx || mineY != ty { mineP = 0 }
-			mineX = tx
-			mineY = ty
-		}
-		mining = true
-		var speed: Double = 1.0
-		if let k = kind, let tr = tier { speed = (toolSpeed ?? tr.mineSpeed) * (k == cls ? 1.0 : 0.35) }
-		if drill > 0 {
-			let ds: Double = (Tier(rawValue: drill)?.mineSpeed ?? 4.0) * 1.25
-			if ds > speed && suitRun(.drill, 4.0, dt) { speed = ds }
-		}
-		if isCreative { speed = 1000 }
-		mineNeed = max(0.05, def.hard * 1.5)
-		mineP += dt * speed * mineBoost(kind) * ModRuntime.shared.rule(.mining)
-		if useCD <= 0 {
-			swingT = 0.22
-			swingDir = aimFacing()
-			facing = swingDir
-			useCD = 0.26
-			let col: UInt32 = def.colors.first ?? 0x888888
-			spawnParticles(Double(tx) + 0.5, Double(ty) + 0.5, col, 3, 3.0, 0.4, 14)
-			digSound(t, broke: false)
-		}
-		if mineP >= mineNeed {
-			mineP = 0
-			mining = false
-			digSound(t, broke: true)
-			let fell: Bool = isLogTile(t) && kind == .axe
-			if fell {
-				fellTree(tx, ty)
-			} else {
-				breakTile(tx, ty, true)
-				if let k = kind, let tr = tier, k == cls { quarryAround(tx, ty, t, k, tr) }
-			}
-		}
-	}
-
-	func tileDropStacks(_ t: Tile, _ x: Int, _ y: Int) -> [Stack] {
-		if t.isMod, let st = ModRuntime.shared.blockDrops(t) {
-			var mod: [Stack] = st
-			// a mod tree's leaves give saplings as the game's do (they grow its designs where they belong)
-			if isLeafTile(t) && Double.random(in: 0...1) < 0.085 { mod.append(Stack(item: .block(.sapling), count: 1)) }
-			// a custom storage block spills what it held
-			if ModRuntime.shared.blockDef(t)?.function == .storage, world.chests[world.chestKey(x, y)] != nil {
-				mod.append(contentsOf: world.removeChest(x, y))
-			}
-			return mod
-		}
-		var out: [Stack] = []
-		let r: Double = Double.random(in: 0...1)
-		switch t {
-		case .tallGrass:
-			if r < 0.14 { out.append(Stack(item: .mat(.seeds), count: 1)) }
-		case .leaves, .jungleLeaves, .birchLeaves, .pineLeaves:
-			if (t == .leaves || t == .jungleLeaves) && r < 0.05 { out.append(Stack(item: .food(.apple), count: 1)) }
-			// about one leaf block in twelve gives a sapling (a felled tree's leaves fall by themselves)
-			if Double.random(in: 0...1) < 0.085 { out.append(Stack(item: .block(.sapling), count: 1)) }
-		case .wheat3:
-			out.append(Stack(item: .food(.wheat), count: 1 + Int.random(in: 0...1)))
-			out.append(Stack(item: .mat(.seeds), count: 1 + Int.random(in: 0...2)))
-		case .wheat1, .wheat2:
-			out.append(Stack(item: .mat(.seeds), count: 1))
-		case .carrot3:
-			out.append(Stack(item: .food(.carrot), count: 1 + Int.random(in: 0...2)))
-		case .carrot1, .carrot2:
-			out.append(Stack(item: .food(.carrot), count: 1))
-		case .cobweb:
-			out.append(Stack(item: .mat(.string), count: 1))
-		case .saltpeter:
-			out.append(Stack(item: .mat(.saltpeter), count: 1 + (r < 0.35 ? 1 : 0)))
-		case .amethyst:
-			out.append(Stack(item: .mat(.amethyst), count: 1 + (r < 0.5 ? 1 : 0)))
-		case .oreCart:
-			// an abandoned cart still holds a little of what was being hauled out (fixed by its spot)
-			for st in oreCartLoad(x, y) { out.append(st) }
-		case .chest:
-			for s in world.removeChest(x, y) { out.append(s) }
-			out.append(Stack(item: .block(.chest), count: 1))
-		case .cabinet, .wardrobe:
-			for s in world.removeChest(x, y) { out.append(s) }
-			out.append(Stack(item: .block(t), count: 1))
-		default:
-			if let d = t.def.drop { out.append(Stack(item: d, count: 1)) }
-			else if !t.def.noDrop { out.append(Stack(item: .block(t), count: 1)) }
-		}
-		return out
-	}
-
-	func breakTile(_ x: Int, _ y: Int, _ byPlayer: Bool, dropChance: Double = 1.0) {
-		let t: Tile = world.tile(x, y)
-		if t == .air || t.hardness >= 9999 { return }
-		if isDoor(t) {
-			// remove the other half quietly so a door only drops once
-			if isDoor(world.tile(x, y - 1)) { world.set(x, y - 1, .air) }
-			if isDoor(world.tile(x, y + 1)) { world.set(x, y + 1, .air) }
-		}
-		// a bed is taken down whole (it drops once)
-		if t == .bedL && world.tile(x + 1, y) == .bedR { world.set(x + 1, y, .air) }
-		if t == .bedR && world.tile(x - 1, y) == .bedL { world.set(x - 1, y, .air) }
-		if world.set(x, y, .air) == .air && t != .air { return }
-		if byPlayer && t.isMod && !logicRT.isEmpty, let k = modBlockKey(t) { fireLogic(.blockBroken, x: x, y: y, block: true, key: k) }
-		if isLogTile(t) && decayZones.count < 24 { decayZones.append(DecayZone(x: x, y: y, t: 30)) }
-		if isLeafTile(t) {
-			for _ in 0..<3 { dropLeaf(Double(x) + Double.random(in: 0.1...0.9), Double(y) + Double.random(in: 0.2...0.8), t) }
-		}
-		let col: UInt32 = t.def.colors.first ?? 0x888888
-		spawnParticles(Double(x) + 0.5, Double(y) + 0.5, col, 6, 3.5, 0.5, 16)
-		if !(byPlayer && isCreative) {
-			for s in minedDrops(t, x, y, byPlayer) {
-				if dropChance < 1.0 && Double.random(in: 0...1) > dropChance { continue }
-				spawnDrop(s, Double(x) + 0.5, Double(y) + 0.4, Double.random(in: -1.5...1.5), -3.0)
-			}
-		} else if t == .chest {
-			_ = world.removeChest(x, y)
-		}
-		// dependent tiles
-		let above: Tile = world.tile(x, y - 1)
-		if world.needsSupport(above) && !world.supports(world.tile(x, y), above) {
-			breakTile(x, y - 1, byPlayer)
-		}
-		if t == .farmland {
-			let a2: Tile = world.tile(x, y - 1)
-			if a2 == .wheat1 || a2 == .wheat2 || a2 == .wheat3 || a2 == .carrot1 || a2 == .carrot2 || a2 == .carrot3 { breakTile(x, y - 1, byPlayer) }
-		}
-		// unsupported sand above falls
-		if fallsLikeSand(world.tile(x, y - 1)) { checkFalling(x, y - 1) }
-		bumpHUD()
-	}
-
-	func fellTree(_ x: Int, _ y: Int) {
-		// find the base and walk upward
-		var by: Int = y
-		while isLogTile(world.tile(x, by + 1)) { by += 1 }
-		var cy: Int = by
-		var top: Int = y
-		var count: Int = 0
-		while isLogTile(world.tile(x, cy)) && count < 40 {
-			top = cy
-			cy -= 1
-			count += 1
-		}
-		// remove logs from top to bottom (only from the struck tile upwards)
-		var yy: Int = y
-		while isLogTile(world.tile(x, yy)) && yy >= top {
-			breakTile(x, yy, true)
-			yy -= 1
-		}
-		// leaves around the crown
-		let ty: Int = top
-		for dy in -7...3 {
-			for dx in -6...6 {
-				let lx: Int = x + dx
-				let ly: Int = ty + dy
-				let lt: Tile = world.tile(lx, ly)
-				if isLeafTile(lt) {
-					// only fell leaves that belong to this tree (near the trunk top)
-					if abs(dx) + abs(dy + 1) <= 8 { breakTile(lx, ly, true) }
-				}
-			}
-		}
-	}
-
-	// MARK: placing blocks
-
-	func canPlaceAt(_ tx: Int, _ ty: Int, _ t: Tile) -> Bool {
-		if ty < 2 || ty >= world.H - 2 { return false }
-		let cur: Tile = world.tile(tx, ty)
-		if !(cur == .air || cur.liquid || (cur.isPlant && cur != .torch && cur != .lantern) || cur == .cobweb) { return false }
-		if !inReach(Double(tx) + 0.5, Double(ty) + 0.5) { return false }
-		if t.solid {
-			// no overlap with bodies
-			let x0: Double = Double(tx), x1: Double = Double(tx + 1)
-			let y0: Double = Double(ty), y1: Double = Double(ty + 1)
-			if pb.right > x0 + 0.02 && pb.left < x1 - 0.02 && pb.y > y0 + 0.02 && pb.top < y1 - 0.02 && !noclip { return false }
-			for m in mobs {
-				if m.hp <= 0 { continue }
-				if m.b.right > x0 + 0.02 && m.b.left < x1 - 0.02 && m.b.y > y0 + 0.02 && m.b.top < y1 - 0.02 { return false }
-			}
-			for v in vehicles {
-				if v.b.x + v.b.w * 0.5 > x0 + 0.02 && v.b.x - v.b.w * 0.5 < x1 - 0.02 && v.b.y > y0 + 0.02 && v.b.y - v.b.h < y1 - 0.02 { return false }
-			}
-		}
-		if world.needsSupport(t) {
-			let below: Tile = world.tile(tx, ty + 1)
-			if !world.supports(below, t) { return false }
-		}
-		if isCreative || flying { return true }
-		// needs an adjacent tile to attach to, or a wall behind it
-		let n: [Tile] = [world.tile(tx - 1, ty), world.tile(tx + 1, ty), world.tile(tx, ty - 1), world.tile(tx, ty + 1)]
-		for k in n {
-			if k != .air && !k.liquid && !(k.isPlant && k != .torch) { return true }
-		}
-		return world.wallAt(tx, ty) != 0
-	}
-
-	func usePlaceBlock(_ t: Tile, _ dt: Double) {
-		if placeCD > 0 { return }
-		let tx: Int = Int(floor(aimX))
-		let ty: Int = Int(floor(aimY))
-		if vehicleBuild && wallMode && canBeWall(t.placedForm) && attachWallToVehicle(t.placedForm) { return }
-		if t == .doorClosed || t == .doorOpen {
-			if vehicleBuild && attachDoorToVehicle() { return }
-			if placeDoor(tx, ty) {
-				if !isCreative { inv.removeAt(sel, 1) }
-				placeCD = 0.25
-				swingT = 0.14
-				bumpHUD()
-			}
-			return
-		}
-		// the ON VEHICLE switch: the block is built onto the vehicle instead
-		if vehicleBuild && attachBlockToVehicle(t.placedForm) { return }
-		// the WALL switch: the block goes up as a passable wall instead
-		if wallMode && canBeWall(t.placedForm) {
-			placeBlockAsWall(t.placedForm)
-			return
-		}
-		// aiming at a ladder with ladders in hand builds it on; beds, stairs and lift cars place their own way
-		if t == .ladder && extendLadder(tx, ty) { return }
-		if placeSpecial(t, tx, ty) { return }
-		// a log item builds a solid log block (tree trunks themselves have no collision)
-		let placed: Tile = t.placedForm
-		if !canPlaceAt(tx, ty, placed) { return }
-		// plants / crops need special support handled in canPlaceAt through needsSupport
-		world.set(tx, ty, placed)
-		world.setBuilt(tx, ty, true)
-		if t == .chest { world.setChestItems(tx, ty, []) }
-		if placed.isMod, ModRuntime.shared.blockDef(placed)?.function == .storage { world.setChestItems(tx, ty, []) }
-		// parts that point a way face the way the player does
-		if powerDirectional(placed), let d = world.powerDev(tx, ty) { d.dir = facing >= 0 ? 0 : 2 }
-		if !isCreative { inv.removeAt(sel, 1) }
-		sfx(.place, 0.6)
-		// the last block of a summoning shape
-		if !ModRuntime.shared.summons.isEmpty { summonByBuilding(tx, ty) }
-		if placed.isMod && !logicRT.isEmpty, let k = modBlockKey(placed) { fireLogic(.blockPlaced, x: tx, y: ty, block: true, key: k) }
-		placeCD = 0.11
-		swingT = 0.14
-		swingDir = aimFacing()
-		facing = swingDir
-		bumpHUD()
-	}
-
-	func usePlant(_ crop: Tile, _ it: Item, _ pressed: Bool) {
-		if placeCD > 0 { return }
-		let tx: Int = Int(floor(aimX))
-		let ty: Int = Int(floor(aimY))
-		if world.tile(tx, ty) == .air && world.tile(tx, ty + 1) == .farmland && inReach(Double(tx) + 0.5, Double(ty) + 0.5) {
-			world.set(tx, ty, crop)
-			if !isCreative { inv.removeAt(sel, 1) }
-			placeCD = 0.2
-			swingT = 0.14
-			bumpHUD()
-		}
-	}
-
-	// MARK: food
-
-	func useFood(_ f: Food, _ pressed: Bool) {
-		let tx: Int = Int(floor(aimX))
-		let ty: Int = Int(floor(aimY))
-		if f == .carrot && world.tile(tx, ty) == .air && world.tile(tx, ty + 1) == .farmland {
-			usePlant(.carrot1, .food(.carrot), pressed)
-			return
-		}
-		if !pressed || eatT > 0.0 { return }
-		if hunger >= 19.5 && hp >= maxHP && !isCreative {
-			say("You're not hungry.", 1.2)
-			return
-		}
-		let fo: ModOverride? = OverrideRT.shared.items[.food(f)]
-		let fh: Double = fo?.hunger ?? f.hunger
-		let fl: Double = fo?.heal ?? f.heal
-		hunger = min(20, hunger + fh)
-		if fl > 0 { heal(fl) }
-		if !isCreative { inv.removeAt(sel, 1) }
-		eatT = 0.5
-		useCD = 0.5
-		sfx(.eat, 0.6)
-		spawnParticles(pb.x + Double(facing) * 0.4, pb.y - 1.4, 0xC8A060, 5, 2.0, 0.4, 8)
-		floatText("+" + String(Int(f.hunger)), pb.x, pb.y - pb.h - 0.4, 0xE0A040)
-		bumpHUD()
-	}
-
-	// MARK: bow
-
-	/// Bow stats live in one place so new bows only need a new entry here
-	struct BowStats {
-		var minSpeed: Double = 20
-		var maxSpeed: Double = 40
-		var baseDamage: Double = 5
-		var chargeDamage: Double = 9
-		var chargeTime: Double = 0.55
-		var useTime: Double = 0.32
-		var gravity: Double = 15
-	}
-
-	func bowStats(_ it: Item) -> BowStats { return BowStats() }
-
-	/// Hold to draw (aim with your finger, the dotted arc shows the flight path), release to shoot.
-	/// A quick tap still fires a useful shot, and holding at full draw keeps firing automatically.
-	func handleBow(_ dt: Double, _ pressed: Bool, _ released: Bool) {
-		let hasArrow: Bool = isCreative || inv.total(.ammo(.arrow)) > 0
-		let st: BowStats = bowStats(.bow)
-		if useHeld {
-			if !hasArrow {
-				if pressed { say("No arrows!", 1.2) }
-				bowCharge = 0
-				return
-			}
-			if useCD > 0 && bowCharge == 0 { return }
-			bowCharge = min(1.0, max(bowCharge, 0.01) + dt / st.chargeTime)
-			facing = aimFacing()
-			if bowCharge >= 1.0 && useCD <= 0 {
-				fireArrow(1.0)
-				bowCharge = 0.3
-			}
-		} else if released && bowCharge > 0 && hasArrow {
-			fireArrow(max(0.45, bowCharge))
-			bowCharge = 0
-		} else {
-			bowCharge = 0
-		}
-	}
-
-	/// Where the arrow leaves the bow and its starting velocity for a given draw
-	func arrowLaunch(_ charge: Double) -> (Double, Double, Double, Double) {
-		let st: BowStats = bowStats(.bow)
-		let ox: Double = pb.x + Double(facing) * 0.35
-		let oy: Double = pb.y - 1.2
-		var dx: Double = aimX - ox
-		var dy: Double = aimY - oy
-		let len: Double = max(0.001, sqrt(dx * dx + dy * dy))
-		dx /= len
-		dy /= len
-		let speed: Double = st.minSpeed + (st.maxSpeed - st.minSpeed) * charge
-		// a little of the archer's own motion carries into the arrow, so shots on the run still land;
-		// all of the speed of a vehicle that carries the archer does (the arrow was going that fast already)
-		let cv: (Double, Double) = carrierVel()
-		let own: Double = inVehicle == nil ? pb.vx : 0
-		return (ox + dx * 0.4, oy + dy * 0.4, dx * speed + own * 0.3 + cv.0, dy * speed + min(0, inVehicle == nil ? pb.vy : 0) * 0.2 + cv.1)
-	}
-
-	func fireArrow(_ charge: Double) {
-		if !isCreative { _ = inv.remove(.ammo(.arrow), 1) }
-		let st: BowStats = bowStats(.bow)
-		let l: (Double, Double, Double, Double) = arrowLaunch(charge)
-		var dmg: Double = st.baseDamage + st.chargeDamage * charge
-		// a mod may change the bow's full-draw damage
-		if let o = OverrideRT.shared.items[.bow], let v = o.damage { dmg *= v / max(0.1, st.baseDamage + st.chargeDamage) }
-		if charge >= 0.99 && Double.random(in: 0...1) < 0.15 { dmg *= 1.5 }
-		var p = Projectile(kind: .arrow, x: l.0, y: l.1, vx: l.2, vy: l.3, dmg: dmg, fromPlayer: true, gravity: st.gravity)
-		p.life = 6.0
-		p.w = 0.22
-		p.source = .player
-		p.uid = newID()
-		infuseShot(&p, heldItem)
-		projectiles.append(p)
-		sfx(.bow, 0.7)
-		useCD = st.useTime * quickMul()
-		swingT = 0.18
-		swingDir = facing
-		bowRecoil = 0.12
-		bumpHUD()
-	}
-
-	/// Sample points of the shot's flight for the aiming arc: the bow while it is drawn, the sling and
-	/// bolt throwers while the aim is held
-	func arrowPreview() -> [(Double, Double)] {
-		var l: (Double, Double, Double, Double)
-		var grav: Double
-		if bowCharge > 0 {
-			let st: BowStats = bowStats(.bow)
-			l = arrowLaunch(max(0.45, bowCharge))
-			grav = st.gravity
-		} else if useHeld && aimValid && inVehicle == nil, let it = heldItem {
-			var speed: Double = 0
-			var ox: Double = pb.x + Double(facing) * 0.4
-			var oy: Double = pb.y - 1.3
-			switch it {
-			case .sling: speed = 23; grav = 16
-			case .gun(let g) where g.isBoltThrower:
-				speed = g.speed; grav = g.gravity
-				ox = pb.x + Double(facing) * 0.7
-				oy = pb.y - 1.2
-			case .gadget(let gd) where gd == .bomb || gd == .fireFlask: speed = throwSpeed; grav = throwGravity
-			case .potion(let pt) where pt.thrown: speed = throwSpeed; grav = throwGravity
-			default: return []
-			}
-			let a: Double = lobAngle(aimX - ox, aimY - oy, speed, grav)
-			l = (ox, oy, cos(a) * speed, sin(a) * speed)
-		} else {
-			return []
-		}
-		var x: Double = l.0
-		var y: Double = l.1
-		let vx: Double = l.2
-		var vy: Double = l.3
-		var out: [(Double, Double)] = []
-		let step: Double = 0.03
-		var i: Int = 0
-		while i < 40 {
-			vy = min(vy + grav * step, 40)
-			let nx: Double = x + vx * step
-			let ny: Double = y + vy * step
-			if world.segmentSolidT(x, y, nx, ny) != nil { break }
-			x = nx
-			y = ny
-			if i % 2 == 1 { out.append((x, y)) }
-			i += 1
-		}
-		return out
-	}
-
-	// MARK: guns
-
-	func updateReload(_ dt: Double) {
-		if reloadT <= 0 { return }
-		if reloadSlot != sel {
-			reloadT = 0
-			reloadSlot = -1
-			return
-		}
-		reloadT -= dt
-		if reloadT <= 0 {
-			reloadT = 0
-			if var st = inv.slots[sel], case .gun(let g) = st.item, let a = g.ammo {
-				let need: Int = g.magazine - st.extra
-				var take: Int = need
-				if !isCreative {
-					take = min(need, inv.total(.ammo(a)))
-					_ = inv.remove(.ammo(a), take)
-				}
-				st.extra += take
-				inv.slots[sel] = st
-				if g.isBoltThrower { sfx(.tap, 0.5) }
-				bumpHUD()
-			} else if let st = inv.slots[sel], case .custom(let k) = st.item, let r = ModRuntime.shared.item(k), r.def.kind == .gun {
-				finishModReload(r)
-			}
-			reloadSlot = -1
-		}
-	}
-
-	func startReload() {
-		if let st = heldStack, case .custom(let k) = st.item, let r = ModRuntime.shared.item(k), r.def.kind == .gun {
-			startModReload(r, st)
-			return
-		}
-		guard let st = heldStack, case .gun(let g) = st.item, let a = g.ammo else { return }
-		if reloadT > 0 || st.extra >= g.magazine { return }
-		if !isCreative && inv.total(.ammo(a)) <= 0 {
-			say("Out of " + a.name.lowercased() + "s!", 1.5)
-			return
-		}
-		reloadT = g.reloadTime
-		reloadSlot = sel
-		// a crossbow is cocked after every bolt: no need to announce that each time
-		if g.magazine > 1 { say("Reloading...", 1.0) }
-	}
-
-	/// Fires a loaded weapon: bullets, bolts, a spread of pellets, or the storm rod's lightning. Heavy
-	/// weapons need a fresh press per shot; the rest keep firing while held. Empty ones reload by
-	/// themselves when there is ammunition.
-	func useGun(_ g: GunType, _ pressed: Bool) {
-		guard var st = inv.slots[sel] else { return }
-		if reloadT > 0 { return }
-		if st.extra <= 0 {
-			if g == .stormRod {
-				if pressed { say("The rod is still gathering its charge.", 1.2) }
-				return
-			}
-			if pressed || useCD <= 0 { startReload() }
-			return
-		}
-		if useCD > 0 { return }
-		if g.needsPress && !pressed { return }
-		if !isCreative || g != .stormRod { st.extra -= 1 }
-		inv.slots[sel] = st
-		useCD = (OverrideRT.shared.items[.gun(g)]?.cooldown ?? g.cooldown) * quickMul()
-		if g == .stormRod {
-			fireStormRod()
-			bumpHUD()
-			return
-		}
-		facing = aimFacing()
-		let ox: Double = pb.x + Double(facing) * 0.7
-		let oy: Double = pb.y - 1.2
-		// bolts drop a little: they are raised just enough to fly through the spot aimed at
-		let base: Double = lobAngle(aimX - ox, aimY - oy, g.speed, g.gravity)
-		let n: Int = g == .blunderbuss ? 7 : 1
-		for i in 0..<n {
-			var a: Double = base
-			// an even fan of pellets, so the spread always covers the same cone
-			if n > 1 { a += (Double(i) / Double(n - 1) - 0.5) * 0.6 }
-			let dx: Double = cos(a)
-			let dy: Double = sin(a)
-			let kind: ProjKind = g == .blunderbuss ? .pellet : (g.isBoltThrower ? .quarrel : .bullet)
-			var p = Projectile(kind: kind, x: ox, y: oy, vx: dx * g.speed, vy: dy * g.speed, dmg: OverrideRT.shared.items[.gun(g)]?.damage ?? g.damage, fromPlayer: true, gravity: g.gravity)
-			p.life = g.shotLife * (n > 1 ? Double.random(in: 0.85...1.1) : 1.0)
-			p.source = .player
-			p.uid = newID()
-			p.pierce = g.pierce
-			p.knock = g.knock
-			if kind == .pellet { p.w = 0.16 }
-			if kind == .quarrel { p.w = 0.22 }
-			infuseShot(&p, heldItem)
-			projectiles.append(p)
-		}
-		let heavyShot: Bool = g == .rifle || g == .arbalest || g == .blunderbuss
-		switch g {
-		case .blunderbuss: sfx(.blunderbuss, 0.9)
-		case .crossbow, .arbalest, .repeater: sfx(.crossbow, 0.75)
-		default: sfx(.gun, 0.8)
-		}
-		muzzleT = g.isBoltThrower ? 0 : 0.08
-		swingT = 0.1
-		swingDir = facing
-		addShake(heavyShot ? 0.16 : 0.07)
-		pb.vx -= Double(facing) * (g == .blunderbuss ? 4.0 : (heavyShot ? 2.5 : 1.0))
-		let dx0: Double = cos(base)
-		let dy0: Double = sin(base)
-		if g.isFirearm { spawnParticles(ox + dx0 * 0.4, oy + dy0 * 0.4, 0xFFE080, g == .blunderbuss ? 9 : 4, 3.0, 0.15, 0) }
-		if st.extra <= 0, let am = g.ammo, isCreative || inv.total(.ammo(am)) > 0 { startReload() }
-		bumpHUD()
-	}
-
-	// MARK: gadgets & vehicle parts
-
-	func useGadget(_ g: Gadget, _ pressed: Bool) {
-		switch g {
-		case .bucket:
-			if pressed { useBucket() }
-		case .remote:
-			if pressed { useRemote() }
-		case .treasureMap:
-			if pressed {
-				showMap = true
-				bumpHUD()
-			}
-		case .shears:
-			if let m = mobAtPoint(aimX, aimY, 0.3), m.kind == .sheep, !m.sheared, inReach(m.b.x, m.b.cy), useCD <= 0 {
-				m.sheared = true
-				m.regrow = 150
-				useCD = 0.4
-				swingT = 0.2
-				for _ in 0..<(1 + Int.random(in: 0...2)) {
-					spawnDrop(Stack(item: .mat(.wool), count: 1), m.b.x, m.b.y - 0.8, Double.random(in: -2...2), -4)
-				}
-				spawnParticles(m.b.x, m.b.cy, 0xF0F0F0, 8, 3.0, 0.5, 8)
-			}
-		case .wrench:
-			if pressed, useCD <= 0, inReach(aimX, aimY), let (v, c) = vehicleWallAtPoint(aimX, aimY), removeVehicleWall(v, c) {
-				useCD = 0.3
-			} else if pressed, useCD <= 0, let (v, c) = vehicleAtPoint(aimX, aimY), inReach(aimX, aimY) {
-				removeVehiclePart(v, c)
-				useCD = 0.3
-			}
-		case .portalKey:
-			if pressed { say("Use the key on the sealed portal.", 2.0) }
-		case .carKit, .boatKit, .motorboatKit, .planeKit, .heliKit, .airshipKit, .tankKit, .truckKit:
-			if pressed && useCD <= 0 { placeKit(g) }
-		case .assembler:
-			useAssembler(pressed)
-		case .bomb:
-			if pressed { throwBomb() }
-		case .fireFlask:
-			if pressed { throwFlask() }
-		case .barometer:
-			if pressed { say(barometerReading(), 2.5) }
-		case .waterFlask:
-			useWaterFlask(pressed)
-		case .powerCable, .pulseWire, .pulseWireB, .wireSnips:
-			useWiring(g, pressed)
-		case .probe:
-			if pressed { probeAt(aimX, aimY) }
-		}
-	}
-
-	/// A cargo crate's storage lives with the other chests, under a key no block can have (built from
-	/// the vehicle's saved id and the crate's cell), so it is saved and loaded like any chest
-	func cargoSpot(_ v: Vehicle, _ c: PartCell) -> IntPair {
-		if c.dx >= -32 && c.dx < 32 && c.dy >= -32 && c.dy < 32 {
-			return IntPair(x: -1_000_000_000 + v.id * 4096 + (c.dx + 32) * 64 + (c.dy + 32), y: -77)
-		}
-		// a cell further out on a big vehicle (an assembled ship): the cell goes in the second number
-		return IntPair(x: -1_000_000_000 + v.id, y: -100_000 - ((c.dx + 2048) * 4096 + (c.dy + 2048)))
-	}
-
-	func isCargoSpot(_ p: IntPair) -> Bool { return (p.y == -77 || p.y <= -100_000) && p.x < -900_000_000 }
-
-	func removeVehiclePart(_ v: Vehicle, _ c: PartCell) {
-		if v.rider { dismount() }
-		let crates: [PartCell] = v.parts.keys.filter { vehicleStores(v, $0) }
-		let spills: [(PartCell, (Double, Double))] = crates.map { ($0, v.cellCenter($0)) }
-		let returned: [VCell] = v.cutAway(c)
-		// a crate that comes off tips its contents onto the ground
-		for (cell, at) in spills where v.parts[cell] == nil {
-			let k: IntPair = cargoSpot(v, cell)
-			if let p = openChest, p == k { openChest = nil }
-			for st in world.removeChest(k.x, k.y) { spawnDrop(st, at.0, at.1, Double.random(in: -2...2), -3.5) }
-		}
-		for r in returned { giveItem(vehicleCellItem(r), 1) }
-		if v.parts.isEmpty {
-			vehicles.removeAll { $0.id == v.id }
-		} else {
-			v.recompute(keepAnchor: true)
-		}
-		bumpHUD()
-	}
-
-	func usePart(_ p: PartType, _ pressed: Bool) {
-		if !pressed || useCD > 0 { return }
-		if !inReach(aimX, aimY) {
-			say("Too far away. Tap closer to you.", 1.2)
-			return
-		}
-		if p == .bigWheel {
-			if !attachBigWheel() { say("Tap next to a vehicle: the cell you tap is the big wheel's middle.", 2.0) }
-			return
-		}
-		// attach to an existing vehicle (the tapped cell must touch it)
-		for v in vehicles {
-			if aimX < v.b.left - 1.5 || aimX > v.b.right + 1.5 || aimY < v.b.top - 1.5 || aimY > v.b.y + 1.5 { continue }
-			let c: PartCell = v.cellAt(aimX, aimY)
-			if v.parts[c] != nil || !v.hasNeighbor(c) { continue }
-			if let problem = attachProblem(v, c, p) {
-				say(problem + " Green squares show where it fits.", 2.5)
-				useCD = 0.3
-				return
-			}
-			let wasReady: Bool = vehicleCheck(v).ready
-			liftIfBuried(v, c)
-			v.parts[c] = p
-			v.recompute(keepAnchor: true)
-			splitJointSections(v)
-			if !isCreative { inv.removeAt(sel, 1) }
-			useCD = 0.2
-			swingT = 0.15
-			let check: VehicleCheck = vehicleCheck(v)
-			if check.ready && !wasReady {
-				let kind: String = check.title.lowercased()
-				say("Your \(kind) is ready! Stand next to it and press DRIVE.", 3.5)
-			} else if let note = partNote(v, c, p) {
-				say(note, 3.0)
-			}
-			bumpHUD()
-			return
-		}
-		// start a new vehicle on the ground
-		let first: [PartType] = [.frame, .hull, .seat, .fuelTank, .engine]
-		if !first.contains(p) {
-			if nearestVehicle(10) != nil {
-				let pn: String = p.name
-				say("Tap one of the green squares to attach the \(pn).", 2.5)
-			} else {
-				say("Start with a Frame (car) or Hull Float (boat). Or craft a ready-made kit in Vehicles.", 3.0)
-			}
-			return
-		}
-		let tx: Int = Int(floor(aimX))
-		let ty: Int = Int(floor(aimY))
-		if world.solid(tx, ty) { return }
-		let v = Vehicle(id: newID(), first: p, x: Double(tx) + 0.5, y: Double(ty) + 1.0)
-		vehicles.append(v)
-		if !isCreative { inv.removeAt(sel, 1) }
-		useCD = 0.25
-		say("Vehicle started. Now hold more parts: green squares show where they fit.", 3.0)
-		bumpHUD()
-	}
-}
-
-// MARK: - Combat: melee strikes, aim, weapon switching, ranged and special weapons, feedback
-
-/// A melee swing, drawn for a moment after it is made: the trail covers exactly the space it swept
-struct SlashFX {
-	var x: Double
-	var y: Double
-	var ang: Double
-	var reach: Double
-	var halfArc: Double
-	var style: SwingStyle
-	var color: UInt32
-	var life: Double
-	var maxLife: Double
-	var hit: Bool
-}
-
-/// A lightning arc from the storm rod: a jagged line through these points
-struct ArcFX {
-	var pts: [(Double, Double)]
-	var life: Double
-}
-
-/// Ground set alight by a fire flask; it burns whatever stands in it
-struct FireZone {
-	var x: Double
-	/// the ground the flames stand on
-	var y: Double
-	var r: Double
-	var t: Double
-	var tick: Double = 0
-	var uid: Int
-	/// started by lightning, not by a thrown flask (it then answers to the weather damage settings)
-	var env: Bool = false
-}
-
-func isUndead(_ k: MobKind) -> Bool {
-	switch k {
-	case .zombie, .skeleton, .archer, .wraith: return true
-	default: return false
-	}
-}
-
-/// signed difference between two angles, in -pi...pi
-func angleDiff(_ a: Double, _ b: Double) -> Double {
-	var d: Double = a - b
-	while d > Double.pi { d -= 2.0 * Double.pi }
-	while d < -Double.pi { d += 2.0 * Double.pi }
-	return d
-}
-
-/// Rock blocks a sling can throw
-let slingAmmo: [Tile] = [.stone, .slate, .deepRock, .sandstone, .ashStone]
-
-/// The direction (radians, y pointing down) to launch a shot of speed `v` falling under gravity `g`
-/// so that it passes through the point (dx, dy) from where it starts, on the lower, flatter of the two
-/// arcs. Out of reach: the longest-reaching throw toward it (45 degrees up).
-func lobAngle(_ dx: Double, _ dy: Double, _ v: Double, _ g: Double) -> Double {
-	if g <= 0.001 { return atan2(dy, dx) }
-	let x: Double = max(0.001, abs(dx))
-	let up: Double = -dy
-	let v2: Double = v * v
-	let disc: Double = v2 * v2 - g * (g * x * x + 2.0 * up * v2)
-	let th: Double = disc < 0 ? Double.pi * 0.25 : atan((v2 - sqrt(disc)) / (g * x))
-	return dx >= 0 ? -th : Double.pi + th
-}
-
-/// Thrown and lobbed weapons are aimed at the spot itself: the game works out the arc
-let throwSpeed: Double = 15.0
-let throwGravity: Double = 22.0
-
-extension Game {
-	// MARK: geometry
-
-	/// The way the player turns to face the aim: toward it, but aiming straight up or down (within a third
-	/// of a block of the player's own column) keeps the way they already face
-	func aimFacing() -> Int {
-		let d: Double = aimX - pb.x
-		if abs(d) < 0.3 { return facing }
-		return d >= 0 ? 1 : -1
-	}
-
-	/// where melee blows start from
-	var shoulderX: Double { return pb.x }
-	var shoulderY: Double { return pb.y - pb.h * 0.55 }
-
-	/// The way an attack goes: toward the aim, or straight ahead when there is no aim (or the aim is on
-	/// the player's own body, where its direction would be noise)
-	func attackAngle() -> Double {
-		let ox: Double = shoulderX
-		let oy: Double = shoulderY
-		if aimValid {
-			let dx: Double = aimX - ox
-			let dy: Double = aimY - oy
-			if dx * dx + dy * dy > 0.36 { return atan2(dy, dx) }
-		}
-		return facing >= 0 ? 0 : Double.pi
-	}
-
-	/// distance from a point to the nearest edge of a creature's box (0 inside it)
-	func boxDistance(_ m: Mob, _ ox: Double, _ oy: Double) -> Double {
-		let nx: Double = clampD(ox, m.b.left, m.b.right)
-		let ny: Double = clampD(oy, m.b.top, m.b.y)
-		let dx: Double = nx - ox
-		let dy: Double = ny - oy
-		return sqrt(dx * dx + dy * dy)
-	}
-
-	/// Whether a swing with profile `p` aimed along (dirx, diry) from the shoulder reaches `m`; returns
-	/// how far away it is. The same test serves every way of attacking, so reach never depends on how
-	/// the attack was started.
-	func meleeReach(_ m: Mob, _ dirx: Double, _ diry: Double, _ p: MeleeProfile) -> Double? {
-		let ox: Double = shoulderX
-		let oy: Double = shoulderY
-		let hw: Double = m.b.w * 0.5
-		let hh: Double = m.b.h * 0.5
-		let cx: Double = m.b.x
-		let cy: Double = m.b.y - hh
-		let nx: Double = clampD(ox, cx - hw, cx + hw)
-		let ny: Double = clampD(oy, cy - hh, cy + hh)
-		let ddx: Double = nx - ox
-		let ddy: Double = ny - oy
-		let dist: Double = sqrt(ddx * ddx + ddy * ddy)
-		if dist > p.reach { return nil }
-		let vx: Double = cx - ox
-		let vy: Double = cy - oy
-		if p.style == .thrust {
-			// a straight band along the aim
-			let along: Double = vx * dirx + vy * diry
-			let ext: Double = hw * abs(dirx) + hh * abs(diry)
-			if along + ext < 0 || along - ext > p.reach { return nil }
-			let perp: Double = abs(vx * diry - vy * dirx)
-			let pext: Double = hw * abs(diry) + hh * abs(dirx)
-			if perp - pext > p.band { return nil }
-		} else if dist > 0.45 {
-			// inside the arc: the angle to the box centre, widened by how wide the box looks from here
-			let cd: Double = max(0.2, sqrt(vx * vx + vy * vy))
-			let off: Double = abs(angleDiff(atan2(vy, vx), atan2(diry, dirx)))
-			let ext: Double = hw * abs(vy / cd) + hh * abs(vx / cd)
-			if off > p.halfArc + atan(ext / cd) { return nil }
-		} else if vx * dirx < -0.3 && abs(dirx) > 0.3 {
-			// pressed right up against the player: anything on the side being swung at
-			return nil
-		}
-		// blades do not pass through walls
-		let ix: Double = nx + (cx - nx) * 0.25
-		let iy: Double = ny + (cy - ny) * 0.25
-		if !world.lineClear(ox, oy, ix, iy) && !world.lineClear(ox, oy, cx, cy) { return nil }
-		return dist
-	}
-
-	/// every creature the current aim would catch, nearest first, at most the weapon's limit
-	func meleeCandidates(_ p: MeleeProfile) -> [(Mob, Double)] {
-		let ang: Double = attackAngle()
-		let dirx: Double = cos(ang)
-		let diry: Double = sin(ang)
-		let ox: Double = shoulderX
-		var out: [(Mob, Double)] = []
-		for m in mobsNear(ox - p.reach - 4, ox + p.reach + 4) {
-			if m.hp <= 0 || m.removed || m.tame || m.downed { continue }
-			if let d = meleeReach(m, dirx, diry, p) { out.append((m, d)) }
-		}
-		if out.count > 1 { out.sort { $0.1 < $1.1 } }
-		if out.count > p.maxHits { out.removeLast(out.count - p.maxHits) }
-		return out
-	}
-
-	// MARK: melee
-
-	/// Starts a melee attack with the held item (nil: bare hands). A heavy weapon winds up first and
-	/// its blow lands a moment later; everything else strikes at once. False while still recovering.
-	@discardableResult
-	func startMelee(_ it: Item?, target: Mob? = nil) -> Bool {
-		if useCD > 0 || strikeT > 0 { return false }
-		let p: MeleeProfile = infusedMelee(it)
-		useCD = p.cooldown
-		swingDur = p.swingTime
-		swingT = p.swingTime
-		let ang: Double = attackAngle()
-		// a blow straight up or down keeps the way the player already faces
-		swingDir = abs(cos(ang)) < 0.25 ? facing : (cos(ang) >= 0 ? 1 : -1)
-		facing = swingDir
-		strikeItem = it
-		strikeSel = sel
-		strikeTarget = target
-		if p.windup > 0 {
-			strikeT = p.windup
-		} else {
-			resolveMelee(it)
-		}
-		return true
-	}
-
-	/// The blow itself: everything inside the swing's shape is hit, with the weapon's knockback,
-	/// crits, combo, backstab, daze and fire; then the trail, sound and hit feedback
-	func resolveMelee(_ it: Item?) {
-		let p: MeleeProfile = infusedMelee(it)
-		let infs: [Int] = heldInfusions(it)
-		if suitHas(.servo) { _ = suitSpend(.servo, 1.0) }
-		let ox: Double = shoulderX
-		let oy: Double = shoulderY
-		let ang: Double = attackAngle()
-		let swingKey: Int = newID()
-		let targets: [(Mob, Double)] = meleeCandidates(p)
-		var hits: Int = 0
-		var crits: Int = 0
-		var undead: Bool = false
-		for (m, _) in targets {
-			var d: Double = p.damage
-			var crit: Bool = false
-			if p.combo {
-				comboN = clock - comboT < 0.7 ? comboN + 1 : 1
-				comboT = clock
-				if comboN % 3 == 0 { d *= 2.0; crit = true }
-			}
-			if !crit && Double.random(in: 0...1) < p.critChance { d *= 1.5; crit = true }
-			if p.backstab > 1 && (pb.x - m.b.x) * Double(m.dir) < 0 && !m.isBoss {
-				d *= p.backstab
-				crit = true
-			}
-			if p.undeadMult != 1 && isUndead(m.kind) { d *= p.undeadMult; undead = true }
-			let dx: Double = m.b.x - ox
-			var info = DamageInfo(amount: d, type: .melee, source: .player)
-			info.dirX = abs(dx) > 0.2 ? (dx > 0 ? 1.0 : -1.0) : Double(swingDir)
-			info.knock = p.knock
-			info.originX = ox
-			info.originY = oy
-			info.key = swingKey
-			info.cooldown = 0.3
-			info.heavy = p.heavy
-			info.crit = crit
-			if applyMobDamage(m, info) {
-				hits += 1
-				if crit { crits += 1 }
-				if p.burn > 0 && !heatImmune(m) { m.burn = max(m.burn, p.burn) }
-				if p.daze > 0 { dazeMob(m, p.daze) }
-				meleeInfusionHit(m, infs, d)
-				suitMeleeHit(m)
-				spawnSparks(m.b.x - info.dirX * m.b.w * 0.3, m.b.cy, info.dirX, p.trail, crit ? 7 : 4)
-				lockTarget = m
-				lockT = 2.0
-			}
-		}
-		// pirate ships
-		for sh in ships {
-			let dx: Double = abs(sh.x - ox)
-			let dy: Double = abs(sh.deckY(Double(WorldGen.sea)) - pb.y)
-			if dx < 5.0 + p.reach * 0.3 && dy < 3.5 {
-				sh.hp -= p.damage * 0.6
-				sh.hitT = 0.2
-				hits += 1
-			}
-		}
-		if p.shockwave {
-			// the maul's blow runs along the ground as a quake
-			var q = Projectile(kind: .shock, x: pb.x + Double(swingDir) * 1.2, y: pb.y - 0.5, vx: Double(swingDir) * 15.0, vy: 0, dmg: 12, fromPlayer: true, gravity: 0)
-			q.life = 0.55
-			q.source = .player
-			q.uid = newID()
-			projectiles.append(q)
-			addShake(0.3)
-			spawnParticles(pb.x + Double(swingDir) * 1.4, pb.y - 0.1, 0xA08860, 10, 4.0, 0.5, 12)
-		}
-		lastStrikeHits = hits
-		if slashes.count > 8 { slashes.removeFirst() }
-		let life: Double = max(0.12, p.swingTime * 0.7)
-		slashes.append(SlashFX(x: ox, y: oy, ang: ang, reach: p.reach, halfArc: p.halfArc, style: p.style, color: p.trail, life: life, maxLife: life, hit: hits > 0))
-		switch p.style {
-		case .stab: sfx(.swingLight, 0.5)
-		case .thrust: sfx(.thrust, 0.55)
-		case .smash, .bash: sfx(p.heavy || p.daze > 0 ? .swingHeavy : .swing, 0.6)
-		case .slash: sfx(.swing, 0.5)
-		}
-		if hits > 0 {
-			hitStopT = max(hitStopT, p.heavy ? 0.07 : (crits > 0 ? 0.05 : 0.03))
-			addShake(p.heavy ? 0.18 : (crits > 0 ? 0.12 : 0.07))
-			sfx(crits > 0 ? .crit : .hit, p.heavy ? 1.0 : 0.75)
-			if hits >= 2 {
-				floatText("x" + String(hits), pb.x, pb.y - pb.h - 0.9, 0xFFD060)
-				sfx(.multiHit, 0.6)
-			}
-			if undead && p.undeadMult > 1 { spawnParticles(pb.x + Double(swingDir) * 1.2, pb.y - 1.2, 0xC8E8FF, 5, 2.5, 0.4, -2) }
-		} else if let t = strikeTarget ?? (lockT > 0 ? lockTarget : nil), t.hp > 0, !t.removed {
-			// aimed at something and missed: say so, where it is
-			floatText("miss", t.b.x, t.b.top - 0.3, 0xA8A8A8)
-		}
-		strikeTarget = nil
-	}
-
-	/// Leaves a creature reeling: it cannot move or attack for a moment, then cannot be dazed again
-	/// right away (no stun-locking). Bosses shrug it off; the golem only half feels it.
-	func dazeMob(_ m: Mob, _ t: Double) {
-		if m.isBoss || m.dazeGuard > 0 || m.hp <= 0 { return }
-		let k: Double = m.kind == .golem ? 0.5 : 1.0
-		m.daze = max(m.daze, t * k)
-		m.atkT = 0
-		m.blocking = false
-		sfx(.daze, at: m.b.x, 0.5)
-	}
-
-	/// sparks thrown back along the line of a blow
-	func spawnSparks(_ x: Double, _ y: Double, _ dirX: Double, _ color: UInt32, _ n: Int) {
-		if particles.count > 160 { return }
-		for _ in 0..<n {
-			let a: Double = Double.random(in: -0.9...0.9) + (dirX >= 0 ? 0 : Double.pi)
-			let sp: Double = Double.random(in: 4.0...8.0)
-			let c: UInt32 = Double.random(in: 0...1) < 0.5 ? color : 0xFFF4D0
-			particles.append(Particle(x: x, y: y, vx: cos(a) * sp, vy: sin(a) * sp - 2.0, life: Double.random(in: 0.12...0.25), maxLife: 0.25, color: c, size: Double.random(in: 0.07...0.13), gravity: 20))
-		}
-	}
-
-	// MARK: aim assist for the action button
-
-	/// The creature the action button should go for: hostile ones first (and the one already locked
-	/// on), in sight for ranged weapons, within reach for melee (a little beyond it, so the player
-	/// turns to face what is coming). Animals only when nothing hostile is near and a weapon is out.
-	func autoTarget(_ it: Item?) -> Mob? {
-		let ranged: Bool = it?.isRanged ?? false
-		let weapon: Bool = it?.isWeapon ?? false
-		let p: MeleeProfile = infusedMelee(it)
-		let range: Double = ranged ? 22.0 : p.reach + 3.0
-		let ox: Double = shoulderX
-		let oy: Double = shoulderY
-		var best: Mob? = nil
-		var bs: Double = 1e9
-		for m in mobsNear(ox - range - 4, ox + range + 4) {
-			if m.hp <= 0 || m.removed || m.tame || m.downed { continue }
-			let foe: Bool = isThreat(m)
-			if !foe && !weapon { continue }
-			let d: Double = boxDistance(m, ox, oy)
-			if d > range { continue }
-			var score: Double = d
-			if !foe { score += 8.0 }
-			if !world.lineClear(ox, oy, m.b.x, m.b.cy) {
-				if ranged { continue }
-				score += 6.0
-			}
-			if m === lockTarget { score -= 1.5 }
-			if score < bs { bs = score; best = m }
-		}
-		return best
-	}
-
-	/// launch speed and gravity of what the held item fires (0 speed: not a projectile weapon)
-	func shotBallistics(_ it: Item?) -> (Double, Double) {
-		guard let i = it else { return (0, 0) }
-		switch i {
-		case .bow: let st: BowStats = bowStats(.bow); return (st.maxSpeed, st.gravity)
-		case .gun(let g): return (g.speed, g.gravity)
-		case .sling: return (23.0, 16.0)
-		case .gadget(let g): return (g == .bomb || g == .fireFlask) ? (throwSpeed, throwGravity) : (0, 0)
-		case .potion(let p): return p.thrown ? (throwSpeed, throwGravity) : (0, 0)
-		default: return (0, 0)
-		}
-	}
-
-	/// Where to aim to hit `m`: its centre, led by its speed and raised to allow for the drop
-	func aimPointFor(_ m: Mob, _ it: Item?) -> (Double, Double) {
-		var tx: Double = m.b.x
-		var ty: Double = m.b.cy
-		let (spd, grav) = shotBallistics(it)
-		if spd > 0 {
-			let dx: Double = tx - pb.x
-			let dy: Double = ty - (pb.y - 1.2)
-			let t: Double = sqrt(dx * dx + dy * dy) / spd
-			tx += m.b.vx * t
-			// the bow is drawn and loosed along the aim, so it is aimed above the target; everything
-			// else works its own arc out to the point it is aimed at
-			if case .bow? = it { ty -= 0.5 * grav * t * t }
-		}
-		return (tx, ty)
-	}
-
-	// MARK: weapon switching
-
-	/// The hotbar slot "next weapon" would pick: the weapon used last when something else is in hand,
-	/// otherwise the next weapon along the hotbar
-	func nextWeaponSlot() -> Int? {
-		let n: Int = Inventory.hotbarCount
-		let holdingWeapon: Bool = heldItem?.isWeapon ?? false
-		if !holdingWeapon && lastWeaponSel >= 0 && lastWeaponSel < n && lastWeaponSel != sel {
-			if let s = inv.slots[lastWeaponSel], s.item.isWeapon { return lastWeaponSel }
-		}
-		var k: Int = 1
-		while k < n {
-			let i: Int = (sel + k) % n
-			if let s = inv.slots[i], s.item.isWeapon { return i }
-			k += 1
-		}
-		return nil
-	}
-
-	/// One tap to the next weapon (or back to the weapon from a tool); the HUD button and the Q key
-	func cycleWeapon() {
-		guard let i = nextWeaponSlot() else {
-			say("No other weapon in your hotbar.", 1.2)
-			return
-		}
-		setSel(i)
-		sfx(.swap, 0.6)
-		floatText(inv.slots[i]?.item.name ?? "", pb.x, pb.y - pb.h - 0.6, 0xE8E8E8)
-	}
-
-	/// What the action button does with the item in hand
-	var useLabel: String {
-		if let v = drivenVehicle, machineGuns(v) > 0 { return "FIRE" }
-		guard let it = heldItem else { return "PUNCH" }
-		if it.isWeapon { return "ATTACK" }
-		switch it {
-		case .tool: return "MINE"
-		case .block, .wall: return "BUILD"
-		case .food: return "EAT"
-		default: return "USE"
-		}
-	}
-
-	// MARK: input safety
-
-	/// Drops every held control. Panels, the pause menu and death take the on-screen controls away
-	/// mid-press, and a button that disappears never hears its finger lift, so without this an attack,
-	/// a walk or a jump could carry on by itself once the panel closes.
-	func releaseAllInput() {
-		suitFireHeld = false
-		jointButtons = [false, false, false]
-		actState.stickReleased()
-		actState.was = false
-		stick = 0
-		stickY = 0
-		jumpHeld = false
-		downHeld = false
-		keyL = false
-		keyR = false
-		useHeld = false
-		useWasHeld = false
-		usePressedFlag = false
-		useReleasedFlag = false
-		touchActive = false
-		pendingInteract = false
-		bowCharge = 0
-		mining = false
-	}
-
-	/// Once a frame: releases the controls when something covers them
-	func updateInputGate() {
-		let blocked: Bool = paused || showInventory || showMap || showJournal || showWeather || showPower || showCapture || showModTest || showInfuse || showExo || showJoint || showRadio || dead
-		if blocked && !inputBlocked { releaseAllInput() }
-		inputBlocked = blocked
-	}
-
-	// MARK: sling
-
-	func useSling(_ pressed: Bool) {
-		if useCD > 0 { return }
-		var ammo: Tile? = nil
-		if !isCreative {
-			for t in slingAmmo where inv.total(.block(t)) > 0 { ammo = t; break }
-			if ammo == nil {
-				if pressed { say("The sling needs stones: any stone or slate in your bag.", 1.8) }
-				return
-			}
-		}
-		if let t = ammo { _ = inv.remove(.block(t), 1) }
-		facing = aimFacing()
-		let ox: Double = pb.x + Double(facing) * 0.4
-		let oy: Double = pb.y - 1.3
-		// the stone is lobbed so that it comes down on the spot aimed at
-		let a: Double = lobAngle(aimX - ox, aimY - oy, 23.0, 16.0)
-		var p = Projectile(kind: .pebble, x: ox, y: oy, vx: cos(a) * 23.0, vy: sin(a) * 23.0, dmg: 4.5, fromPlayer: true, gravity: 16)
-		p.life = 3.0
-		p.w = 0.22
-		p.knock = 7.5
-		p.source = .player
-		p.uid = newID()
-		infuseShot(&p, heldItem)
-		projectiles.append(p)
-		useCD = 0.55 * quickMul()
-		swingDur = 0.2
-		swingT = 0.2
-		swingDir = facing
-		sfx(.sling, 0.6)
-		bumpHUD()
-	}
-
-	// MARK: fire flask
-
-	func throwFlask() {
-		if useCD > 0 { return }
-		if !isCreative { inv.removeAt(sel, 1) }
-		facing = aimFacing()
-		let ox: Double = pb.x + Double(facing) * 0.4
-		let oy: Double = pb.y - 1.3
-		let a: Double = lobAngle(aimX - ox, aimY - oy, throwSpeed, throwGravity)
-		var p = Projectile(kind: .flask, x: ox, y: oy, vx: cos(a) * throwSpeed, vy: sin(a) * throwSpeed, dmg: 2, fromPlayer: true, gravity: throwGravity)
-		p.life = 2.5
-		p.w = 0.3
-		p.source = .player
-		p.uid = newID()
-		projectiles.append(p)
-		useCD = 0.45
-		swingT = 0.18
-		swingDir = facing
-		bumpHUD()
-	}
-
-	/// A flask breaks: a patch of fire on the ground below, and everything in it starts burning
-	func burstFlask(_ x: Double, _ y: Double, _ src: DamageSource) {
-		let gx: Int = Int(floor(x))
-		var gy: Double = y
-		let ground: Int = world.groundBelow(gx, Int(floor(y)))
-		if Double(ground) - y < 4.0 { gy = Double(ground) }
-		if fireZones.count >= 6 { fireZones.removeFirst() }
-		var z = FireZone(x: x, y: gy, r: 2.2, t: 3.5, uid: newID())
-		z.tick = 0.35
-		fireZones.append(z)
-		sfx(.flask, at: x, 0.9)
-		spawnParticles(x, gy - 0.4, 0xFF8030, 14, 5.0, 0.6, -2)
-		spawnParticles(x, y, 0xB8E0F0, 6, 4.0, 0.3, 18)
-		addLightFlash(x, gy - 0.8, peak: 12, dur: 0.5, radius: 3.0)
-		_ = src
-	}
-
-	// MARK: storm rod
-
-	/// Lightning down the aim to the first creature in its path, then leaping to up to three more
-	/// close by (each strike a little weaker); creatures standing in water take half as much again
-	func fireStormRod() {
-		let ox: Double = pb.x + Double(facing) * 0.4
-		let oy: Double = pb.y - 1.25
-		facing = aimFacing()
-		let ang: Double = atan2(aimY - oy, aimX - ox)
-		let dx: Double = cos(ang)
-		let dy: Double = sin(ang)
-		let maxL: Double = 14.0
-		let ex: Double = ox + dx * maxL
-		let ey: Double = oy + dy * maxL
-		var endT: Double = 1.0
-		if let w = world.segmentSolidT(ox, oy, ex, ey) { endT = w.2 }
-		var first: Mob? = nil
-		var ft: Double = endT
-		for m in mobsNear(min(ox, ex) - 3, max(ox, ex) + 3) {
-			if m.hp <= 0 || m.removed || m.downed { continue }
-			if !canHarm(.player, targetFaction: faction(of: m), targetID: m.id, area: false) { continue }
-			if let t = segmentBoxT(ox, oy, ex, ey, m.b.left - 0.15, m.b.top - 0.15, m.b.right + 0.15, m.b.y + 0.15), t < ft {
-				ft = t
-				first = m
-			}
-		}
-		var anchors: [(Double, Double)] = [(ox, oy)]
-		if let m0 = first {
-			var chain: [Mob] = [m0]
-			while chain.count < 4 {
-				guard let cur = chain.last else { break }
-				var next: Mob? = nil
-				var nd: Double = 5.5 * 5.5
-				for o in mobsNear(cur.b.x - 6, cur.b.x + 6) {
-					if o.hp <= 0 || o.removed || o.downed || chain.contains(where: { $0 === o }) { continue }
-					if !canHarm(.player, targetFaction: faction(of: o), targetID: o.id, area: false) { continue }
-					let ddx: Double = o.b.x - cur.b.x
-					let ddy: Double = o.b.cy - cur.b.cy
-					let d2: Double = ddx * ddx + ddy * ddy
-					if d2 < nd && world.lineClear(cur.b.x, cur.b.cy, o.b.x, o.b.cy) { nd = d2; next = o }
-				}
-				guard let n = next else { break }
-				chain.append(n)
-			}
-			var dmg: Double = GunType.stormRod.damage
-			var px: Double = ox
-			for c in chain {
-				var info = DamageInfo(amount: c.b.inWater ? dmg * 1.5 : dmg, type: .shock, source: .player)
-				info.knock = 2.5
-				info.originX = px
-				info.originY = c.b.cy
-				info.key = newID()
-				if applyMobDamage(c, info) {
-					lockTarget = c
-					lockT = 2.0
-				}
-				anchors.append((c.b.x, c.b.cy))
-				addLightFlash(c.b.x, c.b.cy, peak: 9, dur: 0.22, radius: 1.0, color: 0x6AA8FF)
-				spawnParticles(c.b.x, c.b.cy, 0xD8F0FF, 4, 4.0, 0.2, 0)
-				px = c.b.x
-				dmg *= 0.8
-			}
-			if chain.count >= 2 {
-				floatText("x" + String(chain.count), pb.x, pb.y - pb.h - 0.9, 0xB8E0FF)
-				sfx(.multiHit, 0.5)
-			}
-		} else {
-			anchors.append((ox + dx * maxL * endT, oy + dy * maxL * endT))
-		}
-		// a jagged line between the strikes
-		var pts: [(Double, Double)] = [anchors[0]]
-		var k: Int = 1
-		while k < anchors.count {
-			let a: (Double, Double) = anchors[k - 1]
-			let b: (Double, Double) = anchors[k]
-			let sx: Double = b.0 - a.0
-			let sy: Double = b.1 - a.1
-			let len: Double = max(0.01, sqrt(sx * sx + sy * sy))
-			let steps: Int = max(2, Int(len / 1.2))
-			for j in 1..<steps {
-				let f: Double = Double(j) / Double(steps)
-				let off: Double = Double.random(in: -0.35...0.35)
-				pts.append((a.0 + sx * f - sy / len * off, a.1 + sy * f + sx / len * off))
-			}
-			pts.append(b)
-			k += 1
-		}
-		if arcs.count > 6 { arcs.removeFirst() }
-		arcs.append(ArcFX(pts: pts, life: 0.2))
-		addLightFlash(ox + dx * 0.6, oy + dy * 0.6, peak: 8, dur: 0.15, radius: 0.7, color: 0x6AA8FF)
-		sfx(.zap, 0.8)
-		muzzleT = 0.08
-		swingT = 0.12
-		swingDir = facing
-	}
-
-	// MARK: effects, fire and recharge, once a frame
-
-	func updateCombatFX(_ dt: Double) {
-		if !slashes.isEmpty {
-			for i in 0..<slashes.count { slashes[i].life -= dt }
-			slashes.removeAll { $0.life <= 0 }
-		}
-		if !arcs.isEmpty {
-			for i in 0..<arcs.count { arcs[i].life -= dt }
-			arcs.removeAll { $0.life <= 0 }
-		}
-		if !fireZones.isEmpty { updateFireZones(dt) }
-		// storm rods gather their charge back, one strike every few seconds, wherever they are carried
-		rodT += dt
-		if rodT >= GunType.stormRod.reloadTime {
-			rodT = 0
-			for i in 0..<inv.slots.count {
-				if var st = inv.slots[i], case .gun(.stormRod) = st.item, st.extra < GunType.stormRod.magazine {
-					st.extra += 1
-					inv.slots[i] = st
-					if i == sel { bumpHUD() }
-				}
-			}
-		}
-	}
-
-	func updateFireZones(_ dt: Double) {
-		var keep: [FireZone] = []
-		for z0 in fireZones {
-			var z: FireZone = z0
-			z.t -= dt
-			// rain puts fires out sooner
-			let rain: Double = abs(z.x - pb.x) < 40 ? wxHere.precip : precipAt(z.x)
-			if rain > 0.05 && !wxHere.snow { z.t -= dt * 2.0 * rain }
-			z.tick += dt
-			if z.tick >= 0.35 {
-				z.tick = 0
-				let src: DamageSource = z.env ? .environment : .player
-				let hurtsMobs: Bool = !z.env || settings.weatherHurtsCreatures
-				for m in mobsNear(z.x - z.r - 2, z.x + z.r + 2) where hurtsMobs {
-					if m.hp <= 0 || m.removed { continue }
-					if abs(m.b.x - z.x) > z.r + m.b.w * 0.5 { continue }
-					if m.b.y < z.y - 2.4 || m.b.top > z.y + 0.4 { continue }
-					if !canHarm(src, targetFaction: faction(of: m), targetID: m.id, area: true) { continue }
-					var info = DamageInfo(amount: 2.0, type: .fire, source: src)
-					info.originX = z.x
-					info.key = z.uid
-					info.cooldown = 0.3
-					if applyMobDamage(m, info) && !heatImmune(m) { m.burn = max(m.burn, 2.5) }
-				}
-				// the thrower is not spared if they stand in it
-				let hurtsPlayer: Bool = !z.env || settings.weatherHurtsPlayer
-				if hurtsPlayer && !dead && abs(pb.x - z.x) < z.r + pb.w * 0.5 && pb.y > z.y - 2.0 && pb.top < z.y + 0.3 && !wearing(.emberCharm) {
-					playerBurn = max(playerBurn, 0.8)
-				}
-				if z.t > 0.3 { spawnParticles(z.x + Double.random(in: -z.r...z.r), z.y - 0.3, 0xFFA030, 2, 1.5, 0.45, -5) }
-			}
-			if z.t > 0 { keep.append(z) }
-		}
-		fireZones = keep
-	}
-
-	/// What an abandoned ore cart still holds: a little ore, fixed by where it stands
-	func oreCartLoad(_ x: Int, _ y: Int) -> [Stack] {
-		var rng = RNG(hashU(x, y, gen.seed &+ 991))
-		let deep: Bool = y > 230
-		let kinds: [Mat] = deep ? [.ironOre, .silverOre, .coal, .tinOre, .goldOre] : [.coal, .copperOre, .tinOre, .coal, .ironOre]
-		var out: [Stack] = []
-		let a: Mat = kinds[rng.int(kinds.count)]
-		out.append(Stack(item: .mat(a), count: 2 + rng.int(4)))
-		if rng.double() < 0.5 {
-			let b: Mat = kinds[rng.int(kinds.count)]
-			if b != a { out.append(Stack(item: .mat(b), count: 1 + rng.int(3))) }
-		}
-		return out
 	}
 }

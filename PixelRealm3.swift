@@ -1,9 +1,7 @@
-// PIXEL REALM v2, part 3 of 8: creature AI, spawning, combat, damage and bosses, ships, the portal and map, saving, helpers, walls and
-// doors, the vehicle screens' logic, vehicles of every kind (flight, weapons, damage, the assembler, the
-// autopilot), and Sparkworks (power).
-// The game is eight files that go together in one Swift Playgrounds app: PixelRealm1.swift to
-// PixelRealm8.swift. Each goes in its own file in the app (delete ContentView.swift; MyApp.swift can
-// hold part 1). The hand-drawn pictures are kept as text in part 2 (a01_artsheet).
+// PIXEL REALM v2, part 3 of 10: the hand-drawn pictures kept as text, creatures and their kinds, vehicles, the game state, the player and input.
+// The game is 10 files that go together in one Swift Playgrounds app: PixelRealm1.swift to
+// PixelRealm10.swift. Each goes in its own file in the app (delete ContentView.swift; MyApp.swift can
+// hold part 1). The hand-drawn pictures are kept as text in part 3 (a01_artsheet).
 
 import SwiftUI
 import AVFoundation
@@ -11,10357 +9,4626 @@ import AVFoundation
 import UIKit
 #endif
 
-// ===== p15a_mobai =====
+// ===== a01_artsheet =====
 
-// MARK: - Mob AI
+// MARK: - The hand-drawn pictures, kept as text
+// Creatures and blocks are drawn at 16 pixels to a block with the tools in tools/art (parts laid over
+// each other, a dark line round each), and packed here as text: pictures in a string cost the build far
+// less than the same pictures as code. A picture's pixels run row after row, repeats written as a
+// count: "12.3ab" is twelve clear pixels, three of colour a and one of colour b.
 
-extension Game {
-	func buildDecks() -> [Deck] {
-		var out: [Deck] = []
-		let sea: Double = Double(WorldGen.sea)
-		for s in ships where s.sink < 3.0 {
-			let dy: Double = s.deckY(sea)
-			out.append(Deck(x0: s.x - PirateShip.deckHalf, x1: s.x + PirateShip.deckHalf - 0.1, y: dy, vx: s.speed * Double(s.dir), id: s.id))
+enum ArtSheet {
+	/// A creature starts on a line "name|width|height|row of the soles|column of the middle|colours|
+	/// poses"; the lines after it that start with "+" hold its frames, one after another with "/" between
+	static let creatureText: String = """
+		// <art:creatures> written by tools/art/build.py pack from tools/art/creatures: change the drawings, not this
+		archer|34|34|31|13.5|a17191E,b574736,c392F24,d93B6A4,e71A09D,f3A5357,g507272,h1A1418,iD87067,j381E26,kE7E2C9,l7F8B66,m5A6641,nE4DCCD,o9A7A54,p3E4833,q2C342B,r72573B,s677186,t3F4C5F,u2C3544,v212633,w494048,x3A3238,y2A242C,z1E1A20|idle:0;walk:1,2,3,4;windup:5;strike:5;shoot:5
+		+14.5a28.a5b2a25.a8ba23.ac3b5da23.ac2b2d4ea23.acb2e4fea23.acg2e2hih2ea22.a2g7ega23.ag2ejkjkja24.a2ge5ja23.2a2fgkjk2ga22.a3l5f2a22.a2lm5fanoa20.a2lmf2lf2manaoa19.al2mf2mfmp
+		+an2aoa18.a3mfmp3fan2aoa18.ap2mfmp2edfn2aoa18.a2p2mfq2gefn2ara19.a2p2m4fana2ra19.qpqmpmqa.an2ara18.a3qp3qa.an2aoa18.asqt2quq2.an2aoa18.a6vuv2an2aoa18.as2tuv2uv2anaoa19.as2
+		+tuv2uv2anoa21.a2tuv2uva.2a22.a2tuv2uva25.at2uvu2va25.aeg2agfa26.aeg2agfa25.a4wv3xa24.a4wyv2xza24.4av4a50./14.5a28.a5b2a25.a8ba23.ac3b5da23.ac2b2d4ea23.acb2e4fea23.acg2e2h
+		+ih2ea22.a2g7ega23.ag2ejkjkja24.a2ge5ja23.2a2fgkjk2ga22.a3l5f2a22.a2lm5fanoa20.a2lmf2lf2manaoa19.al2mf2mfmpan2aoa18.a3mfmp3fan2aoa18.ap2mfmp2edfn2aoa18.a2p2mfq2gefn2ara19.
+		+a2p2m4fana2ra19.qpqmpmqa.an2ara18.a3qp3qa.an2aoa18.asqt2quq2.an2aoa18.a6vuv2an2aoa18.a2s2tuvuv2anaoa20.as2tu2va.anoa22.a2t2uva2.2a23.vs2tuv28.av2tua28.avega29.aveg2a28.av
+		+4wa27.av3wya28.a3va52./48.5a28.a5b2a25.a8ba23.ac3b5da23.ac2b2d4ea23.acb2e4fea23.acg2e2hih2ea22.a2g7ega23.ag2ejkjkja24.a2ge5ja23.2a2fgkjk2ga22.a3l5f2a22.a2lm5fanoa20.a2lmf
+		+2lf2manaoa19.al2mf2mfmpan2aoa18.a3mfmp3fan2aoa18.ap2mfmp2edfn2aoa18.a2p2mfq2gefn2ara19.a2p2m4fana2ra19.qpqmpmqa.an2ara18.a3qp3qa.an2aoa18.vsqt2quqv2an2aoa18.a6vuv2an2aoa1
+		+8.as2tuvtuv2anaoa20.a2tuvt2uvanoa21.a2tu2a2uv3a22.at2u2agfva24.aega.agfa25.aeg2a3xa24.a4wv3xza23.a4wyv3a25.5a54./14.5a28.a5b2a25.a8ba23.ac3b5da23.ac2b2d4ea23.acb2e4fea23.
+		+acg2e2hih2ea22.a2g7ega23.ag2ejkjkja24.a2ge5ja23.2a2fgkjk2ga22.a3l5f2a22.a2lm5fanoa20.a2lmf2lf2manaoa19.al2mf2mfmpan2aoa18.a3mfmp3fan2aoa18.ap2mfmp2edfn2aoa18.a2p2mfq2gefn
+		+2ara19.a2p2m4fana2ra19.qpqmpmqa.an2ara18.a3qp3qa.an2aoa18.asqt2quq2.an2aoa18.a6vuv2an2aoa18.as2tuvt2uvanaoa18.as2tu2at2uvanoa19.a2t2ua.a2u2v2a19.as2tua2.at2uva20.a2tua4.a
+		+2uva20.aega5.agfa21.aega5.agf2a20.a3wa4.a4xa19.a3wya3.a3xza20.4a5.4a48./48.5a28.a5b2a25.a8ba23.ac3b5da23.ac2b2d4ea23.acb2e4fea23.acg2e2hih2ea22.a2g7ega23.ag2ejkjkja24.a2g
+		+e5ja23.2a2fgkjk2ga22.a3l5f2a22.a2lm5fanoa20.a2lmf2lf2manaoa19.al2mf2mfmpan2aoa18.a3mfmp3fan2aoa18.ap2mfmp2edfn2aoa18.a2p2mfq2gefn2ara19.a2p2m4fana2ra19.qpqmpmqa.an2ara18.
+		+a3qp3qa.an2aoa18.vsqt2quqv2an2aoa18.a6vuv2an2aoa18.a2stuv2uv2anaoa20.as2tuvuv2anoa22.a2tuvuva.2a23.aegu3va26.aegvgfa26.a3wvgfa26.a3wyv2xa26.2a2v3xza28.5a50./14.5a28.a5b2a
+		+25.a8ba23.ac3b5da23.ac2b2d4ea23.acb2e4fea23.acg2e2hih2ea22.a2g7ega23.ag2ejkjkja3.a20.a2ge5ja2.aoa18.2a2fgkjk2ga.anaoa16.a3l6fa.an2aoa15.a2l2m5f2a3f2aoa14.a2l2mf4lmfe3defr
+		+a14.al2maf4m2p5egfa14.a4mf3pqf2g2ega2gf14.ap4m4f.2a3fg2fa14.a2p4m2pa4.anfaoa15.a2p3mpqa5.anaoa15.qpqmpmqa7.aoa15.a3qp3qa8.a16.asqt2quq26.a6vuva24.as2tuv2uva24.as2tuvuva26
+		+.a2tu3va26.a2tu2va27.at2uva28.aegva29.aegva28.a4wva27.a4wyva27.2a3va53.
+		bat|24|16|13|12|a14111C,b6F6582,c403854,d2D283D,e5B4D6E,f2C263A,g827495,hDB6E6E,i3F364F,jFFFFFF|idle:0;fly:0,1,2,1
+		+.a18.a3.aba16.aba2.acba14.abca2.a2cba12.ab2ca2.ad2cba10.ab2cda3.ad2cba2.a4.2ab2cda5.ad2cb2aea2.aef2cda7.a2dc2a2e2a2ef2da9.3a.aeg2egef2a14.aeh2ehea17.a4ea18.ai2eia19.a2ja2
+		+1.2a59./105.a4.a9.7a.aea2.aef6a2.7b2a2e2a2ef6ba.d5cb2aeg2egef5cda.adadadc2aeh2ehefdadada3.a.a.2a2.a4e3a.a.a12.ai2eia19.a2ja21.2a83./81.a4.a17.aea2.aea16.a2e2a2ea12.3a.aeg
+		+2egef2a9.a2dc2aeh2ehef2da7.ad2cba.a4efb2cda5.ad2cba2.ai2ei2ab2cda3.ad2cba4.a2ja2.ab2cda2.a2cba6.2a4.ab2ca2.acba14.abca2.aba16.aba3.a18.a27.
+		bear|46|26|23|16|a1C1518,bA08061,c422F2C,d815F48,e5B4237,fFFFFFF,g1A1316,hCBB393,i1E1519,jBA9C77,k816B57,l251A18,mE7DFC9,nEFEAD9,o834248|idle:0;walk:1,2,3,4;strike:5
+		+106.8a34.4a8b2ac2a25.4a13bc3da22.2a16bcd3ed6a15.a18bcd2e2d6b2a12.a3b17dc2d10ba10.a2b14de3dc3b4d3e3dba9.ab15de2dc2b7dfg4d2a8.a17dedcb8d2g4h2ia7.a17dedc11d4j2ia7.ae17dece9d
+		+e6ja7.ae19dce7d2e5ka9.ae19dce6de5la10.a5dc8dc5d2c2e4d2e3ja11.a5dc8ec5d3c7e3a12.a4de10c4dec2e3c4a15.a4de6c3ac4dec3eca19.a3d2ec2e2ca3.a3d2ec2e2ca19.a3d2ec2e2ca3.a3d2ec2e2ca
+		+19.a4d2ec2e2ca2.a4d2ec2e2ca18.a5dec3eca2.a5dec3eca18.acmcmcm2cmcma2.acmcmcm2cmcma19.5ac5a4.5ac5a63./106.8a34.4a8b2ac2a25.4a13bc3da22.2a16bcd3ed6a15.a18bcd2e2d6b2a12.a3b17
+		+dc2d10ba10.a2b14de3dc3b4d3e3dba9.ab15de2dc2b7dfg4d2a8.a17dedcb8d2g4h2ia7.a17dedc11d4j2ia7.ae17dece9de6ja7.ae19dce7d2e5ka9.ae19dce6de5la11.ac5dc4dc5dc2ec2e4d2e3ja13.c5dc4e
+		+c5dcea2c7e3a14.a4de6c4deca.ae5c2a17.a4de2c3ac4dea2.a4eca19.a3d2eca3.a3d2ea2.a3e2ca19.a3d2eca3.a3d2ea2.a3e2ca19.a4d2eca2.a4d2ea.a4e2ca18.a5deca2.a5dea.a5eca18.acmcmcmca2.a
+		+cmcmcma.acmcmcma19.a5ca4.6a3.6a61./60.8a34.4a8b2ac2a25.4a13bc3da22.2a16bcd3ed6a15.a18bcd2e2d6b2a12.a3b17dc2d10ba10.a2b14de3dc3b4d3e3dba9.ab15de2dc2b7dfg4d2a8.a17dedcb8d2g
+		+4h2ia7.a17dedc11d4j2ia7.ae17dece9de6ja7.ae19dce7d2e5ka9.ae19dce6de5la11.a2e11dc5d2c2e4d2e3ja11.a5dc8ec5d3c7e3a12.a5d10c4dec2e3c4a15.a4de6c3ac4dec3eca19.a4dec2e2ca3.a3d2ec
+		+3eca19.a3d2ec2e2ca3.a3d2ec2e2ca19.a3d2ec3e2ca2.a4d2ece2ca19.a4d2ec3eca2.a5dec2e2ca18.a5de2cmcma2.acmcmcmc3eca18.acmcmcmc4a4.4a2cmcmcma19.6a14.6a63./106.8a34.4a8b2ac2a25.4
+		+a13bc3da22.2a16bcd3ed6a15.a18bcd2e2d6b2a12.a3b17dc2d10ba10.a2b14de3dc3b4d3e3dba9.ab15de2dc2b7dfg4d2a8.a17dedcb8d2g4h2ia7.a17dedc11d4j2ia7.ae17dece9de6ja7.ae19dce7d2e5ka9.
+		+ae19dce6de5la8.a5dc12dc4dc2e4d2e3ja9.a5dc12ec5dc7e3a10.a4deca12c4de2c6a13.a4dea.a7c3ac4deca19.a3d2ea2.a3e2ca3.a3d2eca19.a3d2ea2.a3e2ca3.a3d2eca19.a4d2ea.a4e2ca2.a4d2eca18
+		+.a5dea.a5eca2.a5deca18.acmcmcma.acmcmcma2.acmcmcmca19.6a3.6a4.a5ca65./60.8a34.4a8b2ac2a25.4a13bc3da22.2a16bcd3ed6a15.a18bcd2e2d6b2a12.a3b17dc2d10ba10.a2b14de3dc3b4d3e3dba
+		+9.ab15de2dc2b7dfg4d2a8.a17dedcb8d2g4h2ia7.a17dedc11d4j2ia7.ae17dece9de6ja7.ae19dce7d2e5ka9.ae19dce6de5la10.a5dc13d2ec2e4d2e3ja11.a5dc8ec5d3c7e3a12.a4de10c5dc2e3c4a15.a4de
+		+6c3ac4dec3eca19.a3d2ec3eca3.a4dec2e2ca19.a3d2ec2e2ca3.a3d2ec2e2ca19.a4d2ece2ca3.a3d2ec3e2ca18.a5dec2e2ca2.a4d2ec3eca18.acmcmcmc3eca2.a5de2cmcma19.4a2cmcmcma2.acmcmcmc4a25
+		+.6a4.6a68./106.8a34.4a8b3a.3a23.4a15bc3da20.2a18bcd3ed6a13.a20bcd2e2d6b2a10.a3b19dc2d10ba8.a2b14de5dc3b4d3e3dba7.ab15de4dc2b7dfg4d2a6.a17de3dcb8d2g4h2ia5.a17de3dc11d4j2ia
+		+5.ae17de2dce9dejnjnja6.ae21dce7d2e5oa7.ae15dc5dce6d2e5oa6.a5dc11dc5d2ce5d2ejnjnja6.a5dc11ec4decec2e3d2e4ja7.a4de13c4de2c2a6e3ka8.a4de2a7c3ac3d2e2ca.9a9.a3d2ea.a3e2ca3.a3d
+		+2e2ca19.a3d2ea.a4e2ca2.a4d2eca19.a4d2e2a5eca2.a5de2ca18.a5de2acmcmcma2.acmcmcm2ca18.acmcmcma.6a4.a6cma19.6a14.6a64.
+		bearBoss|112|92|88|50|a120D10,bDDD5BF,cD1C7AD,d978E7E,e120C10,f493B36,g6B5D53,h322727,i90857C,j231B1D,kBC8B7F,lEFE3AF,mD6AA63,n9F876F,o1A1115,p846B56,q5D4A3E,r231A1C,sE3DBC9,t978E7F,uEFEAD9,v552930,w834248,xE4DCCD|idle:0;walk:1,2,3,4;rear:5;strike:6
+		+3533.a110.aba108.a2bca102.a3.d2b2cda7.3a90.aba2edb2c2da.a4.a3fa83.a4.a2bcd2g5d.aba2.af3hf7a75.aba.ed2b2c2d3fi2gd2bca.af2h2f7g3a65.a5.a2bcdgdb2c3d5fd2b2cd3a2f12ga55.a7.aba
+		+3.a2b2c2dg5d6fdb2c2dj4g11f2ga45.a7.aba5.a2bca2.ab2c3d13f4dj2g16fga43.aba5.a2bca3.d2b2c2d2e5d17fj2g9fk8fga41.a2bca3ed2b2c2d2edb2c3d4g15fi3fj2g11fk4h4fga38.ed2b2c2digdb2c3d
+		+3g5d3g11fi9fjg12fklm8f2a35.egdb2c3d3g5d3g14fi15fjg13fk2mf6n2oa33.e3g5d20fi21fj15fk7n3oa32.e2g21fi27fj16f8p2oa31.e2g16fi26fh3fi2fjh14fh10pa30.e2g11fi24fh5fifh6fjh13f2h9pa3
+		+0.e2g6fi30fi15fjh11f2h9qa31.egfi28fhfi22fjh10fh9oa32.e15fh7fh3fi24fh4fjh8f2h8pa33.e7fh7fh5fi22fh7fh5fj2h6f3h6qa33.eg7fh7fi20fh7fh14f2j9h6a34.eg28fh7fh24f4j5a40.e21fh7fh28
+		+fh5fge44.eg13fh7fh28fh7fh6fe44.eg5fh7fh28fh7fh14fe44.e6fh28fh7fh22fe44.e27fh7fh28fhfe44.e19fh7fh28f2h6fhfe44.e11fh7fh24f17h2f2hfe44.e2hfh7fh28f21hf4he44.e7h25fh4f29he44.e
+		+66he44.ej63h2je44.e2j61h3je45.ej61h2je46.ej60h2je48.ej54h7je48.e4j50h7je49.e5j37h19je49.e7j5h8j18h22je51.e2j9f31j9f8je52.j11f30j9fh4j3r53.a11fh29j9fh2j2rhja53.a11fh29j8f2
+		+hjr2h2ja54.a9f2h29j8f2hj3h2ja55.a7f2hj6r21jej8f2hj3h2ja55.a7fhj5hja21e2.a7f2hj3h2ja55.a7fhj5hja23.a7f2hj3h2ja55.a6f2hj4h2ja23.a7f2hj3h2ja55.a6f2hj4h2ja23.a7f2hj3h2ja55.a6
+		+f2hj4h2ja23.a7f2hj3h2ja55.a6f2hj4h2ja23.a8f2hj3h2ja54.a7f2hj4h2ja22.a9fhj4hja54.a8fhj5hja22.a9fhj4hja54.a9fhj5hja21.a10h6ja54.a10h7ja21.aststststsjststsa55.aststststsjtst
+		+stsa23.6a3j6a57.7a2j7a192./3533.a110.aba108.a2bca102.a3.d2b2cda7.3a90.aba2edb2c2da.a4.a3fa83.a4.a2bcd2g5d.aba2.af3hf7a75.aba.ed2b2c2d3fi2gd2bca.af2h2f7g3a65.a5.a2bcdgdb2c
+		+3d5fd2b2cd3a2f12ga55.a7.aba3.a2b2c2dg5d6fdb2c2dj4g11f2ga45.a7.aba5.a2bca2.ab2c3d13f4dj2g16fga43.aba5.a2bca3.d2b2c2d2e5d17fj2g9fk8fga41.a2bca3ed2b2c2d2edb2c3d4g15fi3fj2g11
+		+fk4h4fga38.ed2b2c2digdb2c3d3g5d3g11fi9fjg12fklm8f2a35.egdb2c3d3g5d3g14fi15fjg13fk2mf6n2oa33.e3g5d20fi21fj15fk7n3oa32.e2g21fi27fj16f8p2oa31.e2g16fi26fh3fi2fjh14fh10pa30.e2
+		+g11fi24fh5fifh6fjh13f2h9pa30.e2g6fi30fi15fjh11f2h9qa31.egfi28fhfi22fjh10fh9oa32.e15fh7fh3fi24fh4fjh8f2h8pa33.e7fh7fh5fi22fh7fh5fj2h6f3h6qa33.eg7fh7fi20fh7fh14f2j9h6a34.eg
+		+28fh7fh24f4j5a40.e21fh7fh28fh5fge44.eg13fh7fh28fh7fh6fe44.eg5fh7fh28fh7fh14fe44.e6fh28fh7fh22fe44.e27fh7fh28fhfe44.e19fh7fh28f2h6fhfe44.e11fh7fh24f17h2f2hfe44.e2hfh7fh28f
+		+21hf4he44.e7h25fh4f29he44.e66he44.ej63h2je44.e2j61h3je45.ej61h2je46.ej60h2je48.ej54h7je48.e4j50h7je49.e5j37h19je49.e7j5h8j18h22je51.e5j9f25j9f11jra51.2e2j11f24j9fh7j3rhja
+		+52.ej11fh23j9fh5j2r4hja53.j11fh23j8f2h4jr5h2ja54.j9f2h23j8f2h2j2r6h2ja55.a7f2hjr2e20j8f2hjr8h2ja55.a7fhja3.20ej7f2ha.a7h2ja55.a7fhja23.a7f2ha.a7h2ja55.a6f2hja23.a7f2ha.a7
+		+h2ja55.a6f2hja23.a7f2ha.a7h2ja55.a6f2hja23.a7f2ha.a7h2ja55.a6f2hja23.a8f2h2a8h2ja54.a7f2hja22.a9fh2a9hja54.a8fhja22.a9fh2a9hja54.a9fhja21.a10h2a10ja54.a10hja21.aststststs
+		+a.aststststsa55.aststststsja23.9a3.9a57.a8ja195./3645.a110.aba108.a2bca102.a3.d2b2cda7.3a90.aba2edb2c2da.a4.a3fa83.a4.a2bcd2g5d.aba2.af3hf7a75.aba.ed2b2c2d3fi2gd2bca.af2h
+		+2f7g3a65.a5.a2bcdgdb2c3d5fd2b2cd3a2f12ga55.a7.aba3.a2b2c2dg5d6fdb2c2dj4g11f2ga45.a7.aba5.a2bca2.ab2c3d13f4dj2g16fga43.aba5.a2bca3.d2b2c2d2e5d17fj2g9fk8fga41.a2bca3ed2b2c2
+		+d2edb2c3d4g15fi3fj2g11fk4h4fga38.ed2b2c2digdb2c3d3g5d3g11fi9fjg12fklm8f2a35.egdb2c3d3g5d3g14fi15fjg13fk2mf6n2oa33.e3g5d20fi21fj15fk7n3oa32.e2g21fi27fj16f8p2oa31.e2g16fi26
+		+fh3fi2fjh14fh10pa30.e2g11fi24fh5fifh6fjh13f2h9pa30.e2g6fi30fi15fjh11f2h9qa31.egfi28fhfi22fjh10fh9oa32.e15fh7fh3fi24fh4fjh8f2h8pa33.e7fh7fh5fi22fh7fh5fj2h6f3h6qa33.eg7fh7f
+		+i20fh7fh14f2j9h6a34.eg28fh7fh24f4j5a40.e21fh7fh28fh5fge44.eg13fh7fh28fh7fh6fe44.eg5fh7fh28fh7fh14fe44.e6fh28fh7fh22fe44.e27fh7fh28fhfe44.e19fh7fh28f2h6fhfe44.e11fh7fh24f1
+		+7h2f2hfe44.e2hfh7fh28f21hf4he44.e7h25fh4f29he44.e66he44.ej63h2je44.e2j61h3je45.ej61h2je46.ej60h2je48.ej54h7je48.e4j50h7je49.e5j37h19je49.e3j9f8j18h5j9f8je51.ej11f30j9fh7j
+		+e52.j11fh29j9fh4j3r53.a11fh29j8f2h2j2r2ja54.a9f2h29j8f2hjr2h2ja55.a7f2h30j8f2hj3h2ja55.a7fhj7r21j2ej7f2hj3h2ja55.a7fhj5hja21e2.a7f2hj3h2ja55.a6f2hj4h2ja23.a7f2hj3h2ja55.a
+		+6f2hj4h2ja23.a7f2hj3h2ja55.a6f2hj4h2ja23.a7f2hj3h2ja55.a6f2hj4h2ja23.a8f2hj3h2ja54.a7f2hj4h2ja22.a9fhj4hja54.a8fhj5hja22.a9fhj4hja54.a9fhj5hja21.a10h6ja54.a10h7ja21.astst
+		+ststsjststsa55.aststststsjtststsa23.6a3j6a57.7a2j7a192./3533.a110.aba108.a2bca102.a3.d2b2cda7.3a90.aba2edb2c2da.a4.a3fa83.a4.a2bcd2g5d.aba2.af3hf7a75.aba.ed2b2c2d3fi2gd2b
+		+ca.af2h2f7g3a65.a5.a2bcdgdb2c3d5fd2b2cd3a2f12ga55.a7.aba3.a2b2c2dg5d6fdb2c2dj4g11f2ga45.a7.aba5.a2bca2.ab2c3d13f4dj2g16fga43.aba5.a2bca3.d2b2c2d2e5d17fj2g9fk8fga41.a2bca3
+		+ed2b2c2d2edb2c3d4g15fi3fj2g11fk4h4fga38.ed2b2c2digdb2c3d3g5d3g11fi9fjg12fklm8f2a35.egdb2c3d3g5d3g14fi15fjg13fk2mf6n2oa33.e3g5d20fi21fj15fk7n3oa32.e2g21fi27fj16f8p2oa31.e2
+		+g16fi26fh3fi2fjh14fh10pa30.e2g11fi24fh5fifh6fjh13f2h9pa30.e2g6fi30fi15fjh11f2h9qa31.egfi28fhfi22fjh10fh9oa32.e15fh7fh3fi24fh4fjh8f2h8pa33.e7fh7fh5fi22fh7fh5fj2h6f3h6qa33.
+		+eg7fh7fi20fh7fh14f2j9h6a34.eg28fh7fh24f4j5a40.e21fh7fh28fh5fge44.eg13fh7fh28fh7fh6fe44.eg5fh7fh28fh7fh14fe44.e6fh28fh7fh22fe44.e27fh7fh28fhfe44.e19fh7fh28f2h6fhfe44.e11fh
+		+7fh24f17h2f2hfe44.e2hfh7fh28f21hf4he44.e7h25fh4f29he44.e66he44.ej63h2je44.e2j61h3je45.ej61h2je46.ej60h2je48.ej54h7je48.e4j50h7je49.e5j37h19je49.e7j5h8j18h22je50.a9f37j9f5
+		+je49.a11f36j9fhj3e50.a11fh35j9fhj53.a11fh35j8f2hj54.a9f2h35j8f2hj55.a7f2hj2e7r21j4ej8f2hj55.a7fha3.a6h3r18e5.j7f2hj55.a7fha3.a7hja23.j7f2hj55.a6f2ha3.a6h2ja23.j7f2hj55.a6
+		+f2ha3.a6h2ja23.j7f2hj55.a6f2ha3.a6h2ja23.j7f2hj55.a6f2ha3.a6h2ja23.j8f2hj54.a7f2ha2.a7h2ja22.j9fhj54.a8fha2.a8hja22.j9fhj54.a9fha.a9hja21.j10hj54.a10ha.a10ja21.jststststs
+		+j55.aststststsa2.aststststsa23.9j57.9a4.9a189./3645.a110.aba108.a2bca102.a3.d2b2cda7.3a90.aba2edb2c2da.a4.a3fa83.a4.a2bcd2g5d.aba2.af3hf7a75.aba.ed2b2c2d3fi2gd2bca.af2h2f
+		+7g3a65.a5.a2bcdgdb2c3d5fd2b2cd3a2f12ga55.a7.aba3.a2b2c2dg5d6fdb2c2dj4g11f2ga45.a7.aba5.a2bca2.ab2c3d13f4dj2g16fga43.aba5.a2bca3.d2b2c2d2e5d17fj2g9fk8fga41.a2bca3ed2b2c2d2
+		+edb2c3d4g15fi3fj2g11fk4h4fga38.ed2b2c2digdb2c3d3g5d3g11fi9fjg12fklm8f2a35.egdb2c3d3g5d3g14fi15fjg13fk2mf6n2oa33.e3g5d20fi21fj15fk7n3oa32.e2g21fi27fj16f8p2oa31.e2g16fi26fh
+		+3fi2fjh14fh10pa30.e2g11fi24fh5fifh6fjh13f2h9pa30.e2g6fi30fi15fjh11f2h9qa31.egfi28fhfi22fjh10fh9oa32.e15fh7fh3fi24fh4fjh8f2h8pa33.e7fh7fh5fi22fh7fh5fj2h6f3h6qa33.eg7fh7fi2
+		+0fh7fh14f2j9h6a34.eg28fh7fh24f4j5a40.e21fh7fh28fh5fge44.eg13fh7fh28fh7fh6fe44.eg5fh7fh28fh7fh14fe44.e6fh28fh7fh22fe44.e27fh7fh28fhfe44.e19fh7fh28f2h6fhfe44.e11fh7fh24f17h
+		+2f2hfe44.e2hfh7fh28f21hf4he44.e7h25fh4f29he44.e66he44.ej63h2je44.e2j61h3je45.ej61h2je46.ej60h2je48.ej54h7je48.e4j50h7je49.e5j37h19je49.e3j9f8j18h5j9f8je51.ej11f30j9fh7je5
+		+2.j11fh29j9fh4j3r53.a11fh29j8f2h2j2r2ja54.a9f2h29j8f2hjr2h2ja55.a7f2h30j8f2hj3h2ja55.a7fhj7r21j2ej7f2hj3h2ja55.a7fhj5hja21e2.a7f2hj3h2ja55.a6f2hj4h2ja23.a7f2hj3h2ja55.a6f
+		+2hj4h2ja23.a7f2hj3h2ja55.a6f2hj4h2ja23.a7f2hj3h2ja55.a6f2hj4h2ja23.a8f2hj3h2ja54.a7f2hj4h2ja22.a9fhj4hja54.a8fhj5hja22.a9fhj4hja54.a9fhj5hja21.a10h6ja54.a10h7ja21.aststst
+		+stsjststsa55.aststststsjtststsa23.6a3j6a57.7a2j7a192./1304.3a108.a3fa106.af3hf7a99.af2h2f7g3a96.2a2f12ga94.a4g11f2ga92.a2g16fga90.a2g9fk8fga88.a2g11fk4h4fga82.a4.ag12fklm
+		+8f2a79.aba3.jg13fk2mf6n2oa77.a2bca.aj15fk7n3oa76.a2b2c2dbj16f8p2oa72.a3.ab2c2d2bjh14fhpupupupupa72.aba3.4adbcjh13f2h8va72.a2bca5.2a4jh11f2h8wva71.a2b2cda3.a6fjh10fh9wva71
+		+.ab2c2da2.a8fjh8f2h8wva71.2e5d3ej8fhjh7f2hupupupu2pa68.a.e4g6fj8f2hj2h5f2h8pa68.abd3g9fj8fh3j8h5q2a68.a2bcd10fifj7f2hjg5j8a69.a2b2c2d3fi5fh2fj7fhjgea.a73.a4.ab2c3d9fh3fj6
+		+fhjfe75.aba2.2e5d14fj7hjie74.a2bcde3g18fjstststsjfge72.a2b2c2d2g16fi2fjsjsjsjsjfge66.a5.db2c3d12fifh7fjfjfjfj3fge64.aba2.2eg5d7fi7fh17fge56.a6.a2bcde4g5fi5fh24fife55.aba4
+		+.a2b2c2d2gfi32fh5fe54.a2bca3edb2c3d28fh7fh5fe52.ed2b2c2di2g5d21fh7fh13fe51.egdb2c3d3g18fh7fh21fe50.e3g5d20fifh28fhe49.e2g21fi28fh7fhe48.e2g16fi26fh7fh5fh2fe47.e2g11fi24fh
+		+7fh8f2h3f3he46.e2g6fi22fh7fh14f10he46.egfi20fh7fh21f11he46.e15fh7fh23f17he46.e7fh7fh28f19hje45.eg7fh7fi20fh6f19h2je45.eg28fh7fh5f19h3je45.e21fh7fh10f22h2je45.eg13fh7fh15f
+		+24h2je46.eg5fh7fh22f22hjh3je46.e6fh28f23h5je47.e27fh5f23h7je47.e19fh7fh2f25h8je47.e11fh7fh6f28h8je48.e2hfh7fh9f29h11je49.e7h11f29h12j2e50.e44h14je52.ej40h16je53.e2j36h18j
+		+e55.ej35h18je56.ej32h20je58.ej27h20j4e59.e4j20h21j3e63.e5j13h24j3e66.e7j5h27j3e70.e2j9f24j3e74.j11f19j4e77.a11fh14j4e81.a11fh10j4e86.a9f2h4j4r2e91.a7f2hj4r2ja94.a7fhj5hja
+		+95.a7fhj5hja95.a6f2hj4h2ja95.a6f2hj4h2ja95.a6f2hj4h2ja95.a6f2hj4h2ja95.a7f2hj4h2ja94.a8fhj5hja94.a9fhj5hja93.a10h7ja93.aststststsjtststsa95.7a2j7a192./3533.a110.aba108.a2
+		+bca102.a3.d2b2cda100.aba2edb2c2da.a5.3a84.a4.a2bcd2g5d.aba3.a3fa82.aba.ed2b2c2d3fi2gd2bca.af3hf7a68.a5.a2bcdgdb2c3d5fd2b2cd2af2h2f7gaxa56.a7.aba3.a2b2c2dg5d6fdb2c2d3a2f8g
+		+2x2ga46.a7.aba5.a2bca2.ab2c3d13f5dj4g5f3x3f2ga44.aba5.a2bca3.d2b2c2d2e5d18fj2g4f4x8fga42.a2bca3ed2b2c2d2edb2c3d4g15fi4fj2g3f2x4fk8fga39.ed2b2c2digdb2c3d3g5d3g11fi9fj2g11f
+		+k4h4fga37.egdb2c3d3g5d3g14fi15fjg12fklm8f2a34.e3g5d20fi21fjg13fk2mf6n2oa32.e2g21fi27fj15fk7n3oa31.e2g16fi26fh3fi2fj16f8p2oa30.e2g11fi24fh5fifh6fjh14fhpupupupupa30.e2g6fi3
+		+0fi10f5jh13f2h8va31.egfi28fhfi14f2j5fjh11f2h8wva31.e15fh7fh3fi19fj8fjh10fh9wva31.e7fh7fh5fi22fhfj10fjh8f2h8wva31.eg7fh7fi20fh7fhfj7f4hjh7f2hupupupu2pa31.eg28fh7fh10fj5h7j
+		+2h5f2h8pa32.e21fh7fh19f5j4fh2f2j8h5q2a32.eg13fh7fh28fh7fh4f3j10a34.eg5fh7fh28fh7fh14fe44.e6fh28fh7fh22fe44.e27fh7fh28fhfe44.e19fh7fh28f2h6fhfe44.e11fh7fh24f17h2f2hfe44.e2
+		+hfh7fh28f21hf4he44.e7h25fh4f29he44.e66he44.ej63h2je44.e2j61h3je45.ej61h2je46.ej60h2je48.ej54h7je48.e4j50h7je49.e5j37h19je49.e7j5h8j18h22je51.e3j9f47je52.ej11f43j3r54.a11f
+		+h40j2rhja54.a11fh39jr2h2ja55.a9f2h37j2r3h2ja56.a7f2hj5r21j7e4r5h2ja56.a7fhj4hja21e8.a7h2ja56.a7fhj4hja29.a7h2ja56.a6f2hj3h2ja29.a7h2ja56.a6f2hj3h2ja29.a7h2ja56.a6f2hj3h2j
+		+a29.a7h2ja56.a6f2hj3h2ja29.a8h2ja55.a7f2hj3h2ja28.a9hja55.a8fhj4hja28.a9hja55.a9fhj4hja27.a10ja55.a10h6ja27.aststststsa56.aststststsjststsa29.9a58.6a3j6a192.
+		cat|24|17|14|10.5|a211713,bC89961,cD3AB75,dA2744B,e83C66E,f6B4C39,g15111A,hDD909C,iEEDEC0,j926D49,kCEBA9B|idle:0;walk:1,2,3,4
+		+13.a5.a6.2a8.aba3.aba4.abca7.a2b3a2bca2.abca8.a2b3c3ba2.aba9.abdbd2bdba2.aba9.abe3be2ba2.abd9afbg3bg2ba3.abf9cf2bh3ba5.fc2bd2bd2bdbf4ia6.a3bd2bd2bd2bf3a7.aj10bja11.f2bf3i
+		+f2b2fa11.a2b3faf2bfja11.a2bfja.a2bfja11.a2ifka.a2ifka12.4a3.4a33./13.a5.a6.2a8.aba3.aba4.abca7.a2b3a2bca2.abca8.a2b3c3ba2.aba9.abdbd2bdba2.aba9.abe3be2ba2.abd9afbg3bg2ba3
+		+.abf9cf2bh3ba5.fc2bd2bd2bdbf4ia6.a3bd2bd2bd2bf3a7.aj10bja11.af2bfif2b3fja11.f2bfaf2bfa2ja11.f2bf.a2b2a2ja11.f2if.a2i2a2ka12.2f3.2a2.2a32./2.2a8.aba3.aba4.abca7.a2b3a2bca2
+		+.abca8.a2b3c3ba2.aba9.abdbd2bdba2.aba9.abe3be2ba2.abd9afbg3bg2ba3.abf9cf2bh3ba5.fc2bd2bd2bdbf4ia6.a3bd2bd2bd2bf3a7.aj10bja11.aj5if2bfa12.a2b3faf2bfja11.a2bfja.a2bfja11.a2
+		+bfka.a2ifja11.a2ifa3.af2ka12.2a7.2a33./13.a5.a6.2a8.aba3.aba4.abca7.a2b3a2bca2.abca8.a2b3c3ba2.aba9.abdbd2bdba2.aba9.abe3be2ba2.abd9afbg3bg2ba3.abf9cf2bh3ba5.fc2bd2bd2bdb
+		+f4ia6.a3bd2bd2bd2bf3a7.aj10bja10.a2bf5if2bf11.a2b5faf2bf11.a2b2a2ja.f2bf11.a2i2a2ka.f2if12.2a2.2a3.2f34./2.2a8.aba3.aba4.abca7.a2b3a2bca2.abca8.a2b3c3ba2.aba9.abdbd2bdba2
+		+.aba9.abe3be2ba2.abd9afbg3bg2ba3.abf9cf2bh3ba5.fc2bd2bd2bdbf4ia6.a3bd2bd2bd2bf3a7.aj10bja11.f2bf4ikj2fa11.a2b3faf2bfja11.a2bfja.a2bfja11.a2ifja.a2bfka12.af2ka.a2ifa15.2a3
+		+.2a35.
+		chicken|18|18|15|7.5|a241D22,bC56661,cFAF8F0,d1E1519,eD0AC64,fB5ADB7,gAE874F,h974A50,iDAD4D1|idle:0;walk:1,2,3,4;alt:5
+		+8.a2baba12.a4ba12.a4ca5.a5.a3cdcea3.aca2.2af4cega3.a2c2a3cf3cba4.a7cf3caha3.ai3c2i2c3f.a4.ai2c4i3ca7.ai2c2i4ca7.a2i6cia8.a7ia10.a4faea11.a3faea12.7a11.a2ea3ea11.6a24./8.a
+		+2baba12.a4ba12.a4ca5.a5.a3cdcea3.aca2.2af4cega3.a2c2a3cf3cba4.a7cf3caha3.ai3c2i2c3f.a4.ai2c4i3ca7.ai2c2i4ca7.a2i6cia8.a7ia10.a3faea12.2afaea14.5a13.2a3ea13.4a25./8.a4ba12
+		+.a4ca5.a5.a3cdcea3.aca2.2af4cega3.a2c2a3cf3cba4.a7cf3caha3.ai3c2i2c3f.a4.ai2c4i3ca7.ai2c2i4ca7.a2i6cia8.a7ia10.a5fa12.a3faea12.4aea12.a2e4a12.3a3ea14.3a24./8.a2baba12.a4b
+		+a12.a4ca5.a5.a3cdcea3.aca2.2af4cega3.a2c2a3cf3cba4.a7cf3caha3.ai3c2i2c3f.a4.ai2c4i3ca7.ai2c2i4ca7.a2i6cia8.a7ia10.a5faea10.3f3aea10.4a.4a9.a3e2a3ea9.3a2.3a23./8.a4ba12.a4
+		+ca5.a5.a3cdcea3.aca2.2af4cega3.a2c2a3cf3cba4.a7cf3caha3.ai3c2i2c3f.a4.ai2c4i3ca7.ai2c2i4ca7.a2i6cia8.a7ia10.a4faea11.a3faea12.ae5a11.4a3ea10.a3e3a12.3a27./73.a16.aca2.4a9
+		+.a2c2a4c4a.a3.a9cf2baba2.ai3c2i3cf4ba2.ai2c4i2cf4ca3.ai2c2i2cf3cdcea2.a2i5cf4cega3.a5iaef3cba5.a4faef3caha5.a3f3af2a.a7.a2ea3ea11.6a24.
+		cinderBat|24|16|13|12|a1D110F,bC4836F,cB36F51,d7C4D3A,e48302A,f24181C,g755E60,hDFCB78,i322121,jFFFFFF|idle:0;fly:0,1,2,1
+		+.a18.a3.aba16.aba2.acba14.abca2.a2cba12.ab2ca2.ad2cba10.ab2cda3.ad2cba2.a4.2ab2cda5.ad2cb2aea2.aef2cda7.a2dc2a2e2a2ef2da9.3a.aeg2egef2a14.aeh2ehea17.a4ea18.ai2eia19.a2ja2
+		+1.2a59./105.a4.a9.7a.aea2.aef6a2.7b2a2e2a2ef6ba.d5cb2aeg2egef5cda.adadadc2aeh2ehefdadada3.a.a.2a2.a4e3a.a.a12.ai2eia19.a2ja21.2a83./81.a4.a17.aea2.aea16.a2e2a2ea12.3a.aeg
+		+2egef2a9.a2dc2aeh2ehef2da7.ad2cba.a4efb2cda5.ad2cba2.ai2ei2ab2cda3.ad2cba4.a2ja2.ab2cda2.a2cba6.2a4.ab2ca2.acba14.abca2.aba16.aba3.a18.a27.
+		cow|34|24|21|14|a1E1B22,bE3D9C1,cBCAE90,dAEA7B4,e38343E,fF6F2EA,g1E1519,hE6A9B0,iD7D1D3,j824C5C,kC4818F,lCA8B98,mEAB5BC,n3A3038|idle:0;walk:1,2,3,4;alt:5
+		+22.2a31.a2ba29.abc5a12.13ad3e5f2a8.2a14fd3e6fa6.a4f4e6f2efde4fg3fa4.a4f6e4f4ed5fgf2ha3.ai4f6e5f3ed6f3ha2.aia5f4e7f2efdi3f2hjha2.aia12f2e5fd2i2f4ha2.aia11f4e5fd3i3ka3.aiai
+		+10f4e4fi7a4.aia2i10f2e4f2ia10.ae2a3i12f3ia11.ae2a3fd7id3f3dia11.a.a3f9d3f2d2ia13.a2fi5d3ad2fid2ida13.a2fidlmla3.a2fid2ida13.a2fidilda3.a2fid2ida13.a2fid2ida3.a2fid2ida13.
+		+a3nd3na3.a3nd3na13.a3nd3na3.a3nd3na14.3a.3a5.3a.3a45./22.2a31.a2ba29.abc5a12.13ad3e5f2a8.2a14fd3e6fa6.a4f4e6f2efde4fg3fa4.a4f6e4f4ed5fgf2ha3.ai4f6e5f3ed6f3ha2.aia5f4e7f2e
+		+fdi3f2hjha2.aia12f2e5fd2i2f4ha2.aia11f4e5fd3i3ka3.aiai10f4e4fi7a4.aia2i10f2e4f2ia10.ae2a3i12f3ia11.aea.ad3fd3id3fdi3d3ia9.a3.d3f5d3f2d3a3ia13.d2fi3dad2fida2.a2ida13.d2fid
+		+a2.a2fia3.a2ida13.d2fid3.a2fia3.a2ida13.d2fid3.a2fia3.a2ida13.d3nd3.a3na3.a3na13.d3nd3.a3na3.a3na14.3d5.3a5.3a43./21.a2ba29.abc5a12.13ad3e5f2a8.2a14fd3e6fa6.a4f4e6f2efde4
+		+fg3fa4.a4f6e4f4ed5fgf2ha3.ai4f6e5f3ed6f3ha2.aia5f4e7f2efdi3f2hjha2.aia12f2e5fd2i2f4ha2.aia11f4e5fd3i3ka3.aiai10f4e4fi7a4.aia2i10f2e4f2ia10.ae2a3i12f3ia11.aea.a2d8id3f2da1
+		+3.a.a3f9d3f2d2ia13.a3f5d3ad2fid3ia13.a2fidlmla3.a2fid2ida13.a2fidilda3.a2fid2ida13.a2fid2ida3.a2fid2ida13.a2fid3na3.a3nd2ida13.a3nd3na3.a3nd3na13.a3n4a5.4a3na14.3a13.3a45
+		+./22.2a31.a2ba29.abc5a12.13ad3e5f2a8.2a14fd3e6fa6.a4f4e6f2efde4fg3fa4.a4f6e4f4ed5fgf2ha3.ai4f6e5f3ed6f3ha2.aia5f4e7f2efdi3f2hjha2.aia12f2e5fd2i2f4ha2.aia11f4e5fd3i3ka3.ai
+		+ai10f4e4fi7a4.aia2i10f2e4f2ia10.ae2a3i12f3ia11.ad3f2d10id3fd13.d3fda11d3fd13.a2fia.7d3ad2fid13.a2fia2.amlida3.d2fid13.a2fia3.l2ida3.d2fid13.a2fia3.a2ida3.d2fid13.a3na3.a3
+		+na3.d3nd13.a3na3.a3na3.d3nd14.3a5.3a5.3d47./21.a2ba29.abc5a12.13ad3e5f2a8.2a14fd3e6fa6.a4f4e6f2efde4fg3fa4.a4f6e4f4ed5fgf2ha3.ai4f6e5f3ed6f3ha2.aia5f4e7f2efdi3f2hjha2.aia
+		+12f2e5fd2i2f4ha2.aia11f4e5fd3i3ka3.aiai10f4e4fi7a4.aia2i10f2e4f2ia10.ae2a3i12f3ia11.ae2a3fd11i3dia11.a.a3f9d3f2d2ia13.a2fi5d3ad3fd2ida13.a2fidlmla3.a2fid2ida13.a2fidilda3
+		+.a2fid2ida13.a2fid2ida3.a2fid2ida13.a3nd2ida3.a2fid3na13.a3nd3na3.a3nd3na14.4a3na3.a3n4a19.3a5.3a49./108.15a17.2a15fa15.a4f4e6f2e2fa13.a4f6e4f4e2fa11.ai4f6e5f3e2fa10.aia5
+		+f4e7f2e2f3a8.aia12f2e6fd2ba7.aia11f4e4fdbc5a4.aiai10f4e3fd3e5f2a2.aia2i10f2e4fid3e6fa.ae2a3i12f3i2ae4fg3f2ae2a3fd7id3f3did5fgf2ha.a.a3f9d3f2d2id6f3ha3.a2fi5d3ad2fid2id2ai
+		+3f2hjha3.a2fidlmla3.a2fid2id2a2i2f4ha3.a2fidilda3.a2fid2ida.a3i3ka4.a2fid2ida3.a2fid2ida2.6a5.a3nd3na3.a3nd3na13.a3nd3na3.a3nd3na14.3a.3a5.3a.3a45.
+		crawler|36|18|14|18|a281F2E,b4F3F58,c17121C,d35293E,e8A7696,f695374,gB4A5AD,hC96962,iECAEA2,j493A54,kD2C7B1,l968878,m130E18|idle:0;walk:1,2,3,4;strike:5
+		+149.ab3.ab.2c2.2c2.db3.ab13.ab3.dbc2e2c2e2cebc2.db2c10.ababcdbeb2f2e2f2ebfbcdbebec9.abab2ebfb8fbfbdebfbfec8.abcebfb2fbfg4fb2fbdbfhb2fec7.abefbfb2fb6fb2fbdb2fbhifc6.abcj2f
+		+bj3fbj3fbj3fbj3fb2fkc5.ab.c2jb14jbd2jfbjlkc5.ab2.cdb14db.2cjbclc6.ab3.ab13cab3.db.c6.ab3.ab15.ab3.ab7.2m3.2m15.2m3.2m77./151.b3.a.2c2.2c2.2cb3.a12.a2.b2.bdc2e2c2ecde2b2.b
+		+d2c10.2a.2bc2be2f2e2f2efbebcb3ec8.a2.bc2b2fb8fb2f2bfb2fec7.a2.be2bgfb2fg4fb3f2bfbi2fec6.a.cb2fb3fb6fb3f2bfbfhifc5.a2.cbf2bj3fbj3fbj3f2b2fb3fkc4.a3.bjb16jdbjbfjlkc4.a3.bcb
+		+14d2c.bcbjdlc5.a2.b2.bd12cd3.b.bcac5.a3.b.b.a13.a3.b.b.a5.m3.m.m.m13.m3.m.m.m76./113.ab3.ab.2c2.2c2.db3.ab13.ab3.dbc2e2c2e2cebc2.db2c10.ababcdbeb2f2e2f2ebfbcdbebec9.abab2
+		+ebfb8fbfbdebfbfec8.abcebfb2fbfg4fb2fbdbfhb2fec7.abefbfb2fb6fb2fbdb2fbhifc6.abcj2fbj3fbj3fbj3fbj3fb2fkc5.ab.c2jb14jbd2jfbjlkc5.ab2.cdb14db.2cjbclc6.ab3.ab13cab3.db.c6.ab3.
+		+ab15.ab3.ab7.ab3.ab15.ab3.ab7.2m3.2m15.2m3.2m77./150.a5.b2c2.2c2.cd5.b12.ba2.a2cb2e2c2e2cbec.ac2bc11.2bacd2e2bf2e2f2ebfecdebebc9.ba.b2efbfb6fbfbfdeb2fbec8.bacb2fgbfbfg4fb
+		+fbfdbfhibfec7.bdefb2fb2fb4fb2fbfdb3fhbfc6.b.dj2fbjb2fbj3fbj2f2bj4fbfkc5.b.ac4jb11jbjd2j2fjbkc5.b.a.dc2db11dbcacd2jcbc6.ba2.a.cb12cb.a.a2c.b6.b.a.a3.b13.b.a.a3.b5.m.m.m3.m
+		+13.m.m.m3.m75./113.ab3.ab.2c2.2c2.db3.ab13.ab3.dbc2e2c2e2cebc2.db2c10.ababcdbeb2f2e2f2ebfbcdbebec9.abab2ebfb8fbfbdebfbfec8.abcebfb2fbfg4fb2fbdbfhb2fec7.abefbfb2fb6fb2fbdb
+		+2fbhifc6.abcj2fbj3fbj3fbj3fbj3fb2fkc5.ab.c2jb14jbd2jfbjlkc5.ab2.cdb14db.2cjbclc6.ab3.ab13cab3.db.c6.ab3.ab15.ab3.ab7.ab3.ab15.ab3.ab7.2m3.2m15.2m3.2m77./62.4c3.c27.c4ec.c
+		+kc23.abce2fbfecklc13.2c2.2c2.cdbab2fbibfelc11.3c2e2c2e2c2eb.d3bfhbfc10.2c3e2f2e2f2efbe2cjbm2fbfc9.c2e12fbfecdbj2fjbc8.cebfg2fbfg4fgb3feb2c2jclmc6.cebfb2fbfb6fb4fb2.2c.clc
+		+6.cjb2fbfb2fb4fb4fbc6.c7.ab4jb13jc14.ab.2cdb12d2c14.ab3.ab13c16.ab3.ab28.2m3.2m100.
+		crow|20|18|15|9.5|a0F0F16,b5F5F79,c46465C,d2E2E3F,e1E1E2A,fE2CD81,gA7A7AF,h73737D,i898993|idle:0;fly:0,1,2,1
+		+9.2a17.abca15.ab3ca13.ab4ca12.ab4cda11.ab4c2da11.a4c2de2a8.a2.a4de3ba6.aea2.2a2e4bd2a4.a2e4a2d2bf2d2ga4.a2e10dh2ga4.ae10d3a6.a9da10.ae5dea12.2a2i3a15.2a50./111.3a8.a7.a3b
+		+a6.a2e4a5ebd2a4.ae2b7cded2ga4.aeb5c2de2dh2ga4.a2e4d2e3d3a6.ad4e4da10.ae5dea12.2a2i3a15.2a70./91.3a8.a7.a3ba6.aea4.2a4bd2a4.a2e2a4e2bf2d2ga4.a3e4de4dh2ga4.ae4c2de3d3a6.eb4
+		+c2deda10.eb4cdea12.eb4ce14.ab2cda15.abda17.2a49.
+		elephant|64|46|40|26|a1D1B26,bAFB1B9,c4A4A5B,d9598A9,e686979,fAF93A3,gFFFFFF,h1E1519,iA39983,jF1ECDB,k3B3747,lC8BFA4,mD9D3C6,nAEA89F|idle:0;walk:1,2,3,4;strike:5
+		+295.7a35.16a4.2a7b2a28.5a16b4a11b2a23.3a23bc14ba15.2a3.2a25b6c9d2ba13.adea.a9b18dc5bc10dba11.adea.a4b23dcb5dbc10dba10.ade2a3b24dcb7dbc10da10.adec2b25dcb2d4f4dcdgh7da9.ade
+		+cb26dcbd7f2dcd2h7da9.adcb27dc2d8fdc11da8.adcb7de19dc2d7f2dc11da8.adc8de19dc2d6f2dec5de5da9.ac9de17dece2d5f2dec2d3i6da9.ac9de17dece3d3f2dec2di3j2i3dea8.akce28dce7dec2di2l3
+		+j2idia9.ace28dc2e5dec4ei3l3jiji10.c2e28dc2e3d2ec4a.ai2l4ji11.a2e28dc5ea7.a2i3lia12.a3e25d2e4ca8.abd3iea13.a6e17d6e2a11.ab5ea14.2a25e2a13.ab3dea13.a8d14c8dc5ea5.ab4dea13.a
+		+7de7c6ac7dec4eca5.ab5ea13.a7dec4eca6.a7dec4eca5.ab3dea14.a6d2ec3e2ca6.a6d2ec3e2ca5.ab3dea14.ab5d2ec3e2ca6.ab5d2ec3e2ca5.ab4ea14.ab5d2ec3e2ca6.ab5d2ec3e2ca6.ab3dea13.ab2de
+		+2d2e2c2e2ca6.ab2de2d2e2c2e2ca6.ab3dea13.ab3ded2ecece2ca6.ab3ded2ecece2ca7.ab3ea13.ab5d2ec3e2ca6.ab5d2ec3e2ca7.ab3dea12.ab5d2ec3e2ca6.ab5d2ec3e2ca7.ab4da12.ab5d2ec3e2ca6.a
+		+b5d2ec3e2ca8.a2e2da12.ab5d2ec3e2ca6.ab5d2ec3e2ca9.a2ea13.ab6dec4eca6.ab6dec4eca10.2a14.a8dec4eca5.a8dec4eca25.amdmdm3decn3eca5.amdmdm3decn3eca26.6a3c6a7.6a3c6a278./295.7a
+		+35.16a4.2a7b2a28.5a16b4a11b2a23.3a23bc14ba15.2a3.2a25b6c9d2ba13.adea.a9b18dc5bc10dba11.adea.a4b23dcb5dbc10dba10.ade2a3b24dcb7dbc10da10.adec2b25dcb2d4f4dcdgh7da9.adecb26dc
+		+bd7f2dcd2h7da9.adcb27dc2d8fdc11da8.adcb7de19dc2d7f2dc11da8.adc8de19dc2d6f2dec5de5da9.ac9de17dece2d5f2dec2d3i6da9.ac9de17dece3d3f2dec2di3j2i3dea8.akce28dce7dec2di2l3j2idia
+		+9.ace28dc2e5dec4ei3l3jiji10.c2e28dc2e3d2ec4a.ai2l4ji11.a2e28dc5ea7.a2i3lia12.a3e25d2e4ca8.abd3iea13.a6e17d6e2a11.ab5ea14.2a25e2a13.ab3dea15.a8d10c8d2a8ea3.ab4dea15.a7de3c
+		+6ac7de2a7eca3.ab5ea15.a7de2ca6.a7de2a7eca3.ab3dea16.a6d2e2ca6.a6d2e2a6e2ca3.ab3dea16.ab5d2e2ca6.ab5d2e2ad5e2ca3.ab4ea16.ab5d2e2ca6.ab5d2e2ad5e2ca4.ab3dea15.ab2de2d2e2ca6.
+		+ab2de2d2e2ad2ec2e2ca4.ab3dea15.ab3ded2e2ca6.ab3ded2e2ad3ece2ca5.ab3ea15.ab5d2e2ca6.ab5d2e2ad5e2ca5.ab3dea14.ab5d2e2ca6.ab5d2e2ad5e2ca5.ab4da14.ab5d2e2ca6.ab5d2e2ad5e2ca6.
+		+a2e2da14.ab5d2e2ca6.ab5d2e2ad5e2ca7.a2ea15.ab6de2ca6.ab6de2ad6eca8.2a16.a8de2ca5.a8dec8eca25.amdmdm3de2ca5.amdmdm3decnenen3eca26.2a7c2a7.9a.9a276./231.7a35.16a4.2a7b2a28.
+		+5a16b4a11b2a23.3a23bc14ba15.2a3.2a25b6c9d2ba13.adea.a9b18dc5bc10dba11.adea.a4b23dcb5dbc10dba10.ade2a3b24dcb7dbc10da10.adec2b25dcb2d4f4dcdgh7da9.adecb26dcbd7f2dcd2h7da9.ad
+		+cb27dc2d8fdc11da8.adcb7de19dc2d7f2dc11da8.adc8de19dc2d6f2dec5de5da9.ac9de17dece2d5f2dec2d3i6da9.ac9de17dece3d3f2dec2di3j2i3dea8.akce28dce7dec2di2l3j2idia9.ace28dc2e5dec4e
+		+i3l3jiji10.c2e28dc2e3d2ec4a.ai2l4ji11.a2e28dc5ea7.a2i3lia12.a3e25d2e4ca8.abd3iea13.a6e17d6e2a11.ab5ea14.2a25e2a13.ab3dea17.2a17c8da11.ab4dea13.a8d7c6ac7dec5ea5.ab5ea13.a7
+		+dec4eca6.a7dec4eca5.ab3dea14.a7dec3e2ca6.a6d2ec4eca5.ab3dea14.a6d2ec3e2ca6.ab5d2ec3e2ca5.ab4ea14.ab5d2ec3e2ca6.ab5d2ec3e2ca6.ab3dea13.ab5d2e2c2e2ca6.ab2de2d2ec3e2ca6.ab3d
+		+ea13.ab2de2d2ecece2ca6.ab3ded2e2c2e2ca7.ab3ea13.ab3ded2ec3e2ca6.ab5d2ecece2ca7.ab3dea12.ab5d2ec3e2ca6.ab5d2ec3e2ca7.ab4da12.ab5d2ec3e2ca6.ab5d2ec3e2ca8.a2e2da12.ab5d2ec3e
+		+2ca6.ab5d2ec3e2ca9.a2ea13.ab5d2ec4eca6.ab6dec3e2ca10.2a14.ab6dec5eca5.a8dec3eca26.a8decn3eca5.amdmdm3dec4eca25.amdmdm3dec5a7.5a4cen3eca26.9a19.9a278./295.7a35.16a4.2a7b2a
+		+28.5a16b4a11b2a23.3a23bc14ba15.2a3.2a25b6c9d2ba13.adea.a9b18dc5bc10dba11.adea.a4b23dcb5dbc10dba10.ade2a3b24dcb7dbc10da10.adec2b25dcb2d4f4dcdgh7da9.adecb26dcbd7f2dcd2h7da9
+		+.adcb27dc2d8fdc11da8.adcb7de19dc2d7f2dc11da8.adc8de19dc2d6f2dec5de5da9.ac9de17dece2d5f2dec2d3i6da9.ac9de17dece3d3f2dec2di3j2i3dea8.akce28dce7dec2di2l3j2idia9.ace28dc2e5de
+		+c4ei3l3jiji10.c2e28dc2e3d2ec4a.ai2l4ji11.a2e28dc5ea7.a2i3lia12.a3e25d2e4ca8.abd3iea13.a6e17d6e2a11.ab5ea14.2a25e2a13.ab3dea11.a8d18c8dcea7.ab4dea11.a7de11c6ac7de2ca7.ab5e
+		+a11.a7de2a7eca6.a7de2ca7.ab3dea12.a6d2e2a6e2ca6.a6d2e2ca7.ab3dea12.ab5d2e2ad5e2ca6.ab5d2e2ca7.ab4ea12.ab5d2e2ad5e2ca6.ab5d2e2ca8.ab3dea11.ab2de2d2e2ad2ec2e2ca6.ab2de2d2e2
+		+ca8.ab3dea11.ab3ded2e2ad3ece2ca6.ab3ded2e2ca9.ab3ea11.ab5d2e2ad5e2ca6.ab5d2e2ca9.ab3dea10.ab5d2e2ad5e2ca6.ab5d2e2ca9.ab4da10.ab5d2e2ad5e2ca6.ab5d2e2ca10.a2e2da10.ab5d2e2a
+		+d5e2ca6.ab5d2e2ca11.a2ea11.ab6de2ad6eca6.ab6de2ca12.2a12.a8dec8eca5.a8de2ca25.amdmdm3decnenen3eca5.amdmdm3de2ca26.9a.9a7.2a7c2a280./231.7a35.16a4.2a7b2a28.5a16b4a11b2a23.
+		+3a23bc14ba15.2a3.2a25b6c9d2ba13.adea.a9b18dc5bc10dba11.adea.a4b23dcb5dbc10dba10.ade2a3b24dcb7dbc10da10.adec2b25dcb2d4f4dcdgh7da9.adecb26dcbd7f2dcd2h7da9.adcb27dc2d8fdc11d
+		+a8.adcb7de19dc2d7f2dc11da8.adc8de19dc2d6f2dec5de5da9.ac9de17dece2d5f2dec2d3i6da9.ac9de17dece3d3f2dec2di3j2i3dea8.akce28dce7dec2di2l3j2idia9.ace28dc2e5dec4ei3l3jiji10.c2e2
+		+8dc2e3d2ec4a.ai2l4ji11.a2e28dc5ea7.a2i3lia12.a3e25d2e4ca8.abd3iea13.a6e17d6e2a11.ab5ea14.2a25e2a13.ab3dea13.a8d18cac8ea5.ab4dea13.a7de7c6ac8dc4eca5.ab5ea13.a7dec4eca6.a7d
+		+ec4eca5.ab3dea14.a6d2ec4eca6.a7dec3e2ca5.ab3dea14.ab5d2ec3e2ca6.a6d2ec3e2ca5.ab4ea14.ab5d2ec3e2ca6.ab5d2ec3e2ca6.ab3dea13.ab2de2d2ec3e2ca6.ab5d2e2c2e2ca6.ab3dea13.ab3ded2
+		+e2c2e2ca6.ab2de2d2ecece2ca7.ab3ea13.ab5d2ecece2ca6.ab3ded2ec3e2ca7.ab3dea12.ab5d2ec3e2ca6.ab5d2ec3e2ca7.ab4da12.ab5d2ec3e2ca6.ab5d2ec3e2ca8.a2e2da12.ab5d2ec3e2ca6.ab5d2ec
+		+3e2ca9.a2ea13.ab6dec3e2ca6.ab5d2ec4eca10.2a14.a8dec3eca6.ab6dec5eca25.amdmdm3dec4eca5.a8decn3eca26.5a4cen3eca5.amdmdm3dec5a33.9a7.9a284./103.7a55.2a7b2a8.3a41.a11b2a5.ab2
+		+da21.16a2.a14ba3.ab3dea15.5a16ba6c9d2ba2.ab2d2ea12.3a22bc5bc10db2ab3dea6.2a3.2a24bcb5dbc10d2bded2ea5.adea.a9b16dcb7dbc14dea5.adea.a4b21dcb2d4f4dcdgh7ded2ea5.ade2a3b23dcbd
+		+7f2dcd2h9dea6.adec2b25dc2d8fdc9ded2ea6.adecb26dc2d7f2dc10d2ea7.adcb27dc2d6f2dec2d3ie3d2ea8.adcb7de19dce2d5f2decdi3j2i3ea9.adc8de19dce3d3f2dec2di2l3j2i2a10.ac9de17dedce7de
+		+c3di3l3jaja9.ac9de17dedc2e5dec4eaia2l4ja8.akce29dc2e3d2ec4a3.2a3la10.ace30dc5eca9.3a12.c2e30d5ca26.a2e30d3ea28.a3e25d4e2a30.a6e17d6e2a33.2a25e2a37.2a18c8da31.a8d8c6ac7dec
+		+4ea26.a7dec5eca6.a7dec3eca26.a7dec4e2ca6.a6d2ec3eca26.a6d2ec4e2ca6.ab5d2ec2e2ca26.ab5d2ec4e2ca6.ab5d2ec2e2ca26.ab5d2ecec2e2ca6.ab2de2d2ec2e2ca26.ab2de2d2ec2ece2ca6.ab3ded
+		+2ec2e2ca26.ab3ded2ec4e2ca6.ab5d2e2ce2ca26.ab5d2ec4e2ca6.ab5d2ec2e2ca26.ab5d2ec4e2ca6.ab5d2ec2e2ca26.ab5d2ec4e2ca6.ab5d2ec2e2ca26.ab5d2ec5eca6.ab6dec2e2ca26.ab6dec6eca5.a8
+		+dec2eca26.a8decen3eca5.amdmdm3dec3eca25.amdmdm3dec6a7.4a5cn3eca26.9a19.9a278.
+		emberSlime|26|20|17|13|a382019,bD49D6C,cFFFFFF,dCB8A5D,e986348,f291712,g734738,h412820,iE2CD81|idle:0;hop:1;strike:2
+		+113.8a16.2a8b2a13.a3b2c5b2d2a10.a2b3c2b8da8.a2b2cb11dea6.a3b14dea6.ab3dfc6dfc3d2ea4.ab4d2f6d2f3d2ea4.ab17d2ea4.a17d2ega4.a7d6h4d2ega4.ae2d2i12d2ega5.a3e12d2ega7.ag14ega9.
+		+16a31./10.6a18.2a6b2a15.a3b2c3b2da13.a2b3cb6da12.ab2cb7dea11.a3b9dea11.ab2dfc4dfc2dea10.ab2d2f4d2f2dea10.ab12dea10.a12d2ea10.a5d4h3d2ea10.a2d2i8d2ea10.ae11dega11.ae9d2ega
+		+11.a2e8dega13.a10ea15.a8ga17.8a61./140.8a16.2a8b3a11.2a3b2c5b3d2a8.a3b3cb10d2a5.a3b2cb6dfc5dea3.a3b7dfcd2f5dea3.ab9d2f7d2ea2.ab11d7hd2ea2.ab10dhchchc2hdega2.a11d8hdega2.a
+		+e2d2i7dhchchc2dega3.a2e16d2ega4.ag17ega6.19a28.
+		fish|18|10|8|9|a1B2638,b364D6A,c80AED4,d6799C6,e4A6D90,fFFFFFF,g15111A,hDBC36E,iD8E8F8|idle:0;fly:0,1
+		+20.a4.5a7.aba.2a5c2a5.a2ba2c6dc2a3.aeb8dfgdca2.aeb2d2h7dea2.a2bae7ie2a3.aba.2a5e2a6.a4.5a24./25.5a9.a.2a5c2a6.aba2c6dc2a3.abe8dfgdca2.abe2d2h7dea3.abae7ie2a5.a.2a5e2a11.5
+		+a24.
+		frog|20|13|10|10|a182F22,bFFFFFF,c15111A,d66A85D,e87BC72,f335737,g477A48,hDDE4AE,i32583B|idle:0;hop:1
+		+46.2a4.2a11.a2ba2.a2ba9.abcbd2adbcba8.a4d2e4da7.a12da6.ad10fda6.agd8hdga6.a2gda4had2ga6.a2ia.4a.a2ia7.2a8.2a24./8.2a4.2a11.a2ba2.a2ba9.abcbd2adbcba6.2ae3d2e5da5.ae13da3.a
+		+g4d8fda3.ag2dagd6hdga4.a2da.agd4a2da5.aia3.aia3.aia6.a5.a5.a65.
+		giraffe|40|62|58|12|a231912,b644A34,c38291E,dCFB474,eD9C286,f6D5942,g957F56,h15111A,iFFFFFF,jECDEB5,k473126,l97704A,m7B5A3B,n392C24|idle:0;walk:1,2,3,4;alt:5
+		+22.a.a36.ababa35.acac2a33.a2d4e2a30.a7d2e2a28.fg3dhi4dja26.aefg7djka26.aedfg4d4ja26.aedlf4g3ja26.ae3dgf6a27.ael2dga33.ae3dga33.ae3dga33.aed2lga33.aed2lga32.ae3dga33.ael2d
+		+ga33.ae3dga33.ae3dga33.aed2lga33.aed2lga32.ae3dga33.ael2dga33.ae3dga33.ae3dga33.aed2lga33.aed2lga32.fe3dga28.5afel2dgf24.4a5efe3dgf20.a.2a4e2d2l2d5fa19.adf2ed2l3d2l7da19.
+		+afe3d2l6d2l4da19.af7d2l3d2l4da19.af2d2l3d2l7dlda19.afgd2l7d2l5da19.afg10d2l4dga19.acf2gd11jdga20.a2cfdldf5gfdld2fga20.3adld4f2afdldfmga22.a2dgfgfa2.a2dgfgfa22.a2dgfgfa2.a
+		+2dgfgfa22.adlgfmfa2.adlgfmfa22.a2dgfgfa2.a2dgfgfa22.a2dgfgfa2.a2dgfgfa22.a2dgfgfa2.a2dgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aed
+		+gfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.a3nf2na2.a3nf2n
+		+a22.a3nf2na2.a3nf2na23.6a4.6a100./22.a.a36.ababa35.acac2a33.a2d4e2a30.a7d2e2a28.fg3dhi4dja26.aefg7djka26.aedfg4d4ja26.aedlf4g3ja26.ae3dgf6a27.ael2dga33.ae3dga33.ae3dga33.
+		+aed2lga33.aed2lga32.ae3dga33.ael2dga33.ae3dga33.ae3dga33.aed2lga33.aed2lga32.ae3dga33.ael2dga33.ae3dga33.ae3dga33.aed2lga33.aed2lga32.fe3dga28.5afel2dgf24.4a5efe3dgf20.a.
+		+2a4e2d2l2d5fa19.adf2ed2l3d2l7da19.afe3d2l6d2l4da19.af7d2l3d2l4da19.af2d2l3d2l7dlda19.afgd2l7d2l5da19.afg10d2l4dga19.acf2gd11jdga20.a2c3fdldfgfdldf2gfgmga18.2a.afdldfafdld
+		+f3agmga21.af2dga.a2dga2.a2gfa21.af2dga.a2dga2.a2gfa21.afdlga.adlga2.agmfa21.af2dga.a2dga2.a2gfa21.af2dga.a2dga2.a2gfa21.af2dga.a2dga2.a2gfa21.afedga.aedga2.adgfa21.afedga
+		+.aedga2.adgfa21.afedga.aedga2.adgfa21.afedga.aedga2.adgfa21.afedga.aedga2.adgfa21.afedga.aedga2.adgfa21.afedga.aedga2.adgfa21.afedga.aedga2.adgfa21.afedga.aedga2.adgfa21.
+		+afedga.aedga2.adgfa21.afedga.aedga2.adgfa21.af3na.a3na2.a3na21.af3na.a3na2.a3na22.a2fa3.3a4.3a98./21.ababa35.acac2a33.a2d4e2a30.a7d2e2a28.fg3dhi4dja26.aefg7djka26.aedfg4d
+		+4ja26.aedlf4g3ja26.ae3dgf6a27.ael2dga33.ae3dga33.ae3dga33.aed2lga33.aed2lga32.ae3dga33.ael2dga33.ae3dga33.ae3dga33.aed2lga33.aed2lga32.ae3dga33.ael2dga33.ae3dga33.ae3dga3
+		+3.aed2lga33.aed2lga32.fe3dga28.5afel2dgf24.4a5efe3dgf20.a.2a4e2d2l2d5fa19.adf2ed2l3d2l7da19.afe3d2l6d2l4da19.af7d2l3d2l4da19.af2d2l3d2l7dlda19.afgd2l7d2l5da19.afg10d2l4dg
+		+a19.acf2gd11jdga20.a2cfa8gfdldfa22.3adld4f2afdldfmga22.adldfgfa2.a2dgfmga22.a2dgfgfa2.a2dgfgfa22.a2dgfmfa2.adlgfgfa22.adlgfgfa2.a2dgfmfa22.a2dgfgfa2.a2dgfgfa22.a2dgfgfa2.
+		+a2dgfgfa22.a2dgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.ae
+		+dgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgf2na2.a3nfgfa22.a3nf2na2.a3nf2na22.a3nf2a4.2af3na23.3a10.3a100./22.a.a36.ababa35.acac2a33.a2d4
+		+e2a30.a7d2e2a28.fg3dhi4dja26.aefg7djka26.aedfg4d4ja26.aedlf4g3ja26.ae3dgf6a27.ael2dga33.ae3dga33.ae3dga33.aed2lga33.aed2lga32.ae3dga33.ael2dga33.ae3dga33.ae3dga33.aed2lga
+		+33.aed2lga32.ae3dga33.ael2dga33.ae3dga33.ae3dga33.aed2lga33.aed2lga32.fe3dga28.5afel2dgf24.4a5efe3dgf20.a.2a4e2d2l2d5fa19.adf2ed2l3d2l7da19.afe3d2l6d2l4da19.af7d2l3d2l4da
+		+19.af2d2l3d2l7dlda19.afgd2l7d2l5da19.afg10d2l4dga19.acf2gd11jdga20.afdldf9gfdlda21.fdldf2a5fa2fdlda21.a2dga2.a2gfa.af2dga21.a2dga2.a2gfa.af2dga21.adlga2.agmfa.afdlga21.a2
+		+dga2.a2gfa.af2dga21.a2dga2.a2gfa.af2dga21.a2dga2.a2gfa.af2dga21.aedga2.adgfa.afedga21.aedga2.adgfa.afedga21.aedga2.adgfa.afedga21.aedga2.adgfa.afedga21.aedga2.adgfa.afedg
+		+a21.aedga2.adgfa.afedga21.aedga2.adgfa.afedga21.aedga2.adgfa.afedga21.aedga2.adgfa.afedga21.aedga2.adgfa.afedga21.aedga2.adgfa.afedga21.a3na2.a3na.af3na21.a3na2.a3na.af3n
+		+a22.3a4.3a3.a2fa101./21.ababa35.acac2a33.a2d4e2a30.a7d2e2a28.fg3dhi4dja26.aefg7djka26.aedfg4d4ja26.aedlf4g3ja26.ae3dgf6a27.ael2dga33.ae3dga33.ae3dga33.aed2lga33.aed2lga32
+		+.ae3dga33.ael2dga33.ae3dga33.ae3dga33.aed2lga33.aed2lga32.ae3dga33.ael2dga33.ae3dga33.ae3dga33.aed2lga33.aed2lga32.fe3dga28.5afel2dgf24.4a5efe3dgf20.a.2a4e2d2l2d5fa19.adf
+		+2ed2l3d2l7da19.afe3d2l6d2l4da19.af7d2l3d2l4da19.af2d2l3d2l7dlda19.afgd2l7d2l5da19.afg10d2l4dga19.acf2gd11jdga20.a2cfdldf10gfga20.3adld4f2afdldfmga22.a2dgfmga2.adldfgfa22.
+		+a2dgfgfa2.a2dgfgfa22.adlgfgfa2.a2dgfmfa22.a2dgfmfa2.adlgfgfa22.a2dgfgfa2.a2dgfgfa22.a2dgfgfa2.a2dgfgfa22.aedgfgfa2.a2dgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.ae
+		+dgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.a3nf
+		+gfa2.aedgf2na22.a3nf2na2.a3nf2na23.2af3na2.a3nf2a27.3a4.3a103./1094.6a29.5a6ea24.4a5e2d2l2d6a15.a.2a4e2d2l3d2l2dfe3dga13.adf2ed2l3d2l7dfed2lga13.afe3d2l6d2l3dfed2lga14.af
+		+7d2l3d2l2dfe3dga15.af2d2l3d2l7dfel2dga15.afgd2l7d2l3dfe3dga15.afg10d2l2dfe3dg2a.a13.acf2gd10jfed2lg2ababa12.a2cfdldf5gfdlfed2lg2acac2a12.3adld4f2afdld4f2a2d4e2a12.a2dgfgf
+		+a2.a2dgfgf2a7d2e2a10.a2dgfgfa2.a2dgfgf2ag3dhi4dja9.adlgfmfa2.adlgfmfa.ag7djka9.a2dgfgfa2.a2dgfgfa2.ag4d4ja9.a2dgfgfa2.a2dgfgfa3.a4g3ja10.a2dgfgfa2.a2dgfgfa4.7a11.aedgfgfa
+		+2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.
+		+aedgfgfa22.aedgfgfa2.aedgfgfa22.aedgfgfa2.aedgfgfa22.a3nf2na2.a3nf2na22.a3nf2na2.a3nf2na23.6a4.6a100.
+		golem|48|50|45|20|a16141A,b62824B,c839D65,d9C988F,e455C38,f7D7973,g3D3B40,h242227,i2E2C30,j565454,k86DFDA,lE5FAF8,m6DC3BD,nC4F4EE,o252326,p88837B,q5D5A56|idle:0;walk:1,2,3,4;windup:5;strike:6;throw:7
+		+832.5a40.3a2b2cb2a36.2a2b2c2b2c2ba34.ad2beb3d2bcbda32.a4d7f4da.5a24.a2d14fdg5da23.ad9f4h2fgd5fda21.a2d5fi2fh4dhgd7fda20.ad7fihd4fdg7ifja20.ad8fh5fjg6fklja20.a9fh5fjg8fja2
+		+0.a9fhj3f2jgj2f5ija20.a5fi4fhj4hfg7ja21.a6fi4fh3dhfm5g2a22.aj9fhd3fjh2nmfja24.aj9fh4fjhmnf2ja24.aj9fh4fjh2f3ja24.a2j8f7hf4ja25.a2j7fh5dh3jga26.a3j5fhd5fdhj2ga27.a7jh6fjh2
+		+ga29.a4j2gh5fijh2a31.6gh6fjh33.a2fi2fhj4fijh33.a5fjh5jha33.aj4f2j5hga33.ad5fjg4jga33.a6fjg4jga33.a7fjg4jga33.6a2g6a166./832.5a40.3a2b2cb2a36.2a2b2c2b2c2ba34.ad2beb3d2bcbd
+		+a32.a4d7f4da.5a24.a2d14fdg5da23.ad9f4h2fgd5fda21.a2d5fi2fh4dhgd7fda20.ad7fihd4fdg7ifja20.ad8fh5fjg6fklja20.a9fh5fjg8fja20.a9fhj3f2jgj2f5ija20.a5fi4fh2j3hfg7ja21.a6fi4f2h3
+		+dhm5g2a22.aj10fhd3fjhnmfja24.aj10fh4fjhnf2ja24.aj10fh4fjhf3ja24.a2j9fhj5h4ja25.a2j9fh5dhjga26.a3j7fhd5fdhga27.a9jh6fjha29.a4j3gjh5fijh31.a7gh6fja33.g2fi2fhj4fija33.a5fjh5
+		+ja34.aj4f2j3h2a35.ad5fj2ga37.a6fj2ga37.a7fj2ga37.2a6g2a168./880.5a40.3a2b2cb2a36.2a2b2c2b2c2ba34.ad2beb3d2bcbda32.a4d7f4da.5a24.a2d14fdg5da23.ad9f4h2fgd5fda21.a2d5fi2fh4d
+		+hgd7fda20.ad7fihd4fdg7ifja20.ad8fh5fjg6fklja20.a9fh5fjg8fja20.a9fhj3f2jgj2f5ija20.a5fi4fhj4hfg7ja21.a6fi4fh3dhfm5g2a22.aj9fhd3fjh2nmfja24.aj9fh4fjhmnf2ja24.aj9fh4fjh2f3ja
+		+24.a2j8f7hf4ja25.a2j7fh5dh3jga26.a3j5fhd5fdhj2ga27.a7jh6fjh2ga29.a4j2gh5fijh2a31.6gh6fjh33.a5fhj4fijh33.aj4fjh5jha33.ad5fj5hga33.a6fjg4jga33.a7fjg4jga33.6a2g6a166./832.5a
+		+40.3a2b2cb2a36.2a2b2c2b2c2ba34.ad2beb3d2bcbda32.a4d7f4da.5a24.a2d14fdg5da23.ad9f4h2fgd5fda21.a2d5fi2fh4dhgd7fda20.ad7fihd4fdg7ifja20.ad8fh5fjg6fklja20.a9fh5fjg8fja20.a9fh
+		+j3f2jgj2f5ija20.a5fi4f4hjhfg7ja21.a6fi3fh3dh2fm5g2a22.aj8fhd3fjhm2nmfja24.aj8fh4fjhfmnf2ja24.aj8fh4fjh3f3ja24.a2j7f5hjh2f4ja25.a2j5fh5dh2f3jga26.a3j3fhd5fdh3j2ga27.a5jh6f
+		+jhj3ga28.ag4jh5fijh4g29.af4gh6fjh3ga29.a2fi2fhj4fijh2jga29.a5fjh5jh2j2ga29.aj4f2jha3h3j2ga29.ad5fja.af5jga29.a6fja.a6jga29.a7fj2a7jga29.8a2.8a164./880.5a40.3a2b2cb2a36.2a
+		+2b2c2b2c2ba34.ad2beb3d2bcbda32.a4d7f4da.5a24.a2d14fdg5da23.ad9f4h2fgd5fda21.a2d5fi2fh4dhgd7fda20.ad7fihd4fdg7ifja20.ad8fh5fjg6fklja20.a9fh5fjg8fja20.a9fhj3f2jgj2f5ija20.a
+		+5fi4fhj4hfg7ja21.a6fi4fh3dhfm5g2a22.aj9fhd3fjh2nmfja24.aj9fh4fjhmnf2ja24.aj9fh4fjh2f3ja24.a2j8f7hf4ja25.a2j7fh5dh3jga26.a3j5fhd5fdhj2ga27.a7jh6fjh2ga29.a4j2gh5fijh2a31.6g
+		+h6fjh33.a5fhj4fijh33.aj4fjh5jha33.ad5fj5hga33.a6fjg4jga33.a7fjg4jga33.6a2g6a166./160.5a42.a5fa40.af4j3h2a37.a4jh5da36.a3jhd5fda35.a3jh6fja35.ag2jh5fija36.a2gh6fja37.3hj4f
+		+ija36.af2jh5ja37.a4j5h38.a3jhd3fja37.ag2jh4fja37.a3gh4fja35.a2g2bchj2f2ja33.2a2b2c2b2h3jh33.ad2beb2dhdf3hda31.a4d4fh5fjh.5a24.a2d7fh5fjhg5da23.ad8fhj3f2jgd5fda21.a2d5fi3f
+		+h4jgd7fda20.ad7fi3f4hg7ifja20.ad8fi6fg6fklja20.a16fg8fja20.a16fgj2f5ija20.a5fi11fg7ja21.a6fi10fm5g2a22.aj15fm2nmfja24.aj16fmnf2ja24.aj18f3ja24.a2j16f4ja25.a2j14f3jga26.a3
+		+j11f4j2ga27.a15j3ga29.a4j3g5j3g2a31.15g33.a6fjg4jga33.a2fi3fjgo3jga33.a5f2jg3j2ga33.aj4f2jg3j2ga33.ad5fjg4jga33.a6fjg4jga33.a7fjg4jga33.6a2g6a166./928.5a40.3a2b2cb2a36.2a
+		+2b2c2b2c2ba34.ad2beb3d2bcbda32.a4d7f4da.5a24.a2d14fdg5da23.ad15fgd5fda21.a2d5fi6f2hgd7fda20.ad7fi4fh2dg7ifja20.ad8fi2fhd2fg6fklja20.a12fh3fg8fja20.a12fh3fgj2f5ija20.a5fi6
+		+fhj3fg7ja21.a6fi6fh3jh6ga22.aj13f4h4fja23.aj16fh4fjh23.aj16fhj2f2jha22.a2j16fh3j4h2a20.a2j14f2j4h5da19.a3j11f4j2ghd5fda19.a15j4gh6fja20.a4j3g5j5gjh5fija21.a13g2a2gh6fja22
+		+.aj4f2jgj2ga2.2ahj4fija22.ad5fjg2jga5.a5ja23.a6fjg2jga2.p3.2ap2a3.p20.a7fjg2jga2.p3.p.p3.p22.4a4g4a167./832.5a40.3a2b2cb2a17.4a15.2a2b2c2b2c2ba15.a4pa13.ad2beb3d2bcbda13.
+		+a5pqa11.a4d7f4da.5a6.a4p2qa10.a2d14fdg5da6.a4qa11.ad15fgd5fda6.4a11.a2d5fi8fgd7fda20.ad7fi5f2hg7ifjg3a17.ad8fi3fh2dg6fkljg3da16.a12fhd2fg8fjg3fda15.a12fh3fgj2f5ijg3fja15.
+		+a5fi6fh4fg7jg3fija15.a6fi5fhj3fj7g5fja15.aj12fh4jhj2fjhj4fija15.aj13f4hnh3j2a5ja16.aj18fj3h2.5a17.a2j16f4ja25.a2j14f3jga26.a3j11f4j2ga27.a15j3ga29.a4j3g5j3g2a31.15g33.a2f
+		+i3fjgo3jga33.a5f2jg3j2ga33.aj4f2jg3j2ga33.ad5fjg4jga33.a6fjg4jga33.a7fjg4jga33.6a2g6a166.
+		grizzly|50|28|25|18|a181114,bB3A593,c8F755A,d372727,e694F3C,f4B372F,gFFFFFF,h1A1316,iC2AB8D,j1E1519,kAC916F,l786352,m1F1515,nE7DFC9,oEFEAD9,p834248|idle:0;walk:1,2,3,4;strike:5
+		+117.8a39.3a8b2a34.3a13b2a28.4a3c14b2da24.2a8c10b2cd3ea21.2a21cde3fe6a14.a4c19ede2f2e6c2a11.a3c17ef4ed2e10ca10.a2c18ef3ed3c4e3f3eca9.ac20efed2c7egh4e2a8.a21efedc8e2h4i2ja7
+		+.a22efd11e4k2ja7.af22edf9ef6ka7.af23edf7e2f5la9.af23edf6ef5ma10.a5ed11ed5edfd2f4e2f3ka11.a5ed11fd5e2dfd7f3a12.a4ef13d4efd3f3d4a15.a4ef7d5ad4efd4fda19.a3e2fd3f2da5.a3e2fd3
+		+f2da19.a3e2fd3f2da5.a3e2fd3f2da19.a4e2fd3f2da4.a4e2fd3f2da18.a5efd4fda4.a5efd4fda18.adndndndndndna4.adndndndndndna19.12a6.12a67./117.8a39.3a8b2a34.3a13b2a28.4a3c14b2da24.
+		+2a8c10b2cd3ea21.2a21cde3fe6a14.a4c19ede2f2e6c2a11.a3c17ef4ed2e10ca10.a2c18ef3ed3c4e3f3eca9.ac20efed2c7egh4e2a8.a21efedc8e2h4i2ja7.a22efd11e4k2ja7.af22edf9ef6ka7.af23edf7e
+		+2f5la9.af23edf6ef5ma11.ad5ed7ed5ed3fd2f4e2f3ka13.d5ed7fd5edf3ad7f3a14.a4ef9d4efda2.af5d2a17.a4ef3d5ad4efa3.a4fda19.a3e2f2da5.a3e2fa3.a3f2da19.a3e2f2da5.a3e2fa3.a3f2da19.a
+		+4e2f2da4.a4e2fa2.a4f2da18.a5ef2da4.a5efa2.a5fda18.adndndndna4.adndndna2.adndndna19.2a4d2a6.6a4.6a65./67.8a39.3a8b2a34.3a13b2a28.4a3c14b2da24.2a8c10b2cd3ea21.2a21cde3fe6a1
+		+4.a4c19ede2f2e6c2a11.a3c17ef4ed2e10ca10.a2c18ef3ed3c4e3f3eca9.ac20efed2c7egh4e2a8.a21efedc8e2h4i2ja7.a22efd11e4k2ja7.af22edf9ef6ka7.af23edf7e2f5la9.af23edf6ef5ma11.a2f14e
+		+d5edfd2f4e2f3ka11.a5ed11fd5e2dfd7f3a12.a5e13d4efd3f3d4a15.a4ef7d5ad4efd4fda19.a4efd3f2da5.a3e2fd4fda19.a3e2fd3f2da5.a3e2fd3f2da19.a3e2fd4f2da4.a4e2fd2f2da19.a4e2fd4fda4.a
+		+5efd3f2da18.a5efdndndna4.adndndnd4fda18.adndndnd5a6.5a2dndndna19.6a18.6a67./117.8a39.3a8b2a34.3a13b2a28.4a3c14b2da24.2a8c10b2cd3ea21.2a21cde3fe6a14.a4c19ede2f2e6c2a11.a3c
+		+17ef4ed2e10ca10.a2c18ef3ed3c4e3f3eca9.ac20efed2c7egh4e2a8.a21efedc8e2h4i2ja7.a22efd11e4k2ja7.af22edf9ef6ka7.af23edf7e2f5la9.af23edf6ef5ma8.a5ed15ed5ed2f4e2f3ka9.a5ed15fd5
+		+e2d7f3a10.a4efda15d4ef3d6a13.a4efa.2a7d5ad4ef2da19.a3e2fa3.a3f2da5.a3e2f2da19.a3e2fa3.a3f2da5.a3e2f2da19.a4e2fa2.a4f2da4.a4e2f2da18.a5efa2.a5fda4.a5ef2da18.adndndna2.adnd
+		+ndna4.adndndndna19.6a4.6a6.2a4d2a69./67.8a39.3a8b2a34.3a13b2a28.4a3c14b2da24.2a8c10b2cd3ea21.2a21cde3fe6a14.a4c19ede2f2e6c2a11.a3c17ef4ed2e10ca10.a2c18ef3ed3c4e3f3eca9.ac
+		+20efed2c7egh4e2a8.a21efedc8e2h4i2ja7.a22efd11e4k2ja7.af22edf9ef6ka7.af23edf7e2f5la9.af23edf6ef5ma10.a5ed16e3fd2f4e2f3ka11.a5ed11fd5e2dfd7f3a12.a4ef13d5ed3f3d4a15.a4ef7d5a
+		+d4efd4fda19.a3e2fd4fda5.a4efd3f2da19.a3e2fd3f2da5.a3e2fd3f2da19.a4e2fd2f2da5.a3e2fd4f2da18.a5efd3f2da4.a4e2fd4fda18.adndndnd4fda4.a5efdndndna19.5a2dndndna4.adndndnd5a26.6
+		+a6.6a73./117.8a39.3a8b2a34.3a13b2a28.4a3c14bc4a22.2a8c10b4cd3ea19.2a23cde3fe6a12.a4c21ede2f2e6c2a9.a3c17ef6ed2e10ca8.a2c18ef5ed3c4e3f3eca7.ac20ef3ed2c7egh4e2a6.a21ef3edc8
+		+e2h4i2ja5.a22ef2ed11e4k2ja5.af24edf9efkokoka6.af25edf7e2f5pa7.af18ed5e2df6e2f5pa6.a5ed14ed5edfdf5e2fkokoka6.a5ed14fd4efd2fd2f3e2f4ka7.a4ef16d4efdfd2a6f3la8.a4ef3a7d5ad3e2
+		+fdfda.9a9.a3e2fa2.a3f2da5.a3e2f3da19.a3e2fa2.a4f2da4.a4e2f2da19.a4e2fa.a5fda4.a5ef3da18.a5efa.adndndna4.adndndndfda18.adndndna2.6a6.2a4dndna19.6a18.6a68.
+		imp|34|34|31|13.5|a17191E,b381E1E,c251414,dC4826C,eB76659,f5A3834,g804A43,h1A1418,iD9C769,j381E26,kE7E2C9,l7D5C57,m562D2F,n3C2128,o2B1A23,p2A242C,q6F4F58,r472428,s321A20,t23141A,u494048,v3A3238,w1E1A20|idle:0;walk:1,2,3,4;windup:5;strike:6;shoot:5
+		+12.a7.a24.aba5.aba23.a2b5a2ba23.acb6dba23.ac4d4ea23.ac3e4fea23.acg2e2hih2ea22.a2g7ega23.ag2ejkjkja24.a2ge5ja23.2a2fgkjk2gf2a20.a3l7f2ega18.a2l2m11fa16.a2l2mf4lmfe3defa15.
+		+al3mf4m2n5ega15.a4mf3nof2g2ega2ga12.a.an4m4f.5ag2a12.ap2a2n4m2na6.a13.aega.a2n3mnoa19.aega2.onomnmoa19.aega2.a3on3oa19.a2e2a.aqor2oso21.aegp2a6tsta20.3a.aq2rst2sta24.aq2r
+		+st2sta25.a2rst2sta25.a2rst2sta25.ar2sts2ta25.aeg2agfa26.aeg2agfa25.a4ut3va24.a4upt2vwa24.4at4a50./12.a7.a24.aba5.aba23.a2b5a2ba23.acb6dba23.ac4d4ea23.ac3e4fea23.acg2e2hih
+		+2ea22.a2g7ega23.ag2ejkjkja24.a2ge5ja23.2a2fgkjk2gf2a20.a3l7f2ega18.a2l2m11fa16.a2l2mf4lmfe3defa15.al3mf4m2n5ega15.a4mf3nof2g2ega2ga12.a.an4m4f.5ag2a12.ap2a2n4m2na6.a13.ae
+		+ga.a2n3mnoa19.aega2.onomnmoa19.aega2.a3on3oa19.a2e2a.aqor2oso21.aegp2a6tsta20.3a.a2q2rststa25.aq2rs2ta27.a2r2sta27.tq2rst28.at2rsa28.atega29.ateg2a28.at4ua27.at3upa28.a3t
+		+a52./46.a7.a24.aba5.aba23.a2b5a2ba23.acb6dba23.ac4d4ea23.ac3e4fea23.acg2e2hih2ea22.a2g7ega23.ag2ejkjkja24.a2ge5ja23.2a2fgkjk2gf2a20.a3l7f2ega18.a2l2m11fa16.a2l2mf4lmfe3de
+		+fa15.al3mf4m2n5ega15.a4mf3nof2g2ega2ga12.a.an4m4f.5ag2a12.ap2a2n4m2na6.a13.aega.a2n3mnoa19.aega2.onomnmoa19.aega2.a3on3oa19.a2e2a.tqor2osota19.aegp2a6tsta20.3a.aq2rstrsta
+		+25.a2rstr2sta24.a2rs2a2sta24.ar2s2agfta24.aega.agfa25.aeg2a3va24.a4ut3vwa23.a4upt3a25.5a54./12.a7.a24.aba5.aba23.a2b5a2ba23.acb6dba23.ac4d4ea23.ac3e4fea23.acg2e2hih2ea22.
+		+a2g7ega23.ag2ejkjkja24.a2ge5ja23.2a2fgkjk2gf2a20.a3l7f2ega18.a2l2m11fa16.a2l2mf4lmfe3defa15.al3mf4m2n5ega15.a4mf3nof2g2ega2ga12.a.an4m4f.5ag2a12.ap2a2n4m2na6.a13.aega.a2n
+		+3mnoa19.aega2.onomnmoa19.aega2.a3on3oa19.a2e2a.aqor2oso21.aegp2a6tsta20.3a.aq2rstr2sta22.aq2rs2ar2sta22.a2r2sa.a2s2ta20.aq2rsa2.ar2sta20.a2rsa4.a2sta20.aega5.agfa21.aega5
+		+.agf2a20.a3ua4.a4va19.a3upa3.a3vwa20.4a5.4a48./46.a7.a24.aba5.aba23.a2b5a2ba23.acb6dba23.ac4d4ea23.ac3e4fea23.acg2e2hih2ea22.a2g7ega23.ag2ejkjkja24.a2ge5ja23.2a2fgkjk2gf2
+		+a20.a3l7f2ega18.a2l2m11fa16.a2l2mf4lmfe3defa15.al3mf4m2n5ega15.a4mf3nof2g2ega2ga12.a.an4m4f.5ag2a12.ap2a2n4m2na6.a13.aega.a2n3mnoa19.aega2.onomnmoa19.aega2.a3on3oa19.a2e2
+		+a.tqor2osota19.aegp2a6tsta20.3a.a2qrst2sta25.aq2rststa26.a2rststa26.aegs3ta26.aegtgfa26.a3utgfa26.a3upt2va26.2a2t3vwa28.5a50./11.a7.a24.aba5.aba23.a2b5a2ba23.acb6dba23.ac
+		+4d4ea23.ac3e4fef.a21.acg2e2hih2e2fa20.a2g7e2f2a21.ag2ejkj2fdeaga20.f2gej2fd2e2ga20.2o4flm2eg2a20.a2l2f2lmnfga21.a2lf2l2mnf2a21.a2lmfm2nofa23.al3m4fna23.a7m2na22.2an5m2na2
+		+2.apo2n4m2na21.aeg2a2n3mnoa20.aega.anomnmoa20.aega2.3on4o20.a2e2a.aor2osoa21.aegp2a6tsta20.3a.aq2rst2sta24.aq2rststa26.a2rs3ta26.a2rs2ta27.ar2sta28.aegta29.aegta28.a4uta2
+		+7.a4upta27.2a3ta53./48.a7.a24.aba5.aba23.a2b5a2ba23.acb6dba23.ac4d4ea23.ac3e4fea23.acg2e2hih2ea22.a2g7ega23.ag2ekjkjka24.a2ge5ja22.2af2ge5ja21.a3l2fgkjk2ga20.a2l3m6fa20.a
+		+2l3m7f21.al3mf2lm2f2ea.a18.a4mf3mne3fafa14.a2.an3mf3no2e2d3f13.apa.a2n3m3f2g3edfga11.aega2.a2n3mnofa2g2e2ga10.aega2.aonomnmoa2.2agaga10.aega2.aq3on3oa4.a.a11.a2e2a.tqror2
+		+otoa19.aegp2a6tsta20.3a2.aq2rs2ta27.a2r2sta27.tq2rst28.at2rsa28.atega29.ateg2a28.at4ua27.at3upa28.a3ta52.
+		mimic|22|22|18|11|a291F18,bC5A374,cA9895F,d856A46,e898D96,fD3BD68,gECE0A2,h685137,iD9C769,j15111A,kFFFFFF,l462026,m70333B,nD17985|idle:0;hop:1,2;strike:3
+		+202.14a7.a14ba6.a14ca6.a14da6.a6e2f6ea6.a6cfg6ca6.a14ca6.acd10cdca6.a14ca6.a14ha7.14a48./92.14a7.a14ba6.a2cij6cij2ca6.a14da6.aka2ka2ka2ka2k2a6.al12mla6.al4m5n3mla6.al4m5n
+		+3mla6.2ak2ak2ak2ak2aka6.a6e2f6ea6.a6cfg6ca6.a14ca6.acd10cdca6.a14ca6.a14ha7.14a48./48.14a7.a14ba6.a2cij6cij2ca6.a14da6.aka2ka2ka2ka2k2a6.al12mla6.al12mla6.al12mla6.al4m5n
+		+3mla6.al4m5n3mla6.2ak2ak2ak2ak2aka6.a6e2f6ea6.a6cfg6ca6.a14ca6.acd10cdca6.a14ca6.a14ha7.14a48./114.14a7.a14ba6.a2cij6cij2ca6.a14da6.aka2ka2ka2ka2k2a6.al12m2a6.al11ma2na5.
+		+2ak2ak2ak2ak2a3na4.a6e2f5ea2na4.a6cfg6c2a5.a14ca6.acd10cdca6.a14ca6.a14ha7.14a48.
+		pig|30|18|16|11.5|a38202A,bE29DA7,cF2C4BD,d9C5D74,eC47C8E,f1E1519,gFFFFFF,hF0B4B4,i83495D,j5A3644|idle:0;walk:1,2,3,4;alt:5
+		+48.2a17.9a.a2ba14.2a9cdbe2b3a10.a11cdbeb4ca7.2a2c10bd8ca5.aea11bd2c3bfg2b3a2.aeae11bdc4b2f2b3ha.ae2a11bd8b2hiha2.a2e11bde7b4ha3.2ae11bde5bd2hiha4.a2e10bed2e4b2d2a6.d3bd3e
+		+d3b3d5e2a8.a3b5d3b2ded4a10.a2be5d2bededa14.a2beded2a2bededa14.a3jd2j2a3jd2ja15.6a2.6a11./48.2a17.9a.a2ba14.2a9cdbe2b3a10.a11cdbeb4ca7.2a2c10bd8ca5.aea11bd2c3bfg2b3a2.aeae
+		+11bdc4b2f2b3ha.ae2a11bd8b2hiha2.a2e11bde7b4ha3.2ae11bde5bd2hiha4.a2e10bed2e4b2d2a6.aed3bd3bd2e2d5e2a9.2d3bd3b4de3d2a11.ad2bed2bed3a2eda13.ad2bed2bea2.a2eda13.ad3jd3ja2.a3
+		+ja14.a2da.3a4.3a9./18.2a17.9a.a2ba14.2a9cdbe2b3a10.a11cdbeb4ca7.2a2c10bd8ca5.aea11bd2c3bfg2b3a2.aeae11bdc4b2f2b3ha.ae2a11bd8b2hiha2.a2e11bde7b4ha3.2ae11bde5bd2hiha4.a2e10
+		+bed2e4b2d2a6.a7ed3b3d5e2a8.a3b5d3b2ded4a10.a3b5d2bed2ea14.a2beded2a2bededa14.a2bed2j2a3jdeda14.a3jd2a2.2ad3ja15.3a8.3a11./48.2a17.9a.a2ba14.2a9cdbe2b3a10.a11cdbeb4ca7.2a2
+		+c10bd8ca5.aea11bd2c3bfg2b3a2.aeae11bdc4b2f2b3ha.ae2a11bd8b2hiha2.a2e11bde7b4ha3.2ae11bde5bd2hiha4.a2e10bed2e4b2d2a4.a3bd7ed3bd5e2a6.a3b9d3b6a8.a2bed2a6d2bea13.a2bea2.a2e3
+		+d2bea13.a3ja2.a3j2d3ja14.3a4.3a.a2da12./18.2a17.9a.a2ba14.2a9cdbe2b3a10.a11cdbeb4ca7.2a2c10bd8ca5.aea11bd2c3bfg2b3a2.aeae11bdc4b2f2b3ha.ae2a11bd8b2hiha2.a2e11bde7b4ha3.2a
+		+e11bde5bd2hiha4.a2e10bed2e4b2d2a6.d3bd8e2d5e2a8.a3b5d3b2ded4a10.a2be5d3bdeda14.a2beded2a2bededa14.a3jded2a2bed2ja15.2ad3j2a3jd2a19.3a2.3a14./67.9a19.2a9c2a16.a13ca13.2a2c
+		+13bda10.aea14bd2ba8.aeae13bdbe2b3a5.ae2a13bdbeb4ca5.a2e13bd8ca5.2ae11bd2c3bfg2b3a4.a2e10bdc4b2f2b3ha4.d3bd3ed3bd8b2hiha4.a3b5d3bde7b4ha4.a2be5d2be2de5bd2hiha4.a2beded2a2b
+		+eded2e4b2d2a5.a3jd2j2a3jd2jd5e2a8.6a2.6a.5a5.
+		pirate|32|38|33|16|a7D6153,bAF7B72,c9A605D,d15131A,e704546,f503236,g18151D,h14121A,iB59378,jA17962,k825F4E,lE5DCC5,m676162,nDFD8C5,oB1756A,p4C2A2E,q99524E,r6C3A3B,s969189,t392C24,u8F7E68,v352B2C,w8C7245,x675545,yC5A766,zE6EAF0,AA6AEBB,B4A3C35,CCCAB8E,D2A2124,E645A52,F221A21,G1C1620,HE6EBF5|idle:0;walk:1,2,3,4;windup:5;strike:6;block:7
+		+109.6a25.a4b2ca22.da2b6ca20.d2e8cea18.defe4c2ge2ah17.defae3ce2a2gih17.def2a3ea2i2gih18.deai3aj5ih19.d.h9ih22.h7ijh23.h6jh24.h5kh24.hl3mknm23.hopoqrpqrp22.hlm2nsm2sm22.hqp
+		+2qrp2rp22.hnmn2sm2sm22.hrpoqrpr2p22.hsmlnsms2m22.hrp2qrpt2p23.3mij3mh22.hu2v2pwdv23.hu2xdyzAd23.hu2xBdzAd24.huxBdAzd24.huxBvdzAd23.h2xBvdAzd23.hCijvjdAd23.hCijvjkd23.hD2E
+		+FvDGh23.h4DFvFGh23.3h2v3h108./109.6a25.a4b2ca22.da2b6ca20.d2e8cea18.defe4c2ge2ah17.defae3ce2a2gih17.def2a3ea2i2gih18.deai3aj5ih19.d.h9ih22.h7ijh23.h6jh24.h5kh24.h3m2knmh2
+		+2.hpoqrp2qrph21.m2n2smn2smh20.hoq2rp2q2rph20.hlnsm3n2smh20.p2qrp3qr2ph20.mijm4ns2mh21.2pwdty2t2ph21.dyzAd4mkh21.hdzAd4vh22.hdAzdB2vh24.hdzAdvh26.dAzdBv25.hvdAdBh25.hxvdxB
+		+h25.hivCijh25.hivCijh25.hFvD2EFh24.hFv3DFh25.2h2v2h109./141.6a25.a4b2ca22.da2b6ca20.d2e8cea18.defe4c2ge2ah17.defae3ce2a2gih17.def2a3ea2i2gih18.deai3aj5ih19.d.h9ih22.h7ijh
+		+23.h6jh24.h5kh24.hl3mknm23.hopoqrpqrp22.hlm2nsm2sm22.hqp2qrp2rp22.hnmn2sm2sm22.hrpoqrpr2p22.hsmlnsms2m22.hrp2qrpt2p22.h3mij3mh22.hu2v2pwdv23.hu2xdyzAdh23.huxBdzAdh23.huxB
+		+dAzdh23.h2xBvdzAd23.hCijvdAzd23.hCijvDdAd22.hD2EFv2Fdh22.h4DFv2h24.5h111./109.6a25.a4b2ca22.da2b6ca20.d2e8cea18.defe4c2ge2ah17.defae3ce2a2gih17.def2a3ea2i2gih18.deai3aj5i
+		+h19.d.h9ih22.h7ijh23.h6jh24.h5kh24.hl3mknh23.hopoqrpqrh22.hlm2n2smsh22.h2qpqrorph22.h3nml2nsm22.hr3qpoqrp22.hs4nmijm22.hr3tyt2pwd22.6mdyzAd20.hu6vdzAd20.hu2xBv2BdAzd19.hu
+		+2xBvx2BvdzAd18.hux2B2hxBvdAzd17.hu2xBh.hx2BvdAd17.huxBh3.hxBvhd18.hCijh3.hijkh19.hCijh3.hijkh19.hD2EFh2.hF2DGh18.h3DFh2.h3FGh19.4h4.4h106./141.6a25.a4b2ca22.da2b6ca20.d2e
+		+8cea18.defe4c2ge2ah17.defae3ce2a2gih17.def2a3ea2i2gih18.deai3aj5ih19.d.h9ih22.h7ijh23.h6jh24.h5kh24.hl3mknm23.hopoqrpqrp22.hlm2nsm2sm22.hqp2qrp2rp22.hnmn2sm2sm22.hrpoqrpr
+		+2p22.hsmlnsms2m22.hrp2qrpt2p22.h3mij3mh22.hu2v2pwdv23.h2uxdyzAd24.hu2xdzAd25.huxdAzd25.huxBdzAd24.hCijdAzd23.hD2EFvdAd23.h3DFvGd25.h3v2FGh26.5h108./108.6a25.a4b2ca22.da2b
+		+6ca20.d2e8cea18.defe4c2ge2ah16.2defae3ce2a2gih15.dzaef2a3ea2i2gih15.dAzaeai3aj5ih16.dAza.h9ih17.dAz2dh7ijh18.dAz2mh6jh20.dpijp5kh21.hlnsml3knm20.hoq2rp5qrp19.hn2sm5n2sm19
+		+.h2qrp5q2rp20.2hm6n2sm22.hr5qr2p22.hs5ns2m22.hr3ty2t2p23.h7mv23.hu6vh23.hu2xBvBvh23.hu2xB2vh25.huxB2vh25.vuxBvh26.v2xBv27.vCijv27.vCijv26.hD2EFvh25.h4DFv26.h4v111./142.6a
+		+25.a4b2ca22.da2b6ca20.d2e8cea18.defe4c2ge2ah17.defae3ce2a2gih17.def2a3ea2i2gih18.deai3aj5ih19.d.h9ih22.h7ijk3H20.h6jh4.3H16.h5k2h8.2H13.h2l3mnm3.d7.H11.h2opoqr3ph2p8d11.h
+		+lnm2ns2l2nijm7z11.h3qp2r2q2r2jp7A11.h4n5mh2m8d11.hr5qr2p2.d19.hs5ns2m22.hr3ty2t2p22.h8mh22.hu7v24.hu2xBvh26.vux2Bv25.hvu2xBh25.hxvuxBh25.hivCijh25.hivCijh25.hFvD2EFh24.hF
+		+v3DFh25.2h2v2h109./109.6a25.a4b2ca22.da2b6ca20.d2e8cea18.defe4c2ge2ah2.2d13.defae3ce2a2gih.dzAd12.def2a3ea2i2gihdzAd14.deai3aj5idzAd16.d.h8idzAd20.h6i2pyd22.h4jmijmd22.hk
+		+3poqrp22.hlmlnsnsh22.h2op2qr3p22.hl2nm2smsm22.h4q2p2rp22.h6n2sm22.hr5qr2p22.hs5ns2m22.hr3ty2t2p23.8mh22.hu7v23.hu2xBvBvh23.hu2xBvBvh24.huxBvBvh24.huxBvBvh24.h2xBvBvh24.hC
+		+ijvjkh24.hCijvjkh23.hD2EFvDGh23.h4DFvFGh23.3h2v3h108.
+		pirateCaptain|32|38|33|16|a15131A,b666162,c2C2C38,dB4A071,e7D6153,f14121A,g483429,hA17962,iB59378,j0B0B12,k291E20,l825F4E,mA96D65,n46262C,o8D4747,p633337,q442B30,r855151,s5F3A3E,t1F1D2A,u696465,v8C7245,w2F2F3D,xC5A766,yE6EAF0,zA6AEBB,A252430,B1E1A20,C5C554F,D1A161F,E18141E,FA0716A,GE6EBF5|idle:0;walk:1,2,3,4;windup:5;strike:6;block:7
+		+13.5a25.2a5b2a21.2a2b6cba.a17.ada10cada16.ad12cda17.a12da19.12e20.f8g2hf20.f6gihjif20.f4gh3i2ef20.f2gi2h2ie2ke21.fg3i2e4ka21.f2ie6ka22.f2he4ka23.f3le2ka23.fm3nl2e23.fmnmo
+		+pnopn22.fmn2opn2pn22.fon2opn2pn22.fono2pn2pn22.fpnmopnp2n22.fpnmopnp2n22.npn2opn2qn21.ar3nihnrsq21.atu2t2nvasa21.atu2waxyz2a21.atu2wAayz2a21.artuwAazya22.astuwAtayza22.at
+		+2wAtazya23.fuwAtAaza23.fuwAtAta23.fB2CDtBEf23.f4BDtDEf23.3f2t3f108./13.5a25.2a5b2a21.2a2b6cba.a17.ada10cada16.ad12cda17.a12da19.12e20.f8g2hf20.f6gihjif20.f4gh3i2ef20.f2gi
+		+2h2ie2ke21.fg3i2e4ka21.f2ie6ka22.f2he4ka23.f3le2ka23.f3n2l2ef22.fnmopn2opnf21.n2o2pno2pnf20.fmo2pn2o2pnf20.fmopn3o2pnf20.n2opn3op2nf20.nihn4op2nf21.2nva2o3qnf20.2axyzaqFr
+		+sqf20.atayzaq2rsq21.atazyaq2rsa21.artayzarsqa21.arsazya2qa22.as2tazaAf24.atwtawAf25.fwtuwAf25.fwtuwAf25.fDtB2CDf24.fDt3BDf25.2f2t2f109./45.5a25.2a5b2a21.2a2b6cba.a17.ada1
+		+0cada16.ad12cda17.a12da19.12e20.f8g2hf20.f6gihjif20.f4gh3i2ef20.f2gi2h2ie2ke21.fg3i2e4ka21.f2ie6ka22.f2he4ka23.f3le2ka23.fm3nl2e23.fmnmopnopn22.fmn2opn2pn22.fon2opn2pn22.
+		+fono2pn2pn22.fpnmopnp2n22.fpnmopnp2n22.npn2opn2qn21.at3nihnrsq21.atu2t2nvasa21.atu2waxyzaq21.artuwAayzaq21.artuwAazyaf21.ast2wAtayza22.atuwAtazya23.fuwAtBaza22.fB2CDt2Daf
+		+22.f4BDt2f24.5f111./13.5a25.2a5b2a21.2a2b6cba.a17.ada10cada16.ad12cda17.a12da19.12e20.f8g2hf20.f6gihjif20.f4gh3i2ef20.f2gi2h2ie2ke21.fg3i2e4ka21.f2ie6ka22.f2he4ka23.f3le2
+		+ka23.fm3nl2e23.fmnmopnopf22.fmn2o2pnpf22.f2onopmpnf22.f3onm2opn22.fp3onmopn22.fp4onihn22.n2p3oq2nva20.ar4nqFaxyza19.atu3tq2rayza19.atu2wAq2razya19.tu2wAtqrsqayza18.tuw2A2
+		+f3qazya17.fu2wAf.fw2Ataza17.fuwAf3.fwAtfa18.fuwAf3.fwAtf19.fuwAf3.fwAtf19.fB2CDf2.fD2BEf18.f3BDf2.f3DEf19.4f4.4f106./45.5a25.2a5b2a21.2a2b6cba.a17.ada10cada16.ad12cda17.a
+		+12da19.12e20.f8g2hf20.f6gihjif20.f4gh3i2ef20.f2gi2h2ie2ke21.fg3i2e4ka21.f2ie6ka22.f2he4ka23.f3le2ka23.fm3nl2e23.fmnmopnopn22.fmn2opn2pn22.fon2opn2pn22.fono2pn2pn22.fpnmop
+		+np2n22.fpnmopnp2n22.npn2opn2qn21.at3nihnrsq21.atu2t2nvasa21.at2uwaxyz2a21.artu2wayz2a21.arstuwazya22.asqtuwAayza22.2afuwAazya23.fB2CDtaza23.f3BDtEa25.f3t2DEf26.5f108./12.
+		+5a25.2a5b2a21.2a2b6cba.a17.ada10cada16.ad12cda17.a12da19.12e20.f8g2hf16.a3.f6gihjif15.aya2.f4gh3i2ef15.azya.f2gi2h2ie2ke16.azya.fg3i2e4ka16.azy2af2ie6ka17.azy2nf2he4ka19.
+		+anihn3le2ka20.fmopnm3l2e20.fmo2pn5opn19.fo2pn5o2pn19.f2opn5o2pn20.2fn6o2pn22.fp5op2n22.fp5op2n22.n2p3o3qn21.ar4nqFrsq21.artu2tq2rsq21.artu2wq2rsq21.artu2wqrsqa21.arstuwA3
+		+q22.asqtuwAtf24.2at2wAt27.tuwAt27.tuwAt26.fB2CDtf25.f4BDt26.f4t111./46.5a25.2a5b2a21.2a2b6cba.a17.ada10cada16.ad12cda17.a12da19.12e20.f8g2hf20.f6gihjif20.f4gh3i2ef20.f2gi
+		+2h2ie2ke21.fg3i2e4ka21.f2ie6ke2G20.f2he4ka3.3G16.f4le2ka7.2G13.f2m3noea2.a7.G11.f2mnmop3nf2n8a11.fmon2op2m2oihn7y11.f3on2p2o2p2hn7z11.f4o5nf2n8a11.fp5op2n2.a19.fp5op2n22.
+		+n2p3o3qn21.at4nqFrsq21.atu3tq2rsa21.artu2wq2rsa21.arstuwqrsqa21.ar2tu2w2qa22.astwtuwAf24.atwtuwAf25.fwtuwAf25.fDtB2CDf24.fDt3BDf25.2f2t2f109./13.5a25.2a5b2a21.2a2b6cba.a1
+		+7.ada10cada16.ad12cda17.a12da19.12e20.f8g2hf2.2a16.f6gihjif.ayza15.f4gh3i2efayza16.f2gi2h2ie2kayza18.fg3i2e2kayza20.f2ie3k2nxa22.f2heknihna22.fl3nmopn22.fmnmopopf22.f2mn2
+		+op3n22.fm2on2pnpn22.f4o2n2pn22.f6o2pn22.fp5op2n22.fp5op2n22.n2p3o3qn21.ar4nqFrsq21.atu3tq2rsa21.atu2wAq2rsa21.atu2wAqrsqa21.artuwAt3q22.astuwAtAtf23.at2wAtAtf24.fuwAtAtf2
+		+4.fuwAtAtf23.fB2CDtBEf23.f4BDtDEf23.3f2t3f108.
+		pirateGunner|32|38|33|16|a7D6153,b6C798E,c495A77,d15131A,e374258,f2B3043,g14121A,h0B0B12,iB59378,jA17962,k291E20,l825F4E,m7688A4,n2D364F,o516994,p3B4A6B,q392C24,r847663,s2F2629,t4A4E57,u584A3D,v3F3530,w2A2C34,x2A2124,y645A52,z221A21,A1C1620,BC5A766,CECE2A2,DD9AB69,EC47758|idle:0;walk:1,2,3,4;shoot:5;fire:6;strike:6
+		+109.6a25.a4b2ca22.da2b6ca20.d2e8cea18.defe4c3e2ag17.defae3ce3ahig17.def2a3ea3ihig18.deai3aj5ig19.d.g6i3kg22.g7ijg23.g6jg24.g5lg24.gm3nlon23.gmnmopnopn22.gmn2opn2pn22.gon2
+		+opn2pn22.gono2pn2pn22.gpnmopnp2n22.gpnmopnp2n22.gpn2opnq2n23.3nij3ng22.gr2s2ntds23.gr2ud2tdg23.gr2uvdtdg24.gruvdwdg24.gruvsdsg24.g2uvsvsg24.gruvsvsg24.gruvsvsg23.gx2yzsxA
+		+g23.g4xzszAg23.3g2s3g108./109.6a25.a4b2ca22.da2b6ca20.d2e8cea18.defe4c3e2ag17.defae3ce3ahig17.def2a3ea3ihig18.deai3aj5ig19.d.g6i3kg22.g7ijg23.g6jg24.g5lg24.g3n2long22.gnm
+		+opn2opng21.n2o2pno2png20.gmo2pn2o2png20.gmopn3o2png20.g2opn3op2ng20.nijn4op2ng21.2ntdqB2q2ng21.d2td5nlg21.gdtd5sg22.gdwduv2sg24.gd2uvsg26.sru2vs25.gsr2uvg25.gusruvg25.gus
+		+ruvg25.gusruvg25.gzsx2yzg24.gzs3xzg25.2g2s2g109./141.6a25.a4b2ca22.da2b6ca20.d2e8cea18.defe4c3e2ag17.defae3ce3ahig17.def2a3ea3ihig18.deai3aj5ig19.d.g6i3kg22.g7ijg23.g6jg2
+		+4.g5lg24.gm3nlon23.gmnmopnopn22.gmn2opn2pn22.gon2opn2pn22.gono2pn2pn22.gpnmopnp2n22.gpnmopnp2n22.gpn2opnq2n22.g3nij3ng22.gr2s2ntds23.gr2ud2tdsg23.gruvdtdsg23.gruvdwdsg23.
+		+g2uvsdvsg23.gruvsuvsg23.gruvs2xAg22.gx2yzs2zAg22.g4xzs2g24.5g111./109.6a25.a4b2ca22.da2b6ca20.d2e8cea18.defe4c3e2ag17.defae3ce3ahig17.def2a3ea3ihig18.deai3aj5ig19.d.g6i3k
+		+g22.g7ijg23.g6jg24.g5lg24.gm3nlog23.gmnmopnopg22.gmn2o2pnpg22.g2onopmpng22.g3onm2opn22.gp3onmopn22.gp4onijn22.gp3qBq2ntd22.6nd2td21.gr6sdtd21.gr2uvs2vdwd20.gr2uvsu2vsd21.
+		+gru2v2guv2sg19.gr2uvg.gu2vsg19.gruvg3.guvsg19.gruvg3.guvsg19.gruvg3.guvsg19.gx2yzg2.gz2xAg18.g3xzg2.g3zAg19.4g4.4g106./141.6a25.a4b2ca22.da2b6ca20.d2e8cea18.defe4c3e2ag17
+		+.defae3ce3ahig17.def2a3ea3ihig18.deai3aj5ig19.d.g6i3kg22.g7ijg23.g6jg24.g5lg24.gm3nlon23.gmnmopnopn22.gmn2opn2pn22.gon2opn2pn22.gono2pn2pn22.gpnmopnp2n22.gpnmopnp2n22.gpn
+		+2opnq2n22.g3nij3ng22.gr2s2ntds23.g2rud2tdg24.gr2udtdg25.grudwdg25.gruvdsg25.gruv2sg24.gx2yz2sg24.g3xzsAg25.g3s2zAg26.5g108./109.6a25.a4b2ca22.da2b6ca20.d2e8cea18.defe4c3e
+		+2ag17.defae3ce3ahig17.def2a3ea3ihig18.deai3aj5ig19.d.g6i3kg22.g7ijg23.g6jg24.g6l24.g2m3non3g6d14.g2mnmop6n4twd13.gmon2op2m2oijnt3d14.g3on2p2o2p2jnd17.g4o5ng2nd18.gp5opng2
+		+2.gp5opng22.gp3qB2qng23.8n23.gr6sg23.gr2uvsvsg23.gr2uv2sg25.gruv2sg25.sruvsg26.s2uvs27.sruvs27.sruvs26.gx2yzsg25.g4xzs26.g4s111./108.6a25.a4b2ca22.da2b6ca20.d2e8cea18.def
+		+e4c3e2ag17.defae3ce3ahig17.def2a3ea3ihig18.deai3aj5ig19.d.g6i3kg22.g7ijg23.g6jg24.g6l24.g2m3non3g6d.C12.g2mnmop6n4tw2CD11.gmon2op2m2oijnt3dDCE11.g3on2p2o2p2jnd4.D12.g4o5n
+		+g2nd18.gp5opng22.gp5opng22.gp3qB2q2n23.g7ng23.gr6sg23.gr2uvsvsg23.gr2uv2sg25.gruv2sg25.sruvsg26.s2uvs27.sruvs27.sruvs26.gx2yzsg25.g4xzs26.g4s111.
+		player|32|38|33|16|a14121A,bCCAB8E,cB59378,dA17962,e0B0B12,f825F4E,gF0F002,hF0F001,iF0F003,jF0F004,k6A4242|idle:0;walk:1,2,3,4;windup:5;strike:6;block:7;shoot:8;front:9
+		+109.6a25.a6ba23.a4b4ca21.a2b8ca20.ab7c2da20.a3c2d2cdeca20.a2cdfd3ceca20.a3c2d5ca21.a9ca22.a7cda23.a6da24.a5fa24.ab4fcf23.abfbcdfcdf22.abf2cdfcdf22.acf2cdf2df22.acfc2df2df
+		+22.adfbcdfc2f22.adfbcdfc2f22.adf2cd4f23.3fcd3fa22.ab7f23.ab2cdfdfa23.ab2cdfdfa24.abcdfdfa24.abcdfdfa24.a2cdfdfa24.abcdfdfa24.abcdfdfa23.ag2hifgja23.a4gifija23.3a2f3a108./
+		+109.6a25.a6ba23.a4b4ca21.a2b8ca20.ab7c2da20.a3c2d2cdeca20.a2cdfd3ceca20.a3c2d5ca21.a9ca22.a7cda23.a6da24.a5fa24.a5fcfa22.afbcdf2cdfa21.f2c2df2cdfa20.abc2df2c2dfa20.abcdf3
+		+c2dfa20.a2cdf4c2fa20.acdf5c2fa21.2fd4c3fa22.9fa21.ab7fa22.a2b2cd2fa24.ab2cdfa26.fbc2df25.afb2cda25.acfbcda25.acfbcda25.acfbcda25.aifg2hia24.aif3gia25.2a2f2a109./141.6a25.
+		+a6ba23.a4b4ca21.a2b8ca20.ab7c2da20.a3c2d2cdeca20.a2cdfd3ceca20.a3c2d5ca21.a9ca22.a7cda23.a6da24.a5fa24.ab4fcf23.abfbcdfcdf22.abf2cdfcdf22.acf2cdf2df22.acfc2df2df22.adfbcd
+		+fc2f22.adfbcdfc2f22.adf2cd4f22.a3fcd3fa22.ab7f23.ab2cdf2dfa23.abcdf2dfa23.abcdfcdfa23.a2cdfcdfa23.abcdfcdfa23.abcdf2gja22.ag2hif2ija22.a4gif2a24.5a111./109.6a25.a6ba23.a4
+		+b4ca21.a2b8ca20.ab7c2da20.a3c2d2cdeca20.a2cdfd3ceca20.a3c2d5ca21.a9ca22.a7cda23.a6da24.a5fa24.ab4fca23.abfbcdfcda22.abf2c2dfda22.a2cfcdbdfa22.a3cfb2cdf22.ad3cfbcdf22.ad4c
+		+fcdf22.a2d4c2fa23.8f23.ab6fa23.ab2cdf2dfa21.ab2cdfc2dfa21.abc2d2acd2fa19.ab2cda.ac2dfa19.abcda3.acdfa19.abcda3.acdfa19.abcda3.acdfa19.ag2hia2.ai2gja18.a3gia2.a3ija19.4a4.
+		+4a106./141.6a25.a6ba23.a4b4ca21.a2b8ca20.ab7c2da20.a3c2d2cdeca20.a2cdfd3ceca20.a3c2d5ca21.a9ca22.a7cda23.a6da24.a5fa24.ab4fcf23.abfbcdfcdf22.abf2cdfcdf22.acf2cdf2df22.acf
+		+c2df2df22.adfbcdfc2f22.adfbcdfc2f22.adf2cd4f22.a3fcd3fa22.ab7f23.a2b2cd2fa24.ab2cd2fa25.abcd2fa25.abcd2fa25.abcd2fa24.ag2hi2fa24.a3gifja25.a3f2ija26.5a108./108.6a25.a6ba2
+		+3.a4b4ca21.a2b8ca20.ab7c2da20.a3c2d2cdeca20.a2cdfd3ceca20.a3c2d5ca21.a9ca22.a7cda21.3a6da21.acd6fa21.abcdfc3fcf20.abc2df5cdf19.ac2df6cdf19.a2cdf5c2df20.2af6c2df22.ad6c2f2
+		+2.ad6c2f22.a2d4c3f23.a8f23.ab6fa23.ab2cdfdfa23.ab2cd2fa25.abcd2fa25.fbcdfa26.f2cdf27.fbcdf27.fbcdf26.ag2hifa25.a4gif26.a4f111./142.6a25.a6ba23.a4b4ca21.a2b8ca20.ab7c2da20
+		+.a3c2d2cdeca20.a2cdfd3ceca20.a3c2d5ca21.a9ca22.a7cda23.a6da23.a5f2a23.abc3fcf23.abcfbcd3f3a19.abcf2cd2b3cda18.a3cf2d2c4da18.a4c5f3a19.ad6c2f22.ad6c2f22.a2d4c3f22.a8fa22.a
+		+b7f24.ab2cdfa26.fbc2df25.afb2cda25.acfbcda25.acfbcda25.acfbcda25.aifg2hia24.aif3gia25.2a2f2a109./109.6a25.a6ba23.a4b4ca21.a2b8ca20.ab7c2da20.a3c2d2cdeca20.a2cdfd3ceca20.a
+		+3c2d5ca21.a9ca22.a6c2fa23.a4dfcda23.a4fbcda22.abfbcdcda22.abcf2cd3f22.ab2cf2dfdf22.a4c2f2df22.a6c2df22.ad6c2f22.ad6c2f22.a2d4c3f23.8fa22.ab7f23.ab2cdfdfa23.ab2cdfdfa24.ab
+		+cdfdfa24.abcdfdfa24.a2cdfdfa24.abcdfdfa24.abcdfdfa23.ag2hifgja23.a4gifija23.3a2f3a108./109.6a25.a6ba23.a4b4ca21.a2b8ca20.ab7c2da20.a3c2d2cdeca20.a2cdfd3ceca20.a3c2d5ca21.
+		+a9ca22.a7cda23.a6da24.a6f24.abc3fcf6a17.abcfbcd6fdfa16.abcf2cd2b3cd2fa16.a3cf2d2c4dfa17.a4c5f3a19.ad6cfa22.ad6cfa22.a2d4c2fa23.8f23.ab6fa23.ab2cdfdfa23.ab2cd2fa25.abcd2fa
+		+25.fbcdfa26.f2cdf27.fbcdf27.fbcdf26.ag2hifa25.a4gif26.a4f111./108.8a23.a8ba21.a4b6ca20.ab9ca20.ab9ca20.ad8cda20.adce4cecda20.adce4cecda20.a10ca20.ad3c2k3cda21.ad6cda22.a8
+		+fa20.2ab9c2a17.ab11c2da16.ab11c2da16.ab11cdba16.ab11cdba16.ab10cdbca16.abcd7c2dbca16.a2c10dcda16.acd10acda16.acdfb6cbfcda17.af2b2c2d2c2bfa19.a2bcd2adc2ba20.a2bcd2adc2ba20
+		+.a2bcd2adc2ba20.ab2cd2ad2cba20.a2bcd2adc2ba20.a2bcd2adc2ba20.a2hgi2ai2gha20.a3gi2ai3ga21.4a2.4a107.
+		player_hair_0|32|38|33|16|aF00001,bF00002|idle:0;walk:1,2,3,4;windup:5;strike:6;block:7;shoot:8;front:9
+		+141.6a25.a7b23.10b22.8b24.6b26.4b28.2b31.b851./141.6a25.a7b23.10b22.8b24.6b26.4b28.2b31.b851./173.6a25.a7b23.10b22.8b24.6b26.4b28.2b31.b819./141.6a25.a7b23.10b22.8b24.6b2
+		+6.4b28.2b31.b851./173.6a25.a7b23.10b22.8b24.6b26.4b28.2b31.b819./140.6a25.a7b23.10b22.8b24.6b26.4b28.2b31.b852./174.6a25.a7b23.10b22.8b24.6b26.4b28.2b31.b818./141.6a25.a7
+		+b23.10b22.8b24.6b26.4b28.2b31.b851./141.6a25.a7b23.10b22.8b24.6b26.4b28.2b31.b851./140.8a23.a9b22.10b22.b8.b22.b8.b939.
+		player_hair_1|32|38|33|16|a14121A,bF00001,cF00002,dF00003|idle:0;walk:1,2,3,4;windup:5;strike:6;block:7;shoot:8;front:9
+		+12.a3.a26.aba.aba.a22.abcbabc2aba21.ab2cb3cbcba20.a10ca19.a11ca19.a9cd23.6cd25.5c27.3c29.2c883./12.a3.a26.aba.aba.a22.abcbabc2aba21.ab2cb3cbcba20.a10ca19.a11ca19.a9cd23.6
+		+cd25.5c27.3c29.2c883./44.a3.a26.aba.aba.a22.abcbabc2aba21.ab2cb3cbcba20.a10ca19.a11ca19.a9cd23.6cd25.5c27.3c29.2c851./12.a3.a26.aba.aba.a22.abcbabc2aba21.ab2cb3cbcba20.a1
+		+0ca19.a11ca19.a9cd23.6cd25.5c27.3c29.2c883./44.a3.a26.aba.aba.a22.abcbabc2aba21.ab2cb3cbcba20.a10ca19.a11ca19.a9cd23.6cd25.5c27.3c29.2c851./11.a3.a26.aba.aba.a22.abcbabc2
+		+aba21.ab2cb3cbcba20.a10ca19.a11ca19.a9cd23.6cd25.5c27.3c29.2c884./45.a3.a26.aba.aba.a22.abcbabc2aba21.ab2cb3cbcba20.a10ca19.a11ca19.a9cd23.6cd25.5c27.3c29.2c850./12.a3.a2
+		+6.aba.aba.a22.abcbabc2aba21.ab2cb3cbcba20.a10ca19.a11ca19.a9cd23.6cd25.5c27.3c29.2c883./12.a3.a26.aba.aba.a22.abcbabc2aba21.ab2cb3cbcba20.a10ca19.a11ca19.a9cd23.6cd25.5c2
+		+7.3c29.2c883./11.a3.a3.a22.aba.aba.aba21.acbabcbabcba20.a2cb3cb3ca19.ab10cba18.a12ca20.c8.c1003.
+		player_hair_2|32|38|33|16|aF00001,bF00002,c14121A,dF00003,e825F4E|idle:0;walk:1,2,3,4;windup:5;strike:6;block:7;shoot:8;front:9
+		+141.6a25.a7b23.10b20.c10bd20.c8b23.c5bd25.c4bd26.c3bd27.c3bd27.c2b2d27.c2bde27.cb2de28.cde30.e660./141.6a25.a7b23.10b20.c10bd20.c8b23.c5bd25.c4bd26.c3bd27.c3bd27.c2b2d27.
+		+c2bde27.cb2d29.cd692./173.6a25.a7b23.10b20.c10bd20.c8b23.c5bd25.c4bd26.c3bd27.c3bd27.c2b2d27.c2bde27.cb2de28.cde30.e628./141.6a25.a7b23.10b20.c10bd20.c8b23.c5bd25.c4bd26.
+		+c3bd27.c3bd27.c2b2d27.c2bde27.cb2de28.cde30.e660./173.6a25.a7b23.10b20.c10bd20.c8b23.c5bd25.c4bd26.c3bd27.c3bd27.c2b2d27.c2bde27.cb2de28.cde30.e628./140.6a25.a7b23.10b20.
+		+c10bd20.c8b23.c5bd25.c4bd26.c3bd27.c3bd27.cb2ed27.ce30.e727./174.6a25.a7b23.10b20.c10bd20.c8b23.c5bd25.c4bd26.c3bd27.c3bd27.c2b2d27.c2bd28.cb2de28.ede30.e627./141.6a25.a7
+		+b23.10b20.c10bd20.c8b23.c5bd25.c4bd26.c3bd27.c3bd27.c2b2d27.c2bde27.cb2de28.cde30.e660./141.6a25.a7b23.10b20.c10bd20.c8b23.c5bd25.c4bd26.c3bd27.c3bd27.c2b2d27.c2bde27.cb2
+		+de28.cde30.e660./140.8a23.a9b22.10b20.c12bc18.c2b8.2bc18.c2b8.2bc18.c2b8.2bc18.cbd8.dbc18.cbd8.dbc18.cd10.dc19.c10.c746.
+		player_hair_3|32|38|33|16|aF00001,bF00002,c14121A,dF00003|idle:0;walk:1,2,3,4;windup:5;strike:6;block:7;shoot:8;front:9
+		+141.6a25.a7b21.c.10b19.ca10b19.ca2bd6b21.c2bd.4b23.cbd2.2b25.cdc2.b27.c823./141.6a25.a7b21.c.10b19.ca10b19.ca2bd6b21.c2bd.4b23.cbd2.2b25.cdc2.b27.c823./173.6a25.a7b21.c.1
+		+0b19.ca10b19.ca2bd6b21.c2bd.4b23.cbd2.2b25.cdc2.b27.c791./141.6a25.a7b21.c.10b19.ca10b19.ca2bd6b21.c2bd.4b23.cbd2.2b25.cdc2.b27.c823./173.6a25.a7b21.c.10b19.ca10b19.ca2bd
+		+6b21.c2bd.4b23.cbd2.2b25.cdc2.b27.c791./140.6a25.a7b21.c.10b19.ca10b19.ca2bd6b21.c2bd.4b23.cbd2.2b25.cdc2.b27.c824./174.6a25.a7b21.c.10b19.ca10b19.ca2bd6b21.c2bd.4b23.cbd
+		+2.2b25.cdc2.b27.c790./141.6a25.a7b21.c.10b19.ca10b19.ca2bd6b21.c2bd.4b23.cbd2.2b25.cdc2.b27.c823./141.6a25.a7b21.c.10b19.ca10b19.ca2bd6b21.c2bd.4b23.cbd2.2b25.cdc2.b27.c8
+		+23./140.8a23.a9b22.10b22.b8.b971.
+		player_hair_4|32|38|33|16|aF00002,bF00003|idle:0;walk:1,2,3,4;windup:5;strike:6;block:7;shoot:8;front:9
+		+141.6a25.a6ba23.a8b23.a6b25.a3b28.ab915./141.6a25.a6ba23.a8b23.a6b25.a3b28.ab915./173.6a25.a6ba23.a8b23.a6b25.a3b28.ab883./141.6a25.a6ba23.a8b23.a6b25.a3b28.ab915./173.6a
+		+25.a6ba23.a8b23.a6b25.a3b28.ab883./140.6a25.a6ba23.a8b23.a6b25.a3b28.ab916./174.6a25.a6ba23.a8b23.a6b25.a3b28.ab882./141.6a25.a6ba23.a8b23.a6b25.a3b28.ab915./141.6a25.a6b
+		+a23.a8b23.a6b25.a3b28.ab915./140.8a23.a8ba22.b8.b1003.
+		player_hair_5|32|38|33|16|a14121A,bF00001,cF00002,dF00003,e825F4E|idle:0;walk:1,2,3,4;windup:5;strike:6;block:7;shoot:8;front:9
+		+45.5a26.a5b2a23.ab6cba21.ab9ca19.ab10cda18.a10cd20.a8cd22.a6cd24.a5cd25.a4cd27.a2cd29.ad31.a787./45.5a26.a5b2a23.ab6cba21.ab9ca19.ab10cda18.a10cd20.a8cd22.a6cd24.a5cd25.a
+		+4cd27.a2cd29.ad31.a787./77.5a26.a5b2a23.ab6cba21.ab9ca19.ab10cda18.a10cd20.a8cd22.a6cd24.a5cd25.a4cd27.a2cd29.ad31.a755./45.5a26.a5b2a23.ab6cba21.ab9ca19.ab10cda18.a10cd2
+		+0.a8cd22.a6cd24.a5cd25.a4cd27.a2cd29.ad31.a787./77.5a26.a5b2a23.ab6cba21.ab9ca19.ab10cda18.a10cd20.a8cd22.a6cd24.a5cd25.a4cd27.a2cd29.ad31.a755./44.5a26.a5b2a23.ab6cba21.
+		+ab9ca19.ab10cda18.a10cd20.a8cd22.a6cd24.a5cd25.a4cd27.a2cd29.ad31.e788./78.5a26.a5b2a23.ab6cba21.ab9ca19.ab10cda18.a10cd20.a8cd22.a6cd24.a5cd25.a4cd27.a2cd29.ad31.a754./4
+		+5.5a26.a5b2a23.ab6cba21.ab9ca19.ab10cda18.a10cd20.a8cd22.a6cd24.a5cd25.a4cd27.a2cd29.ad31.a787./45.5a26.a5b2a23.ab6cba21.ab9ca19.ab10cda18.a10cd20.a8cd22.a6cd24.a5cd25.a4
+		+cd27.a2cd29.ad31.a787./45.6a24.2a6b2a21.a2b6c2ba19.ab10cba18.a12ca18.a12ca18.a2c8.2ca18.ac10.ca937.
+		player_helm|32|38|33|16|aF000F4,bF000F1,cF000F2,dF000F3|idle:0;walk:1,2,3,4;windup:5;strike:6;block:7;shoot:8;front:9
+		+109.6a25.a6ba23.ab6cda21.ab8cda20.ab6c2da21.a5c2d2a22.a4c2da24.ac2d3a26.3a850./109.6a25.a6ba23.ab6cda21.ab8cda20.ab6c2da21.a5c2d2a22.a4c2da24.ac2d3a26.3a850./141.6a25.a6b
+		+a23.ab6cda21.ab8cda20.ab6c2da21.a5c2d2a22.a4c2da24.ac2d3a26.3a818./109.6a25.a6ba23.ab6cda21.ab8cda20.ab6c2da21.a5c2d2a22.a4c2da24.ac2d3a26.3a850./141.6a25.a6ba23.ab6cda21
+		+.ab8cda20.ab6c2da21.a5c2d2a22.a4c2da24.ac2d3a26.3a818./108.6a25.a6ba23.ab6cda21.ab8cda20.ab6c2da21.a5c2d2a22.a4c2da24.ac2d3a26.3a851./142.6a25.a6ba23.ab6cda21.ab8cda20.ab
+		+6c2da21.a5c2d2a22.a4c2da24.ac2d3a26.3a817./109.6a25.a6ba23.ab6cda21.ab8cda20.ab6c2da21.a5c2d2a22.a4c2da24.ac2d3a26.3a850./109.6a25.a6ba23.ab6cda21.ab8cda20.ab6c2da21.a5c2
+		+d2a22.a4c2da24.ac2d3a26.3a850./108.8a23.a8ba21.ab8cda20.ab8cda20.a2c6d2ca20.acd6adca21.2a6.2a907.
+		player_pants_0|32|38|33|16|a0000F1,b0000F4,c0000F2,d0000F3|idle:0;walk:1,2,3,4;windup:5;strike:6;block:7;shoot:8;front:9
+		+780.a2b2.3b24.a2cdbdb25.a2cdbdb26.acdbdb26.acdbdb26.2cdbdb26.acdbdb26.acdbdb29.b32.b29.2b111./780.a7b24.2a2cd2b26.a2cdb27.bac2db26.ba2cd27.cbacd27.cbacd27.cbacd28.b31.b32
+		+.2b111./812.a2b2.3b24.a2cdb2db25.acdb2db25.acdbcdb25.2cdbcdb25.acdbcdb25.acdb31.b32.b142./780.a6b25.a2cdb2db23.a2cdbc2db23.ac2d2.cd2b21.a2cd3.c2db21.acd5.cdb21.acd5.cdb21
+		+.acd5.cdb203./812.a2b2.3b24.2a2cd2b26.a2cd2b27.acd2b27.acd2b27.acd2b30.2b30.b28.3b143./755.b24.a6b25.a2cdbdb25.a2cd2b27.acd2b26.bacdb27.b2cdb27.bacdb27.bacdb31.b32.b27.4b
+		+111./812.a7b25.a2cdb27.bac2db26.ba2cd27.cbacd27.cbacd27.cbacd28.b31.b32.2b111./780.a7b24.a2cdbdb25.a2cdbdb26.acdbdb26.acdbdb26.2cdbdb26.acdbdb26.acdbdb29.b32.b29.2b111./7
+		+80.a6b25.a2cdbdb25.a2cd2b27.acd2b26.bacdb27.b2cdb27.bacdb27.bacdb31.b32.b27.4b111./780.a6ca23.2a2c2d2c2a22.2acd2.dc2a22.2acd2.dc2a22.2acd2.dc2a22.a2cd2.d2ca22.2acd2.dc2a2
+		+2.2acd2.dc2a203.
+		player_pants_1|32|38|33|16|a0000F1,b0000F4,c0000F2,d0000F3|idle:0;walk:1,2,3,4;windup:5;strike:6;block:7;shoot:8;front:9
+		+780.a2b2.3b24.a2cdbdb25.a2cdbdb29.b31.b31.b31.b31.b31.b32.b29.2b111./780.a7b24.2a2cd2b26.a2cdb27.b4.b26.b32.b31.b31.b31.b31.b32.2b111./812.a2b2.3b24.a2cdb2db28.b31.b31.b3
+		+1.b31.b31.b32.b142./780.a6b25.a2cdb2db23.a2cdbc2db364./812.a2b2.3b24.2a2cd2b30.b31.b31.b31.b31.b31.b28.3b143./755.b24.a6b25.a2cdbdb25.a2cd2b30.b27.b3.b27.b3.b27.b3.b27.b3
+		+.b31.b32.b27.4b111./812.a7b25.a2cdb27.b4.b26.b32.b31.b31.b31.b31.b32.2b111./780.a7b24.a2cdbdb25.a2cdbdb29.b31.b31.b31.b31.b31.b32.b29.2b111./780.a6b25.a2cdbdb25.a2cd2b30.
+		+b27.b3.b27.b3.b27.b3.b27.b3.b31.b32.b27.4b111./780.a6ca23.2a2c2d2c2a22.2acd2.dc2a363.
+		player_pants_2|32|38|33|16|a0000F1,b0000F4,c0000F2,d0000F3|idle:0;walk:1,2,3,4;windup:5;strike:6;block:7;shoot:8;front:9
+		+780.a2b2.3b24.a2cdbdb25.a2cdbdb26.acdbdb26.acdbdb26.2cdbdb29.b31.b31.b32.b29.2b111./780.a7b24.2a2cd2b26.a2cdb27.bac2db26.ba2cd27.cbacd28.b31.b31.b31.b32.2b111./812.a2b2.3
+		+b24.a2cdb2db25.acdb2db25.acdbcdb25.2cdbcdb28.b31.b31.b32.b142./780.a6b25.a2cdb2db23.a2cdbc2db23.ac2d2.cd2b21.a2cd3.c2db21.acd5.cdb267./812.a2b2.3b24.2a2cd2b26.a2cd2b27.ac
+		+d2b27.acd2b30.b31.b31.b28.3b143./755.b24.a6b25.a2cdbdb25.a2cd2b27.acd2b26.bacdb27.b2cdb27.b3.b27.b3.b31.b32.b27.4b111./812.a7b25.a2cdb27.bac2db26.ba2cd27.cbacd28.b31.b31.
+		+b31.b32.2b111./780.a7b24.a2cdbdb25.a2cdbdb26.acdbdb26.acdbdb26.2cdbdb29.b31.b31.b32.b29.2b111./780.a6b25.a2cdbdb25.a2cd2b27.acd2b26.bacdb27.b2cdb27.b3.b27.b3.b31.b32.b27.
+		+4b111./780.a6ca23.2a2c2d2c2a22.2acd2.dc2a22.2acd2.dc2a22.2acd2.dc2a22.a2cd2.d2ca267.
+		player_scarf|32|38|33|16|a14121A,b825F4E,c00F0F2,d00F0F1,e00F0F3,f00F0F4|idle:0;walk:1,2,3,4;windup:5;strike:6;block:7;shoot:8;front:9
+		+395.ab29.acdb27.ae3c27.a2efe3.f23.aef30.a661./395.ab29.acdb27.ae3c27.a2ef3.ef23.aef30.a661./427.ab29.acdb27.ae3c27.a2efe3.f23.aef30.a629./395.ab29.acdb27.ae3c27.a2efe3.f2
+		+3.aef30.a661./427.ab29.acdb27.ae3c27.a2efe3.f23.aef30.a629./394.ab29.a3b27.ab30.b4.3ef28.3f688./428.ab29.acdb27.ae3c4.b22.a2efe3.f23.aef30.f628./395.ab29.acdb27.ae3c27.a2
+		+efe27.aef.f28.a661./395.ab29.acdb27.ae3c27.a2ef2e26.aef.f28.a661./427.b8.b56.2fce2f27.fcef29.2f655.
+		player_shirt_0|32|38|33|16|a00F001,b00F004,c00F002,d00F003|idle:0;walk:1,2,3,4;windup:5;strike:6;block:7;shoot:8;front:9
+		+493.a3b.cb24.abacdbcdb23.ab2cdb2db23.cb2cdb2db23.cbc2db2db23.db3.bd2b23.db3.bd2b23.db3.4b23.3b2.3b27.2b431./493.3b2.cb24.bacdb2cdb22.b2c2dbc2db25.db2c2db25.b3c2db25.b3cd2
+		+b24.b4cd2b22.2bd4c3b23.8b460./525.a3b.cb24.abacdbcdb23.ab2cdb2db23.cb2cdb2db23.cbc2db2db23.db3.bd2b23.db3.bd2b23.db3.4b23.3b2.3b27.2b399./493.a3b.c25.abacdbcd24.ab2c2dbd2
+		+4.2cbcd2.b24.3cb4.b23.d3cb3.b23.d4cb2.b23.2d4c2b24.8b460./525.a3b.cb24.abacdbcdb23.ab2cdb2db23.cb2cdb2db23.cbc2db2db23.db3.bd2b23.db3.bd2b23.db3.4b23.3b2.3b27.2b399./460.
+		+b31.ba3.cb24.db5cdb20.c2db5c2db20.2cdb5c2db22.b6c2db23.d5cd2b23.d5cd2b23.2d4c3b24.7b461./525.2a3bcb24.2abacd3b23.acb2cd26.3cb2d26.4c5b23.d5cd2b23.d5cd2b23.2d4c3b23.8b428.
+		+/403.2b29.b28.3b27.abacd26.2ab2cd3b23.a2cb2dbdb23.4c2b2db23.6c2db23.d5cd2b23.d5cd2b23.2d4c3b23.8b460./493.2a3bcb24.2abacd6b20.acb2cd6.b19.3cb2d6.b19.4c5b23.d5cdb24.d5cdb2
+		+4.2d4c2b24.8b460./491.2a8c20.2a10c2d18.a10cb2d18.acb8cbac18.acb8cbac20.bd6cdb22.b2d4c2db22.b8db23.8d23.10b21.b10.b394.
+		player_shirt_1|32|38|33|16|a00F001,b00F004,c00F002,d00F003|idle:0;walk:1,2,3,4;windup:5;strike:6;block:7;shoot:8;front:9
+		+493.a3b.cb24.abacdbcdb23.ab2cdb2db23.cb2cdb2db23.cbc2db2db23.dbacdbd2b23.dbacdbd2b23.db2cd4b23.3b2.3b27.2b431./493.3b2.cb24.bacdb2cdb22.b2c2dbc2db22.ac2db2c2db22.acdb3c2d
+		+b22.2cdb3cd2b24.b4cd2b22.2bd4c3b23.8b460./525.a3b.cb24.abacdbcdb23.ab2cdb2db23.cb2cdb2db23.cbc2db2db23.dbacdbd2b23.dbacdbd2b23.db2cd4b23.3b2.3b27.2b399./493.a3b.c25.abacd
+		+bcd24.ab2c2dbd24.2cbcdadb24.3cba2cdb23.d3cbacdb23.d4cb2.b23.2d4c2b24.8b460./525.a3b.cb24.abacdbcdb23.ab2cdb2db23.cb2cdb2db23.cbc2db2db23.dbacdbd2b23.dbacdbd2b23.db2cd4b23
+		+.3b2.3b27.2b399./460.b28.acdba3.cb21.ac2db5cdb20.c2db5c2db20.2cdb5c2db22.b6c2db23.d5cd2b23.d5cd2b23.2d4c3b24.7b461./525.2a3bcb24.2abacd3b23.acb2cd2a2c22.3cb2d2c2d22.4c5b2
+		+3.d5cd2b23.d5cd2b23.2d4c3b23.8b428./403.2b29.b28.3bacd24.abacdcd24.2ab2cd3b23.a2cb2dbdb23.4c2b2db23.6c2db23.d5cd2b23.d5cd2b23.2d4c3b23.8b460./493.2a3bcb24.2abacd6b20.acb2
+		+cd2a2c2.b19.3cb2d2c2d2.b19.4c5b23.d5cdb24.d5cdb24.2d4c2b24.8b460./491.2a8c20.2a10c2d18.a10cb2d18.acb8cbac18.acb8cbac18.acbd6cdbac18.acb2d4c2dbac18.2cb8dbcd21.8d23.10b21.b
+		+10.b394.
+		player_shirt_2|32|38|33|16|aCCAB8E,b00F004,c00F001,d00F003,e00F002,fB59378|idle:0;walk:1,2,3,4;windup:5;strike:6;block:7;shoot:8;front:9
+		+498.ab32.b23.c5.2db23.e5.2db23.e5.2db23.d5.d2b23.d5.d2b23.d5.3b23.2b4.2b460./498.ab29.e2.b28.e2db27.2e2db26.3e2db26.3ed2b25.4ed2b24.d4e3b23.8b460./530.ab32.b23.c5.2db23.e
+		+5.2db23.e5.2db23.d5.d2b23.d5.d2b23.d5.3b23.2b4.2b428./498.a57.c6.d24.2e30.3e29.d3e28.d4e27.2d4e26.8b460./530.ab32.b23.c5.2db23.e5.2db23.e5.2db23.d5.d2b23.d5.d2b23.d5.3b23
+		+.2b4.2b428./493.a3.ab26.c3e2.b24.5e2db24.5e2db23.6e2db23.d5ed2b23.d5ed2b23.2d4e3b24.7b461./526.a3.ab56.ce30.3e29.4e28.d5ed2b23.d5ed2b23.2d4e3b23.8b428./532.b23.c2e4.db23.
+		+4e2.2db23.6e2db23.d5ed2b23.d5ed2b23.2d4e3b23.8b460./494.a3.ab56.ce30.3e29.4e28.d5edb24.d5edb24.2d4e2b24.8b460./493.6e.a22.c8e22.c9eb22.b8ebaf20.b8ebaf20.bd6edb22.b2d4e2db
+		+22.b8db23.8d23.10b21.b10.b394.
+		player_shirt_3|32|38|33|16|a825F4E,b14121A,c00F001,d00F002,e00F003,f00F004|idle:0;walk:1,2,3,4;windup:5;strike:6;block:7;shoot:8;front:9
+		+363.a30.bca28.bc2da27.b2d2e28.b2e4f.df23.3fcdefdef23.cf2def2ef23.df2def2ef23.dfd2ef2ef23.efcdefe2f23.efcdefe2f23.2f2de4f23.3f2.3f27.2f431./363.a30.bca28.bc2da27.b2d2e28.b
+		+2e3f2.df23.2fcdef2def22.f2d2efd2ef22.cd2efd3ef22.cde4f2ef22.2def3de2f24.5fe2f22.10f23.8f460./395.a30.bca28.bc2da27.b2d2e28.b2e4f.df23.3fcdefdef23.cf2def2ef23.df2def2ef23.
+		+dfd2ef2ef23.efcdefe2f23.efcdefe2f23.2f2de4f23.3f2.3f27.2f399./363.a30.bca28.bc2da27.b2d2e28.b2e4f.d24.3fcdefde24.cf2d2efe24.2dfdecef24.2d2fc2def23.edfdfcdef23.ed4f2.f23.8
+		+f24.8f460./395.a30.bca28.bc2da27.b2d2e28.b2e4f.df23.3fcdefdef23.cf2def2ef23.df2def2ef23.dfd2ef2ef23.efcdefe2f23.efcdefe2f23.2f2de4f23.3f2.3f27.2f399./362.a30.bca28.bc2fa2
+		+7.bf2.f28.cde2f3.df21.cd2ef2dc2def20.d2ef3dcd2ef20.2def4d3ef22.f2d4f2ef23.edf3de2f23.ed4fe2f23.9f24.7f461./395.ba29.bcda27.bc2dea26.b2d2ef27.b2e5fdf23.4fcde3f23.cdf2de2c2
+		+d22.3df2e2d2e22.2d7f23.edf3de2f23.ed4fe2f23.9f23.8f428./363.a30.bca6.2f20.bc2da4.f22.b2d2e.3fcde21.b2e2fcdede23.4f2de3f23.c2df2efef23.4d2f2ef23.2d4f2ef23.edf3de2f23.ed4fe
+		+2f23.9f23.8f460./363.a30.bca28.bc2da27.b2d2e28.b2e5fdf23.4fcde6f20.cdf2de2c2d2.f19.3df2e2d2e2.f19.2d7f23.edf3def24.ed4fef24.8f24.8f460./459.f8.f22.c8fd20.2c2dc4dc2d2e18.c
+		+3dc4dcdf2e18.cdf8dfcd18.cdf2d4f2dfcd18.cdfedf2dfdefcd18.cdf2e4f2efcd18.2d10fde21.8f23.10f21.f10.f394.
+		polarBear|52|26|23|18|a212633,bEFEBE2,c707984,dE9E5D7,eA1A4A6,fFFFFFF,g1A1316,h1E1519,i3E4349,j8992A6,k3A3A43,lEFEAD9,m834248|idle:0;walk:1,2,3,4;strike:5
+		+112.15a34.3a15b3a2.2a25.2a21bac2da23.a23bcd2ed7a15.a4b20dcde2d7b3a12.a2b23dcd12ba10.a2b19de3dc3b4d3e4dba9.ab20de2dc2b7dfg5db2a7.ab21dedcb8d2g6d2ha6.a22dedc17d2ha6.ae23dce
+		+9de7da7.ae24dce7d2e6ia9.ae24dc2e5d2e4d2a11.c5dc11dc5dce2c7e4a13.a5dc11ec5d2c2e3c4a17.a4de13c4dec4eca21.a4de7c5ac4dec4eca21.a3d2ec3e2ca5.a3d2ec3e2ca21.a3d2ec3e2ca5.a3d2ec3
+		+e2ca21.a4d2ec3e2ca4.a4d2ec3e2ca20.a5dec4eca4.a5dec4eca20.ajkjkjkckjkjka4.ajkjkjkckjkjka21.12a6.12a71./112.15a34.3a15b3a2.2a25.2a21bac2da23.a23bcd2ed7a15.a4b20dcde2d7b3a12
+		+.a2b23dcd12ba10.a2b19de3dc3b4d3e4dba9.ab20de2dc2b7dfg5db2a7.ab21dedcb8d2g6d2ha6.a22dedc17d2ha6.ae23dce9de7da7.ae24dce7d2e6ia9.ae24dc2e5d2e4d2a11.aec5dc7dc5dc3e2c7e4a14.ac
+		+5dc7ec5dc4ae5c2a19.a4de9c4dec3.a4eca21.a4de3c5ac4dea3.a4eca21.a3d2e2ca5.a3d2ea3.a3e2ca21.a3d2e2ca5.a3d2ea3.a3e2ca21.a4d2e2ca4.a4d2ea2.a4e2ca20.a5de2ca4.a5dea2.a5eca20.ajk
+		+jkjkcka4.ajkjkjka2.ajkjkjka21.2a4c2a6.6a4.6a69./60.15a34.3a15b3a2.2a25.2a21bac2da23.a23bcd2ed7a15.a4b20dcde2d7b3a12.a2b23dcd12ba10.a2b19de3dc3b4d3e4dba9.ab20de2dc2b7dfg5d
+		+b2a7.ab21dedcb8d2g6d2ha6.a22dedc17d2ha6.ae23dce9de7da7.ae24dce7d2e6ia9.ae24dc2e5d2e4d2a11.a2e15dc5dce2c7e4a13.a5dc11ec5d2c2e3c4a17.a5d13c4dec5ea21.a4de7c5ac4dec4eca21.a4d
+		+ec3e2ca5.a3d2ec4eca21.a3d2ec3e2ca5.a3d2ec3e2ca21.a3d2ec4e2ca4.a4d2ec2e2ca21.a4d2ec4eca4.a5dec3e2ca20.a5deckjkjka4.ajkjkjkc4eca20.ajkjkjkc5a6.5acjkjkjka21.6a18.6a71./112.1
+		+5a34.3a15b3a2.2a25.2a21bac2da23.a23bcd2ed7a15.a4b20dcde2d7b3a12.a2b23dcd12ba10.a2b19de3dc3b4d3e4dba9.ab20de2dc2b7dfg5db2a7.ab21dedcb8d2g6d2ha6.a22dedc17d2ha6.ae23dce9de7d
+		+a7.ae24dce7d2e6ia9.ae24dc2e5d2e4d2a9.a5dc15dc5d2c7e4a11.a5dc15ec5dcec6a15.a4de17c4de2ca21.a4de4a7c5ac4de2ca21.a3d2ea3.a3e2ca5.a3d2e2ca21.a3d2ea3.a3e2ca5.a3d2e2ca21.a4d2ea
+		+2.a4e2ca4.a4d2e2ca20.a5dea2.a5eca4.a5de2ca20.ajkjkjka2.ajkjkjka4.ajkjkjkcka21.6a4.6a6.2a4c2a73./60.15a34.3a15b3a2.2a25.2a21bac2da23.a23bcd2ed7a15.a4b20dcde2d7b3a12.a2b23d
+		+cd12ba10.a2b19de3dc3b4d3e4dba9.ab20de2dc2b7dfg5db2a7.ab21dedcb8d2g6d2ha6.a22dedc17d2ha6.ae23dce9de7da7.ae24dce7d2e6ia9.ae24dc2e5d2e4d2a11.c5dc16d3e2c7e4a13.a5dc11ec5d2c2e
+		+3c4a17.a4de13c5dc4eca21.a4de7c5ac4dec4eca21.a3d2ec4eca5.a4dec3e2ca21.a3d2ec3e2ca5.a3d2ec3e2ca21.a4d2ec2e2ca5.a3d2ec4e2ca20.a5dec3e2ca4.a4d2ec4eca20.ajkjkjkc4eca4.a5deckjk
+		+jka21.5acjkjkjka4.ajkjkjkc5a28.6a6.6a77./112.15a34.3a15b3a4.2a23.2a21b2a.a2da21.a25bcd2ed7a13.a4b20d2bcde2d7b3a10.a2b25dcd12ba8.a2b19de5dc3b4d3e4dba7.ab20de4dc2b7dfg5db2a
+		+5.ab21de3dcb8d2g6d2ha4.a22de3dc17d2ha4.ae25dce9dedldldl2a5.ae26dce7d2e6ma7.ae19dc5d2ce6d2e6ma7.a5dc14dc5d3ce5d2edldldla7.a5dc14ec4dec2ec2e3d2e5da8.a4de16c4decec3a7e3a9.a4
+		+dec2a7c5ac3d2ececa2.7a12.a3d2ea2.a3e2ca5.a3d2e3ca21.a3d2ea2.a4e2ca4.a4d2e2ca21.a4d2ea.a5eca4.a5de3ca20.a5dea.ajkjkjka4.ajkjkjkceca20.ajkjkjka2.6a6.2a4ckjka21.6a18.6a72.
+		rex|130|84|79|62|a11140D,bE4DCC9,cDAD1B9,d9D9585,e727B56,f4E5739,gD87967,hECC7A2,i141010,j252C21,k353D2B,lEFEAD9,mD0CAAA,n87816A,o10140C,p2C3225,q242C20,rE3DBC9,s978E7F,t834248,u552930|idle:0;walk:1,2,3,4;windup:5;strike:6
+		+2816.a7.a120.aba5.aba4.a114.acba3.abca3.aba114.acba.ab2ca2.abca114.a2cbab3cb2ab2ca115.a2cb5c2b2cda116.6a6d2b2a118.2a2b2c2b2c2b4a113.a16e3a109.a2e15f3e2a106.ae20f2ea104.ae
+		+23fe2a101.ae13fgh11fia100.ae13f2g12fa100.a28fa99.ajk16f11ka97.2aejk16filililililia96.a2efj2k15fklklklklklka95.ae4fjk25mka94.ae6fjk23nka73.9o13.a8fj23ka67.7op7ep4o7.2ok9f3
+		+j20a65.3o6e2p7f2p3e7o2e2k8fmka84.o2pe6f2p7f2p3f4e2pe2f2k7f2mka82.2oe2p7f2p7f2p7f2p3f3k5fmnka81.2o2ef2p6f2p7f3p7f2p4f3k3fmnka80.2o2e3fp7f2p7f2p8f2p5f6k2a75.6o2e4f2p7f2p7f2
+		+p7f2p7f5k74.3o4e2p6fp7f2p8f2p7f2p9f2ko72.2o3e4f2p6fp7f2p7f2p8f2p7f2k2mo70.2o2p6f2p6f2p4f6k6f2p7f2p7fk4mo68.2o2e2p5f2p7fp3f2k6e2k4f2p7f2p6fk5mo65.3o2e2fp6f2p6fkf3k2e6f2ek1
+		+2f2p4f2k4m2no58.7o3e3fp5f14ke10f2k16f2k3m4no54.4o5e2p5f2p2f17k11f18k4m5no50.4o2p2e4f2p6f17kj3k10f3k5m10k5m3n2o46.5o4fp6f2p5f6k16j2k9f3k19m2n2o47.o2p5f2p4f10k23j2k7f3k19m2
+		+nq49.o5f15k9j14o4j2k5f3k19m3nqj2a46.o23j6o14.5o2k3f3k2n17m3nqj2fka46.23o26.3a3k22nqkj2fka100.o21noarkj2fka100.2o18no.arajrfka102.o16no3.a.jrara103.16o7.a.a93.a5fkj2kja118
+		+.a5fkj2kja119.a4fkj2kja119.a4fkj2kja119.a3f2kjk2ja120.a3fkj2kja120.a3fkj2kja120.a3fkj2kja120.a3fkj2kja119.a4fkj2kja118.a6fkj2kja116.a8fkj2kja114.a10fkj2kja113.arsrsrsrsrs
+		+jsrsa115.4a6j4a456./2816.a7.a120.aba5.aba4.a114.acba3.abca3.aba114.acba.ab2ca2.abca114.a2cbab3cb2ab2ca115.a2cb5c2b2cda116.6a6d2b2a118.2a2b2c2b2c2b4a113.a16e3a109.a2e15f3e
+		+2a106.ae20f2ea104.ae23fe2a101.ae13fgh11fia100.ae13f2g12fa100.a28fa99.ajk16f11ka97.2aejk16filililililia96.a2efj2k15fklklklklklka95.ae4fjk25mka94.ae6fjk23nka75.7o13.a8fj23k
+		+a68.8o6ep4o7.2ok9f3j20a66.3o5e2pe6f2p3e7o2e2k8fmka84.2op2e5f2p7f2p3f4e2pe2f2k7f2mka83.oe2p7f2p7f2p7f2p3f3k5fmnka82.2oef2p6f3p6f3p7f2p4f3k3fmnka81.2o2e2fp7f2p7f2p8f2p5f6k2
+		+a80.2o2e3f2p7f2p7f2p7f2p7f5k76.6ope5f2p6f2p8f2p7f2p9f2ko74.2o5e2p6fp7f2p7f2p8f2p7f2k2mo72.2o2e5fp6f2p5f6k5f2p7f2p7fk4mo70.2o2p6f2p6fp4f2k6e2k3f2p7f2p6fk5mo68.2o2e2p5f2p8f
+		+4k2e6f2ek11f2p4f2k4m2no66.2o2e2fp6f2p5f6ke10f2k15f2k3m4no60.6o2e3fp4f16k11f17k4m5no56.4o3e2pe4f2p2f18k10f3k4m10k5m3n2o54.3o4e2f2p6f16k5j2k9f3k18m2n2o52.4oe2p5f2p5f6k18j2k
+		+7f3k18m2nq50.4o4f2p5f8k25j2k5f3k18m3nqj2a46.o2p5fp3f10k8j20o2k3f3kn17m3nqj2fka45.o4f8k11j6o21.2a4k21nqkj2fka45.o12j11o31.o21noarkj2fka45.12o43.o19no.arajrfka101.2o16no3.a
+		+.jrara103.16o7.a.a95.j5fkj121.akj5fka120.a2kj5fka119.a3kj5fka118.a4kj4fka119.a3kj4fka119.a2kj4fka121.akj4fka121.aj4fka123.j4fkj122.a6fkj120.a8fkj118.a10fkj117.arsrsrsrsrs
+		+j119.3a7j457./2686.a7.a120.aba5.aba4.a114.acba3.abca3.aba114.acba.ab2ca2.abca114.a2cbab3cb2ab2ca115.a2cb5c2b2cda116.6a6d2b2a118.2a2b2c2b2c2b4a113.a16e3a109.a2e15f3e2a106.
+		+ae20f2ea104.ae23fe2a101.ae13fgh11fia100.ae13f2g12fa100.a28fa99.ajk16f11ka97.2aejk16filililililia96.a2efj2k15fklklklklklka95.ae4fjk25mka94.ae6fjk23nka73.9o13.a8fj23ka67.7o
+		+p7ep4o7.2ok9f3j20a65.3o6e2p7f2p3e7o2e2k8fmka84.o2pe6f2p7f2p3f4e2pe2f2k7f2mka82.2oe2p7f2p7f2p7f2p3f3k5fmnka81.2o2ef2p6f2p7f3p7f2p4f3k3fmnka80.2o2e3fp7f2p7f2p8f2p5f6k2a75.6
+		+o2e4f2p7f2p7f2p7f2p7f5k74.3o4e2p6fp7f2p8f2p7f2p9f2ko72.2o3e4f2p6fp7f2p7f2p8f2p7f2k2mo70.2o2p6f2p6f2p4f6k6f2p7f2p7fk4mo68.2o2e2p5f2p7fp3f2k6e2k4f2p7f2p6fk5mo65.3o2e2fp6f2p
+		+6fkf3k2e6f2ek12f2p4f2k4m2no58.7o3e3fp5f14ke10f2k16f2k3m4no54.4o5e2p5f2p2f17k11f18k4m5no50.4o2p2e4f2p6f17kj3k10f3k5m10k5m3n2o46.5o4fp6f2p5f6k16j2k9f3k19m2n2o47.o2p5f2p4f10
+		+k23j2k7f3k19m2nq49.o5f15k9j14o4j2k5f3k19m3nqj2a46.o23j6o14.5o2k3f3k2n17m3nqj2fka46.23o26.3a3k22nqkj2fka100.o21noarkj2fka100.2o18no.arajrfka102.o16no3.a.jrara103.16o7.a.a2
+		+23.a5fkj2kja118.a5fkj2kja119.a4fkj2kja119.a4fkj2kja119.a3f2kjk2ja120.a3fkj2kja120.a3fkj2kja120.a3fkj2kja120.a3fkj2kja119.a4fkj2kja118.a6fkj2kja116.a8fkj2kja114.a10fkj2kja
+		+113.arsrsrsrsrsjsrsa115.4a6j4a456./2816.a7.a120.aba5.aba4.a114.acba3.abca3.aba114.acba.ab2ca2.abca114.a2cbab3cb2ab2ca115.a2cb5c2b2cda116.6a6d2b2a118.2a2b2c2b2c2b4a113.a16
+		+e3a109.a2e15f3e2a106.ae20f2ea104.ae23fe2a101.ae13fgh11fia100.ae13f2g12fa100.a28fa99.ajk16f11ka97.2aejk16filililililia96.a2efj2k15fklklklklklka95.ae4fjk25mka94.ae6fjk23nka
+		+71.12o12.a8fj23ka66.6oe2p7e2p3o7.2ok9f3j20a65.2o6ef2p7f2p3e7o2e2k8fmka83.2o2p7f2p7f2p3f4e2pe2f2k7f2mka81.2o2e2p6f3p7f2p7f2p3f3k5fmnka80.2o2e2f2p6f2p7f2p8f2p4f3k3fmnka75.6
+		+o2e4fp7f2p7f2p8f2p5f6k2a73.3o3e2pe5f2p7f2p7f2p7f2p7f5k72.3o3e3f2p6fp7f2p8f2p7f2p9f2ko70.2o2pe5f2p6f2p7f2p7f2p8f2p7f2k2mo68.2o2e2p5f2p7f2p3f6k7f2p7f2p7fk4mo65.3o2e2fp6f2p9
+		+f3k6e2k5f2p7f2p6fk5mo55.10o3e3fp6f5k3f5k2e6f2ek13f2p4f2k4m2no51.4op7e2p5f2p3f15ke10f3k16f2k3m4no45.6o3fp7f2p6f20k11f19k4m5no44.o2p5f2p7f2p4f9k7j3k3jk10f3k7m8k6m3n2o45.o6f
+		+17k21j2k9f3k20m2n2o47.o12j8k11j7o7j2k7f3k20m2nq50.12o10j9o7.8o2k5f3kn19m3nqj2a59.10o25.2k3f3k4n16m3nqj2fka94.5ak23nqkj2fka100.2o20noarkj2fka101.o18no.arajrfka102.2o14n2o3
+		+.a.jrara104.14o8.a.a91.a5fk2a5kja113.a5fka2.a5kja112.a4fka4.a5kja111.a4fka5.a5kja110.a4fka6.a4kja111.a3fka6.a4kja111.a4fka4.a4kja113.a3fka4.a4kja113.a4fka2.a4kja115.a4fka
+		+.a4kja115.a5fkj6kja114.a6fkj6kja113.a7fkj6kja112.arsrsrsrjsrsrsrsa114.5a2j8a453./2686.a7.a120.aba5.aba4.a114.acba3.abca3.aba114.acba.ab2ca2.abca114.a2cbab3cb2ab2ca115.a2c
+		+b5c2b2cda116.6a6d2b2a118.2a2b2c2b2c2b4a113.a16e3a109.a2e15f3e2a106.ae20f2ea104.ae23fe2a101.ae13fgh11fia100.ae13f2g12fa100.a28fa99.ajk16f11ka97.2aejk16filililililia96.a2ef
+		+j2k15fklklklklklka95.ae4fjk25mka94.ae6fjk23nka73.9o13.a8fj23ka67.7op7ep4o7.2ok9f3j20a65.3o6e2p7f2p3e7o2e2k8fmka84.o2pe6f2p7f2p3f4e2pe2f2k7f2mka82.2oe2p7f2p7f2p7f2p3f3k5fm
+		+nka81.2o2ef2p6f2p7f3p7f2p4f3k3fmnka80.2o2e3fp7f2p7f2p8f2p5f6k2a75.6o2e4f2p7f2p7f2p7f2p7f5k74.3o4e2p6fp7f2p8f2p7f2p9f2ko72.2o3e4f2p6fp7f2p7f2p8f2p7f2k2mo70.2o2p6f2p6f2p4f6
+		+k6f2p7f2p7fk4mo68.2o2e2p5f2p7fp3f2k6e2k4f2p7f2p6fk5mo65.3o2e2fp6f2p6fkf3k2e6f2ek12f2p4f2k4m2no58.7o3e3fp5f14ke10f2k16f2k3m4no54.4o5e2p5f2p2f17k11f18k4m5no50.4o2p2e4f2p6f1
+		+7kj3k10f3k5m10k5m3n2o46.5o4fp6f2p5f6k16j2k9f3k19m2n2o47.o2p5f2p4f10k23j2k7f3k19m2nq49.o5f15k9j14o4j2k5f3k19m3nqj2a46.o23j6o14.5o2k3f3k2n17m3nqj2fka46.23o26.3a3k22nqkj2fka
+		+100.o21noarkj2fka100.2o18no.arajrfka102.o16no3.a.jrara103.16o7.a.a223.a5fkj2kja118.a5fkj2kja119.a4fkj2kja119.a4fkj2kja119.a3f2kjk2ja120.a3fkj2kja120.a3fkj2kja120.a3fkj2kj
+		+a120.a3fkj2kja119.a4fkj2kja118.a6fkj2kja116.a8fkj2kja114.a10fkj2kja113.arsrsrsrsrsjsrsa115.4a6j4a456./2423.a7.a120.aba5.aba4.a114.acba3.abca3.aba114.acba.ab2ca2.abca114.a
+		+2cbab3cb2ab2ca115.a2cb5c2b2cda116.6a6d2b2a118.2a2b2c2b2c2b4a113.a16e3a109.a2e15f3e2a106.ae20f2ea104.ae23fe2a101.ae13fgh11fia100.ae13f2g12fa100.a28fa100.ak16f11ka100.jk16f
+		+lililililila98.2ajk14f12ta98.a2ej2k12f2t10ua98.ae3fjk11f2t9u2a98.ae5fjk9f2t10u2a98.a7fjk9m13ta97.a8fjk8nlililililililia77.8o11.ak8fjk21na69.8o7ep4o7.2k7f2mj20ka68.2o6e2p7
+		+f2p3e7o3k5fmnk21a67.2ope6f2p7f2p3f4e2pef3k3fmnka86.2oe2p7f2p7f2p7f2p3f8k86.o2ef2p6f3p6f3p7f2p4f5kfo84.2oe3fp7f2p7f2p8f2p10fo79.5o2e3f2p7f2p7f2p7f2p11fo76.3o2e2pe5f2p6f2p8
+		+f2p7f2p9f2ko73.3o3e2f2p6fp7f2p7f2p8f2p7f2k2mo71.2op2e4f2p6f2p4f6k6f2p7f2p7fk4mo69.2oe2p5f2p7fp3f2k6e2k4f2p7f2p6fk5mo67.2o2efp6f2p8f3k2e6f2ek12f2p4f2k4m2no64.3o2e2f2p6f5k2
+		+f5ke10f2k16f2k3m4no57.7op2e4fp4f15k11f18k4m5no54.3o6ep6fpf19k10f3k5m10k5m3n2o51.4o2pe5f2p5f9k6j2k4j2k9f3k19m2n2o48.5o4fp6f2p3f6k19j2k7f3k19m2nq49.o2p5f2p3f10k11j6o8j2k5f3
+		+k19m3nqj2a46.o5f14k8j6o6.9o2k3f3k2n17m3nqj2fka45.o21j6o22.3a3k22nqkj2fka46.21o33.o21noarkj2fka100.o19no.arajrfka101.2o16no3.a.jrara103.16o7.a.a93.a5fk2ja120.a5fkja122.j4f
+		+kj123.j4fkj123.j3f2kj124.j3fkj124.j3fkja123.a3fkja123.a3fk2ja121.a4fkjkja119.a6fkjkja117.a8fkjkja115.a10fkjkja114.arsrsrsrsrsjsra116.6a4j3a457./3341.a7.a120.aba5.aba4.a11
+		+4.acba3.abca3.aba114.acba.ab2ca2.abca114.a2cbab3cb2ab2ca115.a2cb5c2b2cda116.6a6d2b2a118.2a2b2c2b2c2b4a113.a16e3a109.a2e15f3e2a106.ae20f2ea104.ae23fe2a101.ae13fgh11fia96.4
+		+aje13f2g12fa94.2a4ej28fa93.a2e4fjk16f11ka92.ke6fjk16flililililila66.10o14.oke7fjk14f12ta60.7o2p7ep4o7.3oek8fj2k12f2t10ua59.2o7e2p7f2p3e7o3efk9fjk11f2t9u2a58.2o2p7f2p7f2p3
+		+f4e2pe4f2k8fmjk9f2t10u2a56.2o2e2p7f2p7f2p7f2p5f2k7f2mkjk9m13ta54.o2e2f2p6f2p7f3p7f2p5f3k5fmnka.ak8nlililililililia50.3oe4fp7f2p7f2p8f2p6f3k3fmnka3.ak21na44.6op2e4f2p7f2p7
+		+f2p7f2p8f6k2a5.a20ka42.3o5e2p6fp7f2p8f2p7f2p9f3k2a8.20a41.2op2e5fp6f2p7f2p7f2p8f2p7f2k2mo69.2oe2p6f2p6f2p5f6k5f2p7f2p7fk4mo66.3o2efp6f2p11f3k6e2k3f2p7f2p6fk5mo59.7o3e2f2p
+		+6f2p5f7k2e6f2ek11f2p4f2k4m2no54.5o4e2pe5fp4f16ke10f2k15f2k3m4no49.5o2p3e3f2p6fp21k11f17k4m5no45.4o5fp6f2p6f17k4j2k10f3k4m10k5m3n2o45.o2p5f2p5f12k20j2k9f3k18m2n2o47.o4f17k
+		+26j2k7f3k18m2nq49.o26j19o3j2k5f3k18m3nqj2a47.26o19.4o2k3f3k2n16m3nqj2fka96.3a3k21nqkj2fka100.o21noarkj2fka100.2o18no.arajrfka102.2o15no3.a.jrara94.j5fkj2.15o7.a.a94.akj5f
+		+ka120.a2kj5fka119.a3kj5fka118.a4kj4fka119.a3kj4fka119.a2kj4fka121.akj4fka121.aj4fka123.j4fkj122.a6fkj120.a8fkj118.a10fkj117.arsrsrsrsrsj119.3a7j457.
+		scorpion|32|19|16|13|a291B15,bC2A16E,cB28B5A,d7F613D,e381F1C,f5F4536,g816244,hD87067|idle:0;walk:1,2,3,4;strike:5
+		+69.4a27.a4ba25.abcd2cba23.ab2c2a2cba22.acda2.acda22.a2ca3.acea20.abca4.a2ea9.3a8.acd5a3f10ab2ca7.a2cf2bd2bd2bd3bfb4c2aca7.afb2cd2cd2cd4c2fg5ca8.a3cd2cd2cd2ch3cfa3ga9.ag14
+		+cga.3a11.a14ga17.a12fa19.af2af2af2afa21.a2.a2.a2.a47./69.4a27.a4ba25.abcd2cba23.ab2c2a2cba22.acda2.acda22.a2ca3.acea20.abca4.a2ea9.3a8.acd5a3f10ab2ca7.a2cf2bd2bd2bd3bfb4c
+		+2aca7.afb2cd2cd2cd4c2fg5ca8.a3cd2cd2cd2ch3cfa3ga9.ag14cga.3a11.a14ga17.2a12f20.af2af2af2afa21.a2.a2.a2.a46./37.4a27.a4ba25.abcd2cba23.ab2c2a2cba22.acda2.acda22.a2ca3.acea
+		+20.abca4.a2ea9.3a8.acd5a3f10ab2ca7.a2cf2bd2bd2bd3bfb4c2aca7.afb2cd2cd2cd4c2fg5ca8.a3cd2cd2cd2ch3cfa3ga9.ag14cga.3a11.a14ga17.a12fa19.ac2ac2ac2aca20.af2af2af2afa21.a2.a2.a
+		+2.a47./69.4a27.a4ba25.abcd2cba23.ab2c2a2cba22.acda2.acda22.a2ca3.acea20.abca4.a2ea9.3a8.acd5a3f10ab2ca7.a2cf2bd2bd2bd3bfb4c2aca7.afb2cd2cd2cd4c2fg5ca8.a3cd2cd2cd2ch3cfa3g
+		+a9.ag14cga.3a11.a14ga17.a3fa5fa3f19.afa.afafa.afa20.a3.a.a3.a46./37.4a27.a4ba25.abcd2cba23.ab2c2a2cba22.acda2.acda22.a2ca3.acea20.abca4.a2ea9.3a8.acd5a3f10ab2ca7.a2cf2bd2
+		+bd2bd3bfb4c2aca7.afb2cd2cd2cd4c2fg5ca8.a3cd2cd2cd2ch3cfa3ga9.ag14cga.3a11.a14ga17.a12fa19.ac2ac2ac2aca20.af2af2af2afa21.a2.a2.a2.a47./69.8a23.a8b2a20.abcd2cd2cdcb2a17.ab2
+		+c7a2cdb2a15.acda7.2a2c2ea14.a2ca9.2a2ea13.abca12.2a3.3a8.acd18ab2ca7.a2cf2bd2bd2bd3bfb4c2aca7.afb2cd2cd2cd4c2fg5ca8.a3cd2cd2cd2ch3cfa3ga9.ag14cga.3a11.a14ga17.a12fa19.af2
+		+af2af2afa21.a2.a2.a2.a47.
+		sentinel|50|42|36|22|a1A1F2F,bA6C3DD,c8EB2D1,d647A96,eF2FAFD,f566882,g86D4DF,hC4F1F4,iFFFFFF,j49556F,kA8E2EE|idle:0;fly:0,1;charge:2;strike:3
+		+21.a48.aba46.abcda46.ada48.a32.a48.aba46.abcda14.2a30.ada14.a2ba30.a14.aeb2ca43.aeb3cfa41.aeb4cdfa39.aeb6cdfa37.aeb8cdfa30.a4.aeb10cdfa28.aba3.aeb11cda4.a22.aecda2.a2b5c2
+		+g4cda3.aba20.aeb2cda.ab5cg2hg3cda2.aecda19.ab3cda.ab4cgh2ihg2cda.aeb2cda18.ab3cda.ab4cgh2ihg2cda.ab3cda18.ab3cda.ab5cg2hg3cda.ab3cda19.abcda2.ab6c2g4cda.ab3cda20.ada3.ad1
+		+2cja2.abcda22.a4.a2d10c2ja3.ada29.a2d8c2ja5.a31.a2d6c2ja39.a2d4c2ja41.a2d2c2ja43.a2d2ja32.a12.adja32.aba12.2a32.abcda46.ada48.a442./421.2a47.a2ba45.aeb2ca12.a30.aeb3cfa10
+		+.aba28.aeb4cdfa8.abcda26.aeb6cdfa8.ada26.aeb8cdfa8.a26.aeb10cdfa4.a24.a4.aeb11cda3.aba22.aba3.a2b5c2g4cda2.aecda20.aecda2.ab5cg2hg3cda.aeb2cda18.aeb2cda.ab4cgh2ihg2cda.ab
+		+3cda18.ab3cda.ab4cgh2ihg2cda.ab3cda18.ab3cda.ab5cg2hg3cda.ab3cda18.ab3cda.ab6c2g4cda2.abcda20.abcda2.ad12cja3.ada22.ada3.a2d10c2ja4.a24.a5.a2d8c2ja37.a2d6c2ja39.a2d4c2ja4
+		+1.a2d2c2ja9.a33.a2d2ja9.aba33.adja9.abcda33.2a11.ada48.a464./271.2a47.a2ba45.aeb2ca35.a7.aeb3cfa8.a24.aba5.aeb4cdfa6.aba22.abcda3.aeb2c2g2cdfa4.abcda22.ada3.aeb2cg2hg2cdf
+		+a4.ada24.a3.aeb2cgh2ihg2cdfa4.a29.aebcgh4ihg2cda33.2a2bcg6ig2cd2a31.abjbcgh6ihgcdjba29.aecjbcg8igcjecda27.aebcjbcg8igjeb2cda26.ab2cjbcgh6ihgjb3cda26.ab2cjb2cg6igcjb3cda26
+		+.ab2cjd2cgh4ihgcjb3cda27.abcj2d2cgh2ihg2c2jbcda29.ad2a2d2cg2hg2c2j2ada31.a2.a2d2c2g2c2ja2.a36.a2d4c2ja41.a2d2c2ja35.a7.a2d2ja8.a26.aba7.adja8.aba24.abcda7.2a8.abcda24.ada
+		+19.ada26.a21.a566./372.2a47.a2ba45.aeb2ca43.aeb3cfa41.aeb4cdfa39.aeb6cdfa37.aeb8cdfa4.2a29.aeb10cdfa2.a2b3a26.aeb11cda.aeb3cd2a24.a2b5c2g4cd2aeb6cda3.k19.ab5cg2hg3cda.ad4
+		+cd2a2.k.i.k17.ab4cgh2ihg2cda2.2a2d2a5.3i18.ab4cgh2ihg2cda4.2a5.k5ik16.ab5cg2hg3cda5.2a6.3i18.ab6c2g4cda4.a2b3a2.k.i.k17.ad12cja3.aeb3cd2a2.k19.a2d10c2ja2.aeb6cda22.a2d8c2
+		+ja4.ad4cd2a24.a2d6c2ja6.2a2d2a27.a2d4c2ja9.2a30.a2d2c2ja43.a2d2ja45.adja47.2a576.
+		sheep|30|22|19|12|a1E1B24,bF6F2EA,c3A3541,d6B6675,e524C59,fDCD6D3,gFFFFFF,h16141A,i2A2530,jB9B1BB|idle:0;walk:1,2,3,4;alt:5
+		+64.2a.3a.3a.2a2.2a11.2a2ba3ba3ba2ba3c2a8.a15b2c2d2e3a4.a2bf14bcd6ea3.a9bf7bc3egh3ea2.a17bc8ea2.abf12bf3bc5ecia2.a19bc4ecia2.aj4bf13bj5ca3.a2j16b2j5a5.a3j12b3ja11.a3ja4ja4
+		+ja2ja13.acdec3j.2acdecjca13.adececa3.adececa13.adececa3.adececa13.adececa3.adececa13.a2e3ca3.a2e3ca13.a2ic2ia3.a2ic2ia14.2a.2a5.2a.2a40./64.2a.3a.3a.2a2.2a11.2a2ba3ba3ba2
+		+ba3c2a8.a15b2c2d2e3a4.a2bf14bcd6ea3.a9bf7bc3egh3ea2.a17bc8ea2.abf12bf3bc5ecia2.a19bc4ecia2.aj4bf13bj5ca3.a2j16b2j5a5.a3j12b3ja11.a3ja4ja4ja2ja13.2ajcdeca.cdec.3aeca12.acd
+		+ea2.adea3.aeca12.acdea2.adea3.aeca12.acdea2.adea3.aeca12.ac2ea2.a2ea3.a2ca12.ac2ia2.a2ia3.a2ia13.aca4.2a5.2a38./34.2a.3a.3a.2a2.2a11.2a2ba3ba3ba2ba3c2a8.a15b2c2d2e3a4.a2b
+		+f14bcd6ea3.a9bf7bc3egh3ea2.a17bc8ea2.abf12bf3bc5ecia2.a19bc4ecia2.aj4bf13bj5ca3.a2j16b2j5a5.a3j12b3ja11.a3ja4ja4ja2ja13.3a.4j.2acdeca15.adececa3.adececa13.adececa3.adecec
+		+a13.adececa3.adececa13.ade3ca3.a2ececa13.a2ec2ia3.a2i3ca13.a2i3a5.3a2ia14.2a11.2a40./64.2a.3a.3a.2a2.2a11.2a2ba3ba3ba2ba3c2a8.a15b2c2d2e3a4.a2bf14bcd6ea3.a9bf7bc3egh3ea2.
+		+a17bc8ea2.abf12bf3bc5ecia2.a19bc4ecia2.aj4bf13bj5ca3.a2j16b2j5a5.a3j12b3ja11.a3ja4ja4ja2ja12.adec.2a2jcj2ajcdea12.adea3.aeca2.acdea12.adea3.aeca2.acdea12.adea3.aeca2.acde
+		+a12.a2ea3.a2ca2.ac2ea12.a2ia3.a2ia2.ac2ia13.2a5.2a4.aca41./34.2a.3a.3a.2a2.2a11.2a2ba3ba3ba2ba3c2a8.a15b2c2d2e3a4.a2bf14bcd6ea3.a9bf7bc3egh3ea2.a17bc8ea2.abf12bf3bc5ecia2
+		+.a19bc4ecia2.aj4bf13bj5ca3.a2j16b2j5a5.a3j12b3ja11.a3ja4ja4ja2ja13.acdec3a.4a.2jca13.adececa3.adececa13.adececa3.adececa13.adececa3.adececa13.a2ececa3.ade3ca13.a2i3ca3.a2
+		+ec2ia14.3a2ia3.a2i3a18.2a5.2a43./64.2a.3a.3a.2a15.2a2ba3ba3ba2b2a12.a17ba10.a2bf16ba9.a9bf10ba8.a20ba8.abf12bf5ba8.a20bca7.aj4bf13b3c2a5.a2j16b2c2d2e3a3.a3j12b3jcd6ea3.a3
+		+ja4ja4ja2j2a3egh3ea3.acdec3j.2acdecj2c8ea4.adececa3.adecec2a5ecia4.adececa3.adececa.a4ecia4.adececa3.adececa2.a4ca5.a2e3ca3.a2e3ca3.4a6.a2ic2ia3.a2ic2ia14.2a.2a5.2a.2a40.
+		sheep_1|30|22|19|12|a1E1B24,b3A3541,c6B6675,d524C59,eEFD6C8,fFFFFFF,g16141A,hE2C3B5,i2A2530,jC4A197,kA28079|idle:0;walk:1,2,3,4;alt:5
+		+79.2a27.a2b2a12.13ab2c2d3a7.2a12eabc6da5.a15eb3dfg3da3.a2e14hb8da3.a17hb5dbia3.a18hb4dbia3.aj15h2j2a4ba4.a2j12h3ja2.4a6.a15ja14.2a11k2a16.acdb3k3abcdbdba13.acdbdba3.acdbd
+		+ba13.acdbdba3.acdbdba13.acdbdba3.acdbdba13.a2d3ba3.a2d3ba13.a2ib2ia3.a2ib2ia14.2a.2a5.2a.2a40./79.2a27.a2b2a12.13ab2c2d3a7.2a12eabc6da5.a15eb3dfg3da3.a2e14hb8da3.a17hb5db
+		+ia3.a18hb4dbia3.aj15h2j2a4ba4.a2j12h3ja2.4a6.a15ja14.2a11k2a17.kbcdb2abcdb3.adba12.abcda2.acda3.adba12.abcda2.acda3.adba12.abcda2.acda3.adba12.ab2da2.a2da3.a2ba12.ab2ia2.
+		+a2ia3.a2ia13.aba4.2a5.2a38./49.2a27.a2b2a12.13ab2c2d3a7.2a12eabc6da5.a15eb3dfg3da3.a2e14hb8da3.a17hb5dbia3.a18hb4dbia3.aj15h2j2a4ba4.a2j12h3ja2.4a6.a15ja14.2a11k2a17.2a4k
+		+3abcda16.acdbdba3.acdbdba13.acdbdba3.acdbdba13.acdbdba3.acdbdba13.acd3ba3.a2dbdba13.a2db2ia3.a2i3ba13.a2i3a5.3a2ia14.2a11.2a40./79.2a27.a2b2a12.13ab2c2d3a7.2a12eabc6da5.a
+		+15eb3dfg3da3.a2e14hb8da3.a17hb5dbia3.a18hb4dbia3.aj15h2j2a4ba4.a2j12h3ja2.4a6.a15ja14.2a11k2a14.acdb3a4k2akbcda12.acda3.adba2.abcda12.acda3.adba2.abcda12.acda3.adba2.abcd
+		+a12.a2da3.a2ba2.ab2da12.a2ia3.a2ia2.ab2ia13.2a5.2a4.aba41./49.2a27.a2b2a12.13ab2c2d3a7.2a12eabc6da5.a15eb3dfg3da3.a2e14hb8da3.a17hb5dbia3.a18hb4dbia3.aj15h2j2a4ba4.a2j12h
+		+3ja2.4a6.a15ja14.2a11k2a16.acdb8a.adba13.acdbdba3.acdbdba13.acdbdba3.acdbdba13.acdbdba3.acdbdba13.a2dbdba3.acd3ba13.a2i3ba3.a2db2ia14.3a2ia3.a2i3a18.2a5.2a43./125.12a16.2
+		+a12e2a13.a16ea11.a2e15ha11.a18ha10.a18h3a8.aj15h2j3b2a6.a2j12h3j2b2c2d3a4.a15ja.ac6da4.2a11k2a2.a3dfg3da4.acdb3k3abcdbd2b8da4.acdbdba3.acdbdb2a5dbia4.acdbdba3.acdbdba.a4d
+		+bia4.acdbdba3.acdbdba2.a4ba5.a2d3ba3.a2d3ba3.4a6.a2ib2ia3.a2ib2ia14.2a.2a5.2a.2a40.
+		skeleton|42|42|36|18|a17151C,bDBE1E9,cA8B0BD,d7B8391,e555C6A,fF7F3E5,gE3DBC7,hF3F6FA,i2A2732,jB2B9C7,k92DDE8,lB9B09C,mFDFDF2,n887D73,o977A49,pCCB36B,qA98960,r644933,s806044,t846547,uE6EBF5,vA6B1C3,w644A34|idle:0;walk:1,2,3,4;windup:5;strike:6;block:7;shoot:6
+		+226.5a35.2a5b2a32.a2b7ca30.a2b8cda29.ad9ed2a29.af9gaha28.af3g3i3gahja27.a3g3iki2gahja27.a4g3igigahja27.al9gahja28.al2gmimimlahja28.a8i2ahja29.algmimimlahja29.an6l2ahja25.
+		+2a.a2f6n.ahja24.adcnfginfgn2gao2pa24.acq2afgngln2g2arsa24.act2agingl4narsa24.act2afgnf5gapa25.act2ag2in6la26.adt2af3g4n2a28.ada.aigl2in32.a.af5ga34.a6n35.aglnlna35.aglnln
+		+a35.af2gn2la34.aglnlna35.aglnlna35.aglnlna35.abcdndea33.ab3cdndea33.3a2n3a188./226.5a35.2a5b2a32.a2b7ca30.a2b8cda29.ad9eda.a28.af9g2aha27.af3g3i3g2ahja26.a3g3iki2g2ahja26
+		+.a4g3igig2ahja26.al9g2ahja27.al2gmimiml2ahja27.a8ia.ahja28.algmimiml2ahja28.an6la.ahja24.2a.a2f6n2.ahja23.adcnfg2infgng2ao2pa23.acq2af2gnglnga.arsa23.act2ag2ingl3n2arsa23
+		+.act2af2gnf5gapa24.act2ag3in6la25.adt2af4g3n3a27.ada.aigl2ia32.a.af5ga34.a6n36.aglna37.agl2n37.anf2ga36.angla36.al2ngla35.al2ngla35.acnb2cda34.acnb2cda35.2a2n2a189./268.5
+		+a35.2a5b2a32.a2b7ca30.a2b8cda29.ad9ed2a29.af9gaha28.af3g3i3gahja27.a3g3iki2gahja27.a4g3igigahja27.al9gahja28.al2gmimimlahja28.a8i2ahja29.algmimimlahja29.an6l2ahja25.2a.a2
+		+f6n.ahja24.adcnfginfgn2gao2pa24.acq2afgngln2g2arsa24.act2agingl4narsa24.act2afgnf5gapa25.act2ag2in6la26.adt2af3g4n2a28.ada.aigl2in32.a.nf5ga34.a6na34.agla.alna33.af2g2ag2
+		+la32.agla.alna33.agla.alna33.agl2acdea33.abcdnc2dea31.ab3cdn3a33.5a191./226.5a35.2a5b2a32.a2b7ca30.a2b8cda29.ad9eda30.af8gaha29.af3g3i2gahja28.a3g3ikigahja28.a4g3igiahja2
+		+8.al8gahja29.al2gmimimahja29.a8iahja30.algmimimahja30.an6lahja26.2a.a2f6nahja25.adcnfgnfgnigao2pa25.acq2afngln3garsa25.act2agngl4narsa25.act2afnf5gapa26.act2agin6la27.adt
+		+2af2g5na29.ada.aigl2ina31.a.af5gn34.a6n34.agla.alna33.agla.aln2a31.af2ga2.ag2la30.agla3.alna30.agla5.alna29.agla5.alna29.abcda3.ac2dea28.ab2cda2.ac2dea29.4a4.4a186./268.5
+		+a35.2a5b2a32.a2b7ca30.a2b8cda29.ad9ed2a29.af9gaha28.af3g3i3gahja27.a3g3iki2gahja27.a4g3igigahja27.al9gahja28.al2gmimimlahja28.a8i2ahja29.algmimimlahja29.an6l2ahja25.2a.a2
+		+f6n.ahja24.adcnfginfgn2gao2pa24.acq2afgngln2g2arsa24.act2agingl4narsa24.act2afgnf5gapa25.act2ag2in6la26.adt2af3g4n2a28.ada.aigl2in32.a.nf5ga35.6n37.aglna37.af2gna36.aglna
+		+37.aglna36.abcdna36.ab2cdna36.4ndea36.5a188./52.2a39.apsa37.aropa36.ahproa35.ahjo4a.5a27.ahj2a.afgn5b2a24.ahja3.aglfn6ca22.ahja4.anglfn5cda21.aja5.adnglfn4eda22.a7.afngln
+		+5ga30.afg2n3i3ga30.a3g3iki2ga30.a4g3igiga30.al9ga31.al2gmimimla31.a8ia33.algmimimla32.an6la29.2a.a2f6n29.adcnfg5i2ga28.acq2af7ga28.act2ag6ila28.act2af7ga28.act2ag6ila28.a
+		+dt2af6ga30.ada.aigl2in32.a.af5ga35.6na35.agl2na36.agl2na36.af2gna36.aglna37.ngln38.ngln38.nbcdn36.ab3cdn36.a4n191./270.5a35.2a5b2a32.a2b7ca30.a2b8cda29.ad9eda30.af9ga30.a
+		+f3g3i3ga30.a3g3iki2ga30.a4g3igiga.3u26.al9ga3.2u26.al2gmimimla4.vu25.a8ia6.vu25.algmimimla6.v24.2an6la28.2a.a2fg5na28.adcnfg2i6n11a17.acq2afgnf2gfg2ao9ja16.act2agin4lap2r
+		+p9ha15.act2af2g5n2ao10a16.act2ag6ila.a26.adt2af6ga30.ada.aigl2in32.2anf5ga34.a4n2a35.agl2n37.anf2ga36.angla36.al2ngla35.al2ngla35.acnb2cda34.acnb2cda35.2a2n2a189./226.5a3
+		+5.na5b2a32.n2b7ca30.a2b8cda29.ad9eda30.nf9ga30.nf3g3i3ga30.n3g3iki2ga30.n4g3igiga30.nl9ga30.anl2gmimimla30.an7i5a27.aopnlgmimad3cda27.ar2n3lad2q3tda26.an2f3nacq4tda26.nfg
+		+2i2nac2tbcwea27.nfgnfgac2tcdwea27.aginglac3t2wea27.af2g2nadt4wda27.ag5iad3wda28.af6ga3da30.aigl2in.3a30.af5ga34.a6n35.aglnlna35.aglnlna35.af2gn2la34.aglnlna35.aglnlna35.a
+		+glnlna35.abcdndea33.ab3cdndea33.3a2n3a188.
+		slime|26|20|17|13|a1C362E,b97CC84,cFFFFFF,d7ABD6B,e548751,f15231C,g3B6241,h213724|idle:0;hop:1;strike:2
+		+113.8a16.2a8b2a13.a3b2c5b2d2a10.a2b3c2b8da8.a2b2cb11dea6.a3b14dea6.ab3dfc6dfc3d2ea4.ab4d2f6d2f3d2ea4.ab17d2ea4.a17d2ega4.a7d6h4d2ega4.ae16d2ega5.a3e12d2ega7.ag14ega9.16a3
+		+1./10.6a18.2a6b2a15.a3b2c3b2da13.a2b3cb6da12.ab2cb7dea11.a3b9dea11.ab2dfc4dfc2dea10.ab2d2f4d2f2dea10.ab12dea10.a12d2ea10.a5d4h3d2ea10.a12d2ea10.ae11dega11.ae9d2ega11.a2e8
+		+dega13.a10ea15.a8ga17.8a61./140.8a16.2a8b3a11.2a3b2c5b3d2a8.a3b3cb10d2a5.a3b2cb6dfc5dea3.a3b7dfcd2f5dea3.ab9d2f7d2ea2.ab11d7hd2ea2.ab10dhchchc2hdega2.a11d8hdega2.ae11dhch
+		+chc2dega3.a2e16d2ega4.ag17ega6.19a28.
+		tiger|46|24|20|20|a1E1510,bCB925D,cD5A46E,d291D1A,e6D4937,fDBC86E,g15111A,hF5EEDF,iD4838F,j956847,k392121,lD3C8B9,mFFFFFF,n8C464E|idle:0;walk:1,2,3,4;strike:5
+		+75.2a5.2a9.2a25.a2ba3.a2ba7.acba23.ab2db3ab2dba6.aba24.a4b3c4bca5.ada8.16a.acbd3bd4bca4.a2b2a4.2a16cec8bf3ba5.abdb4a2c2bd3bd3bd3bdbebd7bg2bha6.2abdbec4bd3bd3bd3bdbe7b5hia
+		+8.2aec5bd3bd3bd3bdbejd4b6ha11.a21bej4b2h3kha11.a3bd4bd4bd4bd3be3j6ha12.aj2bd4bd4bd4bd4b2e5j2a14.e3be12he3b3e6a16.abdbe12lebdbedja21.a2bj5e8ae2bjejea21.abdjejdea8.abdjedea
+		+21.a2bje2jea8.a2bjejea21.a2bje2jea8.a2bjejea21.a3he3la8.a3he2la21.a2hle3la8.a2hle2la22.3a.3a10.6a107./75.2a5.2a9.2a25.a2ba3.a2ba7.acba23.ab2db3ab2dba6.aba24.a4b3c4bca5.ad
+		+a8.16a.acbd3bd4bca4.a2b2a4.2a16cec8bf3ba5.abdb4a2c2bd3bd3bd3bdbebd7bg2bha6.2abdbec4bd3bd3bd3bdbe7b5hia8.2aec5bd3bd3bd3bdbejd4b6ha11.a21bej4b2h3kha11.a3bd4bd4bd4bd3be3j6ha
+		+12.aj2bd4bd4bd4bd4b2e5j2a14.aje3be8he3be2j2ej2e3a17.aebdbe8lebdbe3ajdja21.e2bje8ae2bje2.a2jea21.ebdje8.abdja2.ajdea21.e2bje8.a2bja2.a2jea21.e2bje8.a2bja2.a2jea21.e3he8.a3
+		+ha2.a3la21.e2hle8.a2hla2.a3la22.3e10.3a4.3a105./29.2a5.2a9.2a25.a2ba3.a2ba7.acba23.ab2db3ab2dba6.aba24.a4b3c4bca5.ada8.16a.acbd3bd4bca4.a2b2a4.2a16cec8bf3ba5.abdb4a2c2bd3
+		+bd3bd3bdbebd7bg2bha6.2abdbec4bd3bd3bd3bdbe7b5hia8.2aec5bd3bd3bd3bdbejd4b6ha11.a21bej4b2h3kha11.a3bd4bd4bd4bd3be3j6ha12.aj2bd4bd4bd4bd4b2e5j2a14.a2j14he3be2a.5a16.a3be12le
+		+bdbe2ja21.abdb5e8ae2bjedja21.a2bjejdea8.abdjejea21.abdje2jea8.a2bjedea21.a2bje2jea8.a2bjejea21.a2bje3la8.a3hejea21.a3he3la8.a2hle2la21.a2hl4a10.2ae3la22.3a17.3a107./75.2a
+		+5.2a9.2a25.a2ba3.a2ba7.acba23.ab2db3ab2dba6.aba24.a4b3c4bca5.ada8.16a.acbd3bd4bca4.a2b2a4.2a16cec8bf3ba5.abdb4a2c2bd3bd3bd3bdbebd7bg2bha6.2abdbec4bd3bd3bd3bdbe7b5hia8.2ae
+		+c5bd3bd3bd3bdbejd4b6ha11.a21bej4b2h3kha11.a3bd4bd4bd4bd3be3j6ha12.aj2bd4bd4bd4bd4b2e5j2a12.a3be16he3be.5a14.abdbej15lebdba20.a2bj4a5e7a2e2bja20.abdja3.ajdea7.aebdja20.a2b
+		+ja3.a2jea7.ae2bja20.a2bja3.a2jea7.ae2bja20.a3ha3.a3la7.ae3ha20.a2hla3.a3la7.ae2hla21.3a5.3a9.a2ea108./29.2a5.2a9.2a25.a2ba3.a2ba7.acba23.ab2db3ab2dba6.aba24.a4b3c4bca5.ad
+		+a8.16a.acbd3bd4bca4.a2b2a4.2a16cec8bf3ba5.abdb4a2c2bd3bd3bd3bdbebd7bg2bha6.2abdbec4bd3bd3bd3bdbe7b5hia8.2aec5bd3bd3bd3bdbejd4b6ha11.a21bej4b2h3kha11.a3bd4bd4bd4bd3be3j6ha
+		+12.aj2bd4bd4bd4bd4b2e5j2a14.e3be15h2j2e6a16.abdbe12le3bedja21.a2bj5e8aebdbejea21.abdje2jea8.a2bjedea21.a2bjejdea8.abdjejea21.a2bje2jea8.a2bjejea21.a3he2jea8.a2bje2la21.a2
+		+hle3la8.a3he2la22.4a3la8.a2hle2a27.3a10.3a110./77.2a5.2a7.2a27.a2ba3.a2ba5.acba25.ab2db3ab2dba4.aba26.a4b3c4bca3.ada8.16a3.acbd3bd4bca2.a2b2a4.2a16c3ac8bf3bha2.abdb4a2c2b
+		+d3bd3bd3bdb2cebd7bg2bhia3.2abdbec4bd3bd3bd3bd3be7bhmhmhma6.2aec5bd3bd3bd3bd3bejd4bh5na9.a23bej4bh5na9.a3bd4bd4bd4bd5be3jbhmhmhma9.aj2bd4bd4bd4bd4bj3a3j4ha10.a3be15he3be3.
+		+7a11.abdbe15lebdbe21.a2bje2a5e8ae2bje21.abdja2.ajdea8.ebdje21.a2bja2.a2jea8.e2bje21.a2bja2.a2jea8.e2bje21.a3ha2.a3la8.e3he21.a2hla2.a3la8.e2hle22.3a4.3a10.3e108.
+		warden|84|94|90|42|a120E18,b6A6F7E,c989EAD,dD6DAE3,eF3F5F9,f100C18,g57473A,h392E25,i625773,j3B3148,k292233,l0C0912,mCEA8EE,nFCEEFC,o2B2D38,p818493,q5A5E6C,r3E404D,sD9C4F4,tA481CE,u1C1825,v1B1525,wC096E9,xEFE0FA|idle:0;fly:0,1;windup:2;strike:3;cast:4
+		+723.12a71.a2b2c7de5a67.a2b2c8d4e2a66.2a2b5a2c4d3ea64.fgh2a5.5a2d2ea64.fghf11.2ad2ea63.fghf13.a2ea63.fghf14.aea63.fghf15.a64.fghf80.fghf66.2a12.fghf65.a2ia11.fghf64.ai2jia
+		+10.fghf63.ai4jia9.fghf62.ai6jia8.fghf61.ai8jka7.fghf60.ai6j4lka6.fghf59.ai6j6lka5.fghf59.ai5j7lka5.fghf58.ai5j5lmnlka5.fghf58.ai5j8lka5.fghf58.ai5j4lm3lka5.fghf58.ak6j6l2
+		+ka5.fghf58.ak7j4l2ka6.fghf59.a2kjk2j6oa7.fghf60.ak2a2o5pq2a6.fghf61.2ao4p5qra5.fghf60.2ao2p7q3ra4.fghf59.apo2p7q2roa5.fghf58.a2po8q3r2o5.fghf58.ap2qo7r4oa5.3of57.ap4q10or
+		+a4.a2qro57.a9qs4q2ra3.ap2q2ra56.ar8qt4q2ra3.a3qroa56.a2r11q2roa4.aqr2o58.a2r10q2roa4.a2qro59.a11r2oa4.ap3qoa57.2a13o6a2qr2oa56.a3i2j2k5jk5jku2ar3o56.a3i3jk5j2k5jkua.3of56
+		+.a3i3j2k5jk6jkuafghf56.a3i3j2k5jk6jkuafghf55.a3i3j2k5j2k6jkuafghf55.a3i3j2k6j2k6jk2ughf55.a3i3j2k6j2k6jk2ughf54.a3i4j2k5j2k7jk2ughf54.a3i4j2k5j2k7jk2ughf54.a3i4j2k6j2k7jk
+		+2uhf54.a3i4j2k6j2k7jk2uhf53.a4i3j2k7j2k7jk2uhf53.a4i3j2k7j2k7jk2uhf53.a4i4j2k6j2k8jk2uf53.a4i4j2k6j2k8jk2uf52.a4i4j2k7j2k8jk2uf52.a4i4j2k7j2k8jk2uf52.a4i4j2k7j3k8jk2u52.a
+		+4i4j2k7j3k8jk2u52.a4i4j2k7j3k8jk2u51.a4i4j3k7j2k9jk2u51.a4i4j3k7j2k9jk2u51.a4i5j2k7j3k9jkua50.a4i5j2k7j3k9jkua49.a4i5j2k8j3k9jkua49.a4i5j2k8j3k9jkua49.a4i5j2k8j3k9jkua49.
+		+a4i5j3k8j2k10jkua48.a4i5j3k8j2k10jkua47.a5i4j3k8j3k10jkua47.a5i4j3k8j3k10jkua47.a5i4j3k8j3k10jkua47.a5i5j2k9j3k10jkua46.a5i5j2k9j3k10jkua45.a5i5j3k8j3k11jkua45.a5i5j3k8j3
+		+k11jkua45.a5i5j3k8j3k11jkua45.a5i5j3k9j3k11jkua44.a5i5j3k9j3k11jkua44.a5i5j3k9j3k11jkua43.a2ia2i2ja2j2ka4ja4ja3kja4ja4jaua43.a2iaia2jaja2kaja2jaja2jakakjaja2jaja2jaua43.a
+		+i2aiaj2ajaj2akaj2ajaj2akak2ajaj2ajaj2aka43.aia.2aja.2aja.2aja.2aja.2aka.2aja.2aja.a45.a4.a4.a4.a4.a4.a4.a4.a197./807.12a71.a2b2c7de5a67.a2b2c8d4e2a66.2a2b5a2c4d3ea64.fgh2
+		+a5.5a2d2ea64.fghf11.2ad2ea63.fghf13.a2ea63.fghf14.aea63.fghf15.a64.fghf80.fghf66.2a12.fghf65.a2ia11.fghf64.ai2jia10.fghf63.ai4jia9.fghf62.ai6jia8.fghf61.ai8jka7.fghf60.ai
+		+6j4lka6.fghf59.ai6j6lka5.fghf59.ai5j7lka5.fghf58.ai5j5lmnlka5.fghf58.ai5j8lka5.fghf58.ai5j4lm3lka5.fghf58.ak6j6l2ka5.fghf58.ak7j4l2ka6.fghf59.a2kjk2j6oa7.fghf60.ak2a2o5pq
+		+2a6.fghf61.2ao4p5qra5.fghf60.2ao2p7q3ra4.fghf59.apo2p7q2roa5.fghf58.a2po8q3r2o5.fghf58.ap2qo7r4oa5.3of57.ap4q10ora4.a2qro57.a9qs4q2ra3.ap2q2ra56.ar8qt4q2ra3.a3qroa56.a2r1
+		+1q2roa4.aqr2o58.a2r10q2roa4.a2qro59.a11r2oa4.ap3qoa57.2a13o6a2qr2oa56.a3i2j2k5jk5jku2ar3o56.a3i3jk5j2k5jkua.3of56.a3i3j2k5jk6jkuafghf56.a3i3j2k5jk6jkuafghf55.a3i3j2k5j2k6
+		+jkuafghf55.a3i3j2k6j2k6jk2ughf55.a3i3j2k6j2k6jk2ughf54.a3i4j2k5j2k7jk2ughf54.a3i4j2k5j2k7jk2ughf54.a3i4j2k6j2k7jk2uhf54.a3i4j2k6j2k7jk2uhf53.a4i3j2k7j2k7jk2uhf53.a4i3j2k7
+		+j2k7jk2uhf53.a4i4j2k6j2k8jk2uf53.a4i4j2k6j2k8jk2uf52.a4i4j2k7j2k8jk2uf52.a4i4j2k7j2k8jk2uf52.a4i4j2k7j3k8jk2u52.a4i4j2k7j3k8jk2u52.a4i4j2k7j3k8jk2u51.a4i4j3k7j2k9jk2u51.a
+		+4i4j3k7j2k9jk2u51.a4i5j2k7j3k9jkua51.a4i5j2k7j3k9jkua49.a4i5j2k8j3k9jkua49.a4i5j2k8j3k9jkua49.a4i5j2k8j3k9jkua49.a4i5j3k8j2k10jkua48.a4i5j3k8j2k10jkua47.a5i4j3k8j3k10jkua
+		+47.a5i4j3k8j3k10jkua47.a5i4j3k8j3k10jkua47.a5i5j2k9j3k10jkua47.a5i5j2k9j3k10jkua45.a5i5j3k8j3k11jkua45.a5i5j3k8j3k11jkua45.a5i5j3k8j3k11jkua45.a5i5j3k9j3k11jkua44.a5i5j3k
+		+9j3k11jkua44.a5i5j3k9j3k11jkua44.a4ia4ja2k2ja4ja2j2ka4ja4jajkua44.aia2iaja2jaka2jaja2jaja2kaja2jaja2jajaua44.aiai2ajaj2akak2ajaj2ajak2ajaj2ajaj2ajaka45.2aia.2aja.2aka.2aj
+		+a.2aka.2aja.2aja.2aka47.a4.a4.a4.a4.a4.a4.a4.a108./695.3a79.2a2eda76.2a2e2dca75.a2e2dc2ahf73.ae2dc2afghf72.ae2dca3.fghf70.ae2d2a4.fghf69.ae2da7.fghf68.aeda9.fghf66.aeda10
+		+.fghf66.aea12.fghf66.a13.fghf5.2a74.fghf3.a2ia74.fghf.ai2jia73.fghfai4jia73.fgui6jia72.fui8jka71.ai6j4lka69.ai6j6lka68.ai5j7lka67.ai5j5lmnlka67.ai5j8lka67.ai5j4lm3lka67.a
+		+k6j6l2ka67.ak7j4l2ka69.a2kjk2j6oa71.ak2a2o5pq2a71.2ao4p5qra69.2ao2p7q3ra67.apo2p7q2r2oa66.a2po8qr2o2pqa65.ap2qo7ro2p2qra64.ap4q7op2q2ra65.a9qsop2qr2o66.ar8qop2q2r2o66.a2r
+		+7qo2q5of66.a2r7q4or2of67.a9r5oghf65.2a13oa4u63.a3i2j2k5jk5jkua61.a3i3jk5j2k5jk2u61.a3i3j2k5jk6jkua60.a3i3j2k5jk6jk2u59.a3i3j2k5j2k6jkua59.a3i3j2k6j2k6jkua58.a3i3j2k6j2k6j
+		+kua57.a3i4j2k5j2k7jkua57.a3i4j2k5j2k7jkua57.a3i4j2k6j2k7jkua56.a3i4j2k6j2k7jkua55.a4i3j2k7j2k7jkua55.a4i3j2k7j2k7jkua55.a4i4j2k6j2k8jkua54.a4i4j2k6j2k8jkua53.a4i4j2k7j2k8
+		+jkua53.a4i4j2k7j2k8jkua53.a4i4j2k7j3k8jkua52.a4i4j2k7j3k8jkua52.a4i4j2k7j3k8jkua51.a4i4j3k7j2k9jkua51.a4i4j3k7j2k9jkua51.a4i5j2k7j3k9jkua49.a4i5j2k7j3k9jkua49.a4i5j2k8j3k
+		+9jkua49.a4i5j2k8j3k9jkua49.a4i5j2k8j3k9jkua49.a4i5j3k8j2k10jkua48.a4i5j3k8j2k10jkua47.a5i4j3k8j3k10jkua47.a5i4j3k8j3k10jkua47.a5i4j3k8j3k10jkua47.a5i5j2k9j3k10jkua46.a5i5
+		+j2k9j3k10jkua45.a5i5j3k8j3k11jkua45.a5i5j3k8j3k11jkua45.a5i5j3k8j3k11jkua45.a5i5j3k9j3k11jkua44.a5i5j3k9j3k11jkua44.a5i5j3k9j3k11jkua43.a3iai3jaj3ka4ja4ja2k2ja4ja3jka45.a
+		+2iaia2jaja2kaja2jaja2jaka2jaja2jajajk2a44.ai2aiaj2ajak2ajaj2ajaj2akaj2ajaj2ajaj2aua43.aia.2aja.2aka.2aja.2aja.2aja.2aja.2aja.a45.a4.a4.a4.a4.a4.a4.a4.a197./1717.2a81.a2ia
+		+79.ai2jia77.ai4jia75.ai6jia73.ai8jka71.ai6j4lka69.ai6j6lka68.ai5j7lka67.ai5j5lmnlka67.ai5j8lka67.ai5j4lm3lka67.ak6j6l2ka67.ak7j4l2ka69.a2kjkj2v5oa71.ak2avghv3pq2a71.2aopv
+		+ghv4qra69.2ao2pqvghv2q3ra67.apo2p3qvgh2vroa67.a2po6qv6o67.ap2qo5ro2p2q2o4a62.ap4q5op9qra61.a9qo2q4r5qoa60.ar8qt6or2oq2oa60.a2r9q2o2r6oa62.a2r10q2roafg2of63.a11r2oa2.f2ghf
+		+61.2a13o4avfghf59.a3i2j2k5jk5jkuafghf57.a3i3jk5j2k5jkua.fghf56.a3i3j2k5jk6jkua.fghf55.a3i3j2k5jk6jkua2.fghf3.2w48.a3i3j2k5j2k6jkua3.fghf4.2w46.a3i3j2k6j2k6jkua3.fgh2f4.3w
+		+43.a3i3j2k6j2k6jkua4.f2ghf6.4w38.a3i4j2k5j2k7jkua5.2fghf9.4w34.a3i4j2k5j2k7jkua7.fghf46.a3i4j2k6j2k7jkua7.fghf45.a3i4j2k6j2k7jkua8.fghf43.a4i3j2k7j2k7jkua9.fghf42.a4i3j2k
+		+7j2k7jkua10.fgh2f40.a4i4j2k6j2k8jkua10.f2gha39.a4i4j2k6j2k8jkua11.2faea37.a4i4j2k7j2k8jkua13.a2e2a35.a4i4j2k7j2k8jkua14.a2ed3a32.a4i4j2k7j3k8jkua14.a2e3d8a24.a4i4j2k7j3k8
+		+jkua15.2a6d3c2ba23.a4i4j2k7j3k8jkua17.3a2d3c3ba22.a4i4j3k7j2k9jkua20.4a2b2a23.a4i4j3k7j2k9jkua24.2a25.a4i5j2k7j3k9jkua51.a4i5j2k7j3k9jkua49.a4i5j2k8j3k9jkua49.a4i5j2k8j3k
+		+9jkua49.a4i5j2k8j3k9jkua49.a4i5j3k8j2k10jkua48.a4i5j3k8j2k10jkua47.a5i4j3k8j3k10jkua47.a5i4j3k8j3k10jkua47.a5i4j3k8j3k10jkua47.a5i5j2k9j3k10jkua47.a5i5j2k9j3k10jkua45.a5i
+		+5j3k8j3k11jkua45.a5i5j3k8j3k11jkua45.a5i5j3k8j3k11jkua45.a5i5j3k9j3k11jkua44.a5i5j3k9j3k11jkua44.a5i5j3k9j3k11jkua44.a4ia4ja2k2ja4ja2j2ka4ja4jajkua44.aia2iaja2jaka2jaja2j
+		+aja2kaja2jaja2jajaua44.aiai2ajaj2akak2ajaj2ajak2ajaj2ajaj2ajaka45.2aia.2aja.2aka.2aja.2aka.2aja.2aja.2aka47.a4.a4.a4.a4.a4.a4.a4.a108./615.12a71.a2b2c7de5a67.a2b2c8d4e2a6
+		+6.2a2b5a2c4d3ea64.fgh2a5.5a2d2ea64.fghf11.2ad2ea63.fghf13.a2ea63.fghf14.aea63.fghf15.a64.fghf80.fghf80.fghf6.2a72.fghf5.a2ia71.fghf4.ai2jia70.fghf3.ai4jia69.fghf2.ai6jia6
+		+8.fghf.ai8jka67.fghfai6j4lka66.fghui6j6lka65.fghui5j7lka65.fgui5j5lmnlka65.fgui5j8lka65.fgui5j4lm3lka65.fguk6j6l2ka65.fguk7j4l2ka66.fghu2kjk2j6oa67.fghfak2a2o5pq2a66.fghf
+		+.2ao4p5qra65.fghf2ao2p7q3ra8.w.w53.fghopo2p7q2roa8.w3xw52.fgo2po7q3or2o7.w2xn2xw51.fgop2qo5ro2pq3o3a5.w3xw52.fop4q5op3qr5q3a3.w.w53.fo9qo2q4r5qpqa58.for8qt7o2ro2qoa58.fo2
+		+r9q2o2ro3ar2oa59.fgo2r10q2roa2.3a60.fgho11r2oa66.fg2u13o5a62.fu3i2j2k5jk5jkua61.u3i3jk5j2k5jkua61.u3i3j2k5jk6jkua60.u3i3j2k5jk6jkua59.a3i3j2k5j2k6jkua59.a3i3j2k6j2k6jkua5
+		+8.a3i3j2k6j2k6jkua57.a3i4j2k5j2k7jkua57.a3i4j2k5j2k7jkua57.a3i4j2k6j2k7jkua56.a3i4j2k6j2k7jkua55.a4i3j2k7j2k7jkua55.a4i3j2k7j2k7jkua55.a4i4j2k6j2k8jkua54.a4i4j2k6j2k8jkua
+		+53.a4i4j2k7j2k8jkua53.a4i4j2k7j2k8jkua53.a4i4j2k7j3k8jkua52.a4i4j2k7j3k8jkua52.a4i4j2k7j3k8jkua51.a4i4j3k7j2k9jkua51.a4i4j3k7j2k9jkua51.a4i5j2k7j3k9jkua50.a4i5j2k7j3k9jku
+		+a49.a4i5j2k8j3k9jkua49.a4i5j2k8j3k9jkua49.a4i5j2k8j3k9jkua49.a4i5j3k8j2k10jkua48.a4i5j3k8j2k10jkua47.a5i4j3k8j3k10jkua47.a5i4j3k8j3k10jkua47.a5i4j3k8j3k10jkua47.a5i5j2k9j
+		+3k10jkua46.a5i5j2k9j3k10jkua45.a5i5j3k8j3k11jkua45.a5i5j3k8j3k11jkua45.a5i5j3k8j3k11jkua45.a5i5j3k9j3k11jkua44.a5i5j3k9j3k11jkua44.a5i5j3k9j3k11jkua43.a2ia2i2ja2j2ka4ja4j
+		+a3kja4ja4jaua43.a2iaia2jaja2kaja2jaja2jakakjaja2jaja2jaua43.ai2aiaj2ajaj2akaj2ajaj2akak2ajaj2ajaj2aka43.aia.2aja.2aja.2aja.2aja.2aka.2aja.2aja.a45.a4.a4.a4.a4.a4.a4.a4.a2
+		+81.
+		wolf|34|21|18|14.5|a17171E,b898D9A,cABABAE,d5E606D,e41424F,fD8BE67,g15111A,hCBCED6,i1A1418,j888993,kFFFFFF,l8C464E|idle:0;walk:1,2,3,4;strike:5
+		+21.a3.a10.2a16.aba.aba8.a2ca14.abdbabdba6.ac2bca13.a3bc3bca5.ac4ba.11ae2c6bca5.ad3b2e10cec5bfg3ba5.adbe2c10be9b3ha5.aec12bebd5b4hia6.e14bed3b6ha7.a15be4d2j3a8.ad15b3e3a12
+		+.a2d11h2d2a16.a2be8je2beda16.abd4e5aebd2ea16.abdedea5.abd2ea16.abdedea5.abd2ea16.abdedea5.abd2ea16.abdedea5.abd2ea16.a5ea5.a4ea17.2a.2a7.4a46./21.a3.a10.2a16.aba.aba8.a2c
+		+a14.abdbabdba6.ac2bca13.a3bc3bca5.ac4ba.11ae2c6bca5.ad3b2e10cec5bfg3ba5.adbe2c10be9b3ha5.aec12bebd5b4hia6.e14bed3b6ha7.a15be4d2j3a8.ad15b3e3a12.a2d11h2d2a17.2e2be4je2be3a
+		+2da15.aebde4aebde2.adea15.aebda4.abda2.adea15.aebda4.abda2.adea15.aebda4.abda2.adea15.aebda4.abda2.adea15.a3ea4.a2ea2.a2ea16.aea6.2a4.2a44./2.2a16.aba.aba8.a2ca14.abdbabd
+		+ba6.ac2bca13.a3bc3bca5.ac4ba.11ae2c6bca5.ad3b2e10cec5bfg3ba5.adbe2c10be9b3ha5.aec12bebd5b4hia6.e14bed3b6ha7.a15be4d2j3a8.ad15b3e3a12.a2d11h2d2a17.2ad8je2be18.a2b4e5aebded
+		+a16.abdedea5.abd2ea16.abdedea5.abd2ea16.abdedea5.abd2ea16.abdedea5.abd2ea16.abd3ea5.a4ea16.a2e3a7.a3ea17.2a12.2a46./21.a3.a10.2a16.aba.aba8.a2ca14.abdbabdba6.ac2bca13.a3b
+		+c3bca5.ac4ba.11ae2c6bca5.ad3b2e10cec5bfg3ba5.adbe2c10be9b3ha5.aec12bebd5b4hia6.e14bed3b6ha7.a15be4d2j3a8.ad15b3e3a12.a2d11h2d2a14.a2bead9jde2ba14.abda.2a4e3a3ebda14.abda3
+		+.adea3.adebda14.abda3.adea3.adebda14.abda3.adea3.adebda14.abda3.adea3.adebda14.a2ea3.a2ea3.a4ea15.2a5.2a5.4a46./2.2a16.aba.aba8.a2ca14.abdbabdba6.ac2bca13.a3bc3bca5.ac4ba
+		+.11ae2c6bca5.ad3b2e10cec5bfg3ba5.adbe2c10be9b3ha5.aec12bebd5b4hia6.e14bed3b6ha7.a15be4d2j3a8.ad15b3e3a12.a2d11h2d2a16.a2be9jd2eda16.abd4e5ae2b2ea16.abdedea5.abd2ea16.abde
+		+dea5.abd2ea16.abdedea5.abd2ea16.abdedea5.abd2ea16.a3edea5.abd2ea17.3a2ea5.a3ea21.2a7.2a48./23.a3.a8.2a18.aba.aba6.a2ca16.abdbabdba4.ac2bca15.a3bc3bca3.ac4ba.12a.a2c6bc2a2
+		+.ad3b2e12cec5bfg3bha2.adbe2c12be9b3hi3.aec14bebd5bkhkhka4.e16bed4b5la5.a17be2d2bkhkhka5.ad16bdea2d3hja7.a2d11h2d2a2.6a7.a2bed9jde2ba15.abd3a4e4a2ebda15.abda2.adea4.aebda1
+		+5.abda2.adea4.aebda15.abda2.adea4.aebda15.abda2.adea4.aebda15.a2ea2.a2ea4.a3ea16.2a4.2a6.aea46.
+		wolf_1|34|21|18|14.5|a231A14,bB8976E,cC9AD88,d836950,e5F4A3B,f291D18,g15111A,hB85B5B,iE5D4B5,j864343,k1A1418,l9F8F7E,mFFFFFF,n8C464E|idle:0;walk:1,2,3,4;strike:5
+		+21.a3.a10.2a16.aba.aba8.a2ca14.abdbabdba6.ac2bca13.a3bc3bca5.ac4ba.11ae2c6bca5.ad3b2e10cec5bfg3ba5.adbe2c10beh8b3ia5.aec12behj5b4ika6.e14bed3b6ia7.a15be4d2l3a8.ad15b3e3a1
+		+2.a2d11i2d2a16.a2be8le2beda16.abd4e5aebd2ea16.abdedea5.abd2ea16.abdedea5.abd2ea16.abdedea5.abd2ea16.abdedea5.abd2ea16.a5ea5.a4ea17.2a.2a7.4a46./21.a3.a10.2a16.aba.aba8.a2
+		+ca14.abdbabdba6.ac2bca13.a3bc3bca5.ac4ba.11ae2c6bca5.ad3b2e10cec5bfg3ba5.adbe2c10beh8b3ia5.aec12behj5b4ika6.e14bed3b6ia7.a15be4d2l3a8.ad15b3e3a12.a2d11i2d2a17.2e2be4le2be
+		+3a2da15.aebde4aebde2.adea15.aebda4.abda2.adea15.aebda4.abda2.adea15.aebda4.abda2.adea15.aebda4.abda2.adea15.a3ea4.a2ea2.a2ea16.aea6.2a4.2a44./2.2a16.aba.aba8.a2ca14.abdba
+		+bdba6.ac2bca13.a3bc3bca5.ac4ba.11ae2c6bca5.ad3b2e10cec5bfg3ba5.adbe2c10beh8b3ia5.aec12behj5b4ika6.e14bed3b6ia7.a15be4d2l3a8.ad15b3e3a12.a2d11i2d2a17.2ad8le2be18.a2b4e5aeb
+		+deda16.abdedea5.abd2ea16.abdedea5.abd2ea16.abdedea5.abd2ea16.abdedea5.abd2ea16.abd3ea5.a4ea16.a2e3a7.a3ea17.2a12.2a46./21.a3.a10.2a16.aba.aba8.a2ca14.abdbabdba6.ac2bca13.
+		+a3bc3bca5.ac4ba.11ae2c6bca5.ad3b2e10cec5bfg3ba5.adbe2c10beh8b3ia5.aec12behj5b4ika6.e14bed3b6ia7.a15be4d2l3a8.ad15b3e3a12.a2d11i2d2a14.a2bead9lde2ba14.abda.2a4e3a3ebda14.a
+		+bda3.adea3.adebda14.abda3.adea3.adebda14.abda3.adea3.adebda14.abda3.adea3.adebda14.a2ea3.a2ea3.a4ea15.2a5.2a5.4a46./2.2a16.aba.aba8.a2ca14.abdbabdba6.ac2bca13.a3bc3bca5.a
+		+c4ba.11ae2c6bca5.ad3b2e10cec5bfg3ba5.adbe2c10beh8b3ia5.aec12behj5b4ika6.e14bed3b6ia7.a15be4d2l3a8.ad15b3e3a12.a2d11i2d2a16.a2be9ld2eda16.abd4e5ae2b2ea16.abdedea5.abd2ea16
+		+.abdedea5.abd2ea16.abdedea5.abd2ea16.abdedea5.abd2ea16.a3edea5.abd2ea17.3a2ea5.a3ea21.2a7.2a48./23.a3.a8.2a18.aba.aba6.a2ca16.abdbabdba4.ac2bca15.a3bc3bca3.ac4ba.12a.a2c6
+		+bc2a2.ad3b2e12cec5bfg3bia2.adbe2c12beh8b3ik3.aec14behj5bmimima4.e16bed4b5na5.a17be2d2bmimima5.ad16bdea2d3ila7.a2d11i2d2a2.6a7.a2bed9lde2ba15.abd3a4e4a2ebda15.abda2.adea4.
+		+aebda15.abda2.adea4.aebda15.abda2.adea4.aebda15.abda2.adea4.aebda15.a2ea2.a2ea4.a3ea16.2a4.2a6.aea46.
+		wraith|28|28|24|13|a150F1E,b826AA1,c5F4981,d100C16,eEFE9AF,fD9C769,g42325C,h2F2443,i9893AF,jD5D1E4|idle:0;fly:0,1;strike:2
+		+37.6a20.2a6b2a17.a2b7cba15.ab11ca14.ab2c6d3ca13.ab3c5ded3ca12.ab3cdf3dfd3ca12.ab4c5d4cga12.a5c3d5c2ga11.a13cga11.ab13c2ga10.ab13cga11.a14cga11.a14c2ga10.a14cga11.ag13c2ga
+		+10.ag13c2ga11.ag12c2ga11.ag11c2ga12.ag2ca5ca2c2ga13.agc2a3c2ac2ga14.aga.agcga.aga16.a2.ag2a3.a21.a100./65.6a20.2a6b2a17.a2b7cba15.ab11ca14.ab2c6d3ca13.ab3c5ded3ca12.ab3cd
+		+f3dfd3ca12.ab4c5d4cga12.a5c3d5c2ga11.a13cga11.ab13c2ga10.ab13cga11.a14cga11.a14c2ga10.a14cga11.ag13c2ga10.ag13c2ga11.ag12c2ga11.ag12c2ga12.ag2ca5cac2ga13.agca.a3c2acga15.
+		+aga.agca2.aga16.a3.aga3.a22.a70./38.6a20.2a6b2a17.a2b7cba15.ab11ca14.ab2c6d3ca13.ab3c5ded3ca12.ab3cdf3dfd3ca12.ab4c5d4cga12.a5c3d5c2gh11.a7c4h2cghia9.ab6chb3c5hia8.ab6ch6
+		+c2jhia8.a7chg4c2jijh9.a8ch3g2hjhja9.a9c3h2ch2a10.ag13c2ga10.ag13c2ga11.ag12c2ga11.ag11c2ga12.ag2ca5ca2c2ga13.agc2a3c2ac2ga14.aga.agcga.aga16.a2.ag2a3.a21.a99.
+		zombie|34|34|31|13.5|a17191E,b37462E,c242E1E,d9AB978,e7FA964,f3E5A3E,g5A794D,h1A1418,iD87067,j381E26,kE7E2C9,l6FA098,m4A8382,n365C60,o294248,p6C719B,q494F7D,r343858,s262940,t494048,u3A3238,v2A242C,w1E1A20|idle:0;walk:1,2,3,4;windup:5;strike:6
+		+14.5a28.a5b2a25.a8ba23.ac3b5da23.ac2b2d4ea23.acb2e4fea23.acg2e2hih2ea22.a2g7ega23.ag2ejkjkja24.a2ge5ja23.2a2fgkjk2gf2a20.a3l7f2ega18.a2l2m11fa16.a2l2mf4lmfe3defa15.al3mf4
+		+m2n5ega15.a4mf3nof2g2ega2ga14.an4m4f.5ag2a15.a2n4m2na6.a18.a2n3mnoa25.onomnmoa25.a3on3oa25.apoq2oro26.a6srsa24.ap2qrs2rsa24.ap2qrs2rsa25.a2qrs2rsa25.a2qrs2rsa25.aq2rsr2sa
+		+25.aeg2agfa26.aeg2agfa25.a4ts3ua24.a4tvs2uwa24.4as4a50./14.5a28.a5b2a25.a8ba23.ac3b5da23.ac2b2d4ea23.acb2e4fea23.acg2e2hih2ea22.a2g7ega23.ag2ejkjkja24.a2ge5ja23.2a2fgkjk2
+		+gf2a20.a3l7f2ega18.a2l2m11fa16.a2l2mf4lmfe3defa15.al3mf4m2n5ega15.a4mf3nof2g2ega2ga14.an4m4f.5ag2a15.a2n4m2na6.a18.a2n3mnoa25.onomnmoa25.a3on3oa25.apoq2oro26.a6srsa24.a2p
+		+2qrsrsa25.ap2qr2sa27.a2q2rsa27.sp2qrs28.as2qra28.asega29.aseg2a28.as4ta27.as3tva28.a3sa52./48.5a28.a5b2a25.a8ba23.ac3b5da23.ac2b2d4ea23.acb2e4fea23.acg2e2hih2ea22.a2g7ega
+		+23.ag2ejkjkja24.a2ge5ja23.2a2fgkjk2gf2a20.a3l7f2ega18.a2l2m11fa16.a2l2mf4lmfe3defa15.al3mf4m2n5ega15.a4mf3nof2g2ega2ga14.an4m4f.5ag2a15.a2n4m2na6.a18.a2n3mnoa25.onomnmoa2
+		+5.a3on3oa25.spoq2orosa24.a6srsa24.ap2qrsqrsa25.a2qrsq2rsa24.a2qr2a2rsa24.aq2r2agfsa24.aega.agfa25.aeg2a3ua24.a4ts3uwa23.a4tvs3a25.5a54./14.5a28.a5b2a25.a8ba23.ac3b5da23.a
+		+c2b2d4ea23.acb2e4fea23.acg2e2hih2ea22.a2g7ega23.ag2ejkjkja24.a2ge5ja23.2a2fgkjk2gf2a20.a3l7f2ega18.a2l2m11fa16.a2l2mf4lmfe3defa15.al3mf4m2n5ega15.a4mf3nof2g2ega2ga14.an4m
+		+4f.5ag2a15.a2n4m2na6.a18.a2n3mnoa25.onomnmoa25.a3on3oa25.apoq2oro26.a6srsa24.ap2qrsq2rsa22.ap2qr2aq2rsa22.a2q2ra.a2r2sa20.ap2qra2.aq2rsa20.a2qra4.a2rsa20.aega5.agfa21.aeg
+		+a5.agf2a20.a3ta4.a4ua19.a3tva3.a3uwa20.4a5.4a48./48.5a28.a5b2a25.a8ba23.ac3b5da23.ac2b2d4ea23.acb2e4fea23.acg2e2hih2ea22.a2g7ega23.ag2ejkjkja24.a2ge5ja23.2a2fgkjk2gf2a20.
+		+a3l7f2ega18.a2l2m11fa16.a2l2mf4lmfe3defa15.al3mf4m2n5ega15.a4mf3nof2g2ega2ga14.an4m4f.5ag2a15.a2n4m2na6.a18.a2n3mnoa25.onomnmoa25.a3on3oa25.spoq2orosa24.a6srsa24.a2pqrs2r
+		+sa25.ap2qrsrsa26.a2qrsrsa26.aegr3sa26.aegsgfa26.a3tsgfa26.a3tvs2ua26.2a2s3uwa28.5a50./13.5a28.a5b2a25.a8ba23.ac3b5da23.ac2b2d4ea23.acb2e4fef.a21.acg2e2hih2e2fa20.a2g7e2f2
+		+a21.ag2ejkj2fdeaga20.f2gej2fd2e2ga20.2o4flm2eg2a20.a2l2f2lmnfga21.a2lf2l2mnf2a21.a2lmfm2nofa23.al3m4fna23.a7m2na23.an5m2na24.a2n4m2na25.a2n3mnoa25.anomnmoa26.3on4o26.aoq2
+		+oroa26.a6srsa24.ap2qrs2rsa24.ap2qrsrsa26.a2qr3sa26.a2qr2sa27.aq2rsa28.aegsa29.aegsa28.a4tsa27.a4tvsa27.2a3sa53./50.5a28.a5b2a25.a8ba23.ac3b5da23.ac2b2d4ea23.acb2e4fea23.a
+		+cg2e2hih2ea22.a2g7ega23.ag2ekjkjka24.a2ge5ja22.2af2ge5ja21.a3l2fgkjk2ga20.a2l3m6fa20.a2l3m7f21.al3mf2lm2f2ea.a18.a4mf3mne3fafa17.an3mf3no2e2d3f17.a2n3m3f2g3edfga17.a2n3mn
+		+ofa2g2e2ga16.aonomnmoa2.2agaga16.ap3on3oa4.a.a17.spqoq2osoa24.a6srsa25.ap2qr2sa27.a2q2rsa27.sp2qrs28.as2qra28.asega29.aseg2a28.as4ta27.as3tva28.a3sa52.
+		zombie_1|34|34|31|13.5|a17191E,b837451,c574D36,dC8B98B,eBCA97D,f5A5848,g81785D,h1A1418,iD6AA63,j381E26,kE7E2C9,lB1A17D,m9D8761,n6C5E49,o4B4238,p918778,q75694F,r504839,s37312C,t494048,u3A3238,v2A242C,w1E1A20|idle:0;walk:1,2,3,4;windup:5;strike:6
+		+14.5a28.a5b2a25.a8ba23.ac3b5da23.ac2b2d4ea23.acb2e4fea23.acg2e2hih2ea22.a2g7ega23.ag2ejkjkja24.a2ge5ja23.2a2fgkjk2gf2a20.a3l7f2ega18.a2l2m11fa16.a2l2mf4lmfe3defa15.al3mf4
+		+m2n5ega15.a4mf3nof2g2ega2ga14.an4m4f.5ag2a15.a2n4m2na6.a18.a2n3mnoa25.onomnmoa25.a3on3oa25.apoq2oro26.a6srsa24.ap2qrs2rsa24.ap2qrs2rsa25.a2qrs2rsa25.a2qrs2rsa25.aq2rsr2sa
+		+25.aeg2agfa26.aeg2agfa25.a4ts3ua24.a4tvs2uwa24.4as4a50./14.5a28.a5b2a25.a8ba23.ac3b5da23.ac2b2d4ea23.acb2e4fea23.acg2e2hih2ea22.a2g7ega23.ag2ejkjkja24.a2ge5ja23.2a2fgkjk2
+		+gf2a20.a3l7f2ega18.a2l2m11fa16.a2l2mf4lmfe3defa15.al3mf4m2n5ega15.a4mf3nof2g2ega2ga14.an4m4f.5ag2a15.a2n4m2na6.a18.a2n3mnoa25.onomnmoa25.a3on3oa25.apoq2oro26.a6srsa24.a2p
+		+2qrsrsa25.ap2qr2sa27.a2q2rsa27.sp2qrs28.as2qra28.asega29.aseg2a28.as4ta27.as3tva28.a3sa52./48.5a28.a5b2a25.a8ba23.ac3b5da23.ac2b2d4ea23.acb2e4fea23.acg2e2hih2ea22.a2g7ega
+		+23.ag2ejkjkja24.a2ge5ja23.2a2fgkjk2gf2a20.a3l7f2ega18.a2l2m11fa16.a2l2mf4lmfe3defa15.al3mf4m2n5ega15.a4mf3nof2g2ega2ga14.an4m4f.5ag2a15.a2n4m2na6.a18.a2n3mnoa25.onomnmoa2
+		+5.a3on3oa25.spoq2orosa24.a6srsa24.ap2qrsqrsa25.a2qrsq2rsa24.a2qr2a2rsa24.aq2r2agfsa24.aega.agfa25.aeg2a3ua24.a4ts3uwa23.a4tvs3a25.5a54./14.5a28.a5b2a25.a8ba23.ac3b5da23.a
+		+c2b2d4ea23.acb2e4fea23.acg2e2hih2ea22.a2g7ega23.ag2ejkjkja24.a2ge5ja23.2a2fgkjk2gf2a20.a3l7f2ega18.a2l2m11fa16.a2l2mf4lmfe3defa15.al3mf4m2n5ega15.a4mf3nof2g2ega2ga14.an4m
+		+4f.5ag2a15.a2n4m2na6.a18.a2n3mnoa25.onomnmoa25.a3on3oa25.apoq2oro26.a6srsa24.ap2qrsq2rsa22.ap2qr2aq2rsa22.a2q2ra.a2r2sa20.ap2qra2.aq2rsa20.a2qra4.a2rsa20.aega5.agfa21.aeg
+		+a5.agf2a20.a3ta4.a4ua19.a3tva3.a3uwa20.4a5.4a48./48.5a28.a5b2a25.a8ba23.ac3b5da23.ac2b2d4ea23.acb2e4fea23.acg2e2hih2ea22.a2g7ega23.ag2ejkjkja24.a2ge5ja23.2a2fgkjk2gf2a20.
+		+a3l7f2ega18.a2l2m11fa16.a2l2mf4lmfe3defa15.al3mf4m2n5ega15.a4mf3nof2g2ega2ga14.an4m4f.5ag2a15.a2n4m2na6.a18.a2n3mnoa25.onomnmoa25.a3on3oa25.spoq2orosa24.a6srsa24.a2pqrs2r
+		+sa25.ap2qrsrsa26.a2qrsrsa26.aegr3sa26.aegsgfa26.a3tsgfa26.a3tvs2ua26.2a2s3uwa28.5a50./13.5a28.a5b2a25.a8ba23.ac3b5da23.ac2b2d4ea23.acb2e4fef.a21.acg2e2hih2e2fa20.a2g7e2f2
+		+a21.ag2ejkj2fdeaga20.f2gej2fd2e2ga20.2o4flm2eg2a20.a2l2f2lmnfga21.a2lf2l2mnf2a21.a2lmfm2nofa23.al3m4fna23.a7m2na23.an5m2na24.a2n4m2na25.a2n3mnoa25.anomnmoa26.3on4o26.aoq2
+		+oroa26.a6srsa24.ap2qrs2rsa24.ap2qrsrsa26.a2qr3sa26.a2qr2sa27.aq2rsa28.aegsa29.aegsa28.a4tsa27.a4tvsa27.2a3sa53./50.5a28.a5b2a25.a8ba23.ac3b5da23.ac2b2d4ea23.acb2e4fea23.a
+		+cg2e2hih2ea22.a2g7ega23.ag2ekjkjka24.a2ge5ja22.2af2ge5ja21.a3l2fgkjk2ga20.a2l3m6fa20.a2l3m7f21.al3mf2lm2f2ea.a18.a4mf3mne3fafa17.an3mf3no2e2d3f17.a2n3m3f2g3edfga17.a2n3mn
+		+ofa2g2e2ga16.aonomnmoa2.2agaga16.ap3on3oa4.a.a17.spqoq2osoa24.a6srsa25.ap2qr2sa27.a2q2rsa27.sp2qrs28.as2qra28.asega29.aseg2a28.as4ta27.as3tva28.a3sa52.
+		zombie_2|34|34|31|13.5|a17191E,b324955,c213038,d93B6A4,e71A09D,f3A5357,g507272,h1A1418,i78D6DF,j381E26,kE7E2C9,l789179,m506D59,n394C44,o283636,p677186,q3F4C5F,r2C3544,s212633,t494048,u3A3238,v2A242C,w1E1A20|idle:0;walk:1,2,3,4;windup:5;strike:6
+		+14.5a28.a5b2a25.a8ba23.ac3b5da23.ac2b2d4ea23.acb2e4fea23.acg2e2hih2ea22.a2g7ega23.ag2ejkjkja24.a2ge5ja23.2a2fgkjk2gf2a20.a3l7f2ega18.a2l2m11fa16.a2l2mf4lmfe3defa15.al3mf4
+		+m2n5ega15.a4mf3nof2g2ega2ga14.an4m4f.5ag2a15.a2n4m2na6.a18.a2n3mnoa25.onomnmoa25.a3on3oa25.apoq2oro26.a6srsa24.ap2qrs2rsa24.ap2qrs2rsa25.a2qrs2rsa25.a2qrs2rsa25.aq2rsr2sa
+		+25.aeg2agfa26.aeg2agfa25.a4ts3ua24.a4tvs2uwa24.4as4a50./14.5a28.a5b2a25.a8ba23.ac3b5da23.ac2b2d4ea23.acb2e4fea23.acg2e2hih2ea22.a2g7ega23.ag2ejkjkja24.a2ge5ja23.2a2fgkjk2
+		+gf2a20.a3l7f2ega18.a2l2m11fa16.a2l2mf4lmfe3defa15.al3mf4m2n5ega15.a4mf3nof2g2ega2ga14.an4m4f.5ag2a15.a2n4m2na6.a18.a2n3mnoa25.onomnmoa25.a3on3oa25.apoq2oro26.a6srsa24.a2p
+		+2qrsrsa25.ap2qr2sa27.a2q2rsa27.sp2qrs28.as2qra28.asega29.aseg2a28.as4ta27.as3tva28.a3sa52./48.5a28.a5b2a25.a8ba23.ac3b5da23.ac2b2d4ea23.acb2e4fea23.acg2e2hih2ea22.a2g7ega
+		+23.ag2ejkjkja24.a2ge5ja23.2a2fgkjk2gf2a20.a3l7f2ega18.a2l2m11fa16.a2l2mf4lmfe3defa15.al3mf4m2n5ega15.a4mf3nof2g2ega2ga14.an4m4f.5ag2a15.a2n4m2na6.a18.a2n3mnoa25.onomnmoa2
+		+5.a3on3oa25.spoq2orosa24.a6srsa24.ap2qrsqrsa25.a2qrsq2rsa24.a2qr2a2rsa24.aq2r2agfsa24.aega.agfa25.aeg2a3ua24.a4ts3uwa23.a4tvs3a25.5a54./14.5a28.a5b2a25.a8ba23.ac3b5da23.a
+		+c2b2d4ea23.acb2e4fea23.acg2e2hih2ea22.a2g7ega23.ag2ejkjkja24.a2ge5ja23.2a2fgkjk2gf2a20.a3l7f2ega18.a2l2m11fa16.a2l2mf4lmfe3defa15.al3mf4m2n5ega15.a4mf3nof2g2ega2ga14.an4m
+		+4f.5ag2a15.a2n4m2na6.a18.a2n3mnoa25.onomnmoa25.a3on3oa25.apoq2oro26.a6srsa24.ap2qrsq2rsa22.ap2qr2aq2rsa22.a2q2ra.a2r2sa20.ap2qra2.aq2rsa20.a2qra4.a2rsa20.aega5.agfa21.aeg
+		+a5.agf2a20.a3ta4.a4ua19.a3tva3.a3uwa20.4a5.4a48./48.5a28.a5b2a25.a8ba23.ac3b5da23.ac2b2d4ea23.acb2e4fea23.acg2e2hih2ea22.a2g7ega23.ag2ejkjkja24.a2ge5ja23.2a2fgkjk2gf2a20.
+		+a3l7f2ega18.a2l2m11fa16.a2l2mf4lmfe3defa15.al3mf4m2n5ega15.a4mf3nof2g2ega2ga14.an4m4f.5ag2a15.a2n4m2na6.a18.a2n3mnoa25.onomnmoa25.a3on3oa25.spoq2orosa24.a6srsa24.a2pqrs2r
+		+sa25.ap2qrsrsa26.a2qrsrsa26.aegr3sa26.aegsgfa26.a3tsgfa26.a3tvs2ua26.2a2s3uwa28.5a50./13.5a28.a5b2a25.a8ba23.ac3b5da23.ac2b2d4ea23.acb2e4fef.a21.acg2e2hih2e2fa20.a2g7e2f2
+		+a21.ag2ejkj2fdeaga20.f2gej2fd2e2ga20.2o4flm2eg2a20.a2l2f2lmnfga21.a2lf2l2mnf2a21.a2lmfm2nofa23.al3m4fna23.a7m2na23.an5m2na24.a2n4m2na25.a2n3mnoa25.anomnmoa26.3on4o26.aoq2
+		+oroa26.a6srsa24.ap2qrs2rsa24.ap2qrsrsa26.a2qr3sa26.a2qr2sa27.aq2rsa28.aegsa29.aegsa28.a4tsa27.a4tvsa27.2a3sa53./50.5a28.a5b2a25.a8ba23.ac3b5da23.ac2b2d4ea23.acb2e4fea23.a
+		+cg2e2hih2ea22.a2g7ega23.ag2ekjkjka24.a2ge5ja22.2af2ge5ja21.a3l2fgkjk2ga20.a2l3m6fa20.a2l3m7f21.al3mf2lm2f2ea.a18.a4mf3mne3fafa17.an3mf3no2e2d3f17.a2n3m3f2g3edfga17.a2n3mn
+		+ofa2g2e2ga16.aonomnmoa2.2agaga16.ap3on3oa4.a.a17.spqoq2osoa24.a6srsa25.ap2qr2sa27.a2q2rsa27.sp2qrs28.as2qra28.asega29.aseg2a28.as4ta27.as3tva28.a3sa52.
+		// </art:creatures>
+		"""
+
+	/// A block is one line: "name|flips|colours|pixels" (16 x 16). The flips say how the land painter
+	/// may vary the block from place to place so a wall of it is not wallpaper: "h" mirrored, "hv" also
+	/// turned top to bottom, nothing for a block that must always be drawn as it is.
+	static let tileText: String = """
+		// <art:tiles> written by tools/art/build.py pack from tools/art/tiles: change the drawings, not this
+		amethyst|hv|a8D8D97,bA3A3AD,c604180,d777783,eD8BDF2,f5C5C69,gFFFFFF,h996EC6|4a3b12abcb4a2d7acec2a2d2fc4afceghcad2fcecb2ace4hcadceghc2adc3hc4achc4adchc2b4ac7ac3b4ad3a2d3a2b2ac2dfd2a2fd5acecfd3adfcd3aceghc5acec2ace4hc2baceghcbac3hc3b2achc3bachcab5ac2ab3acd13ad2fd4a
+		ashStone|hv|a493B47,b5B4A59,c3B2F3A,d2C212A|4a3b12a3b4a2c12a2c2dc4adc5ac2dc2ab2a2dc5a2c2a2b2acdc8a2b4ac3a2b13a3b4ac3a2c3a2b3a2cdc2a2dc6ac2dc3ac2dc5acdc5a2c6ac3a2b6ab6a3b5a3b5ab8ab3a2c13ac2dc4a
+		birchLeaves|h|a779556,b97B26B,c617C46,d50693C|3a2b13a2b7ac13a3c2a2b4ac5ac2a2b4a3c2.13ac3.9ab4ad.3ac4a2b9a3ca2b11ac10a2b9ac4ab9a3c8ac2.3ac9a2c3.5a2b7ac2.4ab5a2b11ac2ab2a
+		birchLog||a79736B,bFFFFFF,cE5E2D8,dBCB6AC,e3A3632|a2b10c2d2a2b2c3e5c2d2a2b10c2d2ab8c3e2d2a2b10c2d2a2b10c2d2ab3e8c2d2a2b10c2d2a2b5c2e3c2d2a2b10c2d2ab11c2d2a2bc2e7c2d2a2b8c2e2d2a2b10c2d2a2b5c3e2c2d2a2b10c2da
+		birchLogBlock||a79736B,bFFFFFF,cE5E2D8,dBCB6AC,e3A3632|a2b10c2d2a2b2c3e5c2d2a2b10c2d2ab8c3e2d2a2b10c2d2a2b10c2d2ab3e8c2d2a2b10c2d2a2b5c2e3c2d2a2b10c2d2ab11c2d2a2bc2e7c2d2a2b8c2e2d2a2b10c2d2a2b5c3e2c2d2a2b10c2da
+		brick||aB57363,b898583,cBE7E6A,d9E5F53,eA7685A,f824B44|7ab7cb7db7eb7fb7f17b3cb7ab4c3eb7db4e3fb7fb4f16b7ab7ab7db7db7fb7f17b3ab7cb4a3db7eb4d3fb7fb4f16b
+		chest||a291F18,bC5A374,cA9895F,d856A46,e898D96,fD3BD68,gECE0A2,h685137|81.14a.a14b2a14c2a14d2a6e2f6e2a6cfg6c2a14c2acd10cdc2a14c2a14ha.14a.
+		coal|hv|a8D8D97,bA3A3AD,c16161C,d777783,e4A4A55,f2A2A32,g5C5C69|4a3b12ab3c3a2d7ace2fc2d2gd4agdc5fcgd2cb2a2gdc4fcdcefc2adgda4c2ac2fc3ad3a2b4a2c4a2ca3b4ad3adcefc2b3a2dgd2agc3fc3ad3c3adgc2fc3ace2fc3a2d2c4ac5fc5ab4ac3fc5a3b4a3c7ab3a2d13ad2gd4a
+		copper|hv|a8D8D97,bA3A3AD,c7F573D,d777783,eDAA77C,fB9825C,g5C5C69|4a3b11a3cb4a2d5ac2efc2a2dg2c4ace3fcadgcefcb2ac5fcadc2fcb2adc3fc4a2cb4ad3c2b13a3ba3cd3a2d3a2bac2efcd2a2g2c4ace4fcadcefc3ac5fc2ac2fc4ac4fc3a2cab4a4cb5a3b5ab8a2c2a2d9acefcd2gd4a
+		crackedBrick||aA19080,b685A4E,cAB9989,d8A7969,e938272,f6D5E52|7ab7cb7db7eb7fb7f17b3cb7ab4c3eb7db4e3fb7fb4f16b7ab7ab7db7db7fb7f17b3ab7cb4a3db7eb4d3fb7fb4f16b
+		crystalOre|hv|a5E6676,b72798B,c458288,d4D5464,eE5FAFA,f90DDD7,g3C4250|4a3b12a2b2c3a2d8acefc2d2gd4agdacefcd2gd2cb2a2gce2fca2dcefc2adgc2fc4acefc3ada2c2b2ace2fc6a3b2ac2fc2a2da2c2b3ad2cd2a2gcefc3ad2gd3adgcefc3a2cd5ace2fc2acefca2b2ac2fcb2acefc3b3a2c3bce2fcb8abac2fc13a2cgd4a
+		deepRock|hv|a3E3945,b4E4857,c322D39,d25202C|4a3b12a3b4a2c12a2c2dc4adc5ac2dc2ab2a2dc5a2c2a2b2acdc8a2b4ac3a2b13a3b4ac3a2c3a2b3a2cdc2a2dc6ac2dc3ac2dc5acdc5a2c6ac3a2b6ab6a3b5a3b5ab8ab3a2c13ac2dc4a
+		diamond|hv|a8D8D97,bA3A3AD,c42828D,d777783,eB6EDF1,f5C5C69,gFFFFFF,h6AC4C9|4a3b12abcb4a2d7acec2a2d2fc4afceghcad2fcecb2ace4hcadceghc2adc3hc4achc4adchc2b4ac7ac3b4ad3a2d3a2b2ac2dfd2a2fd5acecfd3adfcd3aceghc5acec2ace4hc2baceghcbac3hc3b2achc3bachcab5ac2ab3acd13ad2fd4a
+		dirt|hv|a82614A,b70513E,c916F54,d5A4032,eA88A6A|6a2b10ac4a2b15ad3ac19a2b9a2b4abd4ae4a2b15ad7ac19a2b15abd2ac4a2b15abd22ae4ac22a2b5abd8a2b3a2b
+		dryGrass|h|aCEC581,bB3A966,c928751,d70673E,e82614A,f70513E,g5A4032,h916F54,iA88A6A|2ab4ab4ab3aba4ba4ba22bc5bc6bcb3c3b2c5b3cde2cbcde2c2bcdcd3e3c3ed2cd7ed6ed12e2f15efg2eh4e2f15efg22ei4eh22e2f5efg8e2f3e2f
+		emberOre|hv|a493B47,b5B4A59,c935940,d3B2F3A,eDFC178,fD28D5D,g2C212A|4a3b11a3cb4a2d5ac2efc2a2dg2c4ace3fcadgcefcb2ac5fcadc2fcb2adc3fc4a2cb4ad3c2b13a3ba3cd3a2d3a2bac2efcd2a2g2c4ace4fcadcefc3ac5fc2ac2fc4ac4fc3a2cab4a4cb5a3b5ab8a2c2a2d9acefcd2gd4a
+		flowerR||a1C1820,bC96763,cE1897E,dDFCB78,e5E9A51,f3E733F|54.2a13.a2ba11.ab2cba9.abc2dcba9.ab2cba11.a2ba13.aea.2a8.3ae2a2ea6.a2eaeaefa8.af3e2a10.afea13.aea13.aea7.
+		flowerY||a1C1820,bCDB25F,cE4D486,dBE9056,e5E9A51,f3E733F|54.2a13.a2ba11.ab2cba9.abc2dcba9.ab2cba11.a2ba13.aea.2a8.3ae2a2ea6.a2eaeaefa8.af3e2a10.afea13.aea13.aea7.
+		furnace||a777783,bA3A3AD,c5C5C69,d221D24,eC37756,fD49E61,gDCBF71,hEEE3A8,i8D8D97|.14a.a14b2ab12ac2aba10cac2abac8dcac2abac2d5edcac2abacdef2gfedcac2abacdeg2hgedcac2abac2de2fe2dcac2abac8dcac2aba10cac2ab12ac2abaididididi2ac2abaididididi2ac2a14ca.14a.
+		gold|hv|a8D8D97,bA3A3AD,c967B45,d777783,eFFFFFF,fE9DB96,gCFB764,h5C5C69|4a3b12a2cb4ade6acfgc2a2defe4ahc2gc2ad2he2ab2a2h2c4a2d2a2b2adhd5a2ca2b4ad3a2bcfgc5ae3a3bc3gc3aefe2a2b2ac2gcd2ahed6ad2cd3ad2hd2c3adhd5a2dcfgc2ad2a2cb4ac3gc3acfgc5a3c4ac2gc6ab3a2da2c10ad2hd4a
+		grass|h|a8BAF65,b66924F,c497341,d345734,e82614A,f70513E,g5A4032,h916F54,iA88A6A|2ab4ab4ab3aba4ba4ba22bc5bc6bcb3c3b2c5b3cde2cbcde2c2bcdcd3e3c3ed2cd7ed6ed12e2f15efg2eh4e2f15efg22ei4eh22e2f5efg8e2f3e2f
+		iron|hv|a8D8D97,bA3A3AD,c7B5B50,d777783,eDDBEA2,fBB967D,g5C5C69|4a3b10a4cb4a2d5ac2efc2a2d2g2c3ace3fcad2gcefc2agc3fc2adce2fc2adg3c4ac2fc4ad3a2b3a2c8a3b4ad3a2d2a4c2a2dgd2a2gdc2e2fcd2gd2cad2gce3fcdgdcefca2dac4fc2ac2fc5a4c3ab2c2a2ca3b5ab3acefcab3a2d5ac2fc4ad2gd4a
+		jungleGrass|h|a79C470,b519C57,c3A7547,d2A5537,e534234,f46372A,g372A21,h61513F,i6A5A48|2ab4ab4ab3aba4ba4ba22bc5bc6bcb3c3b2c5b3cde2cbcde2c2bcdcd3e3c3ed2cd7ed6ed12e2f15efg2eh4e2f15efg22ei4eh22e2f5efg8e2f3e2f
+		jungleLeaves|h|a43804D,b659B58,c366840,d2D5636|3a2b13a2b7ac13a3c2a2b4ac5ac2a2b4a3c2.13ac3.9ab4ad.3ac4a2b9a3ca2b11ac10a2b9ac4ab9a3c8ac2.3ac9a2c3.5a2b7ac2.4ab5a2b11ac2ab2a
+		jungleLog||a2F2819,b7E6E4A,c625438,d463B26,e493F2A|a2b2cd3cd2c3e2a2b2cd6cd2e2ab7cd2cd2e2a2bcd4cd3c2e2a2bcd8c2e2a2bcd2cd4cd2e2ab5cd4cd2e2a2b4cd2cd2c2e2a2b2cd4cd2c2e2a2b2cd7c2e2ab3cd2cd3cd2e2a2b5cd3cd2e2a2bcd3cd4c2e2a2bcd6cdc2e2ab5cd3cdc2e2a2b4cd5c2ea
+		jungleLogBlock||a2F2819,b7E6E4A,c625438,d463B26,e493F2A|a2b2cd3cd2c3e2a2b2cd6cd2e2ab7cd2cd2e2a2bcd4cd3c2e2a2bcd8c2e2a2bcd2cd4cd2e2ab5cd4cd2e2a2b4cd2cd2c2e2a2b2cd4cd2c2e2a2b2cd7c2e2ab3cd2cd3cd2e2a2b5cd3cd2e2a2bcd3cd4c2e2a2bcd6cdc2e2ab5cd3cdc2e2a2b4cd5c2ea
+		leaves|h|a557F47,b739C59,c42663B,d365733|3a2b13a2b7ac13a3c2a2b4ac5ac2a2b4a3c2.13ac3.9ab4ad.3ac4a2b9a3ca2b11ac10a2b9ac4ab9a3c8ac2.3ac9a2c3.5a2b7ac2.4ab5a2b11ac2ab2a
+		log||a3C2C21,b907253,c735840,d58412F,e5A4332|a2b2cd3cd2c3e2a2b2cd6cd2e2ab7cd2cd2e2a2bcd4cd3c2e2a2bcd8c2e2a2bcd2cd4cd2e2ab5cd4cd2e2a2b4cd2cd2c2e2a2b2cd4cd2c2e2a2b2cd7c2e2ab3cd2cd3cd2e2a2b5cd3cd2e2a2bcd3cd4c2e2a2bcd6cdc2e2ab5cd3cdc2e2a2b4cd5c2ea
+		logBlock||a3C2C21,b907253,c735840,d58412F,e5A4332|a2b2cd3cd2c3e2a2b2cd6cd2e2ab7cd2cd2e2a2bcd4cd3c2e2a2bcd8c2e2a2bcd2cd4cd2e2ab5cd4cd2e2a2b4cd2cd2c2e2a2b2cd4cd2c2e2a2b2cd7c2e2ab3cd2cd3cd2e2a2b5cd3cd2e2a2bcd3cd4c2e2a2bcd6cdc2e2ab5cd3cdc2e2a2b4cd5c2ea
+		mossBrick||a8BA174,b4D5C41,c96AC7E,d73885F,e7D9269,f576B4A|7ab7cb7db7eb7fb7f17b3cb7ab4c3eb7db4e3fb7fb4f16b7ab7ab7db7db7fb7f17b3ab7cb4a3db7eb4d3fb7fb4f16b
+		mossGrass|h|a96A765,b75884D,c586A3B,d3E4D2D,e534234,f46372A,g372A21,h61513F,i6A5A48|2ab4ab4ab3aba4ba4ba22bc5bc6bcb3c3b2c5b3cde2cbcde2c2bcdcd3e3c3ed2cd7ed6ed12e2f15efg2eh4e2f15efg22ei4eh22e2f5efg8e2f3e2f
+		mud|hv|a534234,b46372A,c61513F,d372A21,e6A5A48|6a2b10ac4a2b15ad3ac19a2b9a2b4abd4ae4a2b15ad7ac19a2b15abd2ac4a2b15abd22ae4ac22a2b5abd8a2b3a2b
+		mythril|hv|a8D8D97,bA3A3AD,c534B98,d777783,eB5ADEF,f7F76DE,g5C5C69|4a3b12a2b2c3a2d8acefc2d2gd4agdacefcd2gd2cb2a2gce2fca2dcefc2adgc2fc4acefc3ada2c2b2ace2fc6a3b2ac2fc2a2da2c2b3ad2cd2a2gcefc3ad2gd3adgcefc3a2cd5ace2fc2acefca2b2ac2fcb2acefc3b3a2c3bce2fcb8abac2fc13a2cgd4a
+		palmLog||a5A4733,bB2966E,c957B58,d776043,e7D6549|a2b2cd3cd2c3e2a2b2cd6cd2e2ab7cd2cd2e2a2bcd4cd3c2e2a2bcd8c2e2a2bcd2cd4cd2e2ab5cd4cd2e2a2b4cd2cd2c2e2a2b2cd4cd2c2e2a2b2cd7c2e2ab3cd2cd3cd2e2a2b5cd3cd2e2a2bcd3cd4c2e2a2bcd6cdc2e2ab5cd3cdc2e2a2b4cd5c2ea
+		palmLogBlock||a5A4733,bB2966E,c957B58,d776043,e7D6549|a2b2cd3cd2c3e2a2b2cd6cd2e2ab7cd2cd2e2a2bcd4cd3c2e2a2bcd8c2e2a2bcd2cd4cd2e2ab5cd4cd2e2a2b4cd2cd2c2e2a2b2cd4cd2c2e2a2b2cd7c2e2ab3cd2cd3cd2e2a2b5cd3cd2e2a2bcd3cd4c2e2a2bcd6cdc2e2ab5cd3cdc2e2a2b4cd5c2ea
+		pineLeaves|h|a3B6554,b558469,c305345,d27463A|3a2b13a2b7ac13a3c2a2b4ac5ac2a2b4a3c2.13ac3.9ab4ad.3ac4a2b9a3ca2b11ac10a2b9ac4ab9a3c8ac2.3ac9a2c3.5a2b7ac2.4ab5a2b11ac2ab2a
+		planks||aC7A87D,b765C40,cB19068,d56402D,e9C7E58|5ab10a4cdb4c3e4c3ecb10c16b12ab3a3c3e5cdb11c2e2cb3c16b2ab13acdb4c3e8cb9c3ec16b9ab6a2c3e3cdb15cb2c3ec16b
+		saltpeter|hv|a8D8D97,bA3A3AD,c88857B,d777783,eFFFFFF,fD9D5CA,g5C5C69|4a3b11a5c3a2d5ac2e4fcd2gd4ag6cd2gd2cb2a2gd5ad2cefc2adgd4a2c2e2fc3ad3abce4f2c6a3b5c3a2d3a2b3a2dgd2a2gd4c2ad2gd3adgc2e2f2cdgd5ace6fc3a2c3a7c2a2cefc4a3b3ace3fc5ab3a2d4c9ad2gd4a
+		sand|hv|aD6C590,bE5D7A7,cAF9869,dC6B27C|18a5b7ac4a4d3a3b5ac7a3d19a3b5ac4a3b3d10a3d6a4b7ac4a4d2ac22a3b13a3d5ac14a4b2ac9a4d6a3b7ac5a3d9a
+		sandstone|hv|aC3AD7C,bD3BF8F,cB09A6B,d998459|4a3b12a3b4a2c12a2c2dc4adc5ac2dc2ab2a2dc5a2c2a2b2acdc8a2b4ac3a2b13a3b4ac3a2c3a2b3a2cdc2a2dc6ac2dc3ac2dc5acdc5a2c6ac3a2b6ab6a3b5a3b5ab8ab3a2c13ac2dc4a
+		silver|hv|a8D8D97,bA3A3AD,c777783,d6A7381,eFFFFFF,fC2C9D5,g5C5C69|4a3b12a3b4ac2d11ac2defd3agc4a2de2fdab2a2gca2de2fd2a2b2acgcde2fd3a2b4acadfdb13ad2b4a2d2a2c3a2b3a2ded2a2gc5a2defd3acg2d2a2de2fd5adef2de2fd3a2b2adf2e2fd4a3b3a5d5ab8ab3a2c13ac2gc4a
+		slate|hv|a5E6676,b72798B,c4D5464,d3C4250|4a3b12a3b4a2c12a2c2dc4adc5ac2dc2ab2a2dc5a2c2a2b2acdc8a2b4ac3a2b13a3b4ac3a2c3a2b3a2cdc2a2dc6ac2dc3ac2dc5acdc5a2c6ac3a2b6ab6a3b5a3b5ab8ab3a2c13ac2dc4a
+		snow|hv|aF0F6FC,bFFFFFF,cC1D1E6,dD8E4F3|18a5b7ac4a4d3a3b5ac7a3d19a3b5ac4a3b3d10a3d6a4b7ac4a4d2ac22a3b13a3d5ac14a4b2ac9a4d6a3b7ac5a3d9a
+		stone|hv|a8D8D97,bA3A3AD,c777783,d5C5C69|4a3b12a3b4a2c12a2c2dc4adc5ac2dc2ab2a2dc5a2c2a2b2acdc8a2b4ac3a2b13a3b4ac3a2c3a2b3a2cdc2a2dc6ac2dc3ac2dc5acdc5a2c6ac3a2b6ab6a3b5a3b5ab8ab3a2c13ac2dc4a
+		tallGrass||a8BAF65,b66924F,c497341|114.a9.a5.b3.a5.ba3.ab2.ab2.a2.ab3.ab2.ab.ab.a2b.2a2ba.2b.ab.a2baba3ba2ba2ba21bc2bc2bc3bc2bc2b16c
+		tin|hv|a8D8D97,bA3A3AD,c7D8691,d777783,eF1F5F8,fC6CFD7,g5C5C69|4a3b11a3cb4a2d5ac2efc2a2dg2c4ace3fcadgcefcb2ac5fcadc2fcb2adc3fc4a2cb4ad3c2b13a3ba3cd3a2d3a2bac2efcd2a2g2c4ace4fcadcefc3ac5fc2ac2fc4ac4fc3a2cab4a4cb5a3b5ab8a2c2a2d9acefcd2gd4a
+		torch||a1C1820,bE2CD81,cEEE3A8,dFFFFFF,eD49E61,f8E6E4D,g684E37|23.a14.aba12.abcba11.abdcba9.aec2dcea8.aecd2cea9.ae2cea11.a2ea12.afga12.afga12.afga12.afga12.afga12.afga12.afga6.
+		voidOre|hv|a493B47,b5B4A59,c65418B,d3B2F3A,eE0B2F0,fAB6FDB,g2C212A|4a3b12a2b2c3a2d8acefc2d2gd4agdacefcd2gd2cb2a2gce2fca2dcefc2adgc2fc4acefc3ada2c2b2ace2fc6a3b2ac2fc2a2da2c2b3ad2cd2a2gcefc3ad2gd3adgcefc3a2cd5ace2fc2acefca2b2ac2fcb2acefc3b3a2c3bce2fcb8abac2fc13a2cgd4a
+		workbench||a98A0AD,bCED4DD,c898D96,dC2C8D1,e9C7E58,fC7A87D,gB19068,h765C40|52.ab5.3c5.a2ba4.cdc6.2e6.e3.16f16g16h.eh10.eh2.eh.8e.eh2.eh.8h.eh2.eh10.eh2.eh10.eh2.eh10.eh2.eh10.eh.
+		// </art:tiles>
+		"""
+
+	/// Colours of a picture: "aF0A0B0,b1E1418" gives each letter its colour
+	static func palette(_ s: Substring) -> [UInt8: UInt32] {
+		var out: [UInt8: UInt32] = [:]
+		for e in s.split(separator: ",") {
+			guard let k = e.utf8.first, let v = UInt32(e.dropFirst(), radix: 16) else { continue }
+			out[k] = v
 		}
-		// lift cars
-		for l in lifts { out.append(Deck(x0: l.x0, x1: l.x1, y: l.y, vx: 0, id: l.deckID)) }
 		return out
 	}
 
-	func allDecks() -> [Deck] { return decksCache }
-
-	func accelX(_ m: Mob, _ target: Double, _ a: Double, _ dt: Double) {
-		let d: Double = target - m.b.vx
-		let s: Double = a * dt
-		if d > s { m.b.vx += s } else if d < -s { m.b.vx -= s } else { m.b.vx = target }
-	}
-
-	func stepMob(_ m: Mob, _ dt: Double, stepUp: Double = 1.0) {
-		let d: MobDef = m.def
-		if d.flying {
-			// keep flyers from sinking; their AI sets vy directly
-		} else if m.b.inWater {
-			m.b.vy += 12.0 * dt
-			m.b.vy = clampD(m.b.vy, -5.0, 5.0)
-			if m.hp > 0 && d.behavior != .swimmer { m.b.vy -= 26.0 * dt }
-		} else {
-			m.b.vy = min(m.b.vy + gravityG * dt, terminalV)
-		}
-		if m.knock > 0 { m.knock -= dt }
-		if m.leapReq {
-			// a harder leap at a wall it is stuck against (see think)
-			m.leapReq = false
-			if m.b.onGround && !d.flying {
-				m.b.vy = -d.jump * 1.22
-				m.b.vx = (m.aimX >= m.b.x ? 1.0 : -1.0) * max(2.5, d.speed)
-				m.leapT = 1.6
-			}
-		}
-		// slowed creatures cover less ground (their AI still asks for its usual speed)
-		let sm: Double = m.speedMul
-		if sm < 0.999 {
-			m.b.vx *= sm
-			if d.flying { m.b.vy *= sm }
-		}
-		moveThing(&m.b, dt, stepUp: d.flying ? 0 : stepUp, dropThrough: false, decks: decksCache, mass: mobMass(m), falls: !d.flying && !m.b.inWater)
-		if sm < 0.999 {
-			m.b.vx /= sm
-			if d.flying { m.b.vy /= sm }
-		}
-		if m.b.deck >= 0 && m.b.deck < decksCache.count { m.b.x += decksCache[m.b.deck].vx * dt }
-		if m.boat >= 0 { clampToDeck(m) }
-		if m.b.onGround { m.anim += abs(m.b.vx) * dt * 0.8 } else { m.anim += dt * 0.5 }
-	}
-
-	func cliffAhead(_ m: Mob, _ dir: Int) -> Bool {
-		let fx: Int = Int(floor(m.b.x + Double(dir) * (m.b.w * 0.5 + 0.6)))
-		let fy: Int = Int(floor(m.b.y + 0.2))
-		var d: Int = 0
-		while d < 5 {
-			let t: Tile = world.tile(fx, fy + d)
-			if t.solid || t == .platform || t.liquid { return false }
-			d += 1
-		}
-		return true
-	}
-
-	func wander(_ m: Mob, _ dt: Double, _ speedK: Double) {
-		let d: MobDef = m.def
-		m.t1 -= dt
-		if m.t1 <= 0 {
-			if m.st == 0 {
-				m.st = 1
-				m.dir = Bool.random() ? 1 : -1
-				if abs(m.b.x - m.homeX) > 24 { m.dir = m.b.x > m.homeX ? -1 : 1 }
-				m.t1 = Double.random(in: 1.5...4.5)
-			} else {
-				m.st = 0
-				m.t1 = Double.random(in: 1.0...4.0)
-			}
-		}
-		if m.st == 1 {
-			if cliffAhead(m, m.dir) || (m.b.hitWall && !m.b.onGround) { m.dir = -m.dir }
-			if m.b.hitWall && m.b.onGround { m.dir = -m.dir }
-			accelX(m, Double(m.dir) * d.speed * speedK, 14, dt)
-		} else {
-			accelX(m, 0, 18, dt)
-		}
-	}
-
-	func flee(_ m: Mob, _ fromX: Double, _ dt: Double, _ speedK: Double) {
-		let dirX: Double = m.b.x >= fromX ? 1.0 : -1.0
-		m.dir = Int(dirX)
-		accelX(m, dirX * m.def.speed * speedK, 30, dt)
-		if m.b.hitWall && m.b.onGround { m.b.vy = -m.def.jump }
-	}
-
-	func chase(_ m: Mob, _ tx: Double, _ speedK: Double, _ dt: Double) {
-		let d: MobDef = m.def
-		let dirX: Double = tx >= m.b.x ? 1.0 : -1.0
-		if abs(tx - m.b.x) > 0.35 {
-			m.dir = Int(dirX)
-			accelX(m, dirX * d.speed * speedK, 26, dt)
-		} else {
-			accelX(m, 0, 30, dt)
-		}
-		if m.b.hitWall && m.b.onGround { m.b.vy = -d.jump }
-		if m.b.inWater { m.b.vy -= 18 * dt }
-	}
-
-	func contactHurt(_ m: Mob, _ dmg: Double) {
-		if m.cd > 0 || dead { return }
-		// touching: overlapping across, and up and down anything from overlapping to standing on the
-		// player's head (or the player on its back)
-		let across: Bool = pb.right > m.b.left + 0.05 && pb.left < m.b.right - 0.05
-		let upDown: Bool = pb.y > m.b.top - 0.2 && pb.top < m.b.y + 0.2
-		if across && upDown {
-			var info = DamageInfo(amount: dmg, type: .contact, source: .mob(m, faction(of: m)))
-			info.knock = 6.5
-			info.originX = m.b.x
-			if hurtPlayer(info) { m.cd = 0.9; m.atkT = Mob.atkDur }
-		}
-	}
-
-	/// A creature's swing: hits the player and any creature from another side inside the reach box
-	func mobStrike(_ m: Mob, reach: Double, height: Double, dmg: Double, knock: Double) {
-		m.atkT = Mob.atkDur
-		// a mutated creature's swing reaches as far as it has grown
-		let k: Double = max(1.0, m.mutSize)
-		let reach: Double = reach * k
-		let height: Double = height * k
-		let x0: Double = m.dir > 0 ? m.b.x - 0.3 : m.b.x - reach - 0.3
-		let x1: Double = m.dir > 0 ? m.b.x + reach + 0.3 : m.b.x + 0.3
-		var info = DamageInfo(amount: dmg, type: .melee, source: .mob(m, faction(of: m)))
-		info.dirX = Double(m.dir)
-		info.knock = knock
-		info.originX = m.b.x
-		info.key = newID()
-		damageBox(x0, m.b.y - height, x1, m.b.y + 0.1, info)
-	}
-
-	func updateMobs(_ dt: Double) {
-		let t0: Double = perfNow()
-		let px: Double = pb.x
-		let py: Double = pb.y
-		let offScreen: Double = viewTilesW * 0.5 + 6.0
-		frameNo &+= 1
-		// iterated by index because AI code may append new mobs while it runs
+	/// Unpacks one picture of w x h pixels
+	static func unpack(_ s: Substring, _ w: Int, _ h: Int, _ pal: [UInt8: UInt32]) -> PixelBuf {
+		var b = PixelBuf(w: w, h: h)
+		var lut: [UInt32] = [UInt32](repeating: 0, count: 128)
+		for (k, v) in pal where k < 128 { lut[Int(k)] = 0xFF000000 | v }
+		let n: Int = w * h
 		var i: Int = 0
-		while i < mobs.count {
-			let m: Mob = mobs[i]
-			i += 1
-			if m.hp <= 0 || m.removed { continue }
-			let dx: Double = abs(m.b.x - px)
-			let dy: Double = abs(m.b.y - py)
-			if !m.persistent && !m.tame && !m.isBoss && (dx > 115 || dy > 85) {
-				m.removed = true
+		var run: Int = 0
+		for c in s.utf8 {
+			if c >= 48 && c <= 57 {
+				run = run * 10 + Int(c) - 48
 				continue
 			}
-			// a monster nobody is fighting that stays well off-screen wanders off after a while, making
-			// room for another; at daybreak the night's hunters out of sight go back where they came from
-			if m.def.hostile && !m.persistent && !m.tame && !m.isBoss && m.boat < 0 && m.lair == 0 {
-				if (dx > offScreen || dy > 40) && m.ai != .chase {
-					m.farT += dt
-					if m.farT > ((m.hunter && !isNight) ? 4.0 : 40.0) {
-						m.removed = true
-						continue
-					}
-				} else {
-					m.farT = 0
-				}
-			}
-			if m.hurtT > 0 { m.hurtT -= dt }
-			if m.cd > 0 { m.cd -= dt }
-			if m.flash > 0 { m.flash -= dt }
-			if m.lean != 0 { m.lean *= (1.0 - min(1.0, dt * 7.0)); if abs(m.lean) < 0.01 { m.lean = 0 } }
-			if m.atkT > 0 { m.atkT -= dt }
-			if m.turnT > 0 {
-				m.turnT -= dt
-				if m.turnT <= 0 { m.turnT = 0; m.face = m.dir }
-			} else if m.face != m.dir {
-				if m.face == 0 { m.face = m.dir } else { m.turnT = Mob.turnDur }
-			}
-			if m.regrow > 0 {
-				m.regrow -= dt
-				if m.regrow <= 0 { m.sheared = false }
-			}
-			if !world.isLoaded(Int(floor(m.b.x))) { continue }
-			if m.dazeGuard > 0 { m.dazeGuard -= dt }
-			if m.daze > 0 {
-				// reeling from a club: it stands (or hangs) where it is and does nothing else
-				m.daze -= dt
-				if m.daze <= 0 { m.daze = 0; m.dazeGuard = 1.2 }
-				m.b.vx *= max(0, 1.0 - dt * 9.0)
-				if m.def.flying { m.b.vy *= max(0, 1.0 - dt * 9.0) }
-				stepMob(m, dt)
-				mobHazards(m, dt)
-				continue
-			}
-			// creatures well off screen wait until the player comes closer (saves a lot of work)
-			if !m.isBoss && !m.tame && m.boat < 0 && (dx > 72 || dy > 56) { continue }
-			// mid-distance creatures think and move at a third of the rate, staggered by id, with the
-			// skipped time folded into their next step so they still cover the same ground
-			var step: Double = dt
-			if !m.isBoss && !m.tame && m.boat < 0 && (dx > 40 || dy > 30) {
-				m.aiAccum += dt
-				if (frameNo &+ m.id) % 3 != 0 {
-					Perf.shared.countSkip()
-					continue
-				}
-				step = min(0.1, m.aiAccum)
-			}
-			m.aiAccum = 0
-			updateMob(m, step)
-			if m.hp > 0 { mobHazards(m, step) }
-		}
-		updateDying(dt)
-		// compact once: drop removed mobs and finished death animations
-		if mobs.contains(where: { $0.removed }) { mobs.removeAll { $0.removed } }
-		Perf.shared.aiMs = Perf.smooth(Perf.shared.aiMs, perfNow() - t0)
-	}
-
-	func nearestHostileTo(_ x: Double, _ y: Double, _ r: Double) -> Mob? {
-		var best: Mob? = nil
-		var bd: Double = r * r
-		for o in mobs {
-			if o.hp <= 0 || o.tame || !o.def.hostile { continue }
-			let dx: Double = o.b.x - x
-			let dy: Double = o.b.cy - y
-			let d: Double = dx * dx + dy * dy
-			if d < bd { bd = d; best = o }
-		}
-		return best
-	}
-
-	func updateMob(_ m: Mob, _ dt: Double) {
-		if m.kind == .custom {
-			updateCustomMob(m, dt)
-			return
-		}
-		let d: MobDef = m.def
-		if m.kind == .bearBoss || m.kind == .rex {
-			updateBossMob(m, dt)
-			return
-		}
-		if m.kind == .sentinel { updateSentinel(m, dt); return }
-		if m.kind == .warden { updateWarden(m, dt); return }
-		if m.boat >= 0 && updateCrew(m, dt) { return }
-		let toPX: Double = pb.x - m.b.x
-		let dist: Double = abs(toPX)
-		let dyP: Double = (pb.y - pb.h * 0.5) - m.b.cy
-		let near: Bool = dist < d.aggro && abs(dyP) < 14 && !dead
-		let peaceful: Bool = settings.peaceful
-		if m.tame {
-			updatePet(m, dt)
-			return
-		}
-		// monsters decide for themselves whether they are after the player (see think)
-		var engaged: Bool = near && !peaceful
-		if m.kind.thinks { engaged = think(m, dt, dist, dyP) }
-		switch m.kind {
-		case .custom:
-			// run by updateCustomMob (never reaches here)
-			stepMob(m, dt)
-		case .pig, .cow, .sheep, .villager:  // (villagers are retired and never appear)
-			if m.t2 > 0 {
-				m.t2 -= dt
-				flee(m, m.tx, dt, 1.9)
-			} else if !animalLife(m, dt) {
-				wander(m, dt, 0.55)
-			}
-			stepMob(m, dt)
-		case .giraffe, .chicken, .frog, .cat:
-			if m.t2 > 0 {
-				m.t2 -= dt
-				flee(m, m.tx, dt, 1.7)
-			} else if !(dist < 6.0 && !dead && m.kind != .cat) && m.kind != .cat && animalLife(m, dt) {
-				// handled: resting, heading for water or the herd
-			} else if dist < 6.0 && !dead && m.kind != .cat {
-				flee(m, pb.x, dt, 1.4)
-			} else {
-				wander(m, dt, 0.5)
-			}
-			if m.kind == .frog && m.b.onGround && m.st == 1 && Double.random(in: 0...1) < 0.04 { m.b.vy = -9; m.b.vx = Double(m.dir) * 3.5 }
-			stepMob(m, dt)
-		case .elephant, .bear, .wolf:
-			if m.drinkT > 0 && m.kind == .wolf { m.drinkT -= dt }
-			// a wolf that turns on the player forgets its prey
-			if m.angry { m.preyID = 0 }
-			if !m.angry && m.kind == .wolf && hunt(m, dt, isNight && m.drinkT <= 0) {
-				// a wolf pack runs down prey at night
-			} else if m.angry && !dead {
-				m.t3 -= dt
-				if m.t3 <= 0 || dist > 30 { m.angry = false } else {
-					chase(m, pb.x, 1.0, dt)
-					if m.kind == .wolf && m.b.onGround && dist < 4.0 && Double.random(in: 0...1) < 0.03 { m.b.vy = -12; m.b.vx = Double(m.dir) * 7.0 }
-					if peaceful { m.angry = false }
-					else { contactHurt(m, d.dmg) }
-				}
-			} else {
-				// animals are neutral: only a blow from the player makes them fight (see hurtMob)
-				wander(m, dt, 0.5)
-			}
-			stepMob(m, dt)
-		case .grizzly, .polarBear, .tiger, .scorpion:
-			if m.drinkT > 0 { m.drinkT -= dt }
-			// wild animals hunt their prey but leave the player alone, unless the player hurts them:
-			// then they fight back for a while
-			let provoked: Bool = wildProvoked(m)
-			if !(provoked && !peaceful) && m.kind != .scorpion && hunt(m, dt, m.drinkT <= 0) {
-				// hunting, or resting after a kill
-			} else if !(provoked && !peaceful) {
-				wander(m, dt, 0.4)
-			} else if !dead {
-				chase(m, pb.x, 1.0, dt)
-				if m.kind == .tiger && m.b.onGround && dist < 6.5 && dist > 2.0 && m.cd <= 0.4 && Double.random(in: 0...1) < 0.04 {
-					m.b.vy = -11.5
-					m.b.vx = Double(m.dir) * 10.0
-					m.t3 = 0.6
-				}
-				contactHurt(m, d.dmg)
-			} else {
-				wander(m, dt, 0.5)
-			}
-			stepMob(m, dt)
-		case .zombie:
-			updateZombie(m, dt, engaged, dyP)
-		case .skeleton, .pirate, .pirateCaptain:
-			updateSwordsman(m, dt, engaged, dist, dyP)
-		case .pirateGunner, .imp:
-			updateShooter(m, dt, engaged, dist, dyP)
-		case .slime, .emberSlime:
-			updateSlime(m, dt, engaged, dyP)
-		case .crow, .bat, .cinderBat, .wraith:
-			updateFlyer(m, dt, engaged, dist, dyP)
-		case .fish:
-			updateFish(m, dt)
-		case .crawler:
-			updateCrawler(m, dt, engaged, dist, dyP)
-		case .golem:
-			updateGolem(m, dt, engaged, dist, dyP)
-		case .archer:
-			updateArcher(m, dt, engaged, dist, dyP)
-		case .mimic:
-			updateMimic(m, dt, !peaceful && !dead && dist < 20, dist, dyP)
-		case .bearBoss, .rex, .sentinel, .warden:
-			break
-		}
-	}
-
-	// MARK: hostile minds
-
-	/// How far a monster's attack reaches (across, up or down) and whether it is shot from afar
-	/// How far a creature's attack reaches: a mutated creature's blows reach as far as its size
-	func attackReach(_ m: Mob) -> (Double, Double, Bool) {
-		let r: (Double, Double, Bool) = attackReachBase(m)
-		if m.mutSize <= 1.001 || r.2 { return r }
-		return (r.0 * m.mutSize, r.1 * m.mutSize, r.2)
-	}
-
-	func attackReachBase(_ m: Mob) -> (Double, Double, Bool) {
-		switch m.kind {
-		case .zombie: return (1.5, 1.7, false)
-		case .skeleton, .pirate, .pirateCaptain: return (2.0, 1.6, false)
-		case .pirateGunner, .imp: return (17.0, 9.0, true)
-		case .archer: return (18.0, 10.0, true)
-		case .crawler: return (4.6, 2.0, false)
-		case .golem: return (3.3, 2.4, false)
-		case .custom: return ModRuntime.shared.mob(m.cslot)?.reach ?? (m.b.w * 0.5 + 0.5, 1.4, false)
-		default: return (m.b.w * 0.5 + 0.5, 1.4, false)
-		}
-	}
-
-	/// A monster's senses and its plan, the same for every kind (each has its own attacks).
-	/// It notices the player by sight (a clear line from its eyes, rechecked a few times a second),
-	/// by sound up close, or by being hit; after a beat of surprise it gives chase; when the player
-	/// slips out of sight it searches where they were last seen, then goes home. Stuck against a wall
-	/// it tries one harder leap, then backs off and comes again. Night hunters spawned on the surface
-	/// roam toward the player before they have seen them. Returns whether it is after the player;
-	/// `aimX` is where it is heading.
-	func think(_ m: Mob, _ dt: Double, _ dist: Double, _ dyP: Double) -> Bool {
-		let d: MobDef = m.def
-		m.aiT += dt
-		if m.leapT > 0 { m.leapT -= dt }
-		if m.hunter && (m.kind == .skeleton || m.kind == .archer) && inSunlight(m) { m.burn = 2.0 }
-		if dead || settings.peaceful {
-			m.why = dead ? .playerGone : .peaceful
-			if m.ai != .idle && m.ai != .back { m.ai = .back; m.aiT = 0 }
-			if m.ai == .back && (abs(m.b.x - m.homeX) < 2.0 || m.aiT > 8.0) { m.ai = .idle; m.aiT = 0 }
-			m.aimX = m.homeX
-			return false
-		}
-		m.losT -= dt
-		if m.losT <= 0 {
-			// its eyes (a golem looks over a low wall) to the player's head or chest
-			m.losT = 0.18 + Double(m.id % 7) * 0.02
-			let ey: Double = m.kind == .golem ? m.b.top - 0.5 : shotY(m)
-			m.sees = m.kind == .wraith || world.lineClear(m.b.x, ey, pb.x, pb.y - pb.h * 0.6) || world.lineClear(m.b.x, ey, pb.x, pb.top + 0.2)
-			// smoke hides the player from eyes on either side of it
-			if m.sees && !smokes.isEmpty && (inSmoke(pb.x, pb.cy) || inSmoke(m.b.x, m.b.cy)) { m.sees = false }
-		}
-		// sight reaches across most of the screen (further for the night's hunters, and for one already
-		// fighting); footsteps and scent carry through walls over a shorter distance
-		let base: Double = max(d.aggro, 16.0)
-		let sight: Double = base * (m.hunter ? 1.25 : 1.0) * (m.ai == .chase ? 1.5 : 1.0)
-		let sense: Double = base * 0.7
-		let hurt: Bool = clock - m.lastHitByPlayer < 0.6
-		let heard: Bool = dist < 3.5 && abs(dyP) < 3.0
-		let detect: Bool = hurt || heard || (dist < sight && abs(dyP) < 12.0 && m.sees)
-		let sensed: Bool = dist < sense && abs(dyP) < 10.0
-		if detect || sensed {
-			m.seenX = pb.x
-			m.seenY = pb.y
-			m.lostT = 0
-		} else {
-			m.lostT += dt
-		}
-		let hunting: Bool = m.hunter && isNight && world.dim == .overworld && dist < 80
-		switch m.ai {
-		case .idle, .back:
-			if detect {
-				m.ai = hurt ? .chase : .alert
-				m.aiT = 0
-			} else if sensed {
-				// something moving nearby, out of sight: it goes to look
-				m.ai = .search
-				m.aiT = 0
-			} else if hunting {
-				// a hunter roams toward where the player is, give or take
-				m.ai = .search
-				m.aiT = 0
-				m.seenX = pb.x + Double.random(in: -6...6)
-				m.seenY = pb.y
-			}
-		case .alert:
-			if m.aiT > 0.35 { m.ai = .chase; m.aiT = 0 }
-		case .chase:
-			if m.lostT > 2.5 { m.ai = .search; m.aiT = 0 }
-		case .search:
-			if detect {
-				m.ai = .chase
-				m.aiT = 0
-			} else if sensed {
-				m.aiT = 0
-			} else if (abs(m.b.x - m.seenX) < 1.2 && m.aiT > 2.0) || m.aiT > (hunting ? 14.0 : 8.0) {
-				if hunting {
-					m.seenX = pb.x + Double.random(in: -8...8)
-					m.seenY = pb.y
-					m.aiT = 0
-				} else {
-					m.ai = .back
-					m.aiT = 0
-				}
-			}
-		case .retreat:
-			if m.aiT > 2.5 { m.ai = detect ? .chase : .search; m.aiT = 0 }
-		}
-		switch m.ai {
-		case .alert, .chase: m.aimX = pb.x
-		case .search: m.aimX = m.seenX
-		case .retreat: m.aimX = m.b.x + (m.b.x >= m.seenX ? 6.0 : -6.0)
-		case .back: m.aimX = m.homeX
-		case .idle: m.aimX = m.b.x
-		}
-		if m.ai == .back && abs(m.b.x - m.homeX) < 2.0 { m.ai = .idle; m.aiT = 0 }
-		// getting nowhere (pressed against a wall it can't get over, or hopping at it): one harder
-		// leap, then back off and come again. One already within reach of its attack is not stuck.
-		let reach: (Double, Double, Bool) = attackReach(m)
-		let inReach: Bool = dist <= reach.0 && abs(dyP) <= reach.1 && (!reach.2 || m.sees)
-		// (states 0 and 1 are walking about; 3 and up are its attacks)
-		let pushing: Bool = (m.ai == .chase || m.ai == .search) && abs(m.aimX - m.b.x) > 1.0 && m.st <= 1 && !(m.ai == .chase && inReach)
-		if pushing {
-			if abs(m.b.x - m.progX) > 0.6 {
-				m.progX = m.b.x
-				m.blockedT = max(0, m.blockedT - 0.5)
-			} else {
-				// a cactus or spikes in the way: it gives up on that much sooner
-				let ax: Int = Int(floor(m.b.x + Double(m.dir) * (m.b.w * 0.5 + 0.3)))
-				let thorny: Bool = world.tile(ax, Int(floor(m.b.y - 0.5))).hurts
-				m.blockedT += thorny ? dt * 3.0 : dt
-			}
-			// (applied in stepMob, after the creature's own moves, so its usual hop can't cancel it)
-			if !d.flying && m.blockedT > 0.9 && m.leapT <= 0 { m.leapReq = true }
-			if m.blockedT > 3.2 {
-				m.ai = .retreat
-				m.aiT = 0
-				m.blockedT = 0
-			}
-		} else if m.st <= 1 {
-			m.progX = m.b.x
-			m.blockedT = max(0, m.blockedT - dt * 0.5)
-		}
-		// the reason it is not attacking right now (shown by the AI overlay)
-		if m.ai == .retreat || m.blockedT > 0.9 { m.why = .blocked }
-		else if m.ai != .chase && m.ai != .alert { m.why = .notSeen }
-		else if dist > reach.0 { m.why = .outOfRange }
-		else if abs(dyP) > reach.1 { m.why = .tooHigh }
-		else if reach.2 && !m.sees { m.why = .noSight }
-		else if m.cd > 0 { m.why = .cooldown }
-		else { m.why = .none }
-		return m.ai != .idle && m.ai != .back
-	}
-
-	// MARK: specific AIs
-
-	/// Out in full daylight under an open sky (the undead burn)
-	func inSunlight(_ m: Mob) -> Bool {
-		return world.dim == .overworld && dayFactor > 0.7 && precipAt(m.b.x) < 0.5 && wxHere.cloud < 0.9 && world.isSkyExposed(Int(floor(m.b.x)), Int(floor(m.b.y - 1))) && !m.b.inWater
-	}
-
-	func updateZombie(_ m: Mob, _ dt: Double, _ aggro: Bool, _ dyP: Double) {
-		let d: MobDef = m.def
-		if inSunlight(m) { m.burn = 2.0 }
-		let dist: Double = abs(pb.x - m.b.x)
-		if m.st == 3 {
-			// arms drawn back: the swipe lands a moment later, so a quick step back dodges it
-			m.t3 -= dt
-			accelX(m, 0, 40, dt)
-			if m.t3 <= 0 {
-				m.st = 4
-				m.t3 = 0.25
-				mobStrike(m, reach: 1.2, height: 1.8, dmg: d.dmg, knock: 6.5)
-			}
-		} else if m.st == 4 {
-			m.t3 -= dt
-			accelX(m, 0, 40, dt)
-			if m.t3 <= 0 {
-				m.st = 0
-				m.cd = 0.9
-			}
-		} else if aggro {
-			chase(m, m.aimX, 1.0, dt)
-			if m.ai == .chase && (m.sees || dist < 1.0) && m.cd <= 0 && dist < 1.5 && abs(dyP) < 1.7 {
-				m.st = 3
-				m.t3 = 0.32
-				m.dir = pb.x >= m.b.x ? 1 : -1
-			}
-		} else {
-			wander(m, dt, 0.45)
-		}
-		stepMob(m, dt)
-	}
-
-	/// skeleton knight (shield), pirate and captain (cutlass)
-	func updateSwordsman(_ m: Mob, _ dt: Double, _ aggro: Bool, _ dist: Double, _ dyP: Double) {
-		let d: MobDef = m.def
-		let isSkel: Bool = m.kind == .skeleton
-		if m.st == 3 {
-			// wind-up
-			m.t3 -= dt
-			accelX(m, 0, 40, dt)
-			if m.t3 <= 0 {
-				m.st = 4
-				m.t3 = 0.22
-				// strike
-				mobStrike(m, reach: 2.2, height: 1.9, dmg: d.dmg, knock: 7.0)
-			}
-		} else if m.st == 4 {
-			m.t3 -= dt
-			accelX(m, 0, 40, dt)
-			if m.t3 <= 0 {
-				m.st = 0
-				m.cd = m.kind == .pirateCaptain ? 0.9 : 1.2
-			}
-		} else if aggro {
-			let sp: Double = dist > 8 ? 1.15 : 0.95
-			if isSkel {
-				// raise the shield while approaching, drop it to attack
-				m.blocking = dist > 2.4 && dist < 11 && m.ai == .chase
-				if m.ai == .chase && m.sees && dist < 2.0 && m.cd <= 0 && abs(dyP) < 1.6 {
-					m.st = 3
-					m.t3 = 0.38
-					m.blocking = false
-					m.dir = pb.x >= m.b.x ? 1 : -1
-				}
-				chase(m, m.aimX, m.blocking ? 0.7 : sp, dt)
-			} else {
-				if m.ai == .chase && m.sees && dist < 2.0 && m.cd <= 0 && abs(dyP) < 1.6 {
-					m.st = 3
-					m.t3 = 0.3
-					m.dir = pb.x >= m.b.x ? 1 : -1
-				}
-				chase(m, m.aimX, sp, dt)
-			}
-		} else {
-			m.blocking = false
-			wander(m, dt, 0.4)
-		}
-		if m.st == 0 && !aggro { m.blocking = false }
-		stepMob(m, dt)
-	}
-
-	/// pirate gunner and imp: keep range and shoot
-	func updateShooter(_ m: Mob, _ dt: Double, _ aggro: Bool, _ dist: Double, _ dyP: Double) {
-		let isImp: Bool = m.kind == .imp
-		if m.st == 3 {
-			m.t3 -= dt
-			accelX(m, 0, 40, dt)
-			m.dir = pb.x >= m.b.x ? 1 : -1
-			if m.t3 <= 0 {
-				if clearShot(m) {
-					m.st = 6
-					m.t3 = 0.18
-					shootAtPlayer(m, isImp)
-				} else if m.t3 < -0.8 {
-					m.st = 0
-					m.cd = 0.4
-					m.blockedT += 0.6
-				}
-			}
-		} else if m.st == 6 {
-			m.t3 -= dt
-			accelX(m, 0, 40, dt)
-			if m.t3 <= 0 { m.st = 0; m.cd = isImp ? 1.9 : 2.2 }
-		} else if aggro {
-			let want: Double = isImp ? 8.0 : 9.0
-			if (m.ai != .chase && m.ai != .alert) || !m.sees || m.blockedT > 0.5 || !m.b.onGround {
-				// no clear shot (or climbing for one): move in until there is one
-				chase(m, m.aimX, 0.9, dt)
-			} else if dist < want - 3.0 {
-				flee(m, pb.x, dt, 0.8)
-			} else if dist > want + 3.0 {
-				chase(m, pb.x, 0.9, dt)
-			} else {
-				accelX(m, 0, 20, dt)
-				m.dir = pb.x >= m.b.x ? 1 : -1
-			}
-			if m.ai == .chase && m.sees && m.b.onGround && m.cd <= 0 && dist < 17 && abs(dyP) < 9 {
-				m.st = 3
-				m.t3 = 0.5
-			}
-		} else {
-			wander(m, dt, 0.4)
-		}
-		stepMob(m, dt)
-	}
-
-	func shootAtPlayer(_ m: Mob, _ fire: Bool) {
-		let ox: Double = m.b.x + Double(m.dir) * 0.6
-		let oy: Double = shotY(m)
-		var dx: Double = pb.x - ox
-		var dy: Double = shotAimY(m) - oy
-		let len: Double = max(0.001, sqrt(dx * dx + dy * dy))
-		dx /= len
-		dy /= len
-		let sp: Double = fire ? 11.0 : 20.0
-		var p = Projectile(kind: fire ? .fireball : .bullet, x: ox, y: oy, vx: dx * sp, vy: dy * sp, dmg: m.def.dmg, fromPlayer: false, gravity: 0)
-		p.life = 3.0
-		p.owner = m.id
-		p.source = .mob(m, faction(of: m))
-		p.uid = newID()
-		projectiles.append(p)
-		spawnParticles(ox, oy, fire ? 0xFF7020 : 0xFFE080, 4, 2.5, 0.18, 0)
-	}
-
-	func updateSlime(_ m: Mob, _ dt: Double, _ aggro: Bool, _ dyP: Double) {
-		let d: MobDef = m.def
-		m.t1 -= dt
-		if m.b.onGround {
-			m.b.vx *= 0.8
-			if m.t1 <= 0 {
-				if aggro {
-					let dirX: Double = m.aimX >= m.b.x ? 1.0 : -1.0
-					m.dir = Int(dirX)
-					m.b.vy = -d.jump
-					m.b.vx = dirX * d.speed * 1.6
-					m.t1 = Double.random(in: 0.7...1.3)
-				} else {
-					m.dir = Bool.random() ? 1 : -1
-					m.b.vy = -8.5
-					m.b.vx = Double(m.dir) * 2.0
-					m.t1 = Double.random(in: 1.5...3.5)
-				}
+			let count: Int = max(1, run)
+			run = 0
+			let v: UInt32 = c == 46 ? 0 : lut[Int(c & 127)]
+			var k: Int = 0
+			while k < count && i < n {
+				b.px[i] = v
+				i += 1
+				k += 1
 			}
 		}
-		if aggro && !m.b.onGround {
-			// a little steering in mid-hop, so a bounce at a wall carries over it
-			accelX(m, (m.aimX >= m.b.x ? 1.0 : -1.0) * d.speed * 1.6, 5, dt)
-		}
-		if m.kind == .emberSlime && Double.random(in: 0...1) < 0.1 {
-			spawnParticles(m.b.x, m.b.y - 0.4, 0xFF8A20, 1, 1.2, 0.4, -3)
-		}
-		if aggro && m.ai == .chase { contactHurt(m, d.dmg) }
-		stepMob(m, dt)
-	}
-
-	func updateFlyer(_ m: Mob, _ dt: Double, _ aggro: Bool, _ dist: Double, _ dyP: Double) {
-		let d: MobDef = m.def
-		m.anim += dt * 8.0
-		var tx: Double = m.homeX
-		var ty: Double = m.homeY
-		var spd: Double = d.speed * 0.6
-		if m.kind == .crow {
-			// wander around home; flee when approached
-			m.t1 -= dt
-			if m.t1 <= 0 {
-				m.t1 = Double.random(in: 2...5)
-				m.tx = m.homeX + Double.random(in: -12...12)
-				let gy: Double = Double(world.surfaceY(Int(floor(m.tx))))
-				m.ty = gy - Double.random(in: 3...8)
-			}
-			tx = m.tx
-			ty = m.ty
-			if dist < 5.0 && !dead {
-				tx = m.b.x + (m.b.x - pb.x) * 3
-				ty = m.b.y - 6
-				spd = d.speed * 1.4
-			}
-		} else if aggro {
-			tx = m.aimX
-			ty = (m.ai == .chase ? pb.y : m.seenY) - 1.3 + sin(clock * 3.0 + Double(m.id)) * 1.2
-			spd = d.speed
-		} else {
-			m.t1 -= dt
-			if m.t1 <= 0 {
-				m.t1 = Double.random(in: 1.5...4)
-				m.tx = m.b.x + Double.random(in: -8...8)
-				m.ty = m.b.y + Double.random(in: -4...4)
-			}
-			tx = m.tx
-			ty = m.ty
-		}
-		var ax: Double = tx - m.b.x
-		var ay: Double = ty - m.b.y
-		let len: Double = max(0.001, sqrt(ax * ax + ay * ay))
-		ax /= len
-		ay /= len
-		m.b.vx += (ax * spd - m.b.vx) * min(1.0, dt * 4.0)
-		m.b.vy += (ay * spd - m.b.vy) * min(1.0, dt * 4.0)
-		if abs(m.b.vx) > 0.3 { m.dir = m.b.vx > 0 ? 1 : -1 }
-		if m.kind == .wraith {
-			// drifts through walls, slower inside solid tiles
-			let inside: Bool = world.solid(Int(floor(m.b.x)), Int(floor(m.b.y - 0.7)))
-			let k: Double = inside ? 0.5 : 1.0
-			m.b.x += m.b.vx * dt * k
-			m.b.y += m.b.vy * dt * k
-		} else {
-			world.moveBody(&m.b, dt, stepUp: 0, dropThrough: false, decks: [])
-			if m.b.hitWall || m.b.hitCeil || m.b.onGround { m.b.vy = -1.0; m.t1 = 0 }
-		}
-		if aggro && m.kind != .crow && m.ai == .chase { contactHurt(m, d.dmg) }
-	}
-
-	func updateFish(_ m: Mob, _ dt: Double) {
-		m.anim += dt * 6.0
-		if !m.b.inWater {
-			// flopping on land
-			m.b.vy = min(m.b.vy + gravityG * dt, terminalV)
-			world.moveBody(&m.b, dt, stepUp: 0, dropThrough: false, decks: [])
-			m.t2 += dt
-			if m.t2 > 1.0 { m.t2 = 0; hurtMob(m, 1, 0, 0, false) }
-			return
-		}
-		m.t1 -= dt
-		if m.t1 <= 0 {
-			m.t1 = Double.random(in: 1.5...4)
-			m.tx = m.b.x + Double.random(in: -8...8)
-			m.ty = m.b.y + Double.random(in: -3...3)
-		}
-		if abs(pb.x - m.b.x) < 4 && abs(pb.y - m.b.y) < 3 && pb.inWater {
-			m.tx = m.b.x + (m.b.x - pb.x) * 3
-			m.ty = m.b.y + (m.b.y - pb.y) * 2
-		}
-		var ax: Double = m.tx - m.b.x
-		var ay: Double = m.ty - m.b.y
-		let len: Double = max(0.001, sqrt(ax * ax + ay * ay))
-		ax /= len
-		ay /= len
-		let sp: Double = m.def.speed
-		m.b.vx += (ax * sp - m.b.vx) * min(1.0, dt * 3.0)
-		m.b.vy += (ay * sp * 0.6 - m.b.vy) * min(1.0, dt * 3.0)
-		if abs(m.b.vx) > 0.2 { m.dir = m.b.vx > 0 ? 1 : -1 }
-		let nx: Double = m.b.x + m.b.vx * dt
-		let ny: Double = m.b.y + m.b.vy * dt
-		let tx: Int = Int(floor(nx))
-		let ty: Int = Int(floor(ny - 0.2))
-		if world.tile(tx, ty) == .water && world.tile(tx, Int(floor(ny))) != .air {
-			m.b.x = nx
-			m.b.y = ny
-		} else {
-			m.t1 = 0
-			m.b.vx = -m.b.vx
-			m.b.vy = -m.b.vy
-		}
-		let hw: Double = m.b.w * 0.5
-		m.b.inWater = world.liquidFraction(m.b.x - hw, m.b.y - m.b.h, m.b.x + hw, m.b.y, false) > 0.3
-	}
-
-	// MARK: pets
-
-	func updatePet(_ m: Mob, _ dt: Double) {
-		let d: MobDef = m.def
-		let toP: Double = pb.x - m.b.x
-		let dist: Double = abs(toP)
-		if dist > 45 || abs(pb.y - m.b.y) > 30 {
-			m.b.x = pb.x - Double(facing) * 1.5
-			m.b.y = pb.y
-			m.b.vx = 0
-			m.b.vy = 0
-			return
-		}
-		if m.st == 7 {
-			accelX(m, 0, 20, dt)
-			stepMob(m, dt)
-			return
-		}
-		// attack nearby hostiles
-		var target: Mob? = nil
-		if m.kind == .wolf {
-			target = nearestHostileTo(pb.x, pb.y - 1, 9.0)
-		}
-		if let t = target, t.hp > 0 {
-			chase(m, t.b.x, 1.2, dt)
-			if m.cd <= 0 && abs(t.b.x - m.b.x) < 1.6 && abs(t.b.cy - m.b.cy) < 1.5 {
-				hurtMob(t, 7, Double(m.dir), 5.0, true)
-				m.cd = 0.7
-			}
-		} else if dist > 3.5 {
-			let sp: Double = dist > 12 ? 1.8 : 1.15
-			chase(m, pb.x, sp, dt)
-		} else {
-			accelX(m, 0, 20, dt)
-		}
-		_ = d
-		stepMob(m, dt)
-	}
-
-	func tryTame(_ m: Mob) -> Bool {
-		if m.tame { return false }
-		guard let it = heldItem else { return false }
-		var ok: Bool = false
-		if m.kind == .wolf, case .mat(let mm) = it, mm == .bone { ok = true }
-		if m.kind == .cat, case .food(let f) = it, f == .rawFish || f == .cookedFish { ok = true }
-		if !ok { return false }
-		if !isCreative { inv.removeAt(sel, 1) }
-		if Double.random(in: 0...1) < 0.6 {
-			m.tame = true
-			m.persistent = true
-			m.angry = false
-			m.hp = m.maxHP
-			say("You tamed the " + m.def.name.lowercased() + "!", 3.0)
-			spawnParticles(m.b.x, m.b.y - 1, 0xFF6080, 10, 3.0, 0.8, -4)
-		} else {
-			say("The " + m.def.name.lowercased() + " isn't convinced yet...", 2.0)
-		}
-		useCD = 0.5
-		bumpHUD()
-		return true
+		return b
 	}
 }
 
-// ===== p15b_spawn =====
+/// One creature's drawing as ArtSheet keeps it (its frames are unpacked when first asked for)
+struct SheetArt {
+	var w: Int
+	var h: Int
+	var foot: Int
+	var cx: Double
+	var pal: [UInt8: UInt32]
+	var poses: [String: [Int]]
+	var packed: [Substring]
+}
 
-// MARK: - Mob spawning
+enum CreatureSheet {
+	static let arts: [String: SheetArt] = parse(ArtSheet.creatureText)
 
-extension Game {
-	/// Notes how a spawn attempt ended (the debug panel shows the tally)
-	func spawnNote(_ s: String) {
-		spawnLast = s
-		if spawnLog.count < 40 || spawnLog[s] != nil { spawnLog[s, default: 0] += 1 }
-	}
-
-	/// The most lamplight a monster may come out in (0...15). A torch (12) keeps them off the ground
-	/// about seven blocks round it in the open, less where walls or ground stand in the way.
-	static let spawnGlowMax: Int = 4
-
-	/// The light at a creature's two cells above its feet at (x, feetY), worked out by the game's own
-	/// light flood over the ground around it, on screen or not: (sky light, light of glowing blocks).
-	/// Torches, lanterns, campfires, lamps, glowing mod blocks and every other light-giving block count,
-	/// fading with distance and held back by walls and ground; a torch in the player's hand does not.
-	func lightForSpawn(_ x: Int, _ feetY: Int) -> (Int, Int) {
-		if !spawnLight.covers(x - 1, feetY - 3, x + 1, feetY) || spawnLight.stamp != world.version || spawnLight.skyUsed != skyLevel || spawnLight.dimUsed != world.dim.rawValue {
-			let r: Int = 18
-			spawnLight.compute(world, x - r, feetY - r, r * 2 + 1, r * 2 + 1, skyLevel, [], noteSeen: false)
+	static func parse(_ s: String) -> [String: SheetArt] {
+		var out: [String: SheetArt] = [:]
+		var name: String = ""
+		var cur: SheetArt? = nil
+		var body: String = ""
+		func close() {
+			guard var a = cur else { return }
+			a.packed = Substring(body).split(separator: "/")
+			out[name] = a
+			cur = nil
+			body = ""
 		}
-		let a: (Int, Int) = spawnLight.level(x, feetY - 1)
-		let b: (Int, Int) = spawnLight.level(x, feetY - 2)
-		return (max(a.0, b.0), max(a.1, b.1))
+		for raw in s.split(separator: "\n") {
+			let line: Substring = raw.drop(while: { (c: Character) -> Bool in c == "\t" || c == " " })
+			if line.isEmpty || line.hasPrefix("//") { continue }
+			if line.hasPrefix("+") {
+				body.append(contentsOf: line.dropFirst())
+				continue
+			}
+			close()
+			let f: [Substring] = line.split(separator: "|", omittingEmptySubsequences: false)
+			guard f.count >= 7, let w = Int(f[1]), let h = Int(f[2]), let foot = Int(f[3]), let cx = Double(f[4]) else { continue }
+			var poses: [String: [Int]] = [:]
+			for e in f[6].split(separator: ";") {
+				let kv: [Substring] = e.split(separator: ":")
+				if kv.count != 2 { continue }
+				poses[String(kv[0])] = kv[1].split(separator: ",").compactMap { Int($0) }
+			}
+			name = String(f[0])
+			cur = SheetArt(w: w, h: h, foot: foot, cx: cx, pal: ArtSheet.palette(f[5]), poses: poses, packed: [])
+		}
+		close()
+		return out
 	}
 
-	/// Ground monsters can come out on: earth, sand, snow and rock, never planks, brick, glass or other
-	/// building blocks (so not on the roof or floor of a house)
-	func naturalGround(_ t: Tile) -> Bool {
-		switch t {
-		case .grass, .dirt, .stone, .sand, .snow, .ice, .sandstone, .mud, .dryGrass, .jungleGrass, .mossGrass,
-			 .slate, .deepRock, .obsidian, .ashStone, .farmland, .coal, .copper, .iron, .tin, .saltpeter: return true
+	static func has(_ name: String) -> Bool { return arts[name] != nil }
+
+	/// A drawing's frames, unpacked
+	static func frames(_ name: String) -> [PixelBuf] {
+		guard let a = arts[name] else { return [] }
+		return a.packed.map { ArtSheet.unpack($0, a.w, a.h, a.pal) }
+	}
+
+	/// How a drawing's frames are used: its poses by name
+	static func anim(_ a: SheetArt) -> CreatureAnim {
+		var an = CreatureAnim()
+		an.walk = a.poses["walk"] ?? []
+		if let x = a.poses["alt"]?.first { an.idleAlt = x }
+		if let x = a.poses["strike"]?.first { an.attack = x }
+		if let x = a.poses["hop"]?.first {
+			an.hop = true
+			an.hopFrame = x
+		}
+		if let c = a.poses["fly"] { an.cycle = c }
+		for (k, v) in a.poses {
+			if let f0 = v.first { an.poses[k] = f0 }
+		}
+		return an
+	}
+
+	/// A creature's look from its drawing (nil when it has not been drawn by hand yet)
+	static func look(_ name: String) -> CreatureLook? {
+		guard let a = arts[name], !a.packed.isEmpty else { return nil }
+		return CreatureLook(frames: frames(name), anim: anim(a), scale: fineScale, foot: a.foot + 1, cx: a.cx, fine: true)
+	}
+}
+
+/// The hand-drawn blocks, by tile number
+enum TileSheet {
+	static let parsed: ([UInt8: PixelBuf], [UInt8: Int]) = parse(ArtSheet.tileText)
+	static var bufs: [UInt8: PixelBuf] { return parsed.0 }
+	/// how each may be varied from place to place: bit 1 mirrored, bit 2 turned top to bottom
+	static var flips: [UInt8: Int] { return parsed.1 }
+
+	static func parse(_ s: String) -> ([UInt8: PixelBuf], [UInt8: Int]) {
+		var byName: [String: Tile] = [:]
+		for t in Tile.allCases { byName[String(describing: t)] = t }
+		var out: [UInt8: PixelBuf] = [:]
+		var fl: [UInt8: Int] = [:]
+		for raw in s.split(separator: "\n") {
+			let line: Substring = raw.drop(while: { (c: Character) -> Bool in c == "\t" || c == " " })
+			if line.isEmpty || line.hasPrefix("//") { continue }
+			let f: [Substring] = line.split(separator: "|", omittingEmptySubsequences: false)
+			guard f.count >= 4, let t = byName[String(f[0])] else { continue }
+			out[t.rawValue] = ArtSheet.unpack(f[3], tileArtPx, tileArtPx, ArtSheet.palette(f[2]))
+			fl[t.rawValue] = (f[1].contains("h") ? 1 : 0) | (f[1].contains("v") ? 2 : 0)
+		}
+		return (out, fl)
+	}
+}
+
+// ===== p13a_mobdefs =====
+
+// MARK: - Mob definitions
+
+enum MobKind: Int, Codable, CaseIterable {
+	case pig, cow, sheep, chicken, crow, giraffe, frog, fish
+	case elephant, bear, grizzly, polarBear, tiger, wolf, cat
+	case zombie, skeleton, slime, bat, scorpion, wraith
+	case villager, pirate, pirateGunner, pirateCaptain
+	case imp, emberSlime, cinderBat
+	case bearBoss, rex
+	/// appended, so saved creature kinds keep their numbers
+	case crawler, golem, archer, sentinel, mimic, warden
+	/// a creature from a player's mod (which one: `Mob.cslot`, see ModRuntime)
+	case custom
+
+	/// wild hunters that roam by day as well: they have their own small number in the spawner, so
+	/// they never use up the night's monsters
+	var isPredator: Bool { return self == .grizzly || self == .polarBear || self == .tiger || self == .scorpion }
+
+	/// monsters run by `think` (senses, memory, chase, search, return) around their own attacks
+	var thinks: Bool {
+		switch self {
+		case .zombie, .skeleton, .pirate, .pirateCaptain, .pirateGunner, .imp, .slime, .emberSlime,
+			 .bat, .cinderBat, .wraith, .crawler, .golem, .archer, .custom: return true
 		default: return false
 		}
 	}
+}
 
-	/// How many monsters may be about at once (surface or underground) at this night-danger setting
-	func monsterCap(_ place: SpawnPlace) -> Int {
-		let d: Int = clampI(settings.nightDanger, 0, 2)
-		let base: Int = (place == .surface || place == .ocean) ? [3, 6, 10][d] : [6, 9, 12][d]
-		return Int((Double(base) * ModRuntime.shared.rule(.monsters)).rounded())
-	}
+enum Behavior: Int {
+	case passive, skittish, defensive, hostile, ranged, flyer, swimmer, boss
+}
 
-	/// How many animals (and fish) may be about at once (9, or as a mod's rule has it)
-	var animalCap: Int { return Int((9.0 * ModRuntime.shared.rule(.animals)).rounded()) }
+struct MobDef {
+	var name: String
+	var w: Double
+	var h: Double
+	var hp: Double
+	var speed: Double
+	var dmg: Double
+	var behavior: Behavior
+	var flying: Bool = false
+	var aggro: Double = 14
+	var jump: Double = 12
+	var hostile: Bool = false
+}
 
-	func updateSpawning(_ dt: Double) {
-		if monsterSpawnCD > 0 { monsterSpawnCD -= dt }
-		spawnTimer -= dt
-		if spawnTimer > 0 { return }
-		spawnTimer = Double.random(in: 0.45...1.0)
-		if dead { return }
-		var passive: Int = 0
-		var hostile: Int = 0
-		var predators: Int = 0
-		var aquatic: Int = 0
-		for m in mobs {
-			if m.hp <= 0 || m.removed || m.tame || m.persistent { continue }
-			let dx: Double = abs(m.b.x - pb.x)
-			if dx > 100 { continue }
-			if m.kind == .fish { aquatic += 1 }
-			else if m.def.hostile {
-				// only creatures still in play hold a place: bosses, lair guards and crews have their own
-				// rules, and one standing frozen far off-screen is about to leave
-				if m.isBoss || m.boat >= 0 || m.lair != 0 || dx > 72 || abs(m.b.y - pb.y) > 56 { continue }
-				if m.kind.isPredator { predators += 1 } else { hostile += 1 }
-			}
-			else { passive += 1 }
-		}
-		let px: Int = Int(floor(pb.x))
-		var place: SpawnPlace = .surface
-		if world.dim == .umbral {
-			place = .umbral
-		} else {
-			let sh: Int = world.dim.isCustom ? customSurface(px) : gen.col(px).h
-			let open: Bool = world.isSkyExposed(px, Int(pb.y) - 1)
-			let depth: Int = Int(pb.y) - sh
-			if depth > 18 && !open { place = .cave }
-		}
-		// just past the edge of the screen, so what comes is soon in sight
-		let half: Double = viewTilesW * 0.5 + 3.0
-		let side: Double = Bool.random() ? 1.0 : -1.0
-		let sx: Double = pb.x + side * (half + Double.random(in: 1...16))
-		let ix: Int = Int(floor(sx))
-		if !world.isLoaded(ix) { spawnNote("spot not loaded"); return }
-		if !gen.infinite && (ix < 4 || ix > gen.width - 5) { return }
-		var sy: Double = 0
-		var eff: SpawnPlace = place
-		if place == .surface {
-			let h: Int = world.surfaceY(ix)
-			let ht: Tile = world.tile(ix, h)
-			if ht.liquid {
-				eff = .ocean
-				var wy: Int = h + 1
-				var dep: Int = 0
-				while world.tile(ix, wy) == .water && dep < 40 { wy += 1; dep += 1 }
-				if dep < 5 { spawnNote("shallow water"); return }
-				sy = Double(h + 2 + Int.random(in: 0..<max(1, dep - 3)))
-			} else if ht.solid {
-				if world.solid(ix, h - 1) || world.solid(ix, h - 2) || world.tile(ix, h - 1).liquid { spawnNote("no headroom"); return }
-				sy = Double(h)
-			} else { spawnNote("no ground"); return }
-		} else {
-			let startY: Int = Int(pb.y) + Int.random(in: -20...20)
-			var found: Bool = false
-			var y: Int = startY
-			var tries: Int = 0
-			while tries < 22 {
-				if !world.solid(ix, y) && !world.solid(ix, y - 1) && !world.solid(ix, y - 2) && world.solid(ix, y + 1) && !world.tile(ix, y).liquid {
-					found = true
-					break
-				}
-				y += 1
-				tries += 1
-			}
-			if !found { spawnNote("no floor"); return }
-			if place == .cave && world.isSkyExposed(ix, y) { spawnNote("open sky"); return }
-			// lamplight, or daylight reaching in from a cave mouth
-			let lit: (Int, Int) = lightForSpawn(ix, y + 1)
-			if lit.1 > Game.spawnGlowMax || lit.0 > 6 { spawnNote("too bright"); return }
-			sy = Double(y + 1)
-		}
-		let biome: Biome = biomeAt(Double(ix))
-		// under a dark storm by day, now and then the night's creatures come out too
-		let stormDark: Bool = world.dim == .overworld && settings.weatherOn && wxHere.cloud > 0.9 && wxHere.precip > 0.6 && Double.random(in: 0...1) < 0.35
-		let night: Bool = isNight || stormDark
-		// on the surface, monsters stay out of lamplight, off roofs and away from ground far above or
-		// below the player (somewhere they could never reach them from)
-		var monsterBlock: String = ""
-		if eff == .surface {
-			let gy: Int = Int(sy)
-			if lightForSpawn(ix, gy).1 > Game.spawnGlowMax { monsterBlock = "lit by a lamp" }
-			else if !naturalGround(world.tile(ix, gy)) { monsterBlock = "on a building" }
-			else if abs(sy - pb.y) > 30 { monsterBlock = "out of reach" }
-			else if monsterSpawnCD > 0 { monsterBlock = "pacing" }
-		}
-		let cap: Int = monsterCap(eff)
-		var capped: Bool = false
-		var cands: [SpawnRule] = []
-		var total: Double = 0
-		// the custom creatures of the world's mods spawn by the same rules, beside the game's own
-		let rt: ModRuntime = ModRuntime.shared
-		// a custom dimension has only its own creatures
-		let rules: [SpawnRule] = world.dim.isCustom ? (customDim?.spawnRules ?? []) : (rt.spawnRules.isEmpty ? spawnRules : spawnRules + rt.spawnRules)
-		var customN: Int = -1
-		for r in rules {
-			if r.place != eff { continue }
-			if r.when == .day && night { continue }
-			if r.when == .night && !night { continue }
-			if !r.biomes.isEmpty && !r.biomes.contains(biome) { continue }
-			if eff == .cave || eff == .umbral || r.slot >= 0 {
-				if Int(sy) < r.minY || Int(sy) > r.maxY { continue }
-			}
-			var d: MobDef = mobDef(r.kind)
-			if r.slot >= 0 {
-				guard let cr = rt.mob(r.slot) else { continue }
-				d = cr.mdef
-				if customN < 0 { customN = customMobCount() }
-				if customN >= ModLimits.maxActiveMobs || customNearby(r.slot) >= r.maxNearby { continue }
-			}
-			if d.hostile {
-				if !monstersEnabled || settings.peaceful { continue }
-				if r.kind.isPredator {
-					// wild predators have their own small number and come by day too
-					if predators >= min(3, cap) { continue }
-				} else {
-					if hostile >= cap { capped = true; continue }
-					if !monsterBlock.isEmpty { continue }
-				}
-			} else if r.kind == .fish || (r.slot >= 0 && r.place == .ocean) {
-				if aquatic >= animalCap { continue }
-			} else {
-				if passive >= animalCap { continue }
-			}
-			cands.append(r)
-			total += r.weight
-		}
-		if cands.isEmpty || total <= 0 {
-			if capped { spawnNote("monster limit reached") }
-			else if !monsterBlock.isEmpty && night { spawnNote(monsterBlock) }
-			else { spawnNote(night ? "nothing for this place" : "nothing for this place by day") }
-			return
-		}
-		var pick: Double = Double.random(in: 0..<total)
-		var chosen: SpawnRule = cands[0]
-		for r in cands {
-			pick -= r.weight
-			if pick <= 0 { chosen = r; break }
-		}
-		let def: MobDef = chosen.slot >= 0 ? (rt.mob(chosen.slot)?.mdef ?? mobDef(chosen.kind)) : mobDef(chosen.kind)
-		let monster: Bool = def.hostile && !chosen.kind.isPredator
-		var n: Int = 1 + Int.random(in: 0..<max(1, chosen.group))
-		if monster { n = min(n, cap - hostile) }
-		var made: Int = 0
-		for k in 0..<n {
-			let ox: Double = Double(k) * 1.1 * side + Double.random(in: -0.4...0.4)
-			let x: Double = sx + ox
-			var y: Double = sy
-			// every member finds its own footing: the ground in its own column on the surface, and
-			// nobody appears inside a wall or hanging over a drop
-			if eff == .surface && !def.flying {
-				let gyS: Int = world.surfaceY(Int(floor(x)))
-				if world.tile(Int(floor(x)), gyS).liquid || abs(gyS - Int(sy)) > 3 { continue }
-				y = Double(gyS)
-			}
-			if def.flying && eff != .ocean { y -= chosen.sky ? Double.random(in: 7...14) : Double.random(in: 1...3) }
-			// each monster of a group only comes out where it is dark enough itself
-			if monster && eff != .ocean && lightForSpawn(Int(floor(x)), Int(floor(y))).1 > Game.spawnGlowMax { continue }
-			if eff != .ocean && !spawnSpotClear(def, x, y) { continue }
-			var made1: Mob? = nil
-			if chosen.slot >= 0 { made1 = addCustomMob(chosen.slot, x, y) } else { made1 = addMob(chosen.kind, x, y) }
-			guard let m = made1 else { continue }
-			m.homeX = x
-			m.homeY = y
-			// the night's monsters on the surface come looking for the player
-			if monster && eff == .surface && night { m.hunter = true }
-			if chosen.kind == .sheep && Double.random(in: 0...1) < 0.1 { m.sheared = true }
-			made += 1
-		}
-		if made == 0 { spawnNote("no room to stand"); return }
-		spawnNote(joinText("spawned ", def.name))
-		if monster && eff == .surface {
-			let d: Int = clampI(settings.nightDanger, 0, 2)
-			monsterSpawnCD = [8.0, 4.0, 2.0][d] * Double.random(in: 0.8...1.25)
-		}
-	}
+/// Mob definitions are built once into a table: building a MobDef (it holds a String) on every
+/// lookup was one of the hottest calls in the AI loop in debug builds.
+var mobDefTable: [MobDef] = MobKind.allCases.map { makeMobDef($0) }
 
-	/// How many of one custom creature are about near the player
-	func customNearby(_ slot: Int) -> Int {
-		var n: Int = 0
-		for m in mobs where m.kind == .custom && m.cslot == slot && m.hp > 0 && !m.removed && abs(m.b.x - pb.x) < 100 { n += 1 }
-		return n
-	}
+@inline(__always) func mobDef(_ k: MobKind) -> MobDef { return mobDefTable[k.rawValue] }
 
-	/// Room for a creature of this size standing at (x, y): no solid tile inside its box, and (unless it
-	/// flies) something to stand on under its feet
-	func spawnSpotClear(_ d: MobDef, _ x: Double, _ y: Double) -> Bool {
-		let hw: Double = d.w * 0.5
-		if world.boxSolid(x - hw + 0.02, y - d.h, x + hw - 0.02, y - 0.05) { return false }
-		if d.flying { return true }
-		let gy: Int = Int(floor(y + 0.05))
-		let l: Int = Int(floor(x - hw + 0.05))
-		let r: Int = Int(floor(x + hw - 0.05))
-		var footing: Int = 0
-		for tx in l...r where world.solid(tx, gy) || world.tile(tx, gy).isPlatform { footing += 1 }
-		return footing * 2 >= (r - l + 1)
+func makeMobDef(_ k: MobKind) -> MobDef {
+	switch k {
+	case .pig: return MobDef(name: "Pig", w: 0.9, h: 0.7, hp: 10, speed: 1.6, dmg: 0, behavior: .passive)
+	case .cow: return MobDef(name: "Cow", w: 1.3, h: 1.1, hp: 14, speed: 1.4, dmg: 0, behavior: .passive)
+	case .sheep: return MobDef(name: "Sheep", w: 1.1, h: 0.95, hp: 12, speed: 1.5, dmg: 0, behavior: .passive)
+	case .chicken: return MobDef(name: "Chicken", w: 0.6, h: 0.6, hp: 5, speed: 1.8, dmg: 0, behavior: .skittish)
+	case .crow: return MobDef(name: "Crow", w: 0.6, h: 0.5, hp: 4, speed: 3.6, dmg: 0, behavior: .flyer, flying: true)
+	case .giraffe: return MobDef(name: "Giraffe", w: 1.6, h: 3.2, hp: 30, speed: 3.4, dmg: 0, behavior: .skittish)
+	case .frog: return MobDef(name: "Frog", w: 0.5, h: 0.4, hp: 3, speed: 2.0, dmg: 0, behavior: .skittish, jump: 9)
+	case .fish: return MobDef(name: "Fish", w: 0.7, h: 0.4, hp: 3, speed: 2.2, dmg: 0, behavior: .swimmer)
+	case .elephant: return MobDef(name: "Elephant", w: 2.8, h: 2.4, hp: 80, speed: 2.4, dmg: 7, behavior: .defensive, aggro: 10)
+	case .bear: return MobDef(name: "Brown Bear", w: 1.8, h: 1.2, hp: 42, speed: 2.8, dmg: 5, behavior: .defensive, aggro: 11)
+	case .grizzly: return MobDef(name: "Grizzly Bear", w: 2.0, h: 1.4, hp: 70, speed: 3.4, dmg: 7, behavior: .hostile, aggro: 12, hostile: true)
+	case .polarBear: return MobDef(name: "Polar Bear", w: 2.0, h: 1.4, hp: 64, speed: 3.2, dmg: 7, behavior: .hostile, aggro: 12, hostile: true)
+	case .tiger: return MobDef(name: "Tiger", w: 1.7, h: 1.0, hp: 48, speed: 4.6, dmg: 6, behavior: .hostile, aggro: 14, jump: 15, hostile: true)
+	case .wolf: return MobDef(name: "Wolf", w: 1.2, h: 0.9, hp: 24, speed: 4.0, dmg: 3, behavior: .defensive, aggro: 11, jump: 14)
+	case .cat: return MobDef(name: "Cat", w: 0.7, h: 0.6, hp: 10, speed: 3.0, dmg: 0, behavior: .skittish, jump: 13)
+	case .zombie: return MobDef(name: "Zombie", w: 0.7, h: 1.7, hp: 30, speed: 1.8, dmg: 4, behavior: .hostile, aggro: 16, hostile: true)
+	case .skeleton: return MobDef(name: "Skeleton Knight", w: 0.7, h: 1.8, hp: 38, speed: 2.1, dmg: 5, behavior: .hostile, aggro: 15, hostile: true)
+	case .slime: return MobDef(name: "Slime", w: 0.9, h: 0.7, hp: 18, speed: 2.6, dmg: 3, behavior: .hostile, aggro: 12, jump: 11, hostile: true)
+	case .bat: return MobDef(name: "Cave Bat", w: 0.6, h: 0.4, hp: 6, speed: 4.2, dmg: 2, behavior: .flyer, flying: true, aggro: 12, hostile: true)
+	case .scorpion: return MobDef(name: "Scorpion", w: 1.2, h: 0.6, hp: 26, speed: 2.6, dmg: 4, behavior: .hostile, aggro: 11, hostile: true)
+	case .wraith: return MobDef(name: "Wraith", w: 0.9, h: 1.5, hp: 44, speed: 2.8, dmg: 6, behavior: .flyer, flying: true, aggro: 18, hostile: true)
+	case .villager: return MobDef(name: "Villager", w: 0.7, h: 1.7, hp: 20, speed: 1.4, dmg: 0, behavior: .passive)  // retired: never spawns
+	case .pirate: return MobDef(name: "Pirate", w: 0.7, h: 1.8, hp: 48, speed: 2.5, dmg: 6, behavior: .hostile, aggro: 20, hostile: true)
+	case .pirateGunner: return MobDef(name: "Pirate Gunner", w: 0.7, h: 1.8, hp: 40, speed: 1.9, dmg: 5, behavior: .ranged, aggro: 20, hostile: true)
+	case .pirateCaptain: return MobDef(name: "Pirate Captain", w: 0.8, h: 1.9, hp: 140, speed: 2.5, dmg: 8, behavior: .hostile, aggro: 22, hostile: true)
+	case .imp: return MobDef(name: "Umbral Imp", w: 0.7, h: 1.5, hp: 34, speed: 2.6, dmg: 5, behavior: .ranged, aggro: 18, hostile: true)
+	case .emberSlime: return MobDef(name: "Ember Slime", w: 1.0, h: 0.8, hp: 36, speed: 2.8, dmg: 5, behavior: .hostile, aggro: 12, jump: 12, hostile: true)
+	case .cinderBat: return MobDef(name: "Cinder Bat", w: 0.6, h: 0.4, hp: 14, speed: 4.6, dmg: 4, behavior: .flyer, flying: true, aggro: 14, hostile: true)
+	case .bearBoss: return MobDef(name: "Ursavor, Warden of the Gate", w: 5.2, h: 3.9, hp: 900, speed: 3.0, dmg: 10, behavior: .boss, aggro: 60, hostile: true)
+	case .rex: return MobDef(name: "Tyrannax the Bonecrown", w: 7.0, h: 4.4, hp: 1400, speed: 3.4, dmg: 13, behavior: .boss, aggro: 60, hostile: true)
+	case .crawler: return MobDef(name: "Cave Crawler", w: 1.1, h: 0.6, hp: 22, speed: 4.4, dmg: 4, behavior: .hostile, aggro: 13, jump: 11.5, hostile: true)
+	case .golem: return MobDef(name: "Stone Golem", w: 1.5, h: 2.2, hp: 150, speed: 1.15, dmg: 8, behavior: .hostile, aggro: 12, jump: 9, hostile: true)
+	case .archer: return MobDef(name: "Bow Zombie", w: 0.7, h: 1.7, hp: 30, speed: 2.3, dmg: 4, behavior: .ranged, aggro: 20, hostile: true)
+	case .sentinel: return MobDef(name: "Crystal Sentinel", w: 1.4, h: 2.0, hp: 320, speed: 3.0, dmg: 7, behavior: .boss, flying: true, aggro: 30, hostile: true)
+	case .mimic: return MobDef(name: "Mimic", w: 1.0, h: 0.95, hp: 90, speed: 3.2, dmg: 7, behavior: .hostile, aggro: 16, jump: 12, hostile: true)
+	case .warden: return MobDef(name: "The Hollow Warden", w: 3.0, h: 4.6, hp: 2200, speed: 2.6, dmg: 11, behavior: .boss, flying: true, aggro: 60, hostile: true)
+	case .custom: return MobDef(name: "Custom Creature", w: 0.8, h: 1.6, hp: 20, speed: 2, dmg: 4, behavior: .hostile, hostile: true)
 	}
 }
 
-// ===== p16a_combat =====
+// MARK: - Drops
 
-// MARK: - Combat: damage, death, projectiles, drops, particles
+func mobDrops(_ k: MobKind, _ rng: inout RNG, _ sheared: Bool) -> [Stack] {
+	var out: [Stack] = []
+	func add(_ it: Item, _ lo: Int, _ hi: Int, _ p: Double) {
+		if rng.double() < p { out.append(Stack(item: it, count: lo + rng.int(max(1, hi - lo + 1)))) }
+	}
+	switch k {
+	case .pig: add(.food(.rawMeat), 1, 3, 1.0)
+	case .cow: add(.food(.rawMeat), 2, 4, 1.0); add(.mat(.leather), 1, 2, 0.8)
+	case .sheep: add(.food(.rawMeat), 1, 2, 1.0); if !sheared { add(.mat(.wool), 1, 3, 0.9) }
+	case .chicken: add(.food(.rawMeat), 1, 1, 0.9); add(.mat(.feather), 1, 3, 0.9)
+	case .crow: add(.mat(.feather), 1, 2, 0.8)
+	case .giraffe: add(.food(.rawMeat), 2, 4, 1.0); add(.mat(.leather), 2, 4, 0.9)
+	case .frog: add(.mat(.string), 0, 1, 0.1)
+	case .fish: add(.food(.rawFish), 1, 1, 1.0)
+	case .elephant: add(.food(.rawMeat), 4, 7, 1.0); add(.mat(.tusk), 1, 2, 0.8); add(.mat(.leather), 2, 4, 0.9)
+	case .bear: add(.food(.rawMeat), 2, 4, 1.0); add(.mat(.fur), 1, 3, 0.9); add(.mat(.claw), 1, 1, 0.3)
+	case .grizzly: add(.food(.rawMeat), 3, 5, 1.0); add(.mat(.fur), 2, 4, 1.0); add(.mat(.claw), 1, 2, 0.6)
+	case .polarBear: add(.food(.rawMeat), 3, 5, 1.0); add(.mat(.fur), 2, 4, 1.0); add(.mat(.claw), 1, 2, 0.5)
+	case .tiger: add(.food(.rawMeat), 2, 4, 1.0); add(.mat(.leather), 1, 3, 0.9); add(.mat(.claw), 1, 2, 0.6)
+	case .wolf: add(.food(.rawMeat), 1, 2, 0.9); add(.mat(.fur), 1, 2, 0.6); add(.mat(.bone), 1, 2, 0.4)
+	case .cat: add(.mat(.string), 1, 2, 0.5)
+	case .zombie: add(.food(.rawMeat), 0, 1, 0.3); add(.mat(.string), 0, 2, 0.3); add(.food(.carrot), 1, 1, 0.08); add(.mat(.ironBar), 1, 1, 0.04)
+	case .skeleton: add(.mat(.bone), 1, 3, 0.9); add(.ammo(.arrow), 2, 6, 0.5); add(.sword(.stone), 1, 1, 0.06); add(.mat(.coal), 1, 3, 0.4)
+	case .slime: add(.mat(.string), 1, 2, 0.4); add(.block(.torch), 1, 3, 0.3)
+	case .bat: add(.mat(.string), 0, 1, 0.2)
+	case .scorpion: add(.mat(.claw), 1, 1, 0.5); add(.food(.rawMeat), 1, 1, 0.5)
+	case .wraith: add(.mat(.mythrilOre), 1, 2, 0.4); add(.mat(.goldBar), 1, 2, 0.3)
+	case .villager: break
+	case .pirate: add(.mat(.goldBar), 1, 2, 0.5); add(.ammo(.bullet), 2, 6, 0.4); add(.mat(.gunpowder), 1, 3, 0.5); add(.sword(.iron), 1, 1, 0.1); add(.gadget(.bomb), 1, 2, 0.15)
+	case .pirateGunner: add(.mat(.goldBar), 1, 2, 0.5); add(.ammo(.bullet), 3, 8, 0.7); add(.mat(.gunpowder), 1, 4, 0.7); add(.gun(.pistol), 1, 1, 0.12)
+	case .pirateCaptain: add(.mat(.goldBar), 4, 8, 1.0); add(.mat(.diamond), 1, 3, 0.8); add(.gun(.rifle), 1, 1, 0.4); add(.ammo(.bullet), 8, 16, 1.0)
+	case .imp: add(.mat(.emberOre), 1, 2, 0.5); add(.mat(.coal), 2, 4, 0.6)
+	case .emberSlime: add(.mat(.emberOre), 1, 3, 0.6); add(.block(.torch), 2, 5, 0.5)
+	case .cinderBat: add(.mat(.emberOre), 0, 1, 0.3)
+	case .bearBoss:
+		add(.mat(.fur), 6, 10, 1.0); add(.mat(.claw), 3, 5, 1.0); add(.mat(.goldBar), 6, 12, 1.0)
+		add(.mat(.diamond), 3, 6, 1.0); add(.food(.cookedMeat), 6, 10, 1.0)
+		add(.armor(.chest, .gold), 1, 1, 0.5)
+	case .rex:
+		add(.mat(.bone), 10, 20, 1.0); add(.mat(.tusk), 2, 4, 1.0); add(.mat(.goldBar), 6, 12, 1.0)
+		add(.mat(.mythrilBar), 2, 5, 1.0); add(.food(.cookedMeat), 6, 10, 1.0)
+	case .crawler: add(.mat(.string), 1, 3, 0.8); add(.mat(.claw), 1, 1, 0.25)
+	case .golem:
+		add(.block(.stone), 4, 8, 1.0); add(.mat(.ironOre), 1, 3, 0.6); add(.mat(.crystalShard), 1, 2, 0.35)
+		add(.mat(.relicFragment), 1, 1, 0.1)
+	case .archer: add(.food(.rawMeat), 0, 1, 0.3); add(.mat(.string), 0, 2, 0.4); add(.ammo(.arrow), 3, 8, 0.8); add(.bow, 1, 1, 0.05)
+	case .sentinel:
+		add(.mat(.crystalShard), 8, 14, 1.0); add(.mat(.diamond), 2, 4, 1.0); add(.block(.glowCrystal), 4, 8, 1.0)
+		add(.mat(.relicFragment), 2, 3, 1.0); add(.gear(.headlamp), 1, 1, 0.35)
+	case .mimic: add(.mat(.goldBar), 2, 5, 1.0); add(.mat(.relicFragment), 1, 1, 0.8); add(.mat(.diamond), 1, 2, 0.35)
+	case .warden:
+		add(.mat(.umbralHeart), 1, 1, 1.0); add(.mat(.voidBar), 6, 10, 1.0); add(.mat(.diamond), 4, 8, 1.0)
+		add(.mat(.emberBar), 4, 8, 1.0); add(.mat(.relicFragment), 3, 3, 1.0)
+	case .custom:
+		// a custom creature's drops come from its mod (see dropModLoot)
+		break
+	}
+	return out
+}
 
-extension Game {
-	func hurtMob(_ m: Mob, _ dmg: Double, _ dirX: Double, _ knock: Double, _ byPlayer: Bool, heavy: Bool = false, crit: Bool = false) {
-		if m.hp <= 0 { return }
-		if m.kind == .rex && m.tame && byPlayer { return }
-		// a wild animal remembers being hurt by the player (it fights back, see wildProvoked)
-		if byPlayer { m.lastHitByPlayer = clock }
-		var d: Double = byPlayer ? dmg * ModRuntime.shared.rule(.hit) : dmg
-		var kb: Double = knock
-		if m.blocking && m.kind == .skeleton && dirX != 0 && dirX * Double(m.dir) < 0 {
-			if heavy {
-				// a hammer blow knocks the shield aside and leaves the skeleton open for a moment
-				m.blocking = false
-				m.cd = max(m.cd, 0.9)
-				spawnParticles(m.b.x - Double(m.dir) * 0.5, m.b.y - 1.0, 0xFFF0C0, 8, 5.0, 0.25, 0)
-				floatText("Guard broken", m.b.x, m.b.top - 0.4, 0xFFD080)
-			} else {
-				d *= 0.1
-				kb *= 0.25
-				spawnParticles(m.b.x - Double(m.dir) * 0.5, m.b.y - 1.0, 0xE8F0FF, 5, 4.0, 0.2, 0)
-				floatText("Blocked", m.b.x, m.b.top - 0.4, 0xA0C0FF)
+// MARK: - Spawn rules
+
+enum SpawnPlace { case surface, cave, ocean, umbral }
+enum SpawnWhen { case any, day, night }
+
+struct SpawnRule {
+	var kind: MobKind
+	var weight: Double
+	var place: SpawnPlace
+	var when: SpawnWhen
+	var biomes: [Biome]
+	var group: Int
+	var minY: Int = 0
+	var maxY: Int = 9999
+	/// a custom creature's slot (-1 for the game's creatures), how many of it may be about at once, and
+	/// whether it appears high in the sky
+	var slot: Int = -1
+	var maxNearby: Int = 99
+	var sky: Bool = false
+}
+
+let spawnRules: [SpawnRule] = [
+	// surface, passive and wild animals by biome
+	SpawnRule(kind: .pig, weight: 5, place: .surface, when: .any, biomes: [.plains, .forest], group: 2),
+	SpawnRule(kind: .cow, weight: 5, place: .surface, when: .any, biomes: [.plains, .forest], group: 2),
+	SpawnRule(kind: .sheep, weight: 5, place: .surface, when: .any, biomes: [.plains, .forest, .mountain], group: 3),
+	SpawnRule(kind: .chicken, weight: 4, place: .surface, when: .day, biomes: [.plains, .forest, .savanna], group: 3),
+	SpawnRule(kind: .crow, weight: 3, place: .surface, when: .any, biomes: [.plains, .forest, .desert, .savanna, .swamp, .mountain], group: 2),
+	SpawnRule(kind: .giraffe, weight: 5, place: .surface, when: .any, biomes: [.savanna], group: 2),
+	SpawnRule(kind: .elephant, weight: 3, place: .surface, when: .any, biomes: [.savanna, .jungle], group: 1),
+	SpawnRule(kind: .tiger, weight: 3, place: .surface, when: .any, biomes: [.jungle, .savanna], group: 1),
+	SpawnRule(kind: .bear, weight: 3, place: .surface, when: .any, biomes: [.forest, .mountain], group: 1),
+	SpawnRule(kind: .grizzly, weight: 2, place: .surface, when: .any, biomes: [.mountain, .forest], group: 1),
+	SpawnRule(kind: .polarBear, weight: 4, place: .surface, when: .any, biomes: [.tundra], group: 1),
+	SpawnRule(kind: .wolf, weight: 3, place: .surface, when: .night, biomes: [.tundra, .forest, .plains], group: 3),
+	SpawnRule(kind: .frog, weight: 5, place: .surface, when: .any, biomes: [.swamp], group: 2),
+	SpawnRule(kind: .scorpion, weight: 5, place: .surface, when: .any, biomes: [.desert], group: 1),
+	// surface hostile
+	SpawnRule(kind: .zombie, weight: 7, place: .surface, when: .night, biomes: [], group: 2),
+	SpawnRule(kind: .slime, weight: 3, place: .surface, when: .night, biomes: [.plains, .forest, .jungle, .swamp], group: 1),
+	// oceans
+	SpawnRule(kind: .fish, weight: 8, place: .ocean, when: .any, biomes: [], group: 4),
+	// caves
+	SpawnRule(kind: .skeleton, weight: 6, place: .cave, when: .any, biomes: [], group: 2, minY: 150),
+	SpawnRule(kind: .zombie, weight: 2, place: .cave, when: .any, biomes: [], group: 1, minY: 140),
+	SpawnRule(kind: .slime, weight: 3, place: .cave, when: .any, biomes: [], group: 2, minY: 140),
+	SpawnRule(kind: .bat, weight: 4, place: .cave, when: .any, biomes: [], group: 3, minY: 150),
+	SpawnRule(kind: .wraith, weight: 2, place: .cave, when: .any, biomes: [], group: 1, minY: 380),
+	SpawnRule(kind: .crawler, weight: 4, place: .cave, when: .any, biomes: [], group: 2, minY: 140),
+	SpawnRule(kind: .archer, weight: 3, place: .cave, when: .any, biomes: [], group: 1, minY: 150),
+	SpawnRule(kind: .golem, weight: 1.5, place: .cave, when: .any, biomes: [], group: 1, minY: 260),
+	SpawnRule(kind: .archer, weight: 2, place: .surface, when: .night, biomes: [], group: 1),
+	SpawnRule(kind: .skeleton, weight: 2, place: .surface, when: .night, biomes: [.plains, .desert, .tundra, .mountain, .savanna], group: 1),
+	SpawnRule(kind: .crawler, weight: 2, place: .surface, when: .night, biomes: [.jungle, .swamp, .forest], group: 2),
+	// umbral realm
+	SpawnRule(kind: .imp, weight: 5, place: .umbral, when: .any, biomes: [], group: 1),
+	SpawnRule(kind: .wraith, weight: 3, place: .umbral, when: .any, biomes: [], group: 1),
+	SpawnRule(kind: .emberSlime, weight: 5, place: .umbral, when: .any, biomes: [], group: 2),
+	SpawnRule(kind: .cinderBat, weight: 4, place: .umbral, when: .any, biomes: [], group: 3)
+]
+
+// MARK: - Mob instance
+
+final class Mob {
+	let id: Int
+	var kind: MobKind
+	var b: Body
+	var hp: Double
+	var maxHP: Double
+	var dir: Int = 1
+	var anim: Double = 0
+	var hurtT: Double = 0
+	var cd: Double = 0
+	var t1: Double = 0
+	var t2: Double = 0
+	var t3: Double = 0
+	var st: Int = 0
+	var variant: Int = 0
+	var tame: Bool = false
+	var angry: Bool = false
+	var persistent: Bool = false
+	var sheared: Bool = false
+	var blocking: Bool = false
+	var boat: Int = -1
+	var raiding: Bool = false
+	var burn: Double = 0
+	var stuckT: Double = 0
+	var lastX: Double = 0
+	var homeX: Double = 0
+	var homeY: Double = 0
+	var mounted: Bool = false
+	var downed: Bool = false
+	var lair: Int = 0
+	var phase: Int = 0
+	var tele: Double = 0
+	var atk: Int = 0
+	var tx: Double = 0
+	var ty: Double = 0
+	var regrow: Double = 0
+	var knock: Double = 0
+	/// time folded in while far-away AI updates were skipped
+	var aiAccum: Double = 0
+	/// set when the mob should leave the list at the end of the frame
+	var removed: Bool = false
+	/// white hit flash, death animation and knockback lean
+	var flash: Double = 0
+	var deathT: Double = -1
+	var lean: Double = 0
+	/// hazard and damage bookkeeping (see the damage system)
+	var hazardT: Double = 0
+	var lastAttacker: Int = 0
+	var lastHitByPlayer: Double = -100
+	var hitStamps: [Int: Double] = [:]
+	var fallPeak: Double = 0
+	var burnTick: Double = 0
+	/// facing shown on screen, the turn animation and the attack lunge (visual only; the AI uses `dir`)
+	var face: Int = 0
+	var turnT: Double = 0
+	var atkT: Double = 0
+	/// a mimic's hoard (dropped when it dies) and the spots a telegraphed attack will strike
+	var loot: [Stack] = []
+	var spots: [Double] = []
+	/// animal life: when to look around next, a place it is heading for (1 water, 2 its herd),
+	/// a thirst timer, the prey it is hunting and a pose to hold (grazing, drinking)
+	var thinkT: Double = 0
+	/// boss attack variety: the last attack, how often in a row, and attacks since the signature move
+	var lastAtk: Int = 0
+	var repeatN: Int = 0
+	var sinceSignature: Int = 0
+	var goal: Int = 0
+	var goalX: Double = 0
+	var drinkT: Double = 0
+	var preyID: Int = 0
+	weak var prey: Mob? = nil
+	var poseT: Double = 0
+	/// dazed by a club: stands reeling, then can't be dazed again for a moment
+	var daze: Double = 0
+	var dazeGuard: Double = 0
+	/// hostile AI (see `think`): its state and how long it has been in it, whether it can see the
+	/// player (rechecked a few times a second), where it last saw them and how long ago, where it is
+	/// heading, how long it has been pushing against a wall, and why it did not attack (for the overlay)
+	var ai: MobAI = .idle
+	var aiT: Double = 0
+	var sees: Bool = false
+	var losT: Double = 0
+	var seenX: Double = 0
+	var seenY: Double = 0
+	var lostT: Double = 99
+	var aimX: Double = 0
+	var blockedT: Double = 0
+	var progX: Double = 0
+	var leapT: Double = 0
+	var leapReq: Bool = false
+	var why: AttackBlock = .none
+	/// came out at night to look for the player; how long it has been far away and forgotten
+	var hunter: Bool = false
+	var farT: Double = 0
+	/// a custom creature's slot in ModRuntime.mobs (-1 for the game's own creatures)
+	var cslot: Int = -1
+	/// custom creatures: each attack's cooldown, the creature it guards, the monster it fights or runs
+	/// from (and timers for looking for them), its home biome, the blow under way (its key, target and
+	/// whether that is the player) and how long a water creature has been on land
+	var modCD: [Double] = []
+	weak var ward: Mob? = nil
+	var wardT: Double = 0
+	weak var foe: Mob? = nil
+	weak var threat: Mob? = nil
+	var foeT: Double = 0
+	var homeBiome: Int = -1
+	var biomeT: Double = 0
+	var strayed: Bool = false
+	var atkKey: Int = 0
+	var atkX: Double = 0
+	var atkY: Double = 0
+	var vsPlayer: Bool = true
+	var dryT: Double = 0
+	/// potion effects: slowed (by how much), poisoned (damage a second, and whether the player gets the
+	/// credit), weakened, regenerating; and their timers
+	var slowT: Double = 0
+	var slowAmt: Double = 0
+	var poisonT: Double = 0
+	var poisonDps: Double = 0
+	var poisonTick: Double = 0
+	var poisonByPlayer: Bool = false
+	var weakT: Double = 0
+	var regenT: Double = 0
+	var regenRate: Double = 0
+	var regenAcc: Double = 0
+	/// mutation: doses taken, the size its body has grown to and how much harder it hits
+	var mut: Int = 0
+	var mutSize: Double = 1
+	var mutDmg: Double = 1
+	/// custom creatures' fights (Mod Creator phases): the phase it is in (0: none yet) and its numbers
+	/// there, how long it can't be hurt, how long it has been fighting, how many helpers it has called,
+	/// the creature it helps (its id), whether a summoning called it, and how long the player has been gone
+	var mphase: Int = 0
+	var phaseSpeed: Double = 1
+	var phaseDmg: Double = 1
+	var phaseCD: Double = 1
+	var phaseDef: Double = 0
+	var phaseShield: Double = 0
+	var fightT: Double = 0
+	var helpersCalled: Int = 0
+	var helperOf: Int = -1
+	var summoned: Bool = false
+	var leaveT: Double = 0
+	static let turnDur: Double = 0.14
+	static let atkDur: Double = 0.28
+
+	init(id: Int, kind: MobKind, x: Double, y: Double) {
+		self.id = id
+		self.kind = kind
+		let d: MobDef = mobDef(kind)
+		self.b = Body(x: x, y: y, w: d.w, h: d.h)
+		self.hp = d.hp
+		self.maxHP = d.hp
+		self.homeX = x
+		self.homeY = y
+		self.lastX = x
+		self.dir = Int.random(in: 0...1) == 0 ? -1 : 1
+		self.t1 = Double.random(in: 0.5...3.0)
+	}
+
+	var def: MobDef {
+		if kind == .custom, let r = ModRuntime.shared.mob(cslot) { return r.mdef }
+		return mobDef(kind)
+	}
+	var x: Double { return b.x }
+	var y: Double { return b.y }
+	/// a boss or guardian kind (worked out once: this is checked for every creature every frame)
+	private(set) lazy var bossKind: Bool = Mob.isBossKind(kind, cslot)
+	/// bosses never become tame, except the T-rex, which then stops being one
+	var isBoss: Bool { return bossKind && !tame }
+
+	static func isBossKind(_ k: MobKind, _ slot: Int) -> Bool {
+		switch k {
+		case .bearBoss, .rex, .sentinel, .warden: return true
+		case .custom: return ModRuntime.shared.mob(slot)?.boss ?? false
+		default: return false
+		}
+	}
+}
+
+/// What a hostile creature is doing. Attack and recover come from its attack routine (a wind-up, the
+/// blow, the moment after); the rest are decided by `think`.
+enum MobAI: UInt8 {
+	case idle, alert, chase, search, back, retreat
+	var name: String {
+		switch self {
+		case .idle: return "idle"
+		case .alert: return "alert"
+		case .chase: return "chase"
+		case .search: return "search"
+		case .back: return "return"
+		case .retreat: return "regroup"
+		}
+	}
+}
+
+/// Why a creature that wants to hit the player has not (shown by the AI overlay)
+enum AttackBlock: UInt8 {
+	case none, notSeen, outOfRange, cooldown, noSight, tooHigh, blocked, peaceful, playerGone
+	var name: String {
+		switch self {
+		case .none: return ""
+		case .notSeen: return "hasn't seen you"
+		case .outOfRange: return "out of range"
+		case .cooldown: return "cooling down"
+		case .noSight: return "no line of sight"
+		case .tooHigh: return "can't reach that height"
+		case .blocked: return "path blocked"
+		case .peaceful: return "peaceful"
+		case .playerGone: return "player dead"
+		}
+	}
+}
+
+struct MobSave: Codable {
+	var kind: Int
+	var x: Double
+	var y: Double
+	var hp: Double
+	var maxHP: Double
+	var tame: Bool
+	var variant: Int
+	var downed: Bool
+	var lair: Int
+	/// mutation doses (nil in saves from before mutation, and for creatures that never mutated)
+	var mut: Int? = nil
+}
+
+// ===== p13b_vehicles =====
+
+// MARK: - Vehicles (player built) and pirate ships
+
+struct PartCell: Hashable, Codable {
+	var dx: Int
+	var dy: Int
+}
+
+struct VPartSave: Codable {
+	var dx: Int
+	var dy: Int
+	var type: Int
+	/// the block of a block cell (or the look of a mod block working as a part); nil for plain parts
+	var tile: Int? = nil
+	/// damage the cell has taken (nil: none)
+	var dmg: Double? = nil
+	/// a wing's tilt (nil: none)
+	var tilt: Int? = nil
+	/// a cell of a part bigger than one cell: the part's middle cell (dx, dy)
+	var span: [Int]? = nil
+}
+
+/// A point on an autopilot's route (world coordinates)
+struct VWaypoint: Codable {
+	var x: Double
+	var y: Double
+}
+
+struct VehicleSave: Codable {
+	var id: Int
+	var parts: [VPartSave]
+	/// centre of mass (saves with `rot`), or the bottom-centre of the box (older saves)
+	var x: Double
+	var y: Double
+	var fuel: Double
+	var dir: Int
+	var kit: Int?
+	/// rotation in radians; nil in saves made before vehicles could rotate
+	var rot: Double? = nil
+	/// the autopilot's mode and route (nil: off, none)
+	var auto: Int? = nil
+	var route: [VWaypoint]? = nil
+	/// the driver's seat (dx, dy) and the back walls (dx, dy, wall), when there are any
+	var seat: [Int]? = nil
+	var walls: [[Int]]? = nil
+	/// how full the ballast tanks are (nil: empty)
+	var ballast: Double? = nil
+	/// its couplings to other vehicles (a train)
+	var links: [VLink]? = nil
+	/// its joints, the section it hangs from, and its walk
+	var joints: [VJoint]? = nil
+	var parent: Int? = nil
+	var gait: Double? = nil
+	/// how its guns fire (dx, dy, mode)
+	var gunModes: [[Int]]? = nil
+	/// its receivers' channel, and what they do while it is on
+	var channel: Int? = nil
+	var radioAct: Int? = nil
+}
+
+/// Displaced volume per part (how much it floats)
+func partVolume(_ p: PartType) -> Double {
+	switch p {
+	case .hull: return 4.0
+	case .frame: return 0.3
+	case .fuelTank: return 0.25
+	case .seat: return 0.1
+	default: return 0.0
+	}
+}
+
+/// Mining power of a drill part: (tier it can break, speed)
+func drillPower(_ p: PartType) -> (Int, Double) {
+	switch p {
+	case .drill: return (4, 4.6)
+	case .diamondDrill: return (7, 8.5)
+	case .voidDrill: return (9, 13.0)
+	default: return (0, 0)
+	}
+}
+
+func isDrill(_ p: PartType) -> Bool { return p == .drill || p == .diamondDrill || p == .voidDrill }
+
+/// Parts that point somewhere (their open side): thrusters, the tail rotor and the guns
+func isFacingPart(_ p: PartType) -> Bool {
+	return p == .airProp || p == .jet || p == .tailRotor || p == .cannon || p == .autoGun
+}
+
+/// One cell taken off a vehicle: what it was, and its block if it was one
+struct VCell {
+	var cell: PartCell
+	var type: PartType
+	var tile: Tile?
+}
+
+/// A player-built vehicle: a rigid body made of 1x1 parts. It has a centre of mass, a rotation and
+/// an angular velocity, and every part collides, floats and drives at its rotated position, so
+/// what you see is exactly what touches the world.
+final class Vehicle {
+	let id: Int
+	var parts: [PartCell: PartType] = [:]
+	/// world-space bounding box of the rotated parts (kept for spawning, decks, pick tests)
+	var b: Body
+	// rigid body state
+	var px: Double = 0
+	var py: Double = 0
+	var vx: Double = 0
+	var vy: Double = 0
+	var angle: Double = 0
+	var angVel: Double = 0
+	/// centre of mass in cell coordinates (cell (0,0) spans 0...1)
+	var comX: Double = 0.5
+	var comY: Double = 0.5
+	var inertia: Double = 1
+	var fuel: Double = 0
+	var dir: Int = 1
+	var minX: Int = 0
+	var maxX: Int = 0
+	var minY: Int = 0
+	var maxY: Int = 0
+	var mass: Double = 1
+	var buoyancy: Double = 0
+	var engines: Int = 0
+	var wheels: Int = 0
+	var propellers: Int = 0
+	var paddles: Int = 0
+	var tanks: Int = 0
+	var drills: Int = 0
+	var offroadWheels: Int = 0
+	var headlights: Int = 0
+	var hasSeat: Bool = false
+	var hasSteering: Bool = false
+	var throttle: Double = 0
+	var wheelRot: Double = 0
+	var rider: Bool = false
+	var propRot: Double = 0
+	var drillRot: Double = 0
+	var drilling: Bool = false
+	var smoke: Double = 0
+	/// contacts touched in the last physics step (wheels on the ground, any part on the ground)
+	var wheelContacts: Int = 0
+	var contacts: Int = 0
+	var submerged: Double = 0
+	var sleepT: Double = 0
+	var asleep: Bool = false
+	/// physics time not yet simulated (vehicles step at a fixed rate)
+	var physAccum: Double = 0
+	/// direction each drill faces in vehicle space, and its mining progress
+	var drillDir: [PartCell: (Int, Int)] = [:]
+	var drillWork: [PartCell: (Int, Int, Double)] = [:]
+	/// the kit this vehicle came from (-1 = built part by part, or changed since)
+	var kit: Int = -1
+	/// the block in each block cell (and the look of a mod block that works as a part)
+	var blocks: [PartCell: Tile] = [:]
+	/// damage each cell has taken (see vehicleCellHP); a cell that takes its fill breaks off
+	var dmg: [PartCell: Double] = [:]
+	/// which way each thruster, gun and tail rotor points in vehicle space (its open side)
+	var face: [PartCell: (Int, Int)] = [:]
+	// parts of aircraft, airships, tanks and armed vehicles
+	var wings: Int = 0
+	var elevators: Int = 0
+	var airProps: Int = 0
+	var jets: Int = 0
+	var rotors: Int = 0
+	var tailRotors: Int = 0
+	var envelopes: Int = 0
+	var burners: Int = 0
+	var tracks: Int = 0
+	var armors: Int = 0
+	var cannons: Int = 0
+	var guns: Int = 0
+	var autopilots: Int = 0
+	var receivers: Int = 0
+	var hasCockpit: Bool = false
+	/// something that works in the air (wings, thrusters, rotors, balloons): the flight model runs
+	var aero: Bool = false
+	/// the pilot's up/down input (-1...1, up is positive): elevators, rotor pitch, burner heat
+	var pitch: Double = 0
+	/// main rotor blade pitch (0...1) and the air heat in the balloon (0...1)
+	var collective: Double = 0
+	var heat: Double = 0
+	/// the end the nose is at, along the vehicle's own x axis (1 or -1)
+	var fwd: Int = 1
+	/// for the instruments: last step's lift and thrust, and whether a wing has stalled
+	var liftNow: Double = 0
+	var thrustNow: Double = 0
+	var stall: Bool = false
+	var airspeed: Double = 0
+	/// the steepest angle the air meets a wing at (radians)
+	var alpha: Double = 0
+	/// a turn to face the other way in progress (0...1; 0 = none) and the speed it started from
+	var turnT: Double = 0
+	var turnVX: Double = 0
+	var turned: Bool = false
+	/// each gun's reload and the way its barrel points (world angle)
+	var gunCD: [PartCell: Double] = [:]
+	var aimAng: [PartCell: Double] = [:]
+	/// autopilot: 0 off, 1 cruise, 2 route; what cruise holds; the marked route and the next point
+	var auto: Int = 0
+	var holdThr: Double = 0
+	var holdY: Double = 0
+	var holdVX: Double = 0
+	var route: [VWaypoint] = []
+	var routeAt: Int = 0
+	/// time the rotor blades have been striking the ground (they break)
+	var bladeHit: Double = 0
+	/// the elevator trim the flight model finds by itself (so a plane holds its attitude hands-off), and
+	/// the cyclic's (so a helicopter holds its tilt)
+	var trim: Double = 0
+	var cycI: Double = 0
+	/// the wind at the vehicle this frame (blocks per second, signed)
+	var windX: Double = 0
+	/// flashes red for a moment when hit
+	var hitT: Double = 0
+	/// how strong each mod block working as a part is at its work (1: the game part's own)
+	var boost: [PartCell: Double] = [:]
+	/// the engines' power (a mod engine can be stronger or weaker than the game's)
+	var enginePower: Double = 0
+	/// what each cell is to somebody walking on the vehicle (see Vehicle.walkKind), over the cells' box
+	var walkGrid: [UInt8] = []
+	var gridW: Int = 0
+	var gridH: Int = 0
+	/// how far its furthest corner is from its centre of mass (blocks)
+	var radius: Double = 1
+	/// what each cell is to another vehicle meeting it (solid, stood on from above, or nothing)
+	var meetGrid: [UInt8] = []
+	/// being stepped in this frame's physics (it moves when pushed); the vehicle it rests on (0: none)
+	var inStep: Bool = false
+	var restOn: Int = 0
+	/// what other vehicles met of it in this frame (their samples in its cells), and one that it rests
+	/// on that found it so
+	var touched: Int = 0
+	var leanOn: Int = 0
+	/// the seat the driver sat down in (with several seats)
+	var seatAt: PartCell? = nil
+	/// back walls behind cells, inside the vehicle's box (the same numbers as the land's walls)
+	var walls: [PartCell: UInt8] = [:]
+	/// counts every change to how it looks (its cached picture is redrawn when this moves on), and that
+	/// picture (see VehicleArt)
+	var artRev: Int = 0
+	var artImage: Image? = nil
+	var artKey: Int = -1
+	/// thrusters, guns and drills with no open side to work from (they wait for one)
+	var boxed: Set<PartCell> = []
+	/// how much room each rotor's blades have (1: all of it; parts in the row above take some), and
+	/// the rotors' lift in all (in rotors)
+	var rotorRoom: [PartCell: Double] = [:]
+	var rotorLift: Double = 0
+	/// the propellers, paddles and tail rotors that are free to push
+	var openProps: Int = 0
+	var openPaddles: Int = 0
+	var openTails: Int = 0
+	/// flight and water: each wing's tilt (steps of Aero.tiltStep; saved), flaps, air brakes, tailplanes
+	/// and ballast tanks, how full the ballast tanks are (0 air ... 1 water), and how far the air brakes
+	/// are open
+	var tilt: [PartCell: Int] = [:]
+	var flaps: Int = 0
+	var airBrakes: Int = 0
+	var stabilizers: Int = 0
+	var ballasts: Int = 0
+	var ballast: Double = 0
+	var brakeOpen: Double = 0
+	/// the cells inside it that are under the surface of what it floats in, and how flooded each is
+	/// (0 dry air ... 1 full); worked out a few times a second (see updateHullAir)
+	var hullAir: [PartCell: Double] = [:]
+	var hullT: Double = 0
+	/// parts bigger than one cell: every cell of one, mapped to its middle cell (where it is counted,
+	/// weighs and is drawn); the couplers, and the links to other vehicles they make (a train)
+	var spanOf: [PartCell: PartCell] = [:]
+	var couplers: Int = 0
+	var railWheels: Int = 0
+	var links: [VLink] = []
+	/// a moment after being uncoupled by hand, before its couplers link again
+	var noCoupleT: Double = 0
+	/// its joints to the sections built on beyond them, the section it hangs from (0: none), and how far
+	/// round its walk is (a mech)
+	var joints: [VJoint] = []
+	var parentID: Int = 0
+	var gait: Double = 0
+	/// a machine section's places on the land from its last step, worked out again with its joints
+	/// (not saved)
+	var heldContacts: [VContact] = []
+	/// how each gun fires (GunMode's number; none: with the driver's attack)
+	var gunMode: [PartCell: Int] = [:]
+	/// the signal channel its receivers pick up (1 to 8; 0: none) and what it does while that channel is
+	/// on (RadioAct's number)
+	var channel: Int = 0
+	var radioAct: Int = 0
+	/// its channel is on now, and that signal is driving it (not saved)
+	var signalOn: Bool = false
+	var signalDrive: Bool = false
+	/// how far into its stride a mech's legs swing (rises as it walks, falls back as it stops) and the
+	/// way it last walked (not saved)
+	var gaitAmp: Double = 0
+	var gaitDir: Double = 1
+	/// its collision samples, kept until it changes
+	var sampleCache: [VSample] = []
+	var sampleKey: Int = -1
+
+	init(id: Int, first: PartType, x: Double, y: Double) {
+		self.id = id
+		self.b = Body(x: x, y: y, w: 1, h: 1)
+		parts[PartCell(dx: 0, dy: 0)] = first
+		recompute(keepAnchor: false)
+		placeBox(left: x - 0.5, bottom: y)
+	}
+
+	// MARK: transforms
+
+	var cosA: Double { return cos(angle) }
+	var sinA: Double { return sin(angle) }
+
+	/// vehicle-space point (cell units) to world
+	func toWorld(_ lx: Double, _ ly: Double) -> (Double, Double) {
+		let ox: Double = lx - comX
+		let oy: Double = ly - comY
+		let c: Double = cosA
+		let s: Double = sinA
+		return (px + ox * c - oy * s, py + ox * s + oy * c)
+	}
+
+	/// world point to vehicle space (cell units)
+	func toLocal(_ wx: Double, _ wy: Double) -> (Double, Double) {
+		let dx: Double = wx - px
+		let dy: Double = wy - py
+		let c: Double = cosA
+		let s: Double = sinA
+		return (dx * c + dy * s + comX, -dx * s + dy * c + comY)
+	}
+
+	func cellCenter(_ c: PartCell) -> (Double, Double) {
+		return toWorld(Double(c.dx) + 0.5, Double(c.dy) + 0.5)
+	}
+
+	/// top-left of the cell's (unrotated) box around its rotated centre
+	func cellPos(_ c: PartCell) -> (Double, Double) {
+		let p: (Double, Double) = cellCenter(c)
+		return (p.0 - 0.5, p.1 - 0.5)
+	}
+
+	func cellAt(_ wx: Double, _ wy: Double) -> PartCell {
+		let l: (Double, Double) = toLocal(wx, wy)
+		return PartCell(dx: Int(floor(l.0)), dy: Int(floor(l.1)))
+	}
+
+	/// Places an unrotated vehicle so its parts' box has this left edge and bottom
+	func placeBox(left: Double, bottom: Double) {
+		angle = 0
+		px = left + (comX - Double(minX))
+		py = bottom - (Double(maxY + 1) - comY)
+		updateBox()
+	}
+
+	/// Recomputes the world bounding box from the rotated part corners
+	func updateBox() {
+		var x0: Double = 1e9, x1: Double = -1e9, y0: Double = 1e9, y1: Double = -1e9
+		let c: Double = cosA
+		let s: Double = sinA
+		for (cell, _) in parts {
+			let corners: [(Double, Double)] = [(0, 0), (1, 0), (0, 1), (1, 1)]
+			for k in corners {
+				let ox: Double = Double(cell.dx) + k.0 - comX
+				let oy: Double = Double(cell.dy) + k.1 - comY
+				let wx: Double = px + ox * c - oy * s
+				let wy: Double = py + ox * s + oy * c
+				x0 = min(x0, wx); x1 = max(x1, wx); y0 = min(y0, wy); y1 = max(y1, wy)
 			}
 		}
-		if d < 0.5 { d = 0.5 }
-		m.hp -= d
-		m.hurtT = 0.22
-		m.flash = 0.12
-		if dirX != 0 && kb > 0 { m.lean = clampD(dirX * kb / 9.0, -1, 1) }
-		var resist: Double = m.isBoss ? 0.97 : (m.def.w > 2.0 ? 0.6 : 0.0)
-		if m.kind == .golem { resist = heavy ? 0.45 : 0.88 }
-		if m.kind == .custom, let r = ModRuntime.shared.mob(m.cslot) { resist = max(resist, clampD(r.def.knockResist, 0, 1)) }
-		if dirX != 0 && kb > 0 {
-			m.b.vx = dirX * kb * (1.0 - resist)
-			if resist < 0.9 { m.b.vy = min(m.b.vy, -3.5) }
+		b.w = max(0.1, x1 - x0)
+		b.h = max(0.1, y1 - y0)
+		b.x = (x0 + x1) * 0.5
+		b.y = y1
+		b.vx = vx
+		b.vy = vy
+	}
+
+	func recompute(keepAnchor: Bool) {
+		// remember where one surviving cell is, so the rest of the vehicle stays put in the world
+		var anchor: PartCell? = nil
+		var anchorW: (Double, Double) = (0, 0)
+		if keepAnchor, let c0 = parts.keys.first {
+			anchor = c0
+			anchorW = cellCenter(c0)
 		}
-		if crit && byPlayer {
-			floatText(String(Int(d.rounded())) + "!", m.b.x, m.b.top - 0.35, 0xFFE040)
-		} else {
-			floatText(String(Int(d.rounded())), m.b.x, m.b.top - 0.2, byPlayer ? 0xFFFFFF : 0xFFAA40)
+		var x0: Int = 0, x1: Int = 0, y0: Int = 0, y1: Int = 0
+		var first: Bool = true
+		mass = 0
+		buoyancy = 0
+		engines = 0; wheels = 0; propellers = 0; paddles = 0; tanks = 0; drills = 0; offroadWheels = 0; headlights = 0
+		wings = 0; elevators = 0; airProps = 0; jets = 0; rotors = 0; tailRotors = 0; envelopes = 0; burners = 0
+		tracks = 0; armors = 0; cannons = 0; guns = 0; autopilots = 0; receivers = 0
+		flaps = 0; airBrakes = 0; stabilizers = 0; ballasts = 0; couplers = 0; railWheels = 0
+		spanOf = spanOf.filter { parts[$0.key] != nil }
+		hasSeat = false
+		hasSteering = false
+		hasCockpit = false
+		blocks = blocks.filter { parts[$0.key] != nil }
+		dmg = dmg.filter { parts[$0.key] != nil }
+		var mx: Double = 0
+		var my: Double = 0
+		for (c, t) in parts {
+			if first { x0 = c.dx; x1 = c.dx; y0 = c.dy; y1 = c.dy; first = false }
+			x0 = min(x0, c.dx); x1 = max(x1, c.dx); y0 = min(y0, c.dy); y1 = max(y1, c.dy)
+			// (the outer cells of a big part are counted and weighed at its middle)
+			if let k = spanOf[c], k != c { continue }
+			let pm: Double = cellMass(c, t)
+			mass += pm
+			mx += pm * (Double(c.dx) + 0.5)
+			my += pm * (Double(c.dy) + 0.5)
+			buoyancy += partVolume(t)
+			countPart(t)
 		}
-		spawnParticles(m.b.x, m.b.cy, m.kind == .skeleton ? 0xE8E8E0 : 0xB02828, 4, 3.0, 0.4, 14)
-		switch m.def.behavior {
-		case .passive, .skittish:
-			m.t2 = 3.5
-			m.tx = m.b.x - (dirX == 0 ? 1.0 : dirX) * 6.0
-		case .defensive:
-			// animals only hold a grudge against the player; hurt by anything else they just bolt
-			if !byPlayer { break }
-			m.angry = true
-			m.t3 = 10.0
-			if m.kind == .wolf {
-				for o in mobs where o.kind == .wolf && !o.tame && abs(o.b.x - m.b.x) < 16 {
-					o.angry = true
-					o.t3 = 12.0
-				}
-			}
+		aero = wings + elevators + airProps + jets + rotors + envelopes + airBrakes + stabilizers > 0
+		tilt = tilt.filter { parts[$0.key] != nil }
+		joints = joints.filter { parts[$0.cell] != nil }
+		hullAir = hullAir.filter { parts[$0.key] == nil || Vehicle.walkKind(parts[$0.key]!, blocks[$0.key]) != cellSolid }
+		// back walls weigh a little where they are
+		for (c, k) in walls {
+			let wm: Double = vehicleWallMass(k)
+			mass += wm
+			mx += wm * (Double(c.dx) + 0.5)
+			my += wm * (Double(c.dy) + 0.5)
+		}
+		minX = x0; maxX = x1; minY = y0; maxY = y1
+		mass = max(0.3, mass)
+		comX = mx / mass
+		comY = my / mass
+		// moment of inertia: each part as a 1x1 plate around the centre of mass
+		var inert: Double = 0
+		for (c, t) in parts {
+			let ox: Double = Double(c.dx) + 0.5 - comX
+			let oy: Double = Double(c.dy) + 0.5 - comY
+			inert += cellMass(c, t) * (ox * ox + oy * oy + 1.0 / 6.0)
+		}
+		inertia = max(0.2, inert)
+		var far: Double = 0.5
+		for (c, _) in parts {
+			let ox: Double = abs(Double(c.dx) + 0.5 - comX) + 0.5
+			let oy: Double = abs(Double(c.dy) + 0.5 - comY) + 0.5
+			far = max(far, sqrt(ox * ox + oy * oy))
+		}
+		radius = far
+		findFacings()
+		findBoxedParts()
+		boost.removeAll()
+		for (c, b) in blocks where b.isMod && parts[c] != .block {
+			if let d = ModRuntime.shared.blockDef(b) { boost[c] = d.vehPower }
+		}
+		enginePower = 0
+		for (c, t) in parts where t == .engine { enginePower += boost[c] ?? 1.0 }
+		// drills face the open side of their cell
+		drillDir.removeAll()
+		for (c, t) in parts where isDrill(t) {
+			let free: (PartCell) -> Bool = { self.parts[$0] == nil }
+			if free(PartCell(dx: c.dx + 1, dy: c.dy)) && !free(PartCell(dx: c.dx - 1, dy: c.dy)) { drillDir[c] = (1, 0) }
+			else if free(PartCell(dx: c.dx - 1, dy: c.dy)) && !free(PartCell(dx: c.dx + 1, dy: c.dy)) { drillDir[c] = (-1, 0) }
+			else if free(PartCell(dx: c.dx, dy: c.dy + 1)) { drillDir[c] = (0, 1) }
+			else if free(PartCell(dx: c.dx + 1, dy: c.dy)) { drillDir[c] = (1, 0) }
+			else { drillDir[c] = (0, -1) }
+		}
+		drillWork = drillWork.filter { parts[$0.key] != nil }
+		buildWalkGrid()
+		if let a = anchor, parts[a] != nil {
+			// put the anchor cell back where it was
+			let ox: Double = Double(a.dx) + 0.5 - comX
+			let oy: Double = Double(a.dy) + 0.5 - comY
+			let c: Double = cosA
+			let s: Double = sinA
+			px = anchorW.0 - (ox * c - oy * s)
+			py = anchorW.1 - (ox * s + oy * c)
+		}
+		asleep = false
+		updateBox()
+	}
+
+	/// How much one cell weighs: a part's own mass, or the weight of the block it is (stone 2.5)
+	func cellMass(_ c: PartCell, _ t: PartType) -> Double {
+		if let b = blocks[c] { return vehicleBlockMass(b, t) }
+		return t.mass
+	}
+
+	func countPart(_ t: PartType) {
+		switch t {
+		case .engine: engines += 1
+		case .wheel: wheels += 1
+		case .offroadWheel: wheels += 1; offroadWheels += 1
+		case .track: wheels += 1; tracks += 1
+		case .headlight: headlights += 1
+		case .propeller: propellers += 1
+		case .paddle: paddles += 1
+		case .fuelTank: tanks += 1
+		case .seat: hasSeat = true
+		case .steering: hasSteering = true
+		case .cockpit: hasSeat = true; hasSteering = true; hasCockpit = true
+		case .drill, .diamondDrill, .voidDrill: drills += 1
+		case .wing: wings += 1
+		case .elevator: elevators += 1
+		case .airProp: airProps += 1
+		case .jet: jets += 1
+		case .rotor: rotors += 1
+		case .tailRotor: tailRotors += 1
+		case .envelope: envelopes += 1
+		case .burner: burners += 1
+		case .armor: armors += 1
+		case .cannon: cannons += 1
+		case .autoGun: guns += 1
+		case .autopilot: autopilots += 1
+		case .receiver: receivers += 1
+		case .flap: wings += 1; flaps += 1
+		case .airBrake: airBrakes += 1
+		case .stabilizer: stabilizers += 1
+		case .ballast: ballasts += 1
+		case .railWheel: wheels += 1; railWheels += 1
+		case .bigWheel: wheels += 1; offroadWheels += 1
+		case .coupler: couplers += 1
 		default: break
 		}
-		if m.boat >= 0 { alertShip(m.boat) }
-		if m.kind == .custom && !logicRT.isEmpty, let r = ModRuntime.shared.mob(m.cslot) { fireLogic(.hurt, mob: m, key: r.key) }
-		if m.hp <= 0 { killMob(m, byPlayer) }
 	}
 
-	func killMob(_ m: Mob, _ byPlayer: Bool) {
-		if m.kind == .rex && m.tame {
-			downRex(m)
-			return
+	/// Thrusters, guns and tail rotors point out of their open side: left or right for thrusters and
+	/// tail rotors (the side away from the centre when both are open), any side for guns (up first
+	/// when the top is open, so a turret on a roof looks up and round)
+	func findFacings() {
+		face.removeAll()
+		for (c, t) in parts where isFacingPart(t) {
+			let r: Bool = parts[PartCell(dx: c.dx + 1, dy: c.dy)] == nil
+			let l: Bool = parts[PartCell(dx: c.dx - 1, dy: c.dy)] == nil
+			let u: Bool = parts[PartCell(dx: c.dx, dy: c.dy - 1)] == nil
+			let d: Bool = parts[PartCell(dx: c.dx, dy: c.dy + 1)] == nil
+			let away: Int = Double(c.dx) + 0.5 >= comX ? 1 : -1
+			var f: (Int, Int) = (away, 0)
+			if r && l { f = (away, 0) } else if r { f = (1, 0) } else if l { f = (-1, 0) }
+			else if t == .cannon || t == .autoGun { f = u ? (0, -1) : (d ? (0, 1) : (away, 0)) }
+			if (t == .cannon || t == .autoGun) && u && !(r || l) { f = (0, -1) }
+			face[c] = f
 		}
-		m.hp = 0
-		m.deathT = 0
-		m.burn = 0
-		// a creature the player hit recently still counts as the player's kill if lava, a fall or
-		// another creature finishes it off
-		let credit: Bool = byPlayer || clock - m.lastHitByPlayer < 6.0
-		var rng = RNG(UInt64(truncatingIfNeeded: m.id) &* 6364136223846793005 &+ UInt64(truncatingIfNeeded: Int(clock * 1000)))
-		for s in mobDrops(m.kind, &rng, m.sheared) {
-			spawnDrop(s, m.b.x, m.b.y - m.b.h * 0.5, Double.random(in: -2...2), -4.5)
-		}
-		if m.kind == .custom { dropModLoot(m, &rng) }
-		if m.kind == .custom && !logicRT.isEmpty, let r = ModRuntime.shared.mob(m.cslot) { fireLogic(.dies, mob: m, key: r.key) }
-		for s in alchemyDrops(m, &rng, credit) {
-			spawnDrop(s, m.b.x, m.b.y - m.b.h * 0.5, Double.random(in: -2...2), -4.5)
-		}
-		var col: UInt32 = 0xB02828
-		if m.kind == .skeleton { col = 0xE8E8E0 }
-		if m.kind == .slime { col = 0x60C060 }
-		if m.kind == .emberSlime { col = 0xFF8A20 }
-		spawnParticles(m.b.x, m.b.cy, col, Int(10 + m.b.w * 4), 5.0, 0.7, 14)
-		if credit { kills += 1 }
-		if m.kind == .bearBoss { onBearDefeated(m) }
-		if m.kind == .rex { onRexDefeated(m) }
-		if m.kind == .sentinel || m.kind == .warden { onGuardianDefeated(m) }
-		for s in m.loot { spawnDrop(s, m.b.x, m.b.y - m.b.h * 0.5, Double.random(in: -2.5...2.5), -5.0) }
-		m.loot = []
-		if m === activeBoss { activeBoss = nil }
-		bumpHUD()
 	}
 
-	func addMob(_ kind: MobKind, _ x: Double, _ y: Double) -> Mob {
-		let m = Mob(id: newID(), kind: kind, x: x, y: y)
-		if kind == .zombie { m.variant = Int.random(in: 0...2) }
-		if mobHealthMult != 1.0 {
-			m.maxHP *= mobHealthMult
-			m.hp = m.maxHP
-		}
-		mobs.append(m)
-		return m
-	}
-
-	// MARK: projectiles
-
-	/// Steps every projectile. Collision is swept along the whole frame's movement, so fast arrows and
-	/// bullets cannot skip over a target between frames, and the first thing along the path is hit.
-	func updateProjectiles(_ dt: Double) {
-		if projectiles.isEmpty { return }
-		let list: [Projectile] = projectiles
-		// projectiles created while stepping (none today, but explosions could) land in the fresh array
-		projectiles = []
-		var keep: [Projectile] = []
-		keep.reserveCapacity(list.count)
-		for p0 in list {
-			var p: Projectile = p0
-			if stepProjectile(&p, dt) { keep.append(p) }
-		}
-		if !projectiles.isEmpty { keep.append(contentsOf: projectiles) }
-		projectiles = keep
-	}
-
-	/// Returns false when the projectile is used up
-	func stepProjectile(_ p: inout Projectile, _ dt: Double) -> Bool {
-		p.life -= dt
-		if p.life <= 0 {
-			if p.mod >= 0 { modShotLanded(p, p.x, p.y, mob: nil, player: false) }
-			if p.kind == .bomb { explode(p.x, p.y, radius: 3.4, power: p.dmg, source: p.source, breakBlocks: true) }
-			if p.kind == .shell { shellBurst(p, p.x, p.y) }
-			if p.kind == .flask { burstFlaskOrPotion(p, p.x, p.y, nil) }
-			return false
-		}
-		if p.stuck > 0 {
-			p.stuck -= dt
-			if p.stuck <= 0 && (p.kind == .arrow || p.kind == .quarrel) && p.source.kind == .player && !isCreative && Double.random(in: 0...1) < 0.35 {
-				// some arrows and bolts survive and can be picked back up
-				spawnDrop(Stack(item: .ammo(p.kind == .arrow ? .arrow : .bolt), count: 1), p.x, p.y, 0, -1)
-			}
-			return p.stuck > 0
-		}
-		if p.kind == .shock { return stepShock(&p, dt) }
-		p.vy = min(p.vy + p.gravity * dt, 40.0)
-		let nx: Double = p.x + p.vx * dt
-		let ny: Double = p.y + p.vy * dt
-		// first solid tile along the path
-		var wallT: Double = 2.0
-		var wallTile: (Int, Int) = (0, 0)
-		if let hit = world.segmentSolidT(p.x, p.y, nx, ny) {
-			wallT = hit.2
-			wallTile = (hit.0, hit.1)
-		}
-		// a vehicle's parts stop shots aimed at it (the player's own shots pass their vehicles)
-		var vehHit: VehicleHit? = nil
-		if !vehicles.isEmpty && p.kind != .bomb { vehHit = vehicleOnPath(p, nx, ny, maxT: wallT) }
-		let entityMax: Double = vehHit?.t ?? wallT
-		// first creature (or the player) along the path, before the wall
-		if p.kind != .bomb {
-			if let target = firstEntityOnPath(p, nx, ny, maxT: entityMax) {
-				let hx: Double = p.x + (nx - p.x) * target.t
-				let hy: Double = p.y + (ny - p.y) * target.t
-				if p.kind == .flask {
-					burstFlaskOrPotion(p, hx, hy, target.mob)
-					return false
-				}
-				if p.kind == .shell {
-					shellBurst(p, hx, hy)
-					return false
-				}
-				let dirx: Double = p.vx >= 0 ? 1.0 : -1.0
-				var info = DamageInfo(amount: p.dmg, type: .projectile, source: p.source)
-				info.dirX = dirx
-				info.knock = p.knock > 0 ? p.knock : (p.kind == .bullet ? 4.0 : (p.kind == .arrow ? 3.5 : 3.0))
-				info.originX = p.x
-				info.originY = p.y
-				info.key = p.uid
-				info.cooldown = 1.0
-				if p.kind == .fireball { info.type = .fire }
-				if let m = target.mob {
-					if applyMobDamage(m, info) {
-						if p.mod >= 0 {
-							let s: ModProjectile? = p.mod < ModRuntime.shared.shots.count ? ModRuntime.shared.shots[p.mod] : nil
-							if let sh = s, sh.explode > 0 {
-								modShotLanded(p, hx, hy, mob: m, player: false)
-								return false
-							}
-							if let sh = s, sh.burn > 0 { m.burn = max(m.burn, sh.burn) }
-						}
-						if p.kind == .fireball { m.burn = max(m.burn, 2.5) }
-						if p.inf != 0 || !p.custom.isEmpty { shotInfusionHit(p, m, hx, hy) }
-						spawnParticles(hx, hy, p.kind == .fireball ? 0xFF8030 : 0xE8E0D0, 3, 2.5, 0.25, 8)
-						if p.source.kind == .player {
-							// a clear "it landed" for the player's own shots
-							sfx(.arrowHit, 0.55)
-							lockTarget = m
-							lockT = 2.0
-						}
-					}
-					p.lastHit = m.id
-				} else {
-					_ = hurtPlayer(info)
-					if p.mod >= 0 {
-						modShotLanded(p, hx, hy, mob: nil, player: true)
-						return false
-					}
-					if p.kind == .fireball { playerBurn = max(playerBurn, 1.5); spawnParticles(hx, hy, 0xFF8030, 8, 4.0, 0.4, 6) }
-				}
-				if p.pierce > 0 && target.mob != nil {
-					p.pierce -= 1
-					p.dmg *= 0.7
-				} else {
-					return false
-				}
-			}
-		}
-		if let vh = vehHit {
-			shotHitsVehicle(p, vh, p.x + (nx - p.x) * vh.t, p.y + (ny - p.y) * vh.t)
-			return false
-		}
-		if wallT <= 1.0 {
-			let hx: Double = p.x + (nx - p.x) * wallT
-			let hy: Double = p.y + (ny - p.y) * wallT
-			if p.mod >= 0 {
-				modShotLanded(p, hx, hy, mob: nil, player: false)
-				return false
-			}
-			if p.inf & 4 != 0 { volatileBurst(hx, hy) }
-			switch p.kind {
-			case .flask:
-				burstFlaskOrPotion(p, hx, hy, nil)
-				return false
-			case .pebble:
-				spawnParticles(hx, hy, 0x9A9A9A, 4, 2.5, 0.3, 14)
-				return false
-			case .arrow, .quarrel:
-				// stick into the block, nudged back out of it slightly so it reads as embedded
-				p.x = hx - p.vx * 0.004
-				p.y = hy - p.vy * 0.004
-				p.stuckAngle = atan2(p.vy, p.vx)
-				p.vx = 0
-				p.vy = 0
-				p.stuck = 4.0
-				p.gravity = 0
-				spawnParticles(hx, hy, 0xA0A0A0, 2, 1.5, 0.2, 8)
-				return true
-			case .rock:
-				rockImpact(p, hx, hy)
-				return false
-			case .shell:
-				shellBurst(p, hx - p.vx * 0.004, hy - p.vy * 0.004)
-				return false
-			case .bomb:
-				// bounce off the face it struck, losing energy, and come to rest on top of the ground
-				// (it used to work its way into the floor and go off inside the rock)
-				let tx: Double = Double(wallTile.0)
-				let ty: Double = Double(wallTile.1)
-				let onTop: Bool = abs(hy - ty) < 0.02 && p.vy > 0
-				let onBottom: Bool = abs(hy - (ty + 1.0)) < 0.02 && p.vy < 0
-				if onTop || onBottom {
-					// the ground grips it: it settles close to where it came down
-					p.vy = -p.vy * 0.35
-					p.vx *= onTop ? 0.4 : 0.7
-					p.x = hx
-					p.y = onTop ? ty - 0.02 : ty + 1.02
-					if onTop && abs(p.vy) < 1.5 { p.vy = 0; p.vx *= 0.6 }
-				} else {
-					p.vx = -p.vx * 0.45
-					p.x = p.vx < 0 ? tx - 0.02 : tx + 1.02
-					p.y = hy
-				}
-				if world.solid(Int(floor(p.x)), Int(floor(p.y))) { p.y = Double(world.groundBelow(Int(floor(p.x)), Int(floor(p.y)) - 4)) - 0.02 }
-				return true
+	/// Parts that need room to work: a thruster needs one end open (left or right), a gun any side, a
+	/// drill a side or its underside; a rotor lifts by how much of its blades' row (two cells either side
+	/// above it) is clear
+	func findBoxedParts() {
+		boxed.removeAll()
+		rotorRoom.removeAll()
+		rotorLift = 0
+		openProps = 0
+		openPaddles = 0
+		openTails = 0
+		for (c, t) in parts {
+			let r: Bool = parts[PartCell(dx: c.dx + 1, dy: c.dy)] == nil
+			let l: Bool = parts[PartCell(dx: c.dx - 1, dy: c.dy)] == nil
+			let u: Bool = parts[PartCell(dx: c.dx, dy: c.dy - 1)] == nil
+			let d: Bool = parts[PartCell(dx: c.dx, dy: c.dy + 1)] == nil
+			switch t {
+			case .propeller, .paddle, .airProp, .jet, .tailRotor:
+				if !(r || l) { boxed.insert(c); continue }
+				if t == .propeller { openProps += 1 }
+				if t == .paddle { openPaddles += 1 }
+				if t == .tailRotor { openTails += 1 }
+			case .cannon, .autoGun:
+				if !(r || l || u || d) { boxed.insert(c) }
+			case .drill, .diamondDrill, .voidDrill:
+				if !(r || l || d || u) { boxed.insert(c) }
+			case .rotor:
+				var free: Int = 0
+				for k in -2...2 where parts[PartCell(dx: c.dx + k, dy: c.dy - 1)] == nil { free += 1 }
+				let room: Double = Double(free) / 5.0
+				rotorRoom[c] = room
+				rotorLift += room
 			default:
-				spawnParticles(hx, hy, p.kind == .fireball ? 0xFF8030 : 0xFFE080, 5, 3.0, 0.25, 6)
-				if p.kind == .fireball { igniteNear(hx, hy, p.source) }
-				return false
+				break
 			}
 		}
-		p.x = nx
-		p.y = ny
-		// player shots also damage pirate ships
-		if p.source.kind == .player {
-			for s in ships {
-				let dy: Double = s.deckY(Double(WorldGen.sea))
-				if abs(p.x - s.x) < 4.6 && p.y > dy - 3.0 && p.y < dy + 2.0 {
-					s.hp -= p.dmg * 0.5
-					s.hitT = 0.2
-					spawnParticles(p.x, p.y, 0x8A5A2E, 4, 3.0, 0.3, 12)
-					return false
-				}
-			}
+	}
+
+	var fuelCapacity: Double { return Double(tanks) * 60.0 + (engines > 0 || jets > 0 || burners > 0 ? 8.0 : 0.0) }
+	var isBoat: Bool { return buoyancy > 0 }
+	var canDriveOnLand: Bool { return wheels >= 2 && engines > 0 }
+	var canSail: Bool { return buoyancy >= mass * 0.8 && ((engines > 0 && propellers > 0) || paddles > 0) }
+	var topY: Double { return b.y - b.h }
+	var speed: Double { return sqrt(vx * vx + vy * vy) }
+	/// roughly upright (flat enough to stand on, to place kits next to, and so on)
+	var upright: Bool { return abs(remainder(angle, 2.0 * Double.pi)) < 0.35 }
+
+	func hasNeighbor(_ c: PartCell) -> Bool {
+		let n: [PartCell] = [PartCell(dx: c.dx + 1, dy: c.dy), PartCell(dx: c.dx - 1, dy: c.dy), PartCell(dx: c.dx, dy: c.dy + 1), PartCell(dx: c.dx, dy: c.dy - 1)]
+		for k in n { if parts[k] != nil { return true } }
+		return false
+	}
+
+	func canAttach(_ c: PartCell, _ t: PartType) -> Bool {
+		if parts[c] != nil { return false }
+		if !hasNeighbor(c) { return false }
+		if isWheelPart(t) {
+			// wheels hang below the body: something must be directly above, nothing below
+			if parts[PartCell(dx: c.dx, dy: c.dy - 1)] == nil { return false }
+			if parts[PartCell(dx: c.dx, dy: c.dy + 1)] != nil { return false }
 		}
-		if p.kind == .fireball && Double.random(in: 0...1) < 0.5 { spawnParticles(p.x, p.y, 0xFFB040, 1, 1.0, 0.25, -2) }
-		if p.kind == .arrow && p.source.kind == .player && p.trail < 6 { p.trail += 1 }
+		if t == .steering {
+			let n: [PartCell] = [PartCell(dx: c.dx + 1, dy: c.dy), PartCell(dx: c.dx - 1, dy: c.dy), PartCell(dx: c.dx, dy: c.dy + 1), PartCell(dx: c.dx, dy: c.dy - 1)]
+			var ok: Bool = false
+			for k in n { if parts[k] == .seat { ok = true } }
+			if !ok { return false }
+		}
+		if t == .propeller || t == .paddle || t == .airProp || t == .jet || t == .tailRotor {
+			// must sit at the edge of the vehicle
+			let side: [PartCell] = [PartCell(dx: c.dx + 1, dy: c.dy), PartCell(dx: c.dx - 1, dy: c.dy)]
+			var free: Bool = false
+			for k in side { if parts[k] == nil { free = true } }
+			if !free { return false }
+		}
+		if t == .rotor {
+			// on top, with room for the blades: nothing in the row above, two cells either side
+			for k in -2...2 where parts[PartCell(dx: c.dx + k, dy: c.dy - 1)] != nil { return false }
+		}
+		// nothing goes where a rotor's blades turn
+		for k in -2...2 where parts[PartCell(dx: c.dx + k, dy: c.dy + 1)] == .rotor { return false }
+		if t == .cannon || t == .autoGun {
+			// a gun needs one open side to fire from
+			let n: [PartCell] = [PartCell(dx: c.dx + 1, dy: c.dy), PartCell(dx: c.dx - 1, dy: c.dy), PartCell(dx: c.dx, dy: c.dy - 1), PartCell(dx: c.dx, dy: c.dy + 1)]
+			var free: Bool = false
+			for k in n { if parts[k] == nil { free = true } }
+			if !free { return false }
+		}
+		if isDrill(t) {
+			// a drill needs one open side to bore into
+			let n: [PartCell] = [PartCell(dx: c.dx + 1, dy: c.dy), PartCell(dx: c.dx - 1, dy: c.dy), PartCell(dx: c.dx, dy: c.dy + 1)]
+			var free: Bool = false
+			for k in n { if parts[k] == nil { free = true } }
+			if !free { return false }
+		}
 		return true
 	}
 
-	struct PathHit {
-		var t: Double
-		var mob: Mob?
+	/// Removes a part, returning every part that is no longer connected (including the removed one)
+	func removePart(_ c: PartCell) -> [PartType] {
+		return cutAway(c).map { $0.type }
 	}
 
-	/// Nearest creature or player the segment passes through that this projectile is allowed to hurt
-	func firstEntityOnPath(_ p: Projectile, _ nx: Double, _ ny: Double, maxT: Double) -> PathHit? {
-		var best: PathHit? = nil
-		var bt: Double = min(1.0, maxT)
-		let pad: Double = max(0.08, p.w * 0.5)
-		if !dead && canHarm(p.source, targetFaction: .player, targetID: 0, area: false) {
-			if let t = segmentBoxT(p.x, p.y, nx, ny, pb.left - pad, pb.top - pad, pb.right + pad, pb.y + pad), t <= bt {
-				bt = t
-				best = PathHit(t: t, mob: nil)
+	/// The groups of cells that hang together (side by side), largest first
+	func connectedGroups() -> [[PartCell]] {
+		var seen: Set<PartCell> = []
+		var out: [[PartCell]] = []
+		for start in parts.keys where !seen.contains(start) {
+			var group: [PartCell] = []
+			var stack: [PartCell] = [start]
+			while let cur = stack.popLast() {
+				if seen.contains(cur) { continue }
+				seen.insert(cur)
+				group.append(cur)
+				let n: [PartCell] = [PartCell(dx: cur.dx + 1, dy: cur.dy), PartCell(dx: cur.dx - 1, dy: cur.dy), PartCell(dx: cur.dx, dy: cur.dy + 1), PartCell(dx: cur.dx, dy: cur.dy - 1)]
+				for k in n where parts[k] != nil && !seen.contains(k) { stack.append(k) }
 			}
+			out.append(group)
 		}
-		let x0: Double = min(p.x, nx) - 4.0
-		let x1: Double = max(p.x, nx) + 4.0
-		for m in mobsNear(x0, x1) {
-			if m.hp <= 0 || m.id == p.lastHit || m.downed { continue }
-			if !canHarm(p.source, targetFaction: faction(of: m), targetID: m.id, area: false) { continue }
-			if let t = segmentBoxT(p.x, p.y, nx, ny, m.b.left - pad, m.b.top - pad, m.b.right + pad, m.b.y + pad), t <= bt {
-				bt = t
-				best = PathHit(t: t, mob: m)
+		out.sort { $0.count > $1.count }
+		return out
+	}
+
+	/// Removes a cell and everything no longer joined to the part that stays (the group holding `keep`
+	/// if it survives, otherwise the largest), returning what came off (the removed cell first)
+	func cutAway(_ c: PartCell, keep: PartCell? = nil) -> [VCell] {
+		var out: [VCell] = []
+		if let mid = spanOf[c] {
+			// a part bigger than one cell comes away whole (given back once, from its middle)
+			for (k, m) in spanOf where m == mid {
+				if k == mid, let t = parts[k] { out.append(VCell(cell: k, type: t, tile: blocks[k])) }
+				parts[k] = nil
+				blocks[k] = nil
+				dmg[k] = nil
+				spanOf[k] = nil
 			}
+			if parts.isEmpty { return out }
 		}
-		return best
-	}
-
-	/// Boss shockwaves run along the ground and hurt anything standing in them
-	func stepShock(_ p: inout Projectile, _ dt: Double) -> Bool {
-		p.x += p.vx * dt
-		let gy: Int = world.groundBelow(Int(floor(p.x)), Int(floor(p.y)) - 3)
-		p.y = Double(gy) - 0.5
-		if world.solid(Int(floor(p.x)), Int(floor(p.y - 0.6))) && world.solid(Int(floor(p.x + p.vx * 0.1)), Int(floor(p.y - 0.4))) { return false }
-		var info = DamageInfo(amount: p.dmg, type: .stomp, source: p.source)
-		info.dirX = p.vx >= 0 ? 1 : -1
-		info.knock = 7.0
-		info.originX = p.x - p.vx
-		info.originY = p.y
-		info.key = p.uid
-		info.cooldown = 2.0
-		damageBox(p.x - 0.5, p.y - 0.9, p.x + 0.5, p.y + 0.5, info)
-		if Double.random(in: 0...1) < 0.5 { spawnParticles(p.x, p.y + 0.3, 0xA08860, 1, 1.5, 0.3, 6) }
-		return true
-	}
-
-	func rockImpact(_ p: Projectile, _ x: Double, _ y: Double) {
-		spawnParticles(x, y, 0x8A8A8A, 10, 5.0, 0.5, 16)
-		addShake(0.25)
-		var info = DamageInfo(amount: p.dmg, type: .impact, source: p.source)
-		info.knock = 5.0
-		info.originX = x
-		info.originY = y - 1.0
-		info.key = p.uid
-		info.cooldown = 1.0
-		damageArea(x, y - 0.8, radius: 1.8, info, falloff: false, lineOfSight: false)
-	}
-
-	/// Fireballs set fire to whatever stands where they burst
-	func igniteNear(_ x: Double, _ y: Double, _ src: DamageSource) {
-		for m in mobsNear(x - 1.5, x + 1.5) where m.hp > 0 && !heatImmune(m) {
-			if abs(m.b.cy - y) < m.b.h * 0.5 + 1.0 && canHarm(src, targetFaction: faction(of: m), targetID: m.id, area: true) {
-				m.burn = max(m.burn, 2.0)
-			}
+		if let t = parts[c] { out.append(VCell(cell: c, type: t, tile: blocks[c])) }
+		parts[c] = nil
+		blocks[c] = nil
+		dmg[c] = nil
+		if parts.isEmpty { return out }
+		let groups: [[PartCell]] = connectedGroups()
+		var stay: [PartCell] = groups[0]
+		if let k = keep, parts[k] != nil {
+			for g in groups where g.contains(k) { stay = g }
 		}
-	}
-
-	func throwBomb() {
-		if useCD > 0 { return }
-		if !isCreative { inv.removeAt(sel, 1) }
-		facing = aimFacing()
-		let ox: Double = pb.x + Double(facing) * 0.4
-		let oy: Double = pb.y - 1.3
-		// thrown on the arc that lands it on the spot aimed at (then it may bounce a little)
-		let a: Double = lobAngle(aimX - ox, aimY - oy, throwSpeed, throwGravity)
-		var p = Projectile(kind: .bomb, x: ox, y: oy, vx: cos(a) * throwSpeed, vy: sin(a) * throwSpeed, dmg: 26, fromPlayer: true, gravity: throwGravity)
-		p.life = 1.8
-		p.w = 0.4
-		p.source = DamageSource.player
-		p.uid = newID()
-		projectiles.append(p)
-		useCD = 0.45
-		swingT = 0.18
-		swingDir = facing
-		bumpHUD()
-	}
-
-	// MARK: drops
-
-	func updateDrops(_ dt: Double) {
-		var i: Int = 0
-		while i < drops.count {
-			var d: DropItem = drops[i]
-			d.age += dt
-			if d.pickDelay > 0 { d.pickDelay -= dt }
-			if d.age > 400 {
-				drops.remove(at: i)
-				continue
-			}
-			var b = Body(x: d.x, y: d.y, w: 0.3, h: 0.3)
-			b.vx = d.vx
-			b.vy = d.vy
-			b.ride = d.ride
-			b.rlx = d.rlx
-			b.rly = d.rly
-			b.onGround = d.onGround
-			let px: Double = pb.x
-			let py: Double = pb.y - pb.h * 0.5
-			let dx: Double = px - d.x
-			let dy: Double = py - (d.y - 0.15)
-			let dist: Double = sqrt(dx * dx + dy * dy)
-			// a stack the player threw away waits until they have walked off from it
-			if d.heldBack && dist > 3.6 { d.heldBack = false }
-			var magnet: Bool = false
-			if !dead && d.pickDelay <= 0 && !d.heldBack && dist < 3.2 && inv.canFit(d.stack.item, 1) {
-				magnet = true
-				let k: Double = 16.0
-				b.vx = dx / max(dist, 0.1) * k * (1.0 + (3.2 - dist) * 0.3)
-				b.vy = dy / max(dist, 0.1) * k * (1.0 + (3.2 - dist) * 0.3)
-			} else {
-				b.vy = min(b.vy + gravityG * 0.8 * dt, 18)
-				b.vx *= (1.0 - min(1.0, dt * (d.onGround ? 6.0 : 0.6)))
-			}
-			if magnet {
-				// drawn to the player through the air, whatever it was lying on
-				if b.ride != 0 { b.ride = 0 }
-				b.x += b.vx * dt
-				b.y += b.vy * dt
-			} else {
-				moveThing(&b, dt, stepUp: 0, dropThrough: false, decks: decksCache, mass: 0)
-				if b.inWater { b.vy = min(b.vy, 1.5); b.vx *= 0.9 }
-			}
-			d.x = b.x
-			d.y = b.y
-			d.vx = b.vx
-			d.vy = b.vy
-			d.onGround = b.onGround
-			d.ride = b.ride
-			d.rlx = b.rlx
-			d.rly = b.rly
-			if !dead && d.pickDelay <= 0 && !d.heldBack && dist < 0.9 {
-				let left: Int = inv.add(d.stack.item, d.stack.count, extra: d.stack.extra, inf: d.stack.inf)
-				if left < d.stack.count {
-					if d.stack.item == .mat(.relicFragment) { journal.relics += d.stack.count - left }
-					sfx(.pickup, 0.5)
-					floatText("+" + String(d.stack.count - left) + " " + d.stack.item.name, px, pb.y - pb.h - 0.5, 0xFFF0A0)
-					bumpHUD()
-				}
-				if left == 0 {
-					drops.remove(at: i)
-					continue
-				} else {
-					d.stack.count = left
-				}
-			}
-			drops[i] = d
-			i += 1
-		}
-	}
-
-	// MARK: particles and floating text
-
-	/// Leaves come loose from the canopies on screen now and then (more in a wind, and where the player
-	/// pushes through them) and drift down, swaying and tumbling, until they settle and fade
-	func updateLeafFall(_ dt: Double) {
-		let wind: Double = settings.weatherOn ? wxHere.wind : 0
-		var w: Int = 0
-		for i in 0..<leafFlakes.count {
-			var f: LeafFlake = leafFlakes[i]
-			f.life -= dt
-			if f.life <= 0 { continue }
-			if !f.landed {
-				f.phase += dt * (2.0 + abs(wind) * 0.15)
-				f.vy += (0.9 - f.vy) * min(1.0, dt * 2.0)
-				f.x += (sin(f.phase) * 0.9 + wind * 0.18) * dt
-				f.y += f.vy * dt
-				let tx: Int = Int(floor(f.x))
-				let ty: Int = Int(floor(f.y))
-				let t: Tile = world.tile(tx, ty)
-				if t.liquid {
-					continue
-				}
-				if t.solid || Tile.opaqueTable[Int(t.rawValue)] {
-					// come to rest on the block below
-					f.y = Double(ty) - 0.02
-					f.landed = true
-					f.life = min(f.life, 2.5)
-				}
-			}
-			leafFlakes[w] = f
-			w += 1
-		}
-		if w < leafFlakes.count { leafFlakes.removeLast(leafFlakes.count - w) }
-		if leafFlakes.count >= 40 { return }
-		// a few tries a second to find the underside of a canopy in a column on screen
-		let tries: Double = (3.0 + min(6.0, abs(wind) * 0.4)) * dt
-		if Double.random(in: 0...1) < tries {
-			let x0: Int = Int(floor(camX - viewTilesW * 0.5))
-			let x: Int = x0 + Int.random(in: 0...max(1, Int(viewTilesW)))
-			let top: Int = Int(floor(camY - viewTilesH * 0.5))
-			let bottom: Int = top + Int(viewTilesH) + 1
-			var y: Int = max(1, top)
-			while y < bottom {
-				let t: Tile = world.tile(x, y)
-				if isLeafTile(t) {
-					let under: Tile = world.tile(x, y + 1)
-					if !isLeafTile(under) && !under.solid {
-						dropLeaf(Double(x) + Double.random(in: 0.1...0.9), Double(y) + 1.0, t)
-						break
-					}
-				}
-				y += 1
-			}
-		}
-		// pushing through leaves shakes some loose
-		if abs(pb.vx) + abs(pb.vy) > 2.0 {
-			let t: Tile = world.tile(Int(floor(pb.x)), Int(floor(pb.y - 1.0)))
-			if isLeafTile(t) && Double.random(in: 0...1) < dt * 3.0 { dropLeaf(pb.x, pb.y - 1.0, t) }
-		}
-	}
-
-	/// One leaf off a leaf block, in that block's own colours
-	func dropLeaf(_ x: Double, _ y: Double, _ t: Tile) {
-		if leafFlakes.count >= 48 { return }
-		let tn: [UInt32] = SectionPainter.shared.leafTones[Int(t.rawValue)] ?? [0x6A9A4A, 0x4C7A3A, 0x3A5E30, 0x284426]
-		leafFlakes.append(LeafFlake(x: x, y: y, vy: 0.3, phase: Double.random(in: 0...6.28), life: 14.0, light: tn[1], dark: tn[2]))
-	}
-
-	func updateParticles(_ dt: Double) {
-		// compact in place: remove(at:) in a loop was O(n^2) when bursts of particles expired together
-		let n: Int = particles.count
-		var w: Int = 0
-		particles.withUnsafeMutableBufferPointer { bp in
-			var i: Int = 0
-			while i < n {
-				var p: Particle = bp[i]
-				p.life -= dt
-				if p.life > 0 {
-					p.vy += p.gravity * dt
-					p.x += p.vx * dt
-					p.y += p.vy * dt
-					bp[w] = p
-					w += 1
-				}
-				i += 1
-			}
-		}
-		if w < n { particles.removeLast(n - w) }
-		var j: Int = 0
-		while j < floats.count {
-			floats[j].life -= dt
-			floats[j].y -= dt * 1.1
-			if floats[j].life <= 0 { floats.remove(at: j); continue }
-			j += 1
-		}
-	}
-}
-
-// ===== p16c_damage =====
-
-// MARK: - Unified damage system
-// Every source of harm (swings, projectiles, boss stomps, explosions, falling blocks, vehicles, lava,
-// fire, spikes) builds a DamageInfo and goes through the same few functions. They decide who can be
-// hurt (factions), stop one attack from hitting the same target every frame (per-attack cooldown
-// keys), apply armor and resistances, push targets back, and remember who to credit for a kill.
-
-enum DamageType: Int {
-	case melee, projectile, explosion, fire, lava, impact, stomp, contact, fall, drown, starve, hazard, crush
-	/// lightning from the storm rod
-	case shock
-	/// potions (appended): poison over time, and the searing splash's burn
-	case poison, magic
-
-	/// Armor does not help against these
-	var bypassesArmor: Bool {
-		switch self {
-		case .fire, .lava, .fall, .drown, .starve, .poison: return true
-		default: return false
-		}
-	}
-
-	/// Area attacks hit everything in range (except their owner), including members of the attacker's
-	/// own side. Aimed attacks never hurt the attacker's own side.
-	var isArea: Bool {
-		switch self {
-		case .explosion, .stomp, .impact, .crush, .fire, .lava, .hazard: return true
-		default: return false
-		}
-	}
-}
-
-enum Faction: Int {
-	case player, ally, wild, hostile, pirate, umbral, boss, environment
-}
-
-enum SourceKind: Int {
-	case player, mob, environment
-}
-
-struct DamageSource {
-	var kind: SourceKind
-	var id: Int
-	var faction: Faction
-	/// how hard a creature's blows land (mutation doubles it, weakness softens it): fixed when the blow starts
-	var mult: Double = 1
-
-	static let player: DamageSource = DamageSource(kind: .player, id: 0, faction: .player)
-	static let environment: DamageSource = DamageSource(kind: .environment, id: -1, faction: .environment)
-	static func mob(_ m: Mob, _ f: Faction) -> DamageSource { return DamageSource(kind: .mob, id: m.id, faction: f, mult: m.dmgMul) }
-}
-
-struct DamageInfo {
-	var amount: Double
-	var type: DamageType
-	var source: DamageSource
-	/// knockback direction (-1 / 1); 0 = push away from the origin
-	var dirX: Double = 0
-	var knock: Double = 0
-	var originX: Double = 0
-	var originY: Double = 0
-	/// attack instance id: the same key never hits the same target twice within `cooldown` seconds
-	var key: Int = 0
-	var cooldown: Double = 0.5
-	/// a crushing blow (war hammer): breaks a raised guard and cracks stone hides
-	var heavy: Bool = false
-	/// a critical blow (shown bigger and brighter)
-	var crit: Bool = false
-
-	init(amount: Double, type: DamageType, source: DamageSource) {
-		self.amount = amount
-		self.type = type
-		self.source = source
-	}
-}
-
-/// Bucketed mob positions, rebuilt once per frame, so area attacks and projectiles only look at
-/// creatures near them instead of every mob in the world.
-final class MobGrid {
-	static let cell: Int = 8
-	var buckets: [Int: [Mob]] = [:]
-
-	func rebuild(_ mobs: [Mob]) {
-		for k in buckets.keys { buckets[k]?.removeAll(keepingCapacity: true) }
-		for m in mobs where m.hp > 0 && !m.removed {
-			let k: Int = floorDiv(Int(floor(m.b.x)), MobGrid.cell)
-			if buckets[k] == nil { buckets[k] = [] }
-			buckets[k]?.append(m)
-		}
-		if buckets.count > 256 { buckets = buckets.filter { !$0.value.isEmpty } }
-	}
-}
-
-func isHeatImmune(_ k: MobKind) -> Bool {
-	switch k {
-	case .imp, .emberSlime, .cinderBat, .warden: return true
-	default: return false
-	}
-}
-
-/// Fraction of damage a creature takes from a damage type (1 = full)
-func damageResist(_ k: MobKind, _ t: DamageType) -> Double {
-	switch (k, t) {
-	case (.imp, .fire), (.emberSlime, .fire), (.cinderBat, .fire), (.imp, .lava), (.emberSlime, .lava), (.cinderBat, .lava): return 0
-	case (.wraith, .fall), (.bat, .fall), (.cinderBat, .fall), (.crow, .fall): return 0
-	case (.skeleton, .projectile): return 0.75
-	case (.bearBoss, .lava), (.rex, .lava): return 0.5
-	case (.bearBoss, .explosion), (.rex, .explosion): return 0.6
-	case (.slime, .fall), (.emberSlime, .fall), (.cat, .fall), (.frog, .fall): return 0.2
-	// the golem's stone hide shrugs off blades and arrows (a hammer's crushing blow gets through)
-	case (.golem, .melee), (.golem, .contact): return 0.55
-	case (.golem, .projectile): return 0.35
-	case (.golem, .fire), (.golem, .fall): return 0.2
-	case (.golem, .explosion): return 1.25
-	case (.sentinel, .fall), (.warden, .fall), (.warden, .lava), (.mimic, .fall): return 0
-	case (.sentinel, .projectile): return 0.8
-	case (.warden, .explosion): return 0.7
-	// lightning: stone and crystal carry it poorly
-	case (.golem, .shock): return 0.6
-	case (.sentinel, .shock): return 0.5
-	// poison does not take hold in the dead, in stone or crystal, or in slimes
-	case (.zombie, .poison), (.skeleton, .poison), (.wraith, .poison), (.golem, .poison), (.sentinel, .poison), (.warden, .poison), (.slime, .poison), (.emberSlime, .poison): return 0
-	case (.warden, .shock): return 0.75
-	default: return 1
-	}
-}
-
-/// Segment/box intersection (slab method). Returns the entry fraction along the segment, or nil.
-func segmentBoxT(_ x0: Double, _ y0: Double, _ x1: Double, _ y1: Double, _ bx0: Double, _ by0: Double, _ bx1: Double, _ by1: Double) -> Double? {
-	let dx: Double = x1 - x0
-	let dy: Double = y1 - y0
-	var tmin: Double = 0
-	var tmax: Double = 1
-	if abs(dx) < 1e-9 {
-		if x0 < bx0 || x0 > bx1 { return nil }
-	} else {
-		var ta: Double = (bx0 - x0) / dx
-		var tb: Double = (bx1 - x0) / dx
-		if ta > tb { let s: Double = ta; ta = tb; tb = s }
-		tmin = max(tmin, ta)
-		tmax = min(tmax, tb)
-		if tmin > tmax { return nil }
-	}
-	if abs(dy) < 1e-9 {
-		if y0 < by0 || y0 > by1 { return nil }
-	} else {
-		var ta: Double = (by0 - y0) / dy
-		var tb: Double = (by1 - y0) / dy
-		if ta > tb { let s: Double = ta; ta = tb; tb = s }
-		tmin = max(tmin, ta)
-		tmax = min(tmax, tb)
-		if tmin > tmax { return nil }
-	}
-	return tmin
-}
-
-extension World {
-	/// First solid tile along a segment: (tile x, tile y, fraction along the segment)
-	func segmentSolidT(_ x0: Double, _ y0: Double, _ x1: Double, _ y1: Double) -> (Int, Int, Double)? {
-		let dx: Double = x1 - x0
-		let dy: Double = y1 - y0
-		let dist: Double = sqrt(dx * dx + dy * dy)
-		let n: Int = max(1, Int(ceil(dist / 0.2)))
-		var i: Int = 1
-		while i <= n {
-			let t: Double = Double(i) / Double(n)
-			let tx: Int = Int(floor(x0 + dx * t))
-			let ty: Int = Int(floor(y0 + dy * t))
-			if tile(tx, ty).solid {
-				// refine the entry point against the tile box
-				let et: Double = segmentBoxT(x0, y0, x1, y1, Double(tx), Double(ty), Double(tx + 1), Double(ty + 1)) ?? t
-				return (tx, ty, et)
-			}
-			i += 1
-		}
-		return nil
-	}
-
-	/// True when nothing solid blocks the straight line between two points
-	func lineClear(_ x0: Double, _ y0: Double, _ x1: Double, _ y1: Double) -> Bool {
-		return segmentSolidT(x0, y0, x1, y1) == nil
-	}
-}
-
-extension Game {
-	// MARK: sides
-
-	func faction(of m: Mob) -> Faction {
-		if m.tame { return .ally }
-		switch m.kind {
-		case .pirate, .pirateGunner, .pirateCaptain: return .pirate
-		case .imp, .emberSlime, .cinderBat: return .umbral
-		case .bearBoss, .rex, .sentinel, .warden: return .boss
-		case .custom: return ModRuntime.shared.mob(m.cslot)?.faction ?? .wild
-		default: return m.def.hostile ? .hostile : .wild
-		}
-	}
-
-	/// May `src` hurt a target of `targetFaction`?
-	func canHarm(_ src: DamageSource, targetFaction tf: Faction, targetID: Int, area: Bool) -> Bool {
-		// nothing hurts itself (the player's own bombs are the exception, handled in explode())
-		if src.kind == .mob && src.id == targetID { return false }
-		if src.kind == .player && tf == .player { return false }
-		switch src.faction {
-		case .environment, .boss: return true
-		case .player: return tf != .ally
-		case .ally: return tf != .player && tf != .ally
-		default:
-			if area { return true }
-			return tf != src.faction
-		}
-	}
-
-	// MARK: queries
-
-	func mobsNear(_ x0: Double, _ x1: Double) -> [Mob] {
-		Perf.shared.countDamage()
-		let c0: Int = floorDiv(Int(floor(x0)), MobGrid.cell)
-		let c1: Int = floorDiv(Int(floor(x1)), MobGrid.cell)
-		if c1 - c0 > 64 { return mobs }
-		var out: [Mob] = []
-		var c: Int = c0
-		while c <= c1 {
-			if let b = mobGrid.buckets[c] { out.append(contentsOf: b) }
-			c += 1
+		let staySet: Set<PartCell> = Set(stay)
+		for k in Array(parts.keys) where !staySet.contains(k) {
+			let outer: Bool = spanOf[k] != nil && spanOf[k] != k
+			if let t = parts[k], !outer { out.append(VCell(cell: k, type: t, tile: blocks[k])) }
+			parts[k] = nil
+			blocks[k] = nil
+			dmg[k] = nil
+			spanOf[k] = nil
 		}
 		return out
 	}
 
-	// MARK: applying damage
-
-	/// Damages a creature. Returns true if the hit landed.
-	@discardableResult
-	func applyMobDamage(_ m: Mob, _ info: DamageInfo) -> Bool {
-		if m.hp <= 0 || m.removed { return false }
-		if !canHarm(info.source, targetFaction: faction(of: m), targetID: m.id, area: info.type.isArea) { return false }
-		if info.key != 0 {
-			if let last = m.hitStamps[info.key], clock - last < info.cooldown { return false }
-			m.hitStamps[info.key] = clock
-			if m.hitStamps.count > 24 { m.hitStamps = m.hitStamps.filter { clock - $0.value < 4.0 } }
+	func save() -> VehicleSave {
+		var ps: [VPartSave] = []
+		for (c, t) in parts {
+			var e = VPartSave(dx: c.dx, dy: c.dy, type: t.rawValue)
+			if let b = blocks[c] { e.tile = Int(b.rawValue) }
+			if let d = dmg[c], d > 0 { e.dmg = d }
+			if let k = tilt[c], k != 0 { e.tilt = k }
+			if let m = spanOf[c] { e.span = [m.dx, m.dy] }
+			ps.append(e)
 		}
-		var amount: Double = info.amount * damageResist(m.kind, info.type) * (info.source.kind == .mob ? info.source.mult : 1.0)
-		if m.kind == .custom, let r = ModRuntime.shared.mob(m.cslot) {
-			amount *= r.resist(info.type) * (1.0 - m.phaseDef)
-			// changing phase: blows glance off
-			if m.phaseShield > 0 {
-				if info.source.kind == .player { spawnParticles(m.b.x, m.b.cy, 0xE0E8FF, 3, 2.5, 0.25, 6) }
-				return false
-			}
-		}
-		if info.heavy && m.kind == .golem { amount *= 1.9 }
-		if info.source.kind == .player {
-			amount *= dmgOutMult * (1.0 + effects.value(.strength) / 100.0)
-			if wearing(.wardenSigil) { amount *= 1.2 }
-			if isUndead(m.kind) && wearing(.silverCharm) { amount *= 1.25 }
-		}
-		if amount <= 0 { return false }
-		let byPlayer: Bool = info.source.kind == .player
-		if byPlayer { m.lastHitByPlayer = clock }
-		m.lastAttacker = info.source.id
-		var dir: Double = info.dirX
-		if dir == 0 && info.knock > 0 { dir = m.b.x >= info.originX ? 1.0 : -1.0 }
-		hurtMob(m, amount, dir, info.knock, byPlayer, heavy: info.heavy, crit: info.crit)
-		return true
+		var s = VehicleSave(id: id, parts: ps, x: px, y: py, fuel: fuel, dir: dir, kit: kit, rot: angle)
+		if auto != 0 { s.auto = auto }
+		if !route.isEmpty { s.route = route }
+		if let c = seatAt { s.seat = [c.dx, c.dy] }
+		if ballast > 0.001 { s.ballast = ballast }
+		if !links.isEmpty { s.links = links }
+		if !joints.isEmpty { s.joints = joints }
+		if parentID != 0 { s.parent = parentID }
+		if gait != 0 { s.gait = gait }
+		if !gunMode.isEmpty { s.gunModes = gunMode.map { [$0.key.dx, $0.key.dy, $0.value] } }
+		if channel != 0 { s.channel = channel }
+		if radioAct != 0 { s.radioAct = radioAct }
+		if !walls.isEmpty { s.walls = walls.map { [$0.key.dx, $0.key.dy, Int($0.value)] } }
+		return s
 	}
 
-	/// Damages the player. Returns true if the hit landed.
-	@discardableResult
-	func hurtPlayer(_ info: DamageInfo) -> Bool {
-		if dead { return false }
-		if !canHarm(info.source, targetFaction: .player, targetID: 0, area: info.type.isArea) && info.source.kind != .player { return false }
-		if info.key != 0 {
-			if let last = playerHitStamps[info.key], clock - last < info.cooldown { return false }
-			playerHitStamps[info.key] = clock
-			if playerHitStamps.count > 24 { playerHitStamps = playerHitStamps.filter { clock - $0.value < 4.0 } }
+	static func restore(_ s: VehicleSave) -> Vehicle {
+		let v = Vehicle(id: s.id, first: .frame, x: s.x, y: s.y)
+		v.parts.removeAll()
+		for p in s.parts {
+			let c: PartCell = PartCell(dx: p.dx, dy: p.dy)
+			let t: PartType = PartType(rawValue: p.type) ?? .frame
+			v.parts[c] = t
+			if let tr = p.tile, tr >= 0, tr < 256, let b = Tile(rawValue: UInt8(tr)) { v.blocks[c] = b }
+			else if t == .block { v.blocks[c] = .planks }
+			if let d = p.dmg { v.dmg[c] = d }
+			if let k = p.tilt, k != 0 { v.tilt[c] = clampI(k, -Aero.tiltSteps, Aero.tiltSteps) }
+			if let m = p.span, m.count == 2 { v.spanOf[c] = PartCell(dx: m[0], dy: m[1]) }
 		}
-		if effects.value(.fireproof) > 0 && (info.type == .fire || info.type == .lava) { return false }
-		let before: Double = hp
-		var ward: Double = wearing(.wardenSigil) ? 0.85 : 1.0
-		ward *= 1.0 - clampD(effects.value(.resistance), 0, 90) / 100.0
-		if info.source.kind == .mob && wearing(.silverCharm), let src = mobs.first(where: { $0.id == info.source.id }), isUndead(src.kind) { ward *= 0.75 }
-		// armour infusions and the suit take their share first
-		let amount: Double = guardedAmount(info)
-		if amount <= 0.001 { return false }
-		damagePlayer(amount * dmgInMult * ward, from: info.originX, knock: info.knock * knockTaken, ignoreArmor: info.type.bypassesArmor)
-		if hp < before { thornsBack(info, amount) }
-		if hp < before { customHurtTriggers() }
-		if hp < before && !logicRT.isEmpty { fireLogic(.playerHurt) }
-		return hp < before
-	}
-
-	/// Hits everything (player and creatures) inside a box
-	func damageBox(_ x0: Double, _ y0: Double, _ x1: Double, _ y1: Double, _ info: DamageInfo) {
-		if !dead && pb.right > x0 && pb.left < x1 && pb.y > y0 && pb.top < y1 { _ = hurtPlayer(info) }
-		for m in mobsNear(x0 - 4, x1 + 4) {
-			if m.hp <= 0 { continue }
-			if m.b.right > x0 && m.b.left < x1 && m.b.y > y0 && m.b.top < y1 { applyMobDamage(m, info) }
-		}
-	}
-
-	/// Hits everything within `radius` of a point. With falloff, damage drops to 35% at the edge;
-	/// with lineOfSight, targets behind solid blocks are spared.
-	func damageArea(_ cx: Double, _ cy: Double, radius: Double, _ info: DamageInfo, falloff: Bool, lineOfSight: Bool) {
-		func scaled(_ d: Double) -> DamageInfo {
-			var i: DamageInfo = info
-			if falloff { i.amount = info.amount * (1.0 - 0.65 * clampD(d / radius, 0, 1)) }
-			i.knock = info.knock * (falloff ? (1.0 - 0.5 * clampD(d / radius, 0, 1)) : 1.0)
-			i.originX = cx
-			i.originY = cy
-			return i
-		}
-		if !dead {
-			let d: Double = boxDistance(cx, cy, pb.left, pb.top, pb.right, pb.y)
-			if d <= radius && (!lineOfSight || world.lineClear(cx, cy, pb.x, pb.cy)) { _ = hurtPlayer(scaled(d)) }
-		}
-		for m in mobsNear(cx - radius - 4, cx + radius + 4) {
-			if m.hp <= 0 { continue }
-			let d: Double = boxDistance(cx, cy, m.b.left, m.b.top, m.b.right, m.b.y)
-			if d > radius { continue }
-			if lineOfSight && !world.lineClear(cx, cy, m.b.x, m.b.cy) { continue }
-			applyMobDamage(m, scaled(d))
-		}
-	}
-
-	func boxDistance(_ px: Double, _ py: Double, _ x0: Double, _ y0: Double, _ x1: Double, _ y1: Double) -> Double {
-		let dx: Double = max(0, max(x0 - px, px - x1))
-		let dy: Double = max(0, max(y0 - py, py - y1))
-		return sqrt(dx * dx + dy * dy)
-	}
-
-	// MARK: explosions
-
-	func explode(_ x: Double, _ y: Double, radius: Double, power: Double, source: DamageSource, breakBlocks: Bool) {
-		sfx(.explosion, at: x, 1.0)
-		var info = DamageInfo(amount: power, type: .explosion, source: source)
-		info.knock = 11.0
-		info.key = newID()
-		info.cooldown = 1.0
-		damageArea(x, y, radius: radius, info, falloff: true, lineOfSight: true)
-		// the thrower is not immune to their own bomb, but takes less
-		if source.kind == .player && !dead {
-			let d: Double = boxDistance(x, y, pb.left, pb.top, pb.right, pb.y)
-			if d <= radius && world.lineClear(x, y, pb.x, pb.cy) {
-				damagePlayer(power * 0.45 * (1.0 - 0.65 * clampD(d / radius, 0, 1)), from: x, knock: 9.0)
-			}
-		}
-		if breakBlocks { blastBlocks(x, y, radius: radius, power: power) }
-		if !vehicles.isEmpty { blastVehicles(x, y, radius: radius, power: power) }
-		for s in ships where abs(s.x - x) < radius + 4.5 && abs(s.deckY(Double(WorldGen.sea)) - y) < radius + 2 {
-			s.hp -= power
-			s.hitT = 0.3
-		}
-		spawnParticles(x, y, 0xFFC050, 18, 8.0, 0.5, 2)
-		spawnParticles(x, y, 0x606060, 12, 4.0, 1.0, -3)
-		addShake(0.6)
-		// the blast lights up its surroundings for a moment (the light map floods it through open space,
-		// so walls still cast shadows), fading out over the same time as the fire particles
-		addLightFlash(x, y, peak: 15, dur: 0.75, radius: radius + 2.5)
-	}
-
-	// MARK: hazards for creatures
-
-	/// Lava, fire, spikes, cactus and fall damage for every creature, through the same damage path
-	/// as everything else. Hazards are timed (not per frame) and resistances apply.
-	func mobHazards(_ m: Mob, _ dt: Double) {
-		if m.removed || m.downed { return }
-		if m.hasStatus { mobStatus(m, dt) }
-		if m.hazardT > 0 { m.hazardT -= dt }
-		let b: Body = m.b
-		let def: MobDef = m.def
-		let hw: Double = b.w * 0.5
-		let x0: Double = b.x - hw
-		let x1: Double = b.x + hw
-		let immune: Bool = heatImmune(m)
-		let fx: Int = Int(floor(b.x))
-		// lava: physics already worked out whether the body is in lava; also catch feet just touching it
-		let inLava: Bool = b.inLava || world.tile(fx, Int(floor(b.y - 0.1))) == .lava
-		if inLava && !immune {
-			m.burn = max(m.burn, 3.0)
-			if m.hazardT <= 0 {
-				m.hazardT = 0.35
-				var info = DamageInfo(amount: m.isBoss ? 14 : 6, type: .lava, source: .environment)
-				info.originX = m.b.x
-				applyMobDamage(m, info)
-				if m.hp > 0 && !m.def.flying { m.b.vy = min(m.b.vy, -7.0) }
-			}
-		}
-		// burning
-		if m.burn > 0 {
-			if immune || m.b.inWater {
-				m.burn = 0
-			} else {
-				m.burn -= dt
-				m.burnTick += dt
-				if m.burnTick >= 0.5 {
-					m.burnTick = 0
-					var info = DamageInfo(amount: m.isBoss ? 3 : 2, type: .fire, source: .environment)
-					info.originX = m.b.x
-					applyMobDamage(m, info)
-					spawnParticles(m.b.x, m.b.y - m.b.h * 0.7, 0xFF8030, 2, 1.5, 0.4, -4)
-				}
-			}
-		}
-		// spikes, cactus, campfires (checked every 4th frame per creature, staggered; these only
-		// apply damage on a 0.6 s timer anyway)
-		if !def.flying && m.hazardT <= 0 && (frameNo &+ m.id) & 3 == 0 {
-			if let t = world.boxHurts(x0 + 0.05, m.b.y - 0.6, x1 - 0.05, m.b.y + 0.05) ?? world.boxHurts(x0 - 0.02, m.b.top + 0.1, x1 + 0.02, m.b.y - 0.1) {
-				if t == .spikes || t == .cactus || t.isMod {
-					m.hazardT = 0.6
-					let dmg: Double = t.isMod ? (ModRuntime.shared.blockDef(t)?.power ?? 4) : (t == .spikes ? 5 : 2)
-					var info = DamageInfo(amount: dmg, type: .hazard, source: .environment)
-					info.originX = m.b.x - Double(m.dir)
-					info.knock = 3.0
-					applyMobDamage(m, info)
-				}
-			}
-			let fy: Int = Int(floor(b.y - 0.5))
-			if world.tile(fx, fy) == .campfire && !immune { m.burn = max(m.burn, 2.0) }
-		}
-		// falling (knockback off a ledge counts too)
-		if !def.flying && m.kind != .fish {
-			if !m.b.onGround && m.b.vy > 0 && !m.b.inWater { m.fallPeak = max(m.fallPeak, m.b.vy) }
-			if m.b.onGround || m.b.inWater {
-				if m.fallPeak > 23.0 && !m.b.inWater && !m.isBoss {
-					var info = DamageInfo(amount: (m.fallPeak - 21.0) * 1.5, type: .fall, source: .environment)
-					info.originX = m.b.x
-					applyMobDamage(m, info)
-				}
-				m.fallPeak = 0
-			}
-		}
-	}
-
-	/// Dead creatures topple, fall and fade out for a moment before they are removed
-	func updateDying(_ dt: Double) {
-		for m in mobs where m.hp <= 0 && !m.removed {
-			if m.deathT < 0 { m.deathT = 0 }
-			m.deathT += dt
-			if !m.def.flying || m.deathT > 0.1 {
-				m.b.vy = min(m.b.vy + gravityG * dt, terminalV)
-				m.b.vx *= (1.0 - min(1.0, dt * 4.0))
-				if m.deathT < 0.8 { world.moveBody(&m.b, dt, stepUp: 0, dropThrough: false, decks: []) }
-			}
-			if m.deathT > 0.7 { m.removed = true }
-		}
-	}
-
-	// MARK: player fire
-
-	func updatePlayerBurn(_ dt: Double) {
-		if playerBurn <= 0 { return }
-		if pb.inWater || mode == .creative { playerBurn = 0; return }
-		// the ember charm makes flames die out twice as fast
-		playerBurn -= dt * (wearing(.emberCharm) ? 2.0 : 1.0)
-		playerBurnTick += dt
-		if playerBurnTick >= 0.6 {
-			playerBurnTick = 0
-			var info = DamageInfo(amount: 1, type: .fire, source: .environment)
-			info.originX = pb.x
-			_ = hurtPlayer(info)
-			spawnParticles(pb.x, pb.y - 1.2, 0xFF8030, 2, 1.5, 0.4, -4)
-		}
-	}
-
-	// MARK: falling blocks
-
-	// MARK: light flashes
-
-	func addLightFlash(_ x: Double, _ y: Double, peak: Int, dur: Double, radius: Double, color: UInt32 = 0xFF8A30) {
-		// a cap keeps a chain of explosions from piling up work; the oldest gives way
-		if flashes.count >= 12 { flashes.removeFirst() }
-		flashes.append(LightFlash(x: x, y: y, peak: clampI(peak, 0, 15), dur: dur, radius: radius, color: color))
-	}
-
-	func updateFlashes(_ dt: Double) {
-		if flashes.isEmpty { return }
-		var keep: [LightFlash] = []
-		for f0 in flashes {
-			var f: LightFlash = f0
-			f.age += dt
-			if f.age < f.dur { keep.append(f) }
-		}
-		flashes = keep
-	}
-
-	/// Sand (and a mod's blocks that fall) with nothing under it falls; it hurts whatever it lands on
-	func checkFalling(_ x: Int, _ y: Int) {
-		var yy: Int = y
-		var n: Int = 0
-		while n < 16 && fallsLikeSand(world.tile(x, yy)) {
-			let below: Tile = world.tile(x, yy + 1)
-			if below.supportsThings || below.isPlatform { break }
-			let t: Tile = world.tile(x, yy)
-			world.set(x, yy, .air)
-			fallingBlocks.append(FallingBlock(x: Double(x) + 0.5, y: Double(yy) + 1.0, vy: 0, tile: t, uid: newID()))
-			yy -= 1
-			n += 1
-		}
-	}
-
-	/// Moves the blocks on the move. Sand drops straight down; a thrown block also flies sideways,
-	/// turns, is carried by a storm's wind (less the heavier it is), bounces off walls and slides along
-	/// the ground until it is slow, then settles back into a block (settleBlock). Anything still in the
-	/// air after 14 s settles where it is. A heavy, fast block hurts what it hits.
-	func updateFallingBlocks(_ dt: Double) {
-		if fallingBlocks.isEmpty { return }
-		var keep: [FallingBlock] = []
-		for fb0 in fallingBlocks {
-			var fb: FallingBlock = fb0
-			fb.age += dt
-			fb.vy = min(fb.vy + gravityG * dt, terminalV)
-			if fb.flung {
-				windOnBlock(&fb, dt)
-				fb.vx *= exp(-dt * 0.35)
-				fb.ang += fb.spin * dt
-				let nx: Double = fb.x + fb.vx * dt
-				let side: Double = nx + (fb.vx >= 0 ? 0.45 : -0.45)
-				if world.solid(Int(floor(side)), Int(floor(fb.y - 0.5))) {
-					fb.vx = -fb.vx * 0.3
-					fb.spin *= -0.5
-				} else {
-					fb.x = nx
-				}
-			}
-			let ny: Double = fb.y + fb.vy * dt
-			// crush whatever is in the way while moving fast enough (heavier blocks hit harder)
-			let speed: Double = max(fb.vy, abs(fb.vx))
-			if speed > 4.0 {
-				var info = DamageInfo(amount: (2.0 + speed * 0.4) * clampD(0.5 + fb.mass * 0.3, 0.5, 2.5), type: .crush, source: .environment)
-				info.originX = fb.x
-				info.originY = fb.y - 1.0
-				info.key = fb.uid
-				info.cooldown = 5.0
-				damageBox(fb.x - 0.45, fb.y - 1.0, fb.x + 0.45, max(ny, fb.y), info)
-			}
-			let tx: Int = Int(floor(fb.x))
-			if fb.vy < 0 {
-				// rising: a ceiling stops it
-				if world.solid(tx, Int(floor(ny - 1.0))) { fb.vy = 0 } else { fb.y = ny }
-				keep.append(fb)
-				continue
-			}
-			let landRow: Int = Int(floor(ny))
-			if world.tile(tx, landRow).supportsThings || world.tile(tx, landRow).isPlatform || landRow >= world.H - 2 {
-				if fb.flung && abs(fb.vx) > 2.5 && fb.age < 10 {
-					// still going: a little bounce, and it slides on
-					fb.y = Double(landRow)
-					fb.vy = -min(4.0, fb.vy * 0.25)
-					fb.vx *= 0.55
-					fb.spin *= 0.6
-					keep.append(fb)
-					continue
-				}
-				settleBlock(fb, landRow - 1)
-				spawnParticles(fb.x, Double(landRow), fb.tile.def.colors.first ?? 0xE0D08A, 4, 2.0, 0.3, 10)
-				continue
-			}
-			fb.y = ny
-			if fb.age > 14.0 || fb.y > Double(world.H - 2) {
-				settleBlock(fb, Int(floor(fb.y - 0.5)))
-				continue
-			}
-			keep.append(fb)
-		}
-		fallingBlocks = keep
-	}
-}
-
-/// A burst of light at a fixed spot in the world that fades out (explosions)
-struct LightFlash {
-	var x: Double
-	var y: Double
-	/// light level at the moment it starts (0...15)
-	var peak: Int
-	var age: Double = 0
-	var dur: Double
-	/// glow radius in blocks for the drawn flash
-	var radius: Double
-	/// tint of the drawn glow (explosions are amber, lightning pale blue)
-	var color: UInt32 = 0xFF8A30
-
-	/// 1 at the start, easing smoothly to 0 at the end
-	var strength: Double {
-		let t: Double = clampD(age / max(0.01, dur), 0, 1)
-		let u: Double = 1.0 - t
-		return u * u * (3.0 - 2.0 * u)
-	}
-	/// current light level for the light map
-	var level: Int { return Int((Double(peak) * strength).rounded()) }
-}
-
-/// A block on the move: sand with nothing under it, or a block knocked loose by a blast, a storm or
-/// a structure giving way. x is its centre, y its bottom edge.
-struct FallingBlock {
-	var x: Double
-	var y: Double
-	var vy: Double
-	var tile: Tile
-	var uid: Int
-	var vx: Double = 0
-	/// how it is turned (drawn), and how fast it turns
-	var ang: Double = 0
-	var spin: Double = 0
-	var mass: Double = 1.6
-	var age: Double = 0
-	/// thrown (it slides and bounces before it settles, and the wind carries it)
-	var flung: Bool = false
-	/// it was part of something built (it counts as built again once it settles)
-	var built: Bool = false
-}
-
-// ===== p16b_bosses =====
-
-// MARK: - Bosses (giant bear, T-rex), rex companion
-
-enum BossAtk: Int {
-	case melee, sweep, charge, slam, roar
-}
-
-extension Game {
-	func lairKey(_ L: LairInfo) -> Int {
-		return L.kind.rawValue * 1_000_000 + (L.k + 500_000)
-	}
-
-	func updateBosses(_ dt: Double) {
-		guardianT -= dt
-		let checkGuardians: Bool = guardianT <= 0
-		if checkGuardians { guardianT = 0.25 }
-		if world.dim == .umbral {
-			if checkGuardians { updateWardenSpawn() }
-			refreshBossBar()
-			return
-		}
-		if world.dim.isCustom {
-			refreshBossBar()
-			return
-		}
-		if world.dim != .overworld {
-			activeBoss = nil
-			return
-		}
-		if checkGuardians { updateGuardians() }
-		// the lairs are checked four times a second too (a boss wakes as you approach, not to the frame)
-		if !checkGuardians {
-			refreshBossBar()
-			return
-		}
-		let px: Int = Int(floor(pb.x))
-		for L in gen.lairCenters(near: px) {
-			let key: Int = lairKey(L)
-			if defeated.contains(key) { continue }
-			let dist: Double = abs(Double(L.cx) - pb.x)
-			if suppressedLairs.contains(key) {
-				if dist > 180 { suppressedLairs.remove(key) }
-				continue
-			}
-			var existing: Mob? = nil
-			for m in mobs where m.isBoss && m.lair == key { existing = m }
-			if dist < 90 && existing == nil && world.isLoaded(L.cx) && !dead {
-				spawnBoss(L, key)
-			} else if dist > 180, let e = existing {
-				e.hp = 0
-				mobs.removeAll { $0 === e }
-			}
-		}
-		refreshBossBar()
-	}
-
-	func refreshBossBar() {
-		var best: Mob? = nil
-		var bd: Double = 70
-		for m in mobs where m.isBoss && m.hp > 0 {
-			let d: Double = abs(m.b.x - pb.x)
-			if d < bd { bd = d; best = m }
-		}
-		activeBoss = best
-		if let b = best {
-			bossBarName = bossTitle(b)
-			bossBarFrac = clampD(b.hp / b.maxHP, 0, 1)
-		}
-		// companion housekeeping
-		if let r = rex, r.hp <= 0 && !r.downed { rex = nil }
-	}
-
-	func spawnBoss(_ L: LairInfo, _ key: Int) {
-		let kind: MobKind = L.kind == .bear ? .bearBoss : .rex
-		let floorY: Double = Double(lairFloorRow(gen))
-		let m: Mob = addMob(kind, Double(L.cx) + 0.5, floorY)
-		m.lair = key
-		m.homeX = Double(L.cx)
-		m.homeY = floorY
-		m.st = 3
-		m.t2 = 1.5
-		m.t1 = 2.0
-		m.phase = 1
-		m.persistent = true
-		m.dir = pb.x >= m.b.x ? 1 : -1
-		say(m.def.name + " awakens!", 3.5)
-		sfx(.roar, at: m.b.x, 1.0)
-	}
-
-	func updateBossMob(_ m: Mob, _ dt: Double) {
-		if m.kind == .rex && m.tame {
-			updateRexCompanion(m, dt)
-			return
-		}
-		bossBrain(m, dt)
-	}
-
-	// MARK: boss attack machine
-
-	func bossBrain(_ m: Mob, _ dt: Double) {
-		let isBear: Bool = m.kind == .bearBoss
-		let hpf: Double = m.hp / m.maxHP
-		let newPhase: Int = hpf < 0.5 ? 2 : 1
-		if newPhase != m.phase {
-			m.phase = newPhase
-			if newPhase == 2 {
-				m.st = 1
-				m.atk = BossAtk.roar.rawValue
-				m.t2 = 1.3
-				say(m.def.name + " flies into a rage!", 3.0)
-			}
-		}
-		let enrage: Bool = hpf < 0.25
-		let toP: Double = pb.x - m.b.x
-		let dist: Double = abs(toP)
-		let dirP: Int = toP >= 0 ? 1 : -1
-		let dyP: Double = (pb.y - pb.h * 0.5) - m.b.cy
-		let sp: Double = m.def.speed * (m.phase == 2 ? 1.25 : 1.0) * (enrage ? 1.15 : 1.0)
-		if dead {
-			accelX(m, 0, 20, dt)
-			m.st = 0
-			stepMob(m, dt, stepUp: 2.0)
-			return
-		}
-		switch m.st {
-		case 0:
-			m.dir = dirP
-			if dist > (isBear ? 2.6 : 3.8) {
-				accelX(m, Double(dirP) * sp, 16, dt)
-			} else {
-				accelX(m, 0, 30, dt)
-			}
-			if abs(m.b.x - m.homeX) > 33 && (m.b.x - m.homeX) * Double(dirP) > 0 { accelX(m, 0, 40, dt) }
-			if m.b.hitWall && m.b.onGround { m.b.vy = -12 }
-			m.t1 -= dt
-			if dist < (isBear ? 3.4 : 4.6) && abs(dyP) < 2.8 { contactHurt(m, m.def.dmg * 0.45) }
-			if m.t1 <= 0 { chooseAttack(m, dist) }
-		case 1:
-			accelX(m, 0, 40, dt)
-			if m.t2 > 0.25 { m.dir = dirP }
-			m.tele = m.t2
-			m.t2 -= dt
-			if m.atk == BossAtk.charge.rawValue && Double.random(in: 0...1) < 0.5 {
-				spawnParticles(m.b.x + Double(m.dir) * 1.5, m.b.y, 0xA08860, 1, 3.0, 0.4, 6)
-			}
-			if m.atk == BossAtk.roar.rawValue { addShake(0.1) }
-			if m.t2 <= 0 { beginAttack(m) }
-		case 2:
-			runAttack(m, dt)
-		case 3:
-			accelX(m, 0, 30, dt)
-			m.tele = 0
-			m.t2 -= dt
-			if m.t2 <= 0 {
-				m.st = 0
-				m.t1 = m.phase == 2 ? Double.random(in: 0.8...1.6) : Double.random(in: 1.4...2.6)
-			}
-		case 4:
-			accelX(m, 0, 30, dt)
-			m.t2 -= dt
-			if m.t2 <= 0 { m.st = 0; m.t1 = 0.9 }
-		default:
-			m.st = 0
-		}
-		stepMob(m, dt, stepUp: 2.0)
-	}
-
-	func chooseAttack(_ m: Mob, _ dist: Double) {
-		let isBear: Bool = m.kind == .bearBoss
-		var opts: [(BossAtk, Double)] = []
-		if dist < (isBear ? 6.5 : 8.5) {
-			opts.append((.melee, 5))
-			if !isBear { opts.append((.sweep, 3)) }
-			opts.append((.slam, 2.5))
-			opts.append((.charge, 1.5))
+		if v.parts.isEmpty { v.parts[PartCell(dx: 0, dy: 0)] = .frame }
+		v.auto = s.auto ?? 0
+		v.route = s.route ?? []
+		if let c = s.seat, c.count == 2 { v.seatAt = PartCell(dx: c[0], dy: c[1]) }
+		v.ballast = clampD(s.ballast ?? 0, 0, 1)
+		v.links = s.links ?? []
+		v.parentID = s.parent ?? 0
+		v.gait = s.gait ?? 0
+		for w in s.walls ?? [] where w.count == 3 && w[2] > 0 && w[2] < 256 { v.walls[PartCell(dx: w[0], dy: w[1])] = UInt8(w[2]) }
+		v.recompute(keepAnchor: false)
+		if let r = s.rot {
+			v.px = s.x
+			v.py = s.y
+			v.angle = r
+			v.updateBox()
 		} else {
-			opts.append((.charge, 5))
-			opts.append((.slam, 3))
-			opts.append((.melee, 1))
-			if m.phase == 2 { opts.append((.roar, 2)) }
-		}
-		var total: Double = 0
-		for o in opts { total += o.1 }
-		var r: Double = Double.random(in: 0..<total)
-		var pick: BossAtk = .melee
-		for o in opts {
-			r -= o.1
-			if r <= 0 { pick = o.0; break }
-		}
-		m.atk = pick.rawValue
-		m.st = 1
-		var tt: Double = 0.9
-		switch pick {
-		case .melee: tt = isBear ? 0.95 : 0.8
-		case .sweep: tt = 0.75
-		case .charge: tt = 1.05
-		case .slam: tt = 0.95
-		case .roar: tt = 1.3
-		}
-		if m.phase == 2 { tt *= 0.8 }
-		m.t2 = tt
-		m.dir = pb.x >= m.b.x ? 1 : -1
-	}
-
-	func beginAttack(_ m: Mob) {
-		m.st = 2
-		m.t3 = 0
-		m.tele = 0
-		m.knock = 0
-		let a: BossAtk = BossAtk(rawValue: m.atk) ?? .melee
-		switch a {
-		case .melee: m.t2 = 0.4
-		case .sweep: m.t2 = 0.35
-		case .charge: m.t2 = 1.6
-		case .slam:
-			m.t2 = 2.4
-			m.b.vy = -17.0
-			m.tx = pb.x
-			m.t3 = 0
-		case .roar:
-			m.t2 = 3.2
-			m.ty = 0
-			addShake(0.35)
-		}
-	}
-
-	func runAttack(_ m: Mob, _ dt: Double) {
-		let isBear: Bool = m.kind == .bearBoss
-		let a: BossAtk = BossAtk(rawValue: m.atk) ?? .melee
-		m.t2 -= dt
-		switch a {
-		case .melee:
-			accelX(m, Double(m.dir) * (isBear ? 0.0 : 6.0), 30, dt)
-			if m.t3 == 0 {
-				let reach: Double = isBear ? 5.6 : 7.6
-				let fx0: Double = m.dir > 0 ? m.b.x - 0.5 : m.b.x - reach
-				let fx1: Double = m.dir > 0 ? m.b.x + reach : m.b.x + 0.5
-				var info = DamageInfo(amount: m.def.dmg, type: .melee, source: .mob(m, .boss))
-				info.dirX = Double(m.dir)
-				info.knock = 10.0
-				info.originX = m.b.x
-				info.key = newID()
-				damageBox(fx0, m.b.top - 0.5, fx1, m.b.y + 0.2, info)
-				addShake(0.3)
-				m.t3 = 1
-				spawnParticles(m.b.x + Double(m.dir) * (reach * 0.6), m.b.y - 1.6, 0xE8E0D0, 6, 5.0, 0.3, 4)
-			}
-			if m.t2 <= 0 { m.st = 3; m.t2 = 0.8 }
-		case .sweep:
-			accelX(m, 0, 30, dt)
-			if m.t3 == 0 {
-				var info = DamageInfo(amount: m.def.dmg * 0.75, type: .stomp, source: .mob(m, .boss))
-				info.knock = 11.0
-				info.originX = m.b.x
-				info.key = newID()
-				damageBox(m.b.x - 7.0, m.b.y - 2.0, m.b.x + 7.0, m.b.y + 0.3, info)
-				m.t3 = 1
-				addShake(0.25)
-				spawnParticles(m.b.x - Double(m.dir) * 4.5, m.b.y - 0.4, 0xA08860, 8, 5.0, 0.4, 6)
-			}
-			if m.t2 <= 0 { m.st = 3; m.t2 = 0.8 }
-		case .charge:
-			let spd: Double = (isBear ? 13.0 : 11.5) * (m.phase == 2 ? 1.15 : 1.0)
-			m.b.vx = Double(m.dir) * spd
-			if Double.random(in: 0...1) < 0.7 { spawnParticles(m.b.x - Double(m.dir) * 2.0, m.b.y, 0xA08860, 1, 3.0, 0.4, 6) }
-			// the charge tramples everything in its path, one hit per target
-			var info = DamageInfo(amount: m.def.dmg * 1.3, type: .impact, source: .mob(m, .boss))
-			info.dirX = Double(m.dir)
-			info.knock = 13.0
-			info.originX = m.b.x
-			info.key = m.id &* 1000 &+ Int(m.t2 > 0 ? 1 : 0) &+ m.atk
-			info.cooldown = 1.2
-			damageBox(m.b.left - 0.1, m.b.top, m.b.right + 0.1, m.b.y + 0.1, info)
-			if m.b.hitWall {
-				m.st = 4
-				m.t2 = 1.8
-				m.b.vx = 0
-				addShake(0.6)
-				spawnParticles(m.b.x + Double(m.dir) * 2.5, m.b.y - 2.0, 0x9A9A9A, 20, 6.0, 0.7, 18)
-				rainRocks(m, 3)
-			} else if m.t2 <= 0 {
-				m.st = 3
-				m.t2 = 0.9
-			}
-		case .slam:
-			if !m.b.onGround { m.t3 = 1 }
-			let flight: Double = 0.95
-			if m.t3 == 0 || !m.b.onGround {
-				let target: Double = clampD(m.tx, m.homeX - 33, m.homeX + 33)
-				m.b.vx = clampD((target - m.b.x) / flight, -11, 11)
-			}
-			if m.b.onGround && m.t3 == 1 {
-				addShake(0.7)
-				spawnParticles(m.b.x, m.b.y, 0xA08860, 24, 7.0, 0.6, 10)
-				let sp: Double = isBear ? 9.0 : 8.0
-				for sgn in [-1.0, 1.0] {
-					var p = Projectile(kind: .shock, x: m.b.x + sgn * (m.b.w * 0.5), y: m.b.y - 0.5, vx: sgn * sp, vy: 0, dmg: m.def.dmg * 0.8, fromPlayer: false, gravity: 0)
-					p.life = 3.0
-					p.w = 0.6
-					p.source = .mob(m, .boss)
-					p.uid = newID()
-					projectiles.append(p)
-				}
-				// the landing itself: everything under and right beside the body
-				var info = DamageInfo(amount: m.def.dmg, type: .stomp, source: .mob(m, .boss))
-				info.knock = 9.0
-				info.originX = m.b.x
-				info.key = newID()
-				damageArea(m.b.x, m.b.y - 0.5, radius: m.b.w * 0.5 + 1.2, info, falloff: true, lineOfSight: false)
-				m.st = 3
-				m.t2 = 1.0
-				m.b.vx = 0
-			} else if m.t2 <= 0 {
-				m.st = 3
-				m.t2 = 0.8
-			}
-		case .roar:
-			accelX(m, 0, 30, dt)
-			addShake(0.15)
-			m.ty -= dt
-			if m.ty <= 0 {
-				m.ty = 0.42
-				rainRocks(m, 1)
-			}
-			if m.t2 <= 0 { m.st = 3; m.t2 = 1.0 }
-		}
-	}
-
-	func rainRocks(_ m: Mob, _ n: Int) {
-		for _ in 0..<n {
-			let rx: Double = clampD(pb.x + Double.random(in: -9...9), m.homeX - 36, m.homeX + 36)
-			var p = Projectile(kind: .rock, x: rx, y: m.b.y - 17.0, vx: 0, vy: 0, dmg: 16, fromPlayer: false, gravity: 26)
-			p.life = 5.0
-			p.w = 0.9
-			// falling rocks hurt anyone underneath, the boss's own minions included
-			p.source = .mob(m, .boss)
-			p.uid = newID()
-			projectiles.append(p)
-			spawnParticles(rx, m.b.y - 0.3, 0x8A8A8A, 2, 1.0, 0.8, 0)
-		}
-	}
-
-	// MARK: rewards
-
-	func onBearDefeated(_ m: Mob) {
-		defeated.insert(m.lair)
-		addShake(0.8)
-		spawnDrop(Stack(item: .gadget(.portalKey), count: 1), m.b.x, m.b.y - 2.0, 0, -6.0)
-		spawnDrop(Stack(item: .gadget(.treasureMap), count: 1), m.b.x + 0.8, m.b.y - 2.0, 1.0, -6.0)
-		gotMap = true
-		say(m.def.name + " has fallen! It dropped a Portal Key and a Treasure Map.", 6.0)
-		spawnParticles(m.b.x, m.b.cy, 0xFFE070, 40, 9.0, 1.2, 8)
-	}
-
-	func onRexDefeated(_ m: Mob) {
-		defeated.insert(m.lair)
-		addShake(0.8)
-		spawnParticles(m.b.x, m.b.cy, 0xFFE070, 40, 9.0, 1.2, 8)
-		if rex == nil {
-			m.tame = true
-			m.persistent = true
-			m.maxHP = 700
-			m.hp = 420
-			m.downed = false
-			m.st = 0
-			m.phase = 1
-			m.lair = 0
-			rex = m
-			say(m.def.name + " bows its head. It will follow you now. Tap it to ride!", 6.0)
-		} else {
-			say(m.def.name + " has fallen!", 4.0)
-		}
-	}
-
-	// MARK: companion
-
-	func downRex(_ m: Mob) {
-		m.downed = true
-		m.hp = 1
-		m.t1 = 40
-		m.mounted = false
-		if mounted === m {
-			dismount()
-		}
-		floatText("Tyrannax is down!", m.b.x, m.b.top - 0.5, 0xFF6060)
-		say("Tyrannax collapsed. It will recover in a moment.", 3.0)
-	}
-
-	func nearestGround(_ x: Double, _ y: Double) -> Double {
-		let ix: Int = Int(floor(x))
-		var yy: Int = Int(floor(y)) - 8
-		var n: Int = 0
-		while n < 40 {
-			if world.solid(ix, yy) { return Double(yy) }
-			yy += 1
-			n += 1
-		}
-		return y
-	}
-
-	func teleportRexNearPlayer(_ m: Mob) {
-		let side: Double = Double(-facing)
-		var x: Double = pb.x + side * 6.0
-		if !world.isLoaded(Int(floor(x))) { x = pb.x }
-		// find a free spot big enough
-		var y: Double = pb.y
-		var tries: Int = 0
-		while tries < 4 && world.boxSolid(x - m.b.w * 0.5, y - m.b.h, x + m.b.w * 0.5, y - 0.05) {
-			x = pb.x + side * (6.0 + Double(tries) * 3.0)
-			y = nearestGround(x, pb.y - 6.0)
-			tries += 1
-		}
-		if world.boxSolid(x - m.b.w * 0.5, y - m.b.h, x + m.b.w * 0.5, y - 0.05) {
-			// carve space if the area is blocked
-			let x0: Int = Int(floor(x - m.b.w * 0.5))
-			let x1: Int = Int(ceil(x + m.b.w * 0.5))
-			let y0: Int = Int(floor(y - m.b.h))
-			let y1: Int = Int(ceil(y)) - 1
-			for tx in x0...x1 { for ty in y0...y1 { if world.tile(tx, ty).solid && world.tile(tx, ty).def.hard < 9000 { world.set(tx, ty, .air) } } }
-		}
-		m.b.x = x
-		m.b.y = y
-		m.b.vx = 0
-		m.b.vy = 0
-		m.stuckT = 0
-		m.lastX = x
-	}
-
-	func updateRexCompanion(_ m: Mob, _ dt: Double) {
-		if m.downed {
-			m.t1 -= dt
-			m.b.vx = 0
-			m.b.vy = min(m.b.vy + gravityG * dt, terminalV)
-			world.moveBody(&m.b, dt, stepUp: 0, dropThrough: false, decks: [])
-			if m.t1 <= 0 {
-				m.downed = false
-				m.hp = m.maxHP * 0.5
-				floatText("Tyrannax rises!", m.b.x, m.b.top - 0.5, 0x80FF80)
-			}
-			return
-		}
-		if mounted === m { return }
-		m.hp = min(m.maxHP, m.hp + dt * 1.2)
-		let toP: Double = pb.x - m.b.x
-		let dist: Double = abs(toP)
-		if dist > 70 || abs(pb.y - m.b.y) > 40 || m.stuckT > 4.0 {
-			if dist > 12 || abs(pb.y - m.b.y) > 6 { teleportRexNearPlayer(m) }
-			m.stuckT = 0
-		}
-		var target: Mob? = nil
-		if !dead { target = nearestHostileTo(m.b.x, m.b.cy, 13.0) }
-		if let t = target, t.hp > 0, !t.isBoss {
-			let dx: Double = t.b.x - m.b.x
-			m.dir = dx >= 0 ? 1 : -1
-			if abs(dx) > 4.2 { accelX(m, Double(m.dir) * 5.5, 22, dt) } else { accelX(m, 0, 30, dt) }
-			if m.cd <= 0 && abs(dx) < 5.6 && abs(t.b.cy - m.b.cy) < 3.5 {
-				m.st = 2
-				m.t2 = 0.3
-				m.cd = 1.1
-				hurtMob(t, 28, Double(m.dir), 9.0, true)
-			}
-		} else if dist > 7.5 {
-			m.dir = toP >= 0 ? 1 : -1
-			let sp: Double = dist > 25 ? 11.0 : 6.0
-			accelX(m, Double(m.dir) * sp, 24, dt)
-		} else {
-			accelX(m, 0, 24, dt)
-			if dist > 1 { m.dir = toP >= 0 ? 1 : -1 }
-		}
-		if m.st == 2 {
-			m.t2 -= dt
-			if m.t2 <= 0 { m.st = 0 }
-		}
-		if m.b.hitWall && m.b.onGround { m.b.vy = -16.0 }
-		// stuck detection
-		m.t3 += dt
-		if m.t3 >= 0.5 {
-			m.t3 = 0
-			let moved: Double = abs(m.b.x - m.lastX)
-			m.lastX = m.b.x
-			if moved < 0.15 && abs(m.b.vx) > 0.5 && dist > 8 { m.stuckT += 0.5 } else if moved >= 0.15 { m.stuckT = 0 }
-		}
-		stepMob(m, dt, stepUp: 2.0)
-	}
-
-	func mountRex(_ m: Mob) {
-		if m.downed { say("Tyrannax is recovering.", 2.0); return }
-		if inVehicle != nil { return }
-		if abs(m.b.x - pb.x) > 9 || abs(m.b.y - pb.y) > 8 { say("Get closer to ride.", 2.0); return }
-		mounted = m
-		m.mounted = true
-		pb.vx = 0
-		pb.vy = 0
-		say("Riding Tyrannax. Bite attacks are automatic!", 2.5)
-		bumpHUD()
-	}
-
-	func rideRex(_ r: Mob, _ ix: Double, _ jumpPressed: Bool, _ dt: Double) {
-		if r.downed || r.hp <= 0 {
-			dismount()
-			return
-		}
-		if ix != 0 { r.dir = ix > 0 ? 1 : -1 }
-		let target: Double = ix * 10.0
-		accelX(r, target, 40, dt)
-		if jumpPressed && r.b.onGround { r.b.vy = -19.0 }
-		if r.cd > 0 { r.cd -= dt }
-		if r.st == 2 {
-			r.t2 -= dt
-			if r.t2 <= 0 { r.st = 0 }
-		}
-		// auto bite
-		if r.cd <= 0 {
-			var bestM: Mob? = nil
-			var bd: Double = 6.5
-			for o in mobs {
-				if o === r || o.hp <= 0 || o.tame { continue }
-				let dx: Double = (o.b.x - r.b.x) * Double(r.dir)
-				if dx < -1.0 { continue }
-				let d: Double = abs(o.b.x - r.b.x) - o.b.w * 0.5
-				if d < bd && abs(o.b.cy - r.b.cy) < 3.8 && (!o.isBoss || true) { bd = d; bestM = o }
-			}
-			if let t = bestM {
-				hurtMob(t, 26, Double(r.dir), 9.0, true)
-				r.st = 2
-				r.t2 = 0.3
-				r.cd = 0.9
-			}
-		}
-		stepMob(r, dt, stepUp: 2.0)
-		pb.x = r.b.x - Double(r.dir) * 0.5
-		pb.y = r.b.y - 3.4
-		pb.vx = 0
-		pb.vy = 0
-		facing = r.dir
-		fallPeak = 0
-		walkAnim += dt * 2
-	}
-
-	func dismount() {
-		if let r = mounted {
-			r.mounted = false
-			pb.x = r.b.x + Double(-r.dir) * 1.5
-			pb.y = r.b.y
-			pb.vx = 0
-			pb.vy = 0
-			mounted = nil
-			invuln = max(invuln, 0.5)
-		}
-		if let v = inVehicle {
-			v.rider = false
-			v.throttle = 0
-			v.pitch = 0
-			pb.x = v.b.x
-			pb.y = v.b.y - v.b.h - 0.1
-			pb.vx = 0
-			pb.vy = 0
-			inVehicle = nil
-		}
-		bumpHUD()
-	}
-}
-
-// ===== p17_vehicles_ships =====
-
-// MARK: - Vehicle driving and rigid-body physics
-
-/// One collision sample on a vehicle part: where it is on the part (vehicle space), whether it
-/// belongs to a wheel (wheels roll and push), and whether block corners act as ramps for it
-/// (wheels and the underside of hulls, so cars climb steps and boats slide on and off beaches)
-struct VSample {
-	var lx: Double
-	var ly: Double
-	var wheel: Bool
-	var ramp: Bool
-	var hull: Bool
-	/// a track (grips harder than a wheel and rolls less freely)
-	var track: Bool = false
-	/// a rail wheel (rolls almost freely on rails, drags elsewhere)
-	var rail: Bool = false
-	/// the cell it belongs to (a hard crash damages that part)
-	var cx: Int = 0
-	var cy: Int = 0
-}
-
-/// Water a part displaces when fully under (in tiles of water). Every part floats a little; hulls a
-/// lot. Parts without displacement (the old model) made engines and propellers drag boats under.
-func partDisplacement(_ p: PartType) -> Double {
-	switch p {
-	case .hinge, .servo, .piston: return 0.5
-	case .receiver: return 0.2
-	case .railWheel: return 0.5
-	case .coupler: return 0.3
-	case .bigWheel: return 3.0
-	case .flap: return 0.3
-	case .airBrake, .stabilizer: return 0.2
-	case .ballast: return 1.0
-	case .hull: return 4.0
-	case .fuelTank: return 1.0
-	case .frame: return 0.8
-	case .seat: return 0.5
-	case .wheel: return 0.5
-	case .engine: return 0.7
-	case .steering: return 0.2
-	case .propeller: return 0.25
-	case .paddle: return 0.3
-	case .drill, .diamondDrill, .voidDrill: return 0.3
-	case .offroadWheel: return 0.5
-	case .headlight: return 0.2
-	case .cargo: return 0.9
-	case .block: return 1.0
-	case .cockpit: return 0.6
-	case .wing: return 0.3
-	case .elevator: return 0.2
-	case .airProp: return 0.25
-	case .jet: return 0.6
-	case .rotor: return 0.3
-	case .tailRotor: return 0.2
-	case .envelope: return 0.15
-	case .burner: return 0.4
-	case .track: return 0.6
-	case .armor: return 0.5
-	case .cannon: return 0.6
-	case .autoGun: return 0.3
-	case .autopilot: return 0.2
-	}
-}
-
-/// Fixed physics step for vehicles (seconds). Simulating in fixed steps makes boats and cars behave
-/// the same at 30 and 60 frames per second.
-let vehicleStep: Double = 1.0 / 120.0
-
-/// One place a vehicle touches the land in a physics step: where (from its centre of mass), which way
-/// the surface faces, how hard a push there turns and moves it, how fast it must be leaving the surface
-/// afterwards (its bounce), its grip, and the pushes given so far along the surface's face and along it
-struct VContact {
-	var rx: Double
-	var ry: Double
-	var nx: Double
-	var ny: Double
-	var rn: Double
-	var kn: Double
-	var rt: Double
-	var kt: Double
-	var want: Double
-	var mu: Double
-	var jn: Double = 0
-	var jt: Double = 0
-	/// a wheel's contact, and the grip of what it touches (for driving along it)
-	var wheel: Bool = false
-	var grip: Double = 1
-	/// another vehicle it touches (nil: the land): where the place is from that one's centre of mass, how
-	/// hard a push there turns it, and how easily it moves (0 while it is at rest or not being stepped)
-	var other: Vehicle? = nil
-	var ox: Double = 0
-	var oy: Double = 0
-	var on: Double = 0
-	var ot: Double = 0
-	var oInvM: Double = 0
-	var oInvI: Double = 0
-}
-
-/// Per-frame contact summary gathered over the fixed steps
-struct VStepStats {
-	var anyHits: Int = 0
-	var wheelHits: Int = 0
-	var wet: Double = 0
-	var nearWater: Bool = false
-	var rammed: [(Int, Int)] = []
-	/// the hardest hit each part took (speed into the ground beyond what it shrugs off)
-	var crash: [PartCell: Double] = [:]
-	/// hard hits on other vehicles' cells (their id, the cell, the speed beyond a landing)
-	var crashOther: [(Int, PartCell, Double)] = []
-	/// the vehicle it last stood on (0: none)
-	var restOn: Int = 0
-}
-
-/// How far a vehicle met by another in one step is to be moved out of it (the most each way)
-struct VPush {
-	let o: Vehicle
-	var right: Double = 0
-	var left: Double = 0
-	var down: Double = 0
-	var up: Double = 0
-}
-
-/// What a vehicle met of the other vehicles in one step
-struct VMeet {
-	var hits: Int = 0
-	/// its wheels standing on another vehicle, and the one most of them stand on (it takes the
-	/// push back when they drive)
-	var wheelsUnder: Int = 0
-	var wheelOn: Vehicle? = nil
-	var wheelOnN: Int = 0
-	var right: Double = 0
-	var left: Double = 0
-	var down: Double = 0
-	var up: Double = 0
-	var pushes: [VPush] = []
-}
-
-/// One vehicle's frame of physics while all of them are stepped together
-final class VRun {
-	let v: Vehicle
-	let samples: [VSample]
-	let throttle: Double
-	let airBusy: Bool
-	let n: Int
-	var stats: VStepStats = VStepStats()
-	/// the other vehicles near enough to meet it this frame
-	var near: [Vehicle] = []
-	/// where it was at the start of the frame (a machine's sections judge stillness by how far they went)
-	let x0: Double
-	let y0: Double
-	let a0: Double
-
-	init(_ v: Vehicle, _ samples: [VSample], _ throttle: Double, _ airBusy: Bool, _ n: Int) {
-		self.v = v
-		self.samples = samples
-		self.throttle = throttle
-		self.airBusy = airBusy
-		self.n = n
-		self.x0 = v.px
-		self.y0 = v.py
-		self.a0 = v.angle
-	}
-}
-
-extension Game {
-	func updateVehicles(_ dt: Double) {
-		let t0: Double = perfNow()
-		radioControls(dt)
-		jointControls(dt)
-		stepVehicles(vehicles, dt)
-		formCouplings(dt)
-		// weapons, the autopilot, turns and damage (also for a vehicle at rest)
-		for v in vehicles { vehicleExtras(v, dt) }
-		flushVehicleBlasts()
-		if vehicles.contains(where: { $0.parts.isEmpty }) { vehicles.removeAll { $0.parts.isEmpty } }
-		Perf.shared.physMs = Perf.smooth(Perf.shared.physMs, perfNow() - t0)
-	}
-
-	/// What the player weighs on whatever they stand on (a vehicle frame is 1)
-	var playerMass: Double { return Phys.playerMass }
-
-	/// The seat the driver sits in: the one they got in by, or else the first (topmost, then leftmost)
-	func seatCell(_ v: Vehicle) -> PartCell? {
-		if let c = v.seatAt, let t = v.parts[c], t == .seat || t == .cockpit { return c }
-		var best: PartCell? = nil
-		for (c, t) in v.parts where t == .seat || t == .cockpit {
-			if let b = best, b.dy < c.dy || (b.dy == c.dy && b.dx < c.dx) { continue }
-			best = c
-		}
-		return best
-	}
-
-	/// Collision samples: the four corners and edge midpoints of square parts; a ring for wheels.
-	/// Hull samples follow the visible hull (its art leaves the top quarter of the cell empty).
-	func vehicleSamples(_ v: Vehicle) -> [VSample] {
-		// (worked out again only when the vehicle changes: a big ship has thousands)
-		if v.sampleKey == v.artRev && !v.sampleCache.isEmpty { return v.sampleCache }
-		let made: [VSample] = makeVehicleSamples(v)
-		v.sampleCache = made
-		v.sampleKey = v.artRev
-		return made
-	}
-
-	func makeVehicleSamples(_ v: Vehicle) -> [VSample] {
-		var out: [VSample] = []
-		out.reserveCapacity(v.parts.count * 8)
-		// on a boat every part slides like a hull (engine and propeller included)
-		let boat: Bool = v.buoyancy > 0 && v.wheels < 2
-		for (c, t) in v.parts {
-			let x0: Double = Double(c.dx)
-			let y0: Double = Double(c.dy)
-			if isWheelPart(t) {
-				if let m = v.spanOf[c], m != c { continue }
-				var k: Int = 0
-				let tr: Bool = t == .track
-				// (a big wheel: one ring three cells across round its middle)
-				let big: Bool = t == .bigWheel
-				let r: Double = big ? 1.47 : 0.47
-				let n: Int = big ? 22 : 10
-				while k < n {
-					let a: Double = Double(k) / Double(n) * 2.0 * Double.pi
-					var smp: VSample = VSample(lx: x0 + 0.5 + cos(a) * r, ly: y0 + 0.5 + sin(a) * r, wheel: true, ramp: true, hull: false, track: tr, cx: c.dx, cy: c.dy)
-					smp.rail = t == .railWheel
-					out.append(smp)
-					k += 1
-				}
-			} else {
-				let isHull: Bool = t == .hull
-				let top: Double = isHull ? 0.25 : 0.02
-				let mid: Double = isHull ? 0.6 : 0.5
-				let pts: [(Double, Double)] = [(0.02, top), (0.5, isHull ? 0.25 : 0.0), (0.98, top), (1.0, mid), (0.98, 0.98), (0.5, 1.0), (0.02, 0.98), (0.0, mid)]
-				for p in pts {
-					// only outer edges can touch the world
-					let nx: Int = p.0 < 0.25 ? -1 : (p.0 > 0.75 ? 1 : 0)
-					let ny: Int = p.1 < 0.3 ? -1 : (p.1 > 0.75 ? 1 : 0)
-					let openX: Bool = nx == 0 || v.parts[PartCell(dx: c.dx + nx, dy: c.dy)] == nil
-					let openY: Bool = ny == 0 || v.parts[PartCell(dx: c.dx, dy: c.dy + ny)] == nil
-					if openX || openY {
-						out.append(VSample(lx: x0 + p.0, ly: y0 + p.1, wheel: false, ramp: (isHull || boat) && p.1 > 0.75, hull: isHull || boat, cx: c.dx, cy: c.dy))
-					}
-				}
-			}
-		}
-		return out
-	}
-
-	/// How far a point is inside solid ground and which way is out (the exposed face it is nearest).
-	/// For ramp samples (wheels, hull bottoms), the top corner of a block with open space above acts
-	/// like a slope, so cars roll up one-block steps and boats slide over beach steps instead of jamming.
-	func penetration(_ x: Double, _ y: Double, wheel: Bool = false) -> (Double, Double, Double)? {
-		let tx: Int = Int(floor(x))
-		let ty: Int = Int(floor(y))
-		if !world.tile(tx, ty).solid { return nil }
-		var best: Double = 9
-		var nx: Double = 0
-		var ny: Double = -1
-		let up: Double = y - Double(ty)
-		let down: Double = Double(ty + 1) - y
-		let left: Double = x - Double(tx)
-		let right: Double = Double(tx + 1) - x
-		let topOpen: Bool = !world.tile(tx, ty - 1).solid
-		if wheel && topOpen && up < 0.8 {
-			let leftOpen: Bool = !world.tile(tx - 1, ty).solid
-			let rightOpen: Bool = !world.tile(tx + 1, ty).solid
-			if leftOpen && left < up { return (up * 0.75, -0.6, -0.8) }
-			if rightOpen && right < up { return (up * 0.75, 0.6, -0.8) }
-			return (up, 0, -1)
-		}
-		// prefer resting on top over catching on a side when barely inside
-		if topOpen && up < 0.3 { return (up, 0, -1) }
-		if topOpen && up < best { best = up; nx = 0; ny = -1 }
-		if !world.tile(tx - 1, ty).solid && left < best { best = left; nx = -1; ny = 0 }
-		if !world.tile(tx + 1, ty).solid && right < best { best = right; nx = 1; ny = 0 }
-		if !world.tile(tx, ty + 1).solid && down < best { best = down; nx = 0; ny = 1 }
-		if best > 8 { best = up; nx = 0; ny = -1 }
-		return (best, nx, ny)
-	}
-
-	/// How much of a 1x1 part centred at (x, cy) is under water, 0...1, from the real water surface
-	/// in that column (continuous, so buoyancy changes smoothly instead of in jumps)
-	func submergedFraction(_ x: Double, _ cy: Double, reach: Double = 0) -> Double {
-		let tx: Int = Int(floor(x))
-		let bottom: Double = cy + 0.5 + reach
-		let start: Int = Int(floor(cy - 0.5))
-		let end: Int = Int(floor(bottom))
-		var y: Int = start
-		while y <= end {
-			let t: Tile = world.tile(tx, y)
-			if t.liquid {
-				var top: Int = y
-				if y == start {
-					// already under at the part's top: find the surface above
-					var k: Int = 0
-					while k < 6 && world.tile(tx, top - 1).liquid { top -= 1; k += 1 }
-				}
-				// (the top cell may be only part full: its surface is lower)
-				let surface: Double = Double(top) + 1.0 - world.liquidAmount(tx, top)
-				return clampD(bottom - surface, 0, 1)
-			}
-			y += 1
-		}
-		return 0
-	}
-
-	/// How dense the liquid at a point is (water 1; no liquid: water's)
-	func liquidDensity(_ x: Double, _ y: Double) -> Double {
-		let t: Tile = world.tile(Int(floor(x)), Int(floor(y + 0.4)))
-		if !t.liquid || t == .water { return 1.0 }
-		return Liquids.def(t)?.density ?? 1.0
-	}
-
-	/// True when every chunk under (and next to) the vehicle is loaded. Otherwise the vehicle waits:
-	/// unloaded chunks read as stone, which used to shove boats and cars around at chunk edges.
-	func vehicleAreaLoaded(_ v: Vehicle) -> Bool {
-		let c0: Int = floorDiv(Int(floor(v.b.left)) - 2, chunkW)
-		let c1: Int = floorDiv(Int(floor(v.b.right)) + 2, chunkW)
-		var c: Int = c0
-		while c <= c1 {
-			if world.chunks[c] == nil && world.inRange(c) { return false }
-			c += 1
-		}
-		return true
-	}
-
-	/// One vehicle's frame of physics (the others it meets are pushed, but not stepped)
-	func stepVehicle(_ v: Vehicle, _ dt: Double) {
-		stepVehicles([v], dt)
-	}
-
-	/// Every vehicle's physics for one frame, in step with each other: fixed step k of every vehicle is
-	/// done before step k + 1 of any, so vehicles that meet push each other at the same moment. Each one
-	/// still splits its own steps as finely as its speed (and how fast it closes on the others) needs.
-	func stepVehicles(_ list: [Vehicle], _ dt: Double) {
-		var runs: [VRun] = []
-		var resting: [Vehicle] = []
-		for v in list {
-			if let r = startVehicleFrame(v, dt) { runs.append(r) } else if v.asleep && v.restOn != 0 { resting.append(v) }
-		}
-		// a vehicle at rest on another that moves now wakes with it (it is carried, or slides off)
-		for v in resting {
-			guard let o = vehicleByID(v.restOn), runs.contains(where: { $0.v === o }) else { continue }
-			v.asleep = false
-			v.sleepT = 0
-			if let r = startVehicleFrame(v, dt) { runs.append(r) }
-		}
-		if runs.isEmpty { return }
-		for r in runs { r.v.inStep = true }
-		if vehicles.count > 1 {
-			for r in runs { r.near = vehiclesNear(r.v, dt) }
-		}
-		var most: Int = 0
-		for r in runs { most = max(most, r.n) }
-		var k: Int = 0
-		let linked: Bool = vehicles.contains { !$0.links.isEmpty }
-		let jointed: Bool = vehicles.contains { !$0.joints.isEmpty }
-		while k < most {
-			for r in runs where k < r.n { vehicleFixedStep(r) }
-			if linked { solveCouplings(vehicleStep) }
-			if jointed { solveJoints(vehicleStep) }
-			k += 1
-		}
-		for r in runs { r.v.inStep = false }
-		for r in runs { finishVehicleFrame(r, dt) }
-	}
-
-	/// The other vehicles a vehicle could meet this frame (boxes within what both can travel)
-	func vehiclesNear(_ v: Vehicle, _ dt: Double) -> [Vehicle] {
-		var out: [Vehicle] = []
-		let t: Double = min(dt, 0.1)
-		let mine: Double = (v.speed + abs(v.angVel) * v.radius) * t + 0.6
-		for o in vehicles where o !== v && !o.parts.isEmpty {
-			let r: Double = mine + (o.speed + abs(o.angVel) * o.radius) * t
-			if o.b.right < v.b.left - r || o.b.left > v.b.right + r || o.b.y < v.b.top - r || o.b.top > v.b.y + r { continue }
-			out.append(o)
-		}
-		return out
-	}
-
-	/// Before a vehicle's fixed steps: whether it moves at all this frame (a vehicle at rest stays at rest
-	/// until something wakes it), and how many fixed steps it takes
-	func startVehicleFrame(_ v: Vehicle, _ dt: Double) -> VRun? {
-		if !vehicleAreaLoaded(v) { return nil }
-		let throttle: Double = v.rider || v.auto != 0 || v.signalDrive ? v.throttle : 0
-		let airBusy: Bool = v.aero && (abs(v.pitch) > 0.05 || v.heat > 0.02 || v.collective > 0.02 || v.turnT > 0)
-		if v.asleep && abs(throttle) < 0.05 && !v.drilling && !airBusy {
-			// resting vehicles cost nothing until something wakes them (one resting on another vehicle
-			// sleeps while that one does)
-			var held: Bool = world.boxSolid(v.b.left + 0.05, v.b.y + 0.02, v.b.right - 0.05, v.b.y + 0.2) || v.submerged > 0
-			if v.restOn != 0 { held = vehicleByID(v.restOn)?.asleep ?? false }
-			// (a section of a machine is held by the one it hangs from)
-			if v.parentID != 0 { held = vehicleByID(v.parentID)?.asleep ?? false }
-			if held { return nil }
-		}
-		v.asleep = false
-		let samples: [VSample] = vehicleSamples(v)
-		// fixed steps: the same motion whatever the frame rate (leftover time carries to the next frame)
-		v.physAccum += min(dt, 0.1)
-		var n: Int = Int(v.physAccum / vehicleStep)
-		if n > 12 { n = 12; v.physAccum = 0 } else { v.physAccum -= Double(n) * vehicleStep }
-		return VRun(v, samples, throttle, airBusy, n)
-	}
-
-	/// One fixed step of a vehicle, split as often as its speed needs
-	func vehicleFixedStep(_ r: VRun) {
-		let v: Vehicle = r.v
-		// Nothing may move further than Phys.maxStep between collision checks, however fast it goes:
-		// the step is split as often as the speed needs. With no land or water anywhere it could
-		// reach in this step there is nothing to check against, and one step does (open sky is free).
-		let fast: Double = v.speed + abs(v.angVel) * v.radius
-		let travel: Double = fast * vehicleStep
-		var split: Int = 1
-		var open: Bool = false
-		if travel > Phys.maxStep * 0.5 || v.contacts == 0 {
-			let rr: Double = travel + 1.0
-			open = world.boxOpen(v.b.left - rr, v.b.top - rr, v.b.right + rr, v.b.y + rr)
-			if !open { split = min(Phys.maxSplit, max(1, Int(ceil(travel / Phys.maxStep)))) }
-		}
-		if !r.near.isEmpty {
-			// another vehicle is near: as fine as the two close on each other
-			var other: Double = 0
-			for o in r.near { other = max(other, o.speed + abs(o.angVel) * o.radius) }
-			let closing: Double = (fast + other) * vehicleStep
-			split = max(split, min(Phys.maxSplit, max(1, Int(ceil(closing / Phys.maxStep)))))
-		}
-		var s: Int = 0
-		while s < split {
-			vehicleSubstep(v, vehicleStep / Double(split), r.samples, r.throttle, &r.stats, open: open, near: r.near)
-			s += 1
-		}
-		if split > 1 || open || !r.near.isEmpty { v.updateBox() }
-	}
-
-	/// After a vehicle's fixed steps: blocks it rammed, what it touched, crashes, fuel, exhaust, drills,
-	/// creatures it hit, and whether it can rest now
-	func finishVehicleFrame(_ r: VRun, _ dt: Double) {
-		let v: Vehicle = r.v
-		let throttle: Double = r.throttle
-		let airBusy: Bool = r.airBusy
-		let n: Int = r.n
-		let stats: VStepStats = r.stats
-		for rm in stats.rammed where world.tile(rm.0, rm.1).solid {
-			breakTile(rm.0, rm.1, v.rider)
-			addShake(0.25)
-			v.vx *= 0.6
-		}
-		if n > 0 {
-			v.wheelContacts = stats.wheelHits
-			// (what other vehicles met of it counts as touching too)
-			v.contacts = stats.anyHits + v.touched
-			v.submerged = stats.wet / Double(n)
-			v.restOn = stats.restOn != 0 ? stats.restOn : v.leanOn
-		}
-		v.touched = 0
-		v.leanOn = 0
-		if !stats.crash.isEmpty { crashDamage(v, stats.crash) }
-		for hit in stats.crashOther {
-			if let o = vehicleByID(hit.0) { crashDamage(o, [hit.1: hit.2]) }
-		}
-		// fuel and exhaust
-		let burning: Bool = v.engines > 0 && v.fuel > 0 && abs(throttle) > 0.1
-		if burning && !isCreative {
-			v.fuel = max(0, v.fuel - dt * Double(v.engines) * (v.drilling ? 1.5 : 1.0))
-		}
-		if burning {
-			v.smoke += dt
-			if v.smoke > 0.12 {
-				v.smoke = 0
-				let back: (Double, Double) = v.toWorld(v.dir > 0 ? Double(v.minX) - 0.2 : Double(v.maxX) + 1.2, Double(v.maxY) + 0.3)
-				spawnParticles(back.0, back.1, 0x707070, 1, 1.5, 0.6, -2)
-			}
-		}
-		if abs(throttle) > 0.2 { v.dir = throttle > 0 ? 1 : -1 }
-		v.wheelRot += (v.vx * v.cosA + v.vy * v.sinA) * dt * 2.0
-		v.propRot += (abs(throttle) > 0.1 && v.submerged > 0 ? 18.0 : 3.0) * dt
-		v.updateBox()
-		if v.drills > 0 { runDrills(v, dt) }
-		vehicleImpacts(v, dt)
-		// resting (on the ground, or floating calmly): let it sleep so it stops costing time and cannot jitter
-		var calm: Bool = v.speed < 0.08 && abs(v.angVel) < 0.03 && abs(throttle) < 0.05 && !v.drilling && !airBusy
-		if v.parentID != 0 || !v.joints.isEmpty {
-			// (a section's joints leave it a little speed each step that its next step takes away again:
-			// what counts is how far it really went this frame)
-			let went: Double = hypot(v.px - r.x0, v.py - r.y0) / max(dt, 1e-6)
-			let turned: Double = abs(v.angle - r.a0) / max(dt, 1e-6)
-			calm = went < 0.08 && turned < 0.03 && abs(throttle) < 0.05 && !v.drilling && !airBusy
-		}
-		// (a section of a machine is held up by the one it hangs from: the machine rests as one)
-		if calm && (v.contacts > 0 || v.submerged > 0 || v.parentID != 0) {
-			v.sleepT += dt
-			if v.sleepT > (v.submerged > 0 ? 1.5 : 0.6) { v.asleep = true; v.vx = 0; v.vy = 0; v.angVel = 0 }
-		} else {
-			v.sleepT = 0
-		}
-		if v.py > Double(world.H) + 5 {
-			v.py = Double(world.H) - 6
-			v.vy = 0
-		}
-	}
-
-	/// One fixed physics step: gravity, buoyancy and water drag per part, propulsion, contacts with
-	/// impulses and friction, positional correction, stability assists
-	func vehicleSubstep(_ v: Vehicle, _ h: Double, _ samples: [VSample], _ throttle: Double, _ stats: inout VStepStats, open: Bool = false, near: [Vehicle] = []) {
-		let steerOK: Bool = v.hasSeat && v.hasSteering
-		let hasFuel: Bool = v.fuel > 0 || isCreative
-		let invM: Double = 1.0 / v.mass
-		let invI: Double = 1.0 / v.inertia
-		v.vy += gravityG * h
-		let c: Double = v.cosA
-		let s: Double = v.sinA
-		// buoyancy and water drag, part by part, from how deep each part really is: boats settle at
-		// the waterline, tilt back level by themselves and stop bobbing quickly
-		var wetSum: Double = 0
-		var hullWet: Double = 0
-		var hullN: Int = 0
-		var nearWater: Bool = false
-		for (cell, t) in v.parts {
-			if open { break }
-			let lx: Double = Double(cell.dx) + 0.5 - v.comX
-			let ly: Double = Double(cell.dy) + 0.5 - v.comY
-			let wx: Double = v.px + lx * c - ly * s
-			let wy: Double = v.py + lx * s + ly * c
-			let f: Double = submergedFraction(wx, wy)
-			if t == .hull { hullN += 1; hullWet += f }
-			if f <= 0 {
-				if t == .hull && !nearWater && submergedFraction(wx, wy, reach: 1.5) > 0 { nearWater = true }
-				continue
-			}
-			nearWater = true
-			wetSum += f
-			// (what it floats in: lava holds things up three times as hard as water)
-			let disp: Double = cellDisplacement(v, cell, t) * liquidDensity(wx, wy)
-			let rx: Double = wx - v.px
-			let ry: Double = wy - v.py
-			let pvx: Double = v.vx - v.angVel * ry
-			let pvy: Double = v.vy + v.angVel * rx
-			// (a share of the water's drag grows with the square of the speed: what holds a fast boat back)
-			let fx: Double = -pvx * (0.35 + 0.3 * disp + Drive.waterDrag * disp * abs(pvx)) * f
-			let fy: Double = -gravityG * disp * f - pvy * 4.5 * disp * f
-			v.vx += fx * invM * h
-			v.vy += fy * invM * h
-			v.angVel += (rx * fy - ry * fx) * invI * h
-		}
-		if !open && !v.hullAir.isEmpty { hullAirForces(v, h, c, s) }
-		if v.railWheels > 0 && !open { railHold(v, h) }
-		let sub: Double = wetSum / Double(max(1, v.parts.count))
-		// how deep the hulls sit: about 0.4 when floating freely, falling as a boat runs aground
-		let hullDepth: Double = hullN > 0 ? hullWet / Double(hullN) : sub
-		stats.wet += sub
-		if nearWater { stats.nearWater = true }
-		if sub > 0 {
-			// water resists rotation, and a keel keeps a floating hull level with the surface
-			let grip: Double = min(1.0, hullDepth * 4.0)
-			let a: Double = remainder(v.angle, 2.0 * Double.pi)
-			if abs(a) < 2.6 { v.angVel -= sin(a) * 36.0 * grip * h }
-			v.angVel *= (1.0 - min(1.0, 3.5 * grip * h))
-		}
-		// boat propulsion along the water (horizontal, so a tilted hull cannot dive or climb on thrust).
-		// A boat grounded at the edge of the water can still push itself back off.
-		if steerOK && abs(throttle) > 0.1 && v.buoyancy > 0 && (sub > 0 || (nearWater && stats.anyHits > 0)) {
-			// a propeller pushes with the engines' power (so its push falls as the boat gains speed); a
-			// paddle's stroke only goes so fast. What a boat reaches is where that meets the water's drag.
-			var thrust: Double = 0
-			let going: Double = v.vx * throttle > 0 ? abs(v.vx) : 0
-			if v.engines > 0 && v.openProps > 0 && hasFuel {
-				thrust = min(Double(v.engines) * 16.0, Double(v.engines) * Drive.propPower / max(going, 0.1))
-			} else if v.openPaddles > 0 {
-				thrust = Double(v.openPaddles) * 9.0 * max(0, 1.0 - going / Drive.paddleStroke)
-			}
-			if sub <= 0 { thrust *= 0.45 }
-			// touching the bottom: thrust fades as the hull comes out of the water, so a boat runs
-			// aground at the shoreline instead of motoring up the beach (reversing off still works)
-			if stats.anyHits > 0 && throttle * v.vx >= 0 {
-				let landward: Bool = submergedFraction(v.px + Double(throttle > 0 ? 1 : -1) * (v.b.w * 0.5 + 0.5), v.py) <= 0
-				if landward { thrust *= clampD((hullDepth - 0.12) / 0.25, 0, 1) }
-			}
-			v.vx += thrust * throttle * invM * h
-		}
-		// lift, drag and thrust in the air, part by part (wings, rotors, balloons, propellers, jets)
-		if v.aero { airForces(v, h, throttle) }
-		// integrate
-		v.px += v.vx * h
-		v.py += v.vy * h
-		v.angle += v.angVel * h
-		// contacts
-		let c2: Double = v.cosA
-		let s2: Double = v.sinA
-		// deepest penetration per direction; pushing out by the maximum (not the sum) keeps many
-		// simultaneous contacts from launching the vehicle, and the push per step is capped so a
-		// vehicle never jumps when it ends up overlapping blocks (chunk loads, placed blocks)
-		var outUp: Double = 0
-		var outDown: Double = 0
-		var outLeft: Double = 0
-		var outRight: Double = 0
-		var stepWheel: Int = 0
-		var hits: Int = 0
-		vContacts.removeAll(keepingCapacity: true)
-		for smp in samples {
-			if open { break }
-			let lx: Double = smp.lx - v.comX
-			let ly: Double = smp.ly - v.comY
-			let rx: Double = lx * c2 - ly * s2
-			let ry: Double = lx * s2 + ly * c2
-			let wx: Double = v.px + rx
-			let wy: Double = v.py + ry
-			// (a rail wheel rides the rails' smooth surface where there are rails)
-			let found: (Double, Double, Double)? = smp.rail ? railPenetration(wx, wy) : penetration(wx, wy, wheel: smp.ramp)
-			guard let pen = found else { continue }
-			let depth: Double = pen.0
-			let nx: Double = pen.1
-			let ny: Double = pen.2
-			hits += 1
-			if smp.wheel && ny < -0.5 { stepWheel += 1 }
-			// velocity of the contact point
-			let pvx: Double = v.vx - v.angVel * ry
-			let pvy: Double = v.vy + v.angVel * rx
-			let vn: Double = pvx * nx + pvy * ny
-			// ramming: a hard hit knocks out weak wooden builds (planks, log blocks). Terrain (dirt,
-			// sand, stone) never gets dug out, and tree trunks have no collision, so they never get here.
-			if vn < -5.5 && v.mass * -vn > 25.0 {
-				let tt: Tile = world.tile(Int(floor(wx)), Int(floor(wy)))
-				if tt.hardness <= 1.0 && tt != .doorClosed && toolClass(tt) == .axe { stats.rammed.append((Int(floor(wx)), Int(floor(wy)))) }
-			}
-			// a crash: hitting the ground far faster than any landing breaks the part that hits (wheels and
-			// tracks take a harder landing first)
-			let crashAt: Double = smp.wheel ? vehicleCrashSpeed + 5.0 : vehicleCrashSpeed
-			if vn < -crashAt {
-				let pc: PartCell = PartCell(dx: smp.cx, dy: smp.cy)
-				stats.crash[pc] = max(stats.crash[pc] ?? 0, -vn - crashAt)
-			}
-			// what it touches: ice grips far less than stone, hay gives a little back
-			let ground: BlockPhys = blockPhys(world.tile(Int(floor(wx)), Int(floor(wy))))
-			let rn: Double = rx * ny - ry * nx
-			let tx: Double = -ny
-			let ty: Double = nx
-			let rt: Double = rx * ty - ry * tx
-			let vt: Double = pvx * tx + pvy * ty
-			// friction along the surface; wheels roll unless braking, hulls slide on sand and stone.
-			// A boat's parts slide on sand and stone, very easily while it is still partly afloat (so it
-			// eases off a beach under its own power); car bodies grip
-			var mu: Double = smp.hull ? (sub > 0 ? 0.05 : 0.22) : 0.7
-			if smp.wheel {
-				// an aircraft's wheels roll free on the throttle and brake without it
-				let braking: Bool = abs(throttle) < 0.1 || (throttle * vt < 0 && !v.aero)
-				mu = braking ? (v.rider ? 0.9 : 0.25) : (v.aero ? 0.02 : 0.06)
-				if smp.track { mu = braking ? (v.rider ? 1.1 : 0.4) : 0.14 }
-				if smp.rail {
-					// (a rail wheel coasts unless the driver pulls against the motion)
-					let pulling: Bool = v.rider && abs(throttle) > 0.1 && throttle * vt < 0
-					mu = railGrip(Int(floor(wx)), Int(floor(wy)), pulling, v.rider)
-				}
-			}
-			let leave: Double = vn < 0 ? -max(0.04, ground.bounce) * vn : 0
-			var kc: VContact = VContact(rx: rx, ry: ry, nx: nx, ny: ny, rn: rn, kn: invM + rn * rn * invI, rt: rt, kt: invM + rt * rt * invI, want: leave, mu: mu * ground.grip)
-			kc.wheel = smp.wheel
-			kc.grip = ground.grip
-			vContacts.append(kc)
-			let d: Double = min(0.12, max(0, depth - 0.01))
-			if ny < -0.5 { outUp = max(outUp, d) } else if ny > 0.5 { outDown = max(outDown, d) }
-			else if nx < -0.5 { outLeft = max(outLeft, d) } else { outRight = max(outRight, d) }
-		}
-		// other vehicles' cells it is inside: contacts that push both
-		var meet: VMeet = VMeet()
-		if !near.isEmpty { meetVehicleCells(v, samples, near, throttle, sub, &meet, &stats) }
-		// The blows at every place it touches, worked out together: each is given what stops it going
-		// into the surface there (and the little the surface gives back), then friction up to its grip,
-		// and the round is gone through a few times so that what one place gives is taken into account
-		// at the others. (One pass, as it used to be, gave a block landing flat far too much at its first
-		// corner: it bounced high and spun, differently every time.)
-		if !vContacts.isEmpty {
-			var round: Int = 0
-			while round < 4 {
-				var i: Int = 0
-				while i < vContacts.count {
-					var k: VContact = vContacts[i]
-					// (against another vehicle: the speed of one place against the other, and both pushed)
-					let o: Vehicle? = k.oInvM > 0 ? k.other : nil
-					var vn: Double = (v.vx - v.angVel * k.ry) * k.nx + (v.vy + v.angVel * k.rx) * k.ny
-					if let ov = o { vn -= (ov.vx - ov.angVel * k.oy) * k.nx + (ov.vy + ov.angVel * k.ox) * k.ny }
-					let jn0: Double = k.jn
-					k.jn = max(0, jn0 + (k.want - vn) / k.kn)
-					let dn: Double = k.jn - jn0
-					if dn != 0 {
-						v.vx += dn * k.nx * invM
-						v.vy += dn * k.ny * invM
-						v.angVel += k.rn * dn * invI
-						if let ov = o {
-							ov.vx -= dn * k.nx * k.oInvM
-							ov.vy -= dn * k.ny * k.oInvM
-							ov.angVel -= k.on * dn * k.oInvI
-						}
-					}
-					let tx: Double = -k.ny
-					let ty: Double = k.nx
-					var vt: Double = (v.vx - v.angVel * k.ry) * tx + (v.vy + v.angVel * k.rx) * ty
-					if let ov = o { vt -= (ov.vx - ov.angVel * k.oy) * tx + (ov.vy + ov.angVel * k.ox) * ty }
-					let lim: Double = k.mu * k.jn
-					let jt0: Double = k.jt
-					k.jt = clampD(jt0 - vt / k.kt, -lim, lim)
-					let dtn: Double = k.jt - jt0
-					if dtn != 0 {
-						v.vx += dtn * tx * invM
-						v.vy += dtn * ty * invM
-						v.angVel += k.rt * dtn * invI
-						if let ov = o {
-							ov.vx -= dtn * tx * k.oInvM
-							ov.vy -= dtn * ty * k.oInvM
-							ov.angVel -= k.ot * dtn * k.oInvI
-						}
-					}
-					vContacts[i] = k
-					i += 1
-				}
-				round += 1
-			}
-		}
-		// (a machine's sections keep theirs: the joints are worked out with them, so a servo's turning
-		// push on a section standing on the ground is held by its grip, not slid along)
-		if v.parentID != 0 || !v.joints.isEmpty {
-			v.heldContacts.removeAll(keepingCapacity: true)
-			for k in vContacts where k.oInvM == 0 { v.heldContacts.append(k) }
-		}
-		v.px += (outRight - outLeft) * 0.8
-		v.py += (outDown - outUp) * 0.8
-		if meet.hits > 0 { settleVehicleMeet(v, meet) }
-		hits += meet.hits
-		stepWheel += meet.wheelsUnder
-		stats.anyHits += hits
-		stats.wheelHits = max(stats.wheelHits, stepWheel)
-		let wrapped: Double = remainder(v.angle, 2.0 * Double.pi)
-		// grounded stability assist: a tilted vehicle resting on something is eased back toward
-		// upright, and rotation that would tip it further is damped. Flips stay possible in the air.
-		if hits > 0 && abs(wrapped) > 0.4 && abs(wrapped) < 2.5 {
-			v.angVel -= sin(wrapped) * 11.0 * h
-			if v.angVel * wrapped > 0 { v.angVel *= (1.0 - min(1.0, 8.0 * h)) }
-		}
-		// engine drive through wheels that are on the ground
-		// (only while roughly upright: a car on its nose or roof cannot push itself along)
-		if stepWheel > 0 && v.canDriveOnLand && steerOK && hasFuel && abs(throttle) > 0.1 && abs(wrapped) < 1.0 && v.rotors == 0 {
-			// tracks are slow but pull like nothing else
-			let trackShare: Double = Double(v.tracks) / Double(max(1, v.wheels))
-			let along: Double = v.vx * c2 + v.vy * s2
-			// heavier builds accelerate and climb slower; more engines help, and offroad wheels pull
-			// harder (their extra weight is the price)
-			let grip: Double = 1.0 + 0.7 * Double(v.offroadWheels) / Double(max(1, v.wheels)) + 1.4 * trackShare
-			let share: Double = groundShare(v)
-			var push: Double = v.enginePower * 135.0 * grip * min(1.0, Double(stepWheel) / 4.0 + 0.5) * share
-			// An engine gives so much power, so the push it can give falls as the speed rises (power is
-			// push times speed), and the wheels, the gearing and the weight on them take a share that
-			// grows with the speed. There is no top speed built in: a vehicle reaches the speed where
-			// the two meet, so more engines or less weight is faster.
-			let going: Double = along * throttle > 0 ? abs(along) : 0
-			if going > 0.1 { push = min(push, v.enginePower * Drive.power * share / going) }
-			let loss: Double = Drive.loss * (1.0 + Drive.lossPerMass * v.mass) * (1.0 + Drive.trackLoss * trackShare) * along * share
-			let f: Double = push * throttle - loss
-			v.vx += c2 * f * invM * h
-			v.vy += s2 * f * invM * h
-			// wheels driving on another vehicle push it back as hard
-			if let o = meet.wheelOn, o.inStep && !o.asleep {
-				let part: Double = Double(meet.wheelOnN) / Double(max(1, stepWheel))
-				o.vx -= c2 * f * part / o.mass * h
-				o.vy -= s2 * f * part / o.mass * h
-			}
-		} else if v.canDriveOnLand && steerOK && hasFuel && abs(throttle) > 0.1 && v.rotors == 0 {
-			// not upright, or the wheels touch something beside or above it: each wheel that touches
-			// pushes along what it touches, as hard as its grip there lets it
-			wheelsAlongContacts(v, throttle, h)
-		}
-		if !v.aero {
-			// the air against a vehicle with no wings (aircraft work theirs out part by part): it grows
-			// with the square of the speed, on the faces that meet it
-			let rho: Double = airDensity(v.py)
-			// (the air moves too: a gale leans on a balloon of planks or a parked raft)
-			let ax: Double = v.vx - v.windX
-			v.vx -= Aero.kDrag * rho * Double(v.gridH) * ax * abs(ax) * invM * h
-			v.vy -= Aero.kDrag * rho * Double(v.gridW) * v.vy * abs(v.vy) * invM * h
-		}
-		if hits == 0 && sub <= 0 && v.wheels > 0 && !v.aero {
-			// airborne wheeled vehicles slowly level out and shed spin (arcade suspension: driving off a
-			// ledge at speed no longer guarantees a nosedive)
-			if abs(wrapped) < 2.0 { v.angVel -= sin(wrapped) * 4.0 * h }
-			v.angVel *= (1.0 - min(1.0, 1.5 * h))
-		}
-		if hits == 0 && sub <= 0 && v.rider && abs(throttle) > 0.1 && !v.aero {
-			// in the air the driver can lean the vehicle: gentle and capped, so holding the throttle over a
-			// jump leans the car rather than spinning it (throttle leans back, reverse tips the nose down)
-			if abs(v.angVel) < 2.5 || v.angVel * throttle > 0 { v.angVel -= throttle * 2.5 * h }
-		}
-		// a little rolling drag and air resistance
-		v.vx *= (1.0 - min(1.0, 0.05 * h))
-		v.angVel *= (1.0 - min(1.0, (hits > 0 ? 1.2 : 0.3) * h))
-		// No limit on speed or spin: the sub-steps above keep fast things from passing through the land.
-		// Only numbers that are no longer numbers are put right (they would spread to everything).
-		if !(v.vx.isFinite && v.vy.isFinite && v.angVel.isFinite && v.px.isFinite && v.py.isFinite && v.angle.isFinite) {
-			v.vx = 0
-			v.vy = 0
-			v.angVel = 0
-			if !v.px.isFinite { v.px = v.b.x }
-			if !v.py.isFinite { v.py = v.b.y - v.b.h * 0.5 }
-			if !v.angle.isFinite { v.angle = 0 }
-		}
-	}
-
-	/// Where a vehicle's collision samples are inside another vehicle's cells. Each becomes a contact
-	/// that pushes both, by their masses, the way out of the other's nearest open face: a plane comes to
-	/// rest on a carrier's deck and is carried by it (its grip there), a tank pushes a car, two cars that
-	/// meet head on trade their speed. A vehicle at rest (or not moving this frame) is pushed against as
-	/// if it were the land, and is woken by a hard enough blow.
-	func meetVehicleCells(_ v: Vehicle, _ samples: [VSample], _ near: [Vehicle], _ throttle: Double, _ sub: Double, _ meet: inout VMeet, _ stats: inout VStepStats) {
-		let c: Double = v.cosA
-		let s: Double = v.sinA
-		let invM: Double = 1.0 / v.mass
-		let invI: Double = 1.0 / v.inertia
-		let mine: Int = v.parentID != 0 || !v.joints.isEmpty ? machineRoot(v).id : -1
-		for o in near {
-			if o.parts.isEmpty { continue }
-			// (the sections of one jointed machine pass each other: the joints hold them)
-			if mine >= 0 && (o.parentID != 0 || !o.joints.isEmpty) && machineRoot(o).id == mine { continue }
-			let gx: Double = o.px - v.px
-			let gy: Double = o.py - v.py
-			let reach: Double = v.radius + o.radius + 0.3
-			if gx * gx + gy * gy > reach * reach { continue }
-			let oDyn: Bool = o.inStep && !o.asleep
-			let oInvM: Double = oDyn ? 1.0 / o.mass : 0
-			let oInvI: Double = oDyn ? 1.0 / o.inertia : 0
-			let oc: Double = o.cosA
-			let os: Double = o.sinA
-			// how much of the way out each one takes (all of it against one at rest)
-			let mine: Double = oDyn ? o.mass / (v.mass + o.mass) : 1.0
-			var push: VPush = VPush(o: o)
-			var underHere: Int = 0
-			for smp in samples {
-				let lx: Double = smp.lx - v.comX
-				let ly: Double = smp.ly - v.comY
-				let rx: Double = lx * c - ly * s
-				let ry: Double = lx * s + ly * c
-				let dx: Double = v.px + rx - o.px
-				let dy: Double = v.py + ry - o.py
-				let ol: Double = dx * oc + dy * os + o.comX
-				let om: Double = -dx * os + dy * oc + o.comY
-				let cx: Int = Int(floor(ol))
-				let cy: Int = Int(floor(om))
-				let kind: UInt8 = o.meetAt(cx, cy)
-				if kind == cellOpen { continue }
-				guard let pen = cellPenetration(o, cx, cy, ol - Double(cx), om - Double(cy), kind, smp.ramp) else { continue }
-				let nx: Double = pen.1 * oc - pen.2 * os
-				let ny: Double = pen.1 * os + pen.2 * oc
-				let pvx: Double = v.vx - v.angVel * ry - (oDyn ? o.vx - o.angVel * dy : 0)
-				let pvy: Double = v.vy + v.angVel * rx - (oDyn ? o.vy + o.angVel * dx : 0)
-				let vn: Double = pvx * nx + pvy * ny
-				// a crash breaks the parts that meet, on both
-				let crashAt: Double = smp.wheel ? vehicleCrashSpeed + 5.0 : vehicleCrashSpeed
-				if vn < -crashAt {
-					let pc: PartCell = PartCell(dx: smp.cx, dy: smp.cy)
-					stats.crash[pc] = max(stats.crash[pc] ?? 0, -vn - crashAt)
-					stats.crashOther.append((o.id, PartCell(dx: cx, dy: cy), (-vn - crashAt) * min(1.0, v.mass / o.mass)))
-				}
-				let here: BlockPhys = o.blocks[PartCell(dx: cx, dy: cy)].map { blockPhys($0) } ?? BlockPhys(weight: 1, carry: 1, span: 1)
-				var mu: Double = smp.hull ? (sub > 0 ? 0.05 : 0.22) : 0.7
-				if smp.wheel {
-					let braking: Bool = abs(throttle) < 0.1
-					mu = braking ? (v.rider ? 0.9 : 0.25) : (v.aero ? 0.02 : 0.06)
-					if smp.track { mu = braking ? (v.rider ? 1.1 : 0.4) : 0.14 }
-				}
-				let rn: Double = rx * ny - ry * nx
-				let on: Double = dx * ny - dy * nx
-				let tx: Double = -ny
-				let ty: Double = nx
-				let rt: Double = rx * ty - ry * tx
-				let ot: Double = dx * ty - dy * tx
-				let kn: Double = invM + rn * rn * invI + oInvM + on * on * oInvI
-				let kt: Double = invM + rt * rt * invI + oInvM + ot * ot * oInvI
-				let leave: Double = vn < 0 ? -max(0.04, here.bounce) * vn : 0
-				var k: VContact = VContact(rx: rx, ry: ry, nx: nx, ny: ny, rn: rn, kn: kn, rt: rt, kt: kt, want: leave, mu: mu * here.grip)
-				k.wheel = smp.wheel
-				k.grip = here.grip
-				k.other = o
-				k.ox = dx
-				k.oy = dy
-				k.on = on
-				k.ot = ot
-				k.oInvM = oInvM
-				k.oInvI = oInvI
-				vContacts.append(k)
-				meet.hits += 1
-				o.touched += 1
-				if ny < -0.5 {
-					stats.restOn = o.id
-					if smp.wheel { meet.wheelsUnder += 1; underHere += 1 }
-				} else if ny > 0.5 {
-					// it is under the other one: that one rests on it
-					o.leanOn = v.id
-				}
-				// out of each other: this one by its share, the other by the rest
-				let d: Double = min(0.12, max(0, pen.0 - 0.01))
-				let a: Double = d * mine
-				let b: Double = d - a
-				if nx > 0 { meet.right = max(meet.right, nx * a) } else { meet.left = max(meet.left, -nx * a) }
-				if ny > 0 { meet.down = max(meet.down, ny * a) } else { meet.up = max(meet.up, -ny * a) }
-				if oDyn && b > 0 {
-					if nx > 0 { push.left = max(push.left, nx * b) } else { push.right = max(push.right, -nx * b) }
-					if ny > 0 { push.up = max(push.up, ny * b) } else { push.down = max(push.down, -ny * b) }
-				}
-			}
-			if oDyn && (push.right + push.left + push.up + push.down) > 0 { meet.pushes.append(push) }
-			if underHere > meet.wheelOnN {
-				meet.wheelOn = o
-				meet.wheelOnN = underHere
-			}
-		}
-	}
-
-	/// How far a point is inside a vehicle's cell (fx, fy: where in the cell, 0...1) and which way is
-	/// out, in that vehicle's own frame: the nearest face with no solid cell beyond it. A cell stood on
-	/// from above only (a platform) is met near its top. For wheels and hull bottoms the top corner of a
-	/// cell with open space above acts as a slope, as on the land (a car drives up onto a flatbed).
-	func cellPenetration(_ o: Vehicle, _ cx: Int, _ cy: Int, _ fx: Double, _ fy: Double, _ kind: UInt8, _ ramp: Bool) -> (Double, Double, Double)? {
-		if kind == cellRound {
-			// a wheel: out from its middle
-			let ex: Double = fx - 0.5
-			let ey: Double = fy - 0.5
-			let d: Double = sqrt(ex * ex + ey * ey)
-			if d >= 0.47 { return nil }
-			if d < 1e-6 { return (0.47, 0, -1) }
-			return (0.47 - d, ex / d, ey / d)
-		}
-		let topOpen: Bool = o.meetAt(cx, cy - 1) != cellSolid
-		if kind == cellPlatform { return topOpen && fy < 0.3 ? (fy, 0, -1) : nil }
-		let leftOpen: Bool = o.meetAt(cx - 1, cy) != cellSolid
-		let rightOpen: Bool = o.meetAt(cx + 1, cy) != cellSolid
-		if ramp && topOpen && fy < 0.8 {
-			if leftOpen && fx < fy { return (fy * 0.75, -0.6, -0.8) }
-			if rightOpen && 1.0 - fx < fy { return (fy * 0.75, 0.6, -0.8) }
-			return (fy, 0, -1)
-		}
-		if topOpen && fy < 0.3 { return (fy, 0, -1) }
-		var best: Double = 9
-		var nx: Double = 0
-		var ny: Double = -1
-		if topOpen { best = fy }
-		if leftOpen && fx < best { best = fx; nx = -1; ny = 0 }
-		if rightOpen && 1.0 - fx < best { best = 1.0 - fx; nx = 1; ny = 0 }
-		if o.meetAt(cx, cy + 1) != cellSolid && 1.0 - fy < best { best = 1.0 - fy; nx = 0; ny = 1 }
-		if best > 8 { return nil }
-		return (best, nx, ny)
-	}
-
-	/// Moves two vehicles that overlap out of each other, each by its share (from meetVehicleCells),
-	/// and wakes one at rest that was hit hard
-	func settleVehicleMeet(_ v: Vehicle, _ meet: VMeet) {
-		// (each vehicle also meets the other's samples, so each pair is settled from both sides: half each)
-		v.px += (meet.right - meet.left) * 0.5
-		v.py += (meet.down - meet.up) * 0.5
-		for p in meet.pushes {
-			p.o.px += (p.right - p.left) * 0.5
-			p.o.py += (p.down - p.up) * 0.5
-		}
-		for k in vContacts where k.oInvM == 0 {
-			guard let o = k.other, o.asleep else { continue }
-			if k.jn / o.mass > 0.25 {
-				o.asleep = false
-				o.sleepT = 0
-			}
-		}
-	}
-
-	/// Wheels driving along whatever they touch (a wall the vehicle leans on, the ground when it lies on
-	/// its side or roof): the engines' push is shared between the wheels that touch, each giving no more
-	/// than its grip there allows. Upright on the ground the drive above is used instead.
-	func wheelsAlongContacts(_ v: Vehicle, _ throttle: Double, _ h: Double) {
-		var n: Int = 0
-		for k in vContacts where k.wheel && k.jn > 0 { n += 1 }
-		if n == 0 { return }
-		let push: Double = v.enginePower * 135.0 * groundShare(v) * throttle / Double(n)
-		let invM: Double = 1.0 / v.mass
-		for k in vContacts where k.wheel && k.jn > 0 {
-			let tx: Double = -k.ny
-			let ty: Double = k.nx
-			let lim: Double = Drive.tyreGrip * k.grip * k.jn
-			let j: Double = clampD(push * h, -lim, lim)
-			v.vx += tx * j * invM
-			v.vy += ty * j * invM
-			if let o = k.other, k.oInvM > 0 {
-				o.vx -= tx * j * k.oInvM
-				o.vy -= ty * j * k.oInvM
-			}
-		}
-	}
-
-	/// Hitting creatures (or the player) at speed hurts them according to speed and weight
-	func vehicleImpacts(_ v: Vehicle, _ dt: Double) {
-		let sp: Double = v.speed
-		if sp < 4.0 { return }
-		let src: DamageSource = v.rider ? .player : .environment
-		let nudge: Double = 0.15
-		// (the way it came this frame: at a few hundred blocks a second that is several blocks)
-		let backX: Double = sp * dt > 0.6 ? v.vx * dt : 0
-		let backY: Double = sp * dt > 0.6 ? v.vy * dt : 0
-		let sweptL: Double = v.b.left - max(0, backX)
-		let sweptR: Double = v.b.right - min(0, backX)
-		let sweptT: Double = v.b.top - max(0, backY)
-		let sweptB: Double = v.b.y - min(0, backY)
-		for m in mobsNear(sweptL - 1, sweptR + 1) {
-			if m.hp <= 0 || m.tame || m.b.ride == v.id { continue }
-			if m.b.right < sweptL - nudge || m.b.left > sweptR + nudge || m.b.y < sweptT || m.b.top > sweptB { continue }
-			// must actually touch a part, not just the box
-			let cell: PartCell = v.cellAt(m.b.x, m.b.cy)
-			var touching: Bool = v.parts[cell] != nil || backX != 0 || backY != 0
-			if !touching {
-				for (c, _) in v.parts {
-					let cc: (Double, Double) = v.cellCenter(c)
-					if abs(cc.0 - m.b.x) < 0.5 + m.b.w * 0.5 + nudge && abs(cc.1 - m.b.cy) < 0.5 + m.b.h * 0.5 { touching = true; break }
-				}
-			}
-			if !touching { continue }
-			var info = DamageInfo(amount: (sp - 3.0) * (1.2 + v.mass * 0.35), type: .impact, source: src)
-			info.dirX = v.vx >= 0 ? 1 : -1
-			info.knock = min(14.0, 4.0 + sp * 0.8)
-			info.originX = v.b.x
-			info.key = 7_000_000 + v.id
-			info.cooldown = 0.7
-			if applyMobDamage(m, info) {
-				// the creature's weight slows the vehicle (when the vehicle's cells push it along, that
-				// push already takes it: see meetVehicles; this is for a blow in passing at high speed)
-				if backX != 0 || backY != 0 { v.vx *= v.mass / (v.mass + mobMass(m) * 0.5) }
-				addShake(0.12)
-			}
-		}
-		if !v.rider && !dead && inVehicle !== v && pb.ride != v.id {
-			if pb.right > v.b.left && pb.left < v.b.right && pb.y > v.b.top && pb.top < v.b.y {
-				var info = DamageInfo(amount: (sp - 3.0) * (1.0 + v.mass * 0.3), type: .impact, source: .environment)
-				info.knock = 9.0
-				info.originX = v.b.x
-				info.key = 7_000_000 + v.id
-				info.cooldown = 0.8
-				_ = hurtPlayer(info)
-			}
-		}
-	}
-
-	// MARK: drills
-
-	/// Running drills bore into the block in front of them, using the same hardness and tier rules
-	/// (and drops) as hand mining. One block at a time per drill.
-	func runDrills(_ v: Vehicle, _ dt: Double) {
-		let powered: Bool = v.rider && (v.engines > 0 && (v.fuel > 0 || isCreative))
-		v.drilling = false
-		if !powered { v.drillWork.removeAll(); return }
-		v.drillRot += dt * 25.0
-		for (cell, d) in v.drillDir where !v.boxed.contains(cell) {
-			guard let pt = v.parts[cell] else { continue }
-			let pw: (Int, Double) = drillPower(pt)
-			let tip: (Double, Double) = v.toWorld(Double(cell.dx) + 0.5 + Double(d.0) * 0.85, Double(cell.dy) + 0.5 + Double(d.1) * 0.85)
-			// the bit is three blocks wide across its facing (so the hull and wheels behind it fit
-			// through the hole); it clears one block at a time, the centre one first
-			var tx: Int = Int(floor(tip.0))
-			var ty: Int = Int(floor(tip.1))
-			var t: Tile = world.tile(tx, ty)
-			if t == .air || t.liquid || t.isPlant || Tile.tierTable[t.idx] > pw.0 {
-				for side in [1.0, -1.0] {
-					let q: (Double, Double) = v.toWorld(Double(cell.dx) + 0.5 + Double(d.0) * 0.85 + Double(d.1) * side * -1.0 + (d.1 == 0 ? 0 : 0),
-													   Double(cell.dy) + 0.5 + Double(d.1) * 0.85 + Double(d.0) * side * (d.0 == 0 ? 0 : 1))
-					let qt: Tile = world.tile(Int(floor(q.0)), Int(floor(q.1)))
-					if qt != .air && !qt.liquid && !qt.isPlant && qt.hardness < 9000 && Tile.tierTable[qt.idx] <= pw.0 {
-						tx = Int(floor(q.0)); ty = Int(floor(q.1)); t = qt
-						break
-					}
-				}
-			}
-			// creatures caught in the bit get hurt
-			for m in mobsNear(tip.0 - 1, tip.0 + 1) where m.hp > 0 && !m.tame {
-				if abs(m.b.x - tip.0) < m.b.w * 0.5 + 0.3 && tip.1 > m.b.top - 0.2 && tip.1 < m.b.y + 0.2 {
-					var info = DamageInfo(amount: 5, type: .melee, source: .player)
-					info.originX = v.px
-					info.knock = 4
-					info.key = 8_000_000 + v.id
-					info.cooldown = 0.35
-					applyMobDamage(m, info)
-				}
-			}
-			if t == .air || t.liquid || t.isPlant {
-				v.drillWork[cell] = nil
-				continue
-			}
-			let hard: Double = t.hardness
-			if hard >= 9000 || Tile.tierTable[t.idx] > pw.0 {
-				if Double.random(in: 0...1) < 0.1 { spawnParticles(tip.0, tip.1, 0xFFE080, 1, 3.0, 0.2, 6) }
-				continue
-			}
-			v.drilling = true
-			var work: (Int, Int, Double) = v.drillWork[cell] ?? (tx, ty, 0)
-			if work.0 != tx || work.1 != ty { work = (tx, ty, 0) }
-			work.2 += dt * pw.1
-			if Double.random(in: 0...1) < 0.35 {
-				spawnParticles(tip.0, tip.1, t.def.colors.first ?? 0x888888, 1, 3.0, 0.3, 12)
-			}
-			if work.2 >= max(0.05, hard * 1.5) {
-				breakTile(tx, ty, true)
-				v.drillWork[cell] = nil
-				addShake(0.04)
-			} else {
-				v.drillWork[cell] = work
-			}
-		}
-	}
-
-	// MARK: driving
-
-	func driveVehicle(_ v: Vehicle, _ ix: Double, _ jumpPressed: Bool, _ dt: Double) {
-		v.throttle = ix
-		// up and down on the stick: the elevators, the rotor's pitch, the burner
-		var up: Double = -stickY
-		if abs(up) < 0.15 { up = 0 }
-		v.pitch = clampD(up, -1, 1)
-		if v.auto != 0 { autopilotSteer(v, ix, up, dt) }
-		if abs(v.throttle) > 0.05 || abs(v.pitch) > 0.05 { v.asleep = false }
-		if let c = seatCell(v) {
-			// sit on the seat, following the vehicle's rotation
-			let p: (Double, Double) = v.toWorld(Double(c.dx) + 0.5, Double(c.dy) + 0.95)
-			pb.x = p.0
-			pb.y = p.1
-		} else {
-			pb.x = v.b.x
-			pb.y = v.b.top
-		}
-		pb.vx = v.vx
-		pb.vy = v.vy
-		fallPeak = 0
-		facing = v.dir
-		if jumpPressed {
-			let tilt: Double = abs(remainder(v.angle, 2.0 * Double.pi))
-			if tilt > 0.9 && v.contacts > 0 && v.speed < 3.0 {
-				// upside down: give it a shove back onto its wheels
-				v.vy = -7.5
-				v.angVel = (remainder(v.angle, 2.0 * Double.pi) > 0 ? -1.0 : 1.0) * 6.0
-				v.asleep = false
-				say("Heave! Flipping the vehicle back over.", 1.5)
-			} else {
-				leaveSeat(v)
-			}
-		}
-	}
-
-	/// Getting up from the seat. With a floor under the seat the player stands up where they sat, at any
-	/// speed, and can walk about the vehicle while it carries on (the autopilot keeps its hands on the
-	/// controls; without one the engines idle). With nothing to stand on they hop out as before, which
-	/// only a slow vehicle allows.
-	func leaveSeat(_ v: Vehicle) {
-		if let c = seatCell(v) {
-			let floorK: UInt8 = v.walkAt(c.dx, c.dy + 1)
-			let headK: UInt8 = v.walkAt(c.dx, c.dy - 1)
-			if floorK != cellOpen && headK != cellSolid {
-				v.rider = false
-				if v.auto == 0 {
-					v.throttle = 0
-					v.pitch = 0
-				}
-				inVehicle = nil
-				boardFrame(&pb, v, Double(c.dx) + 0.5, Double(c.dy) + 1.0)
-				pb.onGround = true
-				fallPeak = 0
-				if v.speed > 2.5 { say(v.auto != 0 ? "You stand up. The autopilot flies on." : "You stand up. Nobody is at the controls.", 2.5) }
-				bumpHUD()
-				return
-			}
-		}
-		if v.speed < 2.5 {
-			dismount()
-		} else if v.contacts == 0 && v.submerged <= 0.02 {
-			say("Nothing to stand on here. Put a floor under the seat to walk about in flight.", 3.0)
-		} else {
-			say("Slow down to get out (or put a floor under the seat).", 2.5)
-		}
-	}
-
-	func cellPos(_ v: Vehicle, _ c: PartCell) -> (Double, Double) {
-		return v.cellPos(c)
-	}
-
-	func interactVehicle(_ v: Vehicle, _ c: PartCell) {
-		if let it = heldItem {
-			var add: Double = 0
-			switch it {
-			case .mat(let m):
-				if m == .coal { add = 30 }
-				if m == .emberBar { add = 120 }
-			case .block(let t):
-				if t == .planks { add = 8 }
-				if isLogTile(t) { add = 14 }
-			default: break
-			}
-			if add > 0 {
-				if v.fuelCapacity <= 0 {
-					say("This vehicle has no engine or fuel tank.", 2.5)
-					return
-				}
-				if v.fuel >= v.fuelCapacity - 0.5 {
-					say("The fuel tank is full.", 1.5)
-					return
-				}
-				v.fuel = min(v.fuelCapacity, v.fuel + add)
-				if !isCreative { inv.removeAt(sel, 1) }
-				say("Refueled: " + String(Int(v.fuel)) + "/" + String(Int(v.fuelCapacity)), 1.5)
-				bumpHUD()
-				return
-			}
-		}
-		if repairVehiclePart(v, c) { return }
-		if useVehicleBlock(v, c) { return }
-		if let t = v.parts[c], t == .hinge || t == .servo || t == .piston, v.joints.contains(where: { $0.cell == c }), inVehicle == nil {
-			jointEdit = JointRef(vid: v.id, cell: c)
-			showJoint = true
-			bumpHUD()
-			return
-		}
-		if let t = v.parts[c], t == .cannon || t == .autoGun, inVehicle == nil {
-			cycleGunMode(v, c)
-			return
-		}
-		if v.parts[c] == .receiver && inVehicle == nil {
-			radioEdit = v.id
-			showRadio = true
-			bumpHUD()
-			return
-		}
-		if v.parts[c] == .coupler && v.links.contains(where: { $0.cell == c }) {
-			uncouple(v, c)
-			say("Uncoupled.", 1.2)
-			return
-		}
-		if let t = v.parts[c], t == .seat || t == .steering || t == .cockpit {
-			mountVehicle(v, at: t == .steering ? nil : c)
-			return
-		}
-		if v.parts[c] != nil && vehicleStores(v, c) {
-			let k: IntPair = cargoSpot(v, c)
-			if world.chests[world.chestKey(k.x, k.y)] == nil { world.setChestItems(k.x, k.y, []) }
-			openChest = k
-			showInventory = true
-			bumpHUD()
-			return
-		}
-		if let t = v.parts[c], t == .wing || t == .flap || t == .elevator || t == .stabilizer, !v.rider, heldItem == nil || heldItem == .gadget(.wrench) {
-			tiltWing(v, c)
-			return
-		}
-		let massS: String = String(format: "%.1f", v.mass)
-		let fuelA: Int = Int(v.fuel)
-		let fuelB: Int = Int(v.fuelCapacity)
-		var info: String = "Vehicle: mass \(massS), fuel \(fuelA)/\(fuelB)"
-		if let d = v.dmg[c], d > 0.5, let t = v.parts[c] {
-			let hpS: Int = Int(max(0, vehicleCellHP(v, c, t) - d))
-			info = joinText(t == .block ? (v.blocks[c]?.name ?? "Block") : t.name, " damaged: ", String(hpS), " left. Hold an iron bar and tap it to mend it.")
-			say(info, 3.0)
-			return
-		}
-		if v.aero { say(joinText(info, ". ", vehicleCheck(v).hint), 3.5); return }
-		if !v.hasSeat { info += ". Needs a seat." }
-		else if !v.hasSteering { info += ". Needs a steering wheel." }
-		else if v.buoyancy > 0 && !v.canSail && v.wheels < 2 { info += ". Add engine + propeller (or a paddle)." }
-		else if v.wheels >= 2 && v.engines == 0 { info += ". Add an engine." }
-		else { info += ". Tap the seat to drive." }
-		say(info, 3.5)
-	}
-
-	/// Gets in to drive: in the seat tapped (with several seats), or the one sat in last
-	func mountVehicle(_ v: Vehicle, at seatTapped: PartCell? = nil) {
-		if !v.hasSeat || !v.hasSteering {
-			say(v.hasSeat ? "Add a steering wheel (anywhere on it)." : "Add a seat or a cockpit first.", 2.5)
-			return
-		}
-		if mounted != nil { dismount() }
-		if let c = seatTapped { v.seatAt = c }
-		seat = nil
-		seatAboard = nil
-		inVehicle = v
-		pb.ride = 0
-		v.rider = true
-		v.asleep = false
-		v.holdY = v.py
-		let drillTip: String = v.drills > 0 ? " Drills spin while the engine runs." : ""
-		let armed: String = v.cannons + v.guns > 0 ? " The attack stick fires the guns." : ""
-		say(joinText(controlsHint(v), drillTip, armed), 4.0)
-		bumpHUD()
+			// older save: x, y were the bottom-centre of an unrotated box
+			let w: Double = Double(v.maxX - v.minX + 1)
+			v.placeBox(left: s.x - w * 0.5, bottom: s.y)
+		}
+		v.fuel = s.fuel
+		v.dir = s.dir
+		v.kit = s.kit ?? -1
+		v.joints = (s.joints ?? []).filter { v.parts[$0.cell] != nil }
+		for g in s.gunModes ?? [] where g.count == 3 && g[2] > 0 {
+			let c: PartCell = PartCell(dx: g[0], dy: g[1])
+			if v.parts[c] != nil { v.gunMode[c] = clampI(g[2], 0, GunMode.allCases.count - 1) }
+		}
+		v.channel = clampI(s.channel ?? 0, 0, Radio.channels)
+		v.radioAct = clampI(s.radioAct ?? 0, 0, RadioAct.allCases.count - 1)
+		return v
 	}
 }
 
 // MARK: - Pirate ships
 
-extension Game {
-	func shipById(_ id: Int) -> PirateShip? {
-		for s in ships where s.id == id { return s }
-		return nil
+final class PirateShip {
+	let id: Int
+	var x: Double
+	var dir: Int
+	var hp: Double = 180
+	var maxHP: Double = 180
+	var crew: [Int] = []
+	var state: Int = 0
+	var t: Double = 0
+	var looted: Bool = false
+	var bob: Double = 0
+	var patrolMin: Double
+	var patrolMax: Double
+	var sink: Double = 0
+	var hitT: Double = 0
+	var speed: Double = 0
+
+	static let deckHalf: Double = 4.0
+	static let spriteW: Double = 9.5
+	static let spriteH: Double = 5.0
+	static let waterRow: Double = 3.6
+	static let deckRow: Double = 2.625
+
+	init(id: Int, x: Double, dir: Int, pMin: Double, pMax: Double) {
+		self.id = id
+		self.x = x
+		self.dir = dir
+		self.patrolMin = pMin
+		self.patrolMax = pMax
 	}
 
-	func alertShip(_ id: Int) {
-		guard let s = shipById(id) else { return }
-		if s.state == 0 { s.state = 1 }
-		for cid in s.crew {
-			for m in mobs where m.id == cid { m.t3 = max(m.t3, 0) }
-		}
-	}
-
-	func updateCrew(_ m: Mob, _ dt: Double) -> Bool {
-		guard let s = shipById(m.boat) else {
-			m.boat = -1
-			return false
-		}
-		if s.sink >= 3.0 { m.boat = -1; return false }
-		if !m.raiding && s.state == 2 {
-			// anchored at the shore: attackers go ashore
-			if abs(pb.x - s.x) < 40 { m.raiding = true }
-		}
-		return false
-	}
-
-	func clampToDeck(_ m: Mob) {
-		guard m.boat >= 0, !m.raiding, let s = shipById(m.boat) else { return }
-		let lo: Double = s.x - PirateShip.deckHalf + m.b.w * 0.5
-		let hi: Double = s.x + PirateShip.deckHalf - 0.2 - m.b.w * 0.5
-		if m.b.x < lo { m.b.x = lo; m.b.vx = max(0, m.b.vx) }
-		if m.b.x > hi { m.b.x = hi; m.b.vx = min(0, m.b.vx) }
-	}
-
-	func oceanOK(_ x: Int) -> Bool {
-		let c: Col = gen.col(x)
-		return c.biome == .ocean && c.h - WorldGen.sea >= 9
-	}
-
-	func updateShips(_ dt: Double) {
-		if world.dim != .overworld {
-			if !ships.isEmpty {
-				for s in ships { for id in s.crew { mobs.removeAll { $0.id == id } } }
-				ships.removeAll()
-			}
-			return
-		}
-		// spawning
-		shipTimer -= dt
-		if shipTimer <= 0 {
-			shipTimer = Double.random(in: 25...50)
-			trySpawnShip()
-		}
-		var i: Int = 0
-		let sea: Double = Double(WorldGen.sea)
-		while i < ships.count {
-			let s: PirateShip = ships[i]
-			if abs(s.x - pb.x) > 170 {
-				for id in s.crew { mobs.removeAll { $0.id == id } }
-				ships.remove(at: i)
-				continue
-			}
-			if !world.isLoaded(Int(floor(s.x))) { i += 1; continue }
-			s.bob += dt * 1.5
-			if s.hitT > 0 { s.hitT -= dt }
-			if s.hp <= 0 && s.sink == 0 {
-				s.sink = 0.01
-				say("The pirate ship is sinking!", 3.0)
-				for id in s.crew { for m in mobs where m.id == id { m.boat = -1; m.raiding = true } }
-				for _ in 0..<6 { spawnDrop(Stack(item: .block(.planks), count: 2), s.x + Double.random(in: -3...3), s.deckY(sea) - 1, Double.random(in: -2...2), -4) }
-				spawnDrop(Stack(item: .mat(.goldBar), count: 2 + Int.random(in: 0...3)), s.x, s.deckY(sea) - 1, 0, -5)
-				if !s.looted { spawnDrop(Stack(item: .mat(.gunpowder), count: 4), s.x + 1, s.deckY(sea) - 1, 1, -5) }
-			}
-			if s.sink > 0 {
-				s.sink += dt * 0.8
-				s.speed = 0
-				spawnParticles(s.x + Double.random(in: -4...4), sea - 0.2, 0xFFFFFF, 1, 1.5, 0.5, 4)
-				if s.sink > 6.0 {
-					ships.remove(at: i)
-					continue
-				}
-				i += 1
-				continue
-			}
-			// crew bookkeeping
-			var alive: Int = 0
-			for id in s.crew { for m in mobs where m.id == id && m.hp > 0 { alive += 1 } }
-			if alive == 0 && s.state != 3 {
-				s.state = 3
-				s.speed = 0
-			}
-			let dxP: Double = pb.x - s.x
-			let landOnly: Bool = !pb.inWater
-			switch s.state {
-			case 0:
-				s.speed = 1.6
-				if abs(dxP) < 75 && landOnly && pb.y < sea + 2 { s.state = 1 }
-			case 1:
-				s.speed = 2.6
-				s.dir = dxP >= 0 ? 1 : -1
-				if abs(dxP) > 110 { s.state = 0 }
-			case 2:
-				s.speed = 0
-				if abs(dxP) > 70 { s.state = 0 }
-			default:
-				s.speed = 0
-			}
-			if s.state == 0 || s.state == 1 {
-				let aheadX: Int = Int(floor(s.x + Double(s.dir) * 6.0))
-				let waterAhead: Bool = world.tile(aheadX, WorldGen.sea + 1) == .water && world.tile(aheadX, WorldGen.sea + 5) == .water
-				let withinPatrol: Bool = s.x + Double(s.dir) * 6.0 > s.patrolMin && s.x + Double(s.dir) * 6.0 < s.patrolMax
-				if !waterAhead || (!withinPatrol && s.state == 0) {
-					if s.state == 1 { s.state = 2; s.speed = 0 } else { s.dir = -s.dir }
-				} else {
-					s.x += Double(s.dir) * s.speed * dt
-				}
-				// reached the shore: anchor and let the raiders out
-				if s.state == 1 && abs(dxP) < 14 && !waterAhead { s.state = 2 }
-			}
-			i += 1
-		}
-	}
-
-	func trySpawnShip() {
-		if ships.count >= 2 || dead { return }
-		if Double.random(in: 0...1) > 0.55 { return }
-		let side: Double = Bool.random() ? 1.0 : -1.0
-		let x: Int = Int(floor(pb.x + side * Double.random(in: 52...78)))
-		if !world.isLoaded(x) { return }
-		if !gen.infinite && (x < 40 || x > gen.width - 40) { return }
-		if !oceanOK(x) || !oceanOK(x - 6) || !oceanOK(x + 6) { return }
-		if world.tile(x, WorldGen.sea + 1) != .water { return }
-		// patrol range = ocean extent
-		var lo: Int = x
-		var hi: Int = x
-		var n: Int = 0
-		while n < 260 && oceanOK(lo - 4) { lo -= 4; n += 1 }
-		n = 0
-		while n < 260 && oceanOK(hi + 4) { hi += 4; n += 1 }
-		if hi - lo < 50 { return }
-		let s = PirateShip(id: newID(), x: Double(x), dir: side > 0 ? -1 : 1, pMin: Double(lo + 8), pMax: Double(hi - 8))
-		s.state = 0
-		let sea: Double = Double(WorldGen.sea)
-		let dy: Double = s.deckY(sea)
-		var kinds: [MobKind] = [.pirate, .pirateGunner, .pirate]
-		if Double.random(in: 0...1) < 0.3 { kinds.append(.pirateCaptain) }
-		if Double.random(in: 0...1) < 0.4 { kinds.append(.pirateGunner) }
-		var k: Int = 0
-		for kind in kinds {
-			let ox: Double = -2.8 + Double(k) * 1.8
-			let m: Mob = addMob(kind, s.x + ox, dy)
-			m.boat = s.id
-			m.homeX = m.b.x
-			m.persistent = true
-			s.crew.append(m.id)
-			k += 1
-		}
-		ships.append(s)
-		say("Pirates ahoy! A pirate ship patrols the sea.", 3.0)
+	/// y of the deck standing line in tiles
+	func deckY(_ seaY: Double) -> Double {
+		return seaY - PirateShip.waterRow + PirateShip.deckRow + sink + sin(bob) * 0.12
 	}
 }
 
-// ===== p18_portal_map =====
+// ===== p14a_game =====
 
-// MARK: - Portal travel between dimensions
+// MARK: - Game state
 
-extension Game {
-	func updatePortal(_ dt: Double) {
-		if portalCool > 0 { portalCool -= dt }
-		if fadeT > 0 { fadeT = max(0, fadeT - dt * 1.4) }
-		if dead {
-			portalT = 0
-			return
-		}
-		var px: Double = pb.x
-		var py: Double = pb.y - pb.h * 0.5
-		if let r = mounted {
-			px = r.b.x
-			py = r.b.cy
-		}
-		let a: Tile = world.tile(Int(floor(px)), Int(floor(py)))
-		let b: Tile = world.tile(Int(floor(px)), Int(floor(pb.y - 0.3)))
-		let inside: Bool = a == .portalOn || b == .portalOn
-		if !inside { portalNeedsExit = false }
-		riftCheckT -= dt
-		if riftCheckT <= 0 {
-			riftCheckT = 1.0
-			migrateOldRift()
-		}
-		if inside && portalCool <= 0 && !portalNeedsExit {
-			portalT += dt
-			fadeT = max(fadeT, min(1.0, portalT / 1.1))
-			if Double.random(in: 0...1) < 0.5 {
-				spawnParticles(px + Double.random(in: -1...1), py + Double.random(in: -1.5...1.5), 0x7FE8DA, 1, 2.0, 0.6, -2)
-			}
-			if portalT >= 1.1 {
-				portalT = 0
-				let dest: Dimension = world.dim == .overworld ? .umbral : .overworld
-				let spot: (Double, Double) = portalArrival(dest)
-				travelTo(dest, arriveX: spot.0, arriveY: spot.1, silent: false)
-				portalNeedsExit = true
-			}
-		} else if portalT > 0 {
-			portalT = max(0, portalT - dt * 2.0)
-		}
-		// the key hums when the hidden portal is near
-		if world.dim == .overworld && !portalOpened {
-			hintT -= dt
-			if hintT <= 0 {
-				hintT = 6.0
-				if inv.total(.gadget(.portalKey)) > 0 {
-					let lv: Int = portalHintLevel()
-					if lv >= 2 { say(portalHintText(lv), 3.0) }
-				}
-			}
-		}
+enum GameMode: String, Codable {
+	case survival, creative, hardcore
+	var title: String { return rawValue.capitalized }
+}
+
+struct Settings: Codable {
+	/// the player's look (the character screen): hair colour and style, shirt colour and style, trouser
+	/// colour and style, scarf (each a place in its list: hairChoices, hairStyleNames, ...)
+	var hair: Int = 0
+	var scarf: Int = 0
+	var hairStyle: Int = 0
+	var shirtColor: Int = 0
+	var shirtStyle: Int = 0
+	var pantsColor: Int = 0
+	var pantsStyle: Int = 0
+	var touchControls: Bool = true
+	var peaceful: Bool = false
+	var showCoords: Bool = true
+	var tilePx: Int = 24
+	var rareChance: Double = 0.28
+	var smoothLight: Bool = true
+	/// true = 60 frames per second, false = 30 (smoother on older iPads)
+	var fps60: Bool = true
+	var showFPS: Bool = false
+	// camera
+	var camSmoothOn: Bool = true
+	/// 0 = loose and floaty, 1 = tight
+	var camFollow: Double = 0.55
+	/// tiles the player can move before the camera starts to follow
+	var camDeadZone: Double = 0.8
+	var camLookAhead: Bool = true
+	/// the camera stays on the player: no dead zone, no look-ahead, a quick smooth follow
+	var camDirect: Bool = false
+	var shakeOn: Bool = true
+	var shakeIntensity: Double = 0.5
+	var showTrajectory: Bool = true
+	// sound
+	var soundOn: Bool = true
+	var sfxVolume: Double = 0.7
+	var ambienceVolume: Double = 0.5
+	// weather: a master switch, a switch for each kind, what it may damage, how strong and how often
+	// severe weather is, alerts, how much is drawn, and gentler lightning
+	var weatherOn: Bool = true
+	var allowRain: Bool = true
+	var allowThunder: Bool = true
+	var allowWind: Bool = true
+	var allowTornado: Bool = true
+	var allowHurricane: Bool = true
+	var allowBlizzard: Bool = true
+	var allowHail: Bool = true
+	var weatherHurtsPlayer: Bool = true
+	var weatherHurtsBlocks: Bool = true
+	var weatherHurtsCreatures: Bool = true
+	/// 0.25 (gentle) ... 1.5 (fierce)
+	var weatherIntensity: Double = 1.0
+	/// how often severe weather comes: 0 rare, 1 normal, 2 frequent
+	var severeFrequency: Int = 1
+	var weatherAlerts: Bool = true
+	/// 0.2 ... 1: how many raindrops, flakes and stones are drawn
+	var weatherParticles: Double = 1.0
+	/// lightning lights the scene gently instead of flashing it (strikes still happen)
+	var reduceFlashes: Bool = false
+	/// how dangerous nights are: 0 calm, 1 normal, 2 deadly (how many monsters, how quickly they come)
+	var nightDanger: Int = 1
+	/// how wiring is drawn: 0 only while a wiring tool or the probe is in hand, 1 always, 2 always but faint
+	var showWires: Int = 0
+	/// structural physics: built blocks need support and can only carry so much (see updateStructures)
+	var structural: Bool = false
+	/// vehicles take damage (shots, blasts, crashes) and parts break off
+	var vehicleDamage: Bool = true
+
+	var shakeScale: Double { return shakeOn ? shakeIntensity : 0 }
+
+	mutating func resetWeather() {
+		let d: Settings = Settings()
+		weatherOn = d.weatherOn
+		allowRain = d.allowRain
+		allowThunder = d.allowThunder
+		allowWind = d.allowWind
+		allowTornado = d.allowTornado
+		allowHurricane = d.allowHurricane
+		allowBlizzard = d.allowBlizzard
+		allowHail = d.allowHail
+		weatherHurtsPlayer = d.weatherHurtsPlayer
+		weatherHurtsBlocks = d.weatherHurtsBlocks
+		weatherHurtsCreatures = d.weatherHurtsCreatures
+		weatherIntensity = d.weatherIntensity
+		severeFrequency = d.severeFrequency
+		weatherAlerts = d.weatherAlerts
+		weatherParticles = d.weatherParticles
+		reduceFlashes = d.reduceFlashes
 	}
 
-	/// Floor row the rift stands on in the current dimension
-	var riftBase: Int {
-		return world.dim == .overworld ? gen.portalY + 5 : gen.umbralPortalFloor - 1
+	static let cameraDefaults: Settings = Settings()
+
+	mutating func resetCamera() {
+		let d: Settings = Settings.cameraDefaults
+		camSmoothOn = d.camSmoothOn
+		camFollow = d.camFollow
+		camDeadZone = d.camDeadZone
+		camLookAhead = d.camLookAhead
+		camDirect = d.camDirect
+		shakeOn = d.shakeOn
+		shakeIntensity = d.shakeIntensity
+		tilePx = d.tilePx
 	}
 
-	/// Middle of the rift's oval (same for both the old frame and the new rift)
-	var riftCenter: (Double, Double) {
-		return (Double(gen.portalX) + 0.5, Double(riftBase - 4) + 0.5)
-	}
+	init() {}
 
-	/// Worlds made before the rift redesign have a closed rectangular frame (which also could not be
-	/// walked into). Once the area is loaded it is rebuilt as the new open rift, keeping its state.
-	func migrateOldRift() {
-		let px: Int = gen.portalX
-		let base: Int = riftBase
-		if !world.isLoaded(px - 3) || !world.isLoaded(px + 3) { return }
-		if world.tile(px - 3, base - 8) != .portalFrame || world.tile(px - 3, base - 2) != .portalFrame { return }
-		let fill: Tile = world.tile(px, base - 4) == .portalOn ? .portalOn : .portalOff
-		for x in (px - 3)...(px + 3) {
-			for y in (base - 8)...(base - 1) { _ = world.set(x, y, .air) }
+	// Missing keys (settings saved by an older version) fall back to the defaults
+	init(from decoder: Decoder) throws {
+		let c = try decoder.container(keyedBy: CodingKeys.self)
+		hair = (try? c.decodeIfPresent(Int.self, forKey: .hair)) ?? 0
+		scarf = (try? c.decodeIfPresent(Int.self, forKey: .scarf)) ?? 0
+		hairStyle = (try? c.decodeIfPresent(Int.self, forKey: .hairStyle)) ?? 0
+		shirtColor = (try? c.decodeIfPresent(Int.self, forKey: .shirtColor)) ?? 0
+		shirtStyle = (try? c.decodeIfPresent(Int.self, forKey: .shirtStyle)) ?? 0
+		pantsColor = (try? c.decodeIfPresent(Int.self, forKey: .pantsColor)) ?? 0
+		pantsStyle = (try? c.decodeIfPresent(Int.self, forKey: .pantsStyle)) ?? 0
+		// settings from before the look had styles: their hair and scarf lists were in another order,
+		// so the look starts afresh as the player's own drawing (black hair, no scarf)
+		if (try? c.decodeIfPresent(Int.self, forKey: .hairStyle)) == nil {
+			hair = 0
+			scarf = 0
 		}
-		let w: World = world
-		riftShape(px, base, fill) { x, y, t in _ = w.set(x, y, t) }
-		light.valid = false
-	}
-
-	/// Standing spot just to the right of the portal frame in the given dimension
-	func portalArrival(_ dim: Dimension) -> (Double, Double) {
-		if dim == .overworld {
-			return (Double(gen.portalX) + 5.5, Double(gen.portalY + 6))
-		}
-		return (Double(gen.portalX) + 5.5, Double(gen.umbralPortalFloor))
-	}
-
-	func standable(_ x: Int, _ y: Int) -> Bool {
-		// feet at row y means the tile at row y is the floor
-		let f: Tile = world.tile(x, y)
-		if !(f.solid || f == .platform) { return false }
-		for k in 1...2 {
-			let t: Tile = world.tile(x, y - k)
-			if t.solid || t.liquid || t == .portalOn { return false }
-		}
-		return true
-	}
-
-	func findSafeSpot(_ ax: Double, _ ay: Double) -> (Double, Double) {
-		let bx: Int = Int(floor(ax))
-		let by: Int = Int(floor(ay))
-		let offs: [Int] = [0, 1, -1, 2, -2, 3, -3, 4, -4, 6, -6, 8, -8, 10, -10]
-		for o in offs {
-			let x: Int = bx + o
-			for dy in 0...24 {
-				for sgn in [1, -1] {
-					let y: Int = by + dy * sgn
-					if y < 3 || y >= world.H - 2 { continue }
-					if standable(x, y) { return (Double(x) + 0.5, Double(y)) }
-					if dy == 0 { break }
-				}
-			}
-		}
-		// nothing usable: carve a 2x3 pocket and lay a floor
-		for x in bx...(bx + 1) {
-			for y in (by - 3)...(by - 1) {
-				let t: Tile = world.tile(x, y)
-				if t.def.hard < 9000 { world.set(x, y, .air) }
-			}
-			if !world.tile(x, by).solid { world.set(x, by, .stone) }
-		}
-		return (Double(bx) + 0.5, Double(by))
-	}
-
-	func travelTo(_ dim: Dimension, arriveX: Double, arriveY: Double, silent: Bool) {
-		if inVehicle != nil { dismount() }
-		let riding: Mob? = mounted
-		// pets close to the player come along
-		var carried: [Mob] = []
-		for m in mobs where m.tame && m.hp > 0 && !(m === rex) {
-			if abs(m.b.x - pb.x) < 14 && abs(m.b.y - pb.y) < 10 && m.st != 7 { carried.append(m) }
-		}
-		let bringRex: Mob? = (rex != nil && rex!.hp > 0) ? rex : nil
-		// everything else stays behind
-		vehicleStash[world.dim.rawValue] = vehicles
-		vehicles = vehicleStash[dim.rawValue]
-		vehicleStash[dim.rawValue] = []
-		liftStash[world.dim.rawValue] = lifts
-		lifts = liftStash[dim.rawValue]
-		liftStash[dim.rawValue] = []
-		seat = nil
-		mobs.removeAll()
-		projectiles.removeAll()
-		drops.removeAll()
-		particles.removeAll()
-		flashes.removeAll()
-		dangerZones.removeAll()
-		ships.removeAll()
-		smokes.removeAll()
-		rings.removeAll()
-		shipTimer = 30
-		activeBoss = nil
-		decksCache = []
-		world.switchDimension(dim)
-		world.loadAround(centerX: Int(floor(arriveX)), radius: 3)
-		let spot: (Double, Double) = findSafeSpot(arriveX, arriveY)
-		pb.x = spot.0
-		pb.y = spot.1
-		pb.vx = 0
-		pb.vy = 0
-		pb.onGround = true
-		fallPeak = 0
-		facing = -1
-		camX = pb.x
-		camY = pb.y - 2
-		lastStreamCX = Int.min
-		light.valid = false
-		lightTimer = 0
-		portalCool = 3.0
-		portalT = 0
-		fadeT = 1.0
-		for (i, m) in carried.enumerated() {
-			m.b.x = pb.x + 1.2 + Double(i) * 0.9
-			m.b.y = pb.y
-			m.b.vx = 0
-			m.b.vy = 0
-			mobs.append(m)
-		}
-		if let r = bringRex {
-			r.b.vx = 0
-			r.b.vy = 0
-			if riding === r {
-				r.b.x = pb.x
-				r.b.y = pb.y
-				if world.boxSolid(r.b.left, r.b.top, r.b.right, r.b.y - 0.05) {
-					r.b.x = Double(gen.portalX) - 6.5
-				}
-			} else {
-				r.b.x = Double(gen.portalX) - 6.5
-				r.b.y = pb.y
-			}
-			if world.boxSolid(r.b.left, r.b.top, r.b.right, r.b.y - 0.05) {
-				teleportRexNearPlayer(r)
-			}
-			r.stuckT = 0
-			r.lastX = r.b.x
-			mobs.append(r)
-		} else {
-			mounted = nil
-		}
-		if let r = mounted, r !== bringRex { _ = r; mounted = nil }
-		if !silent {
-			if dim == .umbral {
-				say("You step into the Umbral Realm. Beware the heat and the dark.", 5.0)
-			} else {
-				say("You return to the Overworld.", 3.0)
-			}
-			addShake(0.4)
-		}
-		bumpHUD()
-	}
-
-	// MARK: portal proximity hint
-
-	/// 0 silent ... 4 right on top of it
-	func portalHintLevel() -> Int {
-		if world.dim != .overworld { return 0 }
-		let dx: Double = pb.x - Double(gen.portalX)
-		let dy: Double = (pb.y - Double(gen.portalY)) * 0.6
-		let d: Double = sqrt(dx * dx + dy * dy)
-		if d < 45 { return 4 }
-		if d < 120 { return 3 }
-		if d < 300 { return 2 }
-		if d < 700 { return 1 }
-		return 0
-	}
-
-	func portalHintText(_ lv: Int) -> String {
-		switch lv {
-		case 4: return "The Portal Key burns in your hand. The gate is very close!"
-		case 3: return "The Portal Key hums loudly. You are near."
-		case 2: return "The Portal Key trembles faintly..."
-		case 1: return "The Portal Key is cool and quiet. The gate is far."
-		default: return "The Portal Key is silent."
-		}
+		touchControls = (try? c.decodeIfPresent(Bool.self, forKey: .touchControls)) ?? true
+		peaceful = (try? c.decodeIfPresent(Bool.self, forKey: .peaceful)) ?? false
+		showCoords = (try? c.decodeIfPresent(Bool.self, forKey: .showCoords)) ?? true
+		tilePx = (try? c.decodeIfPresent(Int.self, forKey: .tilePx)) ?? 24
+		rareChance = (try? c.decodeIfPresent(Double.self, forKey: .rareChance)) ?? 0.28
+		smoothLight = (try? c.decodeIfPresent(Bool.self, forKey: .smoothLight)) ?? true
+		fps60 = (try? c.decodeIfPresent(Bool.self, forKey: .fps60)) ?? true
+		showFPS = (try? c.decodeIfPresent(Bool.self, forKey: .showFPS)) ?? false
+		camSmoothOn = (try? c.decodeIfPresent(Bool.self, forKey: .camSmoothOn)) ?? true
+		camFollow = (try? c.decodeIfPresent(Double.self, forKey: .camFollow)) ?? 0.55
+		camDeadZone = (try? c.decodeIfPresent(Double.self, forKey: .camDeadZone)) ?? 0.8
+		camLookAhead = (try? c.decodeIfPresent(Bool.self, forKey: .camLookAhead)) ?? true
+		camDirect = (try? c.decodeIfPresent(Bool.self, forKey: .camDirect)) ?? false
+		shakeOn = (try? c.decodeIfPresent(Bool.self, forKey: .shakeOn)) ?? true
+		shakeIntensity = (try? c.decodeIfPresent(Double.self, forKey: .shakeIntensity)) ?? 0.5
+		showTrajectory = (try? c.decodeIfPresent(Bool.self, forKey: .showTrajectory)) ?? true
+		soundOn = (try? c.decodeIfPresent(Bool.self, forKey: .soundOn)) ?? true
+		sfxVolume = (try? c.decodeIfPresent(Double.self, forKey: .sfxVolume)) ?? 0.7
+		ambienceVolume = (try? c.decodeIfPresent(Double.self, forKey: .ambienceVolume)) ?? 0.5
+		weatherOn = (try? c.decodeIfPresent(Bool.self, forKey: .weatherOn)) ?? true
+		allowRain = (try? c.decodeIfPresent(Bool.self, forKey: .allowRain)) ?? true
+		allowThunder = (try? c.decodeIfPresent(Bool.self, forKey: .allowThunder)) ?? true
+		allowWind = (try? c.decodeIfPresent(Bool.self, forKey: .allowWind)) ?? true
+		allowTornado = (try? c.decodeIfPresent(Bool.self, forKey: .allowTornado)) ?? true
+		allowHurricane = (try? c.decodeIfPresent(Bool.self, forKey: .allowHurricane)) ?? true
+		allowBlizzard = (try? c.decodeIfPresent(Bool.self, forKey: .allowBlizzard)) ?? true
+		allowHail = (try? c.decodeIfPresent(Bool.self, forKey: .allowHail)) ?? true
+		weatherHurtsPlayer = (try? c.decodeIfPresent(Bool.self, forKey: .weatherHurtsPlayer)) ?? true
+		weatherHurtsBlocks = (try? c.decodeIfPresent(Bool.self, forKey: .weatherHurtsBlocks)) ?? true
+		weatherHurtsCreatures = (try? c.decodeIfPresent(Bool.self, forKey: .weatherHurtsCreatures)) ?? true
+		weatherIntensity = clampD((try? c.decodeIfPresent(Double.self, forKey: .weatherIntensity)) ?? 1.0, 0.25, 1.5)
+		severeFrequency = clampI((try? c.decodeIfPresent(Int.self, forKey: .severeFrequency)) ?? 1, 0, 2)
+		weatherAlerts = (try? c.decodeIfPresent(Bool.self, forKey: .weatherAlerts)) ?? true
+		weatherParticles = clampD((try? c.decodeIfPresent(Double.self, forKey: .weatherParticles)) ?? 1.0, 0.2, 1.0)
+		reduceFlashes = (try? c.decodeIfPresent(Bool.self, forKey: .reduceFlashes)) ?? false
+		nightDanger = clampI((try? c.decodeIfPresent(Int.self, forKey: .nightDanger)) ?? 1, 0, 2)
+		showWires = clampI((try? c.decodeIfPresent(Int.self, forKey: .showWires)) ?? 0, 0, 2)
+		structural = (try? c.decodeIfPresent(Bool.self, forKey: .structural)) ?? false
+		vehicleDamage = (try? c.decodeIfPresent(Bool.self, forKey: .vehicleDamage)) ?? true
 	}
 }
 
-// MARK: - Treasure map
+/// The HUD and panels watch this instead of the whole game, so they only redraw when something they show changes.
+final class HUDSignal: ObservableObject, @unchecked Sendable {
+	@Published var tick: Int = 0
+}
 
-struct MapMarker {
+/// The world canvas watches this; it changes once per game step.
+final class FrameTicker: ObservableObject, @unchecked Sendable {
+	@Published var frame: Int = 0
+}
+
+struct IntPair: Hashable {
 	var x: Int
-	var kind: Int      // 0 spawn, 1 bear lair, 2 rex lair, 4 ruin, 5 mine shaft
-	var label: String
+	var y: Int
 }
 
-struct TreasureMap {
-	var x0: Int
-	var x1: Int
-	var step: Int
-	var heights: [Int]
-	var biomes: [Biome]
-	var ringX: Int
-	var ringY: Int
-	var ringRX: Int
-	var ringRY: Int
-	var markers: [MapMarker]
-	var clues: [String]
-	var worldH: Int
-}
-
-func biomeMapColor(_ b: Biome) -> UInt32 {
-	switch b {
-	case .ocean: return 0x5C88B0
-	case .plains: return 0x8DB25A
-	case .forest: return 0x4E8A3E
-	case .desert: return 0xE0C878
-	case .tundra: return 0xE8F0F4
-	case .jungle: return 0x2F7A2A
-	case .savanna: return 0xC8B058
-	case .swamp: return 0x5E7048
-	case .mountain: return 0x8C8478
-	case .umbral: return 0x50306A
+final class Game: ObservableObject, @unchecked Sendable {
+	/// a number no other game in this run has (what the render cache knows a world by)
+	let serial: Int = Game.nextSerial()
+	static var serialCount: Int = 0
+	static func nextSerial() -> Int {
+		serialCount += 1
+		return serialCount
 	}
-}
+	// UI refresh signals
+	let hud: HUDSignal = HUDSignal()
+	let ticker: FrameTicker = FrameTicker()
+	var lastHudKey: Int = 0
+	var renderFPS: Double = 0
+	@Published var showInventory: Bool = false
+	@Published var showDebug: Bool = false
+	@Published var showMap: Bool = false
+	@Published var showJournal: Bool = false
+	@Published var paused: Bool = false
+	@Published var openChest: IntPair? = nil
+	@Published var message: String? = nil
+	@Published var dead: Bool = false
+	@Published var craftStation: Station = .hand
 
-func roughDistance(_ d: Int) -> String {
-	let unit: Int = d < 1000 ? 50 : 100
-	let r: Int = max(unit, Int((Double(d) / Double(unit)).rounded()) * unit)
-	if r >= 1000 {
-		let th: Int = r / 1000
-		let rest: Int = (r % 1000) / 100
-		return String(th) + "," + String(rest) + "00"
-	}
-	return String(r)
-}
-
-extension Game {
-	func treasureMap() -> TreasureMap {
-		if let m = mapCache { return m }
-		let m: TreasureMap = buildTreasureMap()
-		mapCache = m
-		return m
-	}
-
-	func buildTreasureMap() -> TreasureMap {
-		let g: WorldGen = gen
-		let px: Int = g.portalX
-		let py: Int = g.portalY
-		let rx: Int = 150
-		let ry: Int = 80
-		// the ring is offset so the exact spot stays a mystery, but the portal is always inside it
-		let ox: Int = Int((hash2(11, 12, g.seed) - 0.5) * 2.0 * 0.55 * Double(rx))
-		let oy: Int = Int((hash2(13, 14, g.seed) - 0.5) * 2.0 * 0.55 * Double(ry))
-		let ringX: Int = px + ox
-		let ringY: Int = clampI(py + oy, 200 + ry / 2, WorldGen.H - 20 - ry / 2)
-		let sx: Int = g.spawnX
-		var x0: Int = min(sx, ringX - rx) - 160
-		var x1: Int = max(sx, ringX + rx) + 160
-		if !g.infinite {
-			x0 = max(0, x0)
-			x1 = min(g.width - 1, x1)
-		}
-		let step: Int = max(4, (x1 - x0) / 300)
-		var hs: [Int] = []
-		var bs: [Biome] = []
-		var x: Int = x0
-		while x <= x1 {
-			let c: Col = g.col(x)
-			hs.append(c.h)
-			bs.append(c.biome)
-			x += step
-		}
-		var markers: [MapMarker] = [MapMarker(x: sx, kind: 0, label: "Start")]
-		for L in g.lairCenters(near: (x0 + x1) / 2) {
-			if L.cx < x0 || L.cx > x1 { continue }
-			markers.append(MapMarker(x: L.cx, kind: L.kind == .bear ? 1 : 2, label: L.kind == .bear ? "Bear Den" : "Bone Nest"))
-		}
-		var ruins: [RareSite] = []
-		for r in g.rareSites(overlapping: x0, x1) {
-			ruins.append(r)
-			markers.append(MapMarker(x: r.x, kind: 4, label: rareName(r.kind)))
-		}
-		for s in g.mineSites(overlapping: x0, x1) {
-			markers.append(MapMarker(x: s.x + 1, kind: 5, label: "Mine Shaft"))
-		}
-		// clues
-		var clues: [String] = []
-		let d: Int = abs(px - sx)
-		let dirS: String = px >= sx ? "east" : "west"
-		clues.append("The gate lies roughly " + roughDistance(d) + " blocks " + dirS + " of where you first woke.")
-		let top: Col = g.col(px)
-		clues.append("Above it, the land is " + top.biome.name + ".")
-		clues.append("It sleeps far below the surface, deeper than the iron veins. Dig down.")
-		// nearest landmark
-		var best: MapMarker? = nil
-		var bd: Int = Int.max
-		for mk in markers where mk.kind != 0 {
-			let dd: Int = abs(mk.x - px)
-			if dd < bd && dd < 900 { bd = dd; best = mk }
-		}
-		if let b = best {
-			let side: String = b.x < px ? "west" : "east"
-			clues.append("The nearest landmark, a " + b.label.lowercased() + ", stands about " + roughDistance(bd) + " blocks to its " + side + ".")
-		}
-		// terrain hint on each side
-		for side in [-1, 1] {
-			var mt: Int = 0
-			var oc: Int = 0
-			var k: Int = 20
-			while k <= 220 {
-				let b: Biome = g.colBase(px + side * k).biome
-				if b == .mountain { mt += 1 }
-				if b == .ocean { oc += 1 }
-				k += 20
-			}
-			let sn: String = side < 0 ? "west" : "east"
-			if mt >= 3 { clues.append("Mountains guard its " + sn + " side.") }
-			else if oc >= 3 { clues.append("The sea is close on its " + sn + " side.") }
-		}
-		clues.append("The Portal Key hums louder as you draw near.")
-		_ = ruins
-		return TreasureMap(x0: x0, x1: x1, step: step, heights: hs, biomes: bs, ringX: ringX, ringY: ringY, ringRX: rx, ringRY: ry, markers: markers, clues: clues, worldH: WorldGen.H)
-	}
-}
-
-func rareName(_ k: RareKind) -> String {
-	switch k {
-	case .house: return "Ruined House"
-	case .tower: return "Ruined Tower"
-	case .fort: return "Old Fort"
-	case .camp: return "Abandoned Camp"
-	case .overgrown: return "Overgrown Ruin"
-	case .bunker: return "Buried Bunker"
-	}
-}
-
-// ===== p19_save =====
-
-// MARK: - Saving and loading
-
-struct ChunkSave: Codable {
-	var dim: Int
-	var cx: Int
-	var data: Data
-	var walls: Data? = nil
-	/// Sparkworks wiring (nil in older saves and chunks with none)
-	var wires: Data? = nil
-	/// which blocks the player built (nil: none; see World.isBuilt)
-	var built: Data? = nil
-	/// how full each part-full liquid cell is (nil: none; see p12c_fluids)
-	var levels: Data? = nil
-}
-
-struct SaveMeta: Codable {
-	var slot: Int
-	var name: String
-	var mode: GameMode
-	var infinite: Bool
-	var seed: UInt64
-	var day: Int
-	var playSeconds: Double
-	var dim: Int
-	/// world generation rules the world was created with (nil in saves made before basins existed)
-	var genVersion: Int? = nil
-	/// world type chosen at creation (nil in saves made before flat worlds existed: a standard world)
-	var options: WorldOptions? = nil
-}
-
-struct SaveData: Codable {
-	var version: Int = 2
-	var meta: SaveMeta
+	// setup
+	var world: World
 	var settings: Settings
-	var px: Double
-	var py: Double
-	var hp: Double
-	var maxHP: Double
-	var hunger: Double
-	var timeOfDay: Double
-	var kills: Int
-	var spawnX: Double
-	var spawnY: Double
-	var inv: Inventory
-	var sel: Int
-	var defeated: [Int]
-	var gotMap: Bool
-	var portalOpened: Bool
-	var chests: [ChestEntry]
-	var chunks: [ChunkSave]
-	var vehicles: [[VehicleSave]]
-	var pets: [MobSave]
-	var rex: MobSave?
-	var nextID: Int
-	/// nil in saves made before the journal
-	var journal: Journal? = nil
-	/// nil in saves made before the weather simulation (such worlds start with fair weather)
-	var weather: WeatherSim? = nil
-	/// how cold the player was
-	var bodyCold: Double? = nil
-	/// Sparkworks devices: settings and charge (nil in saves made before power)
-	var power: [PowerDevSave]? = nil
-	/// the mods the world was made with and its custom blocks' tile numbers (nil: no mods)
-	var mods: ModWorldInfo? = nil
-	/// potion effects on the player (nil: none, or a save from before potions)
-	var effects: EffectsSave? = nil
-	/// mutated creatures still about (nil: none)
-	var mutants: [MutantSave]? = nil
-	/// the exosuit (nil: never built)
-	var suit: ExoSuit? = nil
-	/// summoned mod creatures still about (nil: none)
-	var bosses: [ModBossSave]? = nil
-	/// where the player came into a custom dimension from (nil: not in one)
+	var mode: GameMode
+	var worldName: String = "World"
+	var slot: Int = 0
+	var seedValue: UInt64
+
+	// time
+	var timeOfDay: Double = 0.06
+	/// seconds of a whole day (12 minutes, or a mod's day length rule)
+	var dayLength: Double { return 60.0 * ModRuntime.shared.rule(.day) }
+	var dayCount: Int = 1
+	var clock: Double = 0
+	var playSeconds: Double = 0
+	var messageT: Double = 0
+	var hudAccum: Int = 0
+
+	// player
+	var pb: Body
+	var facing: Int = 1
+	var hp: Double = 20
+	var maxHP: Double = 20
+	var hunger: Double = 20
+	var air: Double = 10
+	var hurtT: Double = 0
+	var invuln: Double = 0
+	var deathT: Double = 0
+	var inv: Inventory = Inventory()
+	var sel: Int = 0
+	var spawnX: Double = 0
+	var spawnY: Double = 0
+	var kills: Int = 0
+	var coyote: Double = 0
+	var jumpBuf: Double = 0
+	var dropT: Double = 0
+	/// time left in a vault out of water onto a ledge
+	var vaultT: Double = 0
+	var starveT: Double = 0
+	var regenT: Double = 0
+	var lastVy: Double = 0
+	var walkAnim: Double = 0
+	/// how long the player has stood still with nothing in hand at work (the sprite turns to face out
+	/// of the screen after a moment)
+	var restT: Double = 0
+	var fallPeak: Double = 0
+
+	// cheats / debug
+	var flying: Bool = false
+	var noclip: Bool = false
+	var godMode: Bool = false
+	var freezeTime: Bool = false
+	var monstersEnabled: Bool = true
+	var speedMult: Double = 1.0
+	var showHitboxes: Bool = false
+	/// debug: each hostile's AI state, what it knows of the player and why it is not attacking
+	var showAI: Bool = false
+	var showChunks: Bool = false
+	var fullBright: Bool = false
+	var infiniteReach: Bool = false
+	/// debug: multiplies the health of newly spawned creatures
+	var mobHealthMult: Double = 1.0
+	/// debug: individual systems can be paused to isolate problems
+	var pauseMobs: Bool = false
+	var pauseBosses: Bool = false
+	var pauseSpawning: Bool = false
+	var pauseProjectiles: Bool = false
+	var pauseVehicles: Bool = false
+	var pauseWorldTicks: Bool = false
+	var pauseParticles: Bool = false
+	/// debug: the creature picked with "Select at cursor"
+	weak var debugSelected: Mob? = nil
+	/// lairs whose boss stays away until the player has left the area (after "Delete all entities")
+	var suppressedLairs: Set<Int> = []
+
+	// tool use
+	var swingT: Double = 0
+	var swingDur: Double = 0.25
+	var swingDir: Int = 1
+	var useCD: Double = 0
+	var bowCharge: Double = 0
+	var reloadT: Double = 0
+	var reloadSlot: Int = -1
+	var mineX: Int = 0
+	var mineY: Int = 0
+	var mineP: Double = 0
+	var mining: Bool = false
+	var muzzleT: Double = 0
+	var recoilT: Double = 0
+	var bowRecoil: Double = 0
+	var eatT: Double = 0
+
+	// input state (set by the UI layer)
+	var stick: Double = 0
+	var stickY: Double = 0
+	var keyL: Bool = false
+	var keyR: Bool = false
+	var jumpHeld: Bool = false
+	var jumpPrev: Bool = false
+	var downHeld: Bool = false
+	var useHeld: Bool = false
+	var usePressedFlag: Bool = false
+	var useReleasedFlag: Bool = false
+	var aimX: Double = 0
+	var aimY: Double = 0
+	var aimValid: Bool = false
+	var useWasHeld: Bool = false
+	var lavaT: Double = 0
+	var drownT: Double = 0
+	var hardcoreOver: Bool = false
+	var pendingInteract: Bool = false
+	var downTime: Double = 0
+	var pointerStartX: Double = 0
+	var pointerStartY: Double = 0
+	var carry: Stack? = nil
+	var placeCD: Double = 0
+	var decksCache: [Deck] = []
+	var mineNeed: Double = 1
+
+	// camera and view
+	var camX: Double = 0
+	/// where the camera is heading (dead zone applied); camX/camY ease toward it
+	var camTX: Double = 0
+	var camTY: Double = 0
+	var camLead: Double = 0
+	var camY: Double = 0
+	var viewW: Double = 1024
+	var viewH: Double = 768
+	var tilePx: Int = 24
+	var shake: Double = 0
+
+	// entities
+	var mobs: [Mob] = []
+	var projectiles: [Projectile] = []
+	var drops: [DropItem] = []
+	/// doors the player walked through, closing behind them (see updateWalkDoors)
+	var walkDoors: [WalkDoor] = []
+	var particles: [Particle] = []
+	/// leaves falling from the trees on screen (see updateLeafFall)
+	var leafFlakes: [LeafFlake] = []
+	var floats: [FloatText] = []
+	var vehicles: [Vehicle] = []
+	var ships: [PirateShip] = []
+	var nextID: Int = 1
+	var spawnTimer: Double = 2.0
+	/// Sparkworks networks and their live state
+	let power: PowerSim = PowerSim()
+	/// time before the next monster may come out on the surface (sets the pace of a night)
+	var monsterSpawnCD: Double = 0
+	/// debug: how spawn attempts ended, by reason, and the last one
+	var spawnLog: [String: Int] = [:]
+	var spawnLast: String = ""
+	var shipTimer: Double = 20.0
+	var fallingBlocks: [FallingBlock] = []
+	/// placing a held block as a wall instead (the HUD's WALL switch)
+	var wallMode: Bool = false
+	/// the item in hand while the use button is held, and whether that hold used it up (see updateUse)
+	var lastUsedItem: Item? = nil
+	var handEmptied: Bool = false
+	/// the chair or sofa the player is sitting on
+	var seat: IntPair? = nil
+	/// a chair or sofa built on a vehicle the player sits on (the vehicle is the one they ride)
+	var seatAboard: PartCell? = nil
+	/// the buttons A, B and C for joints, while held; the joint being set up (its panel is open)
+	var jointButtons: [Bool] = [false, false, false]
+	var jointEdit: JointRef? = nil
+	@Published var showJoint: Bool = false
+	/// the vehicle the remote control is paired with, and the one it drives now (0: none)
+	var remotePair: Int = 0
+	var remoteID: Int = 0
+	/// the signal channels (1 to 8 as the player sees them): on from powered signal posts (worked out
+	/// with the machines), or as the Logic Studio set them
+	var channels: [Bool] = [Bool](repeating: false, count: Radio.channels)
+	var postChannels: [Bool] = [Bool](repeating: false, count: Radio.channels)
+	var logicChannels: [Bool] = [Bool](repeating: false, count: Radio.channels)
+	/// the vehicle whose receiver is being set up (its panel is open)
+	var radioEdit: Int = 0
+	@Published var showRadio: Bool = false
+	/// doors on vehicles the player opened by walking into them
+	var vehicleDoors: [VehicleDoor] = []
+	/// the lift cars of this dimension, and those left in the others
+	var lifts: [Lift] = []
+	var liftStash: [[Lift]] = [[Lift]](repeating: [], count: dimCount)
+	/// structural physics: changes waiting to be looked at, a moment's wait to gather them, and the
+	/// blocks under strain (drawn cracked)
+	var structQueue: [IntPair] = []
+	var structT: Double = 0
+	var stress: [Int: Double] = [:]
+	var decayZones: [DecayZone] = []
+	/// short-lived lights from explosions (fed into the light map as moving lights, then removed)
+	var flashes: [LightFlash] = []
+	/// ground about to be struck by a telegraphed attack (drawn as a warning)
+	var dangerZones: [DangerZone] = []
+	var journal: Journal = Journal()
+	var discoverT: Double = 0
+	var guardianT: Double = 0
+	/// weather (see WeatherSim): the simulation, what it brings to where the player stands, and the
+	/// short-lived things it puts in the world
+	var weather: WeatherSim = WeatherSim()
+	var wxHere: LocalWeather = LocalWeather()
+	/// kept for the code that reads them: how hard rain or snow falls on the player, and whether it is snow
+	var weatherRain: Double = 0
+	var weatherSnow: Bool = false
+	/// where the player last stood in the overworld (the weather is judged there while they are away)
+	var wxHomeX: Double = 0
+	var coastCache: [Int: (Double, Double)] = [:]
+	var bolts: [LightningBolt] = []
+	var thunderQueue: [PendingThunder] = []
+	var strikeMark: StrikeMark? = nil
+	var strikeAcc: Double = 0
+	var playerStrikeCD: Double = 0
+	var skyFlash: Double = 0
+	var hailPool: [HailStone] = []
+	var hailAcc: Double = 0
+	var hailHitT: Double = 0
+	var hailBroken: Int = 0
+	/// how much warmth the player has lost to the cold (0 fine ... 1 freezing), and what keeps it in
+	var bodyCold: Double = 0
+	var coldHurtT: Double = 0
+	var coldWarned: Bool = false
+	var warmthNear: Double = 0
+	var warmthT: Double = 0
+	/// 0 open, 1 under a roof, 2 indoors, 3 underground or in a storm shelter (see shelterAt)
+	var shelterLevel: Int = 0
+	var wxCellT: Double = 0
+	/// the wind's hold on the player this frame (see updateWeatherForces)
+	var wxWalk: Double = 0
+	var wxAirDrift: Double = 0
+	var wxRest: Double = 0
+	var wxAccelX: Double = 0
+	var wxAccelY: Double = 0
+	var wxSlip: Double = 0
+	var wxSlow: Double = 1
+	/// thrown by a tornado: a hard landing hurts less
+	var flingT: Double = 0
+	var wxDebrisT: Double = 0
+	var tornadoAcc: Double = 0
+	var tornadoGround: Double = 0
+	var hurricaneAcc: Double = 0
+	var surgeT: Double = 0
+	/// time not yet spent on the liquids' flow (see updateFlow), and the beat of a mod liquid's harm
+	var flowAccum: Double = 0
+	var liquidHarmT: Double = 0
+	var swampT: Double = 0
+	var wxDevT: Double = 0
+	var wxNoteT: Double = 0
+	/// the present severe spell actually reached the player (it then goes in the journal)
+	var stormFelt: Bool = false
+	var sirenLevel: Double = 0
+	/// the warning strip under the top bar (0 none, 1 advisory, 2 warning)
+	var wxBanner: String = ""
+	var wxBannerLevel: Int = 0
+	/// the weather station whose screen is open
+	var stationAt: DeviceSpot? = nil
+	@Published var showWeather: Bool = false
+	/// a Sparkworks device's panel, and which device
+	@Published var showPower: Bool = false
+	var powerAt: ChestKey? = nil
+	/// the last cell a wire drag reached, the network the probe lit up
+	var wireLast: IntPair? = nil
+	var wireSoundT: Double = 0
+	var inspect: PowerInspect? = nil
+	/// the landing squash and the last frame's water state (for splashes)
+	var landT: Double = 0
+	var wasInWater: Bool = false
+	let mobGrid: MobGrid = MobGrid()
+	var frameNo: Int = 0
+
+	// combat: the blow a heavy weapon is winding up, the brief freeze when a hit lands, the foe the
+	// aim is locked onto, a knife's run of quick hits, the trails, lightning and fire on screen
+	var strikeT: Double = 0
+	var strikeSel: Int = -1
+	var strikeItem: Item? = nil
+	weak var strikeTarget: Mob? = nil
+	var hitStopT: Double = 0
+	weak var lockTarget: Mob? = nil
+	var lockT: Double = 0
+	var comboN: Int = 0
+	var comboT: Double = -10
+	var slashes: [SlashFX] = []
+	var arcs: [ArcFX] = []
+	var fireZones: [FireZone] = []
+	var rodT: Double = 0
+	/// a finger is on the world (it aims for itself; the action button only keeps the action going)
+	var touchActive: Bool = false
+	/// a panel, the pause menu or death is covering the controls (their held state is dropped)
+	var inputBlocked: Bool = false
+	var lastWeaponSel: Int = -1
+	/// what the last melee blow hit (for the feedback and the tests)
+	var lastStrikeHits: Int = 0
+
+	// damage bookkeeping
+	var playerHitStamps: [Int: Double] = [:]
+	var playerBurn: Double = 0
+	var playerBurnTick: Double = 0
+	/// the mods this world uses (see ModRuntime; nil for a world without mods)
+	var modInfo: ModWorldInfo? = nil
+	/// the id of the mod being tried out in a mod test world ("" in a real world)
+	var testMod: String = ""
+	/// structure capture: picking two corners on the world, then the save panel (see startCapture)
+	@Published var capturing: Bool = false
+	@Published var showCapture: Bool = false
+	/// the Mod Test tools (test worlds only)
+	@Published var showModTest: Bool = false
+	var capA: (Int, Int)? = nil
+	var capB: (Int, Int)? = nil
+	/// effects from potions, food and armour (see PlayerEffects)
+	var effects: PlayerEffects = PlayerEffects()
+	/// seconds before mending potions heal fully again
+	var mendCD: Double = 0
+	/// smoke clouds and the rings of bursting potions
+	var smokes: [SmokeCloud] = []
+	var rings: [BurstRing] = []
+	/// the exosuit, a counter bumped whenever it changes, and the numbers worked out from it
+	var suit: ExoSuit = ExoSuit()
+	var suitRev: Int = 0
+	var suitStatsRev: Int = -1
+	var suitStatsCache: ExoStats = ExoStats()
+	/// energy a second the suit's running modules are drawing this frame, and what is running
+	var suitLoad: Double = 0
+	var suitLastLoad: Double = 0
+	var suitHover: Bool = false
+	/// the suit's guns: each one's wait before it can fire again (by piece), the lasers' beams this frame,
+	/// whether its FIRE control is held, and when it may next say a piece broke
+	var suitGunCD: [Int: Double] = [:]
+	var suitBeams: [(Double, Double, Double, Double)] = []
+	var suitFireHeld: Bool = false
+	var suitSayT: Double = 0
+	var suitSprinting: Bool = false
+	var suitLit: Bool = false
+	var suitEmptyWarned: Bool = false
+	/// armour infusions summed over what is worn, and the key of what was worn then
+	var armorInfCache: ArmorInf = ArmorInf()
+	var armorInfKey: Int = 0
+	@Published var showInfuse: Bool = false
+	/// when each custom infusion last gave its effect (by number)
+	var infTriggerCD: [Int: Double] = [:]
+	@Published var showExo: Bool = false
+	/// a healing shrine rests between uses
+	var healerCD: Double = 0
+	/// debug multipliers: damage the player deals / takes
+	var dmgOutMult: Double = 1.0
+	var dmgInMult: Double = 1.0
+
+	// lighting
+	var light: LightMap = LightMap()
+	/// the light around a spot a creature might appear at (see glowForSpawn)
+	let spawnLight: LightMap = LightMap()
+	var lightDark: [UInt32] = []
+	var lightGlow: [UInt32] = []
+	var lightRev: Int = 0
+	var lightTimer: Double = 0
+
+	// bosses & progress
+	var defeated: Set<Int> = []
+	var rex: Mob? = nil
+	var activeBoss: Mob? = nil
+	var bossBarName: String = ""
+	var bossBarFrac: Double = 0
+	var gotMap: Bool = false
+	var portalOpened: Bool = false
+	var portalT: Double = 0
+	var portalCool: Double = 0
+	/// set by a portal trip: the rift will not pull the player again until they have stepped out of it
+	var portalNeedsExit: Bool = false
+	var riftCheckT: Double = 0
+	var fadeT: Double = 0
+	var mounted: Mob? = nil
+	var inVehicle: Vehicle? = nil
+	/// the places a vehicle touches the land in the physics step being worked out (kept to save making a list each step)
+	var vContacts: [VContact] = []
+	/// the ON VEHICLE switch: blocks in hand are built onto the nearest vehicle instead of the world
+	var vehicleBuild: Bool = false
+	/// fuel tanks that burst this frame (they go off next frame, so one blast cannot run into itself)
+	var vehBlasts: [(Double, Double)] = []
+	/// keeps vehicle warnings (out of ammunition and the like) from repeating every frame
+	var vehSayT: Double = 0
+	var vehicleStash: [[Vehicle]] = [[Vehicle]](repeating: [], count: dimCount)
+	/// where the player came from into a custom dimension (to go back there)
 	var dimReturn: DimReturn? = nil
-	/// the Logic Studio variables of the world's mods (nil: none)
-	var logicVars: [String: Double]? = nil
-	/// lift cars in every dimension (nil: none)
-	var lifts: [LiftSave]? = nil
-	/// the vehicle the remote control is paired with (nil: none)
-	var remotePair: Int? = nil
-	/// the signal channels the Logic Studio left on (nil: none)
-	var logicChannels: [Bool]? = nil
-}
+	/// the Logic Studio's running scripts, and the variables of the world's mods ("mod:name")
+	var logic: LogicVM = LogicVM()
+	var logicVars: [String: Double] = [:]
+	var mapCache: TreasureMap? = nil
+	var hintT: Double = 0
+	var autosaveT: Double = 0
 
-func mobToSave(_ m: Mob) -> MobSave {
-	return MobSave(kind: m.kind.rawValue, x: m.b.x, y: m.b.y, hp: m.hp, maxHP: m.maxHP, tame: m.tame, variant: m.variant, downed: m.downed, lair: m.lair, mut: m.mut > 0 ? m.mut : nil)
-}
+	// streaming stats
+	var loadRadius: Int = 5
+	var lastStreamCX: Int = Int.min
+	var chunksLoadedLast: Int = 0
+	var tickMs: Double = 0
+	var tickWorstMs: Double = 0
 
-enum SaveStore {
-	static var dir: URL {
-		let fm = FileManager.default
-		if let d = fm.urls(for: .documentDirectory, in: .userDomainMask).first {
-			let u = d.appendingPathComponent("PixelRealmSaves", isDirectory: true)
-			try? fm.createDirectory(at: u, withIntermediateDirectories: true)
-			return u
+	/// A new world, with the land around its spawn made. A world being loaded passes `loadSpawn: false`:
+	/// its land comes from the save, around where the player was (making the spawn's land first only
+	/// to throw it away cost a dozen chunks every time a world was loaded).
+	init(mode: GameMode, infinite: Bool, seed: UInt64, settings: Settings, genVersion: Int = WorldGen.currentVersion, options: WorldOptions = .standard, loadSpawn: Bool = true) {
+		self.mode = mode
+		self.settings = settings
+		self.seedValue = seed
+		let gen = WorldGen(seed: seed, infinite: infinite, rareChance: settings.rareChance, genVersion: genVersion, options: options)
+		self.world = World(gen: gen)
+		self.tilePx = settings.tilePx
+		self.pb = Body(x: Double(gen.spawnX) + 0.5, y: 100, w: 0.7, h: 1.8)
+		if loadSpawn {
+			world.loadAround(centerX: gen.spawnX, radius: 6)
+			let sy: Int = world.surfaceY(gen.spawnX)
+			pb.y = Double(sy)
 		}
-		return URL(fileURLWithPath: NSTemporaryDirectory())
-	}
-
-	static func url(_ slot: Int) -> URL {
-		return dir.appendingPathComponent("slot" + String(slot) + ".json")
-	}
-
-	static func metaURL(_ slot: Int) -> URL {
-		return dir.appendingPathComponent("slot" + String(slot) + ".meta.json")
-	}
-
-	static func write(_ s: SaveData) -> Bool {
-		let enc = JSONEncoder()
-		guard let d = try? enc.encode(s), let m = try? enc.encode(s.meta) else { return false }
-		do {
-			try d.write(to: url(s.meta.slot), options: .atomic)
-			try m.write(to: metaURL(s.meta.slot), options: .atomic)
-			return true
-		} catch {
-			return false
-		}
-	}
-
-	static func read(_ slot: Int) -> SaveData? {
-		guard let d = try? Data(contentsOf: url(slot)) else { return nil }
-		return try? JSONDecoder().decode(SaveData.self, from: d)
-	}
-
-	static func meta(_ slot: Int) -> SaveMeta? {
-		guard let d = try? Data(contentsOf: metaURL(slot)) else { return nil }
-		return try? JSONDecoder().decode(SaveMeta.self, from: d)
-	}
-
-	static func delete(_ slot: Int) {
-		try? FileManager.default.removeItem(at: url(slot))
-		try? FileManager.default.removeItem(at: metaURL(slot))
-	}
-
-	static let slotCount: Int = 4
-
-	/// First empty slot, or the least recently played one when all are used
-	static func freeSlot() -> Int {
-		for i in 0..<slotCount where meta(i) == nil { return i }
-		var best: Int = 0
-		var bt: Date = .distantFuture
-		for i in 0..<slotCount {
-			let attrs = try? FileManager.default.attributesOfItem(atPath: url(i).path)
-			let t: Date = (attrs?[.modificationDate] as? Date) ?? .distantPast
-			if t < bt { bt = t; best = i }
-		}
-		return best
-	}
-
-}
-
-extension Game {
-	func makeSave() -> SaveData {
-		var cs: [ChunkSave] = []
-		let cur: Int = world.dim.rawValue
-		// a mimic still on the loose is saved as the chest it came out of, its hoard back inside
-		var mimicSpots: [Int: [(Int, Int, [Stack])]] = [:]
-		for m in mobs where m.kind == .mimic && m.hp > 0 && !m.removed {
-			let ox: Int = Int(floor(m.homeX))
-			let oy: Int = Int(floor(m.homeY)) - 1
-			mimicSpots[floorDiv(ox, chunkW), default: []].append((ox, oy, m.loot))
-		}
-		for (k, c) in world.chunks where c.dirty {
-			var tiles: [UInt8] = c.tiles
-			for (ox, oy, _) in mimicSpots[k] ?? [] {
-				let i: Int = (ox - c.x0) * c.H + oy
-				if i >= 0 && i < tiles.count && tiles[i] == Tile.air.rawValue { tiles[i] = Tile.chest.rawValue }
-			}
-			var one: ChunkSave = ChunkSave(dim: cur, cx: k, data: Data(World.rle(tiles)), walls: c.walls.isEmpty ? nil : Data(World.rle(c.walls)), wires: c.wireCount == 0 ? nil : Data(World.rle(c.wires)), built: c.built.isEmpty ? nil : Data(World.rle(c.built)))
-			if c.partials > 0 { one.levels = Data(World.rle(c.level)) }
-			cs.append(one)
-		}
-		for d in 0..<world.parked.count {
-			for (k, c) in world.parked[d] {
-				if d == cur && world.chunks[k] != nil { continue }
-				var one: ChunkSave = ChunkSave(dim: d, cx: k, data: Data(World.rle(c.tiles)), walls: c.walls.isEmpty ? nil : Data(World.rle(c.walls)), wires: c.wireCount == 0 ? nil : Data(World.rle(c.wires)), built: c.built.isEmpty ? nil : Data(World.rle(c.built)))
-				if c.partials > 0 { one.levels = Data(World.rle(c.level)) }
-				cs.append(one)
-			}
-		}
-		var chestList: [ChestEntry] = []
-		for (k, v) in world.chests { chestList.append(ChestEntry(key: k, items: v)) }
-		for (_, list) in mimicSpots {
-			for (ox, oy, loot) in list {
-				let key: ChestKey = world.chestKey(ox, oy)
-				chestList.removeAll { $0.key == key }
-				chestList.append(ChestEntry(key: key, items: loot))
-			}
-		}
-		var vs: [[VehicleSave]] = [[VehicleSave]](repeating: [], count: dimCount)
-		for d in 0..<dimCount {
-			let list: [Vehicle] = d == cur ? vehicles : vehicleStash[d]
-			vs[d] = list.map { $0.save() }
-		}
-		var pets: [MobSave] = []
-		for m in mobs where m.tame && m.hp > 0 && m.kind != .rex { pets.append(mobToSave(m)) }
-		var rs: MobSave? = nil
-		if let r = rex { rs = mobToSave(r) }
-		var px: Double = pb.x
-		var py: Double = pb.y
-		if let r = mounted { px = r.b.x; py = r.b.y }
-		if let v = inVehicle { px = v.b.x; py = v.b.y - v.b.h }
-		let meta = SaveMeta(slot: slot, name: worldName, mode: mode, infinite: gen.infinite, seed: seedValue, day: dayCount, playSeconds: playSeconds, dim: cur, genVersion: gen.genVersion, options: gen.options)
-		// the world's mods: those it was made with (a missing one stays listed, so it is never forgotten)
-		var mi: ModWorldInfo? = modInfo
-		if ModRuntime.shared.active { mi = ModRuntime.shared.worldInfo() }
-		let ls: [LiftSave] = liftSaves()
-		return SaveData(meta: meta, settings: settings, px: px, py: py, hp: max(1, hp), maxHP: maxHP, hunger: hunger, timeOfDay: timeOfDay, kills: kills, spawnX: spawnX, spawnY: spawnY, inv: inv, sel: sel, defeated: Array(defeated), gotMap: gotMap, portalOpened: portalOpened, chests: chestList, chunks: cs, vehicles: vs, pets: pets, rex: rs, nextID: nextID, journal: journal, weather: weather, bodyCold: bodyCold, power: powerSave(), mods: mi, effects: effectsSave(), mutants: mutantSaves(), suit: suit.isEmpty ? nil : suit, bosses: bossSaves(), dimReturn: dimReturn, logicVars: logicVars.isEmpty ? nil : logicVars, lifts: ls.isEmpty ? nil : ls, remotePair: remotePair != 0 ? remotePair : nil, logicChannels: logicChannels.contains(true) ? logicChannels : nil)
-	}
-
-	@discardableResult
-	func saveNow() -> Bool {
-		// a mod test world is never saved (it would overwrite a real world's slot)
-		if !testMod.isEmpty || slot < 0 { return false }
-		if mode == .hardcore && hardcoreOver { return false }
-		if dead { return false }
-		return SaveStore.write(makeSave())
-	}
-
-	static func load(_ s: SaveData, settings: Settings) -> Game {
-		var st: Settings = settings
-		st.rareChance = s.settings.rareChance
-		// worlds saved before the generation changes keep generating exactly as they did, and
-		// worlds saved before world types existed are standard worlds
-		let g = Game(mode: s.meta.mode, infinite: s.meta.infinite, seed: s.meta.seed, settings: st, genVersion: s.meta.genVersion ?? 1, options: s.meta.options ?? .standard, loadSpawn: false)
-		g.slot = s.meta.slot
-		g.worldName = s.meta.name
-		g.dayCount = s.meta.day
-		g.playSeconds = s.meta.playSeconds
-		g.timeOfDay = s.timeOfDay
-		g.hp = s.hp
-		g.maxHP = s.maxHP
-		g.applyHealthRule(newWorld: false)
-		g.hunger = s.hunger
-		g.kills = s.kills
-		g.spawnX = s.spawnX
-		g.spawnY = s.spawnY
-		g.inv = s.inv
-		g.sel = clampI(s.sel, 0, Inventory.hotbarCount - 1)
-		g.defeated = Set(s.defeated)
-		g.journal = s.journal ?? Journal()
-		// the weather carries on as it was (its plan is only remade if the settings differ from when
-		// it was saved)
-		if let w = s.weather { g.weather = w }
-		g.bodyCold = clampD(s.bodyCold ?? 0, 0, 1)
-		g.modInfo = s.mods
-		if let e = s.effects { g.restoreEffects(e) }
-		if let su = s.suit { g.restoreSuit(su) }
-		g.gotMap = s.gotMap
-		g.portalOpened = s.portalOpened
-		g.nextID = max(g.nextID, s.nextID)
-		let w: World = g.world
-		w.chunks.removeAll()
-		w.parked = [[Int: Chunk]](repeating: [:], count: dimCount)
-		for c in s.chunks {
-			if c.dim < 0 || c.dim >= dimCount { continue }
-			let H: Int = dimHeight(Dimension(rawValue: c.dim) ?? .overworld)
-			let ch = Chunk(cx: c.cx, H: H)
-			ch.hasSky = dimHasSky(Dimension(rawValue: c.dim) ?? .overworld)
-			ch.tiles = World.unrle([UInt8](c.data), chunkW * H)
-			if ch.tiles.count > chunkW * H { ch.tiles = Array(ch.tiles.prefix(chunkW * H)) }
-			if let wd = c.walls { ch.walls = World.unrle([UInt8](wd), chunkW * H) }
-			if let wr = c.wires {
-				ch.wires = World.unrle([UInt8](wr), chunkW * H)
-				if ch.wires.count != chunkW * H { ch.wires = [] }
-				ch.wireCount = ch.wires.reduce(0) { $0 + ($1 != 0 ? 1 : 0) }
-			}
-			if let bd = c.built {
-				ch.built = World.unrle([UInt8](bd), chunkW * H)
-				if ch.built.count != chunkW * H { ch.built = [] }
-			}
-			if let lv = c.levels {
-				ch.level = World.unrle([UInt8](lv), chunkW * H)
-				if ch.level.count != chunkW * H { ch.level = [] }
-			}
-			ch.dirty = true
-			ch.rebuildSky()
-			fillSurface(ch, g.gen, Dimension(rawValue: c.dim) ?? .overworld)
-			w.parked[c.dim][c.cx] = ch
-		}
-		for e in s.chests { w.chests[e.key] = e.items }
-		for p in s.power ?? [] {
-			guard let t = Tile(rawValue: UInt8(clampI(p.t, 0, 255))), t.isPower else { continue }
-			let k: ChestKey = ChestKey(d: p.d, x: p.x, y: p.y)
-			let d: PowerDev = PowerDev(key: k, tile: t)
-			d.dir = clampI(p.dir, 0, 3)
-			d.mode = p.mode
-			d.param = p.param
-			d.charge = max(0, p.charge)
-			d.on = p.on
-			d.flag = p.flag
-			d.item = p.item
-			w.devs[k] = d
-		}
-		w.powerRev &+= 1
-		var dim: Dimension = Dimension(rawValue: s.meta.dim) ?? .overworld
-		var startX: Double = s.px
-		var startY: Double = s.py
-		g.dimReturn = s.dimReturn
-		if dim.isCustom && ModRuntime.shared.dimRT(dim) == nil {
-			// saved in a custom dimension whose mod is missing: back at the Overworld's spawn (the
-			// dimension itself is kept for when its mod returns)
-			dim = .overworld
-			startX = s.spawnX
-			startY = s.spawnY
-			g.dimReturn = nil
-			g.say("That dimension's mod is missing, so you are back in the Overworld.", 5.0)
-		}
-		if dim != w.dim {
-			w.dim = dim
-			w.H = dimHeight(dim)
-		}
-		w.version += 1
-		w.layoutVersion += 1
-		for d in 0..<min(dimCount, s.vehicles.count) {
-			let list: [Vehicle] = s.vehicles[d].map { Vehicle.restore($0) }
-			if d == dim.rawValue { g.vehicles = list } else { g.vehicleStash[d] = list }
-		}
-		if let ls = s.lifts { g.restoreLifts(ls) }
-		w.loadAround(centerX: Int(floor(startX)), radius: 4)
-		g.pb.x = startX
-		g.pb.y = startY
-		g.pb.vx = 0
-		g.pb.vy = 0
-		if w.boxSolid(g.pb.left, g.pb.top, g.pb.right, g.pb.y - 0.05) {
-			let spot: (Double, Double) = g.findSafeSpot(startX, startY)
-			g.pb.x = spot.0
-			g.pb.y = spot.1
-		}
-		g.camX = g.pb.x
-		g.camY = g.pb.y - 2
-		for p in s.pets {
-			guard let k = MobKind(rawValue: p.kind) else { continue }
-			let m: Mob = g.addMob(k, g.pb.x + Double.random(in: -2...2), g.pb.y)
-			m.tame = true
-			m.hp = p.hp
-			m.maxHP = p.maxHP
-			m.variant = p.variant
-			if let mu = p.mut, mu > 0 {
-				g.reapplyMutation(m, clampI(mu, 1, MutationLimits.maxStacks))
-				m.maxHP = clampD(p.maxHP, 1, MutationLimits.maxHP)
-				m.hp = clampD(p.hp, 1, m.maxHP)
-			}
-		}
-		if let r = s.rex {
-			let m: Mob = g.addMob(.rex, r.x, r.y)
-			m.tame = true
-			m.persistent = true
-			m.hp = max(1, r.hp)
-			m.maxHP = r.maxHP
-			m.downed = r.downed
-			if m.downed { m.t1 = 20 }
-			g.rex = m
-			if abs(m.b.x - g.pb.x) > 40 || w.boxSolid(m.b.left, m.b.top, m.b.right, m.b.y - 0.05) {
-				g.teleportRexNearPlayer(m)
-			}
-		}
-		if let ms = s.mutants { g.restoreMutants(ms) }
-		if let bs = s.bosses { g.restoreBosses(bs) }
-		g.logicVars = (s.logicVars ?? [:]).filter { $0.value.isFinite }
-		g.remotePair = s.remotePair ?? 0
-		for (i, on) in (s.logicChannels ?? []).enumerated() where i < Radio.channels { g.logicChannels[i] = on }
-		g.invuln = 2.0
-		return g
-	}
-
-	func updateAutosave(_ dt: Double) {
-		autosaveT += dt
-		if autosaveT >= 60 {
-			autosaveT = 0
-			if saveNow() { floatText("Saved", pb.x, pb.y - pb.h - 0.8, 0xA0FFA0) }
-		}
-		if mode == .hardcore && hardcoreOver && SaveStore.meta(slot) != nil {
-			SaveStore.delete(slot)
-		}
-	}
-}
-
-// ===== p20_assist =====
-
-// MARK: - Action button (auto-aim), debug commands, info for the HUD
-
-/// The attack control. `held` is true while it is down (the combat stick, or the F key). The combat stick
-/// also reports where the thumb is: `power` is how far out (0 to 1), `dirX`/`dirY` the unit direction, and
-/// `manual` whether it is out far enough to aim by hand. Inside the dead zone the game aims for itself.
-final class ActState: @unchecked Sendable {
-	var held: Bool = false
-	var was: Bool = false
-	var dirX: Double = 0
-	var dirY: Double = 0
-	var power: Double = 0
-	var manual: Bool = false
-	/// the dead zone, as a share of the stick's radius: a thumb has to leave `deadIn` to start aiming by
-	/// hand, and come back inside `deadOut` to hand the aim back (the gap stops it flickering at the edge)
-	static let deadIn: Double = 0.26
-	static let deadOut: Double = 0.17
-
-	/// A finger is on the combat stick at (x, y), measured from its centre in stick radii (any length;
-	/// anything past the edge counts as the edge). Diagonals are as strong as straight lines.
-	func stickAt(_ x: Double, _ y: Double) {
-		let len: Double = sqrt(x * x + y * y)
-		power = min(1.0, len)
-		manual = power > (manual ? ActState.deadOut : ActState.deadIn)
-		if manual && len > 0.0001 {
-			dirX = x / len
-			dirY = y / len
-		}
-		held = true
-	}
-
-	/// The finger left the combat stick
-	func stickReleased() {
-		held = false
-		manual = false
-		power = 0
-		dirX = 0
-		dirY = 0
-	}
-}
-
-let actState = ActState()
-
-extension Game {
-	/// Called once per frame before tick. While the on-screen action button is held, the game aims
-	/// for you: the best foe for the weapon in hand (hostile ones first, the one already locked on,
-	/// in sight for ranged weapons, led and raised for the shot's drop), otherwise the block in front.
-	/// A finger on the world aims for itself; then the button only keeps the action going.
-	func applyActButton() {
-		let held: Bool = actState.held
-		defer { actState.was = held }
-		if !held {
-			if actState.was && !touchActive {
-				useHeld = false
-				useWasHeld = false
-				useReleasedFlag = true
-			}
-			return
-		}
-		if dead { return }
-		if touchActive {
-			useHeld = true
-			return
-		}
-		// in an armed vehicle (or one driven by remote) the attack stick aims and fires its guns
-		if let v = drivenVehicle, machineGuns(v) > 0 {
-			if actState.manual {
-				aimX = v.px + actState.dirX * 18.0
-				aimY = v.py + actState.dirY * 18.0
-			} else if let a = vehicleAutoAim(v) {
-				aimX = a.0
-				aimY = a.1
-			} else {
-				aimX = v.px + Double(v.dir) * 14.0
-				aimY = v.py
-			}
-			aimValid = true
-			holdAction()
-			return
-		}
-		let it: Item? = heldItem
-		if actState.manual {
-			// the thumb is out past the dead zone: aim where it points, with this weapon's own rules
-			let a: (Double, Double) = stickAim(it, actState.dirX, actState.dirY, actState.power)
-			aimX = a.0
-			aimY = a.1
-			aimValid = true
-			lockTarget = nil
-			if abs(actState.dirX) > 0.25 { facing = actState.dirX >= 0 ? 1 : -1 }
-			holdAction()
-			return
-		}
-		var tx: Double = pb.x + Double(facing) * 1.1
-		var ty: Double = pb.y - 1.3
-		var aimed: Bool = false
-		var wantsMob: Bool = true
-		if let i = it {
-			switch i {
-			case .block, .part, .mat, .food, .wall: wantsMob = false
-			case .potion(let pt): wantsMob = pt.thrown && pt != .mendingSplash && pt != .regrowthSplash
-			default: wantsMob = true
-			}
-		}
-		if wantsMob, let m = autoTarget(it) {
-			let a: (Double, Double) = aimPointFor(m, it)
-			tx = a.0
-			ty = a.1
-			aimed = true
-			lockTarget = m
-			lockT = max(lockT, 0.5)
-		}
-		if case .potion(let pt)? = it, pt == .mendingSplash || pt == .regrowthSplash {
-			// a helpful splash thrown with no direction bursts at the player's own feet
-			tx = pb.x + Double(facing) * 0.6
-			ty = pb.y - 0.3
-			aimed = true
-		}
-		if !aimed {
-			let fx: Int = Int(floor(pb.x + Double(facing) * (pb.w * 0.5 + 0.55)))
-			let chest: Int = Int(floor(pb.y - 1.3))
-			let feet: Int = Int(floor(pb.y - 0.4))
-			let below: Int = Int(floor(pb.y + 0.5))
-			var placing: Bool = false
-			if case .block? = it { placing = true }
-			if case .wall? = it { placing = true }
-			if placing {
-				// build in front at foot level, then the step below
-				if !world.solid(fx, feet) { tx = Double(fx) + 0.5; ty = Double(feet) + 0.5 }
-				else if !world.solid(fx, chest) { tx = Double(fx) + 0.5; ty = Double(chest) + 0.5 }
-				else { tx = Double(fx) + 0.5; ty = Double(chest - 1) + 0.5 }
-			} else if world.tile(fx, chest) != .air {
-				tx = Double(fx) + 0.5; ty = Double(chest) + 0.5
-			} else if world.tile(fx, feet) != .air {
-				tx = Double(fx) + 0.5; ty = Double(feet) + 0.5
-			} else if stickY > 0.5 {
-				let px: Int = Int(floor(pb.x))
-				tx = Double(px) + 0.5; ty = Double(below) + 0.5
-			} else {
-				tx = Double(fx) + 0.5; ty = Double(chest) + 0.5
-			}
-		}
-		aimX = tx
-		aimY = ty
-		aimValid = true
-		holdAction()
-	}
-
-	/// Keeps the action going; the first frame of a press starts it fresh
-	func holdAction() {
-		if !actState.was {
-			useWasHeld = false
-			usePressedFlag = false
-		}
-		useHeld = true
-	}
-
-	/// The point the combat stick aims at, from the direction (dx, dy) (a unit vector) and how far out
-	/// the thumb is (0 to 1). Each kind of item reads it its own way: a blade or spear swings along the
-	/// direction, bows and guns shoot along it, slings and thrown flasks land further out the further
-	/// the thumb is pushed, tools and fists work on the first creature or block along it, and blocks go
-	/// down against the first surface along it.
-	func stickAim(_ it: Item?, _ dx: Double, _ dy: Double, _ power: Double) -> (Double, Double) {
-		let ox: Double = shoulderX
-		let oy: Double = shoulderY
-		let reach: Double = min(reachDistance(), 5.5) - 0.3
-		guard let item = it else { return stickDigPoint(dx, dy, reach) }
-		switch item {
-		case .sword, .spear, .hammer, .knife, .club, .relic:
-			let d: Double = max(1.0, infusedMelee(item).reach)
-			return (ox + dx * d, oy + dy * d)
-		case .bow, .gun:
-			return (ox + dx * 14.0, oy + dy * 14.0)
-		case .sling:
-			let d: Double = 4.0 + 9.0 * power
-			return (ox + dx * d, oy + dy * d)
-		case .potion(let pt) where pt.thrown:
-			let d: Double = 3.0 + 9.0 * power
-			return (ox + dx * d, oy + dy * d)
-		case .gadget(let g):
-			if g == .bomb || g == .fireFlask {
-				let d: Double = 3.0 + 9.0 * power
-				return (ox + dx * d, oy + dy * d)
-			}
-			return stickDigPoint(dx, dy, reach)
-		case .tool:
-			return stickDigPoint(dx, dy, reach)
-		case .block, .wall, .part:
-			return stickPlacePoint(dx, dy, reach)
-		default:
-			return (ox + dx * 1.5, oy + dy * 1.5)
-		}
-	}
-
-	/// The first creature, or failing that the first block, along a direction from the shoulder within
-	/// `r` blocks: what a pickaxe or a fist works on. With nothing in the way, the point at full reach.
-	func stickDigPoint(_ dx: Double, _ dy: Double, _ r: Double) -> (Double, Double) {
-		let ox: Double = shoulderX
-		let oy: Double = shoulderY
-		let near: [Mob] = mobsNear(ox - r - 1.0, ox + r + 1.0)
-		var d: Double = 0.7
-		while d <= r {
-			let x: Double = ox + dx * d
-			let y: Double = oy + dy * d
-			for m in near where m.hp > 0 && !m.removed && !m.tame && !m.downed {
-				if x >= m.b.left - 0.2 && x <= m.b.right + 0.2 && y >= m.b.top - 0.2 && y <= m.b.y + 0.2 { return (m.b.x, m.b.cy) }
-			}
-			let tx: Int = Int(floor(x))
-			let ty: Int = Int(floor(y))
-			let t: Tile = world.tile(tx, ty)
-			if t != .air && !t.liquid { return (Double(tx) + 0.5, Double(ty) + 0.5) }
-			d += 0.25
-		}
-		return (ox + dx * r, oy + dy * r)
-	}
-
-	/// The empty block just in front of the first solid one along a direction: where a block would go
-	/// to build against what the stick points at
-	func stickPlacePoint(_ dx: Double, _ dy: Double, _ r: Double) -> (Double, Double) {
-		let ox: Double = shoulderX
-		let oy: Double = shoulderY
-		var last: (Int, Int)? = nil
-		var d: Double = 0.7
-		while d <= r {
-			let tx: Int = Int(floor(ox + dx * d))
-			let ty: Int = Int(floor(oy + dy * d))
-			if world.solid(tx, ty) { break }
-			last = (tx, ty)
-			d += 0.25
-		}
-		if let l = last { return (Double(l.0) + 0.5, Double(l.1) + 0.5) }
-		return (ox + dx * 1.2, oy + dy * 1.2)
-	}
-
-	// MARK: debug
-
-	func debugSpawn(_ k: MobKind) {
-		let x: Double = pb.x + Double(facing) * 5.0
-		var y: Double = pb.y
-		let ix: Int = Int(floor(x))
-		var yy: Int = Int(floor(pb.y)) - 6
-		var n: Int = 0
-		while n < 30 {
-			if world.solid(ix, yy) && !world.solid(ix, yy - 1) && !world.solid(ix, yy - 2) { y = Double(yy); break }
-			yy += 1
-			n += 1
-		}
-		if k == .fish {
-			y = pb.y - 0.5
-		}
-		let m: Mob = addMob(k, x, y)
-		m.homeX = x
-		m.homeY = y
-		if k == .bearBoss || k == .rex {
-			m.persistent = true
-			m.homeX = x
-			m.st = 3
-			m.t2 = 1.0
-			m.phase = 1
-			m.lair = -1
-		}
-		say("Spawned " + m.def.name, 1.5)
-	}
-
-	/// The debug menu's give: any item of the game or of the world's mods, as many as asked (what does
-	/// not fit falls at the player's feet)
-	func debugGive(_ it: Item, _ n: Int) {
-		let count: Int = clampI(n, 1, 9999)
-		giveItem(it, count, extra: gunLoad(it))
-		say(joinText("Gave ", String(count), " ", it.name, "."), 1.5)
-	}
-
-	func debugGiveKit() {
-		let kit: [(Item, Int)] = [
-			(.tool(.pickaxe, .diamond), 1), (.tool(.axe, .diamond), 1), (.sword(.diamond), 1), (.bow, 1),
-			(.ammo(.arrow), 99), (.gun(.rifle), 1), (.gun(.pistol), 1), (.ammo(.bullet), 99),
-			(.block(.torch), 99), (.block(.planks), 99), (.block(.stone), 99), (.food(.cookedMeat), 30),
-			(.armor(.head, .diamond), 1), (.armor(.chest, .diamond), 1), (.armor(.legs, .diamond), 1),
-			(.part(.frame), 10), (.part(.wheel), 4), (.part(.engine), 2), (.part(.seat), 1), (.part(.steering), 1),
-			(.part(.fuelTank), 2), (.part(.hull), 6), (.part(.propeller), 1), (.mat(.coal), 40), (.gadget(.wrench), 1),
-			(.gadget(.portalKey), 1), (.gadget(.treasureMap), 1), (.gadget(.carKit), 1), (.gadget(.motorboatKit), 1),
-			(.knife(.diamond), 1), (.club(.mace), 1), (.sling, 1), (.gun(.crossbow), 1), (.gun(.blunderbuss), 1),
-			(.gun(.stormRod), 1), (.ammo(.bolt), 99), (.gadget(.fireFlask), 20)
-		]
-		for (it, n) in kit { giveItem(it, n, extra: gunLoad(it)) }
-		gotMap = true
-		say("Debug kit added.", 2.0)
-	}
-
-	func debugKillHostiles() {
-		for m in mobs where m.def.hostile && !m.tame && m.hp > 0 { killMob(m, true) }
-	}
-
-	struct EntityCounts {
-		var hostile: Int = 0
-		var passive: Int = 0
-		var bosses: Int = 0
-		var dying: Int = 0
-		var projectiles: Int = 0
-		var drops: Int = 0
-		var particles: Int = 0
-		var falling: Int = 0
-		var vehicles: Int = 0
-		var ships: Int = 0
-	}
-
-	func entityCounts() -> EntityCounts {
-		var c = EntityCounts()
-		for m in mobs {
-			if m.hp <= 0 && !m.downed { c.dying += 1 } else if m.isBoss { c.bosses += 1 } else if m.def.hostile { c.hostile += 1 } else { c.passive += 1 }
-		}
-		c.projectiles = projectiles.count
-		c.drops = drops.count
-		c.particles = particles.count
-		c.falling = fallingBlocks.count
-		c.vehicles = vehicles.count
-		c.ships = ships.count
-		return c
-	}
-
-	/// Removes every creature, boss, ship, projectile, dropped item, falling block and particle (and,
-	/// if asked, vehicles). References to them are cleared so nothing keeps a removed entity alive, and
-	/// nearby lair bosses stay away until the player has left the area.
-	func debugDeleteAllEntities(includeVehicles: Bool) {
-		if mounted != nil || (includeVehicles && inVehicle != nil) { dismount() }
-		if world.dim == .overworld {
-			for L in gen.lairCenters(near: Int(floor(pb.x))) where abs(Double(L.cx) - pb.x) < 180 {
-				suppressedLairs.insert(lairKey(L))
-			}
-		}
-		for m in mobs { m.removed = true }
-		mobs.removeAll()
-		mobGrid.rebuild(mobs)
-		activeBoss = nil
-		rex = nil
-		mounted = nil
-		debugSelected = nil
-		ships.removeAll()
-		projectiles.removeAll()
-		drops.removeAll()
-		particles.removeAll()
-		flashes.removeAll()
-		fallingBlocks.removeAll()
-		floats.removeAll()
-		playerHitStamps.removeAll()
-		if includeVehicles {
-			inVehicle = nil
-			vehicles.removeAll()
-		}
-		say("All entities deleted.", 2.0)
-		bumpHUD()
-	}
-
-	/// Picks the creature closest to the cursor (or to the player when there is no cursor)
-	func debugSelectAtCursor() {
-		let tx: Double = aimValid ? aimX : pb.x
-		let ty: Double = aimValid ? aimY : pb.y - 1
-		var best: Mob? = nil
-		var bd: Double = 36
-		for m in mobs where m.hp > 0 || m.downed {
-			let dx: Double = m.b.x - tx
-			let dy: Double = m.b.cy - ty
-			let d: Double = dx * dx + dy * dy
-			if d < bd { bd = d; best = m }
-		}
-		debugSelected = best
-		if best == nil { say("Nothing near the cursor.", 1.2) }
-		bumpHUD()
-	}
-
-	func debugRemoveSelected() {
-		guard let m = debugSelected else { return }
-		m.removed = true
-		mobs.removeAll { $0 === m }
-		if m === activeBoss { activeBoss = nil }
-		if m === rex { rex = nil }
-		if m === mounted { dismount(); mounted = nil }
-		debugSelected = nil
-		bumpHUD()
-	}
-
-	// hazard tests: each creates a hazard right next to the player so damage, immunities and
-	// knockback can be checked by eye
-	func debugLavaPool() {
-		let x0: Int = Int(floor(pb.x)) + facing * 3
-		let y: Int = Int(floor(pb.y))
-		for dx in 0..<4 {
-			let x: Int = x0 + (facing > 0 ? dx : -dx)
-			_ = world.set(x, y, .lava)
-			_ = world.set(x, y + 1, .stone)
-		}
-		light.valid = false
-	}
-
-	func debugExplosionAtCursor() {
-		let x: Double = aimValid ? aimX : pb.x + Double(facing) * 4
-		let y: Double = aimValid ? aimY : pb.y - 1
-		explode(x, y, radius: 3.0, power: 20, source: .environment, breakBlocks: false)
-	}
-
-	func debugSandDrop() {
-		let x: Int = Int(floor(pb.x)) + facing * 2
-		let top: Int = Int(floor(pb.y)) - 8
-		for k in 0..<3 where !world.solid(x, top + k) { _ = world.set(x, top + k, .sand) }
-		checkFalling(x, top + 2)
-	}
-
-	func debugSpikes() {
-		let x: Int = Int(floor(pb.x)) + facing * 2
-		let y: Int = Int(floor(pb.y)) - 1
-		if !world.solid(x, y) { _ = world.set(x, y, .spikes) }
-	}
-
-	func debugResetMultipliers() {
-		speedMult = 1
-		dmgOutMult = 1
-		dmgInMult = 1
-		mobHealthMult = 1
-		bumpHUD()
-	}
-
-	func debugResetSystems() {
-		pauseMobs = false
-		pauseBosses = false
-		pauseSpawning = false
-		pauseProjectiles = false
-		pauseVehicles = false
-		pauseWorldTicks = false
-		pauseParticles = false
-		light.valid = false
-		RenderCache.shared.clearAll()
-		Perf.shared.genWorstMs = 0
-		tickWorstMs = 0
-		say("Systems reset.", 1.2)
-		bumpHUD()
-	}
-
-	/// Short report of the world generator around the player
-	func debugWorldgenLines() -> [String] {
-		let x: Int = Int(floor(pb.x))
-		var out: [String] = []
-		out.append(joinText("Gen version ", String(gen.genVersion), "  sea ", String(WorldGen.sea), gen.options.flat ? "  flat" : ""))
-		out.append(joinText("Biome ", biomeHere.name, "  surface y ", String(world.surfaceY(x))))
-		var nearest: Int = -1
-		var d: Int = 0
-		while d < 3000 && nearest < 0 {
-			for sx in [x - d, x + d] {
-				if !gen.infinite && (sx < 0 || sx >= gen.width) { continue }
-				if gen.colBase(sx).biome == .ocean { nearest = sx; break }
-			}
-			d += 16
-		}
-		if nearest >= 0 { out.append(joinText("Nearest ocean x ", String(nearest), " (", String(abs(nearest - x)), " away)")) }
-		else { out.append("No ocean within 3000 blocks") }
-		return out
-	}
-
-	func debugTeleport(_ x: Double, _ y: Double) {
-		if inVehicle != nil || mounted != nil { dismount() }
-		world.loadAround(centerX: Int(floor(x)), radius: 3)
-		let s: (Double, Double) = findSafeSpot(x, y)
-		pb.x = s.0
-		pb.y = s.1
-		pb.vx = 0
-		pb.vy = 0
-		fallPeak = 0
+		spawnX = pb.x
+		spawnY = pb.y
 		camX = pb.x
 		camY = pb.y - 2
-		light.valid = false
-		if let r = rex, r.hp > 0 { teleportRexNearPlayer(r) }
+		setupStartingKit()
+		timeOfDay = 0.06
+		// the weather has its own random numbers, started from the world's seed
+		weather.rngS = seed ^ 0x57EA_7E12_9B3D_0451
+		weather.fxS = seed ^ 0x0FF5_E7FA_CE12_7731
+		wxHomeX = pb.x
 	}
 
-	func debugToSurface() {
-		let x: Int = Int(floor(pb.x))
-		if world.dim == .overworld {
-			debugTeleport(Double(x) + 0.5, Double(world.surfaceY(x)))
-		} else {
-			debugTeleport(Double(x) + 0.5, Double(gen.uFloor(x)))
-		}
-	}
-
-	func debugToPortal() {
-		if world.dim == .overworld {
-			let a: (Double, Double) = portalArrival(.overworld)
-			debugTeleport(a.0, a.1)
-		} else {
-			let a: (Double, Double) = portalArrival(.umbral)
-			debugTeleport(a.0, a.1)
-		}
-	}
-
-	func debugToLair(_ kind: LairKind) {
-		if world.dim != .overworld { travelTo(.overworld, arriveX: spawnX, arriveY: spawnY, silent: true) }
-		for L in gen.lairCenters(near: Int(floor(pb.x))) where L.kind == kind {
-			let x: Double = Double(L.cx) + (Double(L.cx) > pb.x ? -60.0 : 60.0)
-			world.loadAround(centerX: Int(x), radius: 3)
-			debugTeleport(x, Double(world.surfaceY(Int(x))))
+	func setupStartingKit() {
+		applyHealthRule(newWorld: true)
+		if mode == .creative {
+			flying = false
 			return
 		}
+		_ = inv.add(.block(.torch), 4)
+		giveStartItems()
 	}
 
-	func debugSwitchDimension() {
-		let dest: Dimension = world.dim == .overworld ? .umbral : .overworld
-		let a: (Double, Double) = portalArrival(dest)
-		travelTo(dest, arriveX: a.0, arriveY: a.1, silent: false)
+	var gen: WorldGen { return world.gen }
+	var isCreative: Bool { return mode == .creative }
+	var viewTilesW: Double { return viewW / Double(tilePx) }
+	var viewTilesH: Double { return viewH / Double(tilePx) }
+
+	func newID() -> Int {
+		nextID += 1
+		return nextID
 	}
 
-	func debugSetTime(_ t: Double) {
-		timeOfDay = t
-		light.valid = false
+	func say(_ s: String, _ t: Double = 3.0) {
+		message = s
+		messageT = t
+		hud.tick &+= 1
 	}
 
-	// MARK: info
-
-	var biomeHere: Biome {
-		if world.dim == .umbral { return .umbral }
-		if world.dim.isCustom { return customDim?.biomeAt(pb.x) ?? .plains }
-		return gen.col(Int(floor(pb.x))).biome
+	func bumpHUD() {
+		hud.tick &+= 1
 	}
 
-	var depthText: String {
-		let y: Int = Int(floor(pb.y))
-		if world.dim == .umbral { return "Umbral depth " + String(y) }
-		let d: Int = y - WorldGen.sea
-		if d < -2 { return String(-d) + " above sea" }
-		if d <= 2 { return "Sea level" }
-		if d < 60 { return String(d) + " deep" }
-		if d < 220 { return String(d) + " deep (caverns)" }
-		if d < 360 { return String(d) + " deep (deep caves)" }
-		return String(d) + " deep (the abyss)"
+	// MARK: time of day
+
+	/// 1 = full day, 0 = deep night
+	var dayFactor: Double {
+		let t: Double = timeOfDay
+		if world.dim != .overworld {
+			if let d = customDim, !d.def.ceiling { return customDayFactor(d) }
+			return 0
+		}
+		if t < 0.50 { return 1.0 }
+		if t < 0.58 { return 1.0 - smooth((t - 0.50) / 0.08) }
+		if t < 0.92 { return 0.0 }
+		return smooth((t - 0.92) / 0.08)
 	}
 
-	var selectedName: String {
-		guard let s = heldStack else { return "Empty hand" }
-		let nm: String = s.item.name
-		switch s.item {
-		case .gun(let g):
-			let ex: Int = s.extra
-			let mg: Int = g.magazine
-			if let a = g.ammo {
-				let left: Int = inv.total(.ammo(a))
-				return "\(nm)  \(ex)/\(mg) · \(left) left"
+	/// How bright the open sky is (0 dark ... 15 noon): night light from the moon, daylight from the sun
+	/// (a mod's sun or moon can give more or less of it)
+	var skyLevel: Int {
+		if world.dim != .overworld {
+			guard let d = customDim, !d.def.ceiling else { return 0 }
+			// a sun or moon switched off still lights the sky as the game's would
+			let sb: Double = d.def.sun ? (d.def.sunBody?.bright ?? 1.0) : 1.0
+			let mb: Double = d.def.moon ? (d.def.moonBody?.bright ?? 1.0) : 1.0
+			let lv: Double = clampD(d.def.light, 0, 1) * skyLight(sb, mb)
+			return Int(clampD(lv, 0, 15).rounded())
+		}
+		let rt: ModRuntime = ModRuntime.shared
+		if rt.overSun == nil && rt.overMoon == nil { return Int((6.0 + 9.0 * dayFactor).rounded()) }
+		let lv: Double = skyLight(rt.overSun?.bright ?? 1.0, rt.overMoon?.bright ?? 1.0)
+		return Int(clampD(lv, 0, 15).rounded())
+	}
+
+	/// Open sky's light (15 at noon, 6 at midnight with the game's sun and moon): a sun's brightness
+	/// scales the daylight it adds, a moon's the light of the night (never the day's)
+	func skyLight(_ sun: Double, _ moon: Double) -> Double {
+		let nights: Double = ModRuntime.shared.rule(.nights)
+		let night: Double = 6.0 * (dayFactor + (1.0 - dayFactor) * moon * nights)
+		return night + 9.0 * dayFactor * sun
+	}
+
+	var isNight: Bool { return dayFactor < 0.35 }
+
+	// MARK: items
+
+	func giveItem(_ it: Item, _ n: Int, extra: Int = 0) {
+		let left: Int = inv.add(it, n, extra: extra)
+		if left > 0 {
+			spawnDrop(Stack(item: it, count: left, extra: extra), pb.x, pb.y - 1.0, Double(facing) * 3.0, -4.0)
+		}
+		bumpHUD()
+	}
+
+	func spawnDrop(_ s: Stack, _ x: Double, _ y: Double, _ vx: Double, _ vy: Double, heldBack: Bool = false) {
+		if s.count <= 0 { return }
+		var d: DropItem = DropItem(stack: s, x: x, y: y, vx: vx, vy: vy)
+		d.heldBack = heldBack
+		drops.append(d)
+	}
+
+	func spawnParticles(_ x: Double, _ y: Double, _ color0: UInt32, _ n: Int, _ speed: Double, _ life: Double = 0.6, _ grav: Double = 18) {
+		if particles.count > 160 { return }
+		let color: UInt32 = artGrade(color0)
+		for _ in 0..<n {
+			let a: Double = Double.random(in: 0...(2 * Double.pi))
+			let s: Double = Double.random(in: 0.3...1.0) * speed
+			particles.append(Particle(x: x, y: y, vx: cos(a) * s, vy: sin(a) * s - speed * 0.3, life: life * Double.random(in: 0.6...1.2), maxLife: life, color: color, size: Double.random(in: 0.08...0.18), gravity: grav))
+		}
+	}
+
+	func floatText(_ s: String, _ x: Double, _ y: Double, _ color: UInt32 = 0xFFFFFF) {
+		if floats.count > 14 { floats.removeFirst() }
+		floats.append(FloatText(x: x, y: y, text: s, life: 1.0, color: color))
+	}
+
+	// MARK: selected item helpers
+
+	var heldStack: Stack? { return inv.slots[sel] }
+	var heldItem: Item? { return inv.slots[sel]?.item }
+
+	func setSel(_ i: Int) {
+		let n: Int = clampI(i, 0, Inventory.hotbarCount - 1)
+		if n != sel, let it = heldItem, it.isWeapon { lastWeaponSel = sel }
+		// switching while the attack control is down must not fire the new weapon in the same instant
+		if n != sel && actState.held { useCD = max(useCD, 0.15) }
+		sel = n
+		bowCharge = 0
+		mining = false
+		mineP = 0
+		// a blow being wound up is dropped with the weapon; a knife's run starts over
+		strikeT = 0
+		comboN = 0
+		bumpHUD()
+	}
+
+}
+
+// ===== p14b_player =====
+
+// MARK: - Master tick, player movement, survival, camera, streaming, lighting
+
+extension Game {
+	func tick(_ rawDt: Double) {
+		if paused { return }
+		let dt: Double = min(max(rawDt, 0.001), 0.05) * (freezeTime ? 1.0 : 1.0)
+		let t0: Double = Date().timeIntervalSinceReferenceDate
+		clock += dt
+		if !dead { playSeconds += dt }
+		if messageT > 0 {
+			messageT -= dt
+			if messageT <= 0 { message = nil }
+		}
+		updateTime(dt)
+		updateInputGate()
+		mobGrid.rebuild(mobs)
+		updateLifts(dt)
+		decksCache = (ships.isEmpty && lifts.isEmpty) ? [] : buildDecks()
+		updatePointerTimers(dt)
+		updateInputEdges()
+		updatePlayer(dt)
+		updateUse(dt)
+		updateEffects(dt)
+		updateModPlay(dt)
+		updateLogic(dt)
+		// a landed blow holds the creatures still for a frame or two (the player keeps moving), which
+		// is what makes a hit feel like it connected
+		let frozen: Bool = hitStopT > 0
+		if frozen { hitStopT -= dt }
+		if !pauseMobs && !frozen { updateMobs(dt) }
+		updateDangerZones(dt)
+		updateDiscoveries(dt)
+		if !pauseBosses && !frozen { updateBosses(dt) }
+		if !pauseSpawning { updateSpawning(dt) }
+		if !pauseProjectiles { updateProjectiles(dt) }
+		updateCombatFX(dt)
+		if !pauseWorldTicks {
+			updateFallingBlocks(dt)
+			updateStructures(dt)
+			updateFlow(dt)
+		}
+		updateDrops(dt)
+		if !pauseVehicles { updateVehicles(dt) }
+		// everybody aboard a vehicle is where it now has them
+		syncRiders()
+		if !pauseMobs { updateShips(dt) }
+		if !pauseWorldTicks { updateWorldTicks(dt) }
+		updatePortal(dt)
+		updateAutosave(dt)
+		if !pauseParticles {
+			updateParticles(dt)
+			updateLeafFall(dt)
+		}
+		updateFlashes(dt)
+		updateWeather(dt)
+		if !pauseWorldTicks { updatePower(dt) }
+		updatePowerUI(dt)
+		updateAudio()
+		updateStreaming()
+		updateCamera(dt)
+		updateLight(dt)
+		hudAccum += 1
+		if hudAccum >= 5 {
+			hudAccum = 0
+			let k: Int = hudKey()
+			if k != lastHudKey || showDebug {
+				lastHudKey = k
+				hud.tick &+= 1
 			}
-			return "\(nm)  \(ex)/\(mg) charges"
-		case .bow:
-			let n: Int = inv.total(.ammo(.arrow))
-			return "\(nm) · \(n) arrows"
-		case .sling:
-			var n: Int = 0
-			for t in slingAmmo { n += inv.total(.block(t)) }
-			return "\(nm) · \(n) stones"
-		default:
-			return nm
+		}
+		let t1: Double = Date().timeIntervalSinceReferenceDate
+		tickMs = tickMs * 0.9 + (t1 - t0) * 1000.0 * 0.1
+		tickWorstMs = max(tickWorstMs * 0.995, (t1 - t0) * 1000.0)
+		Perf.shared.endFrame()
+	}
+
+	/// Screen shake, scaled (or disabled) by the camera settings
+	func addShake(_ amount: Double) {
+		shake = max(shake, amount * settings.shakeScale)
+	}
+
+	func updateTime(_ dt: Double) {
+		if freezeTime { return }
+		// the world's clock runs on in a custom dimension with day and night (it used to stop there,
+		// so a dimension entered at night stayed dark for good)
+		if world.dim != .overworld {
+			guard let d = customDim, d.def.cycle, !d.def.ceiling else { return }
+		}
+		timeOfDay += dt / dayLength
+		if timeOfDay >= 1.0 {
+			timeOfDay -= 1.0
+			dayCount += 1
 		}
 	}
 
-	func armorPieces() -> (Tier?, Tier?, Tier?) {
-		var r: [Tier?] = [nil, nil, nil]
-		for i in 0..<3 {
-			if let s = inv.armor[i], case .armor(_, let t) = s.item { r[i] = t }
-			if let s = inv.armor[i], case .custom(let k) = s.item, let m = ModRuntime.shared.item(k), m.def.kind == .armor { r[i] = Tier(rawValue: m.def.look) }
-		}
-		return (r[0], r[1], r[2])
+	func updateInputEdges() {
+		if useHeld && !usePressedFlag && !useWasHeld { usePressedFlag = true }
+		useWasHeld = useHeld
 	}
 
-	var armorKey: Int {
-		let a = armorPieces()
-		let h: Int = a.0?.rawValue ?? 0
-		let c: Int = a.1?.rawValue ?? 0
-		let l: Int = a.2?.rawValue ?? 0
-		return (h * 100 + c * 10 + l) &+ PlayerLookChoice(settings).key &* 1000 &+ suitDrawKey
-	}
+	// MARK: player
 
-	/// Which humanoid frame to show for the player: 0 idle, 1/2 walk, 3 windup, 4 attack, 6 shoot
-	func playerFrame() -> Int {
-		if mounted != nil || inVehicle != nil { return 0 }
-		if swingT > 0 {
-			if let it = heldItem, it.isRanged { return 6 }
-			return swingT > swingDur * 0.5 ? 3 : 4
+	func updatePlayer(_ dt: Double) {
+		if dead {
+			deathT += dt
+			return
 		}
-		if bowCharge > 0 { return 6 }
-		if !pb.onGround && !pb.inWater { return 1 }
-		if abs(pb.vx) > 0.6 {
-			return (Int(walkAnim * 2.0) % 2 == 0) ? 1 : 2
+		if invuln > 0 { invuln -= dt }
+		if hurtT > 0 { hurtT -= dt }
+		if shake > 0 { shake = max(0, shake - dt * 1.5) }
+		var ix: Double = stick
+		if keyL { ix -= 1.0 }
+		if keyR { ix += 1.0 }
+		ix = clampD(ix, -1.0, 1.0)
+		if abs(ix) < 0.08 { ix = 0 }
+		var jumpPressed: Bool = jumpHeld && !jumpPrev
+		jumpPrev = jumpHeld
+		if remoteID != 0 {
+			if let rv = remoteVehicle, remoteCanReach(rv) {
+				driveRemote(rv, ix, jumpPressed, dt)
+			} else {
+				endRemote("The remote lost the vehicle.")
+			}
+			// (the player's hands are on the remote: they stand where they are)
+			ix = 0
+			jumpPressed = false
 		}
-		return 0
-	}
-}
-
-// ===== p21_backdrop =====
-
-// MARK: - Backdrop walls (drawn behind open tiles; also decides what the light overlay may darken)
-// 0 none (sky shows through), 1 dirt, 2 stone, 3 deep rock, 4 ash, 5 planks, 6 brick, 7 sandstone
-
-func fillSurface(_ ch: Chunk, _ g: WorldGen, _ dim: Dimension) {
-	let cd: ModDimRT? = dim.isCustom ? ModRuntime.shared.dimRT(dim) : nil
-	for lx in 0..<chunkW {
-		let x: Int = ch.x0 + lx
-		if dim.isCustom {
-			ch.surf[lx] = cd?.surfaceAt(x, g.seed) ?? ch.H - 3
-			ch.ceilY[lx] = (cd?.def.ceiling ?? false) ? (cd?.ceilingAt(x, g.seed) ?? 0) : 0
-		} else if dim == .overworld {
-			ch.surf[lx] = g.col(x).h
+		if let v = inVehicle {
+			driveVehicle(v, ix, jumpPressed, dt)
+			return
+		}
+		if let r = mounted {
+			rideRex(r, ix, jumpPressed, dt)
+			return
+		}
+		if seat != nil && stayInSeat(ix, jumpPressed) {
+			lastVy = 0
+			return
+		}
+		if seatAboard != nil && stayInSeatAboard(ix, jumpPressed) {
+			lastVy = 0
+			return
+		}
+		var runMax: Double = 7.4 * speedMult * ModRuntime.shared.rule(.walk) * (wearing(.swiftBoots) ? 1.18 : 1.0) * wxSlow * (1.0 + effects.value(.speed) / 100.0) * (1.0 + armorInf.speed) * suitSpeedMul
+		// heavy weapons commit you to the blow: slower on your feet while it lasts
+		if swingT > 0 || strikeT > 0, let it = heldItem, it.isMeleeWeapon { runMax *= it.melee.moveScale }
+		// a mod's sticky block holds the player back
+		let sticky: Bool = inStickyBlock()
+		if sticky { runMax *= 0.35 }
+		if ix != 0 {
+			facing = ix > 0 ? 1 : -1
+		}
+		if swingT > 0 || useHeld {
+			if aimValid {
+				facing = aimFacing()
+			}
+		}
+		if flying || noclip {
+			let tx: Double = ix * 13.0 * speedMult
+			var ty: Double = 0
+			if jumpHeld { ty = -10.0 }
+			if downHeld || stickY > 0.55 { ty = 10.0 }
+			pb.vx += (tx - pb.vx) * min(1.0, dt * 9.0)
+			pb.vy += (ty - pb.vy) * min(1.0, dt * 9.0)
+			if noclip {
+				pb.x += pb.vx * dt
+				pb.y += pb.vy * dt
+			} else {
+				world.moveBody(&pb, dt, stepUp: 0, dropThrough: true, decks: [])
+			}
+			walkAnim += abs(pb.vx) * dt * 0.5
+			lastVy = pb.vy
+			checkHazards(dt)
+			return
+		}
+		let inWater: Bool = pb.inWater
+		let inLava: Bool = pb.inLava
+		// climbing out of water: pushing against a bank or a ledge with jump held vaults onto it, if the
+		// top is within reach (water used to pin the player under any ledge above its surface). Decided
+		// before swimming, so the swim limits on rising speed do not cancel the vault.
+		if (inWater || inLava) && vaultT <= 0 && jumpHeld && ix != 0 && pb.hitWall && ledgeWithinReach(ix > 0 ? 1 : -1) {
+			vaultT = 0.32
+			pb.vy = -13.0
+		}
+		if vaultT > 0 { vaultT -= dt }
+		let swimming: Bool = (inWater || inLava) && vaultT <= 0
+		// ladders: while the body overlaps one the player climbs (jump or up to climb, down to descend)
+		if !swimming, let lc = ladderSpot() {
+			let climbUp: Bool = jumpHeld || stickY < -0.45
+			let climbDown: Bool = downHeld || stickY > 0.45
+			let vyT: Double = climbUp ? -5.2 : (climbDown ? 5.2 : 0.0)
+			pb.vy += (vyT - pb.vy) * min(1.0, dt * 16.0)
+			var tx: Double = ix * runMax * 0.7
+			// while climbing with no sideways input the body settles onto the rungs
+			if ix == 0 && (climbUp || climbDown) { tx = (lc - (pb.ride != 0 ? pb.rlx : pb.x)) * 8.0 }
+			pb.vx += (tx - pb.vx) * min(1.0, dt * 14.0)
+			moveThing(&pb, dt, stepUp: 1.0, dropThrough: climbDown, decks: allDecks(), mass: playerMass, falls: false)
+			coyote = 0.11
+			jumpBuf = 0
+			fallPeak = 0
+			walkAnim += (abs(pb.vy) + abs(pb.vx)) * dt * 0.55
+			lastVy = pb.vy
+			checkHazards(dt)
+			updateSurvival(dt, ix)
+			return
+		}
+		// the wind (see updateWeatherForces) helps or holds back a walk, carries a jump, and in a gale
+		// pushes even a player standing still; snow and wet ground make the footing slippery. All of
+		// these are zero in calm weather, so movement is then exactly as it always was.
+		let windT: Double = swimming ? 0 : (pb.onGround ? wxWalk : wxAirDrift)
+		let swimMul: Double = (effects.value(.breathing) > 0 && !inLava) ? 0.85 : 0.55
+		let target: Double = ix * runMax * (swimming ? swimMul : 1.0) + (ix != 0 ? windT : 0)
+		let grip: Double = pb.onGround ? 1.0 - 0.6 * wxSlip : 1.0
+		let accel: Double = (pb.onGround ? 72.0 : 40.0) * grip
+		if ix != 0 {
+			if pb.vx < target { pb.vx = min(target, pb.vx + accel * dt) } else { pb.vx = max(target, pb.vx - accel * dt) }
 		} else {
-			ch.surf[lx] = g.uFloor(x)
-			ch.ceilY[lx] = g.uCeil(x)
+			let rest: Double = swimming ? 0 : (pb.onGround ? wxRest : wxAirDrift)
+			let fr: Double = (pb.onGround ? 90.0 * (1.0 - 0.8 * wxSlip) : 12.0) * dt
+			if pb.vx > rest { pb.vx = max(rest, pb.vx - fr) } else { pb.vx = min(rest, pb.vx + fr) }
 		}
+		// a tornado's pull and lift (bounded; zero without one)
+		if wxAccelX != 0 || wxAccelY != 0 {
+			pb.vx = clampD(pb.vx + wxAccelX * dt, -16, 16)
+			pb.vy = clampD(pb.vy + wxAccelY * dt, -14, terminalV)
+			if wxAccelY < -8 { pb.onGround = false }
+		}
+		if pb.onGround { coyote = 0.11 } else { coyote -= dt }
+		if jumpPressed { jumpBuf = 0.13 } else { jumpBuf -= dt }
+		if jumpBuf > 0 && coyote > 0 && !swimming {
+			// a jump boost raises the jump's height by its percentage
+			pb.vy = -15.9 * sqrt((1.0 + effects.value(.jump) / 100.0) * ModRuntime.shared.rule(.jump)) * suitJumpMul()
+			coyote = 0
+			jumpBuf = 0
+			pb.onGround = false
+			spawnParticles(pb.x, pb.y, 0xB0A890, 4, 2.5, 0.35, 10)
+		}
+		if swimming {
+			pb.vy += (inLava ? 14.0 : 11.0) * dt
+			if jumpHeld { pb.vy = max(pb.vy - 52.0 * dt, -6.5) }
+			pb.vy = clampD(pb.vy, -8.0, inLava ? 3.0 : 6.0)
+		} else {
+			var g: Double = gravityG
+			if !jumpHeld && pb.vy < -5.0 { g *= 2.6 }
+			pb.vy = min(pb.vy + g * dt, terminalV)
+		}
+		if sticky {
+			pb.vy = clampD(pb.vy, -5.0, 2.2)
+			fallPeak = 0
+		}
+		if (downHeld || stickY > 0.6) { dropT = 0.22 }
+		if dropT > 0 { dropT -= dt }
+		let decks: [Deck] = allDecks()
+		let wasAir: Bool = !pb.onGround
+		let peak: Double = pb.vy
+		moveThing(&pb, dt, stepUp: 1.0, dropThrough: dropT > 0, decks: decks, mass: playerMass, falls: !swimming)
+		if pb.deck >= 0 && pb.deck < decks.count {
+			let dk: Deck = decks[pb.deck]
+			pb.x += dk.vx * dt
+		}
+		doorTouch(ix)
+		updateWalkDoors(dt)
+		vehicleDoorTouch(ix)
+		updateVehicleDoors(dt)
+		if !pb.onGround && pb.vy > 0 { fallPeak = max(fallPeak, pb.vy) }
+		if pb.onGround && wasAir {
+			if fallPeak > 20.0 && !swimming && mode != .creative && !godMode {
+				var dmg: Double = (fallPeak - 20.0) * 1.15 * ModRuntime.shared.rule(.falls)
+				// thrown by a tornado: a hard landing, but one that can be lived through
+				if flingT > 0 { dmg = settings.weatherHurtsPlayer ? min(dmg, 3.0) : 0 }
+				if dmg > 0 { damagePlayer(dmg, from: pb.x, knock: 0, ignoreArmor: true) }
+				addShake(0.3)
+			}
+			if fallPeak > 9.0 { spawnParticles(pb.x, pb.y, 0xB0A890, 6, 3.0, 0.4, 10) }
+			if fallPeak > 6.0 { sfx(.land, clampD((fallPeak - 6.0) / 14.0, 0.2, 1.0)); landT = 0.12 }
+			fallPeak = 0
+		}
+		if pb.onGround || swimming { fallPeak = 0 }
+		_ = peak
+		walkAnim += abs(pb.vx) * dt * 0.55
+		let still: Bool = pb.onGround && abs(pb.vx) < 0.15 && abs(ix) < 0.1 && swingT <= 0 && !mining && bowCharge <= 0 && hurtT <= 0
+		restT = still && seat == nil ? restT + dt : 0
+		lastVy = pb.vy
+		checkHazards(dt)
+		updateSurvival(dt, ix)
 	}
-}
 
-func wallForRoof(_ t: Tile) -> UInt8 {
-	switch t {
-	case .brick, .crackedBrick, .mossBrick, .stone, .obsidian, .portalFrame: return 6
-	case .sandstone: return 7
-	case .ashStone: return 4
-	default: return 5
-	}
-}
-
-extension World {
-	func backdrop(_ ch: Chunk) -> [UInt8] {
-		if ch.backRev == ch.rev && !ch.back.isEmpty { return ch.back }
-		let H: Int = ch.H
-		var b: [UInt8] = [UInt8](repeating: 0, count: chunkW * H)
-		let over: Bool = dim == .overworld
-		let hasWalls: Bool = !ch.walls.isEmpty
-		for lx in 0..<chunkW {
-			let x: Int = ch.x0 + lx
-			let s: Int = ch.surf[lx]
-			let base: Int = lx * H
-			let top: Int = ch.skyTop[lx]
-			var y: Int = 0
-			while y < H {
-				var k: UInt8 = 0
-				if over {
-					if y > s + 1 {
-						let d: Int = y - s
-						k = d < 14 ? 1 : (y < 330 ? 2 : 3)
-					}
-				} else if y > s + 1 || y < ch.ceilY[lx] - 1 {
-					k = 4
-				}
-				if hasWalls && ch.walls[base + y] != 0 {
-					k = ch.walls[base + y]
-				} else if k == 0 && y >= top && ch.tiles[base + y] == 0 {
-					k = enclosedWall(x, y, ch, lx)
-				}
-				b[base + y] = k
+	/// Column of a ladder the body is on (its centre within a third of a block of the ladder), or nil.
+	/// The tile right under the feet counts too, so a climb carries on until the player stands at the
+	/// top, and a ladder going down a hole can be walked across.
+	func ladderColumn() -> Int? {
+		let cx: Int = Int(floor(pb.x))
+		let frac: Double = pb.x - Double(cx)
+		var cols: [Int] = [cx]
+		if frac < 0.34 { cols.append(cx - 1) } else if frac > 0.66 { cols.append(cx + 1) }
+		let y0: Int = Int(floor(pb.top + 0.1))
+		let y1: Int = Int(floor(pb.y + 0.05))
+		for tx in cols {
+			var y: Int = y0
+			while y <= y1 {
+				let t: Tile = world.tile(tx, y)
+				if t == .ladder { return tx }
+				// a mod's climbable block works the same way
+				if t.isMod && ModRuntime.shared.climbTiles.contains(t.rawValue) { return tx }
+				// a platform laid over the top of a ladder (a hatch) is climbed through and stepped onto
+				if t == .platform && world.tile(tx, y + 1) == .ladder { return tx }
 				y += 1
 			}
 		}
-		ch.back = b
-		ch.backRev = ch.rev
-		return b
+		return nil
 	}
 
-	/// Air under a roof with walls on both sides (a house, a ruin) gets a wall behind it
-	func enclosedWall(_ x: Int, _ y: Int, _ ch: Chunk, _ lx: Int) -> UInt8 {
-		var roof: Tile = .air
-		var k: Int = 1
-		while k <= 12 {
-			let t: Tile = ch.get(lx, y - k)
-			if t.opaque && t.solid {
-				switch t {
-				case .planks, .brick, .crackedBrick, .mossBrick, .sandstone, .hay: roof = t
-				default: return 0
-				}
-				break
+	func onLadder() -> Bool { return ladderColumn() != nil }
+
+	/// Whether the player's body is in a mod's sticky block
+	func inStickyBlock() -> Bool {
+		let st: Set<UInt8> = ModRuntime.shared.stickyTiles
+		if st.isEmpty { return false }
+		let hw: Double = pb.w * 0.5
+		let x0: Int = Int(floor(pb.x - hw + 0.02))
+		let x1: Int = Int(floor(pb.x + hw - 0.02))
+		let y0: Int = Int(floor(pb.top + 0.02))
+		let y1: Int = Int(floor(pb.y - 0.02))
+		if x1 < x0 || y1 < y0 { return false }
+		for ty in y0...y1 {
+			for tx in x0...x1 where st.contains(world.tile(tx, ty).rawValue) { return true }
+		}
+		return false
+	}
+
+	/// A ledge in front of the player whose top is at most about 2.5 blocks above the feet, with room
+	/// to stand on it
+	func ledgeWithinReach(_ dir: Int) -> Bool {
+		let fx: Int = Int(floor(pb.x + Double(dir) * (pb.w * 0.5 + 0.15)))
+		let feet: Int = Int(floor(pb.y - 0.05))
+		var k: Int = 0
+		while k <= 3 {
+			let row: Int = feet - k
+			if !world.solid(fx, row) && !world.solid(fx, row - 1) && world.solid(fx, row + 1) {
+				return pb.y - Double(row + 1) <= 2.6
 			}
 			k += 1
 		}
-		if roof == .air { return 0 }
-		var leftOK: Bool = false
-		var d: Int = 1
-		while d <= 12 {
-			let t: Tile = tile(x - d, y)
-			if t.solid || t == .glass { leftOK = true; break }
-			d += 1
-		}
-		if !leftOK { return 0 }
-		d = 1
-		while d <= 12 {
-			let t: Tile = tile(x + d, y)
-			if t.solid || t == .glass { return wallForRoof(roof) }
-			d += 1
-		}
-		return 0
-	}
-}
-
-// ===== p22_walls_doors =====
-
-// MARK: - Background walls (no collision) and doors
-
-let wallKinds: [Int] = [1, 2, 4, 5, 6, 7]
-
-func wallName(_ k: Int) -> String {
-	if let t = blockWallTile(k) { return joinText(t.def.name, " Wall") }
-	switch k {
-	case 1: return "Dirt Wall"
-	case 2: return "Stone Wall"
-	case 3: return "Deep Rock Wall"
-	case 4: return "Ash Wall"
-	case 5: return "Plank Wall"
-	case 6: return "Brick Wall"
-	case 7: return "Sandstone Wall"
-	default: return "Wall"
-	}
-}
-
-func wallSourceTile(_ k: Int) -> Tile {
-	if let t = blockWallTile(k) { return t }
-	switch k {
-	case 1: return .dirt
-	case 2: return .stone
-	case 3: return .deepRock
-	case 4: return .ashStone
-	case 5: return .planks
-	case 6: return .brick
-	default: return .sandstone
-	}
-}
-
-/// Inventory icon: a darkened block with a frame, so walls read differently from blocks
-func wallIcon(_ k: Int) -> PixelBuf {
-	var b: PixelBuf = tileBuf(wallSourceTile(k))
-	for i in 0..<b.px.count {
-		let c: UInt32 = b.px[i]
-		if (c >> 24) != 0 { b.px[i] = 0xFF000000 | shadeRGB(c & 0xFFFFFF, 0.6) }
-	}
-	for i in 0..<8 {
-		b.set(i, 0, 0x2A2420); b.set(i, 7, 0x2A2420); b.set(0, i, 0x2A2420); b.set(7, i, 0x2A2420)
-	}
-	return b
-}
-
-extension World {
-	func wallAt(_ x: Int, _ y: Int) -> Int {
-		if y < 0 || y >= H { return 0 }
-		let cx: Int = floorDiv(x, chunkW)
-		guard let c = chunk(cx), !c.walls.isEmpty else { return 0 }
-		return Int(c.walls[(x - cx * chunkW) * H + y])
-	}
-
-	@discardableResult
-	func setWall(_ x: Int, _ y: Int, _ k: Int) -> Bool {
-		if y < 1 || y >= H - 1 { return false }
-		let cx: Int = floorDiv(x, chunkW)
-		guard let c = chunk(cx) else { return false }
-		if c.walls.isEmpty {
-			if k == 0 { return false }
-			c.walls = [UInt8](repeating: 0, count: chunkW * H)
-		}
-		let i: Int = (x - cx * chunkW) * H + y
-		if Int(c.walls[i]) == k { return false }
-		c.walls[i] = UInt8(clampI(k, 0, 255))
-		c.dirty = true
-		c.rev &+= 1
-		c.bumpRows(y - 1, y + 1)
-		version += 1
-		noteEdit(x, y)
-		return true
-	}
-}
-
-func isDoor(_ t: Tile) -> Bool { return t == .doorClosed || t == .doorOpen }
-
-/// A door the player walked through, waiting to close behind them
-struct WalkDoor {
-	var x: Int
-	var y: Int
-	var t: Double
-}
-
-extension Game {
-	/// The two cells of the door containing (x, y): (top, bottom)
-	func doorCells(_ x: Int, _ y: Int) -> (Int, Int) {
-		var top: Int = y
-		var bot: Int = y
-		if isDoor(world.tile(x, y - 1)) && !isDoor(world.tile(x, y + 1)) { top = y - 1 }
-		else if isDoor(world.tile(x, y + 1)) { bot = y + 1 }
-		return (top, bot)
-	}
-
-	func doorBlocked(_ x: Int, _ top: Int, _ bot: Int) -> Bool {
-		let x0: Double = Double(x), x1: Double = Double(x + 1)
-		let y0: Double = Double(top), y1: Double = Double(bot + 1)
-		if pb.right > x0 + 0.05 && pb.left < x1 - 0.05 && pb.y > y0 + 0.05 && pb.top < y1 - 0.05 { return true }
-		for m in mobs where m.hp > 0 {
-			if m.b.right > x0 + 0.05 && m.b.left < x1 - 0.05 && m.b.y > y0 + 0.05 && m.b.top < y1 - 0.05 { return true }
-		}
 		return false
 	}
 
-	func setDoor(_ x: Int, _ y: Int, open: Bool) {
-		let c: (Int, Int) = doorCells(x, y)
-		if !open && doorBlocked(x, c.0, c.1) { return }
-		let t: Tile = open ? .doorOpen : .doorClosed
-		for yy in c.0...c.1 where isDoor(world.tile(x, yy)) { world.set(x, yy, t) }
-	}
-
-	func toggleDoor(_ x: Int, _ y: Int) {
-		let open: Bool = world.tile(x, y) == .doorClosed
-		setDoor(x, y, open: open)
-		sfx(.door, at: Double(x), 0.7)
-		spawnParticles(Double(x) + 0.5, Double(y) + 0.5, 0xA97B45, 2, 1.5, 0.3, 8)
-	}
-
-	/// Walking into a closed door opens it, and it closes again once the player has gone through (a door
-	/// opened or shut with a tap stays as it was set)
-	func doorTouch(_ ix: Double) {
-		if ix != 0 {
-			let sgn: Double = ix > 0 ? 1.0 : -1.0
-			let reachX: Double = pb.w * 0.5 + 0.2
-			let fxd: Double = pb.x + sgn * reachX
-			let fx: Int = Int(floor(fxd))
-			for yy in [Int(floor(pb.y - 0.5)), Int(floor(pb.y - 1.4))] {
-				if world.tile(fx, yy) == .doorClosed {
-					setDoor(fx, yy, open: true)
-					let c: (Int, Int) = doorCells(fx, yy)
-					if !walkDoors.contains(where: { $0.x == fx && $0.y == c.0 }) && walkDoors.count < 16 {
-						walkDoors.append(WalkDoor(x: fx, y: c.0, t: 0))
-					}
-					break
-				}
+	func checkHazards(_ dt: Double) {
+		if mode == .creative || godMode { return }
+		// spikes underfoot, cactus touched from the side (cactus is solid, so test a slightly wider box)
+		if let t = world.boxHurts(pb.left + 0.05, pb.top + 0.1, pb.right - 0.05, pb.y - 0.02) ?? world.boxHurts(pb.left - 0.04, pb.top + 0.2, pb.right + 0.04, pb.y - 0.1) {
+			if t == .spikes || t == .cactus || t.isMod {
+				let dmg: Double = t.isMod ? (ModRuntime.shared.blockDef(t)?.power ?? 4) : (t == .spikes ? 6 : 3)
+				var info = DamageInfo(amount: dmg, type: .hazard, source: .environment)
+				info.originX = pb.x + Double(-facing)
+				info.knock = 5
+				_ = hurtPlayer(info)
 			}
 		}
-	}
-
-	/// Closes the doors the player walked through, once they are clear of the doorway
-	func updateWalkDoors(_ dt: Double) {
-		if walkDoors.isEmpty { return }
-		var keep: [WalkDoor] = []
-		for var w in walkDoors {
-			w.t += dt
-			if world.tile(w.x, w.y) != .doorOpen { continue }
-			let c: (Int, Int) = doorCells(w.x, w.y)
-			let away: Bool = abs(pb.x - (Double(w.x) + 0.5)) > pb.w * 0.5 + 1.1 || pb.y < Double(c.0) - 0.5 || pb.top > Double(c.1) + 1.5
-			if w.t > 0.5 && away && !doorBlocked(w.x, c.0, c.1) {
-				setDoor(w.x, w.y, open: false)
-				sfx(.door, at: Double(w.x), 0.5)
-				continue
+		if world.tile(Int(floor(pb.x)), Int(floor(pb.y - 0.5))) == .campfire { playerBurn = max(playerBurn, 1.2) }
+		if pb.inLava {
+			let charm: Bool = wearing(.emberCharm)
+			playerBurn = max(playerBurn, charm ? 1.0 : 2.5)
+			lavaT += dt
+			if lavaT > 0.35 {
+				lavaT = 0
+				var info = DamageInfo(amount: charm ? 2 : 5, type: .lava, source: .environment)
+				info.originX = pb.x
+				_ = hurtPlayer(info)
 			}
-			if w.t < 60 { keep.append(w) }
+		} else {
+			lavaT = 0
 		}
-		walkDoors = keep
+		updatePlayerBurn(dt)
+		modLiquidEffects(dt)
 	}
 
-	func placeDoor(_ tx: Int, _ ty0: Int) -> Bool {
-		// aim at either cell: the door always stands on the floor
-		var ty: Int = ty0
-		if world.tile(tx, ty + 1) == .air && world.tile(tx, ty + 2).solid { ty += 1 }
-		if !world.tile(tx, ty + 1).solid { return false }
-		for yy in [ty, ty - 1] {
-			let cur: Tile = world.tile(tx, yy)
-			if !(cur == .air || (cur.isPlant && cur != .torch && cur != .lantern)) { return false }
-		}
-		if doorBlocked(tx, ty - 1, ty) { return false }
-		if !inReach(Double(tx) + 0.5, Double(ty) + 0.5) { return false }
-		world.set(tx, ty - 1, .doorClosed)
-		world.set(tx, ty, .doorClosed)
-		world.setBuilt(tx, ty - 1, true)
-		world.setBuilt(tx, ty, true)
+	/// Whether the player's head is under water (below the surface of a part-full cell too), and not in
+	/// the dry air inside a vehicle
+	func headUnderWater() -> Bool {
+		let hy: Double = pb.y - pb.h * 0.92
+		let hx: Int = Int(floor(pb.x))
+		let hyI: Int = Int(floor(hy))
+		let t: Tile = world.tile(hx, hyI)
+		if !t.liquid || t == .lava || Liquids.hotTable[Int(t.rawValue)] { return false }
+		if hy - Double(hyI) < 1.0 - world.liquidAmount(hx, hyI) { return false }
+		if pb.ride != 0, let v = vehicleByID(pb.ride), v.dryAt(pb.rlx, pb.rly - pb.h * 0.92) { return false }
 		return true
 	}
 
-	func usePlaceWall(_ k: Int) {
-		if placeCD > 0 { return }
-		let tx: Int = Int(floor(aimX))
-		let ty: Int = Int(floor(aimY))
-		if !inReach(Double(tx) + 0.5, Double(ty) + 0.5) { return }
-		if world.wallAt(tx, ty) != 0 { return }
-		if world.setWall(tx, ty, k) {
-			if !isCreative { inv.removeAt(sel, 1) }
-			placeCD = 0.06
-			swingT = 0.12
-			swingDir = aimFacing()
-			facing = swingDir
-			bumpHUD()
-		}
-	}
-
-	/// Pickaxes and axes knock out placed walls when nothing is in front of them
-	func mineWall(_ tx: Int, _ ty: Int, _ kind: ToolType?, _ tier: Tier?, _ dt: Double) -> Bool {
-		let k: Int = world.wallAt(tx, ty)
-		if k == 0 || kind == nil || kind == .hoe { return false }
-		if !inReach(Double(tx) + 0.5, Double(ty) + 0.5) { return false }
-		if mineX != tx || mineY != ty { mineP = 0; mineX = tx; mineY = ty }
-		mining = true
-		mineNeed = 0.9
-		let sp: Double = isCreative ? 1000 : (tier?.mineSpeed ?? 1.0)
-		mineP += dt * sp
-		if useCD <= 0 {
-			swingT = 0.22
-			swingDir = aimFacing()
-			facing = swingDir
-			useCD = 0.26
-		}
-		if mineP >= mineNeed {
-			mineP = 0
-			mining = false
-			world.setWall(tx, ty, 0)
-			spawnParticles(Double(tx) + 0.5, Double(ty) + 0.5, shadeRGB(wallSourceTile(k).def.colors.first ?? 0x888888, 0.6), 5, 3.0, 0.4, 14)
-			// a block put up as a wall comes back as the block
-			let back: Item = blockWallTile(k).map { Item.block($0) } ?? .wall(k)
-			if !isCreative { spawnDrop(Stack(item: back, count: 1), Double(tx) + 0.5, Double(ty) + 0.5, 0, -2) }
-		}
-		return true
-	}
-}
-
-// ===== p23_fast =====
-
-// MARK: - Fast enum comparisons
-// In debug builds (which Playgrounds uses) "==" on raw-value enums otherwise goes through a slow
-// generic RawRepresentable path. These concrete versions compare the raw values directly.
-
-extension TStyle {
-	static func == (a: TStyle, b: TStyle) -> Bool { return a.rawValue == b.rawValue }
-	static func != (a: TStyle, b: TStyle) -> Bool { return a.rawValue != b.rawValue }
-}
-
-extension Tile {
-	static func == (a: Tile, b: Tile) -> Bool { return a.rawValue == b.rawValue }
-	static func != (a: Tile, b: Tile) -> Bool { return a.rawValue != b.rawValue }
-}
-
-extension Tier {
-	static func == (a: Tier, b: Tier) -> Bool { return a.rawValue == b.rawValue }
-	static func != (a: Tier, b: Tier) -> Bool { return a.rawValue != b.rawValue }
-}
-
-extension ToolType {
-	static func == (a: ToolType, b: ToolType) -> Bool { return a.rawValue == b.rawValue }
-	static func != (a: ToolType, b: ToolType) -> Bool { return a.rawValue != b.rawValue }
-}
-
-extension ArmorSlot {
-	static func == (a: ArmorSlot, b: ArmorSlot) -> Bool { return a.rawValue == b.rawValue }
-	static func != (a: ArmorSlot, b: ArmorSlot) -> Bool { return a.rawValue != b.rawValue }
-}
-
-extension Mat {
-	static func == (a: Mat, b: Mat) -> Bool { return a.rawValue == b.rawValue }
-	static func != (a: Mat, b: Mat) -> Bool { return a.rawValue != b.rawValue }
-}
-
-extension Food {
-	static func == (a: Food, b: Food) -> Bool { return a.rawValue == b.rawValue }
-	static func != (a: Food, b: Food) -> Bool { return a.rawValue != b.rawValue }
-}
-
-extension GunType {
-	static func == (a: GunType, b: GunType) -> Bool { return a.rawValue == b.rawValue }
-	static func != (a: GunType, b: GunType) -> Bool { return a.rawValue != b.rawValue }
-}
-
-extension AmmoType {
-	static func == (a: AmmoType, b: AmmoType) -> Bool { return a.rawValue == b.rawValue }
-	static func != (a: AmmoType, b: AmmoType) -> Bool { return a.rawValue != b.rawValue }
-}
-
-extension PartType {
-	static func == (a: PartType, b: PartType) -> Bool { return a.rawValue == b.rawValue }
-	static func != (a: PartType, b: PartType) -> Bool { return a.rawValue != b.rawValue }
-}
-
-extension Gadget {
-	static func == (a: Gadget, b: Gadget) -> Bool { return a.rawValue == b.rawValue }
-	static func != (a: Gadget, b: Gadget) -> Bool { return a.rawValue != b.rawValue }
-}
-
-extension Station {
-	static func == (a: Station, b: Station) -> Bool { return a.rawValue == b.rawValue }
-	static func != (a: Station, b: Station) -> Bool { return a.rawValue != b.rawValue }
-}
-
-extension RecipeCat {
-	static func == (a: RecipeCat, b: RecipeCat) -> Bool { return a.rawValue == b.rawValue }
-	static func != (a: RecipeCat, b: RecipeCat) -> Bool { return a.rawValue != b.rawValue }
-}
-
-extension Biome {
-	static func == (a: Biome, b: Biome) -> Bool { return a.rawValue == b.rawValue }
-	static func != (a: Biome, b: Biome) -> Bool { return a.rawValue != b.rawValue }
-}
-
-extension Dimension {
-	static func == (a: Dimension, b: Dimension) -> Bool { return a.rawValue == b.rawValue }
-	static func != (a: Dimension, b: Dimension) -> Bool { return a.rawValue != b.rawValue }
-}
-
-extension LairKind {
-	static func == (a: LairKind, b: LairKind) -> Bool { return a.rawValue == b.rawValue }
-	static func != (a: LairKind, b: LairKind) -> Bool { return a.rawValue != b.rawValue }
-}
-
-extension RareKind {
-	static func == (a: RareKind, b: RareKind) -> Bool { return a.rawValue == b.rawValue }
-	static func != (a: RareKind, b: RareKind) -> Bool { return a.rawValue != b.rawValue }
-}
-
-extension ProjKind {
-	static func == (a: ProjKind, b: ProjKind) -> Bool { return a.rawValue == b.rawValue }
-	static func != (a: ProjKind, b: ProjKind) -> Bool { return a.rawValue != b.rawValue }
-}
-
-extension MobKind {
-	static func == (a: MobKind, b: MobKind) -> Bool { return a.rawValue == b.rawValue }
-	static func != (a: MobKind, b: MobKind) -> Bool { return a.rawValue != b.rawValue }
-}
-
-extension Behavior {
-	static func == (a: Behavior, b: Behavior) -> Bool { return a.rawValue == b.rawValue }
-	static func != (a: Behavior, b: Behavior) -> Bool { return a.rawValue != b.rawValue }
-}
-
-extension BossAtk {
-	static func == (a: BossAtk, b: BossAtk) -> Bool { return a.rawValue == b.rawValue }
-	static func != (a: BossAtk, b: BossAtk) -> Bool { return a.rawValue != b.rawValue }
-}
-
-// ===== p25_hud =====
-
-// MARK: - HUD change detection
-// The HUD only redraws when something it shows has changed (checked a few times a second).
-
-extension Game {
-	func hudKey() -> Int {
-		var h: Hasher = Hasher()
-		// an open device panel shows live readings: it refreshes twice a second
-		if showPower { h.combine(Int(clock * 2.0)) }
-		// the flight instruments and the guns' reload: four times a second while driving
-		if let v = inVehicle {
-			h.combine(Int(clock * 4.0))
-			h.combine(v.auto)
-			h.combine(v.route.count)
-		}
-		h.combine(vehicleBuild)
-		h.combine(canBuildOnVehicle)
-		h.combine(Int(hp * 2.0))
-		h.combine(Int(maxHP))
-		h.combine(Int(hunger * 2.0))
-		h.combine(Int(air * 2.0))
-		h.combine(Int(totalDefense))
-		// effects tick down a second at a time; the suit's energy in steps
-		for e in activeEffects() {
-			h.combine(e.0.rawValue)
-			h.combine(Int(e.1))
-		}
-		h.combine(suit.worn)
-		h.combine(Int(suit.energy / 3.0))
-		h.combine(sel)
-		for i in 0..<Inventory.hotbarCount {
-			if let s = inv.slots[i] {
-				h.combine(s.item)
-				h.combine(s.count)
-				h.combine(s.extra)
-			} else {
-				h.combine(-1)
-			}
-		}
-		if showInventory || openChest != nil {
-			for i in Inventory.hotbarCount..<inv.slots.count {
-				if let s = inv.slots[i] {
-					h.combine(i)
-					h.combine(s.item)
-					h.combine(s.count)
+	func updateSurvival(_ dt: Double, _ ix: Double) {
+		if mode == .creative { return }
+		// air
+		let headY: Int = Int(floor(pb.y - pb.h * 0.92))
+		// a Deepbreath Draught or a sealed suit keeps the air coming
+		if headUnderWater() && effects.value(.breathing) <= 0 && !suitHas(.seal) {
+			air -= dt * (wearing(.divingMask) ? 1.0 / 3.0 : 1.0)
+			if air <= 0 {
+				air = 0
+				drownT += dt
+				if drownT >= 1.0 {
+					drownT = 0
+					damagePlayer(2, from: pb.x, knock: 0, ignoreArmor: true)
 				}
 			}
-			for a in inv.armor { h.combine(a?.item) }
-			h.combine(carry?.item)
-			h.combine(carry?.count ?? 0)
-			if let p = openChest {
-				let items: [Stack] = world.chestItems(p.x, p.y)
-				for s in items {
-					h.combine(s.item)
-					h.combine(s.count)
-				}
+		} else {
+			air = min(10.0, air + dt * 5.0)
+			drownT = 0
+		}
+		// hunger
+		let rate: Double = (ix != 0 ? 0.030 : 0.016) * (pb.inWater ? 1.3 : 1.0)
+		hunger = max(0, hunger - rate * ModRuntime.shared.rule(.hunger) * dt)
+		if hunger <= 0 {
+			starveT += dt
+			if starveT >= 3.0 {
+				starveT = 0
+				if hp > 1 || mode == .hardcore { damagePlayer(1, from: pb.x, knock: 0, ignoreArmor: true) }
 			}
+		} else {
+			starveT = 0
 		}
-		h.combine(reloadT > 0)
-		h.combine(mounted != nil)
-		h.combine(inVehicle != nil)
-		h.combine(flying || noclip)
-		h.combine(activeBoss != nil)
-		h.combine(Int(bossBarFrac * 120.0))
-		h.combine(gotMap)
-		h.combine(dayCount)
-		h.combine(isNight)
-		h.combine(world.dim.rawValue)
-		h.combine(tilePx)
-		if settings.showCoords {
-			h.combine(Int(floor(pb.x)))
-			h.combine(Int(floor(pb.y)))
-		}
-		h.combine(vehicleHelpKey())
-		h.combine(message ?? "")
-		// weather: the banner, what is shown in the info corner, a barometer in hand
-		h.combine(wxBanner)
-		h.combine(weather.kind.rawValue)
-		h.combine(wxHere.snow)
-		h.combine(Int(abs(wxHere.wind)))
-		h.combine(weatherHereLabel)
-		if case .gadget(.barometer)? = heldItem { h.combine(Int(pressureNow())) }
-		if settings.showFPS { h.combine(Int(renderFPS)) }
-		return h.finalize()
-	}
-}
-
-// ===== p26_vehicle_ux =====
-
-// MARK: - Vehicle building made simple: kits, attach hints, a checklist, drive / pack-up
-
-struct KitPart {
-	var dx: Int
-	var dy: Int
-	var p: PartType
-}
-
-/// Ready-made layouts (dy grows downwards; row 0 is the top)
-func kitLayout(_ g: Gadget) -> [KitPart] {
-	switch g {
-	case .carKit:
-		return [KitPart(dx: 1, dy: 0, p: .seat), KitPart(dx: 2, dy: 0, p: .steering),
-				KitPart(dx: 0, dy: 1, p: .fuelTank), KitPart(dx: 1, dy: 1, p: .frame), KitPart(dx: 2, dy: 1, p: .frame), KitPart(dx: 3, dy: 1, p: .engine),
-				KitPart(dx: 0, dy: 2, p: .wheel), KitPart(dx: 3, dy: 2, p: .wheel)]
-	case .boatKit:
-		return [KitPart(dx: 1, dy: 0, p: .seat), KitPart(dx: 2, dy: 0, p: .steering),
-				KitPart(dx: 0, dy: 1, p: .hull), KitPart(dx: 1, dy: 1, p: .hull), KitPart(dx: 2, dy: 1, p: .hull), KitPart(dx: 3, dy: 1, p: .paddle)]
-	case .motorboatKit:
-		// the engine sits on the hull (not out past its end, which tipped the old layout stern-down)
-		return [KitPart(dx: 1, dy: 0, p: .engine), KitPart(dx: 2, dy: 0, p: .seat), KitPart(dx: 3, dy: 0, p: .steering), KitPart(dx: 4, dy: 0, p: .fuelTank),
-				KitPart(dx: 0, dy: 1, p: .propeller), KitPart(dx: 1, dy: 1, p: .hull), KitPart(dx: 2, dy: 1, p: .hull), KitPart(dx: 3, dy: 1, p: .hull), KitPart(dx: 4, dy: 1, p: .hull)]
-	case .planeKit:
-		// a light plane, nose to the right: tail elevator, wings under the cockpit, engine and propeller in front
-		return [KitPart(dx: 0, dy: 0, p: .elevator), KitPart(dx: 4, dy: 0, p: .cockpit),
-				KitPart(dx: 0, dy: 1, p: .frame), KitPart(dx: 1, dy: 1, p: .frame), KitPart(dx: 2, dy: 1, p: .wing), KitPart(dx: 3, dy: 1, p: .wing), KitPart(dx: 4, dy: 1, p: .wing),
-				KitPart(dx: 5, dy: 1, p: .fuelTank), KitPart(dx: 6, dy: 1, p: .engine), KitPart(dx: 7, dy: 1, p: .airProp),
-				KitPart(dx: 3, dy: 2, p: .wheel), KitPart(dx: 6, dy: 2, p: .wheel)]
-	case .heliKit:
-		// two engines under one rotor, a tail rotor on the boom, skids below
-		return [KitPart(dx: 3, dy: 0, p: .rotor),
-				KitPart(dx: 0, dy: 1, p: .tailRotor), KitPart(dx: 1, dy: 1, p: .frame), KitPart(dx: 2, dy: 1, p: .frame), KitPart(dx: 3, dy: 1, p: .engine), KitPart(dx: 4, dy: 1, p: .cockpit),
-				KitPart(dx: 3, dy: 2, p: .engine), KitPart(dx: 4, dy: 2, p: .fuelTank),
-				KitPart(dx: 2, dy: 3, p: .frame), KitPart(dx: 3, dy: 3, p: .frame), KitPart(dx: 4, dy: 3, p: .frame)]
-	case .airshipKit:
-		// a balloon of 20 envelopes, two burners under it, a gondola with propellers at both ends
-		var out: [KitPart] = []
-		for x in 1...6 { out.append(KitPart(dx: x, dy: 0, p: .envelope)) }
-		for x in 0...7 { out.append(KitPart(dx: x, dy: 1, p: .envelope)) }
-		for x in 1...6 { out.append(KitPart(dx: x, dy: 2, p: .envelope)) }
-		out.append(contentsOf: [KitPart(dx: 2, dy: 3, p: .frame), KitPart(dx: 3, dy: 3, p: .burner), KitPart(dx: 4, dy: 3, p: .burner), KitPart(dx: 5, dy: 3, p: .frame),
-								KitPart(dx: 0, dy: 4, p: .airProp), KitPart(dx: 1, dy: 4, p: .frame), KitPart(dx: 2, dy: 4, p: .cockpit), KitPart(dx: 3, dy: 4, p: .engine),
-								KitPart(dx: 4, dy: 4, p: .fuelTank), KitPart(dx: 5, dy: 4, p: .frame), KitPart(dx: 6, dy: 4, p: .airProp)])
-		return out
-	case .tankKit:
-		// armour all round, a cannon on the turret, two engines, tracks the whole length
-		var out: [KitPart] = [KitPart(dx: 3, dy: 0, p: .armor), KitPart(dx: 4, dy: 0, p: .cannon),
-							  KitPart(dx: 1, dy: 1, p: .armor), KitPart(dx: 2, dy: 1, p: .seat), KitPart(dx: 3, dy: 1, p: .steering), KitPart(dx: 4, dy: 1, p: .armor),
-							  KitPart(dx: 0, dy: 2, p: .armor), KitPart(dx: 1, dy: 2, p: .engine), KitPart(dx: 2, dy: 2, p: .fuelTank), KitPart(dx: 3, dy: 2, p: .engine),
-							  KitPart(dx: 4, dy: 2, p: .frame), KitPart(dx: 5, dy: 2, p: .armor)]
-		for x in 0...5 { out.append(KitPart(dx: x, dy: 3, p: .track)) }
-		return out
-	case .truckKit:
-		// a cab with two engines and a headlight, a bed of three cargo crates, three axles
-		return [KitPart(dx: 0, dy: 0, p: .cargo), KitPart(dx: 1, dy: 0, p: .cargo), KitPart(dx: 2, dy: 0, p: .cargo), KitPart(dx: 4, dy: 0, p: .seat), KitPart(dx: 5, dy: 0, p: .steering), KitPart(dx: 6, dy: 0, p: .headlight),
-				KitPart(dx: 0, dy: 1, p: .frame), KitPart(dx: 1, dy: 1, p: .frame), KitPart(dx: 2, dy: 1, p: .frame), KitPart(dx: 3, dy: 1, p: .frame), KitPart(dx: 4, dy: 1, p: .fuelTank),
-				KitPart(dx: 5, dy: 1, p: .engine), KitPart(dx: 6, dy: 1, p: .engine),
-				KitPart(dx: 0, dy: 2, p: .wheel), KitPart(dx: 2, dy: 2, p: .wheel), KitPart(dx: 5, dy: 2, p: .wheel)]
-	default:
-		return []
-	}
-}
-
-/// Earlier layouts of a kit, so vehicles placed by older versions still pack back into their kit
-func legacyKitLayouts(_ g: Gadget) -> [[KitPart]] {
-	if g == .motorboatKit {
-		return [[KitPart(dx: 1, dy: 0, p: .fuelTank), KitPart(dx: 2, dy: 0, p: .seat), KitPart(dx: 3, dy: 0, p: .steering),
-				 KitPart(dx: 0, dy: 1, p: .propeller), KitPart(dx: 1, dy: 1, p: .engine), KitPart(dx: 2, dy: 1, p: .hull), KitPart(dx: 3, dy: 1, p: .hull), KitPart(dx: 4, dy: 1, p: .hull)]]
-	}
-	return []
-}
-
-func isKit(_ g: Gadget) -> Bool {
-	switch g {
-	case .carKit, .boatKit, .motorboatKit, .planeKit, .heliKit, .airshipKit, .tankKit, .truckKit: return true
-	default: return false
-	}
-}
-
-struct VehicleCheck {
-	var title: String
-	var lines: [String]
-	var oks: [Bool]
-	var ready: Bool
-	var hint: String
-}
-
-/// A spot where the held part could go, in world coordinates (top-left of the cell)
-struct GhostCell {
-	var x: Double
-	var y: Double
-	var ok: Bool
-	var ang: Double = 0
-}
-
-extension Game {
-	// MARK: kits
-
-	/// Where a kit would land if placed at the aim point: (left tile x, bottom tile y, fits).
-	/// Tries a few spots around the aim so small bumps, plants or trees don't block it.
-	func kitPlacement(_ g: Gadget, _ ax: Double, _ ay: Double) -> (Int, Int, Bool) {
-		let layout: [KitPart] = kitLayout(g)
-		var w: Int = 1
-		var h: Int = 1
-		for k in layout { w = max(w, k.dx + 1); h = max(h, k.dy + 1) }
-		let baseLeft: Int = Int(floor(ax)) - w / 2
-		let shifts: [Int] = [0, 1, -1, 2, -2, 3, -3]
-		var firstLeft: Int = baseLeft
-		var firstBottom: Int = Int(floor(ay))
-		var firstSet: Bool = false
-		for sx in shifts {
-			let left: Int = baseLeft + sx
-			// drop down onto the ground (or the water surface) below the aim point
-			var bottom: Int = Int(floor(ay))
-			var n: Int = 0
-			while n < 10 && !kitSupport(left, w, bottom + 1) {
-				bottom += 1
-				n += 1
+		// a frozen body does not heal until it has warmed up
+		let healRule: Double = ModRuntime.shared.rule(.healing)
+		if hunger >= 14 && hp < maxHP && bodyCold < 0.9 && healRule > 0 {
+			regenT += dt
+			let period: Double = (hunger >= 18 ? 0.9 : 1.6) / healRule
+			if regenT >= period {
+				regenT = 0
+				hp = min(maxHP, hp + 1)
+				hunger = max(0, hunger - 0.12)
+				bumpHUD()
 			}
-			if !firstSet {
-				firstSet = true
-				firstLeft = left
-				firstBottom = bottom
-			}
-			var lift: Int = 0
-			while lift <= 3 {
-				let by: Int = bottom - lift
-				if kitFits(layout, left, by, h) { return (left, by, true) }
-				lift += 1
-			}
+		} else {
+			regenT = 0
 		}
-		return (firstLeft, firstBottom, false)
 	}
 
-	/// Something to rest on under any column of the kit
-	func kitSupport(_ left: Int, _ w: Int, _ y: Int) -> Bool {
-		var x: Int = left
-		while x < left + w {
-			let t: Tile = world.tile(x, y)
-			if t.solid || t.liquid || t == .platform { return true }
-			x += 1
+	func damagePlayer(_ dmg: Double, from sx: Double, knock: Double = 6, ignoreArmor: Bool = false) {
+		if dead || godMode || mode == .creative { return }
+		if invuln > 0 && !ignoreArmor { return }
+		let hurtRule: Double = ModRuntime.shared.rule(.hurt)
+		if hurtRule <= 0 { return }
+		var d: Double = dmg * hurtRule
+		if !ignoreArmor { d *= 1.0 - armorShare(totalDefense) }
+		d = max(1.0, d.rounded())
+		hp -= d
+		if remoteID != 0 { endRemote("Hurt: you let go of the remote.") }
+		sfx(.hurt, 0.8)
+		invuln = 0.55
+		hurtT = 0.35
+		if knock > 0 {
+			let dirk: Double = pb.x >= sx ? 1.0 : -1.0
+			pb.vx = dirk * knock
+			pb.vy = -6.0
 		}
-		return false
+		floatText("-" + String(Int(d)), pb.x, pb.y - pb.h - 0.3, 0xFF5050)
+		addShake(0.2)
+		bumpHUD()
+		if hp <= 0 { die() }
 	}
 
-	func kitFits(_ layout: [KitPart], _ left: Int, _ bottom: Int, _ h: Int) -> Bool {
-		for k in layout {
-			let tx: Int = left + k.dx
-			let ty: Int = bottom - (h - 1) + k.dy
-			if world.solid(tx, ty) { return false }
-		}
-		return true
+	/// The share of a blow that armour takes: 4% a point, at most 80% (never invincible)
+	func armorShare(_ defense: Double) -> Double {
+		return min(0.8, max(0, defense) * 0.04)
 	}
 
-	func placeKit(_ g: Gadget) {
-		let layout: [KitPart] = kitLayout(g)
-		if layout.isEmpty { return }
-		if !inReach(aimX, aimY) {
-			say("Tap closer to you to place it.", 1.5)
-			return
-		}
-		let pl: (Int, Int, Bool) = kitPlacement(g, aimX, aimY)
-		if !pl.2 {
-			say("Not enough room here. Find open, flat ground (or water for a boat).", 2.5)
-			return
-		}
-		var h: Int = 1
-		for k in layout { h = max(h, k.dy + 1) }
-		let v: Vehicle = Vehicle(id: newID(), first: layout[0].p, x: 0, y: 0)
-		v.parts.removeAll()
-		for k in layout { v.parts[PartCell(dx: k.dx, dy: k.dy)] = k.p }
-		v.recompute(keepAnchor: false)
-		v.placeBox(left: Double(pl.0), bottom: Double(pl.1 + 1))
-		_ = h
-		v.kit = g.rawValue
-		if v.engines > 0 || v.jets > 0 || v.burners > 0 { v.fuel = min(v.fuelCapacity, 40.0) }
-		vehicles.append(v)
-		if !isCreative { inv.removeAt(sel, 1) }
-		useCD = 0.3
-		swingT = 0.15
-		spawnParticles(v.b.x, v.b.y - v.b.h * 0.5, 0xFFF0A0, 10, 3.0, 0.5, 6)
-		say("Placed! Walk up to it and press DRIVE.", 3.0)
+	func heal(_ amount: Double) {
+		hp = min(maxHP, hp + amount)
 		bumpHUD()
 	}
 
-	// MARK: finding vehicles
-
-	func nearestVehicle(_ maxDist: Double) -> Vehicle? {
-		var best: Vehicle? = nil
-		var bd: Double = maxDist
-		for v in vehicles {
-			let dx: Double = abs(v.b.x - pb.x) - v.b.w * 0.5
-			let dy: Double = abs((v.b.y - v.b.h * 0.5) - (pb.y - pb.h * 0.5)) - v.b.h * 0.5
-			let d: Double = max(0, max(dx, dy))
-			if d <= bd {
-				bd = d
-				best = v
-			}
-		}
-		return best
+	func die() {
+		if dead { return }
+		dropBagOnDeath()
+		dead = true
+		hp = 0
+		deathT = 0
+		mounted = nil
+		if let v = inVehicle { v.rider = false }
+		inVehicle = nil
+		if remoteID != 0 { endRemote() }
+		spawnParticles(pb.x, pb.y - 1, 0xC03030, 24, 6.0, 0.9, 16)
+		say(mode == .hardcore ? "You died. Your hardcore world is lost." : "You died!", 5.0)
+		if mode == .hardcore { hardcoreOver = true }
+		bumpHUD()
 	}
 
-	var holdingVehicleThing: Bool {
-		guard let it = heldItem else { return false }
-		switch it {
-		case .part: return true
-		case .gadget(let g): return g == .wrench || g == .assembler || isKit(g)
-		case .block: return vehicleBuild
+	func respawn() {
+		if mode == .hardcore && hardcoreOver { return }
+		if world.dim != .overworld { travelTo(.overworld, arriveX: spawnX, arriveY: spawnY, silent: true) }
+		dimReturn = nil
+		dead = false
+		hp = maxHP
+		hunger = max(hunger, 14)
+		air = 10
+		pb.x = spawnX
+		pb.y = spawnY
+		pb.vx = 0
+		pb.vy = 0
+		pb.ride = 0
+		invuln = 3.0
+		fallPeak = 0
+		world.loadAround(centerX: Int(spawnX), radius: 3)
+		let sy: Int = world.surfaceY(Int(spawnX))
+		pb.y = Double(sy)
+		camX = pb.x
+		camY = pb.y - 2
+		say("Respawned.", 2.0)
+		bumpHUD()
+	}
+
+	// MARK: camera, streaming, light
+
+	/// Camera follow: a dead zone around the player, optional look-ahead in the direction of travel
+	/// (eased so turning around does not jerk the view), and frame-rate independent exponential smoothing.
+	func updateCamera(_ dt: Double) {
+		let st: Settings = settings
+		// Carried by a vehicle (driving it, or standing on it), the view is carried along with it, so
+		// the smoothing below only ever has the player's own movement to follow. Without this the view
+		// fell further behind the faster a vehicle went, and at a few hundred blocks a second lost it.
+		// (driving by remote, the view goes with the vehicle, not the player)
+		let rv: Vehicle? = remoteVehicle
+		var carrier: Vehicle? = inVehicle ?? rv
+		if carrier == nil && pb.ride != 0 { carrier = vehicleByID(pb.ride) }
+		if let cv = carrier {
+			let pv: (Double, Double) = rv != nil ? (cv.vx, cv.vy) : cv.pointVel(pb.x, pb.y)
+			camX += pv.0 * dt
+			camTX += pv.0 * dt
+			camY += pv.1 * dt
+			camTY += pv.1 * dt
+		}
+		// look ahead: further when driving fast, eased in and out
+		var leadTarget: Double = 0
+		if st.camLookAhead && !st.camDirect {
+			if let v = carrier {
+				leadTarget = clampD(v.vx * 0.35, -6.0, 6.0)
+			} else if abs(pb.vx) > 1.0 {
+				leadTarget = Double(facing) * 1.6
+			}
+		}
+		camLead += (leadTarget - camLead) * min(1.0, dt * 2.5)
+		let fx: Double = (rv?.px ?? pb.x) + camLead
+		let fy: Double = rv != nil ? (rv?.py ?? pb.y) : pb.y - 1.6
+		// the target only moves once the player leaves the dead zone around it
+		let dz: Double = st.camDirect ? 0 : clampD(st.camDeadZone, 0, 4)
+		if fx > camTX + dz { camTX = fx - dz } else if fx < camTX - dz { camTX = fx + dz }
+		let dzy: Double = dz * 0.75
+		if fy > camTY + dzy { camTY = fy - dzy } else if fy < camTY - dzy { camTY = fy + dzy }
+		if abs(camTX - camX) > 40 || abs(camTY - camY) > 40 || !st.camSmoothOn {
+			// teleports, respawns and "smoothing off" snap straight to the target
+			camX = camTX
+			camY = camTY
+		} else {
+			let rate: Double = st.camDirect ? 12.0 : 2.5 + clampD(st.camFollow, 0, 1) * 11.5
+			let k: Double = 1.0 - exp(-rate * dt)
+			camX += (camTX - camX) * k
+			camY += (camTY - camY) * k
+		}
+		let halfW: Double = viewTilesW * 0.5
+		let halfH: Double = viewTilesH * 0.5
+		if !gen.infinite {
+			if viewTilesW < Double(gen.width) { camX = clampD(camX, halfW, Double(gen.width) - halfW) }
+		}
+		let Hh: Double = Double(world.H)
+		camY = clampD(camY, halfH - 14.0, Hh - halfH + 1.0)
+	}
+
+	func updateStreaming() {
+		let need: Int = Int(ceil(viewTilesW * 0.5 / Double(chunkW))) + 2
+		loadRadius = need
+		var keep: Set<Int> = []
+		for m in mobs where m.persistent || m.isBoss || m.tame {
+			keep.insert(floorDiv(Int(floor(m.b.x)), chunkW))
+		}
+		for v in vehicles { keep.insert(floorDiv(Int(floor(v.b.x)), chunkW)) }
+		keepWorkingLand(&keep)
+		let cx: Int = Int(floor(camX))
+		let n: Int = world.stream(centerX: cx, radius: loadRadius, hysteresis: 3, budget: 1, keep: keep)
+		chunksLoadedLast = n
+		// keep the player's own chunk always available
+		let pc: Int = floorDiv(Int(floor(pb.x)), chunkW)
+		if world.chunks[pc] == nil { world.loadChunk(pc) }
+	}
+
+	func heldLightLevel() -> Int {
+		if let it = heldItem, case .custom(let k) = it, let r = ModRuntime.shared.item(k), r.def.light > 0 { return r.def.light }
+		if let it = heldItem, case .block(let t) = it {
+			let l: Int = t.light
+			if l >= 9 { return l - 2 }
+		}
+		return 0
+	}
+
+	func updateLight(_ dt: Double) {
+		lightTimer -= dt
+		// dynamic lights
+		var dyn: [(Int, Int, Int)] = []
+		let pcx: Int = Int(floor(pb.x))
+		let pcy: Int = Int(floor(pb.y - pb.h * 0.6))
+		var hl: Int = heldLightLevel()
+		hl = max(hl, wearing(.headlamp) ? 11 : 5)
+		hl = max(hl, Int(effects.value(.glow)))
+		if suitLit { hl = max(hl, 12) }
+		dyn.append((pcx, pcy, hl))
+		for m in mobs {
+			var lv: Int = 0
+			switch m.kind {
+			case .emberSlime: lv = 9
+			case .imp: lv = 8
+			case .wraith: lv = 6
+			case .cinderBat: lv = 6
+			case .bearBoss, .rex: lv = m.isBoss ? 6 : 0
+			case .sentinel: lv = 9
+			case .warden: lv = 10
+			case .custom: lv = clampI(ModRuntime.shared.mob(m.cslot)?.def.glow ?? 0, 0, 12)
+			default: lv = 0
+			}
+			if m.burn > 0 { lv = max(lv, 6) }
+			if lv > 0 { dyn.append((Int(floor(m.b.x)), Int(floor(m.b.y - m.b.h * 0.5)), lv)) }
+		}
+		for p in projectiles where p.mod >= 0 && p.mod < ModRuntime.shared.shots.count {
+			let gl: Int = ModRuntime.shared.shots[p.mod].glow
+			if gl > 0 { dyn.append((Int(floor(p.x)), Int(floor(p.y)), gl)) }
+		}
+		for p in projectiles where p.kind == .fireball || p.kind == .bomb {
+			// fireballs glow; a bomb's lit fuse gives a small light
+			dyn.append((Int(floor(p.x)), Int(floor(p.y)), p.kind == .fireball ? 10 : 5))
+		}
+		for f in flashes {
+			let lv: Int = f.level
+			if lv > 0 { dyn.append((Int(floor(f.x)), Int(floor(f.y)), lv)) }
+		}
+		for z in fireZones { dyn.append((Int(floor(z.x)), Int(floor(z.y - 0.6)), 11)) }
+		for s in ships {
+			dyn.append((Int(floor(s.x)) - 3, Int(floor(s.deckY(Double(WorldGen.sea)))) - 2, 10))
+			dyn.append((Int(floor(s.x)) + 3, Int(floor(s.deckY(Double(WorldGen.sea)))) - 2, 10))
+		}
+		for v in vehicles where v.rider && v.engines > 0 && v.fuel > 0 {
+			dyn.append((Int(floor(v.b.x + Double(v.dir) * (v.b.w * 0.5 + 1.0))), Int(floor(v.b.y - v.b.h * 0.5)), 10))
+		}
+		// lamps and torches built onto a vehicle light it up wherever it goes
+		for v in vehicles where !v.blocks.isEmpty {
+			for (cell, b) in v.blocks where b.light > 0 {
+				let p: (Double, Double) = v.cellCenter(cell)
+				dyn.append((Int(floor(p.0)), Int(floor(p.1)), b.light))
+			}
+		}
+		// headlights throw a beam ahead of a driven vehicle
+		for v in vehicles where v.rider && v.headlights > 0 {
+			for (cell, t) in v.parts where t == .headlight {
+				let d: Double = Double(v.dir)
+				for (k, lv) in [(0.0, 10), (2.5, 14), (5.0, 13), (7.5, 11)] {
+					let p: (Double, Double) = v.toWorld(Double(cell.dx) + 0.5 + d * k, Double(cell.dy) + 0.5)
+					dyn.append((Int(floor(p.0)), Int(floor(p.1)), lv))
+				}
+			}
+		}
+		let nightVision: Bool = effects.value(.nightVision) > 0
+		var key: Int = dyn.count &+ (nightVision ? 7919 : 0)
+		for d in dyn { key = key &* 31 &+ d.0 &* 7 &+ d.1 &* 13 &+ d.2 }
+		// window
+		let vw: Int = Int(ceil(viewTilesW)) + 2
+		let vh: Int = Int(ceil(viewTilesH)) + 2
+		let vx0: Int = Int(floor(camX - viewTilesW * 0.5)) - 1
+		let vy0: Int = Int(floor(camY - viewTilesH * 0.5)) - 1
+		let covered: Bool = light.covers(vx0 - 3, vy0 - 3, vx0 + vw + 3, vy0 + vh + 3)
+		// only edits that touch the light window matter (crops growing far away do not)
+		var edited: Bool = false
+		if world.editAny {
+			let ex0: Int = light.ox - 1
+			let ex1: Int = light.ox + light.w
+			let ey0: Int = light.oy - 1
+			let ey1: Int = light.oy + light.h
+			if world.editX1 >= ex0 && world.editX0 <= ex1 && world.editY1 >= ey0 && world.editY0 <= ey1 {
+				edited = true
+			} else {
+				world.editAny = false
+			}
+		}
+		let layoutChanged: Bool = light.layoutUsed != world.layoutVersion
+		let needsStatic: Bool = !light.valid || !covered || light.skyUsed != skyLevel || light.dimUsed != world.dim.rawValue || edited || layoutChanged
+		let amb: Double = ambientLight()
+		if !needsStatic {
+			// only moving lights changed: cheap partial relight
+			if light.dynUsed == key { return }
+			let t0: Double = perfNow()
+			light.applyDynamic(dyn)
+			light.dynUsed = key
+			light.buildPixels(&lightDark, &lightGlow, amb, 1.0 - dayFactor)
+			lightRev &+= 1
+			Perf.shared.lightDyn += 1
+			Perf.shared.lightMs = Perf.smooth(Perf.shared.lightMs, perfNow() - t0)
+			return
+		}
+		if lightTimer > 0 && light.valid && covered && light.dimUsed == world.dim.rawValue { return }
+		let t0: Double = perfNow()
+		lightTimer = 0.04
+		let m: Int = 17
+		var ox: Int = vx0 - m
+		ox = floorDiv(ox, 4) * 4
+		var oy: Int = vy0 - m
+		oy = floorDiv(oy, 4) * 4
+		var w: Int = (vx0 + vw + m) - ox + 4
+		w = (w / 4 + 1) * 4
+		var h: Int = (vy0 + vh + m) - oy + 4
+		h = (h / 4 + 1) * 4
+		light.compute(world, ox, oy, w, h, skyLevel, dyn)
+		light.dynUsed = key
+		light.buildPixels(&lightDark, &lightGlow, amb, 1.0 - dayFactor)
+		lightRev &+= 1
+		Perf.shared.lightMs = Perf.smooth(Perf.shared.lightMs, perfNow() - t0)
+	}
+
+	/// The least light anywhere: the dimension's own glow (a cavern dimension glows as brightly as its
+	/// maker set its light, as it has no sky to light it), or more with an Owlsight Draught
+	func ambientLight() -> Double {
+		var amb: Double = fullBright ? 1.0 : (world.dim == .umbral ? 0.2 : (world.dim.isCustom ? 0.12 : 0.07))
+		if !fullBright, let d = customDim, d.def.ceiling { amb = max(amb, 0.12 + 0.22 * clampD(d.def.light, 0, 1)) }
+		if effects.value(.nightVision) > 0 { amb = max(amb, 0.5) }
+		return amb
+	}
+
+	// MARK: random world ticks (crops, grass)
+
+	func updateWorldTicks(_ dt: Double) {
+		let n: Int = 7
+		let px: Int = Int(floor(pb.x))
+		let py: Int = Int(floor(pb.y))
+		for _ in 0..<n {
+			let x: Int = px + Int.random(in: -40...40)
+			let y: Int = py + Int.random(in: -26...26)
+			let t: Tile = world.tile(x, y)
+			// rain falling on a crop (not snow) helps it along
+			var grow: Double = 0.35
+			if t.isPlant && weatherRain > 0.2 && !weatherSnow && y < world.rainTop(x) + 1 { grow = 0.35 + 0.3 * weatherRain }
+			switch t {
+			case .wheat1: if Double.random(in: 0...1) < grow { world.set(x, y, .wheat2) }
+			case .wheat2: if Double.random(in: 0...1) < grow { world.set(x, y, .wheat3) }
+			case .carrot1: if Double.random(in: 0...1) < grow { world.set(x, y, .carrot2) }
+			case .carrot2: if Double.random(in: 0...1) < grow { world.set(x, y, .carrot3) }
+			case .sapling: if Double.random(in: 0...1) < grow * 0.4 { growSapling(x, y) }
+			case .dirt:
+				if world.dim == .overworld && y < world.skyTop(x) + 1 && world.tile(x, y - 1) == .air {
+					let a: Tile = world.tile(x - 1, y)
+					let b: Tile = world.tile(x + 1, y)
+					if a == .grass || b == .grass { if Double.random(in: 0...1) < 0.2 { world.set(x, y, .grass) } }
+				}
+			case .grass:
+				if world.tile(x, y - 1).opaque && Double.random(in: 0...1) < 0.3 { world.set(x, y, .dirt) }
+			default: break
+			}
+		}
+		updateLeafDecay(dt)
+		// lantern/torch/crop support is checked when neighbours change (see breakTile)
+	}
+
+	/// Open air or a wild plant a growing tree may take the place of (never a torch or anything built)
+	func treeRoom(_ t: Tile) -> Bool {
+		return t == .air || t == .tallGrass || t == .flowerR || t == .flowerY || t == .deadBush
+	}
+
+	/// A sapling grows into a tree that suits the land it stands in: a pine in snow and on mountains, a
+	/// tall jungle tree, a flat-topped savanna tree, a low swamp tree, a birch or an oak elsewhere (in a
+	/// custom dimension, a tree of its region's own log and leaves). It grows as tall as the room above
+	/// it allows, and waits while there is not room for its smallest kind. True when it grew.
+	@discardableResult
+	func growSapling(_ x: Int, _ y: Int) -> Bool {
+		if world.tile(x, y) != .sapling || !world.isSoil(world.tile(x, y + 1)) { return false }
+		let r: Double = Double.random(in: 0..<1)
+		var log: Tile = .log
+		var leaves: Tile = .leaves
+		// 0 oak, 1 birch, 2 pine, 3 jungle, 4 savanna, 5 swamp
+		var shape: Int = 0
+		if let d = customDim {
+			let z: ModDimZoneRT = d.zones[d.zoneIndex(x)]
+			if !z.designs.isEmpty { return growDesign(d, z, x, y) }
+			log = z.log
+			leaves = z.leaves
+		} else {
+			switch biomeAt(Double(x)) {
+			case .tundra, .mountain: shape = 2; leaves = .pineLeaves
+			case .jungle: shape = 3; log = .jungleLog; leaves = .jungleLeaves
+			case .savanna: shape = 4
+			case .swamp: shape = 5; leaves = .jungleLeaves
+			default: if r < 0.3 { shape = 1; log = .birchLog; leaves = .birchLeaves }
+			}
+		}
+		let wants: [Int] = [4 + Int(r * 4.0), 6 + Int(r * 4.0), 6 + Int(r * 5.0), 9 + Int(r * 6.0), 5 + Int(r * 3.0), 4 + Int(r * 2.0)]
+		let least: [Int] = [4, 5, 6, 8, 5, 4]
+		// free cells straight up from the sapling (its own cell counts): the trunk and two above it
+		var room: Int = 1
+		while room < wants[shape] + 2 && treeRoom(world.tile(x, y - room)) { room += 1 }
+		let th: Int = min(wants[shape], room - 2)
+		if th < least[shape] { return false }
+		let gy: Int = y + 1
+		for k in 1...th { world.set(x, gy - k, log) }
+		func leaf(_ lx: Int, _ ly: Int) {
+			if treeRoom(world.tile(lx, ly)) { world.set(lx, ly, leaves) }
+		}
+		let top: Int = gy - th
+		switch shape {
+		case 1:
+			for dy in -4...0 {
+				let w: Int = (dy == -4 || dy == 0) ? 1 : 2
+				for dx in -w...w { leaf(x + dx, top + dy) }
+			}
+			leaf(x, top - 5)
+		case 2:
+			var layer: Int = 0
+			while layer < th - 1 {
+				let w: Int = min(3, 1 + layer / 2)
+				for dx in -w...w { leaf(x + dx, top - 1 + layer) }
+				layer += 1
+			}
+			leaf(x, top - 2)
+		case 3:
+			for dy in -3...1 {
+				for dx in -4...4 where !(abs(dx) == 4 && abs(dy + 1) > 1) && abs(dx) + abs(dy + 1) <= 6 { leaf(x + dx, top + dy) }
+			}
+		case 4:
+			for dx in -4...4 { leaf(x + dx, top) }
+			for dx in -2...2 { leaf(x + dx, top - 1) }
+		case 5:
+			for dx in -3...3 {
+				leaf(x + dx, top)
+				if abs(dx) < 3 { leaf(x + dx, top - 1) }
+			}
+		default:
+			for dy in -3...1 {
+				for dx in -2...2 where !(abs(dx) == 2 && (dy == -3 || dy == 1)) { leaf(x + dx, top + dy) }
+			}
+		}
+		spawnParticles(Double(x) + 0.5, Double(top) + 0.5, 0x56A83F, 8, 3.0, 0.6, 10)
+		return true
+	}
+
+	/// A sapling in a region with tree designs grows into one of them that suits the ground under it,
+	/// as tall as the room above allows (it waits while even its smallest won't fit). True when it grew.
+	func growDesign(_ d: ModDimRT, _ z: ModDimZoneRT, _ x: Int, _ y: Int) -> Bool {
+		let below: Tile = world.tile(x, y + 1)
+		guard let tr = d.pickDesign(z, below, Double.random(in: 0..<1)) else { return false }
+		let gy: Int = y + 1
+		let seed: UInt64 = UInt64.random(in: 0...UInt64.max)
+		let painted: Bool = tr.def.shape == .painted
+		let least: Int = painted ? 1 : clampI(tr.def.minHeight, 1, 24)
+		var h: Int = painted ? 1 : max(least, clampI(tr.def.maxHeight, 1, 24))
+		while h >= least {
+			let cells: [TreeCell] = TreeShapes.cells(tr.def, h, seed)
+			// every cell of its trunk and branches has to be free (the sapling's own cell counts)
+			var fits: Bool = !cells.isEmpty
+			for c in cells where c.part != 3 {
+				let t: Tile = world.tile(x + c.dx, gy - c.dy)
+				let own: Bool = c.dx == 0 && c.dy == 1
+				if !(own || treeRoom(t)) || gy - c.dy < 2 {
+					fits = false
+					break
+				}
+			}
+			if fits {
+				world.set(x, y, .air)
+				var top: Int = y
+				for c in cells {
+					let cx: Int = x + c.dx
+					let cy: Int = gy - c.dy
+					if cy < 2 || !treeRoom(world.tile(cx, cy)) { continue }
+					world.set(cx, cy, tr.tile(c.part))
+					top = min(top, cy)
+				}
+				spawnParticles(Double(x) + 0.5, Double(top) + 0.5, 0x56A83F, 8, 3.0, 0.6, 10)
+				return true
+			}
+			h -= 1
+		}
+		return false
+	}
+}
+
+// ===== p14c_input =====
+
+// MARK: - Pointer input, interaction, inventory operations, crafting
+
+extension Game {
+	// MARK: pointer (world coordinates in tiles)
+
+	func pointerDown(_ wx: Double, _ wy: Double) {
+		aimX = wx
+		aimY = wy
+		aimValid = true
+		if capturing {
+			if !showCapture { captureTap(wx, wy) }
+			return
+		}
+		downTime = 0
+		usePressedFlag = false
+		touchActive = true
+		// with a weapon out, a tap on a foe is an attack, even if a door or chest is behind it
+		let fight: Bool = (heldItem?.isWeapon ?? false) && hostileAt(wx, wy)
+		if !fight && isInteractive(wx, wy) {
+			pendingInteract = true
+			useHeld = false
+		} else {
+			pendingInteract = false
+			useHeld = true
+			useWasHeld = false
+		}
+		pointerStartX = wx
+		pointerStartY = wy
+	}
+
+	func pointerMove(_ wx: Double, _ wy: Double) {
+		aimX = wx
+		aimY = wy
+		aimValid = true
+		if capturing { return }
+		if pendingInteract {
+			let dx: Double = wx - pointerStartX
+			let dy: Double = wy - pointerStartY
+			if dx * dx + dy * dy > 0.5 {
+				pendingInteract = false
+				useHeld = true
+			}
+		}
+	}
+
+	func pointerUp() {
+		touchActive = false
+		if capturing {
+			useHeld = false
+			pendingInteract = false
+			return
+		}
+		if pendingInteract {
+			if downTime < 0.3 { interact(aimX, aimY) }
+			pendingInteract = false
+		}
+		// the action button may still be held: then it carries on (and aims for itself again)
+		if actState.held { return }
+		if useHeld { useReleasedFlag = true }
+		useHeld = false
+		useWasHeld = false
+	}
+
+	/// A wild animal (bear, elephant, wolf, grizzly, polar bear, tiger, scorpion): neutral to the player
+	func isWildAnimal(_ k: MobKind) -> Bool {
+		switch k {
+		case .elephant, .bear, .wolf, .grizzly, .polarBear, .tiger, .scorpion: return true
 		default: return false
 		}
 	}
 
-	/// The vehicle the help box talks about (nil = no box)
-	var vehicleHelpTarget: Vehicle? {
-		if inVehicle != nil || dead { return nil }
-		if holdingVehicleThing { return nearestVehicle(10) }
-		return nearestVehicle(2.5)
+	/// A wild hunter the player has hurt lately (it fights back for twelve seconds)
+	func wildProvoked(_ m: Mob) -> Bool {
+		return clock - m.lastHitByPlayer < 12.0
 	}
 
-	/// The vehicle the DRIVE / PACK UP buttons act on
-	var vehicleNearby: Vehicle? {
-		if inVehicle != nil || mounted != nil || dead { return nil }
-		return nearestVehicle(2.0)
+	/// A creature that is out to hurt the player: monsters and enemies, and animals once angered
+	func isThreat(_ m: Mob) -> Bool {
+		if m.angry { return true }
+		if isWildAnimal(m.kind) { return wildProvoked(m) }
+		return m.def.hostile
 	}
 
-	// MARK: attaching parts
-
-	/// Why a part can't go in a cell (nil = it can)
-	func attachProblem(_ v: Vehicle, _ c: PartCell, _ p: PartType) -> String? {
-		if v.parts[c] != nil { return "That spot is taken." }
-		if !v.hasNeighbor(c) { return "Parts must touch the vehicle." }
-		// any part goes anywhere it touches: how well it works there is physics (see partNote)
-		let wp: (Double, Double) = v.cellPos(c)
-		if world.boxSolid(wp.0 + 0.02, wp.1 + 0.02, wp.0 + 0.98, wp.1 + 0.98) {
-			// a part under a vehicle that sits on the ground: lift the vehicle one block to make room
-			if c.dy > v.maxY && canLift(v, c) { return nil }
-			return "Something is in the way."
-		}
-		return nil
-	}
-
-	/// How a part will work where it has just been put, when that is not the usual way (said after
-	/// attaching it; nil when there is nothing to say)
-	func partNote(_ v: Vehicle, _ c: PartCell, _ p: PartType) -> String? {
-		if p == .rotor {
-			let room: Double = v.rotorRoom[c] ?? 1.0
-			if room < 0.99 { return joinText("Its blades have ", String(Int((room * 100).rounded())), "% of their room: it lifts that much.") }
-		}
-		if v.boxed.contains(c) {
-			if isDrill(p) { return "Boxed in: it bores once one side is open." }
-			if p == .cannon || p == .autoGun { return "Boxed in: it fires once one side is open." }
-			return "Boxed in on both sides: it pushes once one side is open."
-		}
-		if isWheelPart(p) && v.parts[PartCell(dx: c.dx, dy: c.dy + 1)] != nil { return "A wheel drives wherever it touches the ground (or a wall)." }
-		if p == .steering, let seat = seatCell(v), abs(seat.dx - c.dx) + abs(seat.dy - c.dy) > 1 { return "It steers from any seat on the vehicle." }
-		return nil
-	}
-
-	/// True if the whole vehicle (plus the new cell) would fit one block higher
-	func canLift(_ v: Vehicle, _ extra: PartCell) -> Bool {
-		var cells: [PartCell] = Array(v.parts.keys)
-		cells.append(extra)
-		for c in cells {
-			let wp: (Double, Double) = v.cellPos(c)
-			let y: Double = wp.1 - 1.0
-			if world.boxSolid(wp.0 + 0.02, y + 0.02, wp.0 + 0.98, y + 0.98) { return false }
-		}
-		return true
-	}
-
-	/// Lifts the vehicle one block if the new cell is buried in the ground
-	func liftIfBuried(_ v: Vehicle, _ c: PartCell) {
-		let wp: (Double, Double) = v.cellPos(c)
-		if world.boxSolid(wp.0 + 0.02, wp.1 + 0.02, wp.0 + 0.98, wp.1 + 0.98) {
-			v.py -= 1.0
-			v.vy = 0
-			v.updateBox()
-		}
-	}
-
-	/// Every free cell around a vehicle where the part would fit
-	func attachSpots(_ v: Vehicle, _ p: PartType) -> [PartCell] {
-		var out: [PartCell] = []
-		var seen: Set<PartCell> = []
-		for (c, _) in v.parts {
-			let n: [PartCell] = [PartCell(dx: c.dx + 1, dy: c.dy), PartCell(dx: c.dx - 1, dy: c.dy),
-								 PartCell(dx: c.dx, dy: c.dy + 1), PartCell(dx: c.dx, dy: c.dy - 1)]
-			for k in n {
-				if seen.contains(k) || v.parts[k] != nil { continue }
-				seen.insert(k)
-				if attachProblem(v, k, p) == nil { out.append(k) }
-			}
-		}
-		return out
-	}
-
-	/// Outlines drawn while holding a part (green = can attach here) or a kit (its footprint)
-	func vehicleGhosts() -> [GhostCell] {
-		guard let it = heldItem, inVehicle == nil, !dead else { return [] }
-		var out: [GhostCell] = []
-		switch it {
-		case .part(let p):
-			if let v = nearestVehicle(10) {
-				for c in attachSpots(v, p) {
-					let wp: (Double, Double) = v.cellPos(c)
-					out.append(GhostCell(x: wp.0, y: wp.1, ok: true, ang: v.angle))
-				}
-			}
-		case .block(let t):
-			// with ON VEHICLE: where the block can go on the nearest vehicle
-			if vehicleBuild, let v = nearestVehicle(8) {
-				var part: PartType = .block
-				if t.isMod, let d = ModRuntime.shared.blockDef(t), let pp = d.vehRole.part { part = pp }
-				for c in attachSpots(v, part) {
-					let wp: (Double, Double) = v.cellPos(c)
-					out.append(GhostCell(x: wp.0, y: wp.1, ok: true, ang: v.angle))
-				}
-			}
-		case .gadget(let g):
-			if isKit(g) && aimValid {
-				let pl: (Int, Int, Bool) = kitPlacement(g, aimX, aimY)
-				let layout: [KitPart] = kitLayout(g)
-				var h: Int = 1
-				for k in layout { h = max(h, k.dy + 1) }
-				let ok: Bool = pl.2 && inReach(aimX, aimY)
-				for k in layout {
-					out.append(GhostCell(x: Double(pl.0 + k.dx), y: Double(pl.1 - (h - 1) + k.dy), ok: ok))
-				}
-			}
-		default:
-			break
-		}
-		return out
-	}
-
-	// MARK: checklist
-
-	func vehicleCheck(_ v: Vehicle) -> VehicleCheck {
-		if v.aero || v.tracks > 0 || v.cannons + v.guns > 0 || v.hasCockpit { return flightCheck(v) }
-		var lines: [String] = []
-		var oks: [Bool] = []
-		var hulls: Int = 0
-		for (_, t) in v.parts where t == .hull { hulls += 1 }
-		let isBoat: Bool = hulls > 0 && v.wheels < 2
-		func add(_ ok: Bool, _ s: String) {
-			lines.append(s)
-			oks.append(ok)
-		}
-		add(v.hasSeat, "Seat")
-		add(v.hasSteering, "Steering wheel (next to the seat)")
-		var hint: String = ""
-		if isBoat {
-			let floats: Bool = v.buoyancy >= v.mass * 0.8
-			add(floats, "Enough hull floats to stay up")
-			let motor: Bool = v.engines > 0 && v.propellers > 0
-			add(motor || v.paddles > 0, "Paddle, or engine + propeller")
-			if v.engines > 0 { add(v.fuel > 0.5, fuelLine(v)) }
-			hint = "Boats only move in water."
-		} else {
-			let wn: Int = v.wheels
-			add(v.wheels >= 2, "2 wheels under the frame (\(wn)/2)")
-			add(v.engines > 0, "Engine")
-			add(v.fuel > 0.5, fuelLine(v))
-			hint = "Refuel: hold coal or wood and tap the vehicle."
-		}
-		var ready: Bool = true
-		for o in oks where !o { ready = false }
-		let title: String = isBoat ? (v.engines > 0 ? "MOTORBOAT" : "BOAT") : vehicleKindName(v)
-		return VehicleCheck(title: title, lines: lines, oks: oks, ready: ready, hint: hint)
-	}
-
-	func fuelLine(_ v: Vehicle) -> String {
-		let a: Int = Int(v.fuel)
-		let b: Int = Int(v.fuelCapacity)
-		return "Fuel \(a)/\(b)"
-	}
-
-	/// Changes whenever the help box or vehicle buttons would look different
-	func vehicleHelpKey() -> Int {
-		var k: Int = 0
-		if let v = vehicleHelpTarget {
-			k = v.id &* 31 &+ v.parts.count &* 7 &+ Int(v.fuel) &+ 1
-		}
-		if let v = vehicleNearby { k = k &* 13 &+ v.id &+ 5 }
-		if holdingVehicleThing { k = k &* 3 &+ 1 }
-		return k
-	}
-
-	// MARK: drive / pack up
-
-	func driveNearby() {
-		guard let v = vehicleNearby else { return }
-		mountVehicle(v)
-	}
-
-	func packUpVehicle() {
-		guard let v = vehicleNearby else { return }
-		if v.rider { dismount() }
-		var back: [Item] = []
-		if v.kit >= 0, let g = Gadget(rawValue: v.kit), kitMatches(v, g) {
-			back.append(.gadget(g))
-		} else {
-			for (c, t) in v.parts { back.append(vehicleCellItem(VCell(cell: c, type: t, tile: v.blocks[c]))) }
-		}
-		// what the vehicle carried comes back too
-		for c in v.parts.keys where vehicleStores(v, c) {
-			let k: IntPair = cargoSpot(v, c)
-			if let p = openChest, p == k { openChest = nil }
-			for st in world.removeChest(k.x, k.y) { giveStack(st) }
-		}
-		for it in back { giveItem(it, 1) }
-		vehicles.removeAll { $0.id == v.id }
-		spawnParticles(v.b.x, v.b.y - v.b.h * 0.5, 0xC8C8C8, 8, 3.0, 0.4, 6)
-		say("Packed up. Place it again any time.", 2.0)
-		bumpHUD()
-	}
-
-	func kitMatches(_ v: Vehicle, _ g: Gadget) -> Bool {
-		for layout in [kitLayout(g)] + legacyKitLayouts(g) {
-			if layout.count != v.parts.count { continue }
-			var same: Bool = true
-			for k in layout where v.parts[PartCell(dx: k.dx, dy: k.dy)] != k.p { same = false }
-			if same { return true }
+	/// a hostile (or angered) creature under or right next to a point
+	func hostileAt(_ wx: Double, _ wy: Double) -> Bool {
+		for m in mobsNear(wx - 4, wx + 4) where m.hp > 0 && !m.tame && isThreat(m) {
+			if wx >= m.b.left - 0.4 && wx <= m.b.right + 0.4 && wy >= m.b.top - 0.4 && wy <= m.b.y + 0.4 { return true }
 		}
 		return false
 	}
-}
 
-// ===== p33_vehicles =====
-
-// MARK: - Vehicles of every kind: blocks on vehicles, flight, weapons, damage, turning, assembling, the autopilot
-// A vehicle is a rigid body built cell by cell (p13b_vehicles, p17_vehicles_ships). This part adds what
-// makes planes, helicopters, airships, tanks and anything in between work: every cell can be any block,
-// each cell weighs what it is made of, and the air acts on each cell where it is (lift on wings, drag on
-// exposed faces, thrust along propellers, rotor lift, hot air in balloons), so a design flies, floats or
-// tumbles because of how it is built.
-
-/// Hitting the ground faster than this (blocks per second, straight into it) breaks parts
-let vehicleCrashSpeed: Double = 21.0
-
-/// The numbers of the flight model
-enum Aero {
-	/// lift per wing cell: kLift x airspeed^2 x lift coefficient (a 10-mass plane with 3 wing cells
-	/// leaves the ground at about 11 blocks a second)
-	static let kLift: Double = 0.8
-	/// drag per exposed face: kDrag x drag coefficient x airspeed^2
-	static let kDrag: Double = 0.022
-	/// how much a face tucked behind another still feels the air (skin friction)
-	static let shielded: Double = 0.06
-	/// share of the wing drag coefficient applied (the wing's own profile drag)
-	static let dragShare: Double = 1.0
-	/// lift slope per radian, the angle where a wing stalls, the post-stall lift
-	static let liftSlope: Double = 5.0
-	static let stallAngle: Double = 0.27
-	/// how far an elevator's flap turns the airflow (radians at full stick), and the elevator's size
-	/// against a wing's
-	static let flap: Double = 0.55
-	static let elevatorArea: Double = 1.0
-	/// a wing's camber: it lifts a little even meeting the air head on (radians of extra angle)
-	static let camber: Double = 0.07
-	/// a wing's tilt: steps of this angle (radians), up to this many either way
-	static let tiltStep: Double = 0.05
-	static let tiltSteps: Int = 3
-	/// a flap's drop at its lowest (it drops below flapSpeed, fully by half of it), and its drag then
-	static let flapDrop: Double = 0.16
-	static let flapSpeed: Double = 18.0
-	static let flapDrag: Double = 0.07
-	/// an open air brake's drag, and how fast it opens and closes (per second)
-	static let brakeDrag: Double = 1.8
-	static let brakeRate: Double = 2.5
-	/// a tailplane's area (a wing is 1)
-	static let stabArea: Double = 0.6
-	/// how fast ballast tanks fill or empty at full stick (of a tank a second)
-	static let ballastRate: Double = 0.25
-	/// static thrust of an air propeller per engine of power, and the airspeed where it fades out
-	static let propThrust: Double = 110.0
-	static let propVmax: Double = 64.0
-	/// a jet's thrust (it is its own engine)
-	static let jetThrust: Double = 165.0
-	/// rotor lift per engine of power at full blade pitch
-	static let rotorLift: Double = 265.0
-	/// a heated balloon envelope's lift (mass it can hold up at full heat), and how many envelopes one burner heats
-	static let envLift: Double = 1.3
-	static let burnerCells: Int = 12
-	/// how far the cyclic tilts a helicopter at full stick, and how firmly it holds the tilt
-	static let cyclicTilt: Double = 0.3
-	/// hands off, a helicopter tilts against its drift to hover in place (radians per block a second)
-	static let hoverHold: Double = 0.035
-	/// the turning rotor disc resists the air across it (what keeps a helicopter's speed down)
-	static let rotorDrag: Double = 0.25
-	/// up and down on the stick ask a helicopter for this climb or sink rate (blocks a second)
-	static let climbRate: Double = 9.0
-	static let cyclicP: Double = 16.0
-	static let cyclicD: Double = 7.5
-	/// how fast blade pitch follows the stick, and how fast a burner heats the balloon and venting cools it
-	static let collectiveRate: Double = 0.9
-	static let heatRate: Double = 0.14
-	static let ventRate: Double = 0.22
-	/// a balloon's canopy against the air going up or down through it (a cold balloon comes down slowly)
-	static let canopyDrag: Double = 8.0
-	/// the cyclic's trim: how fast it learns to hold the tilt against an off-centre rotor
-	static let cyclicI: Double = 6.0
-	/// the pitch control: full stick asks for this pitch rate (radians a second); the elevators are moved
-	/// to get it (as far as they can at this speed), and the trim learns what holds the nose steady
-	static let pitchRate: Double = 0.9
-	static let rateGain: Double = 1.3
-	static let trimRate: Double = 1.6
-	/// the stall guard: past this share of the stall angle the nose is eased down instead of pulled up
-	static let alphaGuard: Double = 0.75
-	/// hands off, how fast the nose comes back to level (radians a second per radian)
-	static let levelRate: Double = 0.4
-	/// seconds a turn to face the other way takes in flight
-	static let turnTime: Double = 1.4
-}
-
-/// The numbers of wheels, tracks and water propellers
-enum Drive {
-	/// what one engine gives its wheels (push times speed): above about 8 blocks a second its push falls
-	static let power: Double = 1415.0
-	/// what the wheels and gearing take, per block a second of speed; a little more for every unit of
-	/// weight on them; tracks take a good deal more
-	static let loss: Double = 10.0
-	static let lossPerMass: Double = 0.028
-	static let trackLoss: Double = 0.8
-	/// what one engine gives a water propeller, how fast a paddle's stroke goes (blocks a second), and
-	/// the share of the water's drag that grows with the square of the speed
-	static let propPower: Double = 130.0
-	static let paddleStroke: Double = 9.0
-	static let waterDrag: Double = 0.002
-	/// how hard a tyre can push along what it touches, for each unit it is pressed against it
-	static let tyreGrip: Double = 1.0
-}
-
-/// Air thins with height: full below the hills, about half at the top of the sky
-func airDensity(_ y: Double) -> Double {
-	let top: Double = Double(WorldGen.sea) - 60.0
-	if y >= top { return 1.0 }
-	return max(0.45, 1.0 - 0.55 * (top - y) / max(1.0, top))
-}
-
-/// A wing's lift coefficient at an angle of attack (radians, folded to -pi/2...pi/2): straight up to
-/// the stall, then it falls away to a flat plate's
-func liftCoefficient(_ a: Double) -> Double {
-	let s: Double = Aero.stallAngle
-	let m: Double = abs(a)
-	let sign: Double = a >= 0 ? 1.0 : -1.0
-	if m <= s { return Aero.liftSlope * a }
-	let peak: Double = Aero.liftSlope * s
-	let flat: Double = 0.9 * sin(2.0 * m)
-	let fade: Double = clampD((m - s) / 0.16, 0, 1)
-	return sign * (peak * 0.85 * (1.0 - fade) + flat * fade)
-}
-
-/// A wing's drag coefficient: a little on its own, more as it lifts, a flat plate's beyond the stall
-func wingDrag(_ a: Double, _ cl: Double) -> Double {
-	let sa: Double = sin(a)
-	return 0.012 + 0.06 * cl * cl + 1.1 * sa * sa
-}
-
-/// How much a part catches the air (a bare block is 1)
-func partDrag(_ t: PartType) -> Double {
-	switch t {
-	case .cockpit: return 0.45
-	case .jet: return 0.3
-	case .airProp, .tailRotor, .rotor: return 0.4
-	case .envelope: return 3.0
-	case .wheel, .offroadWheel: return 0.45
-	case .headlight, .steering, .autopilot, .autoGun, .propeller, .paddle: return 0.5
-	default: return 1.0
-	}
-}
-
-/// The mass of a block built onto a vehicle: its building weight (planks 0.6, stone 2.5)
-func vehicleBlockMass(_ b: Tile, _ t: PartType) -> Double {
-	if b.isMod, t != .block, let m = ModRuntime.shared.blockDef(b), m.vehMass > 0 { return m.vehMass }
-	return max(0.05, tileWeight(b))
-}
-
-/// How much water a cell pushes aside when under (its buoyancy): a solid block a whole cell (so wood
-/// floats and stone sinks), anything else a little
-func cellDisplacement(_ v: Vehicle, _ c: PartCell, _ t: PartType) -> Double {
-	if t == .block, let b = v.blocks[c] { return b.solid ? 1.0 : 0.2 }
-	if t == .ballast { return 0.15 + 0.85 * (1.0 - v.ballast) }
-	if let k = v.spanOf[c], k != c { return 0 }
-	return partDisplacement(t)
-}
-
-/// How much damage a part takes before it breaks off
-func partHP(_ t: PartType) -> Double {
-	switch t {
-	case .hinge, .servo, .piston: return 35
-	case .receiver: return 20
-	case .bigWheel: return 70
-	case .railWheel, .coupler: return 30
-	case .ballast: return 40
-	case .flap: return 22
-	case .airBrake: return 18
-	case .stabilizer: return 14
-	case .armor: return 160
-	case .track, .jet, .drill, .diamondDrill, .voidDrill, .cannon: return 55
-	case .engine, .hull, .cargo, .frame, .offroadWheel: return 40
-	case .cockpit, .rotor, .autoGun, .burner, .fuelTank: return 30
-	case .wheel, .seat, .wing, .airProp: return 22
-	case .elevator, .propeller, .paddle, .steering, .tailRotor, .autopilot: return 14
-	case .headlight: return 10
-	case .envelope: return 7
-	case .block: return 30
-	}
-}
-
-/// How much damage one cell takes before it breaks (a block by its hardness and weight)
-func vehicleCellHP(_ v: Vehicle, _ c: PartCell, _ t: PartType) -> Double {
-	if let b = v.blocks[c] {
-		let base: Double = 8.0 + min(90.0, b.hardness * 14.0) + tileWeight(b) * 4.0
-		return t == .block ? base : max(base, partHP(t))
-	}
-	return partHP(t)
-}
-
-/// What a cell taken off a vehicle gives back: its block, or the part
-func vehicleCellItem(_ r: VCell) -> Item {
-	if let b = r.tile { return .block(b) }
-	return .part(r.type == .block ? .frame : r.type)
-}
-
-/// A block turned to face the other way (stairs rise the other way, a bed's head moves)
-func mirroredTile(_ t: Tile) -> Tile {
-	switch t {
-	case .stairWoodR: return .stairWoodL
-	case .stairWoodL: return .stairWoodR
-	case .stairStoneR: return .stairStoneL
-	case .stairStoneL: return .stairStoneR
-	case .stairBrickR: return .stairBrickL
-	case .stairBrickL: return .stairBrickR
-	case .bedL: return .bedR
-	case .bedR: return .bedL
-	default: return t
-	}
-}
-
-/// Blocks the assembler leaves in the world: the ground's own, liquids, lifts and portals
-func canAssemble(_ t: Tile) -> Bool {
-	if t == .air || t.liquid || t == .bedrock { return false }
-	switch t {
-	case .liftRail, .liftButton, .liftCar, .portalOn, .portalOff: return false
-	default: return true
-	}
-}
-
-/// Where a shot meets a vehicle: how far along its step, which vehicle, which cell
-struct VehicleHit {
-	var t: Double
-	var v: Vehicle
-	var cell: PartCell
-}
-
-extension Game {
-	// MARK: power
-
-	/// The engines' power goes where it is needed: driving wheels on a ground vehicle, every air
-	/// propeller, every rotor (a rotor takes as much as three engines' worth, a propeller one and a half).
-	/// The share for the wheels (1 for a car or a tank: they get it all)
-	func groundShare(_ v: Vehicle) -> Double {
-		let wheels: Double = v.wings == 0 && v.rotors == 0 ? 1.0 : 0.0
-		let total: Double = wheels + Double(v.airProps) * 1.5 + Double(v.rotors) * 3.0
-		return total <= 0 ? 0 : wheels / total
-	}
-
-	/// Engine power each air propeller and each rotor gets (in engines); `anyway` works it out as if
-	/// fuelled and crewed (for the checklist)
-	func airPower(_ v: Vehicle, anyway: Bool = false) -> (Double, Double) {
-		if v.engines == 0 { return (0, 0) }
-		if !anyway && (!(v.fuel > 0 || isCreative) || !(v.hasSeat && v.hasSteering)) { return (0, 0) }
-		let wheels: Double = v.wings == 0 && v.rotors == 0 ? 1.0 : 0.0
-		let total: Double = wheels + Double(v.airProps) * 1.5 + Double(v.rotors) * 3.0
-		if total <= 0 { return (0, 0) }
-		let e: Double = v.enginePower
-		return (e * 1.5 / total, e * 3.0 / total)
-	}
-
-	/// The most the rotors can lift (force) here, at full blade pitch
-	func rotorMax(_ v: Vehicle, anyway: Bool = false) -> Double {
-		let p: (Double, Double) = airPower(v, anyway: anyway)
-		return Aero.rotorLift * p.1 * v.rotorLift * (0.35 + 0.65 * airDensity(v.py))
-	}
-
-	/// The most the balloons can lift (force) here, at full heat
-	func balloonMax(_ v: Vehicle) -> Double {
-		if v.burners == 0 || v.envelopes == 0 { return 0 }
-		let heated: Double = Double(min(v.envelopes, v.burners * Aero.burnerCells))
-		return gravityG * Aero.envLift * heated * airDensity(v.py)
-	}
-
-	/// The wings' lift at a speed, flying level at a good angle (for the checklist and instruments)
-	func wingLiftAt(_ v: Vehicle, _ speed: Double) -> Double {
-		return Aero.kLift * speed * speed * Double(v.wings) * 1.1
-	}
-
-	/// The push the propellers and jets give at a speed, at full throttle
-	func thrustAt(_ v: Vehicle, _ speed: Double) -> Double {
-		let p: (Double, Double) = airPower(v, anyway: true)
-		let prop: Double = Aero.propThrust * p.0 * Double(v.airProps) * max(0, 1.0 - speed / Aero.propVmax)
-		let jet: Double = Aero.jetThrust * Double(v.jets) * max(0.35, 1.0 - speed / 90.0)
-		return prop + jet
-	}
-
-	// MARK: the flight model
-
-	/// Forces of the air on every part, for one physics step: drag on each part's exposed faces, lift on
-	/// wings and elevators from the real airflow over each one (its speed, the angle it meets the wing at,
-	/// the wind), thrust from propellers and jets along the vehicle's axis, rotor lift along the rotor
-	/// shaft, and the hot air in the balloons pushing straight up. Each force acts at its own part, so the
-	/// layout decides how the vehicle pitches: a tail far behind steadies it, balloons above keep it
-	/// upright, a heavy nose tips it forward.
-	func airForces(_ v: Vehicle, _ h: Double, _ throttle: Double) {
-		let c: Double = v.cosA
-		let s: Double = v.sinA
-		let rho: Double = airDensity(v.py)
-		let power: (Double, Double) = airPower(v)
-		let canFly: Bool = (v.fuel > 0 || isCreative) && v.hasSeat && v.hasSteering
-		// while turning round the throttle keeps pushing toward the nose, whichever way the stick points
-		let steer: Double = v.turnT > 0 ? abs(throttle) * Double(v.fwd) : throttle
-		let thr: Double = canFly ? steer : 0
-		// the elevators turn the nose the way the stick says (up: toward the top of the screen)
-		let noseX: Double = Double(v.fwd) * c
-		let noseSign: Double = noseX >= 0 ? 1.0 : -1.0
-		let rateErr: Double = pitchRateWanted(v) - (-v.angVel * noseSign)
-		let cmd: Double = clampD(v.trim + Aero.rateGain * rateErr, -1, 1)
-		let wantSpin: Double = -cmd * noseSign
-		let bank: Double = v.turnT > 0 ? 0.7 + 0.3 * abs(cos(Double.pi * v.turnT)) : 1.0
-		let rotorF: Double = Aero.rotorLift * power.1 * v.collective * (0.35 + 0.65 * rho)
-		let heated: Double = v.envelopes > 0 ? min(1.0, Double(v.burners * Aero.burnerCells) / Double(v.envelopes)) : 0
-		let envF: Double = gravityG * Aero.envLift * v.heat * heated * rho
-		var fx: Double = 0
-		var fy: Double = 0
-		var torque: Double = 0
-		var lift: Double = 0
-		var thrust: Double = 0
-		var stalled: Bool = false
-		var alpha: Double = 0
-		for (cell, t) in v.parts {
-			let lx: Double = Double(cell.dx) + 0.5 - v.comX
-			let ly: Double = Double(cell.dy) + 0.5 - v.comY
-			let rx: Double = lx * c - ly * s
-			let ry: Double = lx * s + ly * c
-			// the air going past this part (the wind, less the part's own motion), in the vehicle's frame
-			let ux: Double = v.windX - (v.vx - v.angVel * ry)
-			let uy: Double = -(v.vy + v.angVel * rx)
-			let bx: Double = ux * c + uy * s
-			let by: Double = -ux * s + uy * c
-			var fbx: Double = 0
-			var fby: Double = 0
-			let k: Double = v.boost[cell] ?? 1.0
-			if t == .wing || t == .elevator || t == .flap || t == .stabilizer {
-				// (its tilt, and a flap's drop when slow, turn the wing further into the air)
-				var extra: Double = Double(v.tilt[cell] ?? 0) * Aero.tiltStep
-				if t == .flap { extra += Aero.flapDrop * clampD((Aero.flapSpeed - v.airspeed) / (Aero.flapSpeed * 0.5), 0, 1) }
-				let wide: Bool = t == .wing || t == .flap
-				let f: (Double, Double, Double, Bool, Double) = wingForce(t, bx, by, lx, rho, wantSpin, wide ? bank * k : k, extra)
-				fbx = f.0
-				fby = f.1
-				if t == .wing || t == .flap {
-					lift += f.2
-					alpha = max(alpha, f.4)
-				}
-				if f.3 { stalled = true }
-			} else {
-				let d: (Double, Double) = faceDrag(v, cell, t, bx, by, rho)
-				fbx = d.0
-				fby = d.1
-				switch t {
-				case .airProp:
-					if power.0 > 0 && abs(thr) > 0.05 && !v.boxed.contains(cell) {
-						// along the vehicle's axis either way (the blades reverse at half strength)
-						let eff: Double = max(0, 1.0 - abs(bx) / Aero.propVmax)
-						let w: Double = thr > 0 ? thr : thr * 0.5
-						let f: Double = Aero.propThrust * power.0 * eff * w * k * (0.4 + 0.6 * rho)
-						fbx += f
-						thrust += abs(f)
-					}
-				case .jet:
-					if canFly && abs(thr) > 0.05 && !v.boxed.contains(cell) {
-						// it pushes away from its exhaust; pulled back, its reverser brakes at a third
-						let dirX: Double = -Double((v.face[cell] ?? (-1, 0)).0)
-						let along: Double = thr * dirX
-						let w: Double = along > 0 ? along : along * 0.35
-						let f: Double = Aero.jetThrust * w * k * dirX * (0.7 + 0.3 * rho) * max(0.35, 1.0 - abs(bx) / 90.0)
-						fbx += f
-						thrust += abs(f)
-					}
-				case .airBrake:
-					if v.brakeOpen > 0.01 {
-						// a panel across the flow: drag by how far it is open
-						let q: Double = Aero.brakeDrag * Aero.kDrag * rho * v.brakeOpen * k
-						fbx += q * bx * abs(bx)
-						fby += q * by * abs(by)
-					}
-				case .rotor:
-					if rotorF > 0 {
-						// (blades with parts in their way lift by the room they have)
-						let room: Double = v.rotorRoom[cell] ?? 1.0
-						fby -= rotorF * k * room
-						lift += rotorF * k * room
-						// the disc drags against air going across it
-						fbx += Aero.rotorDrag * rho * bx * abs(bx) * min(1.0, v.collective * 1.5)
-					}
-				default:
-					break
-				}
-			}
-			// to the world, then onto the body at this part
-			var wfx: Double = fbx * c - fby * s
-			var wfy: Double = fbx * s + fby * c
-			if t == .envelope && envF > 0 {
-				// hot air rises: straight up, whatever the tilt (so balloons above keep it upright)
-				wfy -= envF * k
-				lift += envF * k
-			}
-			fx += wfx
-			fy += wfy
-			torque += rx * wfy - ry * wfx
-			wfx = 0
-			wfy = 0
-		}
-		let invM: Double = 1.0 / v.mass
-		v.vx += fx * invM * h
-		v.vy += fy * invM * h
-		v.angVel += torque / v.inertia * h
-		if v.rotors > 0 && rotorF > 0 { cyclic(v, thr, h) }
-		v.liftNow = lift
-		v.thrustNow = thrust
-		v.stall = stalled
-		v.alpha = alpha
-	}
-
-	/// The pitch rate the pilot asks for (nose up positive), eased off near the stall: past the guard
-	/// angle the nose is brought down a little, so holding the stick back climbs steeply without stalling
-	/// while there is speed (slow it down too far and it still sinks)
-	func pitchRateWanted(_ v: Vehicle) -> Double {
-		var want: Double = v.pitch * Aero.pitchRate
-		// hands off in flight, the nose eases back toward level (it holds a gentle climb or dive no longer)
-		if abs(v.pitch) < 0.05 && v.contacts == 0 && v.auto == 0 {
-			let noseUp: Double = -Double(v.fwd) * v.sinA
-			want = clampD(-noseUp * Aero.levelRate, -0.3, 0.3)
-		}
-		let guardA: Double = Aero.stallAngle * Aero.alphaGuard
-		// the angle the wing is heading for: now, plus where the nose is still swinging
-		let noseX: Double = Double(v.fwd) * v.cosA
-		let upRate: Double = -v.angVel * (noseX >= 0 ? 1.0 : -1.0)
-		let ahead: Double = v.alpha + max(0, upRate) * 0.3
-		if v.wings > 0 && ahead > guardA && v.airspeed > 4.0 { want = min(want, -(ahead - guardA) * 5.0) }
-		return want
-	}
-
-	/// One wing or elevator: lift across the airflow and drag along it, from the angle the air meets it
-	/// (folded so the wing works flying either way), with an elevator's flap turned by the stick.
-	/// Returns the body-frame force, the lift, and whether it has stalled.
-	func wingForce(_ t: PartType, _ bx: Double, _ by: Double, _ lx: Double, _ rho: Double, _ wantSpin: Double, _ scale: Double, _ extra: Double = 0) -> (Double, Double, Double, Bool, Double) {
-		let sp2: Double = bx * bx + by * by
-		if sp2 < 0.09 { return (0, 0, 0, false, 0) }
-		let sp: Double = sqrt(sp2)
-		let dx: Double = bx / sp
-		let dy: Double = by / sp
-		var a: Double = atan2(-dy, -dx)
-		if a > Double.pi * 0.5 { a -= Double.pi } else if a < -Double.pi * 0.5 { a += Double.pi }
-		// the camber lifts toward the top of the wing whichever way the air comes; a tilt or a dropped flap
-		// adds to it
-		if t == .wing || t == .flap { a += dx < 0 ? Aero.camber : -Aero.camber }
-		if extra != 0 { a += dx < 0 ? extra : -extra }
-		var area: Double = 1.0
-		if t == .stabilizer { area = Aero.stabArea }
-		if t == .elevator {
-			// the flap, tilted the way that turns the nose as asked (behind or ahead of the centre of mass)
-			area = Aero.elevatorArea
-			let flow: Double = bx < 0 ? 1.0 : -1.0
-			let side: Double = lx >= 0 ? 1.0 : -1.0
-			a += -wantSpin * side * flow * Aero.flap
-		}
-		let cl: Double = liftCoefficient(a)
-		var cd: Double = wingDrag(a, cl)
-		if t == .flap { cd += Aero.flapDrag * clampD(extra / Aero.flapDrop, 0, 1) }
-		let q: Double = Aero.kLift * rho * sp2 * area * scale
-		let fbx: Double = q * cl * -dy + q * Aero.dragShare * cd * dx
-		let fby: Double = q * cl * dx + q * Aero.dragShare * cd * dy
-		let stalled: Bool = (t == .wing || t == .flap) && abs(a) > Aero.stallAngle && sp > 4.0
-		return (fbx, fby, abs(q * cl), stalled, sp > 4.0 ? abs(a) : 0)
-	}
-
-	/// Drag on a part's faces that meet the air (a face tucked behind another part barely feels it)
-	func faceDrag(_ v: Vehicle, _ cell: PartCell, _ t: PartType, _ bx: Double, _ by: Double, _ rho: Double) -> (Double, Double) {
-		let cdp: Double = partDrag(t) * Aero.kDrag * rho
-		var fx: Double = 0
-		var fy: Double = 0
-		if abs(bx) > 0.01 {
-			let up: Int = bx < 0 ? 1 : -1
-			let ex: Double = v.parts[PartCell(dx: cell.dx + up, dy: cell.dy)] == nil ? 1.0 : Aero.shielded
-			fx = cdp * ex * bx * abs(bx)
-		}
-		if abs(by) > 0.01 {
-			let up: Int = by < 0 ? 1 : -1
-			let ey: Double = v.parts[PartCell(dx: cell.dx, dy: cell.dy + up)] == nil ? 1.0 : Aero.shielded
-			let canopy: Double = t == .envelope ? Aero.canopyDrag : 1.0
-			fy = cdp * ey * canopy * by * abs(by)
-		}
-		return (fx, fy)
-	}
-
-	/// The cyclic: the rotor tilts the helicopter toward the stick and holds it there (so it flies
-	/// that way). A single rotor needs a tail rotor for this; without one its torque swings the
-	/// helicopter round and it can hardly be steered. Two rotors turn opposite ways and need none.
-	func cyclic(_ v: Vehicle, _ thr: Double, _ h: Double) {
-		let steady: Bool = v.openTails > 0 || v.rotors >= 2
-		// the stick tilts it; hands off it leans against its drift and comes to a hover
-		var target: Double = clampD(thr, -1, 1) * Aero.cyclicTilt
-		if abs(thr) < 0.1 { target = clampD(-v.vx * Aero.hoverHold, -Aero.cyclicTilt, Aero.cyclicTilt) }
-		let a: Double = remainder(v.angle, 2.0 * Double.pi)
-		let auth: Double = (0.35 + 0.65 * v.collective) * (steady ? 1.0 : 0.2)
-		// the trim builds up against a steady pull (an off-centre rotor or load) so the tilt holds
-		if steady { v.cycI = clampD(v.cycI + (target - a) * Aero.cyclicI * h, -12, 12) }
-		v.angVel += (Aero.cyclicP * (target - a) + v.cycI - Aero.cyclicD * v.angVel) * auth * h
-		if !steady { v.angVel += sin(clock * 2.3 + Double(v.id)) * 4.0 * v.collective * h }
-	}
-
-	/// Once a frame: blade pitch and burner heat follow the stick (hands off, they hold the height), the
-	/// elevator trim settles, and the nose end is worked out from the way the vehicle moves
-	func flightControls(_ v: Vehicle, _ dt: Double) {
-		let piloted: Bool = (v.rider || v.auto != 0) && v.hasSeat && v.hasSteering
-		let airborne: Bool = v.contacts == 0 && v.submerged <= 0.02
-		let along: Double = v.vx * v.cosA + v.vy * v.sinA
-		if abs(along) > 3.0 { v.fwd = along > 0 ? 1 : -1 }
-		else if abs(v.throttle) > 0.2 && v.rider { v.fwd = v.throttle > 0 ? 1 : -1 }
-		if v.rotors > 0 {
-			if !piloted || airPower(v).1 <= 0 {
-				v.collective = max(0, v.collective - dt * 0.4)
-			} else if airborne || v.pitch > 0.05 {
-				// the stick asks for a climb or sink rate (hands off: none, a hover); the blade pitch is set
-				// for it, as far as the rotor can lift
-				let need: Double = max(0, v.mass * gravityG - balloonLiftNow(v))
-				let hover: Double = need / max(1.0, rotorMax(v))
-				let wantVy: Double = -v.pitch * Aero.climbRate
-				let want: Double = clampD(hover + (v.vy - wantVy) * 0.05, 0, 1)
-				let step: Double = Aero.collectiveRate * dt
-				v.collective += clampD((want - v.collective) * min(1.0, 4.0 * dt), -step, step)
-			} else {
-				v.collective = max(0, v.collective - dt * 0.6)
-			}
-			if !airborne { v.cycI *= (1.0 - min(1.0, 2.0 * dt)) }
-		}
-		if v.burners > 0 && v.envelopes > 0 {
-			let fuelOK: Bool = v.fuel > 0 || isCreative
-			if !piloted || !fuelOK {
-				v.heat = max(0, v.heat - dt * 0.035)
-			} else if abs(v.pitch) > 0.05 {
-				v.heat = clampD(v.heat + v.pitch * (v.pitch > 0 ? Aero.heatRate : Aero.ventRate) * dt, 0, 1)
-			} else if airborne {
-				// hands off: the burner keeps the balloon just warm enough to float (no faster than it can heat)
-				let full: Double = balloonMax(v)
-				let need: Double = max(0, v.mass * gravityG - v.liftNow + balloonLiftNow(v))
-				let eq: Double = full > 1 ? need / full : 0
-				let want: Double = clampD(eq + v.vy * 0.05, 0, 1)
-				v.heat += clampD(want - v.heat, -Aero.ventRate * dt, Aero.heatRate * dt)
-			} else {
-				v.heat = max(0, v.heat - dt * 0.05)
-			}
-		}
-		if v.elevators > 0 {
-			if airborne && v.turnT == 0 {
-				// the trim learns the elevator that gives the pitch rate asked for (hands off: none, so the
-				// nose stays where it is)
-				let noseX: Double = Double(v.fwd) * v.cosA
-				let upRate: Double = -v.angVel * (noseX >= 0 ? 1.0 : -1.0)
-				v.trim = clampD(v.trim + (pitchRateWanted(v) - upRate) * Aero.trimRate * dt, -0.9, 0.9)
-			} else if !airborne {
-				v.trim *= (1.0 - min(1.0, 0.8 * dt))
+	func updatePointerTimers(_ dt: Double) {
+		if pendingInteract {
+			downTime += dt
+			if downTime >= 0.3 {
+				pendingInteract = false
+				useHeld = true
+				useWasHeld = false
 			}
 		}
 	}
 
-	/// The balloons' lift right now (force)
-	func balloonLiftNow(_ v: Vehicle) -> Double {
-		return balloonMax(v) * v.heat
+	func reachDistance() -> Double {
+		if infiniteReach { return 60 }
+		return isCreative ? 8.0 : 5.5
 	}
 
-	/// Fuel for what flies: rotors turning, jets, burners (driving and propellers already burn it)
-	func airFuel(_ v: Vehicle, _ dt: Double) {
-		if isCreative || v.fuel <= 0 { return }
-		var use: Double = 0
-		let thr: Double = abs(v.throttle)
-		if v.rotors > 0 && v.collective > 0.05 && thr <= 0.1 { use += Double(v.engines) * (0.4 + 0.6 * v.collective) }
-		if v.jets > 0 && thr > 0.05 && (v.rider || v.auto != 0) { use += Double(v.jets) * 2.5 * thr }
-		if v.burners > 0 && v.heat > 0.05 && (v.rider || v.auto != 0) { use += Double(v.burners) * 0.6 * v.heat }
-		v.fuel = max(0, v.fuel - use * dt)
-	}
-}
-
-extension Game {
-	// MARK: every frame
-
-	/// What a vehicle does besides moving, once a frame (even at rest): the flight controls and fuel,
-	/// the guns, the autopilot when nobody drives, a turn in progress, rotor blades striking the ground,
-	/// fuel tanks that burst
-	func vehicleExtras(_ v: Vehicle, _ dt: Double) {
-		if v.parts.isEmpty { return }
-		if v.hitT > 0 { v.hitT -= dt }
-		ballastAndBrakes(v, dt)
-		updateHullAir(v, dt)
-		if !v.asleep || v.aero { v.windX = windAtVehicle(v) * 0.6 }
-		if v.aero {
-			if v.auto != 0 && !v.rider { autopilotSteer(v, 0, 0, dt) }
-			flightControls(v, dt)
-			airFuel(v, dt)
-			if v.rotors > 0 { rotorBlades(v, dt) }
-			let spin: Double = v.rotors > 0 ? v.collective : min(1.0, abs(v.throttle))
-			if v.rotors + v.airProps + v.tailRotors > 0 && airPower(v).0 + airPower(v).1 > 0 { v.propRot += dt * (4.0 + 26.0 * spin) }
-			v.airspeed = sqrt((v.vx - v.windX) * (v.vx - v.windX) + v.vy * v.vy)
-		} else if v.auto != 0 && !v.rider {
-			autopilotSteer(v, 0, 0, dt)
-		}
-		if v.turnT > 0 { stepTurn(v, dt) }
-		if v.cannons + v.guns > 0 { runVehicleWeapons(v, dt) }
+	func inReach(_ x: Double, _ y: Double) -> Bool {
+		let dx: Double = x - pb.x
+		let dy: Double = y - (pb.y - pb.h * 0.6)
+		let r: Double = reachDistance()
+		return dx * dx + dy * dy <= r * r
 	}
 
-	/// Fuel tanks that burst last frame go off now
-	func flushVehicleBlasts() {
-		if vehBlasts.isEmpty { return }
-		let list: [(Double, Double)] = vehBlasts
-		vehBlasts.removeAll()
-		for b in list { explode(b.0, b.1, radius: 2.0, power: 14, source: .environment, breakBlocks: false) }
-	}
+	// MARK: interactive targets
 
-	/// Rotor blades sweep a line two cells either side of the hub; if they cut into the ground the
-	/// rotor is wrecked in a moment
-	func rotorBlades(_ v: Vehicle, _ dt: Double) {
-		if v.collective < 0.05 && v.propRot == 0 { return }
-		if !(airPower(v).1 > 0) { return }
-		var struck: PartCell? = nil
-		for (c, t) in v.parts where t == .rotor {
-			var k: Double = -2.4
-			while k <= 2.41 {
-				let p: (Double, Double) = v.toWorld(Double(c.dx) + 0.5 + k, Double(c.dy) + 0.02)
-				if world.solid(Int(floor(p.0)), Int(floor(p.1))) { struck = c; break }
-				k += 0.8
-			}
-			if struck != nil { break }
-		}
-		guard let c = struck else { v.bladeHit = 0; return }
-		v.bladeHit += dt
-		let at: (Double, Double) = v.cellCenter(c)
-		if Double.random(in: 0...1) < 0.4 { spawnParticles(at.0, at.1 - 0.5, 0xFFE080, 2, 4.0, 0.25, 8) }
-		damageVehicle(v, c, 40.0 * dt, at.0, at.1)
-	}
-
-	// MARK: damage
-
-	/// A hard landing or a crash: each part that hit the ground too fast takes damage by how much too fast
-	func crashDamage(_ v: Vehicle, _ crash: [PartCell: Double]) {
-		if !settings.vehicleDamage { return }
-		var worst: Double = 0
-		for (c, over) in crash where v.parts[c] != nil {
-			let at: (Double, Double) = v.cellCenter(c)
-			damageVehicle(v, c, over * 3.2 * (1.0 + v.mass / 30.0), at.0, at.1)
-			worst = max(worst, over)
-		}
-		if worst > 0 {
-			addShake(min(0.8, 0.2 + worst * 0.05))
-			sfx(.land, at: v.px, 0.9)
-		}
-	}
-
-	/// Damage to one cell; when it has taken all it can, it breaks off
-	func damageVehicle(_ v: Vehicle, _ c: PartCell, _ amount: Double, _ x: Double, _ y: Double) {
-		guard let t = v.parts[c], amount > 0 else { return }
-		if !settings.vehicleDamage { return }
-		let hp: Double = vehicleCellHP(v, c, t) * (v.boost[c] ?? 1.0)
-		let d: Double = (v.dmg[c] ?? 0) + amount
-		v.dmg[c] = d
-		v.hitT = 0.15
-		if d >= hp { breakVehicleCell(v, c) }
-	}
-
-	/// A cell breaks off: it flies off as debris (a block keeps flying as a falling block), whatever is no
-	/// longer joined to the driver's part becomes a wreck of its own, falling with its own physics, and a
-	/// burst fuel tank goes off
-	func breakVehicleCell(_ v: Vehicle, _ c: PartCell) {
-		guard let t = v.parts[c] else { return }
-		let at: (Double, Double) = v.cellCenter(c)
-		let pv: (Double, Double) = (v.vx - v.angVel * (at.1 - v.py), v.vy + v.angVel * (at.0 - v.px))
-		let color: UInt32 = v.blocks[c].map { $0.def.colors.first ?? 0x8A8A8A } ?? 0x8A8A94
-		spawnParticles(at.0, at.1, color, 10, 4.5, 0.6, 14)
-		spawnParticles(at.0, at.1, 0x5A5A5A, 6, 2.5, 0.9, -2)
-		sfx(v.blocks[c] != nil && toolClass(v.blocks[c]!) == .axe ? .breakWood : .breakStone, at: at.0, 0.9)
-		addShake(0.2)
-		if t == .fuelTank && (v.fuel > 4 || isCreative) { vehBlasts.append(at) }
-		if t == .envelope { spawnParticles(at.0, at.1, 0xF0E4D0, 6, 5.0, 0.4, 4) }
-		// what the stores carried spills out of every store that comes away
-		let stores: [(PartCell, (Double, Double))] = v.parts.keys.filter { vehicleStores(v, $0) }.map { ($0, v.cellCenter($0)) }
-		let seat: PartCell? = seatCell(v)
-		let wasDriver: Bool = v.rider && inVehicle === v
-		// the transform before anything changes: the wrecks keep their place in the world
-		let old: Vehicle = v
-		var off: [VCell] = old.cutAway(c, keep: seat == c ? nil : seat)
-		if let first = off.first, first.cell == c {
-			off.removeFirst()
-			if let b = first.tile, b.solid, fallingBlocks.count < 120 {
-				var fb: FallingBlock = FallingBlock(x: at.0, y: at.1 + 0.5, vy: pv.1 - 3.0, tile: b, uid: newID())
-				fb.vx = pv.0 + Double.random(in: -2...2)
-				fb.mass = max(0.2, tileWeight(b))
-				fb.spin = Double.random(in: -6...6)
-				fb.flung = true
-				fallingBlocks.append(fb)
-			} else if Double.random(in: 0...1) < 0.35 {
-				spawnDrop(Stack(item: vehicleCellItem(first), count: 1), at.0, at.1, pv.0 * 0.5, -4)
-			}
-		}
-		if !off.isEmpty { makeWrecks(old, off) }
-		for (sc, sp) in stores where v.parts[sc] == nil {
-			let k: IntPair = cargoSpot(v, sc)
-			if let p = openChest, p == k { openChest = nil }
-			for st in world.removeChest(k.x, k.y) { spawnDrop(st, sp.0, sp.1, Double.random(in: -2...2), -3.5) }
-		}
-		if v.parts.isEmpty {
-			if wasDriver { dismount() }
-			return
-		}
-		v.recompute(keepAnchor: true)
-		v.kit = -1
-		if wasDriver && (seatCell(v) == nil || !v.hasSteering) {
-			dismount()
-			say("Your seat was shot away!", 2.0)
-		}
-		bumpHUD()
-	}
-
-	/// Pieces broken off a vehicle become wrecks: vehicles of their own (no seat, so nobody drives them)
-	/// that keep the place, turn and speed they had
-	func makeWrecks(_ from: Vehicle, _ cells: [VCell]) {
-		var left: [PartCell: VCell] = [:]
-		for r in cells { left[r.cell] = r }
-		while let start = left.keys.first {
-			var group: [VCell] = []
-			var stack: [PartCell] = [start]
-			while let cur = stack.popLast() {
-				guard let r = left[cur] else { continue }
-				left[cur] = nil
-				group.append(r)
-				let n: [PartCell] = [PartCell(dx: cur.dx + 1, dy: cur.dy), PartCell(dx: cur.dx - 1, dy: cur.dy), PartCell(dx: cur.dx, dy: cur.dy + 1), PartCell(dx: cur.dx, dy: cur.dy - 1)]
-				for k in n where left[k] != nil { stack.append(k) }
-			}
-			if vehicles.count >= 40 {
-				for r in group {
-					let p: (Double, Double) = from.cellCenter(r.cell)
-					if Double.random(in: 0...1) < 0.4 { spawnDrop(Stack(item: vehicleCellItem(r), count: 1), p.0, p.1, 0, -3) }
-				}
-				continue
-			}
-			let w: Vehicle = Vehicle(id: newID(), first: .frame, x: 0, y: 0)
-			w.parts.removeAll()
-			for r in group {
-				w.parts[r.cell] = r.type
-				if let b = r.tile { w.blocks[r.cell] = b }
-			}
-			w.recompute(keepAnchor: false)
-			let p: (Double, Double) = from.toWorld(w.comX, w.comY)
-			w.px = p.0
-			w.py = p.1
-			w.angle = from.angle
-			w.vx = from.vx - from.angVel * (p.1 - from.py) + Double.random(in: -1.5...1.5)
-			w.vy = from.vy + from.angVel * (p.0 - from.px) - 2.0
-			w.angVel = from.angVel + Double.random(in: -1.5...1.5)
-			w.updateBox()
-			vehicles.append(w)
-		}
-	}
-
-	/// Blasts damage every part in reach (less further out) and shove the vehicle away
-	func blastVehicles(_ x: Double, _ y: Double, radius: Double, power: Double) {
-		let list: [Vehicle] = vehicles
-		for v in list {
-			if v.b.right < x - radius - 1 || v.b.left > x + radius + 1 || v.b.y < y - radius - 1 || v.b.top > y + radius + 1 { continue }
-			var hits: [(PartCell, Double)] = []
-			for (c, _) in v.parts {
-				let p: (Double, Double) = v.cellCenter(c)
-				let d: Double = sqrt((p.0 - x) * (p.0 - x) + (p.1 - y) * (p.1 - y))
-				if d > radius + 0.5 { continue }
-				hits.append((c, power * 1.1 * (1.0 - 0.6 * clampD(d / max(0.5, radius), 0, 1))))
-			}
-			if hits.isEmpty { continue }
-			let dx: Double = v.px - x
-			let dy: Double = v.py - y
-			let dl: Double = max(0.5, sqrt(dx * dx + dy * dy))
-			let push: Double = power * 0.9 * Double(hits.count) / Double(max(1, v.parts.count)) / max(1.0, v.mass * 0.25)
-			v.vx += dx / dl * min(14.0, push)
-			v.vy += dy / dl * min(14.0, push) - 1.0
-			v.asleep = false
-			for h in hits where v.parts[h.0] != nil {
-				let p: (Double, Double) = v.cellCenter(h.0)
-				damageVehicle(v, h.0, h.1, p.0, p.1)
-			}
-		}
-	}
-
-	/// The first vehicle cell a shot's step passes through. Shots from monsters, and from other vehicles'
-	/// guns, hit vehicles; the player's own shots pass their vehicles, and a gun never hits its own vehicle.
-	func vehicleOnPath(_ p: Projectile, _ nx: Double, _ ny: Double, maxT: Double) -> VehicleHit? {
-		let fromVehicle: Bool = p.owner >= 2_000_000
-		if p.source.kind == .player && !fromVehicle { return nil }
-		var best: VehicleHit? = nil
-		var bt: Double = min(1.0, maxT)
-		let x0: Double = min(p.x, nx)
-		let x1: Double = max(p.x, nx)
-		let y0: Double = min(p.y, ny)
-		let y1: Double = max(p.y, ny)
-		for v in vehicles {
-			if fromVehicle && p.owner == 2_000_000 + machineRoot(v).id { continue }
-			if x1 < v.b.left || x0 > v.b.right || y1 < v.b.top || y0 > v.b.y { continue }
-			let a: (Double, Double) = v.toLocal(p.x, p.y)
-			let b: (Double, Double) = v.toLocal(nx, ny)
-			let len: Double = sqrt((b.0 - a.0) * (b.0 - a.0) + (b.1 - a.1) * (b.1 - a.1))
-			let n: Int = max(1, Int(ceil(len / 0.2)))
-			var i: Int = 0
-			while i <= n {
-				let t: Double = Double(i) / Double(n)
-				if t > bt { break }
-				let lx: Double = a.0 + (b.0 - a.0) * t
-				let ly: Double = a.1 + (b.1 - a.1) * t
-				let c: PartCell = PartCell(dx: Int(floor(lx)), dy: Int(floor(ly)))
-				if v.parts[c] != nil {
-					bt = t
-					best = VehicleHit(t: t, v: v, cell: c)
-					break
-				}
-				i += 1
+	func mobAtPoint(_ wx: Double, _ wy: Double, _ pad: Double) -> Mob? {
+		var best: Mob? = nil
+		var bd: Double = 1e9
+		for m in mobs {
+			if m.hp <= 0 { continue }
+			let x0: Double = m.b.left - pad
+			let x1: Double = m.b.right + pad
+			let y0: Double = m.b.top - pad
+			let y1: Double = m.b.y + pad
+			if wx >= x0 && wx <= x1 && wy >= y0 && wy <= y1 {
+				let d: Double = abs(wx - m.b.x) + abs(wy - m.b.cy)
+				if d < bd { bd = d; best = m }
 			}
 		}
 		return best
 	}
 
-	/// A shot strikes a vehicle part
-	func shotHitsVehicle(_ p: Projectile, _ vh: VehicleHit, _ x: Double, _ y: Double) {
-		if p.kind == .shell {
-			shellBurst(p, x, y)
-			return
-		}
-		if p.mod >= 0 { modShotLanded(p, x, y, mob: nil, player: false) }
-		var amount: Double = p.dmg
-		if p.kind == .fireball { amount *= 1.3 }
-		if vh.v.parts[vh.cell] == .armor { spawnParticles(x, y, 0xFFE8A0, 4, 4.0, 0.2, 6) } else { spawnParticles(x, y, 0xC8C8C8, 3, 3.0, 0.3, 10) }
-		sfx(.arrowHit, at: x, 0.5)
-		damageVehicle(vh.v, vh.cell, amount, x, y)
-	}
-
-	/// A cannon shell bursts: a small blast that breaks and throws blocks like a bomb's
-	func shellBurst(_ p: Projectile, _ x: Double, _ y: Double) {
-		// a suit's mini cannon: a small blast that leaves the ground alone
-		if p.owner == suitShellOwner {
-			explode(x, y, radius: 1.4, power: p.dmg, source: p.source, breakBlocks: false)
-			return
-		}
-		explode(x, y, radius: 2.3, power: p.dmg, source: p.source, breakBlocks: true)
-	}
-
-	// MARK: weapons
-
-	/// The guns turn toward where the driver aims (each within its own arc) and fire while the attack
-	/// stick is held. Cannons fire shells (one gunpowder each) and kick the vehicle back; machine guns
-	/// fire a stream of bullets.
-	func runVehicleWeapons(_ v: Vehicle, _ dt: Double) {
-		for (c, cd) in v.gunCD where cd > 0 { v.gunCD[c] = cd - dt }
-		// (a gun on any section of a machine answers whoever drives the machine)
-		let driving: Bool = playerDrives(v)
-		let firing: Bool = driving && useHeld && aimValid
-		let buttons: [Bool] = machineButtonsHeld(v, driving)
-		for (c, t) in v.parts where t == .cannon || t == .autoGun {
-			let f: (Int, Int) = v.face[c] ?? (1, 0)
-			let base: Double = v.angle + atan2(Double(f.1), Double(f.0))
-			let o: (Double, Double) = v.cellCenter(c)
-			var want: Double = base
-			if driving && aimValid { want = atan2(aimY - o.1, aimX - o.0) }
-			var shoot: Bool = firing
-			let mode: GunMode = GunMode(rawValue: v.gunMode[c] ?? 0) ?? .driver
-			switch mode {
-			case .driver:
-				break
-			case .auto:
-				// a turret picks its own target and fires by itself
-				shoot = false
-				if let tg = turretTarget(v, c, o, base) {
-					want = atan2(tg.1 - o.1, tg.0 - o.0)
-					shoot = true
-				}
-			case .buttonA, .buttonB, .buttonC:
-				shoot = buttons[mode.rawValue - GunMode.buttonA.rawValue]
-			case .signal:
-				shoot = machineSignalOn(v)
-			}
-			let rel: Double = clampD(remainder(want - base, 2.0 * Double.pi), -Radio.gunArc, Radio.gunArc)
-			let a: Double = base + rel
-			let cur: Double = v.aimAng[c] ?? base
-			let turn: Double = remainder(a - cur, 2.0 * Double.pi)
-			let rate: Double = (t == .cannon ? 3.0 : 6.0) * dt
-			let na: Double = cur + clampD(turn, -rate, rate)
-			v.aimAng[c] = na
-			if shoot && (v.gunCD[c] ?? 0) <= 0 && abs(remainder(want - na, 2.0 * Double.pi)) < 0.35 && !v.boxed.contains(c) {
-				fireVehicleGun(v, c, t, na, o)
-			}
-		}
-	}
-
-	func fireVehicleGun(_ v: Vehicle, _ c: PartCell, _ t: PartType, _ a: Double, _ o: (Double, Double)) {
-		let cannon: Bool = t == .cannon
-		if !isCreative {
-			let ammo: Item = cannon ? .mat(.gunpowder) : .ammo(.bullet)
-			if !inv.remove(ammo, 1) {
-				v.gunCD[c] = 1.0
-				if vehSayT <= clock {
-					vehSayT = clock + 3.0
-					say(cannon ? "The cannon needs gunpowder." : "The machine gun needs bullets.", 2.0)
-				}
-				return
-			}
-		}
-		let k: Double = v.boost[c] ?? 1.0
-		let mx: Double = o.0 + cos(a) * 0.9
-		let my: Double = o.1 + sin(a) * 0.9
-		// a mod's gun block can fire its own shot, as fast, as hard and as often as its maker set
-		let gun: ModGunRT = modGun(v, c)
-		let speed: Double = gun.speed > 0 ? gun.speed : (cannon ? 34.0 : 44.0)
-		let dmg: Double = (gun.damage > 0 ? gun.damage : (cannon ? 24 : 4.5)) * k
-		var grav: Double = cannon ? 14 : 3
-		var life: Double = cannon ? 4.0 : 1.3
-		var kind: ProjKind = cannon ? .shell : .bullet
-		var w: Double = cannon ? 0.35 : 0.15
-		if gun.shot >= 0 && gun.shot < ModRuntime.shared.shots.count {
-			let ms: ModProjectile = ModRuntime.shared.shots[gun.shot]
-			grav = ms.gravity
-			life = ms.life
-			kind = .spit
-			w = ms.size
-		}
-		var p = Projectile(kind: kind, x: mx, y: my, vx: cos(a) * speed + v.vx, vy: sin(a) * speed + v.vy, dmg: dmg, fromPlayer: true, gravity: grav)
-		p.life = life
-		p.w = w
-		p.mod = gun.shot
-		p.source = .player
-		// (the shot passes every section of the machine it came from)
-		p.owner = 2_000_000 + machineRoot(v).id
-		p.uid = newID()
-		p.knock = cannon ? 9 : 3
-		projectiles.append(p)
-		v.gunCD[c] = gun.rate > 0 ? 1.0 / gun.rate : (cannon ? 2.0 : 0.13)
-		if cannon {
-			// the recoil kicks the vehicle back, around the cannon
-			let j: Double = 10.0
-			let rx: Double = o.0 - v.px
-			let ry: Double = o.1 - v.py
-			let jx: Double = -cos(a) * j
-			let jy: Double = -sin(a) * j
-			v.vx += jx / v.mass
-			v.vy += jy / v.mass
-			v.angVel += (rx * jy - ry * jx) / v.inertia
-			v.asleep = false
-			spawnParticles(mx, my, 0xFFC050, 8, 5.0, 0.25, 2)
-			spawnParticles(mx, my, 0x8A8A8A, 6, 2.0, 0.8, -3)
-			addShake(0.25)
-			sfx(.blunderbuss, at: mx, 0.9)
-		} else {
-			if Double.random(in: 0...1) < 0.5 { spawnParticles(mx, my, 0xFFE080, 2, 3.0, 0.12, 0) }
-			sfx(.gun, at: mx, 0.3)
-		}
-	}
-
-	/// Where the guns aim with the attack stick held but not pushed: the nearest foe in range and in
-	/// sight, led a little for its speed (nil: none, the guns look ahead)
-	func vehicleAutoAim(_ v: Vehicle) -> (Double, Double)? {
-		var best: Mob? = nil
-		var bd: Double = 26.0
-		for m in mobsNear(v.px - 26, v.px + 26) where m.hp > 0 && !m.removed && !m.downed && isThreat(m) {
-			let d: Double = abs(m.b.x - v.px) + abs(m.b.cy - v.py) * 0.7
-			if d < bd && world.lineClear(v.px, v.py, m.b.x, m.b.cy) {
-				bd = d
-				best = m
-			}
-		}
-		guard let m = best else { return nil }
-		let lead: Double = bd / 40.0
-		return (m.b.x + m.b.vx * lead, m.b.cy + m.b.vy * lead)
-	}
-
-	// MARK: repairs and storage
-
-	/// Holding an iron bar, a tap on a damaged part mends it (the bar is used up)
-	func repairVehiclePart(_ v: Vehicle, _ c: PartCell) -> Bool {
-		guard let it = heldItem, it == .mat(.ironBar), let d = v.dmg[c], d > 0.5 else { return false }
-		v.dmg[c] = nil
-		if !isCreative { inv.removeAt(sel, 1) }
-		let p: (Double, Double) = v.cellCenter(c)
-		spawnParticles(p.0, p.1, 0xFFE8A0, 6, 2.5, 0.4, 4)
-		sfx(.craft, at: p.0, 0.6)
-		say("Mended.", 1.0)
-		bumpHUD()
-		return true
-	}
-
-	/// Cells that hold things: cargo crates, and chests, cabinets, wardrobes or a mod's storage built on
-	func vehicleStores(_ v: Vehicle, _ c: PartCell) -> Bool {
-		guard let t = v.parts[c] else { return false }
-		if t == .cargo { return true }
-		guard t == .block, let b = v.blocks[c] else { return false }
-		if b == .chest || b == .cabinet || b == .wardrobe { return true }
-		if b.isMod, ModRuntime.shared.blockDef(b)?.function == .storage { return true }
-		return false
-	}
-
-	/// Puts a whole stack (infusions and all) in the bag, dropping what does not fit
-	func giveStack(_ st: Stack) {
-		let left: Int = inv.add(st.item, st.count, extra: st.extra, inf: st.inf)
-		if left > 0 {
-			var rest: Stack = st
-			rest.count = left
-			spawnDrop(rest, pb.x, pb.y - 1.0, Double(facing) * 3.0, -4.0)
-		}
-		bumpHUD()
-	}
-
-	/// What the controls do in this vehicle (said when getting in)
-	func controlsHint(_ v: Vehicle) -> String {
-		if v.ballasts > 0 && v.wings == 0 && v.rotors == 0 { return "Under way. Stick down floods the ballast tanks to dive, up blows them to rise; left and right: the propeller." }
-		if v.rotors > 0 { return "Flying. Stick up and down: climb and sink (let go to hover). Left and right: tilt and fly that way." }
-		if v.burners > 0 && v.envelopes > 0 { return "Ballooning. Stick up: heat the balloon and rise; down: let it cool and sink. Left and right: the propellers." }
-		if v.wings > 0 { return "Flying. Left and right: the throttle. Up and down: pitch the nose (gather speed on the ground, then pull up). TURN turns round." }
-		if v.tracks > 0 { return "Driving a tracked vehicle: slow, but it climbs anything. Jump to get up from the seat." }
-		return "Driving. Hold the stick to move; in the air it tilts the vehicle. Jump to get up from the seat."
-	}
-}
-
-extension Game {
-	// MARK: turning round
-
-	/// TURN is offered while driving: in flight it is a banked turn out of the screen and back; standing
-	/// still (or nearly), the vehicle simply faces the other way if it has room
-	var canTurnVehicle: Bool {
-		guard let v = inVehicle else { return false }
-		return v.turnT == 0 && (v.aero || v.speed < 2.0)
-	}
-
-	func turnVehicle() {
-		guard let v = drivenVehicle, v.turnT == 0 else { return }
-		if !v.joints.isEmpty || v.parentID != 0 {
-			say("A machine with joints can't turn round: drive it the other way.", 2.0)
-			return
-		}
-		let flying: Bool = v.aero && v.contacts == 0 && v.submerged <= 0.02 && v.speed > 3.0
-		if flying {
-			v.turnT = 0.001
-			v.turnVX = v.vx
-			v.turned = false
-			v.asleep = false
-			return
-		}
-		if v.speed > 2.0 {
-			say("Slow down to turn round.", 1.5)
-			return
-		}
-		if !mirrorVehicle(v, check: true) { say("No room to turn round here.", 1.8) }
-	}
-
-	/// A turn in flight: it banks round out of the screen and back (drawn narrowing to its edge and
-	/// widening again), the wings lift a little less while banked, and halfway round it faces and flies
-	/// the other way, keeping its airspeed less what the turn costs
-	func stepTurn(_ v: Vehicle, _ dt: Double) {
-		v.turnT = min(1.0, v.turnT + dt / Aero.turnTime)
-		if !v.turned && v.turnT >= 0.5 {
-			v.turned = true
-			_ = mirrorVehicle(v, check: false)
-			v.vx = -v.vx * 0.92
-			for o in vehicles where o !== v && o.restOn == v.id { o.vx = v.vx; o.vy = v.vy }
-		}
-		if v.turnT >= 1.0 { v.turnT = 0 }
-	}
-
-	/// Mirrors a vehicle left to right about its centre of mass (it then faces the other way). With
-	/// `check`, only if the mirrored vehicle fits where it is. Stores keep what they hold.
-	@discardableResult
-	func mirrorVehicle(_ v: Vehicle, check: Bool, depth: Int = 0) -> Bool {
-		let sx: Int = v.minX + v.maxX
-		if check {
-			for (c, _) in v.parts {
-				let p: (Double, Double) = v.cellCenter(c)
-				let mx: Double = 2.0 * v.px - p.0
-				if world.boxSolid(mx - 0.4, p.1 - 0.4, mx + 0.4, p.1 + 0.4) { return false }
-			}
-		}
-		var np: [PartCell: PartType] = [:]
-		var nb: [PartCell: Tile] = [:]
-		var nd: [PartCell: Double] = [:]
-		var moved: [(IntPair, [Stack])] = []
-		for (c, t) in v.parts {
-			let m: PartCell = PartCell(dx: sx - c.dx, dy: c.dy)
-			np[m] = t
-			if let b = v.blocks[c] { nb[m] = mirroredTile(b) }
-			if let d = v.dmg[c] { nd[m] = d }
-			if vehicleStores(v, c) {
-				let k: IntPair = cargoSpot(v, c)
-				if let p = openChest, p == k { openChest = nil }
-				moved.append((cargoSpot(v, m), world.removeChest(k.x, k.y)))
-			}
-		}
-		let cx: Double = v.px
-		let cy: Double = v.py
-		mirrorRiders(v, sx)
-		// vehicles resting on it (a plane parked on a carrier) are turned round with it
-		let carried: [Vehicle] = depth > 2 ? [] : vehicles.filter { $0 !== v && $0.restOn == v.id }
-		let carriedAt: [(Double, Double)] = carried.map { v.toLocal($0.px, $0.py) }
-		var nw: [PartCell: UInt8] = [:]
-		for (c, k) in v.walls { nw[PartCell(dx: sx - c.dx, dy: c.dy)] = k }
-		v.walls = nw
-		var ns: [PartCell: PartCell] = [:]
-		for (c, m) in v.spanOf { ns[PartCell(dx: sx - c.dx, dy: c.dy)] = PartCell(dx: sx - m.dx, dy: m.dy) }
-		v.spanOf = ns
-		for i in v.links.indices { v.links[i].cell = PartCell(dx: sx - v.links[i].cell.dx, dy: v.links[i].cell.dy) }
-		if let st = v.seatAt { v.seatAt = PartCell(dx: sx - st.dx, dy: st.dy) }
-		v.parts = np
-		v.blocks = nb
-		v.dmg = nd
-		v.gunCD.removeAll()
-		v.aimAng.removeAll()
-		v.drillWork.removeAll()
-		v.recompute(keepAnchor: false)
-		v.angle = -v.angle
-		v.angVel = -v.angVel
-		v.px = cx
-		v.py = cy
-		v.dir = -v.dir
-		v.fwd = -v.fwd
-		v.kit = -1
-		v.asleep = false
-		v.updateBox()
-		for m in moved { world.setChestItems(m.0.x, m.0.y, m.1) }
-		for (i, o) in carried.enumerated() {
-			let l: (Double, Double) = carriedAt[i]
-			_ = mirrorVehicle(o, check: false, depth: depth + 1)
-			let w: (Double, Double) = v.toWorld(Double(sx + 1) - l.0, l.1)
-			o.px = w.0
-			o.py = w.1
-			o.vx = v.vx
-			o.vy = v.vy
-			o.updateBox()
-		}
-		return true
-	}
-
-	// MARK: building blocks onto vehicles
-
-	/// The ON VEHICLE switch shows while a block is in hand near a vehicle
-	var canBuildOnVehicle: Bool {
-		guard inVehicle == nil, !dead, let it = heldItem, case .block(let t) = it else { return false }
-		if t == .liftCar || t == .sapling || t.isPlant { return false }
-		return nearestVehicle(8) != nil
-	}
-
-	func toggleVehicleBuild() {
-		vehicleBuild.toggle()
-		say(vehicleBuild ? "Blocks now go onto the vehicle: tap a green square." : "Blocks go into the world again.", 2.0)
-		bumpHUD()
-	}
-
-	/// Builds the block in hand onto the vehicle at the aim point (it becomes one of its cells, with its
-	/// weight, and moves with it). A mod block made to work as a vehicle part does that part's work.
-	func attachBlockToVehicle(_ t: Tile) -> Bool {
-		guard let (v, c) = vehicleCellAtAim() else {
-			if nearestVehicle(8) == nil { return false }
-			if placeCD <= 0 { say("Tap a green square next to the vehicle.", 1.5) }
-			placeCD = 0.3
-			return true
-		}
-		var part: PartType = .block
-		if t.isMod, let d = ModRuntime.shared.blockDef(t), let p = d.vehRole.part { part = p }
-		if let problem = attachProblem(v, c, part) {
-			say(problem, 2.0)
-			placeCD = 0.3
-			return true
-		}
-		liftIfBuried(v, c)
-		v.parts[c] = part
-		v.blocks[c] = t
-		v.recompute(keepAnchor: true)
-		splitJointSections(v)
-		v.kit = -1
-		if t == .chest || t == .cabinet || t == .wardrobe { world.setChestItems(cargoSpot(v, c).x, cargoSpot(v, c).y, []) }
-		if !isCreative { inv.removeAt(sel, 1) }
-		sfx(.place, 0.6)
-		placeCD = 0.16
-		swingT = 0.14
-		bumpHUD()
-		return true
-	}
-
-	/// Builds a door onto a vehicle at the aim point: two cells high where the cell above is free (one
-	/// otherwise). True when the tap was for a vehicle.
-	func attachDoorToVehicle() -> Bool {
-		guard let (v, c) = vehicleCellAtAim() else { return nearestVehicle(8) != nil }
-		if placeCD > 0 { return true }
-		placeCD = 0.25
-		if let problem = attachProblem(v, c, .block) {
-			say(problem, 2.0)
-			return true
-		}
-		v.parts[c] = .block
-		v.blocks[c] = .doorClosed
-		let up: PartCell = PartCell(dx: c.dx, dy: c.dy - 1)
-		let down: PartCell = PartCell(dx: c.dx, dy: c.dy + 1)
-		if v.parts[up] == nil { v.parts[up] = .block; v.blocks[up] = .doorClosed }
-		else if v.parts[down] == nil { v.parts[down] = .block; v.blocks[down] = .doorClosed }
-		v.recompute(keepAnchor: true)
-		v.kit = -1
-		if !isCreative { inv.removeAt(sel, 1) }
-		sfx(.place, 0.6)
-		swingT = 0.14
-		bumpHUD()
-		return true
-	}
-
-	/// The free cell next to a vehicle under the aim point (the one a block or part would go in)
-	func vehicleCellAtAim() -> (Vehicle, PartCell)? {
+	func vehicleAtPoint(_ wx: Double, _ wy: Double) -> (Vehicle, PartCell)? {
 		for v in vehicles {
-			if aimX < v.b.left - 1.5 || aimX > v.b.right + 1.5 || aimY < v.b.top - 1.5 || aimY > v.b.y + 1.5 { continue }
-			let c: PartCell = v.cellAt(aimX, aimY)
-			if v.parts[c] == nil && v.hasNeighbor(c) { return (v, c) }
+			if wx < v.b.left - 0.2 || wx > v.b.right + 0.2 || wy < v.b.top - 0.2 || wy > v.b.y + 0.2 { continue }
+			// pick in the vehicle's own (rotated) grid
+			let c: PartCell = v.cellAt(wx, wy)
+			if v.parts[c] != nil { return (v, c) }
 		}
 		return nil
 	}
 
-	// MARK: the assembler
-
-	/// The Vehicle Assembler: a tap on a structure you built turns it (every built block joined to it)
-	/// into a vehicle, joined to a vehicle it touches if there is one; a tap on a parked vehicle puts its
-	/// blocks back into the world and its parts in your bag
-	func useAssembler(_ pressed: Bool) {
-		if !pressed || useCD > 0 { return }
-		useCD = 0.4
-		swingT = 0.15
-		if !inReach(aimX, aimY) {
-			say("Tap closer to you.", 1.2)
-			return
+	/// A vehicle cell with a back wall under a point (in its box)
+	func vehicleWallAtPoint(_ wx: Double, _ wy: Double) -> (Vehicle, PartCell)? {
+		for v in vehicles where !v.walls.isEmpty {
+			if wx < v.b.left - 0.2 || wx > v.b.right + 0.2 || wy < v.b.top - 0.2 || wy > v.b.y + 0.2 { continue }
+			let c: PartCell = v.cellAt(wx, wy)
+			if v.walls[c] != nil { return (v, c) }
 		}
-		if let hit = vehicleAtPoint(aimX, aimY) {
-			disassembleVehicle(hit.0)
-			return
-		}
-		let tx: Int = Int(floor(aimX))
-		let ty: Int = Int(floor(aimY))
-		if !world.isBuilt(tx, ty) || !canAssemble(world.tile(tx, ty)) {
-			say("Tap a block you built: it and every built block joined to it become one vehicle.", 3.0)
-			return
-		}
-		assembleStructure(tx, ty)
+		return nil
 	}
 
-	/// The built blocks joined to (x, y), side by side (up to 800)
-	func builtStructure(_ x: Int, _ y: Int) -> [IntPair] {
-		var out: [IntPair] = []
-		var seen: Set<IntPair> = []
-		var stack: [IntPair] = [IntPair(x: x, y: y)]
+	func shipChestAt(_ wx: Double, _ wy: Double) -> PirateShip? {
+		for s in ships {
+			if s.looted { continue }
+			let dy: Double = s.deckY(Double(WorldGen.sea))
+			if abs(wx - (s.x - 2.5)) < 1.2 && abs(wy - (dy - 0.6)) < 1.4 { return s }
+		}
+		return nil
+	}
+
+	func isInteractive(_ wx: Double, _ wy: Double) -> Bool {
+		let tx: Int = Int(floor(wx))
+		let ty: Int = Int(floor(wy))
+		let t: Tile = world.tile(tx, ty)
+		// with wire in hand every tap lays or cuts wire, even over a door or a lever
+		if holdingWireSpool { return false }
+		if case .gadget(.probe)? = heldItem { return t.isPower || world.wireAt(tx, ty) != 0 }
+		if t.isPower { return true }
+		if t.isMod {
+			guard let b = ModRuntime.shared.blockDef(t) else { return true }
+			if b.function != .none && b.function != .bounce && b.function != .trap { return true }
+		}
+		switch t {
+		case .chest, .workbench, .furnace, .campfire, .portalOff, .doorClosed, .doorOpen, .anvil, .tinkerBench, .riftForge, .alchemyStill, .infuser, .exoStation: return true
+		case .weatherStation, .dopplerStation, .stormSiren, .lightningRod, .windTurbine, .rainBarrel, .rainCistern, .weatherVane, .heater, .shutterClosed, .shutterOpen: return true
+		case .chair, .sofa, .bedL, .bedR, .cabinet, .wardrobe, .liftButton: return true
+		default: break
+		}
+		if liftAt(wx, wy) != nil { return true }
+		if let m = mobAtPoint(wx, wy, 0.15) {
+			if m.tame { return true }
+		}
+		if vehicleAtPoint(wx, wy) != nil {
+			if let it = heldItem, case .part = it { return false }
+			if let it = heldItem, case .gadget(let g) = it, g == .wrench { return false }
+			return true
+		}
+		if shipChestAt(wx, wy) != nil { return true }
+		return false
+	}
+
+	func interact(_ wx: Double, _ wy: Double) {
+		let tx: Int = Int(floor(wx))
+		let ty: Int = Int(floor(wy))
+		if !inReach(wx, wy) && !(mobAtPoint(wx, wy, 0.2)?.tame ?? false) {
+			say("Too far away.", 1.2)
+			return
+		}
+		let t: Tile = world.tile(tx, ty)
+		if case .gadget(.probe)? = heldItem {
+			probeAt(wx, wy)
+			return
+		}
+		if case .gadget(.wrench)? = heldItem, wrenchLift(wx, wy) { return }
+		if t == .exoStation {
+			openExo()
+			return
+		}
+		if t.isPower && t != .windTurbine {
+			usePowerDevice(tx, ty, t)
+			return
+		}
+		if t.isMod && interactModBlock(tx, ty, t) { return }
+		switch t {
+		case .chest:
+			if tryMimic(tx, ty) { return }
+			let firstLook: Bool = world.chests[world.chestKey(tx, ty)] == nil
+			sfx(.chestOpen, 0.7)
+			spawnParticles(Double(tx) + 0.5, Double(ty) + 0.3, 0xC8A878, 5, 2.0, 0.4, 6)
+			if firstLook && world.chestItems(tx, ty).contains(where: { MineLoot.isExceptional($0.item) }) {
+				// a rare find: it should feel like one
+				sfx(.rareLoot, 0.8)
+				spawnParticles(Double(tx) + 0.5, Double(ty) + 0.2, 0xFFE070, 16, 3.5, 0.9, -3)
+				addLightFlash(Double(tx) + 0.5, Double(ty) + 0.3, peak: 10, dur: 0.8, radius: 1.8, color: 0xFFD860)
+				say("Something rare glints in this chest!", 2.5)
+			}
+			openChest = IntPair(x: tx, y: ty)
+			showInventory = true
+			bumpHUD()
+			return
+		case .workbench:
+			craftStation = .bench
+			showInventory = true
+			bumpHUD()
+			return
+		case .furnace:
+			craftStation = .furnace
+			showInventory = true
+			bumpHUD()
+			return
+		case .campfire:
+			craftStation = .campfire
+			showInventory = true
+			bumpHUD()
+			return
+		case .anvil, .tinkerBench, .riftForge:
+			craftStation = t == .anvil ? .anvil : (t == .tinkerBench ? .tinker : .forge)
+			showInventory = true
+			bumpHUD()
+			return
+		case .alchemyStill:
+			craftStation = .still
+			showInventory = true
+			sfx(.splash, 0.3)
+			bumpHUD()
+			return
+		case .infuser:
+			openInfuser()
+			return
+		case .portalOff:
+			tryOpenPortal(tx, ty)
+			return
+		case .doorClosed, .doorOpen:
+			toggleDoor(tx, ty)
+			return
+		case .weatherStation, .dopplerStation, .stormSiren, .lightningRod, .windTurbine, .rainBarrel, .rainCistern, .weatherVane, .heater, .shutterClosed, .shutterOpen:
+			useWeatherDevice(tx, ty, t)
+			return
+		case .chair, .sofa:
+			sitOn(tx, ty)
+			return
+		case .bedL, .bedR:
+			sleepIn(tx, ty)
+			return
+		case .cabinet, .wardrobe:
+			openStorage(tx, ty)
+			return
+		case .liftButton:
+			callLift(tx, ty)
+			return
+		default: break
+		}
+		if let l = liftAt(wx, wy) {
+			rideLiftTap(l, wy)
+			return
+		}
+		if let m = mobAtPoint(wx, wy, 0.2) {
+			interactMob(m)
+			return
+		}
+		if let (v, c) = vehicleAtPoint(wx, wy) {
+			interactVehicle(v, c)
+			return
+		}
+		if let s = shipChestAt(wx, wy) {
+			lootShip(s)
+			return
+		}
+	}
+
+	func interactMob(_ m: Mob) {
+		switch m.kind {
+		case .rex:
+			if m.tame { mountRex(m) }
+		case .wolf, .cat:
+			if m.tame {
+				m.st = m.st == 7 ? 0 : 7
+				say(m.st == 7 ? "Your pet will stay here." : "Your pet follows you.", 2.0)
+			}
+		default: break
+		}
+	}
+
+	func tryOpenPortal(_ tx: Int, _ ty: Int) {
+		let key: Item = .gadget(.portalKey)
+		if !isCreative && inv.total(key) < 1 {
+			say("The portal is sealed. It needs a Portal Key.", 3.0)
+			return
+		}
+		if !isCreative { _ = inv.remove(key, 1) }
+		// flood fill all dormant portal tiles
+		var stack: [IntPair] = [IntPair(x: tx, y: ty)]
+		var count: Int = 0
 		while let p = stack.popLast() {
-			if seen.contains(p) { continue }
-			seen.insert(p)
-			if !world.isBuilt(p.x, p.y) || !canAssemble(world.tile(p.x, p.y)) { continue }
-			out.append(p)
-			if out.count >= 800 { break }
+			if world.tile(p.x, p.y) != .portalOff { continue }
+			world.set(p.x, p.y, .portalOn)
+			count += 1
+			if count > 80 { break }
 			stack.append(IntPair(x: p.x + 1, y: p.y))
 			stack.append(IntPair(x: p.x - 1, y: p.y))
 			stack.append(IntPair(x: p.x, y: p.y + 1))
 			stack.append(IntPair(x: p.x, y: p.y - 1))
 		}
-		return out
-	}
-
-	func assembleStructure(_ x: Int, _ y: Int) {
-		let cells: [IntPair] = builtStructure(x, y)
-		if cells.isEmpty { return }
-		if cells.count >= 800 {
-			say("That structure is too big to move (800 blocks at most).", 2.5)
-			return
-		}
-		// a vehicle the structure touches takes it in (it must be roughly level)
-		var host: Vehicle? = nil
-		for v in vehicles where abs(remainder(v.angle, 2.0 * Double.pi)) < 0.08 && !v.rider {
-			for p in cells {
-				let c: PartCell = v.cellAt(Double(p.x) + 0.5, Double(p.y) + 0.5)
-				if v.parts[c] == nil && v.hasNeighbor(c) { host = v; break }
-			}
-			if host != nil { break }
-		}
-		var x0: Int = Int.max
-		var y1: Int = Int.min
-		for p in cells { x0 = min(x0, p.x); y1 = max(y1, p.y) }
-		let v: Vehicle = host ?? Vehicle(id: newID(), first: .frame, x: 0, y: 0)
-		if host == nil { v.parts.removeAll() }
-		var stores: [(PartCell, [Stack])] = []
-		var added: Int = 0
-		for p in cells {
-			let t: Tile = world.tile(p.x, p.y)
-			let c: PartCell = host != nil ? v.cellAt(Double(p.x) + 0.5, Double(p.y) + 0.5) : PartCell(dx: p.x - x0, dy: p.y - y1)
-			if v.parts[c] != nil {
-				// no cell free for it in the vehicle: it goes to the bag (with what it held)
-				giveItem(.block(t), 1)
-				if t == .chest || t == .cabinet || t == .wardrobe { for st in world.removeChest(p.x, p.y) { giveStack(st) } }
-				continue
-			}
-			var part: PartType = .block
-			if t.isMod, let d = ModRuntime.shared.blockDef(t), let pp = d.vehRole.part { part = pp }
-			v.parts[c] = part
-			v.blocks[c] = t
-			added += 1
-			if t == .chest || t == .cabinet || t == .wardrobe || (t.isMod && ModRuntime.shared.blockDef(t)?.function == .storage) {
-				stores.append((c, world.removeChest(p.x, p.y)))
-			}
-		}
-		// the back walls of the structure go with it: behind its blocks, and behind the open cells
-		// inside it (between its blocks in the same row)
-		var inBlocks: Set<IntPair> = Set(cells)
-		var walls: [(PartCell, UInt8)] = []
-		var rows: [Int: (Int, Int)] = [:]
-		for p in cells { let r: (Int, Int) = rows[p.y] ?? (p.x, p.x); rows[p.y] = (min(r.0, p.x), max(r.1, p.x)) }
-		for (y, span) in rows {
-			var x: Int = span.0
-			while x <= span.1 {
-				let k: Int = world.wallAt(x, y)
-				let here: IntPair = IntPair(x: x, y: y)
-				if k > 0 && (inBlocks.contains(here) || world.tile(x, y) == .air) {
-					let c: PartCell = host != nil ? v.cellAt(Double(x) + 0.5, Double(y) + 0.5) : PartCell(dx: x - x0, dy: y - y1)
-					if v.walls[c] == nil {
-						walls.append((c, UInt8(k)))
-						_ = world.setWall(x, y, 0)
-					}
-				}
-				x += 1
-			}
-		}
-		inBlocks.removeAll()
-		for w in walls { v.walls[w.0] = w.1 }
-		for p in cells {
-			world.setBuilt(p.x, p.y, false)
-			world.set(p.x, p.y, .air)
-		}
-		if host == nil {
-			v.recompute(keepAnchor: false)
-			v.placeBox(left: Double(x0), bottom: Double(y1 + 1))
-			vehicles.append(v)
-		} else {
-			v.recompute(keepAnchor: true)
-		}
-		v.kit = -1
-		v.asleep = false
-		for s in stores { world.setChestItems(cargoSpot(v, s.0).x, cargoSpot(v, s.0).y, s.1) }
-		spawnParticles(v.b.x, v.b.y - v.b.h * 0.5, 0x30C0E0, 14, 4.0, 0.6, 2)
-		sfx(.craft, 0.8)
-		let massS: String = String(format: "%.0f", v.mass)
-		let what: String = host == nil ? "a new vehicle" : "the vehicle"
-		say(joinText("Assembled ", String(added), " blocks into ", what, " (mass ", massS, "). ", vehicleCheck(v).hint), 4.0)
+		portalOpened = true
+		spawnParticles(Double(tx) + 0.5, Double(ty) + 0.5, 0xF0A848, 40, 7.0, 1.2, 0)
+		addShake(0.5)
+		say("The rift tears open! Walk into it to cross to the Umbral Realm.", 5.0)
+		sfx(.portal, 1.0)
 		bumpHUD()
 	}
 
-	/// Puts a parked, level vehicle's blocks back into the world, each in the cell it is over (blocks
-	/// that have no room go to the bag, as do the parts); stores keep their things as chests
-	func disassembleVehicle(_ v: Vehicle) {
-		if v.rider || v.speed > 1.0 || !v.upright {
-			say("Park it level and get out first.", 2.0)
-			return
-		}
-		var placed: Int = 0
-		var bagged: Int = 0
-		for (c, t) in v.parts {
-			let p: (Double, Double) = v.cellCenter(c)
-			let tx: Int = Int(floor(p.0))
-			let ty: Int = Int(floor(p.1))
-			var held: [Stack] = []
-			if vehicleStores(v, c) {
-				let k: IntPair = cargoSpot(v, c)
-				if let o = openChest, o == k { openChest = nil }
-				held = world.removeChest(k.x, k.y)
-			}
-			let here: Tile = world.tile(tx, ty)
-			let free: Bool = here == .air || here.liquid || here.isPlant
-			if let b = v.blocks[c], free {
-				world.set(tx, ty, b)
-				world.setBuilt(tx, ty, true)
-				if b == .chest || b == .cabinet || b == .wardrobe || (b.isMod && ModRuntime.shared.blockDef(b)?.function == .storage) {
-					world.setChestItems(tx, ty, held)
-					held = []
-				}
-				placed += 1
-			} else {
-				giveItem(vehicleCellItem(VCell(cell: c, type: t, tile: v.blocks[c])), 1)
-				bagged += 1
-			}
-			for st in held { giveStack(st) }
-		}
-		// its back walls go back up where there is none (or to the bag)
-		for (c, k) in v.walls {
-			let p: (Double, Double) = v.cellCenter(c)
-			let tx: Int = Int(floor(p.0))
-			let ty: Int = Int(floor(p.1))
-			if world.wallAt(tx, ty) == 0 && world.setWall(tx, ty, Int(k)) { continue }
-			if let t = blockWallTile(Int(k)) { giveItem(.block(t), 1) }
-		}
-		vehicles.removeAll { $0 === v }
-		spawnParticles(v.b.x, v.b.y - v.b.h * 0.5, 0x30C0E0, 14, 4.0, 0.6, 2)
-		sfx(.craft, 0.8)
-		say(joinText("Taken apart: ", String(placed), " blocks back in place, ", String(bagged), " to your bag."), 3.0)
-		bumpHUD()
-	}
-
-	// MARK: the autopilot
-
-	/// AUTO cycles the autopilot: off, cruise (it holds the speed and the height you had), route (it
-	/// drives the points you marked, round and round, even with nobody aboard)
-	func cycleAutopilot() {
-		guard let v = drivenVehicle, v.autopilots > 0 else { return }
-		var next: Int = (v.auto + 1) % 3
-		if next == 2 && v.route.count < 2 { next = 0 }
-		v.auto = next
-		v.holdThr = abs(v.throttle) > 0.1 ? v.throttle : (abs(v.vx) > 1.5 ? (v.vx > 0 ? 0.7 : -0.7) : 0)
-		v.holdY = v.py
-		v.holdVX = v.vx
-		if next == 2 { v.routeAt = nearestWaypoint(v) }
-		let names: [String] = ["Autopilot off.", "Autopilot: cruise. It holds your speed and height, even if you get up and walk about.", "Autopilot: route. It drives your marked points round and round, even if you get out."]
-		say(names[next], 3.0)
-		bumpHUD()
-	}
-
-	/// MARK adds where the vehicle is now to its route (up to 16 points)
-	func markWaypoint() {
-		guard let v = drivenVehicle, v.autopilots > 0 else { return }
-		if v.route.count >= 16 { v.route.removeFirst() }
-		v.route.append(VWaypoint(x: v.px, y: v.py))
-		let n: Int = v.route.count
-		say(n < 2 ? "Point 1 marked. Drive on and mark more." : joinText("Point ", String(n), " marked. AUTO twice to drive the route."), 2.0)
-		bumpHUD()
-	}
-
-	func clearRoute() {
-		guard let v = drivenVehicle else { return }
-		v.route.removeAll()
-		if v.auto == 2 { v.auto = 0 }
-		say("Route cleared.", 1.5)
-		bumpHUD()
-	}
-
-	func nearestWaypoint(_ v: Vehicle) -> Int {
-		var best: Int = 0
-		var bd: Double = 1e18
-		for (i, w) in v.route.enumerated() {
-			let d: Double = (w.x - v.px) * (w.x - v.px) + (w.y - v.py) * (w.y - v.py)
-			if d < bd { bd = d; best = i }
-		}
-		return best
-	}
-
-	/// The autopilot's hands on the controls. The driver's own input wins while the stick is pushed
-	/// (and cruise then takes up the new speed or height). Cruise holds the throttle, and in the air the
-	/// height; a route steers for each point in turn.
-	func autopilotSteer(_ v: Vehicle, _ ix: Double, _ up: Double, _ dt: Double) {
-		if v.autopilots == 0 { v.auto = 0; return }
-		let touched: Bool = abs(ix) > 0.1 || abs(up) > 0.1
-		if v.auto == 1 {
-			if abs(ix) > 0.1 { v.holdThr = ix } else { v.throttle = v.holdThr }
-			if abs(up) > 0.1 { v.holdY = v.py } else if v.aero { v.pitch = holdHeight(v, v.holdY) }
-			return
-		}
-		if v.auto != 2 || v.route.count < 2 { return }
-		if touched && v.rider { return }
-		if v.routeAt >= v.route.count { v.routeAt = 0 }
-		let w: VWaypoint = v.route[v.routeAt]
-		let dx: Double = w.x - v.px
-		let dy: Double = w.y - v.py
-		let flyer: Bool = v.aero && (v.rotors > 0 || v.envelopes > 0 || v.wings > 0)
-		let arrived: Bool = abs(dx) < 2.5 && (!flyer || abs(dy) < 3.0)
-		if arrived {
-			v.routeAt = (v.routeAt + 1) % v.route.count
-			return
-		}
-		if v.wings > 0 && v.rotors == 0 && v.envelopes == 0 {
-			// a plane flies on at full throttle and turns round when the point is behind it
-			let ahead: Double = dx * Double(v.fwd) * (v.cosA >= 0 ? 1.0 : -1.0)
-			if ahead < -6.0 && v.turnT == 0 && v.contacts == 0 && v.speed > 3.0 {
-				v.turnT = 0.001
-				v.turnVX = v.vx
-				v.turned = false
-			}
-			v.throttle = Double(v.fwd)
-			v.pitch = holdHeight(v, w.y)
-			return
-		}
-		let gain: Double = flyer ? 0.15 : 0.35
-		var thr: Double = clampD(dx * gain, -1, 1)
-		if abs(thr) < 0.35 { thr = thr >= 0 ? 0.35 : -0.35 }
-		if flyer && abs(dx) < 6.0 { thr *= abs(dx) / 6.0 }
-		v.throttle = thr
-		v.pitch = flyer ? holdHeight(v, w.y) : 0
-	}
-
-	/// The up/down input that brings the vehicle to a height and holds it there
-	func holdHeight(_ v: Vehicle, _ y: Double) -> Double {
-		let err: Double = v.py - y
-		if v.wings > 0 && v.rotors == 0 && v.envelopes == 0 {
-			return clampD(err * 0.12 + v.vy * 0.12, -0.7, 0.7)
-		}
-		return clampD(err * 0.35 + v.vy * 0.3, -1, 1)
-	}
-}
-
-extension Game {
-	// MARK: what kind of vehicle, and is it ready
-
-	/// What the design is, from what it is built of (a hybrid when it is more than one thing)
-	func vehicleKindName(_ v: Vehicle) -> String {
-		var kinds: [String] = []
-		if v.rotors > 0 { kinds.append("HELICOPTER") }
-		if v.envelopes > 0 && v.burners > 0 { kinds.append("AIRSHIP") }
-		if v.wings > 0 && v.rotors == 0 { kinds.append(v.airProps + v.jets > 0 ? (v.jets > 0 ? "JET" : "PLANE") : "GLIDER") }
-		var hulls: Int = 0
-		for (_, t) in v.parts where t == .hull { hulls += 1 }
-		if hulls > 0 { kinds.append("BOAT") }
-		// on an aircraft, wheels are its landing gear
-		let flies: Bool = v.rotors > 0 || v.wings > 0 || (v.envelopes > 0 && v.burners > 0)
-		if v.wheels >= 2 {
-			if v.tracks > 0 { kinds.append(v.cannons > 0 ? "TANK" : "TRACKED") }
-			else if kinds.isEmpty { kinds.append(v.parts.count >= 14 || cargoCount(v) >= 2 ? "TRUCK" : "CAR") }
-			else if !flies { kinds.append("WHEELS") }
-		}
-		if kinds.isEmpty { return v.parts.contains { $0.value == .block } ? "STRUCTURE" : "VEHICLE" }
-		if kinds.count == 1 { return kinds[0] }
-		return joinText(kinds.prefix(2).joined(separator: " + "), " HYBRID")
-	}
-
-	func cargoCount(_ v: Vehicle) -> Int {
-		var n: Int = 0
-		for c in v.parts.keys where vehicleStores(v, c) { n += 1 }
-		return n
-	}
-
-	/// The checklist for anything that flies, fights or runs on tracks: what it needs, and whether its
-	/// design can do it (lift against weight, a tail behind the centre of mass, power for its rotors)
-	func flightCheck(_ v: Vehicle) -> VehicleCheck {
-		var lines: [String] = []
-		var oks: [Bool] = []
-		func add(_ ok: Bool, _ s: String) {
-			lines.append(s)
-			oks.append(ok)
-		}
-		let weight: Double = v.mass * gravityG
-		let massS: String = String(format: "%.1f", v.mass)
-		add(v.hasSeat && v.hasSteering, v.hasCockpit ? "Cockpit" : "Seat and steering wheel (or a cockpit)")
-		var hint: String = joinText("Mass ", massS, ". Refuel: hold coal or wood and tap it.")
-		if v.rotors > 0 {
-			let lift: Double = rotorMax(v, anyway: true) + balloonMax(v)
-			let pct: Int = Int((lift / max(1, weight) * 100).rounded())
-			add(v.engines > 0, joinText("Engines to turn the rotor (", String(v.engines), ")"))
-			add(lift > weight * 1.05, joinText("Rotor lift ", String(pct), "% of the weight"))
-			add(v.tailRotors > 0 || v.rotors >= 2, "Tail rotor (or a second main rotor)")
-			hint = lift > weight * 1.05 ? joinText("Mass ", massS, ". Stick up to lift off; let go to hover.") : "Too heavy for the rotor: add engines or take weight off."
-		} else if v.envelopes > 0 {
-			let lift: Double = balloonMax(v)
-			let pct: Int = Int((lift / max(1, weight) * 100).rounded())
-			let need: Int = (v.envelopes + Aero.burnerCells - 1) / Aero.burnerCells
-			add(v.burners >= need, joinText("Burners: ", String(v.burners), " of ", String(need), " (one heats 12 envelopes)"))
-			add(lift > weight * 1.05, joinText("Balloon lift ", String(pct), "% of the weight (full heat)"))
-			add(v.airProps > 0 && v.engines > 0, "Propeller and engine to move (optional)")
-			oks[oks.count - 1] = true
-			hint = lift > weight * 1.05 ? joinText("Mass ", massS, ". Stick up to heat the balloon and rise.") : "Not enough balloon for the weight: add envelopes (and burners)."
-		} else if v.wings > 0 {
-			let takeoff: Double = sqrt(weight / max(0.01, Aero.kLift * Double(v.wings) * 1.15))
-			let thrust: Bool = (v.airProps > 0 && v.engines > 0) || v.jets > 0
-			add(thrust, "Air propeller with an engine, or a jet")
-			add(takeoff < 20.0, joinText("Wings lift it at ", String(Int(takeoff.rounded())), " blocks/s (", String(v.wings), " wing cells)"))
-			// the push it has at that speed against its weight: under a fifth, it never gets there
-			let push: Double = thrustAt(v, takeoff) / max(1, weight)
-			add(push >= 0.2, joinText("Thrust ", String(Int((push * 100).rounded())), "% of the weight at take-off (20% needed)"))
-			let tail: (Bool, Bool) = tailCheck(v)
-			add(tail.0, "Tail elevator, well behind the centre of mass")
-			add(tail.1, "Centre of mass ahead of the wings (or it flips)")
-			if takeoff >= 20.0 { hint = "The wings are too small for its weight: add wing cells." }
-			else if push < 0.2 { hint = "Too heavy for its engines: add engines or a jet, or take weight off." }
-			else { hint = "Throttle up along the ground; at speed, stick up to lift off." }
-		}
-		if v.tracks > 0 || v.cannons + v.guns > 0 {
-			if v.rotors == 0 && v.wings == 0 && v.envelopes == 0 {
-				add(v.wheels >= 2, joinText("Tracks or wheels under the hull (", String(v.wheels), ")"))
-				add(v.engines > 0, "Engine")
-			}
-			if v.cannons + v.guns > 0 {
-				let ammo: Bool = isCreative || (v.cannons == 0 || inv.total(.mat(.gunpowder)) > 0) && (v.guns == 0 || inv.total(.ammo(.bullet)) > 0)
-				add(ammo, v.cannons > 0 ? "Gunpowder in your bag (cannon shells)" : "Bullets in your bag (machine gun)")
-				if v.rotors == 0 && v.wings == 0 && v.envelopes == 0 { hint = "Drive with the stick; aim and fire with the attack stick." }
-			}
-		}
-		if v.engines > 0 || v.jets > 0 || v.burners > 0 { add(v.fuel > 0.5 || isCreative, fuelLine(v)) }
-		var ready: Bool = true
-		for o in oks where !o { ready = false }
-		return VehicleCheck(title: vehicleKindName(v), lines: lines, oks: oks, ready: ready, hint: hint)
-	}
-
-	/// Is there a tail elevator well behind the centre of mass, and is the centre of mass ahead of the
-	/// wings' middle (so the plane noses down when slow instead of flipping onto its back)?
-	func tailCheck(_ v: Vehicle) -> (Bool, Bool) {
-		var wingX: Double = 0
-		var n: Int = 0
-		var tailX: Double = 0
-		var tn: Int = 0
-		for (c, t) in v.parts {
-			if t == .wing { wingX += Double(c.dx) + 0.5; n += 1 }
-			if t == .elevator { tailX += Double(c.dx) + 0.5; tn += 1 }
-		}
-		if n == 0 { return (tn > 0, true) }
-		wingX /= Double(n)
-		// the nose: the end the thrust is at, or failing that the end away from the tail
-		var front: Double = 1
-		if tn > 0 { tailX /= Double(tn); front = tailX < v.comX ? 1 : -1 }
-		let tailOK: Bool = tn > 0 && (tailX - v.comX) * front < -1.5
-		let balanced: Bool = (v.comX - wingX) * front > -0.6
-		return (tailOK, balanced)
-	}
-
-	/// The flight instruments shown while flying: speed, height, climb, lift against weight, the
-	/// rotor or burner, fuel, and a stall warning
-	func flightReadout(_ v: Vehicle) -> [String] {
-		var out: [String] = []
-		let alt: Int = Int((Double(WorldGen.sea) - v.b.y).rounded())
-		let climb: Double = -v.vy
-		out.append(joinText("SPD ", String(Int(v.airspeed.rounded())), "  ALT ", String(alt), "  ", climb >= 0 ? "▲" : "▼", String(format: "%.1f", abs(climb))))
-		let weight: Double = max(1, v.mass * gravityG)
-		let liftPct: Int = Int((v.liftNow / weight * 100).rounded())
-		var l2: String = joinText("LIFT ", String(liftPct), "%")
-		if v.rotors > 0 { l2 = joinText(l2, "  ROTOR ", String(Int((v.collective * 100).rounded())), "%") }
-		if v.burners > 0 && v.envelopes > 0 { l2 = joinText(l2, "  HEAT ", String(Int((v.heat * 100).rounded())), "%") }
-		if v.airProps + v.jets > 0 { l2 = joinText(l2, "  THR ", String(Int((abs(v.throttle) * 100).rounded())), "%") }
-		out.append(l2)
-		if v.engines + v.jets + v.burners > 0 && !isCreative { out.append(joinText("FUEL ", String(Int(v.fuel)), "/", String(Int(v.fuelCapacity)))) }
-		if v.stall { out.append("STALL!") }
-		return out
-	}
-
-	/// A line about the guns (reload) and the autopilot, while driving
-	func vehicleStatusLine(_ v: Vehicle) -> String? {
-		var parts: [String] = []
-		if v.ballasts > 0 { parts.append(joinText("BALLAST ", String(Int((v.ballast * 100).rounded())), "%")) }
-		if v.airBrakes > 0 && v.brakeOpen > 0.5 { parts.append("AIR BRAKES") }
-		if v.cannons > 0 {
-			var cd: Double = 0
-			for (c, t) in v.parts where t == .cannon { cd = max(cd, v.gunCD[c] ?? 0) }
-			parts.append(cd > 0.05 ? joinText("CANNON ", String(format: "%.1f", cd), "s") : "CANNON READY")
-		}
-		if v.autopilots > 0 {
-			let modes: [String] = ["AUTO OFF", "AUTO CRUISE", "AUTO ROUTE"]
-			var s: String = modes[max(0, min(2, v.auto))]
-			if v.auto == 2 { s = joinText(s, " ", String(v.routeAt + 1), "/", String(v.route.count)) }
-			else if !v.route.isEmpty { s = joinText(s, " · ", String(v.route.count), " PTS") }
-			parts.append(s)
-		}
-		return parts.isEmpty ? nil : parts.joined(separator: "  ")
-	}
-}
-
-// ===== p27_power =====
-
-// MARK: - Sparkworks: power and automation
-//
-// Power (measured in sparks) runs through power cable from generators to batteries and machines.
-// On/off pulses run separately through pulse wire, in two colours (amber and teal) so two circuits can
-// cross. Both are an overlay over the tiles, stored per chunk like background walls, so they are saved,
-// parked and reloaded with the chunk. Devices are ordinary tiles; their settings and charge live in
-// World.devs. Networks are worked out again only when wiring or devices change (World.powerRev).
-// Power is shared out four times a second. Pulses step twenty times a second from a queue of changes,
-// and every logic part adds at least one step of delay, so a loop can never run away within a frame
-// (one that flips too fast burns out for a moment instead).
-
-/// The overlay bits on a cell
-enum Wire {
-	static let power: UInt8 = 1
-	static let pulseA: UInt8 = 2
-	static let pulseB: UInt8 = 4
-	/// the bit for layer 0 (power), 1 (amber) or 2 (teal)
-	static func bit(_ layer: Int) -> UInt8 { return UInt8(1 << layer) }
-}
-
-/// What a device does on the networks
-enum PowerRole {
-	case none, generator, storage, conductor, meter, source, logic, sensor, machine, indicator
-}
-
-func powerRole(_ t: Tile) -> PowerRole {
-	switch t {
-	case .crankGen, .solarPanel, .fuelGen, .waterWheel, .emberDynamo, .windTurbine: return .generator
-	case .battery, .accumulator: return .storage
-	case .powerSwitch, .breaker: return .conductor
-	case .powerMeter: return .meter
-	case .lever, .pushButton, .pressurePlate: return .source
-	case .pulseTimer, .repeater, .inverter, .logicGate: return .logic
-	case .motionSensor, .daySensor, .weatherSensor, .itemSensor, .proximitySensor, .vehicleSensor: return .sensor
-	case .gateClosed, .gateOpen, .lampOff, .lampOn, .arcTrap, .autoDrill, .conveyor, .collector, .autoCrafter, .sumpPump, .exoStation, .signalPost: return .machine
-	case .signalLight: return .indicator
-	default: return t.isMod ? ModRuntime.shared.powerRoleOf(t).role : .none
-	}
-}
-
-/// The two forms of a device (a lamp lit or dark, a gate open or shut) are the same device
-func powerFamily(_ t: Tile) -> Tile {
-	switch t {
-	case .lampOn: return .lampOff
-	case .gateOpen: return .gateClosed
-	default:
-		// a mod lamp lit is the same device as unlit
-		if t.isMod && ModRuntime.shared.isAlt(t), let p = ModRuntime.shared.partner(t) { return p }
-		return t
-	}
-}
-
-/// Parts that point a way (their output side; inputs at the back or the sides)
-func powerDirectional(_ t: Tile) -> Bool {
-	switch t {
-	case .pulseTimer, .repeater, .inverter, .logicGate, .autoDrill, .conveyor, .autoCrafter: return true
-	default: return false
-	}
-}
-
-/// Plain tiles that follow a pulse on their cell without needing power: wooden doors open, storm
-/// shutters close, a storm siren sounds
-func pulseFollower(_ t: Tile) -> Bool {
-	return t == .doorClosed || t == .doorOpen || t == .shutterClosed || t == .shutterOpen || t == .stormSiren
-}
-
-/// Steps of 90 degrees: 0 right, 1 down, 2 left, 3 up
-let sideDX: [Int] = [1, 0, -1, 0]
-let sideDY: [Int] = [0, 1, 0, -1]
-
-/// A placed device: its settings and charge (saved), and what the simulation knows of it right now
-final class PowerDev {
-	let key: ChestKey
-	var tile: Tile
-	/// facing (the output side for parts that point a way)
-	var dir: Int = 0
-	/// a setting chosen in its panel (gate type, sensor mode, breaker rating and so on)
-	var mode: Int = 0
-	/// a number set in its panel (a delay, a period, a range)
-	var param: Double = 0
-	/// stored energy (batteries, a crank's flywheel) or fuel left in seconds (generators)
-	var charge: Double = 0
-	/// a lever or switch position, a breaker closed
-	var on: Bool = false
-	/// a second setting (a trap that hurts the player too, a breaker that has tripped)
-	var flag: Bool = false
-	/// an auto crafter's recipe
-	var item: Int = -1
-	// live state (not saved)
-	var pnet: Int = -1
-	/// pulse nets on its own cell (amber, teal)
-	var snets: [Int] = [-1, -1]
-	/// pulse nets at each side (right, down, left, up), amber then teal, for parts that point a way
-	var ports: [Int] = [-1, -1, -1, -1, -1, -1, -1, -1]
-	var out: Bool = false
-	var pend: [(Int, Bool)] = []
-	var powered: Bool = false
-	var want: Double = 0
-	var made: Double = 0
-	var timer: Double = 0
-	var flips: Int = 0
-	var flipT: Double = 0
-	var burnT: Double = 0
-	var lastSwap: Double = -10
-	var work: Double = 0
-	var enabled: Bool = true
-	/// index among the logic parts (for the evaluation queue)
-	var li: Int = -1
-
-	init(key: ChestKey, tile: Tile) {
-		self.key = key
-		self.tile = tile
-		switch tile {
-		case .pushButton: param = 1.0
-		case .pulseTimer: param = 1.0
-		case .repeater: param = 1
-		case .motionSensor, .proximitySensor: param = 5
-		case .vehicleSensor: param = 3
-		case .breaker: mode = 1; on = true
-		case .powerSwitch: on = true
-		case .autoCrafter: item = -1
-		default: break
-		}
-	}
-
-	var x: Int { return key.x }
-	var y: Int { return key.y }
-	var role: PowerRole { return powerRole(tile) }
-}
-
-struct PowerDevSave: Codable {
-	var d: Int
-	var x: Int
-	var y: Int
-	var t: Int
-	var dir: Int
-	var mode: Int
-	var param: Double
-	var charge: Double
-	var on: Bool
-	var flag: Bool
-	var item: Int
-}
-
-final class PowerNet {
-	var devs: [PowerDev] = []
-	var cells: Int = 0
-	/// last share-out: made, used, asked for, stored and room (sparks per second and sparks)
-	var made: Double = 0
-	var used: Double = 0
-	var asked: Double = 0
-	var stored: Double = 0
-	var cap: Double = 0
-	var short: Bool = false
-}
-
-final class PulseNet {
-	var sources: [PowerDev] = []
-	var readers: [PowerDev] = []
-	/// doors, shutters and sirens on its wire
-	var followers: [IntPair] = []
-	var cells: Int = 0
-	var on: Bool = false
-	var dirty: Bool = true
-}
-
-/// Everything the simulation works out from the wiring, rebuilt when the wiring changes
-final class PowerSim {
-	var builtRev: Int = -1
-	var builtDim: Int = -1
-	var pnets: [PowerNet] = []
-	var snets: [PulseNet] = []
-	/// net index of each wired cell, by layer and position
-	var cellNet: [Int: Int] = [:]
-	var devs: [PowerDev] = []
-	var logic: [PowerDev] = []
-	var polled: [PowerDev] = []
-	var machines: [PowerDev] = []
-	var conveyors: [PowerDev] = []
-	var queue: Set<Int> = []
-	var tickNo: Int = 0
-	var powerT: Double = 0
-	var pulseT: Double = 0
-	var machineT: Double = 0
-	/// tile swaps left this step (lamps, gates, doors), so a fast clock can't relight the world every frame
-	var swaps: Int = 0
-	var sirens: Set<IntPair> = []
-	/// devices that flipped too fast and burnt out (for a warning)
-	var burnNote: Double = 0
-	var rebuilds: Int = 0
-	/// after a rebuild every reader and follower is brought in line with its net once
-	var settle: Bool = false
-
-	static func cellKey(_ layer: Int, _ x: Int, _ y: Int) -> Int {
-		return (((x &+ (1 << 30)) << 12) | (y & 4095)) << 2 | layer
-	}
-}
-
-/// Fuel for generators: seconds of burning per item (the dynamo only takes ember)
-func fuelSeconds(_ it: Item, dynamo: Bool) -> Double {
-	if dynamo {
-		switch it {
-		case .mat(.emberBar): return 300
-		case .mat(.emberOre): return 70
-		default: return 0
-		}
-	}
-	switch it {
-	case .mat(.coal): return 60
-	case .block(.log), .block(.jungleLog), .block(.palmLog), .block(.birchLog): return 20
-	case .block(.planks): return 6
-	case .mat(.stick): return 2
-	default: return 0
-	}
-}
-
-/// How much a device makes or uses, its storage, and a breaker's limit
-enum PowerSpec {
-	static func capacity(_ t: Tile) -> Double {
-		switch t {
-		case .battery: return 600
-		case .accumulator: return 5000
-		case .crankGen: return 60
-		default: return modBattery(t) * 150
-		}
-	}
-	static func rate(_ t: Tile) -> Double {
-		switch t {
-		case .battery: return 15
-		case .accumulator: return 60
-		default: return modBattery(t) * 2.5
-		}
-	}
-	/// a mod battery's strength (0 for anything else)
-	static func modBattery(_ t: Tile) -> Double {
-		if !t.isMod || ModRuntime.shared.powerRoleOf(t) != .battery { return 0 }
-		return ModRuntime.shared.blockDef(t)?.powerAmt ?? 0
-	}
-	/// sparks per second while running
-	static func draw(_ t: Tile) -> Double {
-		switch t {
-		case .lampOff, .lampOn: return 1
-		case .gateClosed, .gateOpen: return 0.5
-		case .arcTrap: return 3
-		case .autoDrill: return 8
-		case .conveyor: return 1.5
-		case .collector: return 1
-		case .autoCrafter: return 5
-		case .sumpPump: return 4
-		case .exoStation: return 10
-		case .motionSensor, .daySensor, .weatherSensor, .itemSensor, .proximitySensor, .vehicleSensor: return 0.5
-		case .signalPost: return 0.5
-		default:
-			if t.isMod && ModRuntime.shared.powerRoleOf(t) == .lamp { return ModRuntime.shared.blockDef(t)?.powerAmt ?? 0 }
-			return 0
-		}
-	}
-	static let breakerLimits: [Double] = [10, 25, 50, 100, 250]
-	static let fuelRate: Double = 12
-	static let dynamoRate: Double = 40
-}
-
-// MARK: - Wires in the world
-
-extension World {
-	func wireAt(_ x: Int, _ y: Int) -> UInt8 {
-		if y < 0 || y >= H { return 0 }
-		let cx: Int = floorDiv(x, chunkW)
-		guard let c = chunk(cx), c.wireCount > 0 else { return 0 }
-		return c.wires[(x - cx * chunkW) * H + y]
-	}
-
-	/// Sets the wire bits on a cell; returns false if the cell is not loaded
-	@discardableResult
-	func setWire(_ x: Int, _ y: Int, _ bits: UInt8) -> Bool {
-		if y < 1 || y >= H - 1 { return false }
-		let cx: Int = floorDiv(x, chunkW)
-		guard let c = chunk(cx) else { return false }
-		if c.wires.isEmpty {
-			if bits == 0 { return true }
-			c.wires = [UInt8](repeating: 0, count: chunkW * H)
-		}
-		let i: Int = (x - cx * chunkW) * H + y
-		let old: UInt8 = c.wires[i]
-		if old == bits { return true }
-		if old == 0 { c.wireCount += 1 }
-		if bits == 0 { c.wireCount -= 1 }
-		c.wires[i] = bits
-		c.dirty = true
-		c.bumpRows(y - 1, y + 1)
-		powerRev &+= 1
-		return true
-	}
-
-	func powerKey(_ x: Int, _ y: Int) -> ChestKey { return ChestKey(d: dim.rawValue, x: x, y: y) }
-
-	func powerDev(_ x: Int, _ y: Int) -> PowerDev? { return devs[powerKey(x, y)] }
-
-	/// Keeps the device list in step with the tiles (called from set): a new device gets its default
-	/// settings, a removed one is forgotten, and switching between a device's two forms keeps it
-	func powerTileChanged(_ x: Int, _ y: Int, _ old: Tile, _ new: Tile) {
-		let k: ChestKey = powerKey(x, y)
-		if new.isPower {
-			if let d = devs[k], powerFamily(d.tile) == powerFamily(new) {
-				d.tile = new
+	func lootShip(_ s: PirateShip) {
+		if !s.crew.isEmpty {
+			var alive: Bool = false
+			for id in s.crew { for m in mobs { if m.id == id && m.hp > 0 { alive = true } } }
+			if alive {
+				say("Defeat the crew first!", 2.0)
 				return
 			}
-			devs[k] = PowerDev(key: k, tile: new)
-		} else if old.isPower {
-			devs[k] = nil
 		}
-		powerRev &+= 1
-	}
-}
-
-// MARK: - The simulation
-
-extension Game {
-	/// Called every frame
-	func updatePower(_ dt: Double) {
-		let sim: PowerSim = power
-		if world.devs.isEmpty && sim.devs.isEmpty { return }
-		if sim.builtRev != world.powerRev || sim.builtDim != world.dim.rawValue { rebuildPower() }
-		if sim.devs.isEmpty { return }
-		sim.powerT += dt
-		if sim.powerT >= 0.25 {
-			let step: Double = min(sim.powerT, 1.0)
-			sim.powerT = 0
-			powerTick(step)
-		}
-		sim.pulseT += dt
-		var n: Int = 0
-		while sim.pulseT >= 0.05 && n < 3 {
-			sim.pulseT -= 0.05
-			n += 1
-			pulseTick()
-		}
-		if sim.pulseT > 0.15 { sim.pulseT = 0 }
-		sim.machineT += dt
-		if sim.machineT >= 0.1 {
-			let step: Double = min(sim.machineT, 0.3)
-			sim.machineT = 0
-			machineTick(step)
-		}
-		if !sim.conveyors.isEmpty { runConveyors(dt) }
-		if sim.burnNote > 0 { sim.burnNote -= dt }
+		s.looted = true
+		var rng = RNG(UInt64(truncatingIfNeeded: s.id) &* 7919 &+ gen.seed)
+		giveItem(.mat(.goldBar), 3 + rng.int(6))
+		giveItem(.ammo(.bullet), 8 + rng.int(14))
+		giveItem(.mat(.gunpowder), 2 + rng.int(5))
+		if rng.double() < 0.35 { giveItem(.gun(.pistol), 1) }
+		if rng.double() < 0.5 { giveItem(.mat(.diamond), 1 + rng.int(3)) }
+		giveItem(.food(.cookedFish), 2 + rng.int(4))
+		say("You looted the pirate treasure!", 3.0)
+		spawnParticles(s.x - 2.5, s.deckY(Double(WorldGen.sea)) - 1, 0xF5D142, 20, 5.0, 0.9, 12)
 	}
 
-	/// Works out every network from the wiring and devices in loaded chunks
-	func rebuildPower() {
-		let sim: PowerSim = power
-		let w: World = world
-		sim.builtRev = w.powerRev
-		sim.builtDim = w.dim.rawValue
-		sim.rebuilds += 1
-		sim.pnets.removeAll()
-		sim.snets.removeAll()
-		sim.cellNet.removeAll(keepingCapacity: true)
-		sim.devs.removeAll()
-		sim.logic.removeAll()
-		sim.polled.removeAll()
-		sim.machines.removeAll()
-		sim.conveyors.removeAll()
-		sim.sirens.removeAll()
-		sim.queue.removeAll()
-		let dim: Int = w.dim.rawValue
-		var gone: [ChestKey] = []
-		for (k, d) in w.devs where k.d == dim {
-			if !w.isLoaded(k.x) { continue }
-			let t: Tile = w.tile(k.x, k.y)
-			if !t.isPower || powerFamily(t) != powerFamily(d.tile) { gone.append(k); continue }
-			d.tile = t
-			d.pnet = -1
-			d.snets = [-1, -1]
-			d.ports = [-1, -1, -1, -1, -1, -1, -1, -1]
-			sim.devs.append(d)
-		}
-		for k in gone { w.devs[k] = nil }
-		sim.devs.sort { $0.x != $1.x ? $0.x < $1.x : $0.y < $1.y }
-		// flood every wired cell into networks, layer by layer, in a fixed order
-		let cks: [Int] = w.chunks.keys.sorted()
-		for cx in cks {
-			guard let c = w.chunks[cx], c.wireCount > 0 else { continue }
-			let H: Int = c.H
-			for lx in 0..<chunkW {
-				let base: Int = lx * H
-				for y in 0..<H {
-					let b: UInt8 = c.wires[base + y]
-					if b == 0 { continue }
-					let x: Int = c.x0 + lx
-					for layer in 0..<3 where b & Wire.bit(layer) != 0 {
-						if sim.cellNet[PowerSim.cellKey(layer, x, y)] == nil && conducts(layer, x, y) { floodNet(layer, x, y) }
-					}
-				}
-			}
-		}
-		// hook the devices onto the networks
-		for d in sim.devs {
-			let role: PowerRole = d.role
-			if role == .generator || role == .storage || role == .meter || role == .sensor || role == .machine || role == .conductor {
-				if let p = sim.cellNet[PowerSim.cellKey(0, d.x, d.y)] {
-					d.pnet = p
-					sim.pnets[p].devs.append(d)
-				}
-			}
-			if role == .logic {
-				// inputs and the output are the cells around it; its own cell joins nothing
-				for side in 0..<4 {
-					let nx: Int = d.x + sideDX[side]
-					let ny: Int = d.y + sideDY[side]
-					for c in 0..<2 {
-						if let s = sim.cellNet[PowerSim.cellKey(c + 1, nx, ny)] {
-							d.ports[side * 2 + c] = s
-							if side == d.dir { sim.snets[s].sources.append(d) } else if isLogicInput(d, side) { sim.snets[s].readers.append(d) }
-						}
-					}
-				}
-				d.li = sim.logic.count
-				sim.logic.append(d)
-			} else {
-				for c in 0..<2 {
-					if let s = sim.cellNet[PowerSim.cellKey(c + 1, d.x, d.y)] {
-						d.snets[c] = s
-						if role == .source || role == .sensor { sim.snets[s].sources.append(d) } else { sim.snets[s].readers.append(d) }
-					}
-				}
-			}
-			if role == .sensor || d.tile == .pressurePlate || d.tile == .pushButton { sim.polled.append(d) }
-			if role == .machine || role == .conductor { sim.machines.append(d) }
-			if d.tile == .conveyor { sim.conveyors.append(d) }
-			if d.tile == .pushButton && d.timer <= 0 { d.out = false }
-			if d.tile == .lever { d.out = d.on }
-		}
-		// every pulse net starts dirty so its followers and readers settle on the wiring as it is now
-		for n in sim.snets { n.dirty = true }
-		for i in 0..<sim.logic.count { sim.queue.insert(i) }
-		sim.settle = true
-	}
+	// MARK: inventory operations (used by the UI)
 
-	/// Whether a layer passes through a cell: power stops at an open switch or a tripped breaker,
-	/// pulses stop at logic parts (their sides are separate inputs and an output)
-	func conducts(_ layer: Int, _ x: Int, _ y: Int) -> Bool {
-		let t: Tile = world.tile(x, y)
-		if layer == 0 {
-			if t == .powerSwitch || t == .breaker {
-				return world.powerDev(x, y)?.on ?? true
-			}
-			return true
-		}
-		return powerRole(t) != .logic
-	}
-
-	func floodNet(_ layer: Int, _ sx: Int, _ sy: Int) {
-		let sim: PowerSim = power
-		let id: Int
-		let pn: PowerNet? = layer == 0 ? PowerNet() : nil
-		let sn: PulseNet? = layer == 0 ? nil : PulseNet()
-		if let p = pn { id = sim.pnets.count; sim.pnets.append(p) } else { id = sim.snets.count; sim.snets.append(sn!) }
-		let bit: UInt8 = Wire.bit(layer)
-		var stack: [IntPair] = [IntPair(x: sx, y: sy)]
-		sim.cellNet[PowerSim.cellKey(layer, sx, sy)] = id
-		var n: Int = 0
-		while let c = stack.popLast() {
-			n += 1
-			if let s = sn {
-				let t: Tile = world.tile(c.x, c.y)
-				if pulseFollower(t) {
-					s.followers.append(c)
-					if t == .stormSiren { sim.sirens.insert(c) }
-				}
-			}
-			// a very long line still works, but stops growing past this many cells
-			if n > 20000 { continue }
-			for side in 0..<4 {
-				let nx: Int = c.x + sideDX[side]
-				let ny: Int = c.y + sideDY[side]
-				if world.wireAt(nx, ny) & bit == 0 { continue }
-				let k: Int = PowerSim.cellKey(layer, nx, ny)
-				if sim.cellNet[k] != nil { continue }
-				if !conducts(layer, nx, ny) { continue }
-				sim.cellNet[k] = id
-				stack.append(IntPair(x: nx, y: ny))
-			}
-		}
-		if let p = pn { p.cells = n } else { sn!.cells = n }
-	}
-
-	/// The sides a logic part reads: the back for a relay, inverter or timer; both sides for a gate
-	func isLogicInput(_ d: PowerDev, _ side: Int) -> Bool {
-		if d.tile == .logicGate { return side == (d.dir + 1) % 4 || side == (d.dir + 3) % 4 }
-		return side == (d.dir + 2) % 4
-	}
-
-	// MARK: power
-
-	/// Shares the power out on every network: generators first, batteries make up the difference or
-	/// take the surplus, fuel is only burnt for what is actually needed, and if there still isn't
-	/// enough the machines are served in a fixed order and the rest stop
-	func powerTick(_ dt: Double) {
-		let sim: PowerSim = power
-		for d in sim.devs where d.pnet < 0 {
-			// not on any power line
-			d.made = 0
-			if d.powered { d.powered = false; powerChanged(d) }
-			if d.tile == .crankGen { d.charge = max(0, d.charge - 6.0 * dt) }
-		}
-		for net in sim.pnets {
-			var made: Double = 0
-			var asked: Double = 0
-			var room: Double = 0
-			var avail: Double = 0
-			var stored: Double = 0
-			var cap: Double = 0
-			var burners: [PowerDev] = []
-			var loads: [PowerDev] = []
-			var stores: [PowerDev] = []
-			var breakers: [PowerDev] = []
-			for d in net.devs {
-				switch d.role {
-				case .generator:
-					if d.tile == .fuelGen || d.tile == .emberDynamo || d.tile == .windTurbine {
-						burners.append(d)
+	func tapSlot(_ i: Int) {
+		if let h = carry {
+			// place carried stack
+			if let s = inv.slots[i] {
+				if s.item == h.item && h.item.maxStack > 1 {
+					let room: Int = h.item.maxStack - s.count
+					let put: Int = min(room, h.count)
+					var ns: Stack = s
+					ns.count += put
+					inv.slots[i] = ns
+					if h.count - put > 0 {
+						var c: Stack = h
+						c.count = h.count - put
+						carry = c
 					} else {
-						let r: Double = generatorRate(d, dt)
-						d.made = r
-						made += r
+						carry = nil
 					}
-				case .storage:
-					stores.append(d)
-					let c: Double = PowerSpec.capacity(d.tile)
-					let r: Double = PowerSpec.rate(d.tile)
-					room += min(r, max(0, c - d.charge) / dt)
-					avail += min(r, d.charge / dt)
-					stored += d.charge
-					cap += c
-				case .conductor:
-					if d.tile == .breaker { breakers.append(d) }
-				case .machine, .sensor:
-					d.want = d.enabled ? PowerSpec.draw(d.tile) : 0
-					if d.want > 0 { loads.append(d) } else if d.powered {
-						d.powered = false
-						powerChanged(d)
-					}
-					asked += d.want
-				default:
-					break
-				}
-			}
-			// generators that burn fuel cover only what the others can't (and topping up batteries); a
-			// wind turbine gives from its own charge, which the wind keeps topping up (see the weather
-			// devices), so what isn't needed stays in it for its Doppler station and storm rod
-			var need: Double = max(0, asked + room - made)
-			for f in burners {
-				if f.tile == .windTurbine {
-					let k: String = deviceKey(DeviceSpot(x: f.x, y: f.y, t: .windTurbine))
-					let have: Double = weather.store[k] ?? 0
-					let r: Double = min(8.0, have / dt, need)
-					weather.store[k] = max(0, have - r * dt)
-					f.made = r
-					made += r
-					need -= r
-					continue
-				}
-				let top: Double = f.tile == .emberDynamo ? PowerSpec.dynamoRate : PowerSpec.fuelRate
-				if f.charge > 0 && need > 0.01 {
-					let r: Double = min(top, need)
-					f.charge = max(0, f.charge - dt * r / top)
-					f.made = r
-					made += r
-					need -= r
 				} else {
-					f.made = 0
+					inv.slots[i] = h
+					carry = s
 				}
-			}
-			var supply: Double = made + avail
-			var used: Double = 0
-			for d in loads {
-				let ok: Bool = supply + 1e-9 >= d.want
-				if ok {
-					supply -= d.want
-					used += d.want
-				}
-				if ok != d.powered {
-					d.powered = ok
-					powerChanged(d)
-				}
-			}
-			// what is left over charges the batteries; a shortfall drains them (the first ones first)
-			var flow: Double = made - used
-			for b in stores {
-				let c: Double = PowerSpec.capacity(b.tile)
-				let r: Double = PowerSpec.rate(b.tile)
-				if flow > 0 {
-					let take: Double = min(flow, r, max(0, c - b.charge) / dt)
-					b.charge += take * dt
-					flow -= take
-				} else if flow < 0 {
-					let give: Double = min(-flow, r, b.charge / dt)
-					b.charge = max(0, b.charge - give * dt)
-					flow += give
-				}
-			}
-			net.made = made
-			net.used = used
-			net.asked = asked
-			net.stored = stored
-			net.cap = cap
-			net.short = used + 1e-6 < asked
-			// a breaker opens when the machines on its line ask for more than its limit
-			for b in breakers where b.on {
-				let limit: Double = PowerSpec.breakerLimits[clampI(b.mode, 0, PowerSpec.breakerLimits.count - 1)]
-				if asked > limit {
-					b.on = false
-					b.flag = true
-					world.powerRev &+= 1
-					sfx(.zap, at: Double(b.x), 0.6)
-					spawnParticles(Double(b.x) + 0.5, Double(b.y) + 0.4, 0xFFE070, 8, 3.0, 0.4, 10)
-					floatText("Breaker tripped: overload", Double(b.x) + 0.5, Double(b.y) - 0.6, 0xFF8040)
-				}
-			}
-		}
-	}
-
-	/// Sparks per second a generator makes right now (fuel burners are worked out separately)
-	func generatorRate(_ d: PowerDev, _ dt: Double) -> Double {
-		switch d.tile {
-		case .crankGen:
-			// a flywheel spun up by hand: it gives its charge back steadily
-			let r: Double = min(6.0, d.charge / dt)
-			d.charge = max(0, d.charge - r * dt)
-			return r
-		case .solarPanel:
-			// needs open sky above (glass lets the light through)
-			if world.dim != .overworld || d.y >= world.skyTop(d.x) { return 0 }
-			let cloud: Double = settings.weatherOn ? weatherAt(Double(d.x) + 0.5, Double(d.y)).cloud : 0
-			return 4.0 * dayFactor * (1.0 - 0.75 * clampD(cloud, 0, 1))
-		case .waterWheel:
-			var n: Int = 0
-			for dy in -1...1 { for dx in -1...1 where !(dx == 0 && dy == 0) { if world.tile(d.x + dx, d.y + dy) == .water { n += 1 } } }
-			var r: Double = Double(n) * 0.75
-			if settings.weatherOn && world.dim == .overworld && d.y < world.rainTop(d.x) + 1 {
-				r += weatherAt(Double(d.x) + 0.5, Double(d.y)).precip * 1.5
-			}
-			return min(6.0, r)
-		default:
-			return modGeneratorRate(d)
-		}
-	}
-
-	/// Sparks a second a mod's generator makes: steadily, or by daylight under the open sky
-	func modGeneratorRate(_ d: PowerDev) -> Double {
-		if !d.tile.isMod { return 0 }
-		let role: ModPowerRole = ModRuntime.shared.powerRoleOf(d.tile)
-		let amt: Double = ModRuntime.shared.blockDef(d.tile)?.powerAmt ?? 0
-		if role == .generator { return amt }
-		if role != .solar { return 0 }
-		// open sky above it (the block itself may be the highest thing in its column)
-		if d.y > world.skyTop(d.x) { return 0 }
-		let cloud: Double = settings.weatherOn && world.dim == .overworld ? weatherAt(Double(d.x) + 0.5, Double(d.y)).cloud : 0
-		return amt * dayFactor * (1.0 - 0.75 * clampD(cloud, 0, 1))
-	}
-
-	/// A mod's powered lamp or signal light: its lit form while it has power (and its pulse wire is on,
-	/// if it has one), or while its pulse wire is on. False for anything else.
-	func modPowerLamp(_ d: PowerDev, _ pulse: Bool?) -> Bool {
-		if !d.tile.isMod { return false }
-		let role: ModPowerRole = ModRuntime.shared.powerRoleOf(d.tile)
-		if role != .lamp && role != .signal { return false }
-		d.enabled = pulse ?? true
-		let lit: Bool = role == .lamp ? (d.enabled && d.powered) : (pulse ?? false)
-		let rt: ModRuntime = ModRuntime.shared
-		guard let other = rt.partner(d.tile) else { return true }
-		if lit != rt.isAlt(d.tile) && clock - d.lastSwap > 0.12 && power.swaps > 0 {
-			power.swaps -= 1
-			d.lastSwap = clock
-			world.set(d.x, d.y, other)
-		}
-		return true
-	}
-
-	/// A machine just gained or lost power
-	func powerChanged(_ d: PowerDev) {
-		applyMachine(d)
-	}
-
-	// MARK: pulses
-
-	func pulseTick() {
-		let sim: PowerSim = power
-		sim.tickNo += 1
-		sim.swaps = 48
-		let now: Int = sim.tickNo
-		// sources that watch the world
-		for d in sim.polled {
-			if d.tile == .pushButton {
-				if d.timer > 0 {
-					d.timer -= 0.05
-					if d.timer <= 0 { setOut(d, false) }
-				}
-				continue
-			}
-			if d.tile == .pressurePlate {
-				if (now &+ d.x) % 2 == 0 { setOut(d, plateDown(d)) }
-				continue
-			}
-			// sensors look four times a second, staggered, and only with power
-			if (now &+ d.x &+ d.y) % 5 != 0 { continue }
-			setOut(d, d.powered && sensorReads(d))
-		}
-		// logic outputs whose delay has run out
-		for d in sim.logic {
-			if d.burnT > 0 {
-				d.burnT -= 0.05
-				if d.burnT <= 0 { d.burnT = 0; sim.queue.insert(d.li) }
-				continue
-			}
-			if d.tile == .pulseTimer && d.mode == 0 { clockStep(d) }
-			while let p = d.pend.first, p.0 <= now {
-				d.pend.removeFirst()
-				setOut(d, p.1)
-			}
-		}
-		// nets whose drivers changed
-		var changed: [PulseNet] = []
-		for n in sim.snets where n.dirty {
-			n.dirty = false
-			var on: Bool = false
-			for s in n.sources where s.out && s.burnT <= 0 { on = true; break }
-			if on != n.on || sim.settle {
-				n.on = on
-				changed.append(n)
-			}
-		}
-		sim.settle = false
-		for n in changed {
-			for r in n.readers {
-				if r.role == .logic {
-					if r.li >= 0 { sim.queue.insert(r.li) }
-				} else {
-					controlChanged(r)
-				}
-			}
-			for c in n.followers { followPulse(c, n.on) }
-		}
-		// logic parts whose inputs changed: work out the new output, due after its delay
-		if !sim.queue.isEmpty {
-			let list: [Int] = sim.queue.sorted()
-			sim.queue.removeAll()
-			var budget: Int = 3000
-			for i in list {
-				if i >= sim.logic.count { continue }
-				budget -= 1
-				if budget < 0 { sim.queue.insert(i); continue }
-				evalLogic(sim.logic[i], now)
-			}
-		}
-	}
-
-	/// Whether any pulse net on a device's own cell is on (a lamp, gate or machine's control)
-	func pulseHere(_ d: PowerDev) -> Bool? {
-		var wired: Bool = false
-		var on: Bool = false
-		for c in 0..<2 where d.snets[c] >= 0 {
-			wired = true
-			if power.snets[d.snets[c]].on { on = true }
-		}
-		return wired ? on : nil
-	}
-
-	/// Reads a logic part's input on one side (either colour)
-	func portOn(_ d: PowerDev, _ side: Int) -> Bool? {
-		var wired: Bool = false
-		var on: Bool = false
-		for c in 0..<2 {
-			let s: Int = d.ports[side * 2 + c]
-			if s >= 0 {
-				wired = true
-				if power.snets[s].on { on = true }
-			}
-		}
-		return wired ? on : nil
-	}
-
-	func evalLogic(_ d: PowerDev, _ now: Int) {
-		if d.burnT > 0 { return }
-		let back: Int = (d.dir + 2) % 4
-		var target: Bool = d.out
-		var delay: Int = 1
-		switch d.tile {
-		case .inverter:
-			target = !(portOn(d, back) ?? false)
-		case .repeater:
-			target = portOn(d, back) ?? false
-			delay = clampI(Int(d.param.rounded()), 1, 4)
-		case .logicGate:
-			let a: Bool = portOn(d, (d.dir + 1) % 4) ?? false
-			let b: Bool = portOn(d, (d.dir + 3) % 4) ?? false
-			switch d.mode {
-			case 0: target = a && b
-			case 1: target = a || b
-			case 2: target = a != b
-			case 3: target = !(a && b)
-			default: target = !(a || b)
-			}
-		case .pulseTimer:
-			if d.mode == 1 {
-				// delay: the output repeats the input's changes after the set time
-				target = portOn(d, back) ?? false
-				delay = max(1, Int((d.param / 0.05).rounded()))
 			} else {
-				// clock: an input wired to the back switches it on and off
-				return
+				inv.slots[i] = h
+				carry = nil
 			}
-		default:
-			return
-		}
-		let last: Bool = d.pend.last?.1 ?? d.out
-		if target == last { return }
-		if d.pend.count >= 16 { d.pend.removeFirst() }
-		d.pend.append((now + delay, target))
-	}
-
-	/// A clock timer: on for half its period, off for the other half, while enabled
-	func clockStep(_ d: PowerDev) {
-		let enabled: Bool = portOn(d, (d.dir + 2) % 4) ?? true
-		if !enabled {
-			d.timer = 0
-			if d.out { setOut(d, false) }
-			return
-		}
-		d.timer += 0.05
-		let half: Double = max(0.1, d.param * 0.5)
-		if d.timer >= half - 1e-9 {
-			d.timer = 0
-			setOut(d, !d.out)
-		}
-	}
-
-	/// Changes what a device sends out, marking the nets it drives. A part that flips more than about
-	/// twenty-five times a second (a loop with no delay worth the name) burns out for three seconds.
-	func setOut(_ d: PowerDev, _ v: Bool) {
-		if d.out == v { return }
-		let sim: PowerSim = power
-		if clock - d.flipT > 1.0 {
-			d.flipT = clock
-			d.flips = 0
-		}
-		d.flips += 1
-		if d.flips > 25 {
-			d.burnT = 3.0
-			d.out = false
-			d.pend.removeAll()
-			if sim.burnNote <= 0 {
-				sim.burnNote = 4.0
-				floatText("Circuit overloaded: flipping too fast", Double(d.x) + 0.5, Double(d.y) - 0.6, 0xFF8040)
-				spawnParticles(Double(d.x) + 0.5, Double(d.y) + 0.3, 0x8A8A8A, 6, 1.5, 0.8, -4)
-			}
-		} else {
-			d.out = v
-		}
-		if d.role == .logic {
-			for c in 0..<2 {
-				let s: Int = d.ports[d.dir * 2 + c]
-				if s >= 0 { sim.snets[s].dirty = true }
-			}
-		} else {
-			for c in 0..<2 where d.snets[c] >= 0 { sim.snets[d.snets[c]].dirty = true }
-		}
-	}
-
-	/// Something stands on a pressure plate: anyone, only the player, or only creatures
-	func plateDown(_ d: PowerDev) -> Bool {
-		let x0: Double = Double(d.x) + 0.1
-		let x1: Double = Double(d.x) + 0.9
-		let y0: Double = Double(d.y) + 0.3
-		let y1: Double = Double(d.y) + 1.05
-		if d.mode != 2 && !dead && pb.right > x0 && pb.left < x1 && pb.y > y0 && pb.y < y1 + 0.1 { return true }
-		if d.mode == 1 { return false }
-		for m in mobsNear(x0 - 2, x1 + 2) where m.hp > 0 {
-			if m.b.right > x0 && m.b.left < x1 && m.b.y > y0 && m.b.y < y1 + 0.1 { return true }
-		}
-		return false
-	}
-
-	/// What a sensor sees (it only reports with power)
-	func sensorReads(_ d: PowerDev) -> Bool {
-		let cx: Double = Double(d.x) + 0.5
-		let cy: Double = Double(d.y) + 0.5
-		switch d.tile {
-		case .daySensor:
-			let day: Bool = world.dim == .overworld && dayFactor > 0.5
-			return d.mode == 0 ? day : !day
-		case .weatherSensor:
-			if !settings.weatherOn || world.dim != .overworld { return false }
-			let L: LocalWeather = weatherAt(cx, cy)
-			switch d.mode {
-			case 0: return L.precip > 0.12
-			case 1: return L.thunder > 0.3 || L.hail > 0.1
-			case 2: return abs(L.wind) > 10
-			default: return sirenWorthy() || L.tornado > 0.05 || L.hurricane > 0.05
-			}
-		case .vehicleSensor:
-			return vehicleNearSensor(cx, cy, clampD(d.param, 1, 8), d.mode)
-		case .motionSensor, .proximitySensor:
-			// motion: 0 anything moving, 1 creatures only, 2 the player only
-			// proximity: 0 the player, 1 hostile creatures, 2 any creature, 3 anyone
-			let r: Double = clampD(d.param, 2, 12)
-			let moving: Bool = d.tile == .motionSensor
-			let player: Bool = moving ? d.mode != 1 : (d.mode == 0 || d.mode == 3)
-			let creatures: Bool = moving ? d.mode != 2 : d.mode != 0
-			let hostileOnly: Bool = !moving && d.mode == 1
-			if player && !dead {
-				let dx: Double = pb.x - cx
-				let dy: Double = pb.cy - cy
-				if dx * dx + dy * dy <= r * r && (!moving || abs(pb.vx) > 0.6 || abs(pb.vy) > 0.6) { return true }
-			}
-			if !creatures { return false }
-			for m in mobsNear(cx - r, cx + r) where m.hp > 0 && !m.removed {
-				let dx: Double = m.b.x - cx
-				let dy: Double = m.b.cy - cy
-				if dx * dx + dy * dy > r * r { continue }
-				if moving && abs(m.b.vx) < 0.6 && abs(m.b.vy) < 0.6 { continue }
-				if hostileOnly && !(m.def.hostile && !m.tame) { continue }
-				return true
-			}
-			return false
-		case .itemSensor:
-			var n: Int = 0
-			var full: Bool = false
-			for side in 0..<4 {
-				let nx: Int = d.x + sideDX[side]
-				let ny: Int = d.y + sideDY[side]
-				if world.tile(nx, ny) == .chest {
-					let items: [Stack] = world.chestItems(nx, ny)
-					for s in items { n += s.count }
-					if items.count >= 27 && items.allSatisfy({ $0.count >= $0.item.maxStack }) { full = true }
-				}
-			}
-			for dr in drops where abs(dr.x - cx) < 0.7 && abs(dr.y - cy) < 0.8 { n += dr.stack.count }
-			switch d.mode {
-			case 0: return n >= 1
-			case 1: return n >= 16
-			case 2: return n >= 64
-			default: return full
-			}
-		default:
-			return false
-		}
-	}
-
-	/// The pulse on a machine's cell changed
-	func controlChanged(_ d: PowerDev) {
-		applyMachine(d)
-	}
-
-	/// Brings a machine, switch or light in line with its power and its pulse. Lamps and gates change
-	/// their tile; a few such changes are allowed per step, the rest wait for the next one.
-	func applyMachine(_ d: PowerDev) {
-		let sim: PowerSim = power
-		let pulse: Bool? = pulseHere(d)
-		switch d.tile {
-		case .powerSwitch:
-			if let p = pulse, p != d.on {
-				d.on = p
-				world.powerRev &+= 1
-			}
-			return
-		case .lampOff, .lampOn:
-			d.enabled = pulse ?? true
-			let lit: Bool = d.enabled && d.powered
-			let want: Tile = lit ? .lampOn : .lampOff
-			if d.tile != want && clock - d.lastSwap > 0.12 && sim.swaps > 0 {
-				sim.swaps -= 1
-				d.lastSwap = clock
-				world.set(d.x, d.y, want)
-			}
-		case .gateClosed, .gateOpen:
-			if let p = pulse {
-				d.enabled = true
-				d.on = p
-			}
-			// a powered gate needs power to move; with no pulse wire, its own setting (tap it) decides
-			let open: Bool = d.on && d.powered
-			let want: Tile = open ? .gateOpen : .gateClosed
-			if d.tile != want && clock - d.lastSwap > 0.12 && sim.swaps > 0 {
-				if want == .gateClosed && doorBlocked(d.x, d.y, d.y) { return }
-				sim.swaps -= 1
-				d.lastSwap = clock
-				world.set(d.x, d.y, want)
-				sfx(.door, at: Double(d.x), 0.4)
-			}
-		default:
-			if modPowerLamp(d, pulse) { return }
-			// a machine runs while its pulse wire is on (or always, with none); a sensor's own cell carries
-			// its own output, so sensors are never switched by it
-			if d.role == .machine || d.role == .indicator { d.enabled = pulse ?? true }
-		}
-	}
-
-	/// A door, shutter or siren on a pulse wire
-	func followPulse(_ c: IntPair, _ on: Bool) {
-		let t: Tile = world.tile(c.x, c.y)
-		let sim: PowerSim = power
-		if sim.swaps <= 0 { return }
-		switch t {
-		case .doorClosed, .doorOpen:
-			let open: Bool = t == .doorOpen
-			if open != on {
-				sim.swaps -= 1
-				setDoor(c.x, c.y, open: on)
-			}
-		case .shutterClosed, .shutterOpen:
-			let closed: Bool = t == .shutterClosed
-			if closed != on {
-				sim.swaps -= 1
-				world.set(c.x, c.y, on ? .shutterClosed : .shutterOpen)
-			}
-		default:
-			break
-		}
-	}
-
-	/// Whether a pulse is on at a cell (sirens ask this)
-	func pulseOnAt(_ x: Int, _ y: Int) -> Bool {
-		let sim: PowerSim = power
-		for layer in 1...2 {
-			if let s = sim.cellNet[PowerSim.cellKey(layer, x, y)], s < sim.snets.count, sim.snets[s].on { return true }
-		}
-		return false
-	}
-
-	// MARK: machines
-
-	/// Machines at work (ten times a second): traps, drills, collectors, crafters and pumps
-	func machineTick(_ dt: Double) {
-		let sim: PowerSim = power
-		var posts: [Bool] = [Bool](repeating: false, count: Radio.channels)
-		for d in sim.machines {
-			// a signal post sends its channel while it runs
-			if d.tile == .signalPost {
-				applyMachine(d)
-				if d.enabled && d.powered { posts[clampI(d.mode, 0, Radio.channels - 1)] = true }
-				continue
-			}
-			// a lamp or gate that was held back by the limit on tile changes catches up
-			if d.tile == .lampOff || d.tile == .lampOn || d.tile == .gateClosed || d.tile == .gateOpen || d.tile.isMod { applyMachine(d) }
-			let running: Bool = d.enabled && d.powered
-			if !running {
-				d.work = 0
-				continue
-			}
-			switch d.tile {
-			case .arcTrap: runArcTrap(d, dt)
-			case .autoDrill: runDrill(d, dt)
-			case .exoStation: runSuitDock(d, dt)
-			case .collector: runCollector(d, dt)
-			case .autoCrafter: runCrafter(d, dt)
-			case .sumpPump: runPump(d, dt)
-			default: break
-			}
-		}
-		postChannels = posts
-	}
-
-	/// An arc trap zaps whatever stands on it, once a second (the player only if set to)
-	func runArcTrap(_ d: PowerDev, _ dt: Double) {
-		d.work -= dt
-		if d.work > 0 { return }
-		let x0: Double = Double(d.x) + 0.05
-		let x1: Double = Double(d.x) + 0.95
-		let y0: Double = Double(d.y) - 2.0
-		let y1: Double = Double(d.y) + 0.05
-		var hit: Bool = false
-		var info = DamageInfo(amount: 7, type: .shock, source: .environment)
-		info.knock = 3.0
-		info.originX = Double(d.x) + 0.5
-		info.key = d.key.hashValue
-		info.cooldown = 0.9
-		for m in mobsNear(x0 - 2, x1 + 2) where m.hp > 0 && !m.tame {
-			if m.b.right > x0 && m.b.left < x1 && m.b.y > y0 && m.b.y <= y1 + 0.1 {
-				if applyMobDamage(m, info) { hit = true }
-			}
-		}
-		if d.flag && !dead && pb.right > x0 && pb.left < x1 && pb.y > y0 && pb.y <= y1 + 0.1 {
-			if hurtPlayer(info) { hit = true }
-		}
-		if hit {
-			d.work = 1.0
-			sfx(.zap, at: Double(d.x), 0.5)
-			spawnParticles(Double(d.x) + 0.5, Double(d.y) - 0.3, 0x8AF0E8, 8, 4.0, 0.25, 0)
-			addLightFlash(Double(d.x) + 0.5, Double(d.y) - 0.5, peak: 9, dur: 0.25, radius: 1.6, color: 0x8AF0E8)
-		}
-	}
-
-	/// An auto drill bores out the block it faces, as fast as the block's hardness allows. It digs what
-	/// an iron pickaxe could, and what it breaks drops as if mined by hand.
-	func runDrill(_ d: PowerDev, _ dt: Double) {
-		let tx: Int = d.x + sideDX[d.dir]
-		let ty: Int = d.y + sideDY[d.dir]
-		let t: Tile = world.tile(tx, ty)
-		if t == .air || t.liquid || t.hardness >= 50 || t.def.tier > 3 || t == .chest || t.isPower || t == .portalFrame || t == .portalOn || t == .portalOff || t == .bedrock {
-			d.work = 0
-			return
-		}
-		d.work += dt
-		let need: Double = 0.6 + t.hardness * 0.9
-		if Int(d.work * 6.0) != Int((d.work - dt) * 6.0) {
-			spawnParticles(Double(tx) + 0.5, Double(ty) + 0.5, t.def.colors.first ?? 0x888888, 1, 2.0, 0.3, 10)
-		}
-		if d.work >= need {
-			d.work = 0
-			breakTile(tx, ty, false)
-			sfx(.digStone, at: Double(tx), 0.4)
-		}
-	}
-
-	/// An item collector draws loose items within two blocks into a chest beside it, as far as they fit
-	func runCollector(_ d: PowerDev, _ dt: Double) {
-		d.work -= dt
-		if d.work > 0 { return }
-		d.work = 0.25
-		var chest: IntPair? = nil
-		for side in 0..<4 where world.tile(d.x + sideDX[side], d.y + sideDY[side]) == .chest {
-			chest = IntPair(x: d.x + sideDX[side], y: d.y + sideDY[side])
-			break
-		}
-		guard let c = chest else { return }
-		let cx: Double = Double(d.x) + 0.5
-		let cy: Double = Double(d.y) + 0.5
-		var items: [Stack] = world.chestItems(c.x, c.y)
-		var changed: Bool = false
-		var i: Int = 0
-		while i < drops.count {
-			let dr: DropItem = drops[i]
-			if abs(dr.x - cx) > 2.0 || abs(dr.y - cy) > 2.0 || dr.age < 0.3 { i += 1; continue }
-			let left: Int = chestAdd(&items, dr.stack)
-			if left == dr.stack.count { i += 1; continue }
-			changed = true
-			spawnParticles(dr.x, dr.y, 0xE8E0C0, 2, 1.5, 0.2, 0)
-			if left == 0 {
-				drops.remove(at: i)
-			} else {
-				drops[i].stack.count = left
-				i += 1
-			}
-		}
-		if changed { world.setChestItems(c.x, c.y, items) }
-	}
-
-	/// An auto crafter makes its chosen recipe every two seconds from the chest behind it into the chest
-	/// in front of it, but only when every ingredient is there and the result fits
-	func runCrafter(_ d: PowerDev, _ dt: Double) {
-		d.work += dt
-		if d.work < 2.0 { return }
-		d.work = 0
-		if d.item < 0 || d.item >= RecipeBook.all.count { return }
-		let r: Recipe = RecipeBook.all[d.item]
-		if !crafterCan(r.station) { return }
-		let side: Int = d.dir == 2 ? 2 : 0
-		let ix: Int = d.x - sideDX[side]
-		let ox: Int = d.x + sideDX[side]
-		if world.tile(ix, d.y) != .chest || world.tile(ox, d.y) != .chest { return }
-		var input: [Stack] = world.chestItems(ix, d.y)
-		var output: [Stack] = world.chestItems(ox, d.y)
-		for c in r.cost where chestCount(input, c.item) < c.n { return }
-		var trial: [Stack] = output
-		if chestAdd(&trial, Stack(item: r.out, count: r.outCount)) > 0 { return }
-		for c in r.cost { chestTake(&input, c.item, c.n) }
-		_ = chestAdd(&output, Stack(item: r.out, count: r.outCount))
-		world.setChestItems(ix, d.y, input)
-		world.setChestItems(ox, d.y, output)
-		sfx(.craft, at: Double(d.x), 0.4)
-		spawnParticles(Double(d.x) + 0.5, Double(d.y) + 0.2, 0xC8B060, 4, 2.0, 0.3, 6)
-	}
-
-	/// The stations an auto crafter stands in for: hand work, the workbench, the anvil and the
-	/// tinker's bench (not the furnace, campfire or Rift Forge, which need heat or the Umbral fire)
-	func crafterCan(_ s: Station) -> Bool {
-		return s == .hand || s == .bench || s == .anvil || s == .tinker
-	}
-
-	/// A sump pump drains the nearest water within four blocks, a block at a time, into a rain barrel
-	/// or cistern beside it if there is one
-	func runPump(_ d: PowerDev, _ dt: Double) {
-		d.work += dt
-		if d.work < 0.4 { return }
-		d.work = 0
-		// a block's worth of water a stroke, from the nearest cells first (the water flows, so a
-		// part-full cell counts by what it holds)
-		var cells: [(Int, IntPair)] = []
-		for dy in -4...4 {
-			for dx in -4...4 {
-				let x: Int = d.x + dx
-				let y: Int = d.y + dy
-				if world.tile(x, y) != .water { continue }
-				cells.append((abs(dx) + abs(dy), IntPair(x: x, y: y)))
-			}
-		}
-		if cells.isEmpty { return }
-		cells.sort { $0.0 < $1.0 || ($0.0 == $1.0 && $0.1.y < $1.1.y) }
-		var want: Int = 255
-		for c in cells where want > 0 {
-			let have: Int = world.liquidLevel(c.1.x, c.1.y)
-			let take: Int = min(have, want)
-			world.setLiquidLevel(c.1.x, c.1.y, .water, have - take)
-			want -= take
-		}
-		let w: IntPair = cells[0].1
-		spawnParticles(Double(w.x) + 0.5, Double(w.y) + 0.5, 0x3B7BE0, 3, 1.5, 0.3, 8)
-		for side in 0..<4 {
-			let nx: Int = d.x + sideDX[side]
-			let ny: Int = d.y + sideDY[side]
-			let t: Tile = world.tile(nx, ny)
-			if t == .rainBarrel || t == .rainCistern {
-				let k: String = deviceKey(DeviceSpot(x: nx, y: ny, t: t))
-				let cap: Double = t == .rainBarrel ? 8 : 32
-				weather.store[k] = min(cap, (weather.store[k] ?? 0) + 1)
-				break
-			}
-		}
-	}
-
-	/// Running conveyor belts carry what lies on them (and walk anyone standing on them along)
-	func runConveyors(_ dt: Double) {
-		let sim: PowerSim = power
-		var belts: [Int: Int] = [:]
-		for d in sim.conveyors where d.enabled && d.powered {
-			belts[PowerSim.cellKey(0, d.x, d.y)] = d.dir == 2 ? -1 : 1
-		}
-		if belts.isEmpty { return }
-		let speed: Double = 2.4
-		for i in 0..<drops.count {
-			let dr: DropItem = drops[i]
-			let k: Int = PowerSim.cellKey(0, Int(floor(dr.x)), Int(floor(dr.y + 0.1)))
-			if let s = belts[k] {
-				drops[i].x += Double(s) * speed * dt
-				drops[i].vx = 0
-			}
-		}
-		if !dead && inVehicle == nil && pb.onGround {
-			let k: Int = PowerSim.cellKey(0, Int(floor(pb.x)), Int(floor(pb.y + 0.1)))
-			if let s = belts[k] { pb.x += Double(s) * speed * 0.8 * dt }
-		}
-		for m in mobs where m.hp > 0 && m.b.onGround && !m.def.flying {
-			let k: Int = PowerSim.cellKey(0, Int(floor(m.b.x)), Int(floor(m.b.y + 0.1)))
-			if let s = belts[k] { m.b.x += Double(s) * speed * 0.8 * dt }
-		}
-	}
-
-	/// The devices' settings and charge for the save (wiring is saved with each chunk)
-	var powerDebugLine: String {
-		let sim: PowerSim = power
-		var short: Int = 0
-		for n in sim.pnets where n.short { short += 1 }
-		var on: Int = 0
-		for n in sim.snets where n.on { on += 1 }
-		return joinText(String(sim.devs.count), " devices live (", String(world.devs.count), " placed) · ", String(sim.pnets.count), " power lines (", String(short), " short) · ", String(sim.snets.count), " pulse lines (", String(on), " on) · rebuilt ", String(sim.rebuilds), "x")
-	}
-
-	/// Debug: one of every Sparkworks part, and plenty of wire
-	func debugPowerKit() {
-		let parts: [Tile] = [.crankGen, .solarPanel, .fuelGen, .waterWheel, .emberDynamo, .battery, .accumulator, .powerSwitch, .breaker, .powerMeter,
-							 .lever, .pushButton, .pressurePlate, .pulseTimer, .repeater, .inverter, .logicGate, .motionSensor, .daySensor, .weatherSensor,
-							 .itemSensor, .proximitySensor, .gateClosed, .lampOff, .arcTrap, .autoDrill, .conveyor, .collector, .autoCrafter, .sumpPump, .signalLight,
-							 .signalPost, .vehicleSensor]
-		for g in [Gadget.powerCable, .pulseWire, .pulseWireB] { giveItem(.gadget(g), 250) }
-		giveItem(.gadget(.wireSnips), 1)
-		giveItem(.gadget(.probe), 1)
-		for t in parts { giveItem(.block(t), 8) }
-		say("Power kit: every Sparkworks part, wire, snips and a probe.", 2.5)
-		bumpHUD()
-	}
-
-	func debugChargeAll() {
-		for (_, d) in world.devs {
-			let c: Double = PowerSpec.capacity(d.tile)
-			if c > 0 { d.charge = c }
-			if d.tile == .fuelGen || d.tile == .emberDynamo { d.charge = 3600 }
-		}
-		say("Batteries charged, generators fuelled.", 1.5)
-	}
-
-	func powerSave() -> [PowerDevSave]? {
-		if world.devs.isEmpty { return nil }
-		var out: [PowerDevSave] = []
-		for (k, d) in world.devs {
-			out.append(PowerDevSave(d: k.d, x: k.x, y: k.y, t: Int(d.tile.rawValue), dir: d.dir, mode: d.mode, param: d.param, charge: d.charge, on: d.on, flag: d.flag, item: d.item))
-		}
-		out.sort { $0.d != $1.d ? $0.d < $1.d : ($0.x != $1.x ? $0.x < $1.x : $0.y < $1.y) }
-		return out
-	}
-
-	// MARK: chests as machine storage (27 stacks, stacked up to each item's limit)
-
-	func chestCount(_ items: [Stack], _ it: Item) -> Int {
-		var n: Int = 0
-		for s in items where s.item == it { n += s.count }
-		return n
-	}
-
-	/// Adds a stack to a chest's contents; returns how many did not fit
-	func chestAdd(_ items: inout [Stack], _ st: Stack) -> Int {
-		var left: Int = st.count
-		let ms: Int = st.item.maxStack
-		if ms > 1 {
-			for i in 0..<items.count where left > 0 && items[i].item == st.item && items[i].extra == st.extra && items[i].count < ms {
-				let put: Int = min(ms - items[i].count, left)
-				items[i].count += put
-				left -= put
-			}
-		}
-		while left > 0 && items.count < 27 {
-			let put: Int = min(ms, left)
-			items.append(Stack(item: st.item, count: put, extra: st.extra))
-			left -= put
-		}
-		return left
-	}
-
-	func chestTake(_ items: inout [Stack], _ it: Item, _ n: Int) {
-		var left: Int = n
-		var i: Int = items.count - 1
-		while i >= 0 && left > 0 {
-			if items[i].item == it {
-				let take: Int = min(items[i].count, left)
-				items[i].count -= take
-				left -= take
-				if items[i].count <= 0 { items.remove(at: i) }
-			}
-			i -= 1
-		}
-	}
-}
-
-// MARK: - Sparkworks: wiring by touch, the probe, tapping devices
-
-/// The network the probe last looked at, lit up on screen for a few seconds
-struct PowerInspect {
-	var layer: Int
-	var cells: [IntPair]
-	var t: Double
-}
-
-struct PanelLine {
-	var text: String
-	var color: UInt32
-}
-
-extension Game {
-	/// A wiring tool or the probe is in hand (wiring is drawn in full)
-	var holdingWiringTool: Bool {
-		if case .gadget(let g)? = heldItem { return g.wiring || g == .probe }
-		return false
-	}
-
-	/// A line on the HUD while a wiring tool is in hand
-	var wiringHint: String? {
-		guard case .gadget(let g)? = heldItem else { return nil }
-		switch g {
-		case .powerCable: return "Drag to lay power cable through generators, batteries and machines"
-		case .pulseWire, .pulseWireB: return "Drag to lay pulse wire from switches and sensors to what they control"
-		case .wireSnips: return "Drag over wire to take it back up"
-		case .probe: return "Tap a device to set it up, or a wire to see its network"
-		default: return nil
-		}
-	}
-
-	var holdingWireSpool: Bool {
-		if case .gadget(let g)? = heldItem { return g.wiring }
-		return false
-	}
-
-	/// Dragging with a spool lays wire cell by cell (a fast drag leaves no gaps); snips take it back up
-	func useWiring(_ g: Gadget, _ pressed: Bool) {
-		let tx: Int = Int(floor(aimX))
-		let ty: Int = Int(floor(aimY))
-		let here: IntPair = IntPair(x: tx, y: ty)
-		guard let last = wireLast, !pressed else {
-			wireLast = here
-			_ = wireCell(g, tx, ty)
-			return
-		}
-		if last == here { return }
-		var x: Int = last.x
-		var y: Int = last.y
-		var n: Int = 0
-		while (x != tx || y != ty) && n < 64 {
-			// step along whichever way is further to go, so a diagonal drag makes a staircase
-			if abs(tx - x) >= abs(ty - y) { x += tx > x ? 1 : -1 } else { y += ty > y ? 1 : -1 }
-			n += 1
-			if !wireCell(g, x, y) { break }
-		}
-		wireLast = IntPair(x: x, y: y)
-	}
-
-	/// Lays (or with snips, removes) wire on one cell; false stops the drag (out of reach or of wire)
-	func wireCell(_ g: Gadget, _ x: Int, _ y: Int) -> Bool {
-		let dx: Double = Double(x) + 0.5 - pb.x
-		let dy: Double = Double(y) + 0.5 - (pb.y - pb.h * 0.6)
-		let r: Double = reachDistance() + 2.5
-		if dx * dx + dy * dy > r * r || !world.isLoaded(x) { return false }
-		let cur: UInt8 = world.wireAt(x, y)
-		if g == .wireSnips {
-			if cur == 0 { return true }
-			if !isCreative {
-				let back: [Gadget] = [.powerCable, .pulseWire, .pulseWireB]
-				for layer in 0..<3 where cur & Wire.bit(layer) != 0 { giveItem(.gadget(back[layer]), 1) }
-			}
-			world.setWire(x, y, 0)
-			spawnParticles(Double(x) + 0.5, Double(y) + 0.5, 0xD2793A, 2, 1.5, 0.25, 10)
-			wireSound()
-			return true
-		}
-		let bit: UInt8 = Wire.bit(g.wireLayer)
-		if cur & bit != 0 { return true }
-		// a logic part's own cell takes no pulse wire: its sides are its inputs and its output
-		if g.wireLayer > 0 && powerRole(world.tile(x, y)) == .logic { return true }
-		if !isCreative {
-			guard let st = heldStack, st.item == .gadget(g), st.count > 0 else {
-				say(joinText("Out of ", g.name.lowercased(), "."), 1.5)
-				return false
-			}
-			inv.removeAt(sel, 1)
-		}
-		world.setWire(x, y, cur | bit)
-		wireSound()
-		bumpHUD()
-		return true
-	}
-
-	func wireSound() {
-		if clock - wireSoundT > 0.06 {
-			wireSoundT = clock
-			sfx(.tap, 0.3)
-		}
-	}
-
-	// MARK: the probe
-
-	/// The probe on a device opens its panel; on a wire it lights up the whole network and says how it is
-	func probeAt(_ wx: Double, _ wy: Double) {
-		let tx: Int = Int(floor(wx))
-		let ty: Int = Int(floor(wy))
-		if let d = world.powerDev(tx, ty), world.tile(tx, ty).isPower {
-			openPowerPanel(d)
-			let layer: Int = d.pnet >= 0 ? 0 : (d.snets[0] >= 0 ? 1 : (d.snets[1] >= 0 ? 2 : -1))
-			if layer >= 0 { inspectNet(layer, tx, ty) }
-			return
-		}
-		let bits: UInt8 = world.wireAt(tx, ty)
-		if bits == 0 {
-			say("Nothing wired here. Tap a device or a wire.", 1.5)
-			return
-		}
-		// several layers on one cell: each tap shows the next
-		var layer: Int = -1
-		let start: Int = (inspect?.cells.contains(IntPair(x: tx, y: ty)) ?? false) ? ((inspect?.layer ?? -1) + 1) : 0
-		for k in 0..<3 {
-			let l: Int = (start + k) % 3
-			if bits & Wire.bit(l) != 0 { layer = l; break }
-		}
-		if layer < 0 { return }
-		inspectNet(layer, tx, ty)
-		say(netSummary(layer, tx, ty), 4.0)
-		sfx(.tap, 0.5)
-	}
-
-	/// Lights up every cell of one network
-	func inspectNet(_ layer: Int, _ x: Int, _ y: Int) {
-		let bit: UInt8 = Wire.bit(layer)
-		var seen: Set<IntPair> = [IntPair(x: x, y: y)]
-		var stack: [IntPair] = [IntPair(x: x, y: y)]
-		var cells: [IntPair] = []
-		while let c = stack.popLast(), cells.count < 4000 {
-			cells.append(c)
-			if !conducts(layer, c.x, c.y) && !(c.x == x && c.y == y) { continue }
-			for side in 0..<4 {
-				let n: IntPair = IntPair(x: c.x + sideDX[side], y: c.y + sideDY[side])
-				if seen.contains(n) || world.wireAt(n.x, n.y) & bit == 0 { continue }
-				seen.insert(n)
-				stack.append(n)
-			}
-		}
-		inspect = PowerInspect(layer: layer, cells: cells, t: 8.0)
-	}
-
-	/// One line about a network: what it makes, uses and stores, or whether a pulse is on
-	func netSummary(_ layer: Int, _ x: Int, _ y: Int) -> String {
-		let sim: PowerSim = power
-		guard let i = sim.cellNet[PowerSim.cellKey(layer, x, y)] else { return "This wire is not connected to anything yet." }
-		if layer == 0 {
-			if i >= sim.pnets.count { return "Power cable" }
-			let n: PowerNet = sim.pnets[i]
-			var s: String = joinText("Power line: makes ", sparks(n.made), ", uses ", sparks(n.used))
-			if n.cap > 0 { s = joinText(s, ", stored ", String(Int(n.stored)), "/", String(Int(n.cap))) }
-			if n.short { s = joinText(s, ". NOT ENOUGH POWER: machines want ", sparks(n.asked)) }
-			if n.devs.isEmpty { s = "Power cable with nothing on it yet." }
-			return s
-		}
-		if i >= sim.snets.count { return "Pulse wire" }
-		let n: PulseNet = sim.snets[i]
-		let col: String = layer == 1 ? "Amber" : "Teal"
-		return joinText(col, " pulse line: ", n.on ? "ON" : "off", " · ", String(n.sources.count), " sending, ", String(n.readers.count + n.followers.count), " listening")
-	}
-
-	func sparks(_ v: Double) -> String { return String(format: "%.1f sparks/s", v) }
-
-	// MARK: tapping a device
-
-	/// A device does its own thing when tapped: levers flip, buttons press, a crank winds up, a
-	/// breaker resets, fuel goes in; anything else opens its panel
-	func usePowerDevice(_ x: Int, _ y: Int, _ t: Tile) {
-		guard let d = world.powerDev(x, y) else { return }
-		// wearing the suit, a tap on a battery fills the suit from it
-		if (t == .battery || t == .accumulator) && suit.worn && chargeSuitFrom(d) { return }
-		switch t {
-		case .lever:
-			d.on.toggle()
-			setOut(d, d.on)
-			sfx(.tap, at: Double(x), 0.8)
-			spawnParticles(Double(x) + 0.5, Double(y) + 0.6, 0xC8CCD4, 2, 1.0, 0.2, 6)
-		case .pushButton:
-			d.timer = max(0.25, d.param)
-			setOut(d, true)
-			sfx(.tap, at: Double(x), 0.8)
-		case .crankGen:
-			// winding by hand is work: a little hunger for every turn
-			let cap: Double = PowerSpec.capacity(.crankGen)
-			if d.charge >= cap - 0.5 {
-				say("The flywheel is spinning as fast as it can.", 1.2)
-				return
-			}
-			d.charge = min(cap, d.charge + 15)
-			if !isCreative { hunger = max(0, hunger - 0.08) }
-			sfx(.swingLight, at: Double(x), 0.5)
-			spawnParticles(Double(x) + 0.8, Double(y) + 0.2, 0xFFC020, 3, 2.0, 0.3, 6)
-			floatText(joinText(String(Int(d.charge)), " / ", String(Int(cap))), Double(x) + 0.5, Double(y) - 0.4, 0xFFD060)
-		case .breaker:
-			if !d.on {
-				d.on = true
-				d.flag = false
-				world.powerRev &+= 1
-				say("Breaker reset. If the line is still overloaded it will trip again.", 2.0)
-			} else {
-				d.on = false
-				world.powerRev &+= 1
-				say("Breaker opened: the line is cut here.", 1.5)
-			}
-			sfx(.tap, at: Double(x), 0.8)
-		case .powerSwitch:
-			if d.snets[0] >= 0 || d.snets[1] >= 0 {
-				say("This switch follows its pulse wire.", 1.5)
-			} else {
-				d.on.toggle()
-				world.powerRev &+= 1
-				sfx(.tap, at: Double(x), 0.8)
-			}
-		case .fuelGen, .emberDynamo:
-			if let it = heldItem, fuelSeconds(it, dynamo: t == .emberDynamo) > 0 {
-				let secs: Double = fuelSeconds(it, dynamo: t == .emberDynamo)
-				if d.charge + secs > 3600 {
-					say("It is full of fuel.", 1.2)
-					return
-				}
-				d.charge += secs
-				if !isCreative { inv.removeAt(sel, 1) }
-				sfx(.place, at: Double(x), 0.5)
-				floatText(joinText("Fuel: ", fuelText(d.charge)), Double(x) + 0.5, Double(y) - 0.4, 0xFFB050)
-				bumpHUD()
-			} else {
-				openPowerPanel(d)
-			}
-		case .gateClosed, .gateOpen:
-			if pulseHere(d) != nil {
-				say("This gate follows its pulse wire.", 1.5)
-			} else if !d.powered {
-				say("The gate needs power to move.", 1.5)
-			} else {
-				d.on.toggle()
-				applyMachine(d)
-			}
-		default:
-			openPowerPanel(d)
+		} else if let s = inv.slots[i] {
+			carry = s
+			inv.slots[i] = nil
 		}
 		bumpHUD()
 	}
 
-	func fuelText(_ s: Double) -> String {
-		if s >= 60 { return joinText(String(Int(s / 60)), " min ", String(Int(s.truncatingRemainder(dividingBy: 60))), " s") }
-		return joinText(String(Int(s)), " s")
-	}
-
-	func openPowerPanel(_ d: PowerDev) {
-		powerAt = d.key
-		showPower = true
-		sfx(.tap, 0.6)
-		bumpHUD()
-	}
-
-	var powerDevOpen: PowerDev? {
-		guard let k = powerAt else { return nil }
-		return world.devs[k]
-	}
-
-	// MARK: the device panel
-
-	func modeNames(_ t: Tile) -> [String] {
-		switch t {
-		case .logicGate: return ["AND", "OR", "XOR", "NAND", "NOR"]
-		case .pulseTimer: return ["CLOCK", "DELAY"]
-		case .pressurePlate: return ["ANYONE", "PLAYER", "CREATURES"]
-		case .motionSensor: return ["ANYTHING", "CREATURES", "PLAYER"]
-		case .proximitySensor: return ["PLAYER", "HOSTILE", "ANY CREATURE", "ANYONE"]
-		case .vehicleSensor: return ["ANY VEHICLE", "DRIVEN", "NOBODY ABOARD"]
-		case .signalPost: return (1...Radio.channels).map { (n: Int) in joinText("CH ", String(n)) }
-		case .daySensor: return ["ON BY DAY", "ON AT NIGHT"]
-		case .weatherSensor: return ["RAIN/SNOW", "STORM", "STRONG WIND", "SEVERE"]
-		case .itemSensor: return ["ANY ITEM", "16+", "64+", "FULL"]
-		case .breaker: return PowerSpec.breakerLimits.map { String(Int($0)) }
-		default: return []
-		}
-	}
-
-	func modeTitle(_ t: Tile) -> String {
-		switch t {
-		case .logicGate: return "Gate type (inputs at the two sides, output where the arrow points)"
-		case .pulseTimer: return "Mode"
-		case .breaker: return "Trips above (sparks per second asked)"
-		case .itemSensor: return "On when the chest beside it holds"
-		case .signalPost: return "The channel it sends to receivers"
-		default: return "Responds to"
-		}
-	}
-
-	/// The number a device's panel sets: its label, range and step
-	func paramSpec(_ d: PowerDev) -> (String, Double, Double, Double)? {
-		switch d.tile {
-		case .pushButton: return ("Pulse length (s)", 0.25, 5, 0.25)
-		case .pulseTimer: return (d.mode == 0 ? "Period (s)" : "Delay (s)", 0.1, 10, 0.1)
-		case .repeater: return ("Delay (steps of 0.05 s)", 1, 4, 1)
-		case .motionSensor, .proximitySensor: return ("Range (blocks)", 2, 12, 1)
-		case .vehicleSensor: return ("Range (blocks)", 1, 8, 1)
-		default: return nil
-		}
-	}
-
-	func setPowerMode(_ d: PowerDev, _ m: Int) {
-		d.mode = m
-		if d.role == .logic {
-			d.pend.removeAll()
-			if d.li >= 0 { power.queue.insert(d.li) }
-		}
-		if d.tile == .breaker { world.powerRev &+= 1 }
-		bumpHUD()
-	}
-
-	func stepPowerParam(_ d: PowerDev, _ dir: Double) {
-		guard let p = paramSpec(d) else { return }
-		d.param = clampD(((d.param + dir * p.3) / p.3).rounded() * p.3, p.1, p.2)
-		bumpHUD()
-	}
-
-	/// Turns a device a quarter (conveyors and crafters only turn round)
-	func rotatePower(_ d: PowerDev) {
-		if d.tile == .conveyor || d.tile == .autoCrafter {
-			d.dir = d.dir == 0 ? 2 : 0
-		} else {
-			d.dir = (d.dir + 1) % 4
-		}
-		d.pend.removeAll()
-		world.powerRev &+= 1
-		bumpHUD()
-	}
-
-	/// What the panel says about a device and the line it is on
-	func powerPanelLines(_ d: PowerDev) -> [PanelLine] {
-		var out: [PanelLine] = []
-		let good: UInt32 = 0x8AF0B0
-		let bad: UInt32 = 0xFF8060
-		let plain: UInt32 = 0xE8E4D8
-		switch d.role {
-		case .generator:
-			switch d.tile {
-			case .crankGen:
-				out.append(PanelLine(text: joinText("Flywheel: ", String(Int(d.charge)), " / 60 sparks. Tap it to crank."), color: plain))
-			case .fuelGen, .emberDynamo:
-				let what: String = d.tile == .emberDynamo ? "ember bars or ember ore" : "coal, logs, planks or sticks"
-				out.append(PanelLine(text: joinText("Fuel: ", fuelText(d.charge), ". Tap it holding ", what, " to add more."), color: d.charge > 0 ? plain : bad))
-				out.append(PanelLine(text: "It only burns fuel for power that is actually needed.", color: plain))
-			case .solarPanel:
-				out.append(PanelLine(text: "Makes up to 4 sparks/s in full sun under open sky; clouds and night cut it.", color: plain))
-			case .waterWheel:
-				out.append(PanelLine(text: "Turns with water around it (up to 6 sparks/s), more in the rain.", color: plain))
-			case .windTurbine:
-				let k: String = deviceKey(DeviceSpot(x: d.x, y: d.y, t: .windTurbine))
-				out.append(PanelLine(text: joinText("Charge: ", String(Int(weather.store[k] ?? 0)), " / 100 (the wind fills it)."), color: plain))
-			default:
-				break
-			}
-			out.append(PanelLine(text: joinText("Making ", sparks(d.made)), color: d.made > 0 ? good : plain))
-		case .storage:
-			let c: Double = PowerSpec.capacity(d.tile)
-			out.append(PanelLine(text: joinText("Charge: ", String(Int(d.charge)), " / ", String(Int(c)), " sparks (", String(Int(100 * d.charge / max(1, c))), "%)"), color: d.charge > 1 ? good : plain))
-			out.append(PanelLine(text: joinText("Charges and gives back up to ", String(Int(PowerSpec.rate(d.tile))), " sparks/s. Taken down, it loses its charge."), color: plain))
-		case .conductor:
-			if d.tile == .breaker {
-				if d.flag && !d.on { out.append(PanelLine(text: "TRIPPED: too much was asked of this line. Tap it to reset.", color: bad)) }
-				else { out.append(PanelLine(text: d.on ? "Closed: power passes." : "Open: the line is cut here.", color: d.on ? good : bad)) }
-			} else {
-				out.append(PanelLine(text: d.on ? "On: power passes." : "Off: the line is cut here.", color: d.on ? good : bad))
-			}
-		case .source, .sensor, .logic:
-			out.append(PanelLine(text: joinText("Sending: ", d.out ? "ON" : "off"), color: d.out ? good : plain))
-			if d.burnT > 0 { out.append(PanelLine(text: "Burnt out for a moment: it was flipping too fast (a loop with no delay?)", color: bad)) }
-			if d.role == .logic {
-				let back: Int = (d.dir + 2) % 4
-				if d.tile == .logicGate {
-					let a: String = (portOn(d, (d.dir + 1) % 4) ?? false) ? "ON" : "off"
-					let b: String = (portOn(d, (d.dir + 3) % 4) ?? false) ? "ON" : "off"
-					out.append(PanelLine(text: joinText("Inputs: ", a, " and ", b), color: plain))
-				} else if let i = portOn(d, back) {
-					out.append(PanelLine(text: joinText("Input: ", i ? "ON" : "off"), color: plain))
-				} else if d.tile != .pulseTimer || d.mode == 1 {
-					out.append(PanelLine(text: "No pulse wire at its back (the input).", color: bad))
-				}
-			}
-		case .machine:
-			let wants: Double = PowerSpec.draw(d.tile)
-			if !d.enabled { out.append(PanelLine(text: "Off: its pulse wire is off.", color: plain)) }
-			else if d.powered { out.append(PanelLine(text: joinText("Running on ", sparks(wants)), color: good)) }
-			else { out.append(PanelLine(text: joinText("NO POWER: it needs ", sparks(wants)), color: bad)) }
-			out.append(PanelLine(text: machineHelp(d.tile), color: plain))
-		case .meter:
-			out.append(PanelLine(text: "Reads the power line it sits on.", color: plain))
-		case .indicator:
-			out.append(PanelLine(text: joinText("Shows its pulse wire: ", (pulseHere(d) ?? false) ? "ON" : "off"), color: plain))
-		case .none:
-			break
-		}
-		if d.role == .sensor && !d.powered { out.append(PanelLine(text: "Sensors need a little power (0.5 sparks/s) to work.", color: bad)) }
-		// the power line it is on
-		let usesPower: Bool = d.role == .generator || d.role == .storage || d.role == .machine || d.role == .sensor || d.role == .meter
-		if usesPower {
-			if d.pnet >= 0 && d.pnet < power.pnets.count {
-				let n: PowerNet = power.pnets[d.pnet]
-				out.append(PanelLine(text: joinText("Line: makes ", sparks(n.made), " · uses ", sparks(n.used), n.cap > 0 ? joinText(" · stored ", String(Int(n.stored)), "/", String(Int(n.cap))) : ""), color: plain))
-				if n.short { out.append(PanelLine(text: joinText("NOT ENOUGH POWER on this line: machines want ", sparks(n.asked)), color: bad)) }
-			} else {
-				out.append(PanelLine(text: "Not on a power line: lay power cable through it.", color: bad))
-			}
-		}
-		if let p = pulseHere(d), d.role != .logic {
-			out.append(PanelLine(text: joinText("Pulse wire here: ", p ? "ON" : "off"), color: p ? good : plain))
-		}
-		return out
-	}
-
-	func machineHelp(_ t: Tile) -> String {
-		switch t {
-		case .lampOff, .lampOn: return "Lights up while powered (and while its pulse wire is on, if it has one)."
-		case .signalPost: return "Sends its channel to every receiver on it while powered (and while its pulse wire is on, if it has one)."
-		case .gateClosed, .gateOpen: return "Opens while its pulse wire is on; with none, tap it. Needs power to move."
-		case .arcTrap: return "Zaps whatever stands on it, once a second."
-		case .autoDrill: return "Bores out the block it faces (what an iron pickaxe could). Drops land as if mined."
-		case .exoStation: return "Builds suits; charges a suit worn close by from this line (10 a second, only while it charges)."
-		case .conveyor: return "Carries items (and anyone) along the way the arrow points."
-		case .collector: return "Draws loose items within two blocks into a chest beside it."
-		case .autoCrafter: return "Makes its recipe from the chest behind it into the chest in front, every 2 s."
-		case .sumpPump: return "Drains water within four blocks, into a rain barrel or cistern beside it if there is one."
-		default: return ""
-		}
-	}
-
-	/// Recipes an auto crafter can make
-	func crafterRecipes() -> [Recipe] {
-		return RecipeBook.all.filter { crafterCan($0.station) && $0.modStation == nil }
-	}
-
-	func updatePowerUI(_ dt: Double) {
-		if var i = inspect {
-			i.t -= dt
-			inspect = i.t > 0 ? i : nil
-		}
-		if showPower, let k = powerAt, world.devs[k] == nil {
-			showPower = false
-			powerAt = nil
+	func splitSlot(_ i: Int) {
+		if carry != nil { return }
+		if let s = inv.slots[i], s.count > 1 {
+			let half: Int = s.count / 2
+			var a: Stack = s
+			a.count = s.count - half
+			var b: Stack = s
+			b.count = half
+			inv.slots[i] = a
+			carry = b
 			bumpHUD()
 		}
 	}
-}
 
-// MARK: - Sparkworks drawing
+	// MARK: drag and drop
 
-extension WorldRenderer {
-	/// Wiring over the tiles: copper power cable (bright when the line has power, red flashes when it is
-	/// short), and thinner pulse wire in amber and teal that glows while on. Shown in full while a
-	/// wiring tool is in hand, and otherwise as the settings say.
-	static func drawWiring(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
-		let mode: Int = g.settings.showWires
-		let tool: Bool = g.holdingWiringTool
-		if mode == 0 && !tool && g.inspect == nil { return }
-		let faint: Bool = !tool && mode == 2
-		let sim: PowerSim = g.power
-		let x0: Int = Int(floor(v.left)) - 1
-		let x1: Int = Int(ceil(v.left + v.wTiles)) + 1
-		let y0: Int = max(0, Int(floor(v.top)) - 1)
-		let y1: Int = min(g.world.H - 1, Int(ceil(v.top + v.hTiles)) + 1)
-		let tp: Double = v.tp
-		var paths: [Path] = [Path(), Path(), Path(), Path(), Path(), Path(), Path()]
-		var used: [Bool] = [false, false, false, false, false, false, false]
-		var cx: Int = floorDiv(x0, chunkW)
-		let blink: Bool = Int(g.clock * 3.0) % 2 == 0
-		while cx <= floorDiv(x1, chunkW) {
-			defer { cx += 1 }
-			guard let c = g.world.chunk(cx), c.wireCount > 0 else { continue }
-			let H: Int = c.H
-			let ax: Int = max(x0, c.x0)
-			let bx: Int = min(x1, c.x0 + chunkW - 1)
-			if ax > bx { continue }
-			for x in ax...bx {
-				let base: Int = (x - c.x0) * H
-				for y in y0...y1 {
-					let b: UInt8 = c.wires[base + y]
-					if b == 0 { continue }
-					for layer in 0..<3 where b & Wire.bit(layer) != 0 {
-						let off: Double = layer == 0 ? 0 : (layer == 1 ? -0.2 : 0.2)
-						let px: Double = v.sx(Double(x) + 0.5 + off)
-						let py: Double = v.sy(Double(y) + 0.5 + off)
-						var slot: Int = layer == 0 ? 0 : (layer == 1 ? 2 : 4)
-						if let n = sim.cellNet[PowerSim.cellKey(layer, x, y)] {
-							if layer == 0, n < sim.pnets.count {
-								let net: PowerNet = sim.pnets[n]
-								if net.short && blink { slot = 6 } else if net.made > 0 || net.stored > 1 { slot = 1 }
-							} else if layer > 0, n < sim.snets.count, sim.snets[n].on {
-								slot += 1
-							}
-						}
-						let bit: UInt8 = Wire.bit(layer)
-						// a stub to each wired neighbour to the right and below (each joint drawn once)
-						if g.world.wireAt(x + 1, y) & bit != 0 {
-							paths[slot].move(to: mkPoint(px, py))
-							paths[slot].addLine(to: mkPoint(px + tp, py))
-						}
-						if g.world.wireAt(x, y + 1) & bit != 0 {
-							paths[slot].move(to: mkPoint(px, py))
-							paths[slot].addLine(to: mkPoint(px, py + tp))
-						}
-						let r: Double = layer == 0 ? tp * 0.11 : tp * 0.08
-						paths[slot].addEllipse(in: mkRect(px - r, py - r, r * 2, r * 2))
-						used[slot] = true
-					}
-				}
-			}
-		}
-		let a: Double = faint ? 0.35 : 1.0
-		let cols: [UInt32] = [0x8A5A30, 0xFFA040, 0x6A5010, 0xFFD040, 0x1A6A66, 0x50FFF0, 0xFF4030]
-		let widths: [Double] = [0.16, 0.16, 0.09, 0.11, 0.09, 0.11, 0.16]
-		for i in 0..<7 where used[i] {
-			ctx.stroke(paths[i], with: .color(Color(hex: 0x14100C, alpha: 0.7 * a)), lineWidth: tp * widths[i] + 2.0)
-			ctx.stroke(paths[i], with: .color(Color(hex: cols[i], alpha: a)), lineWidth: tp * widths[i])
-		}
-		// the network the probe is looking at
-		if let ins = g.inspect {
-			let pulse: Double = 0.35 + 0.25 * sin(g.clock * 6.0)
-			let col: UInt32 = ins.layer == 0 ? 0xFFC060 : (ins.layer == 1 ? 0xFFE060 : 0x80FFF0)
-			var hp: Path = Path()
-			for c in ins.cells where v.visible(Double(c.x), Double(c.y), 2) {
-				hp.addRect(v.rect(Double(c.x) + 0.12, Double(c.y) + 0.12, 0.76, 0.76))
-			}
-			ctx.stroke(hp, with: .color(Color(hex: col, alpha: pulse * min(1.0, ins.t))), lineWidth: 2)
+	enum SlotRef: Hashable {
+		case inv(Int)
+		case armor(Int)
+		case chest(Int)
+		case drop
+		/// creative mode: back to the creative menu
+		case trash
+	}
+
+	func stackAt(_ r: SlotRef) -> Stack? {
+		switch r {
+		case .inv(let i): return i >= 0 && i < inv.slots.count ? inv.slots[i] : nil
+		case .armor(let i): return i >= 0 && i < inv.armor.count ? inv.armor[i] : nil
+		case .chest(let i):
+			guard let p = openChest else { return nil }
+			let items: [Stack] = world.chestItems(p.x, p.y)
+			return i >= 0 && i < items.count ? items[i] : nil
+		case .drop, .trash: return nil
 		}
 	}
 
-	/// What each device in view is doing: lever handles, lights, arrows on parts that point a way,
-	/// charge bars, moving parts, and a red bolt on a machine that wants power and has none
-	static func drawPowerDevices(_ ctx: inout GraphicsContext, _ g: Game, _ v: View2D) {
-		let sim: PowerSim = g.power
-		if sim.devs.isEmpty { return }
-		let tp: Double = v.tp
-		let blink: Bool = Int(g.clock * 2.5) % 2 == 0
-		var dark: Path = Path()
-		var amber: Path = Path()
-		var teal: Path = Path()
-		var red: Path = Path()
-		var green: Path = Path()
-		var white: Path = Path()
-		var fire: Path = Path()
-		for d in sim.devs {
-			if !v.visible(Double(d.x), Double(d.y), 2) { continue }
-			let L: Double = v.sx(Double(d.x))
-			let T: Double = v.sy(Double(d.y))
-			let cx: Double = L + tp * 0.5
-			let cy: Double = T + tp * 0.5
-			func led(_ on: Bool, _ px: Double, _ py: Double, _ onPath: inout Path) {
-				let r: Double = max(1.5, tp * 0.07)
-				if on { onPath.addEllipse(in: mkRect(px - r, py - r, r * 2, r * 2)) } else { dark.addEllipse(in: mkRect(px - r, py - r, r * 2, r * 2)) }
-			}
-			func arrow(_ dir: Int, _ path: inout Path) {
-				let ax: Double = Double(sideDX[dir])
-				let ay: Double = Double(sideDY[dir])
-				let s: Double = tp * 0.22
-				let tipX: Double = cx + ax * tp * 0.34
-				let tipY: Double = cy + ay * tp * 0.34
-				path.move(to: mkPoint(tipX, tipY))
-				path.addLine(to: mkPoint(tipX - ax * s - ay * s, tipY - ay * s + ax * s))
-				path.addLine(to: mkPoint(tipX - ax * s + ay * s, tipY - ay * s - ax * s))
-				path.closeSubpath()
-			}
-			switch d.tile {
-			case .lever:
-				let ang: Double = d.on ? -0.6 : -2.5
-				white.move(to: mkPoint(cx, T + tp * 0.7))
-				white.addLine(to: mkPoint(cx + cos(ang) * tp * 0.45, T + tp * 0.7 + sin(ang) * tp * 0.45))
-				led(d.on, cx + cos(ang) * tp * 0.45, T + tp * 0.7 + sin(ang) * tp * 0.45, &amber)
-			case .pushButton:
-				if d.out { teal.addRect(mkRect(L + tp * 0.375, T + tp * 0.5, tp * 0.25, tp * 0.25)) }
-			case .pressurePlate:
-				if d.out { amber.addRect(mkRect(L + tp * 0.15, T + tp * 0.8, tp * 0.7, tp * 0.06)) }
-			case .repeater, .inverter, .logicGate, .pulseTimer:
-				if d.burnT > 0 { arrow(d.dir, &red) } else if d.out { arrow(d.dir, &amber) } else { arrow(d.dir, &white) }
-				if d.tile == .logicGate {
-					let names: [String] = ["AND", "OR", "XOR", "NAND", "NOR"]
-					drawLabel(&ctx, names[clampI(d.mode, 0, 4)], cx, T + tp * 0.12, max(6.0, tp * 0.26), Color(hex: 0xC8F0E8))
-				}
-				if d.tile == .pulseTimer {
-					let a: Double = d.mode == 0 ? g.clock * 3.0 : (d.out ? 0 : 3.14)
-					white.move(to: mkPoint(cx, cy))
-					white.addLine(to: mkPoint(cx + cos(a) * tp * 0.25, cy + sin(a) * tp * 0.25))
-				}
-			case .autoDrill:
-				if d.enabled && d.powered { arrow(d.dir, &amber) } else { arrow(d.dir, &white) }
-			case .conveyor, .autoCrafter:
-				if d.enabled && d.powered { arrow(d.dir, &amber) } else { arrow(d.dir, &white) }
-				if d.tile == .conveyor && d.enabled && d.powered {
-					let shift: Double = (g.clock * 2.4).truncatingRemainder(dividingBy: 1.0) * (d.dir == 2 ? -1.0 : 1.0)
-					for k in 0..<3 {
-						var fx: Double = (Double(k) / 3.0 + shift).truncatingRemainder(dividingBy: 1.0)
-						if fx < 0 { fx += 1.0 }
-						white.addRect(mkRect(L + fx * tp, T + tp * 0.02, max(1.5, tp * 0.06), tp * 0.1))
-					}
-				}
-			case .motionSensor, .daySensor, .weatherSensor, .itemSensor, .proximitySensor, .vehicleSensor:
-				led(d.out, L + tp * 0.85, T + tp * 0.15, &teal)
-			case .signalPost:
-				led(d.enabled && d.powered, L + tp * 0.5, T + tp * 0.1, &amber)
-			case .signalLight:
-				if g.pulseHere(d) ?? false {
-					let glow: Double = tp * 0.32
-					teal.addEllipse(in: mkRect(cx - glow, T + tp * 0.4 - glow, glow * 2, glow * 2))
-				}
-			case .crankGen:
-				let spin: Double = g.clock * min(12.0, d.charge * 0.4)
-				white.move(to: mkPoint(L + tp * 0.8, T + tp * 0.25))
-				white.addLine(to: mkPoint(L + tp * 0.8 + cos(spin) * tp * 0.2, T + tp * 0.25 + sin(spin) * tp * 0.2))
-				led(d.made > 0, L + tp * 0.5, T + tp * 0.65, &green)
-			case .waterWheel:
-				let spin: Double = g.clock * (d.made > 0 ? 1.5 : 0)
-				for k in 0..<4 {
-					let a: Double = spin + Double(k) * 1.5708
-					dark.move(to: mkPoint(cx, cy))
-					dark.addLine(to: mkPoint(cx + cos(a) * tp * 0.45, cy + sin(a) * tp * 0.45))
-				}
-			case .fuelGen, .emberDynamo:
-				if d.made > 0 {
-					let f: Double = 0.7 + 0.3 * sin(g.clock * 17.0 + Double(d.x))
-					fire.addEllipse(in: mkRect(cx - tp * 0.22 * f, T + tp * 0.45, tp * 0.44 * f, tp * 0.3 * f))
-				}
-				led(d.charge > 0, L + tp * 0.85, T + tp * 0.85, &green)
-			case .solarPanel, .windTurbine:
-				led(d.made > 0, L + tp * 0.85, T + tp * 0.92, &green)
-			case .battery, .accumulator:
-				let f: Double = clampD(d.charge / max(1, PowerSpec.capacity(d.tile)), 0, 1)
-				let h: Double = tp * 0.6 * f
-				if f > 0.01 {
-					let col: Path = Path(mkRect(L + tp * 0.32, T + tp * 0.85 - h, tp * 0.36, h))
-					ctx.fill(col, with: .color(Color(hex: f > 0.5 ? 0x50E070 : (f > 0.2 ? 0xE8D040 : 0xE05030), alpha: 0.9)))
-				}
-			case .powerMeter:
-				var frac: Double = 0
-				var short: Bool = false
-				if d.pnet >= 0 && d.pnet < sim.pnets.count {
-					let n: PowerNet = sim.pnets[d.pnet]
-					frac = n.made > 0 ? clampD(n.used / n.made, 0, 1) : (n.used > 0 ? 1 : 0)
-					short = n.short
-				}
-				let a: Double = 3.4 + frac * 2.6
-				white.move(to: mkPoint(cx, T + tp * 0.6))
-				white.addLine(to: mkPoint(cx + cos(a) * tp * 0.35, T + tp * 0.6 + sin(a) * tp * 0.35))
-				if short { led(true, L + tp * 0.85, T + tp * 0.8, &red) } else { led(true, L + tp * 0.85, T + tp * 0.8, &green) }
-			case .powerSwitch:
-				let r: CGRect = mkRect(L + tp * 0.375, T + (d.on ? tp * 0.32 : tp * 0.5), tp * 0.25, tp * 0.18)
-				if d.on { green.addRect(r) } else { red.addRect(r) }
-			case .breaker:
-				if d.on { led(true, cx, T + tp * 0.5, &green) } else { led(true, cx, T + tp * 0.5, &red) }
+	private func tapRef(_ r: SlotRef) {
+		switch r {
+		case .inv(let i): tapSlot(i)
+		case .armor(let i): tapArmorSlot(i)
+		case .chest(let i): if let p = openChest { chestTapSlot(p.x, p.y, i) }
+		case .drop: dropCarried()
+		case .trash: discardCarried()
+		}
+	}
+
+	/// Drags the stack in `from` onto `to`: places, merges or swaps using the same rules as tapping, so
+	/// armour only goes into its own slot and chests keep their limits. Anything that cannot land goes
+	/// back where it came from (or into the bag).
+	func dragStack(from: SlotRef, to: SlotRef?) {
+		if carry != nil { returnCarried() }
+		if stackAt(from) == nil { return }
+		tapRef(from)
+		guard carry != nil else { return }
+		if let to = to, to != from {
+			tapRef(to)
+		}
+		if carry != nil {
+			// put the remainder (or the swapped stack) back into the slot the drag started from
+			switch from {
+			case .chest:
+				if let p = openChest { chestTapSlot(p.x, p.y, Int.max) }
 			default:
-				break
-			}
-			// a machine or sensor that wants power and has none
-			if (d.role == .machine || d.role == .sensor) && d.enabled && !d.powered && blink {
-				let s: Double = tp * 0.18
-				red.move(to: mkPoint(cx + s * 0.3, T - s * 2.2))
-				red.addLine(to: mkPoint(cx - s * 0.6, T - s * 0.9))
-				red.addLine(to: mkPoint(cx + s * 0.2, T - s * 0.9))
-				red.addLine(to: mkPoint(cx - s * 0.4, T + s * 0.4))
+				if stackAt(from) == nil { tapRef(from) }
 			}
 		}
-		let lw: Double = max(1.5, tp * 0.07)
-		ctx.stroke(dark, with: .color(Color(hex: 0x1A1A20, alpha: 0.9)), lineWidth: lw)
-		ctx.fill(dark, with: .color(Color(hex: 0x1A1A20, alpha: 0.9)))
-		ctx.stroke(white, with: .color(Color(hex: 0xE8ECF0)), lineWidth: lw)
-		ctx.fill(amber, with: .color(Color(hex: 0xFFC020)))
-		ctx.fill(teal, with: .color(Color(hex: 0x50FFF0, alpha: 0.9)))
-		ctx.fill(green, with: .color(Color(hex: 0x50F080)))
-		ctx.fill(fire, with: .color(Color(hex: 0xFF8A20, alpha: 0.85)))
-		ctx.stroke(red, with: .color(Color(hex: 0xFF4030)), lineWidth: lw * 1.3)
-		ctx.fill(red, with: .color(Color(hex: 0xFF4030, alpha: 0.8)))
+		if carry != nil { returnCarried() }
+		bumpHUD()
+	}
+
+	func sortBag() {
+		returnCarried()
+		inv.sortBag()
+		say("Bag sorted.", 1.2)
+		bumpHUD()
+	}
+
+	/// Folds partial stacks together across the bag and hotbar
+	func stackAll() {
+		returnCarried()
+		let n: Int = inv.mergeStacks()
+		say(n > 0 ? "Stacks merged." : "Nothing to merge.", 1.2)
+		bumpHUD()
+	}
+
+	/// Creative mode: the held stack goes back to the creative menu (it leaves the bag). In survival it
+	/// is thrown away instead, as with DROP.
+	func discardCarried() {
+		if carry == nil { return }
+		if !isCreative {
+			dropCarried()
+			return
+		}
+		carry = nil
+		sfx(.tap, 0.5)
+		bumpHUD()
+	}
+
+	/// Moves every bag stack (not the hotbar) whose item the open chest already holds into that chest
+	func quickStack() {
+		guard let p = openChest else { return }
+		var items: [Stack] = world.chestItems(p.x, p.y)
+		var moved: Int = 0
+		for i in Inventory.hotbarCount..<inv.slots.count {
+			guard var s = inv.slots[i] else { continue }
+			if !items.contains(where: { $0.item == s.item }) { continue }
+			// top up existing chest stacks first, then use free chest slots
+			if s.item.maxStack > 1 {
+				for k in 0..<items.count where items[k].item == s.item && items[k].extra == s.extra && items[k].inf == s.inf && items[k].count < s.item.maxStack && s.count > 0 {
+					let put: Int = min(s.item.maxStack - items[k].count, s.count)
+					items[k].count += put
+					s.count -= put
+					moved += put
+				}
+			}
+			if s.count > 0 && items.count < 27 {
+				items.append(s)
+				moved += s.count
+				s.count = 0
+			}
+			inv.slots[i] = s.count > 0 ? s : nil
+		}
+		world.setChestItems(p.x, p.y, items)
+		say(moved > 0 ? "Stored \(moved) items in the chest." : "Nothing here matches the chest.", 1.5)
+		bumpHUD()
+	}
+
+	func dropCarried() {
+		if let c = carry {
+			spawnDrop(c, pb.x + Double(facing) * 0.8, pb.y - 1.2, Double(facing) * 4.0, -4.0, heldBack: true)
+			carry = nil
+			bumpHUD()
+		}
+	}
+
+	func returnCarried() {
+		if let c = carry {
+			let left: Int = inv.add(c.item, c.count, extra: c.extra, inf: c.inf)
+			if left > 0 { spawnDrop(Stack(item: c.item, count: left, extra: c.extra, inf: c.inf), pb.x, pb.y - 1.0, 2.0, -3.0) }
+			carry = nil
+			bumpHUD()
+		}
+	}
+
+	/// Whether an item may go into armour slot `i`: armour into its own slot, gear into either gear slot
+	func fitsArmorSlot(_ it: Item, _ i: Int) -> Bool {
+		switch it {
+		case .armor(let slot, _): return slot.rawValue == i && !(suit.worn && i < 3)
+		case .gear: return i >= Inventory.firstGearSlot && i < inv.armor.count
+		case .custom(let k):
+			guard let r = ModRuntime.shared.item(k), r.def.kind == .armor else { return false }
+			return r.def.slot == i && !(suit.worn && i < 3)
+		default: return false
+		}
+	}
+
+	func tapArmorSlot(_ i: Int) {
+		if i < 0 || i >= inv.armor.count { return }
+		if let h = carry {
+			if fitsArmorSlot(h.item, i) {
+				let old: Stack? = inv.armor[i]
+				inv.armor[i] = h
+				carry = old
+			}
+		} else if let s = inv.armor[i] {
+			carry = s
+			inv.armor[i] = nil
+		}
+		bumpHUD()
+	}
+
+	func quickEquip(_ i: Int) {
+		guard let s = inv.slots[i] else { return }
+		var target: Int = -1
+		switch s.item {
+		case .armor(let slot, _): target = slot.rawValue
+		case .gear(let g):
+			// the same piece already worn is swapped out; otherwise the first free gear slot, else the first
+			target = Inventory.firstGearSlot
+			var free: Int = -1
+			for k in Inventory.firstGearSlot..<inv.armor.count {
+				if let w = inv.armor[k], case .gear(let x) = w.item, x == g { free = k; break }
+				if inv.armor[k] == nil && free < 0 { free = k }
+			}
+			if free >= 0 { target = free }
+		case .custom(let k):
+			guard let r = ModRuntime.shared.item(k), r.def.kind == .armor else { return }
+			target = clampI(r.def.slot, 0, 2)
+		default: return
+		}
+		if target < 0 || target >= inv.armor.count { return }
+		let old: Stack? = inv.armor[target]
+		inv.armor[target] = s
+		inv.slots[i] = old
+		bumpHUD()
+	}
+
+	func wearing(_ g: Gear) -> Bool { return inv.wearing(g) }
+
+	// chest transfer
+	func chestTapSlot(_ cx: Int, _ cy: Int, _ idx: Int) {
+		var items: [Stack] = world.chestItems(cx, cy)
+		if let h = carry {
+			if idx < items.count {
+				let s: Stack = items[idx]
+				if s.item == h.item && h.item.maxStack > 1 {
+					var ns: Stack = s
+					let put: Int = min(h.item.maxStack - s.count, h.count)
+					ns.count += put
+					items[idx] = ns
+					if h.count - put > 0 { var c: Stack = h; c.count = h.count - put; carry = c } else { carry = nil }
+				} else {
+					items[idx] = h
+					carry = s
+				}
+			} else if items.count < 27 {
+				items.append(h)
+				carry = nil
+			}
+		} else if idx < items.count {
+			carry = items[idx]
+			items.remove(at: idx)
+		}
+		world.setChestItems(cx, cy, items)
+		bumpHUD()
+	}
+
+	func chestQuickMove(_ cx: Int, _ cy: Int, _ idx: Int) {
+		var items: [Stack] = world.chestItems(cx, cy)
+		if idx >= items.count { return }
+		let s: Stack = items[idx]
+		let left: Int = inv.add(s.item, s.count, extra: s.extra, inf: s.inf)
+		if left == 0 { items.remove(at: idx) } else { items[idx].count = left }
+		world.setChestItems(cx, cy, items)
+		bumpHUD()
+	}
+
+	func chestStore(_ cx: Int, _ cy: Int, _ slotIndex: Int) {
+		guard let s = inv.slots[slotIndex] else { return }
+		var items: [Stack] = world.chestItems(cx, cy)
+		if items.count >= 27 { say("Chest is full.", 1.5); return }
+		items.append(s)
+		inv.slots[slotIndex] = nil
+		world.setChestItems(cx, cy, items)
+		bumpHUD()
+	}
+
+	// MARK: crafting
+
+	func stationAvailable(_ s: Station) -> Bool {
+		if s == .hand { return true }
+		if isCreative { return true }
+		let px: Int = Int(floor(pb.x))
+		let py: Int = Int(floor(pb.y - 1))
+		for dy in -4...3 {
+			for dx in -5...5 {
+				let t: Tile = world.tile(px + dx, py + dy)
+				// a mod block that works as this station
+				if t.isMod, let b = ModRuntime.shared.blockDef(t), b.function == .station, b.station == s.rawValue { return true }
+				switch s {
+				case .bench: if t == .workbench { return true }
+				case .furnace: if t == .furnace { return true }
+				case .campfire: if t == .furnace || t == .campfire { return true }
+				case .anvil: if t == .anvil { return true }
+				case .tinker: if t == .tinkerBench { return true }
+				case .forge: if t == .riftForge { return true }
+				case .still: if t == .alchemyStill { return true }
+				case .infuser: if t == .infuser { return true }
+				case .assembly: if t == .exoStation { return true }
+				case .hand: return true
+				}
+			}
+		}
+		return false
+	}
+
+	func canCraft(_ r: Recipe) -> Bool {
+		if !recipeStationOK(r) { return false }
+		if !inv.canAfford(r.cost) { return false }
+		return inv.canFit(r.out, r.outCount)
+	}
+
+	func craft(_ r: Recipe) {
+		if !canCraft(r) {
+			if !recipeStationOK(r) { say("Needs a " + recipeStationName(r) + " nearby.", 2.0) }
+			return
+		}
+		for c in r.cost { _ = inv.remove(c.item, c.n) }
+		if !journal.crafted.contains(r.out.name) { journal.crafted.append(r.out.name) }
+		sfx(.craft, 0.6)
+		// a new storm rod comes charged; firearms and crossbows still need loading
+		let ex: Int = r.out == .gun(.stormRod) ? GunType.stormRod.magazine : 0
+		let left: Int = inv.add(r.out, r.outCount, extra: ex)
+		if left > 0 { spawnDrop(Stack(item: r.out, count: left, extra: ex), pb.x, pb.y - 1, 2, -3) }
+		floatText("+" + String(r.outCount) + " " + r.out.name, pb.x, pb.y - 2.2, 0xFFE070)
+		bumpHUD()
+	}
+
+	// MARK: creative palette
+
+	/// Everything the creative palette offers: the game's items, then those of the world's mods
+	func creativeItems() -> [Item] {
+		return allGameItems() + ModRuntime.shared.paletteItems()
+	}
+
+	func creativeGive(_ it: Item) {
+		let n: Int = it.maxStack > 1 ? it.maxStack : 1
+		giveItem(it, n, extra: gunLoad(it))
+		bumpHUD()
+	}
+
+	func gunLoad(_ it: Item) -> Int {
+		if case .gun(let g) = it { return g.magazine }
+		if case .custom(let k) = it, let r = ModRuntime.shared.item(k), r.def.kind == .gun { return r.def.magazine }
+		return 0
 	}
 }
 
-// MARK: - Sparkworks panel
-
-/// A device's panel: how it is doing, the line it is on, and its settings
-struct PowerPanel: View {
-	@ObservedObject var game: Game
-	@ObservedObject var hud: HUDSignal
-
-	func pick(_ on: Bool, _ title: String, _ act: @escaping () -> Void) -> some View {
-		SmallButton(title: title, color: on ? Color(hex: 0x3A8A7A) : Color(hex: 0x4A4E58), action: act)
-	}
-
-	var body: some View {
-		let dev: PowerDev? = game.powerDevOpen
-		return VStack(alignment: .leading, spacing: 8) {
-			HStack {
-				Text(verbatim: dev?.tile.name.uppercased() ?? "DEVICE").font(.pixel(17)).foregroundColor(Color(hex: 0x80F0E0))
-				Spacer()
-				SmallButton(title: "CLOSE", color: Color(hex: 0xA03030)) {
-					game.showPower = false
-					game.bumpHUD()
-				}
-			}
-			if let d = dev {
-				let lines: [PanelLine] = game.powerPanelLines(d)
-				ForEach(0..<lines.count, id: \.self) { i in
-					Text(verbatim: lines[i].text).font(.pixel(12, .semibold)).foregroundColor(Color(hex: lines[i].color))
-				}
-				controls(d)
-			}
-		}
-		.padding(16)
-		.background(PixelBox(color: Color(hex: 0x182024)).opacity(0.96))
-		.frame(maxWidth: 600)
-		.padding(16)
-	}
-
-	@ViewBuilder
-	func controls(_ d: PowerDev) -> some View {
-		let modes: [String] = game.modeNames(d.tile)
-		if !modes.isEmpty {
-			Text(verbatim: game.modeTitle(d.tile)).font(.pixel(12)).foregroundColor(Color(hex: 0xFFE066))
-			LazyVGrid(columns: [GridItem(.adaptive(minimum: 96), spacing: 6)], alignment: .leading, spacing: 6) {
-				ForEach(0..<modes.count, id: \.self) { i in
-					pick(d.mode == i, modes[i]) { game.setPowerMode(d, i) }
-				}
-			}
-		}
-		if let p = game.paramSpec(d) {
-			HStack(spacing: 8) {
-				Text(verbatim: joinText(p.0, ": ", String(format: p.3 < 1 ? "%.2f" : "%.0f", d.param))).font(.pixel(12)).foregroundColor(Color.white)
-				SmallButton(title: "-") { game.stepPowerParam(d, -1) }
-				SmallButton(title: "+") { game.stepPowerParam(d, 1) }
-			}
-		}
-		if powerDirectional(d.tile) {
-			HStack(spacing: 8) {
-				Text(verbatim: joinText("Facing: ", ["right", "down", "left", "up"][clampI(d.dir, 0, 3)])).font(.pixel(12)).foregroundColor(Color.white)
-				SmallButton(title: "ROTATE") { game.rotatePower(d) }
-			}
-		}
-		if d.tile == .arcTrap {
-			pick(d.flag, d.flag ? "HURTS THE PLAYER TOO" : "CREATURES ONLY") {
-				d.flag.toggle()
-				game.bumpHUD()
-			}
-		}
-		if d.tile == .autoCrafter {
-			let list: [Recipe] = game.crafterRecipes()
-			let cur: String = (d.item >= 0 && d.item < RecipeBook.all.count) ? RecipeBook.all[d.item].out.name : "nothing yet"
-			Text(verbatim: joinText("Making: ", cur, " (chest behind = ingredients, chest in front = results)")).font(.pixel(12)).foregroundColor(Color(hex: 0xFFE066))
-			ScrollView {
-				LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 6)], alignment: .leading, spacing: 6) {
-					ForEach(0..<list.count, id: \.self) { i in
-						pick(list[i].id == d.item, joinText(list[i].out.name, list[i].outCount > 1 ? joinText(" x", String(list[i].outCount)) : "")) {
-							d.item = list[i].id
-							d.work = 0
-							game.bumpHUD()
-						}
-					}
-				}
-			}
-			.frame(maxHeight: 220)
+/// Every item of the game itself (no mod content), in palette order
+func allGameItems() -> [Item] {
+	var out: [Item] = []
+	for t in Tile.allCases {
+		if t.isMod { continue }
+		switch t {
+		case .bedR, .stairWoodL, .stairStoneL, .stairBrickL: continue
+		case .air, .water, .lava, .bedrock, .portalFrame, .portalOff, .portalOn, .wheat1, .wheat2, .carrot1, .carrot2, .doorOpen,
+			 .logBlock, .jungleLogBlock, .palmLogBlock, .birchLogBlock, .shutterOpen, .lampOn, .gateOpen: continue
+		default: out.append(.block(t))
 		}
 	}
+	for tier in Tier.allCases {
+		for k in ToolType.allCases { out.append(.tool(k, tier)) }
+		out.append(.sword(tier))
+		out.append(.spear(tier))
+		out.append(.hammer(tier))
+		if tier != .wood { out.append(.knife(tier)) }
+		for s in ArmorSlot.allCases { out.append(.armor(s, tier)) }
+	}
+	for g in Gear.allCases { out.append(.gear(g)) }
+	out.append(.bow)
+	out.append(.sling)
+	for c in ClubKind.allCases { out.append(.club(c)) }
+	for r in Relic.allCases { out.append(.relic(r)) }
+	for gt in GunType.allCases { out.append(.gun(gt)) }
+	for a in AmmoType.allCases { out.append(.ammo(a)) }
+	for g in Gadget.allCases { out.append(.gadget(g)) }
+	for k in wallKinds { out.append(.wall(k)) }
+	for p in PartType.allCases where p != .block { out.append(.part(p)) }
+	for f in Food.allCases { out.append(.food(f)) }
+	for m in Mat.allCases { out.append(.mat(m)) }
+	out.append(contentsOf: featureItems())
+	return out
 }

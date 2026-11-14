@@ -16,7 +16,7 @@ pr_game_files() {
     local src="${GAME_SRC:-$PR_REPO}"
     if [ -d "$src" ]; then
         local parts
-        parts="$(ls "$src"/PixelRealm[0-9].swift 2>/dev/null | sort)"
+        parts="$(ls "$src"/PixelRealm[0-9]*.swift 2>/dev/null | sort -V)"
         if [ -n "$parts" ]; then echo "$parts"; else echo "$src/PixelRealm.swift"; fi
     else
         echo "$src"

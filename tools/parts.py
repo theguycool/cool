@@ -20,26 +20,29 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Which sections go in which part, and what each part is said to hold.
 LAYOUT = [
-    ("utilities, tiles, items, recipes, the older creature pictures made in code, world generation, chunks,\n// villages and ruins, and automation (turrets, the remote control, signals).",
+    ("utilities, tiles, items, recipes, the older creature pictures made in code, world generation and chunks.",
      ["p01_util", "p02_tiles", "p03_items", "p04_recipes", "p05a_humanoid", "p05e_newcreatures", "p05b_animals",
-      "p05c_bosses", "p06_worldgen", "p07_chunk", "p08a_villages", "p08b_ruins", "p35_automation"]),
-    ("the Umbral Realm, the world, light and physics, bodies on vehicles, flowing liquids, the land painter,\n// the hand-drawn pictures kept as text, creatures and their kinds, vehicles, the game state, the player,\n// input and tools.",
-     ["p09_umbral", "p10_world", "p11_light", "p12_phys", "p12b_frames", "p12c_fluids", "p24_painter", "a01_artsheet",
-      "p13a_mobdefs", "p13b_vehicles", "p14a_game", "p14b_player", "p14c_input", "p14d_tools"]),
-    ("creature AI, spawning, combat, damage and bosses, ships, the portal and map, saving, helpers, walls and\n// doors, the vehicle screens' logic, vehicles of every kind (flight, weapons, damage, the assembler, the\n// autopilot), and Sparkworks (power).",
-     ["p15a_mobai", "p15b_spawn", "p16a_combat", "p16c_damage", "p16b_bosses", "p17_vehicles_ships", "p18_portal_map",
-      "p19_save", "p20_assist", "p21_backdrop", "p22_walls_doors", "p23_fast", "p25_hud", "p26_vehicle_ux",
-      "p33_vehicles", "p27_power"]),
-    ("the Mod Creator's data, checks and runtime, potions and mutation, infusions, the exosuit, building\n// (furniture, stairs, lifts), block physics, and rails and trains.",
-     ["p28_mods", "p29_alchemy", "p30_infusion", "p31_exosuit", "p31b_building", "p31c_blockphys", "p31d_rails"]),
-    ("Mod Creator+ (game content changes, ore controls, sprite tools, custom infusions, boss phases and\n// summoning, custom dimensions with their suns, moons and trees, the Logic Studio, rules, weather, machines,\n// vehicles and themes in mods), the HUD and the panels.",
+      "p05c_bosses", "p06_worldgen", "p07_chunk"]),
+    ("villages and ruins, automation (turrets, the remote control, signals), the Umbral Realm, the world, light and\n// physics, bodies on vehicles, flowing liquids and the land painter.",
+     ["p08a_villages", "p08b_ruins", "p35_automation", "p09_umbral", "p10_world", "p11_light", "p12_phys", "p12b_frames",
+      "p12c_fluids", "p24_painter"]),
+    ("the hand-drawn pictures kept as text, creatures and their kinds, vehicles, the game state, the player and input.",
+     ["a01_artsheet", "p13a_mobdefs", "p13b_vehicles", "p14a_game", "p14b_player", "p14c_input"]),
+    ("tools and items in use, creature AI, spawning, combat, damage and bosses, ships, the portal and map, saving,\n// helpers, walls and doors, and the vehicle screens' logic.",
+     ["p14d_tools", "p15a_mobai", "p15b_spawn", "p16a_combat", "p16c_damage", "p16b_bosses", "p17_vehicles_ships",
+      "p18_portal_map", "p19_save", "p20_assist", "p21_backdrop", "p22_walls_doors", "p23_fast", "p25_hud", "p26_vehicle_ux"]),
+    ("vehicles of every kind (flight, weapons, damage, the assembler, the autopilot), Sparkworks (power) and the\n// Mod Creator's data, checks and runtime.",
+     ["p33_vehicles", "p27_power", "p28_mods"]),
+    ("potions and mutation, infusions, the exosuit, building (furniture, stairs, lifts), block physics, and rails and trains.",
+     ["p29_alchemy", "p30_infusion", "p31_exosuit", "p31b_building", "p31c_blockphys", "p31d_rails"]),
+    ("Mod Creator+ (game content changes, ore controls, sprite tools, custom infusions, boss phases and summoning,\n// custom dimensions, the Logic Studio, rules, weather, machines, vehicles and themes in mods), the HUD and the panels.",
      ["p32_modplus", "u03_hud", "u04_panels"]),
-    ("the art store and the player's look, sound, weather, ambient and animal life, the journal and\n// telegraphed attacks, the menus, the receiver panel, and the potion and exosuit screens.",
-     ["u01_art", "u05_menu", "u10_automation", "u08_alchemy"]),
-    ("drawing the world, the Mod Creator screens, joints and mechs (with their panel), and the app itself.",
-     ["u02_render", "u07_mods", "p34_joints", "u06_root"]),
-    ("the Mod Creator+ screens (with the sprite editor, the sun and moon editor and the tree designer).",
-     ["u09_modplus"]),
+    ("the art store and the player's look, sound, weather, ambient and animal life, the journal, telegraphed attacks,\n// the menus and the receiver panel.",
+     ["u01_art", "u05_menu", "u10_automation"]),
+    ("the potion and exosuit screens, drawing the world, and the Mod Creator screens.",
+     ["u08_alchemy", "u02_render", "u07_mods"]),
+    ("joints and mechs (with their panel), the app itself, and the Mod Creator+ screens (with the sprite editor, the sun and\n// moon editor and the tree designer).",
+     ["p34_joints", "u06_root", "u09_modplus"]),
 ]
 
 IMPORTS = "import SwiftUI\nimport AVFoundation\n#if canImport(UIKit)\nimport UIKit\n#endif\n"
@@ -48,7 +51,7 @@ HEADER_LINE = re.compile(r"^(//.*|import \w+|#if canImport\(\w+\)|#endif|\s*)$")
 
 
 def part_paths():
-    return sorted(glob.glob(os.path.join(ROOT, "PixelRealm[0-9].swift")), key=lambda p: int(re.findall(r"(\d+)\.swift$", p)[0]))
+    return sorted(glob.glob(os.path.join(ROOT, "PixelRealm[0-9]*.swift")), key=lambda p: int(re.findall(r"(\d+)\.swift$", p)[0]))
 
 
 def read_sections():

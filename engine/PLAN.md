@@ -28,9 +28,10 @@ viewer's private `data/users/<id>/` documents (256 KiB each, written to a spare 
 ## Phases
 1. Foundation: exporter, real tiles/items/art, world generation v6, light, physics, player, mining
    with tools, placing, inventory, drops, crafting, chests, health and hunger, HUD, menu, saves.
-2. Creatures and combat: every creature, AI, spawning, weapons, bows, armour, bosses, death.
-3. World content: ruins, mineshafts, grottos, Umbral Realm and portal, map, journal, weather, clouds,
-   sounds, ambient life.
+2. Creatures and combat: every creature, AI, spawning, weapons, bows, armour, death.
+3. World content: ruins, mineshafts, grottos, boss lairs and the four bosses (Ursavor, Tyrannax, the
+   Crystal Sentinel, the Hollow Warden), Umbral Realm and portal, pirate ships, map, journal,
+   weather, sounds, ambient life.
 4. Building: walls, doors, ladders, stairs, furniture, lifts, block physics, flowing liquids.
 5. Sparkworks: power, wires, logic, machines, weather devices.
 6. Alchemy: potions, effects, mutation, infusion, the exosuit.
@@ -52,3 +53,15 @@ viewer's private `data/users/<id>/` documents (256 KiB each, written to a spare 
   (changes only, squeezed: 3 KB for 12,000 dug blocks), export and import; settings; a stress test.
   One change from the Swift game: a block picked up into an empty hand while digging is not placed
   by the same hold.
+- Phase 2 done (not yet checked on the iPad): every creature from its hand-drawn frames (turning,
+  lunges, breathing, hit flash, death topple, health bars); the monsters' minds (`think`: sight,
+  sound, chase, search, return, leaping at walls, backing off) and each kind's attacks (zombie
+  swipe, skeleton shield, pirates, gunners and imps that keep range, slimes, flyers, the crawler's
+  pounce, the golem's slam and thrown rocks with warnings, the bow zombie, mimics in deep chests);
+  animals that herd, drink, sleep at night and run from hunters; wolves and big cats hunting;
+  neutral animals that fight back when hit; taming wolves and cats; pets; night and cave spawning
+  by real light (lamps keep monsters away), caps by the Night monsters setting, Peaceful; the
+  unified damage system (sides, keys, resistances, knockback); swords, spears, hammers, knives,
+  clubs, bows (draw and aim arc), guns and crossbows (magazines, reload), the sling, bombs; the
+  attack stick (auto-aim inside, aim by thumb outside) and the weapon button; hit stop; pets saved.
+  Bosses moved to phase 3, where their lairs are built.

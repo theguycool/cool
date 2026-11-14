@@ -42,9 +42,15 @@ input, select { font-family: var(--font); font-size: 16px; color: var(--text); b
 .slot .k { position: absolute; left: 3px; top: 0; font-size: 10px; color: var(--faint); }
 #stick { position: absolute; left: max(18px, env(safe-area-inset-left)); bottom: calc(var(--slot) + 30px); width: 140px; height: 140px; border-radius: 50%; background: rgba(20,26,40,0.38); border: 2px solid rgba(160,170,200,0.35); touch-action: none; }
 #knob { position: absolute; left: 50%; top: 50%; width: 58px; height: 58px; margin: -29px 0 0 -29px; border-radius: 50%; background: rgba(220,225,240,0.5); border: 2px solid rgba(255,255,255,0.6); pointer-events: none; }
-#bJump { position: absolute; right: max(18px, env(safe-area-inset-right)); bottom: calc(var(--slot) + 36px); width: 96px; height: 96px; border-radius: 50%; background: rgba(20,26,40,0.45); border: 2px solid rgba(160,170,200,0.45); font-size: 17px; font-weight: 700; touch-action: none; }
+#bJump { position: absolute; right: calc(max(18px, env(safe-area-inset-right)) + 150px); bottom: calc(var(--slot) + 36px); width: 88px; height: 88px; border-radius: 50%; background: rgba(20,26,40,0.45); border: 2px solid rgba(160,170,200,0.45); font-size: 16px; font-weight: 700; touch-action: none; }
+#atk { position: absolute; right: max(18px, env(safe-area-inset-right)); bottom: calc(var(--slot) + 30px); width: 140px; height: 140px; border-radius: 50%; background: rgba(48,20,20,0.34); border: 2px solid rgba(220,150,140,0.4); touch-action: none; }
+#atkKnob { position: absolute; left: 50%; top: 50%; width: 58px; height: 58px; margin: -29px 0 0 -29px; border-radius: 50%; background: rgba(240,190,180,0.5); border: 2px solid rgba(255,230,220,0.6); pointer-events: none; }
+#atk.on { background: rgba(90,30,30,0.45); }
+#bWeapon { position: absolute; right: max(18px, env(safe-area-inset-right)); bottom: calc(var(--slot) + 182px); width: 52px; height: 52px; padding: 0; font-size: 22px; background: rgba(26,32,48,0.7); }
 body.lefty #stick { left: auto; right: max(18px, env(safe-area-inset-right)); }
-body.lefty #bJump { right: auto; left: max(18px, env(safe-area-inset-left)); }
+body.lefty #atk { right: auto; left: max(18px, env(safe-area-inset-left)); }
+body.lefty #bWeapon { right: auto; left: max(18px, env(safe-area-inset-left)); }
+body.lefty #bJump { right: auto; left: calc(max(18px, env(safe-area-inset-left)) + 150px); }
 /* panels */
 .screen { position: absolute; inset: 0; background: rgba(6,8,14,0.72); display: flex; align-items: center; justify-content: center; padding: max(10px, env(safe-area-inset-top)) 10px 10px; }
 .box { background: var(--panel); border: 2px solid var(--edge); border-radius: 10px; width: min(860px, 100%); max-height: 100%; display: flex; flex-direction: column; overflow: hidden; }
@@ -97,6 +103,8 @@ body.lefty #bJump { right: auto; left: max(18px, env(safe-area-inset-left)); }
 		<div id="floats"></div>
 		<div id="stick"><div id="knob"></div></div>
 		<button id="bJump">JUMP</button>
+		<div id="atk"><div id="atkKnob"></div></div>
+		<button id="bWeapon" aria-label="Next weapon">⚔</button>
 		<div id="hotbar"></div>
 	</div>
 	<div id="panel" class="screen hidden"></div>
@@ -2510,6 +2518,7 @@ function defaultSettings() {
 		showFPS: false, smoothLight: true, sound: true, volume: 0.8, music: false,
 		hair: 0, hairStyle: 0, shirtColor: 0, shirtStyle: 0, pantsColor: 0, pantsStyle: 0, scarf: 0,
 		weatherOn: true, rareChance: 0.35, autosave: true, leftHanded: false,
+		peaceful: false, nightDanger: 1,
 	};
 }
 
@@ -2549,6 +2558,10 @@ class Game {
 		// things in the world
 		this.drops = []; this.particles = []; this.floats = []; this.leafFlakes = []; this.decayZones = []; this.walkDoors = [];
 		this.mobs = []; this.projectiles = []; this.vehicles = []; this.flashes = [];
+		// fighting
+		this.strikeT = 0; this.strikeItem = null; this.strikeSel = -1; this.strikeTarget = null; this.hitStopT = 0;
+		this.lockTarget = null; this.lockT = 0; this.reloadT = 0; this.reloadSlot = -1; this.muzzleT = 0;
+		this.slashes = []; this.dangerZones = []; this.monsterSpawnCD = 0; this.spawnTimer = 0; this.kills = 0; this.frameNo = 0;
 		// panels
 		this.paused = false; this.showInventory = false; this.openChest = null; this.craftStation = "hand";
 		// debug and creative
@@ -2641,6 +2654,8 @@ class Game {
 	// ---- the master tick
 	tick(rawDt) {
 		if (this.paused) return;
+		// a blow that lands holds the world still for a few hundredths of a second
+		if (this.hitStopT > 0) { this.hitStopT -= rawDt; return; }
 		const t0 = performance.now();
 		const dt = Math.min(Math.max(rawDt, 0.001), 0.05);
 		this.clock += dt;
@@ -3222,6 +3237,8 @@ class Game {
 
 // Later phases add to the tick, the lights and what streaming keeps loaded through these lists.
 const tickHooks = [];
+/** each part of the game saves and loads its own share of a world through these (see p19_save) */
+const saveHooks = [], loadHooks = [];
 const lightHooks = [];
 function streamKeep(g) { return null; }
 /** vehicles, mounts and seats take the controls in later phases; true when one did */
@@ -3281,6 +3298,7 @@ Object.assign(Game.prototype, {
 		const tx = Math.floor(wx), ty = Math.floor(wy);
 		if (!this.inReach(wx, wy)) { this.say("Too far away.", 1.2); return; }
 		const t = this.world.tile(tx, ty);
+		if (t === T.chest && this.tryMimic(tx, ty)) return;
 		if (t === T.chest || t === T.cabinet || t === T.wardrobe) {
 			sfx("chestOpen", 0.7);
 			this.spawnParticles(tx + 0.5, ty + 0.3, 0xC8A878, 5, 2, 0.4, 6);
@@ -3334,11 +3352,6 @@ Object.assign(Game.prototype, {
 	},
 	useBareHand(dt, pressed) {
 		if (meleeHook(this, null, pressed)) return;
-		this.mineStep(Math.floor(this.aimX), Math.floor(this.aimY), null, 0, dt, 1);
-	},
-	useMeleeWeapon(id, pressed, dt) {
-		if (meleeHook(this, id, pressed)) return;
-		// (fighting comes with the creatures; until then a weapon digs like a bare hand)
 		this.mineStep(Math.floor(this.aimX), Math.floor(this.aimY), null, 0, dt, 1);
 	},
 	useToolItem(kind, tier, speed, dt, pressed) {
@@ -3614,12 +3627,1959 @@ const INTERACTIVE = new Set([T.chest, T.workbench, T.furnace, T.campfire, T.anvi
 const STATION_OF_TILE = new Map([[T.workbench, "bench"], [T.furnace, "furnace"], [T.campfire, "campfire"], [T.anvil, "anvil"], [T.tinkerBench, "tinker"], [T.riftForge, "forge"], [T.alchemyStill, "still"]]);
 const breakHooks = [];
 // later phases fill these in (creatures, special blocks, weapons)
-function hostileAtHook(g, wx, wy) { return false; }
-function interactiveHook(g, wx, wy, t) { return false; }
-function interactHook(g, tx, ty, t, wx, wy) {}
-function useItemHook(g, held, dt, pressed, released) { return false; }
-function meleeHook(g, id, pressed) { return false; }
 function placeHook(g, t, tx, ty) { return false; }
+
+// ===== p13_mobs.js =====
+// Creatures: their kinds and numbers (from the Swift game through the exporter), drops, spawn rules
+// and one creature's state (the Swift game's p13a_mobdefs).
+
+/** every creature kind by key ("zombie"): name, size, health, speed, blows, behaviour, art */
+const MOBS = {};
+const MOB_BY_ID = [];
+for (const m of DATA.mobs) { MOBS[m.key] = m; MOB_BY_ID[m.id] = m; }
+const mobDef = (k) => MOBS[k];
+
+const PREDATORS = new Set(["grizzly", "polarBear", "tiger", "scorpion"]);
+const WILD_ANIMALS = new Set(["elephant", "bear", "wolf", "grizzly", "polarBear", "tiger", "scorpion"]);
+const PREY = new Set(["pig", "cow", "sheep", "chicken", "giraffe", "frog", "cat"]);
+const UNDEAD = new Set(["zombie", "skeleton", "archer", "wraith"]);
+const HEAT_IMMUNE = new Set(["imp", "emberSlime", "cinderBat", "warden"]);
+const BOSS_KINDS = new Set(["bearBoss", "rex", "sentinel", "warden"]);
+const isPredator = (k) => PREDATORS.has(k);
+const isWildAnimal = (k) => WILD_ANIMALS.has(k);
+const isPrey = (k) => PREY.has(k);
+const isUndead = (k) => UNDEAD.has(k);
+const isHumanoid = (k) => !!MOBS[k].humanoid;
+const thinks = (k) => !!MOBS[k].thinks;
+
+/** What a creature drops: [item, least, most, chance] (the Swift game's mobDrops) */
+const MOB_DROPS = {
+	pig: [["food:rawMeat", 1, 3, 1]],
+	cow: [["food:rawMeat", 2, 4, 1], ["mat:leather", 1, 2, 0.8]],
+	sheep: [["food:rawMeat", 1, 2, 1], ["mat:wool", 1, 3, 0.9, "wool"]],
+	chicken: [["food:rawMeat", 1, 1, 0.9], ["mat:feather", 1, 3, 0.9]],
+	crow: [["mat:feather", 1, 2, 0.8]],
+	giraffe: [["food:rawMeat", 2, 4, 1], ["mat:leather", 2, 4, 0.9]],
+	frog: [["mat:string", 0, 1, 0.1]],
+	fish: [["food:rawFish", 1, 1, 1]],
+	elephant: [["food:rawMeat", 4, 7, 1], ["mat:tusk", 1, 2, 0.8], ["mat:leather", 2, 4, 0.9]],
+	bear: [["food:rawMeat", 2, 4, 1], ["mat:fur", 1, 3, 0.9], ["mat:claw", 1, 1, 0.3]],
+	grizzly: [["food:rawMeat", 3, 5, 1], ["mat:fur", 2, 4, 1], ["mat:claw", 1, 2, 0.6]],
+	polarBear: [["food:rawMeat", 3, 5, 1], ["mat:fur", 2, 4, 1], ["mat:claw", 1, 2, 0.5]],
+	tiger: [["food:rawMeat", 2, 4, 1], ["mat:leather", 1, 3, 0.9], ["mat:claw", 1, 2, 0.6]],
+	wolf: [["food:rawMeat", 1, 2, 0.9], ["mat:fur", 1, 2, 0.6], ["mat:bone", 1, 2, 0.4]],
+	cat: [["mat:string", 1, 2, 0.5]],
+	zombie: [["food:rawMeat", 0, 1, 0.3], ["mat:string", 0, 2, 0.3], ["food:carrot", 1, 1, 0.08], ["mat:ironBar", 1, 1, 0.04]],
+	skeleton: [["mat:bone", 1, 3, 0.9], ["ammo:arrow", 2, 6, 0.5], ["sword:stone", 1, 1, 0.06], ["mat:coal", 1, 3, 0.4]],
+	slime: [["mat:string", 1, 2, 0.4], ["block:torch", 1, 3, 0.3]],
+	bat: [["mat:string", 0, 1, 0.2]],
+	scorpion: [["mat:claw", 1, 1, 0.5], ["food:rawMeat", 1, 1, 0.5]],
+	wraith: [["mat:mythrilOre", 1, 2, 0.4], ["mat:goldBar", 1, 2, 0.3]],
+	pirate: [["mat:goldBar", 1, 2, 0.5], ["ammo:bullet", 2, 6, 0.4], ["mat:gunpowder", 1, 3, 0.5], ["sword:iron", 1, 1, 0.1], ["gadget:bomb", 1, 2, 0.15]],
+	pirateGunner: [["mat:goldBar", 1, 2, 0.5], ["ammo:bullet", 3, 8, 0.7], ["mat:gunpowder", 1, 4, 0.7], ["gun:pistol", 1, 1, 0.12]],
+	pirateCaptain: [["mat:goldBar", 4, 8, 1], ["mat:diamond", 1, 3, 0.8], ["gun:rifle", 1, 1, 0.4], ["ammo:bullet", 8, 16, 1]],
+	imp: [["mat:emberOre", 1, 2, 0.5], ["mat:coal", 2, 4, 0.6]],
+	emberSlime: [["mat:emberOre", 1, 3, 0.6], ["block:torch", 2, 5, 0.5]],
+	cinderBat: [["mat:emberOre", 0, 1, 0.3]],
+	bearBoss: [["mat:fur", 6, 10, 1], ["mat:claw", 3, 5, 1], ["mat:goldBar", 6, 12, 1], ["mat:diamond", 3, 6, 1], ["food:cookedMeat", 6, 10, 1], ["armor:chest:gold", 1, 1, 0.5]],
+	rex: [["mat:bone", 10, 20, 1], ["mat:tusk", 2, 4, 1], ["mat:goldBar", 6, 12, 1], ["mat:mythrilBar", 2, 5, 1], ["food:cookedMeat", 6, 10, 1]],
+	crawler: [["mat:string", 1, 3, 0.8], ["mat:claw", 1, 1, 0.25]],
+	golem: [["block:stone", 4, 8, 1], ["mat:ironOre", 1, 3, 0.6], ["mat:crystalShard", 1, 2, 0.35], ["mat:relicFragment", 1, 1, 0.1]],
+	archer: [["food:rawMeat", 0, 1, 0.3], ["mat:string", 0, 2, 0.4], ["ammo:arrow", 3, 8, 0.8], ["bow", 1, 1, 0.05]],
+	sentinel: [["mat:crystalShard", 8, 14, 1], ["mat:diamond", 2, 4, 1], ["block:glowCrystal", 4, 8, 1], ["mat:relicFragment", 2, 3, 1], ["gear:headlamp", 1, 1, 0.35]],
+	mimic: [["mat:goldBar", 2, 5, 1], ["mat:relicFragment", 1, 1, 0.8], ["mat:diamond", 1, 2, 0.35]],
+	warden: [["mat:umbralHeart", 1, 1, 1], ["mat:voidBar", 6, 10, 1], ["mat:diamond", 4, 8, 1], ["mat:emberBar", 4, 8, 1], ["mat:relicFragment", 3, 3, 1]],
+};
+function mobDrops(k, rng, sheared) {
+	const out = [];
+	for (const [id, lo, hi, p, tag] of MOB_DROPS[k] || []) {
+		if (tag === "wool" && sheared) continue;
+		if (rng.double() < p) { const n = lo + rng.int(Math.max(1, hi - lo + 1)); if (n > 0) out.push(stack(id, n)); }
+	}
+	return out;
+}
+
+// ---- spawn rules: [kind, weight, place, when, biomes, group, minY]
+const SPAWN_RULES = [
+	["pig", 5, "surface", "any", ["plains", "forest"], 2], ["cow", 5, "surface", "any", ["plains", "forest"], 2],
+	["sheep", 5, "surface", "any", ["plains", "forest", "mountain"], 3], ["chicken", 4, "surface", "day", ["plains", "forest", "savanna"], 3],
+	["crow", 3, "surface", "any", ["plains", "forest", "desert", "savanna", "swamp", "mountain"], 2],
+	["giraffe", 5, "surface", "any", ["savanna"], 2], ["elephant", 3, "surface", "any", ["savanna", "jungle"], 1],
+	["tiger", 3, "surface", "any", ["jungle", "savanna"], 1], ["bear", 3, "surface", "any", ["forest", "mountain"], 1],
+	["grizzly", 2, "surface", "any", ["mountain", "forest"], 1], ["polarBear", 4, "surface", "any", ["tundra"], 1],
+	["wolf", 3, "surface", "night", ["tundra", "forest", "plains"], 3], ["frog", 5, "surface", "any", ["swamp"], 2],
+	["scorpion", 5, "surface", "any", ["desert"], 1],
+	["zombie", 7, "surface", "night", [], 2], ["slime", 3, "surface", "night", ["plains", "forest", "jungle", "swamp"], 1],
+	["fish", 8, "ocean", "any", [], 4],
+	["skeleton", 6, "cave", "any", [], 2, 150], ["zombie", 2, "cave", "any", [], 1, 140], ["slime", 3, "cave", "any", [], 2, 140],
+	["bat", 4, "cave", "any", [], 3, 150], ["wraith", 2, "cave", "any", [], 1, 380], ["crawler", 4, "cave", "any", [], 2, 140],
+	["archer", 3, "cave", "any", [], 1, 150], ["golem", 1.5, "cave", "any", [], 1, 260],
+	["archer", 2, "surface", "night", [], 1], ["skeleton", 2, "surface", "night", ["plains", "desert", "tundra", "mountain", "savanna"], 1],
+	["crawler", 2, "surface", "night", ["jungle", "swamp", "forest"], 2],
+	["imp", 5, "umbral", "any", [], 1], ["wraith", 3, "umbral", "any", [], 1], ["emberSlime", 5, "umbral", "any", [], 2], ["cinderBat", 4, "umbral", "any", [], 3],
+].map(([kind, weight, place, when, biomes, group, minY]) => ({ kind, weight, place, when, biomes: biomes.map((b) => Biome[b]), group, minY: minY || 0, maxY: 9999 }));
+
+let mobSerial = 0;
+/** one creature (the Swift game's Mob): its body, health, timers and its mind's state */
+function makeMob(kind, x, y) {
+	const d = MOBS[kind];
+	return {
+		id: ++mobSerial, kind, def: d, b: makeBody(x, y, d.w, d.h), hp: d.hp, maxHP: d.hp,
+		dir: Math.random() < 0.5 ? -1 : 1, anim: 0, hurtT: 0, cd: 0, t1: rand(0.5, 3), t2: 0, t3: 0, st: 0, variant: 0,
+		tame: false, angry: false, persistent: false, sheared: false, blocking: false, boat: -1, burn: 0,
+		homeX: x, homeY: y, lastX: x, downed: false, lair: 0, phase: 0, atk: 0, tx: 0, ty: 0, regrow: 0, knock: 0,
+		aiAccum: 0, removed: false, flash: 0, deathT: -1, lean: 0, hazardT: 0, lastAttacker: 0, lastHitByPlayer: -100,
+		hitStamps: new Map(), fallPeak: 0, burnTick: 0, face: 0, turnT: 0, atkT: 0, loot: [], thinkT: 0,
+		lastAtk: 0, repeatN: 0, sinceSignature: 0, goal: 0, goalX: 0, drinkT: 0, preyID: 0, prey: null, poseT: 0,
+		daze: 0, dazeGuard: 0, ai: "idle", aiT: 0, sees: false, losT: 0, seenX: 0, seenY: 0, lostT: 99, aimX: x,
+		blockedT: 0, progX: x, leapT: 0, leapReq: false, why: "", hunter: false, farT: 0,
+		slowT: 0, slowAmt: 0, poisonT: 0, weakT: 0, mut: 0, mutSize: 1, mutDmg: 1,
+	};
+}
+const MOB_TURN = 0.14, MOB_ATK = 0.28;
+const mobCY = (m) => m.b.y - m.b.h * 0.5;
+const isBossMob = (m) => BOSS_KINDS.has(m.kind) && !m.tame;
+const mobDmgMul = (m) => m.mutDmg * (m.weakT > 0 ? 0.6 : 1);
+const mobSpeedMul = (m) => m.slowT > 0 ? Math.max(0.2, 1 - m.slowAmt) : 1;
+
+// ===== p16_combat.js =====
+// Fighting (the Swift game's p16a_combat, p16c_damage and the player's weapons from p14d_tools and
+// p20_assist). Every source of harm builds a damage record and goes through the same few functions:
+// they decide who can be hurt (sides), stop one attack hitting the same target every frame (keys),
+// apply armour and resistances, push targets back and remember whom to credit for a kill.
+
+const BYPASS_ARMOR = new Set(["fire", "lava", "fall", "drown", "starve", "poison"]);
+const AREA_DAMAGE = new Set(["explosion", "stomp", "impact", "crush", "fire", "lava", "hazard"]);
+const SRC_PLAYER = { kind: "player", id: 0, faction: "player", mult: 1 };
+const SRC_ENV = { kind: "env", id: -1, faction: "environment", mult: 1 };
+const BARE_HANDS = { damage: 1.5, cooldown: 0.4, reach: 1.8, halfArc: 0.75, style: "bash", knock: 4, swingTime: 0.22, trail: 0xE8D8C8, band: 0.55, critChance: 0.1, backstab: 1, combo: false, heavy: false, daze: 0, burn: 0, maxHits: 99, undeadMult: 1, windup: 0, shockwave: false };
+let attackSerial = 0;
+const newAttackKey = () => ++attackSerial;
+function dinfo(amount, type, source) { return { amount, type, source, dirX: 0, knock: 0, originX: 0, originY: 0, key: 0, cooldown: 0.5, heavy: false, crit: false }; }
+const srcMob = (g, m) => ({ kind: "mob", id: m.id, faction: g.faction(m), mult: mobDmgMul(m) });
+
+/** the share of damage of a type a creature takes (1 = all of it) */
+function damageResist(k, t) {
+	const r = DAMAGE_RESIST[k + ":" + t];
+	return r === undefined ? 1 : r;
+}
+const DAMAGE_RESIST = {};
+for (const [list, v] of [
+	[["imp:fire", "emberSlime:fire", "cinderBat:fire", "imp:lava", "emberSlime:lava", "cinderBat:lava"], 0],
+	[["wraith:fall", "bat:fall", "cinderBat:fall", "crow:fall", "sentinel:fall", "warden:fall", "warden:lava", "mimic:fall"], 0],
+	[["skeleton:projectile"], 0.75], [["bearBoss:lava", "rex:lava"], 0.5], [["bearBoss:explosion", "rex:explosion"], 0.6],
+	[["slime:fall", "emberSlime:fall", "cat:fall", "frog:fall"], 0.2], [["golem:melee", "golem:contact"], 0.55], [["golem:projectile"], 0.35],
+	[["golem:fire", "golem:fall"], 0.2], [["golem:explosion"], 1.25], [["sentinel:projectile"], 0.8], [["warden:explosion"], 0.7],
+	[["golem:shock"], 0.6], [["sentinel:shock"], 0.5], [["warden:shock"], 0.75],
+	[["zombie:poison", "skeleton:poison", "wraith:poison", "golem:poison", "sentinel:poison", "warden:poison", "slime:poison", "emberSlime:poison"], 0],
+]) for (const k of list) DAMAGE_RESIST[k] = v;
+
+/** where a segment enters a box (0...1 along it), or -1 */
+function segmentBoxT(x0, y0, x1, y1, bx0, by0, bx1, by1) {
+	const dx = x1 - x0, dy = y1 - y0;
+	let tmin = 0, tmax = 1;
+	if (Math.abs(dx) < 1e-9) { if (x0 < bx0 || x0 > bx1) return -1; }
+	else { let ta = (bx0 - x0) / dx, tb = (bx1 - x0) / dx; if (ta > tb) { const s = ta; ta = tb; tb = s; } tmin = Math.max(tmin, ta); tmax = Math.min(tmax, tb); if (tmin > tmax) return -1; }
+	if (Math.abs(dy) < 1e-9) { if (y0 < by0 || y0 > by1) return -1; }
+	else { let ta = (by0 - y0) / dy, tb = (by1 - y0) / dy; if (ta > tb) { const s = ta; ta = tb; tb = s; } tmin = Math.max(tmin, ta); tmax = Math.min(tmax, tb); if (tmin > tmax) return -1; }
+	return tmin;
+}
+const SEG_HIT = [0, 0, 0];
+Object.assign(World.prototype, {
+	/** the first solid tile along a segment: SEG_HIT = [x, y, fraction] and true, or false */
+	segmentSolid(x0, y0, x1, y1) {
+		const dx = x1 - x0, dy = y1 - y0;
+		const n = Math.max(1, Math.ceil(Math.hypot(dx, dy) / 0.2));
+		for (let i = 1; i <= n; i++) {
+			const t = i / n, tx = Math.floor(x0 + dx * t), ty = Math.floor(y0 + dy * t);
+			if (SOLID[this.tile(tx, ty)]) {
+				const et = segmentBoxT(x0, y0, x1, y1, tx, ty, tx + 1, ty + 1);
+				SEG_HIT[0] = tx; SEG_HIT[1] = ty; SEG_HIT[2] = et < 0 ? t : et;
+				return true;
+			}
+		}
+		return false;
+	},
+	lineClear(x0, y0, x1, y1) { return !this.segmentSolid(x0, y0, x1, y1); },
+});
+function angleDiff(a, b) { let d = a - b; while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI; return d; }
+/** the launch angle for a shot of speed v under gravity g to pass through (dx, dy), on the flatter arc */
+function lobAngle(dx, dy, v, g) {
+	if (g <= 0.001) return Math.atan2(dy, dx);
+	const x = Math.max(0.001, Math.abs(dx)), up = -dy, v2 = v * v;
+	const disc = v2 * v2 - g * (g * x * x + 2 * up * v2);
+	const th = disc < 0 ? Math.PI * 0.25 : Math.atan((v2 - Math.sqrt(disc)) / (g * x));
+	return dx >= 0 ? -th : Math.PI + th;
+}
+const THROW_SPEED = 15, THROW_GRAVITY = 22;
+const BOW = { minSpeed: 20, maxSpeed: 40, baseDamage: 5, chargeDamage: 9, chargeTime: 0.55, useTime: 0.32, gravity: 15 };
+const SLING_AMMO = ["block:stone", "block:slate", "block:deepRock", "block:sandstone", "block:ashStone"];
+const MELEE_KINDS = new Set(["sword", "spear", "hammer", "knife", "club", "relic"]);
+function meleeOf(id) { return id ? (itemDef(id).melee || BARE_HANDS) : BARE_HANDS; }
+const MOB_GRID = 8;
+
+Object.assign(Game.prototype, {
+	// ---- sides
+	faction(m) {
+		if (m.tame) return "ally";
+		if (m.kind === "pirate" || m.kind === "pirateGunner" || m.kind === "pirateCaptain") return "pirate";
+		if (m.kind === "imp" || m.kind === "emberSlime" || m.kind === "cinderBat") return "umbral";
+		if (BOSS_KINDS.has(m.kind)) return "boss";
+		return m.def.hostile ? "hostile" : "wild";
+	},
+	canHarm(src, tf, targetID, area) {
+		if (src.kind === "mob" && src.id === targetID) return false;
+		if (src.kind === "player" && tf === "player") return false;
+		switch (src.faction) {
+			case "environment": case "boss": return true;
+			case "player": return tf !== "ally";
+			case "ally": return tf !== "player" && tf !== "ally";
+			default: return area ? true : tf !== src.faction;
+		}
+	},
+	// ---- creatures by place: buckets of 8 columns, made again each frame
+	rebuildMobGrid() {
+		const grid = this.mobGrid || (this.mobGrid = new Map());
+		for (const b of grid.values()) b.length = 0;
+		for (const m of this.mobs) {
+			if (m.hp <= 0 || m.removed) continue;
+			const k = floorDiv(Math.floor(m.b.x), MOB_GRID);
+			let b = grid.get(k);
+			if (!b) { b = []; grid.set(k, b); }
+			b.push(m);
+		}
+		if (grid.size > 256) for (const [k, b] of grid) if (!b.length) grid.delete(k);
+	},
+	mobsNear(x0, x1) {
+		const c0 = floorDiv(Math.floor(x0), MOB_GRID), c1 = floorDiv(Math.floor(x1), MOB_GRID);
+		if (c1 - c0 > 64 || !this.mobGrid) return this.mobs;
+		const out = [];
+		for (let c = c0; c <= c1; c++) { const b = this.mobGrid.get(c); if (b) for (const m of b) out.push(m); }
+		return out;
+	},
+	isThreat(m) {
+		if (m.angry) return true;
+		if (isWildAnimal(m.kind)) return this.clock - m.lastHitByPlayer < 12;
+		return !!m.def.hostile;
+	},
+	wildProvoked(m) { return this.clock - m.lastHitByPlayer < 12; },
+	heatImmune(m) { return HEAT_IMMUNE.has(m.kind); },
+
+	// ---- applying damage
+	applyMobDamage(m, info) {
+		if (m.hp <= 0 || m.removed) return false;
+		if (!this.canHarm(info.source, this.faction(m), m.id, AREA_DAMAGE.has(info.type))) return false;
+		if (info.key !== 0) {
+			const last = m.hitStamps.get(info.key);
+			if (last !== undefined && this.clock - last < info.cooldown) return false;
+			m.hitStamps.set(info.key, this.clock);
+			if (m.hitStamps.size > 24) for (const [k, t] of m.hitStamps) if (this.clock - t >= 4) m.hitStamps.delete(k);
+		}
+		let amount = info.amount * damageResist(m.kind, info.type) * (info.source.kind === "mob" ? info.source.mult : 1);
+		if (info.heavy && m.kind === "golem") amount *= 1.9;
+		if (info.source.kind === "player") {
+			if (this.inv.wearing("wardenSigil")) amount *= 1.2;
+			if (isUndead(m.kind) && this.inv.wearing("silverCharm")) amount *= 1.25;
+		}
+		if (amount <= 0) return false;
+		const byPlayer = info.source.kind === "player";
+		if (byPlayer) m.lastHitByPlayer = this.clock;
+		m.lastAttacker = info.source.id;
+		let dir = info.dirX;
+		if (dir === 0 && info.knock > 0) dir = m.b.x >= info.originX ? 1 : -1;
+		this.hurtMob(m, amount, dir, info.knock, byPlayer, info.heavy, info.crit);
+		return true;
+	},
+	hurtPlayer(info) {
+		if (this.dead) return false;
+		if (!this.canHarm(info.source, "player", 0, AREA_DAMAGE.has(info.type)) && info.source.kind !== "player") return false;
+		const stamps = this.playerHitStamps || (this.playerHitStamps = new Map());
+		if (info.key !== 0) {
+			const last = stamps.get(info.key);
+			if (last !== undefined && this.clock - last < info.cooldown) return false;
+			stamps.set(info.key, this.clock);
+			if (stamps.size > 24) for (const [k, t] of stamps) if (this.clock - t >= 4) stamps.delete(k);
+		}
+		const before = this.hp;
+		let ward = this.inv.wearing("wardenSigil") ? 0.85 : 1;
+		if (info.source.kind === "mob" && this.inv.wearing("silverCharm")) { const s = this.mobs.find((o) => o.id === info.source.id); if (s && isUndead(s.kind)) ward *= 0.75; }
+		const amount = info.amount * (info.source.kind === "mob" ? info.source.mult : 1);
+		if (amount <= 0.001) return false;
+		this.damagePlayer(amount * ward, info.originX, info.knock, BYPASS_ARMOR.has(info.type));
+		return this.hp < before;
+	},
+	damageBox(x0, y0, x1, y1, info) {
+		const pb = this.pb;
+		if (!this.dead && bodyRight(pb) > x0 && bodyLeft(pb) < x1 && pb.y > y0 && bodyTop(pb) < y1) this.hurtPlayer(info);
+		for (const m of this.mobsNear(x0 - 4, x1 + 4)) {
+			if (m.hp <= 0) continue;
+			if (bodyRight(m.b) > x0 && bodyLeft(m.b) < x1 && m.b.y > y0 && bodyTop(m.b) < y1) this.applyMobDamage(m, info);
+		}
+	},
+	pointBoxDist(px, py, x0, y0, x1, y1) { const dx = Math.max(0, x0 - px, px - x1), dy = Math.max(0, y0 - py, py - y1); return Math.hypot(dx, dy); },
+	damageArea(cx, cy, radius, info, falloff, los) {
+		const scaled = (d) => { const i = Object.assign({}, info); const f = clampD(d / radius, 0, 1); if (falloff) i.amount = info.amount * (1 - 0.65 * f); i.knock = info.knock * (falloff ? 1 - 0.5 * f : 1); i.originX = cx; i.originY = cy; return i; };
+		const pb = this.pb;
+		if (!this.dead) {
+			const d = this.pointBoxDist(cx, cy, bodyLeft(pb), bodyTop(pb), bodyRight(pb), pb.y);
+			if (d <= radius && (!los || this.world.lineClear(cx, cy, pb.x, pb.y - pb.h * 0.5))) this.hurtPlayer(scaled(d));
+		}
+		for (const m of this.mobsNear(cx - radius - 4, cx + radius + 4)) {
+			if (m.hp <= 0) continue;
+			const d = this.pointBoxDist(cx, cy, bodyLeft(m.b), bodyTop(m.b), bodyRight(m.b), m.b.y);
+			if (d > radius) continue;
+			if (los && !this.world.lineClear(cx, cy, m.b.x, mobCY(m))) continue;
+			this.applyMobDamage(m, scaled(d));
+		}
+	},
+	explode(x, y, radius, power, source, breakBlocks) {
+		sfx("explosion", 1);
+		const info = dinfo(power, "explosion", source);
+		info.knock = 11; info.key = newAttackKey(); info.cooldown = 1;
+		this.damageArea(x, y, radius, info, true, true);
+		if (source.kind === "player" && !this.dead) {
+			const pb = this.pb, d = this.pointBoxDist(x, y, bodyLeft(pb), bodyTop(pb), bodyRight(pb), pb.y);
+			if (d <= radius && this.world.lineClear(x, y, pb.x, pb.y - pb.h * 0.5)) this.damagePlayer(power * 0.45 * (1 - 0.65 * clampD(d / radius, 0, 1)), x, 9);
+		}
+		if (breakBlocks) blastHook(this, x, y, radius, power);
+		this.spawnParticles(x, y, 0xFFC050, 18, 8, 0.5, 2);
+		this.spawnParticles(x, y, 0x606060, 12, 4, 1, -3);
+		this.addShake(0.6);
+		this.addLightFlash(x, y, 15, 0.75, radius + 2.5);
+	},
+	addLightFlash(x, y, peak, dur, radius) {
+		if (this.flashes.length >= 12) this.flashes.shift();
+		this.flashes.push({ x, y, peak, dur, radius, age: 0 });
+	},
+
+	// ---- creatures hurt and killed
+	hurtMob(m, dmg, dirX, knock, byPlayer, heavy = false, crit = false) {
+		if (m.hp <= 0) return;
+		if (byPlayer) m.lastHitByPlayer = this.clock;
+		let d = byPlayer ? dmg * rule("hit") : dmg;
+		let kb = knock;
+		if (m.blocking && m.kind === "skeleton" && dirX !== 0 && dirX * m.dir < 0) {
+			if (heavy) {
+				m.blocking = false; m.cd = Math.max(m.cd, 0.9);
+				this.spawnParticles(m.b.x - m.dir * 0.5, m.b.y - 1, 0xFFF0C0, 8, 5, 0.25, 0);
+				this.floatText("Guard broken", m.b.x, bodyTop(m.b) - 0.4, 0xFFD080);
+			} else {
+				d *= 0.1; kb *= 0.25;
+				this.spawnParticles(m.b.x - m.dir * 0.5, m.b.y - 1, 0xE8F0FF, 5, 4, 0.2, 0);
+				this.floatText("Blocked", m.b.x, bodyTop(m.b) - 0.4, 0xA0C0FF);
+			}
+		}
+		if (d < 0.5) d = 0.5;
+		m.hp -= d; m.hurtT = 0.22; m.flash = 0.12;
+		if (dirX !== 0 && kb > 0) m.lean = clampD(dirX * kb / 9, -1, 1);
+		let resist = isBossMob(m) ? 0.97 : (m.def.w > 2 ? 0.6 : 0);
+		if (m.kind === "golem") resist = heavy ? 0.45 : 0.88;
+		if (dirX !== 0 && kb > 0) { m.b.vx = dirX * kb * (1 - resist); if (resist < 0.9) m.b.vy = Math.min(m.b.vy, -3.5); }
+		if (crit && byPlayer) this.floatText(Math.round(d) + "!", m.b.x, bodyTop(m.b) - 0.35, 0xFFE040);
+		else this.floatText(String(Math.round(d)), m.b.x, bodyTop(m.b) - 0.2, byPlayer ? 0xFFFFFF : 0xFFAA40);
+		this.spawnParticles(m.b.x, mobCY(m), m.kind === "skeleton" ? 0xE8E8E0 : 0xB02828, 4, 3, 0.4, 14);
+		const beh = m.def.behavior;
+		if (beh === "passive" || beh === "skittish") { m.t2 = 3.5; m.tx = m.b.x - (dirX === 0 ? 1 : dirX) * 6; }
+		else if (beh === "defensive" && byPlayer) {
+			m.angry = true; m.t3 = 10;
+			if (m.kind === "wolf") for (const o of this.mobs) if (o.kind === "wolf" && !o.tame && Math.abs(o.b.x - m.b.x) < 16) { o.angry = true; o.t3 = 12; }
+		}
+		if (m.hp <= 0) this.killMob(m, byPlayer);
+	},
+	killMob(m, byPlayer) {
+		m.hp = 0; m.deathT = 0; m.burn = 0;
+		const credit = byPlayer || this.clock - m.lastHitByPlayer < 6;
+		const rng = new RNG(hashU(m.id, Math.floor(this.clock * 1000), 4242));
+		for (const s of mobDrops(m.kind, rng, m.sheared)) this.spawnDrop(s, m.b.x, m.b.y - m.b.h * 0.5, rand(-2, 2), -4.5);
+		let col = 0xB02828;
+		if (m.kind === "skeleton") col = 0xE8E8E0;
+		if (m.kind === "slime") col = 0x60C060;
+		if (m.kind === "emberSlime") col = 0xFF8A20;
+		this.spawnParticles(m.b.x, mobCY(m), col, Math.floor(10 + m.b.w * 4), 5, 0.7, 14);
+		if (credit) this.kills = (this.kills || 0) + 1;
+		killHooks.forEach((f) => f(this, m, credit));
+		for (const s of m.loot) this.spawnDrop(s, m.b.x, m.b.y - m.b.h * 0.5, rand(-2.5, 2.5), -5);
+		m.loot = [];
+		if (m === this.activeBoss) this.activeBoss = null;
+		this.bumpHUD();
+	},
+	addMob(kind, x, y) {
+		const m = makeMob(kind, x, y);
+		if (kind === "zombie") m.variant = randInt(0, 2);
+		else if (MOBS[kind].variants.length > 1) m.variant = randInt(0, MOBS[kind].variants.length - 1);
+		this.mobs.push(m);
+		// it can be found at once (the buckets are made again each frame)
+		if (this.mobGrid) { const k = floorDiv(Math.floor(x), MOB_GRID); let b = this.mobGrid.get(k); if (!b) { b = []; this.mobGrid.set(k, b); } b.push(m); }
+		return m;
+	},
+
+	// ---- telegraphed blows
+	warn(x0, y0, x1, y1, dur, color = 0xFF3A2A) {
+		const z = this.dangerZones || (this.dangerZones = []);
+		if (z.length >= 24) z.shift();
+		sfx("warn", 0.6);
+		z.push({ x0: Math.min(x0, x1), y0: Math.min(y0, y1), x1: Math.max(x0, x1), y1: Math.max(y0, y1), t: dur, dur: Math.max(0.05, dur), color });
+	},
+	mobAttackBox(m, x0, y0, x1, y1, dmg, knock, type = "melee") {
+		const info = dinfo(dmg, type, srcMob(this, m));
+		info.knock = knock; info.originX = m.b.x; info.originY = mobCY(m); info.key = newAttackKey();
+		this.damageBox(Math.min(x0, x1), Math.min(y0, y1), Math.max(x0, x1), Math.max(y0, y1), info);
+	},
+
+	// ---- projectiles
+	shoot(p) {
+		const q = Object.assign({ w: 0.12, life: 3, stuck: 0, stuckAngle: 0, pierce: 0, knock: 0, lastHit: 0, trail: 0, owner: 0, uid: newAttackKey(), source: SRC_ENV, gravity: 0 }, p);
+		this.projectiles.push(q);
+		return q;
+	},
+	updateProjectiles(dt) {
+		if (!this.projectiles.length) return;
+		const list = this.projectiles;
+		this.projectiles = [];
+		const keep = [];
+		for (const p of list) if (this.stepProjectile(p, dt)) keep.push(p);
+		for (const p of this.projectiles) keep.push(p);
+		this.projectiles = keep;
+	},
+	stepProjectile(p, dt) {
+		p.life -= dt;
+		if (p.life <= 0) {
+			if (p.kind === "bomb") this.explode(p.x, p.y, 3.4, p.dmg, p.source, true);
+			return false;
+		}
+		if (p.stuck > 0) {
+			p.stuck -= dt;
+			if (p.stuck <= 0 && (p.kind === "arrow" || p.kind === "quarrel") && p.source.kind === "player" && !this.isCreative && Math.random() < 0.35) this.spawnDrop(stack(p.kind === "arrow" ? "ammo:arrow" : "ammo:bolt", 1), p.x, p.y, 0, -1);
+			return p.stuck > 0;
+		}
+		if (p.kind === "shock") return this.stepShock(p, dt);
+		p.vy = Math.min(p.vy + p.gravity * dt, 40);
+		const nx = p.x + p.vx * dt, ny = p.y + p.vy * dt;
+		let wallT = 2, wtx = 0, wty = 0;
+		if (this.world.segmentSolid(p.x, p.y, nx, ny)) { wallT = SEG_HIT[2]; wtx = SEG_HIT[0]; wty = SEG_HIT[1]; }
+		if (p.kind !== "bomb") {
+			const hit = this.firstEntityOnPath(p, nx, ny, wallT);
+			if (hit) {
+				const hx = p.x + (nx - p.x) * hit.t, hy = p.y + (ny - p.y) * hit.t;
+				const info = dinfo(p.dmg, p.kind === "fireball" ? "fire" : "projectile", p.source);
+				info.dirX = p.vx >= 0 ? 1 : -1;
+				info.knock = p.knock > 0 ? p.knock : (p.kind === "bullet" ? 4 : p.kind === "arrow" ? 3.5 : 3);
+				info.originX = p.x; info.originY = p.y; info.key = p.uid; info.cooldown = 1;
+				if (p.kind === "fireball") info.type = "projectile";
+				if (hit.mob) {
+					const m = hit.mob;
+					if (this.applyMobDamage(m, info)) {
+						if (p.kind === "fireball") m.burn = Math.max(m.burn, 2.5);
+						this.spawnParticles(hx, hy, p.kind === "fireball" ? 0xFF8030 : 0xE8E0D0, 3, 2.5, 0.25, 8);
+						if (p.source.kind === "player") { sfx("arrowHit", 0.55); this.lockTarget = m; this.lockT = 2; }
+					}
+					p.lastHit = m.id;
+				} else {
+					this.hurtPlayer(info);
+					if (p.kind === "fireball") { this.playerBurn = Math.max(this.playerBurn, 1.5); this.spawnParticles(hx, hy, 0xFF8030, 8, 4, 0.4, 6); }
+				}
+				if (p.pierce > 0 && hit.mob) { p.pierce--; p.dmg *= 0.7; }
+				else return false;
+			}
+		}
+		if (wallT <= 1) {
+			const hx = p.x + (nx - p.x) * wallT, hy = p.y + (ny - p.y) * wallT;
+			switch (p.kind) {
+				case "pebble": this.spawnParticles(hx, hy, 0x9A9A9A, 4, 2.5, 0.3, 14); return false;
+				case "arrow": case "quarrel":
+					p.x = hx - p.vx * 0.004; p.y = hy - p.vy * 0.004;
+					p.stuckAngle = Math.atan2(p.vy, p.vx);
+					p.vx = 0; p.vy = 0; p.stuck = 4; p.gravity = 0;
+					this.spawnParticles(hx, hy, 0xA0A0A0, 2, 1.5, 0.2, 8);
+					return true;
+				case "rock": this.rockImpact(p, hx, hy); return false;
+				case "bomb": {
+					const onTop = Math.abs(hy - wty) < 0.02 && p.vy > 0, onBottom = Math.abs(hy - (wty + 1)) < 0.02 && p.vy < 0;
+					if (onTop || onBottom) {
+						p.vy = -p.vy * 0.35; p.vx *= onTop ? 0.4 : 0.7; p.x = hx; p.y = onTop ? wty - 0.02 : wty + 1.02;
+						if (onTop && Math.abs(p.vy) < 1.5) { p.vy = 0; p.vx *= 0.6; }
+					} else { p.vx = -p.vx * 0.45; p.x = p.vx < 0 ? wtx - 0.02 : wtx + 1.02; p.y = hy; }
+					if (this.world.solid(Math.floor(p.x), Math.floor(p.y))) p.y = this.world.groundBelow(Math.floor(p.x), Math.floor(p.y) - 4) - 0.02;
+					return true;
+				}
+				default:
+					this.spawnParticles(hx, hy, p.kind === "fireball" ? 0xFF8030 : 0xFFE080, 5, 3, 0.25, 6);
+					if (p.kind === "fireball") this.igniteNear(hx, hy, p.source);
+					return false;
+			}
+		}
+		p.x = nx; p.y = ny;
+		if (p.kind === "fireball" && Math.random() < 0.5) this.spawnParticles(p.x, p.y, 0xFFB040, 1, 1, 0.25, -2);
+		if (p.kind === "arrow" && p.source.kind === "player" && p.trail < 6) p.trail++;
+		return true;
+	},
+	firstEntityOnPath(p, nx, ny, maxT) {
+		let best = null, bt = Math.min(1, maxT);
+		const pad = Math.max(0.08, p.w * 0.5), pb = this.pb;
+		if (!this.dead && this.canHarm(p.source, "player", 0, false)) {
+			const t = segmentBoxT(p.x, p.y, nx, ny, bodyLeft(pb) - pad, bodyTop(pb) - pad, bodyRight(pb) + pad, pb.y + pad);
+			if (t >= 0 && t <= bt) { bt = t; best = { t, mob: null }; }
+		}
+		for (const m of this.mobsNear(Math.min(p.x, nx) - 4, Math.max(p.x, nx) + 4)) {
+			if (m.hp <= 0 || m.id === p.lastHit || m.downed) continue;
+			if (!this.canHarm(p.source, this.faction(m), m.id, false)) continue;
+			const t = segmentBoxT(p.x, p.y, nx, ny, bodyLeft(m.b) - pad, bodyTop(m.b) - pad, bodyRight(m.b) + pad, m.b.y + pad);
+			if (t >= 0 && t <= bt) { bt = t; best = { t, mob: m }; }
+		}
+		return best;
+	},
+	/** a shockwave runs along the ground and hurts what stands in it */
+	stepShock(p, dt) {
+		p.x += p.vx * dt;
+		p.y = this.world.groundBelow(Math.floor(p.x), Math.floor(p.y) - 3) - 0.5;
+		if (this.world.solid(Math.floor(p.x), Math.floor(p.y - 0.6)) && this.world.solid(Math.floor(p.x + p.vx * 0.1), Math.floor(p.y - 0.4))) return false;
+		const info = dinfo(p.dmg, "stomp", p.source);
+		info.dirX = p.vx >= 0 ? 1 : -1; info.knock = 7; info.originX = p.x - p.vx; info.originY = p.y; info.key = p.uid; info.cooldown = 2;
+		this.damageBox(p.x - 0.5, p.y - 0.9, p.x + 0.5, p.y + 0.5, info);
+		if (Math.random() < 0.5) this.spawnParticles(p.x, p.y + 0.3, 0xA08860, 1, 1.5, 0.3, 6);
+		return true;
+	},
+	rockImpact(p, x, y) {
+		this.spawnParticles(x, y, 0x8A8A8A, 10, 5, 0.5, 16);
+		this.addShake(0.25);
+		const info = dinfo(p.dmg, "impact", p.source);
+		info.knock = 5; info.originX = x; info.originY = y - 1; info.key = p.uid; info.cooldown = 1;
+		this.damageArea(x, y - 0.8, 1.8, info, false, false);
+	},
+	igniteNear(x, y, src) {
+		for (const m of this.mobsNear(x - 1.5, x + 1.5)) if (m.hp > 0 && !this.heatImmune(m) && Math.abs(mobCY(m) - y) < m.b.h * 0.5 + 1 && this.canHarm(src, this.faction(m), m.id, true)) m.burn = Math.max(m.burn, 2);
+	},
+	throwBomb() {
+		if (this.useCD > 0) return;
+		if (!this.isCreative) this.inv.removeAt(this.sel, 1);
+		this.facing = this.aimFacing();
+		const ox = this.pb.x + this.facing * 0.4, oy = this.pb.y - 1.3;
+		const a = lobAngle(this.aimX - ox, this.aimY - oy, THROW_SPEED, THROW_GRAVITY);
+		this.shoot({ kind: "bomb", x: ox, y: oy, vx: Math.cos(a) * THROW_SPEED, vy: Math.sin(a) * THROW_SPEED, dmg: 26, gravity: THROW_GRAVITY, life: 1.8, w: 0.4, source: SRC_PLAYER });
+		this.useCD = 0.45; this.swingT = 0.18; this.swingDir = this.facing;
+		this.bumpHUD();
+	},
+
+	// ---- hazards for creatures: lava, fire, spikes and cactus, falls
+	mobHazards(m, dt) {
+		if (m.removed || m.downed) return;
+		if (m.slowT > 0) m.slowT -= dt;
+		if (m.weakT > 0) m.weakT -= dt;
+		if (m.hazardT > 0) m.hazardT -= dt;
+		const b = m.b, w = this.world, hw = b.w * 0.5, immune = this.heatImmune(m), fx = Math.floor(b.x);
+		const inLava = b.inLava || w.tile(fx, Math.floor(b.y - 0.1)) === T.lava;
+		if (inLava && !immune) {
+			m.burn = Math.max(m.burn, 3);
+			if (m.hazardT <= 0) {
+				m.hazardT = 0.35;
+				const info = dinfo(isBossMob(m) ? 14 : 6, "lava", SRC_ENV); info.originX = b.x;
+				this.applyMobDamage(m, info);
+				if (m.hp > 0 && !m.def.flying) b.vy = Math.min(b.vy, -7);
+			}
+		}
+		if (m.burn > 0) {
+			if (immune || b.inWater) m.burn = 0;
+			else {
+				m.burn -= dt; m.burnTick += dt;
+				if (m.burnTick >= 0.5) {
+					m.burnTick = 0;
+					const info = dinfo(isBossMob(m) ? 3 : 2, "fire", SRC_ENV); info.originX = b.x;
+					this.applyMobDamage(m, info);
+					this.spawnParticles(b.x, b.y - b.h * 0.7, 0xFF8030, 2, 1.5, 0.4, -4);
+				}
+			}
+		}
+		if (!m.def.flying && m.hazardT <= 0 && ((this.frameNo + m.id) & 3) === 0) {
+			let t = w.boxHurts(b.x - hw + 0.05, b.y - 0.6, b.x + hw - 0.05, b.y + 0.05);
+			if (t < 0) t = w.boxHurts(b.x - hw - 0.02, bodyTop(b) + 0.1, b.x + hw + 0.02, b.y - 0.1);
+			if (t === T.spikes || t === T.cactus) {
+				m.hazardT = 0.6;
+				const info = dinfo(t === T.spikes ? 5 : 2, "hazard", SRC_ENV); info.originX = b.x - m.dir; info.knock = 3;
+				this.applyMobDamage(m, info);
+			}
+			if (w.tile(fx, Math.floor(b.y - 0.5)) === T.campfire && !immune) m.burn = Math.max(m.burn, 2);
+		}
+		if (!m.def.flying && m.kind !== "fish") {
+			if (!b.onGround && b.vy > 0 && !b.inWater) m.fallPeak = Math.max(m.fallPeak, b.vy);
+			if (b.onGround || b.inWater) {
+				if (m.fallPeak > 23 && !b.inWater && !isBossMob(m)) { const info = dinfo((m.fallPeak - 21) * 1.5, "fall", SRC_ENV); info.originX = b.x; this.applyMobDamage(m, info); }
+				m.fallPeak = 0;
+			}
+		}
+	},
+	/** dead creatures topple, fall and fade for a moment before they go */
+	updateDying(dt) {
+		for (const m of this.mobs) {
+			if (m.hp > 0 || m.removed) continue;
+			if (m.deathT < 0) m.deathT = 0;
+			m.deathT += dt;
+			if (!m.def.flying || m.deathT > 0.1) {
+				m.b.vy = Math.min(m.b.vy + gravityG() * dt, terminalV);
+				m.b.vx *= 1 - Math.min(1, dt * 4);
+				if (m.deathT < 0.8) this.world.moveBody(m.b, dt, 0, false, null);
+			}
+			if (m.deathT > 0.7) m.removed = true;
+		}
+	},
+
+	// ---- the player's blows
+	attackAngle() {
+		if (this.aimValid) {
+			const dx = this.aimX - this.shoulderX, dy = this.aimY - this.shoulderY;
+			if (dx * dx + dy * dy > 0.36) return Math.atan2(dy, dx);
+		}
+		return this.facing >= 0 ? 0 : Math.PI;
+	},
+	boxDistance(m, ox, oy) { const nx = clampD(ox, bodyLeft(m.b), bodyRight(m.b)), ny = clampD(oy, bodyTop(m.b), m.b.y); return Math.hypot(nx - ox, ny - oy); },
+	mobUnderAim(p) {
+		if (!this.aimValid) return null;
+		const pad = 0.9;
+		let best = null, bd = 1e9;
+		for (const m of this.mobsNear(this.aimX - 6, this.aimX + 6)) {
+			if (m.hp <= 0 || m.removed || m.tame || m.downed) continue;
+			if (this.aimX < bodyLeft(m.b) - pad || this.aimX > bodyRight(m.b) + pad || this.aimY < bodyTop(m.b) - pad || this.aimY > m.b.y + pad) continue;
+			if (this.boxDistance(m, this.shoulderX, this.shoulderY) > Math.max(p.reach + 1.5, 4)) continue;
+			let d = Math.abs(this.aimX - m.b.x) + Math.abs(this.aimY - mobCY(m));
+			if (!this.isThreat(m)) d += 2;
+			if (d < bd) { bd = d; best = m; }
+		}
+		return best;
+	},
+	/** whether a swing along (dirx, diry) reaches `m`: how far it is, or -1 */
+	meleeReach(m, dirx, diry, p) {
+		const ox = this.shoulderX, oy = this.shoulderY, hw = m.b.w * 0.5, hh = m.b.h * 0.5, cx = m.b.x, cy = m.b.y - hh;
+		const nx = clampD(ox, cx - hw, cx + hw), ny = clampD(oy, cy - hh, cy + hh);
+		const dist = Math.hypot(nx - ox, ny - oy);
+		if (dist > p.reach) return -1;
+		const vx = cx - ox, vy = cy - oy;
+		if (p.style === "thrust") {
+			const along = vx * dirx + vy * diry, ext = hw * Math.abs(dirx) + hh * Math.abs(diry);
+			if (along + ext < 0 || along - ext > p.reach) return -1;
+			if (Math.abs(vx * diry - vy * dirx) - (hw * Math.abs(diry) + hh * Math.abs(dirx)) > p.band) return -1;
+		} else if (dist > 0.45) {
+			const cd = Math.max(0.2, Math.hypot(vx, vy));
+			const off = Math.abs(angleDiff(Math.atan2(vy, vx), Math.atan2(diry, dirx)));
+			const ext = hw * Math.abs(vy / cd) + hh * Math.abs(vx / cd);
+			if (off > p.halfArc + Math.atan(ext / cd)) return -1;
+		} else if (vx * dirx < -0.3 && Math.abs(dirx) > 0.3) return -1;
+		const ix = nx + (cx - nx) * 0.25, iy = ny + (cy - ny) * 0.25;
+		if (!this.world.lineClear(ox, oy, ix, iy) && !this.world.lineClear(ox, oy, cx, cy)) return -1;
+		return dist;
+	},
+	meleeCandidates(p) {
+		const ang = this.attackAngle(), dirx = Math.cos(ang), diry = Math.sin(ang), ox = this.shoulderX;
+		const out = [];
+		for (const m of this.mobsNear(ox - p.reach - 4, ox + p.reach + 4)) {
+			if (m.hp <= 0 || m.removed || m.tame || m.downed) continue;
+			const d = this.meleeReach(m, dirx, diry, p);
+			if (d >= 0) out.push([m, d]);
+		}
+		out.sort((a, b) => a[1] - b[1]);
+		if (out.length > p.maxHits) out.length = p.maxHits;
+		return out;
+	},
+	/** starts a blow with the held item (null: bare hands); a heavy weapon winds up first */
+	startMelee(it, target = null) {
+		if (this.useCD > 0 || this.strikeT > 0) return false;
+		const p = meleeOf(it);
+		this.useCD = p.cooldown; this.swingDur = p.swingTime; this.swingT = p.swingTime;
+		const ang = this.attackAngle();
+		this.swingDir = Math.abs(Math.cos(ang)) < 0.25 ? this.facing : (Math.cos(ang) >= 0 ? 1 : -1);
+		this.facing = this.swingDir;
+		this.strikeItem = it; this.strikeSel = this.sel; this.strikeTarget = target;
+		if (p.windup > 0) this.strikeT = p.windup; else this.resolveMelee(it);
+		return true;
+	},
+	resolveMelee(it) {
+		const p = meleeOf(it), ox = this.shoulderX, oy = this.shoulderY, ang = this.attackAngle(), key = newAttackKey();
+		let hits = 0, crits = 0, undead = false;
+		for (const [m] of this.meleeCandidates(p)) {
+			let d = p.damage, crit = false;
+			if (p.combo) { this.comboN = this.clock - (this.comboT || -9) < 0.7 ? (this.comboN || 0) + 1 : 1; this.comboT = this.clock; if (this.comboN % 3 === 0) { d *= 2; crit = true; } }
+			if (!crit && Math.random() < p.critChance) { d *= 1.5; crit = true; }
+			if (p.backstab > 1 && (this.pb.x - m.b.x) * m.dir < 0 && !isBossMob(m)) { d *= p.backstab; crit = true; }
+			if (p.undeadMult !== 1 && isUndead(m.kind)) { d *= p.undeadMult; undead = true; }
+			const dx = m.b.x - ox;
+			const info = dinfo(d, "melee", SRC_PLAYER);
+			info.dirX = Math.abs(dx) > 0.2 ? (dx > 0 ? 1 : -1) : this.swingDir;
+			info.knock = p.knock; info.originX = ox; info.originY = oy; info.key = key; info.cooldown = 0.3; info.heavy = p.heavy; info.crit = crit;
+			if (this.applyMobDamage(m, info)) {
+				hits++; if (crit) crits++;
+				if (p.burn > 0 && !this.heatImmune(m)) m.burn = Math.max(m.burn, p.burn);
+				if (p.daze > 0) this.dazeMob(m, p.daze);
+				this.spawnSparks(m.b.x - info.dirX * m.b.w * 0.3, mobCY(m), info.dirX, p.trail, crit ? 7 : 4);
+				this.lockTarget = m; this.lockT = 2;
+			}
+		}
+		if (p.shockwave) {
+			this.shoot({ kind: "shock", x: this.pb.x + this.swingDir * 1.2, y: this.pb.y - 0.5, vx: this.swingDir * 15, vy: 0, dmg: 12, life: 0.55, source: SRC_PLAYER });
+			this.addShake(0.3);
+			this.spawnParticles(this.pb.x + this.swingDir * 1.4, this.pb.y - 0.1, 0xA08860, 10, 4, 0.5, 12);
+		}
+		const sl = this.slashes || (this.slashes = []);
+		if (sl.length > 8) sl.shift();
+		const life = Math.max(0.12, p.swingTime * 0.7);
+		sl.push({ x: ox, y: oy, ang, reach: p.reach, halfArc: p.halfArc, style: p.style, color: p.trail, life, maxLife: life, hit: hits > 0 });
+		sfx(p.style === "stab" ? "swingLight" : p.style === "thrust" ? "thrust" : (p.heavy || p.daze > 0) && (p.style === "smash" || p.style === "bash") ? "swingHeavy" : "swing", 0.55);
+		if (hits > 0) {
+			this.hitStopT = Math.max(this.hitStopT || 0, p.heavy ? 0.07 : crits > 0 ? 0.05 : 0.03);
+			this.addShake(p.heavy ? 0.18 : crits > 0 ? 0.12 : 0.07);
+			sfx(crits > 0 ? "crit" : "hit", p.heavy ? 1 : 0.75);
+			if (hits >= 2) { this.floatText("x" + hits, this.pb.x, this.pb.y - this.pb.h - 0.9, 0xFFD060); sfx("multiHit", 0.6); }
+			if (undead && p.undeadMult > 1) this.spawnParticles(this.pb.x + this.swingDir * 1.2, this.pb.y - 1.2, 0xC8E8FF, 5, 2.5, 0.4, -2);
+		} else {
+			const t = this.strikeTarget || (this.lockT > 0 ? this.lockTarget : null);
+			if (t && t.hp > 0 && !t.removed) this.floatText("miss", t.b.x, bodyTop(t.b) - 0.3, 0xA8A8A8);
+		}
+		this.strikeTarget = null;
+	},
+	dazeMob(m, t) {
+		if (isBossMob(m) || m.dazeGuard > 0 || m.hp <= 0) return;
+		m.daze = Math.max(m.daze, t * (m.kind === "golem" ? 0.5 : 1));
+		m.atkT = 0; m.blocking = false;
+		sfx("daze", 0.5);
+	},
+	spawnSparks(x, y, dirX, color, n) {
+		if (this.particles.length > 160) return;
+		for (let i = 0; i < n; i++) {
+			const a = rand(-0.9, 0.9) + (dirX >= 0 ? 0 : Math.PI), sp = rand(4, 8);
+			this.particles.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 2, life: rand(0.12, 0.25), maxLife: 0.25, color: artGrade(Math.random() < 0.5 ? color : 0xFFF4D0), size: rand(0.07, 0.13), gravity: 20 });
+		}
+	},
+	/** a melee weapon: at what is aimed at; held, it swings again when ready while something is in reach */
+	useMeleeWeapon(id, pressed) {
+		const p = meleeOf(id), target = this.mobUnderAim(p);
+		if (target) { this.aimX = target.b.x; this.aimY = mobCY(target); }
+		if (!pressed) {
+			if (this.useCD > 0 || this.strikeT > 0) return;
+			const onStick = ActStick.held && !this.touchActive;
+			if (!onStick && !this.meleeCandidates(p).length) return;
+		}
+		this.startMelee(id, target);
+	},
+	/** a tool or a fist aimed at a creature fights it instead of digging behind it; true when it did */
+	fightWith(id, pressed) {
+		const p = meleeOf(id), m = this.mobUnderAim(p);
+		if (!m) return false;
+		if (pressed || (this.useCD <= 0 && this.meleeCandidates(p).length)) this.startMelee(id, m);
+		return true;
+	},
+
+	// ---- the bow: hold to draw, let go to loose; a full draw keeps firing
+	handleBow(dt, pressed, released) {
+		const has = this.isCreative || this.inv.total("ammo:arrow") > 0;
+		if (this.useHeld) {
+			if (!has) { if (pressed) this.say("No arrows!", 1.2); this.bowCharge = 0; return; }
+			if (this.useCD > 0 && this.bowCharge === 0) return;
+			this.bowCharge = Math.min(1, Math.max(this.bowCharge, 0.01) + dt / BOW.chargeTime);
+			this.facing = this.aimFacing();
+			if (this.bowCharge >= 1 && this.useCD <= 0) { this.fireArrow(1); this.bowCharge = 0.3; }
+		} else if (released && this.bowCharge > 0 && has) { this.fireArrow(Math.max(0.45, this.bowCharge)); this.bowCharge = 0; }
+		else this.bowCharge = 0;
+	},
+	arrowLaunch(charge) {
+		const pb = this.pb, ox = pb.x + this.facing * 0.35, oy = pb.y - 1.2;
+		let dx = this.aimX - ox, dy = this.aimY - oy;
+		const len = Math.max(0.001, Math.hypot(dx, dy)); dx /= len; dy /= len;
+		const speed = BOW.minSpeed + (BOW.maxSpeed - BOW.minSpeed) * charge;
+		return [ox + dx * 0.4, oy + dy * 0.4, dx * speed + pb.vx * 0.3, dy * speed + Math.min(0, pb.vy) * 0.2];
+	},
+	fireArrow(charge) {
+		if (!this.isCreative) this.inv.remove("ammo:arrow", 1);
+		const l = this.arrowLaunch(charge);
+		let dmg = BOW.baseDamage + BOW.chargeDamage * charge;
+		if (charge >= 0.99 && Math.random() < 0.15) dmg *= 1.5;
+		this.shoot({ kind: "arrow", x: l[0], y: l[1], vx: l[2], vy: l[3], dmg, gravity: BOW.gravity, life: 6, w: 0.22, source: SRC_PLAYER });
+		sfx("bow", 0.7);
+		this.useCD = BOW.useTime; this.swingT = 0.18; this.swingDir = this.facing;
+		this.bumpHUD();
+	},
+	/** points along the shot's flight for the aiming arc */
+	arrowPreview() {
+		let l, grav;
+		const it = this.heldItem;
+		if (this.bowCharge > 0) { l = this.arrowLaunch(Math.max(0.45, this.bowCharge)); grav = BOW.gravity; }
+		else if (this.useHeld && this.aimValid && it) {
+			let speed = 0, ox = this.pb.x + this.facing * 0.4, oy = this.pb.y - 1.3;
+			const gd = itemDef(it).gun;
+			if (it === "sling") { speed = 23; grav = 16; }
+			else if (gd && gd.bolts) { speed = gd.speed; grav = gd.gravity; ox = this.pb.x + this.facing * 0.7; oy = this.pb.y - 1.2; }
+			else if (it === "gadget:bomb") { speed = THROW_SPEED; grav = THROW_GRAVITY; }
+			else return null;
+			const a = lobAngle(this.aimX - ox, this.aimY - oy, speed, grav);
+			l = [ox, oy, Math.cos(a) * speed, Math.sin(a) * speed];
+		} else return null;
+		let x = l[0], y = l[1], vy = l[3];
+		const vx = l[2], out = [];
+		for (let i = 0; i < 40; i++) {
+			vy = Math.min(vy + grav * 0.03, 40);
+			const nx = x + vx * 0.03, ny = y + vy * 0.03;
+			if (this.world.segmentSolid(x, y, nx, ny)) break;
+			x = nx; y = ny;
+			if (i % 2 === 1) out.push(x, y);
+		}
+		return out;
+	},
+
+	// ---- guns and crossbows: the count loaded is the stack's `extra`
+	updateReload(dt) {
+		if (!(this.reloadT > 0)) return;
+		if (this.reloadSlot !== this.sel) { this.reloadT = 0; this.reloadSlot = -1; return; }
+		this.reloadT -= dt;
+		if (this.reloadT > 0) return;
+		this.reloadT = 0; this.reloadSlot = -1;
+		const st = this.inv.slots[this.sel];
+		const g = st && itemDef(st.id).gun;
+		if (!g || !g.ammo) return;
+		const need = g.magazine - st.extra;
+		let take = need;
+		if (!this.isCreative) { take = Math.min(need, this.inv.total(g.ammo)); this.inv.remove(g.ammo, take); }
+		st.extra += take;
+		if (g.bolts) sfx("tap", 0.5);
+		this.bumpHUD();
+	},
+	startReload() {
+		const st = this.heldStack, g = st && itemDef(st.id).gun;
+		if (!g || !g.ammo) return;
+		if (this.reloadT > 0 || st.extra >= g.magazine) return;
+		if (!this.isCreative && this.inv.total(g.ammo) <= 0) { this.say("Out of " + itemName(g.ammo).toLowerCase() + "!", 1.5); return; }
+		this.reloadT = g.reload; this.reloadSlot = this.sel;
+		if (g.magazine > 1) this.say("Reloading...", 1);
+	},
+	useGun(id, pressed) {
+		const st = this.inv.slots[this.sel], g = itemDef(id).gun;
+		if (!st || !g || this.reloadT > 0) return;
+		if (st.extra <= 0) {
+			if (id === "gun:stormRod") { if (pressed) this.say("The rod is still gathering its charge.", 1.2); return; }
+			if (pressed || this.useCD <= 0) this.startReload();
+			return;
+		}
+		if (this.useCD > 0) return;
+		if (g.needsPress && !pressed) return;
+		if (id === "gun:stormRod") { if (pressed) this.say("The storm rod comes with the weather.", 1.5); return; }
+		st.extra--;
+		this.useCD = g.cooldown;
+		this.facing = this.aimFacing();
+		const ox = this.pb.x + this.facing * 0.7, oy = this.pb.y - 1.2;
+		const base = lobAngle(this.aimX - ox, this.aimY - oy, g.speed, g.gravity);
+		const n = id === "gun:blunderbuss" ? 7 : 1;
+		for (let i = 0; i < n; i++) {
+			let a = base;
+			if (n > 1) a += (i / (n - 1) - 0.5) * 0.6;
+			const kind = n > 1 ? "pellet" : g.bolts ? "quarrel" : "bullet";
+			this.shoot({ kind, x: ox, y: oy, vx: Math.cos(a) * g.speed, vy: Math.sin(a) * g.speed, dmg: g.damage, gravity: g.gravity, life: g.life * (n > 1 ? rand(0.85, 1.1) : 1), source: SRC_PLAYER, pierce: g.pierce, knock: g.knock, w: kind === "pellet" ? 0.16 : kind === "quarrel" ? 0.22 : 0.12 });
+		}
+		const heavy = id === "gun:rifle" || id === "gun:arbalest" || id === "gun:blunderbuss";
+		sfx(id === "gun:blunderbuss" ? "blunderbuss" : g.bolts ? "crossbow" : "gun", 0.8);
+		this.muzzleT = g.bolts ? 0 : 0.08;
+		this.swingT = 0.1; this.swingDir = this.facing;
+		this.addShake(heavy ? 0.16 : 0.07);
+		this.pb.vx -= this.facing * (id === "gun:blunderbuss" ? 4 : heavy ? 2.5 : 1);
+		if (g.firearm) this.spawnParticles(ox + Math.cos(base) * 0.4, oy + Math.sin(base) * 0.4, 0xFFE080, n > 1 ? 9 : 4, 3, 0.15, 0);
+		if (st.extra <= 0 && (this.isCreative || this.inv.total(g.ammo) > 0)) this.startReload();
+		this.bumpHUD();
+	},
+	useSling(pressed) {
+		if (this.useCD > 0) return;
+		let ammo = null;
+		if (!this.isCreative) {
+			ammo = SLING_AMMO.find((id) => this.inv.total(id) > 0) || null;
+			if (!ammo) { if (pressed) this.say("The sling needs stones: any stone or slate in your bag.", 1.8); return; }
+			this.inv.remove(ammo, 1);
+		}
+		this.facing = this.aimFacing();
+		const ox = this.pb.x + this.facing * 0.4, oy = this.pb.y - 1.3;
+		const a = lobAngle(this.aimX - ox, this.aimY - oy, 23, 16);
+		this.shoot({ kind: "pebble", x: ox, y: oy, vx: Math.cos(a) * 23, vy: Math.sin(a) * 23, dmg: 4.5, gravity: 16, life: 3, w: 0.22, knock: 7.5, source: SRC_PLAYER });
+		this.useCD = 0.55; this.swingDur = 0.2; this.swingT = 0.2; this.swingDir = this.facing;
+		sfx("sling", 0.6);
+		this.bumpHUD();
+	},
+
+	// ---- the attack stick: inside the dead zone the game aims for itself
+	autoTarget(it) {
+		const ranged = !!(it && isRangedItem(it)), weapon = !!(it && isWeaponItem(it)), p = meleeOf(it);
+		const range = ranged ? 22 : p.reach + 3, ox = this.shoulderX, oy = this.shoulderY;
+		let best = null, bs = 1e9;
+		for (const m of this.mobsNear(ox - range - 4, ox + range + 4)) {
+			if (m.hp <= 0 || m.removed || m.tame || m.downed) continue;
+			const foe = this.isThreat(m);
+			if (!foe && !weapon) continue;
+			const d = this.boxDistance(m, ox, oy);
+			if (d > range) continue;
+			let s = d + (foe ? 0 : 8);
+			if (!this.world.lineClear(ox, oy, m.b.x, mobCY(m))) { if (ranged) continue; s += 6; }
+			if (m === this.lockTarget) s -= 1.5;
+			if (s < bs) { bs = s; best = m; }
+		}
+		return best;
+	},
+	shotBallistics(it) {
+		if (!it) return [0, 0];
+		if (it === "bow") return [BOW.maxSpeed, BOW.gravity];
+		const g = itemDef(it).gun;
+		if (g) return [g.speed, g.gravity];
+		if (it === "sling") return [23, 16];
+		if (it === "gadget:bomb") return [THROW_SPEED, THROW_GRAVITY];
+		return [0, 0];
+	},
+	aimPointFor(m, it) {
+		let tx = m.b.x, ty = mobCY(m);
+		const [spd, grav] = this.shotBallistics(it);
+		if (spd > 0) {
+			const t = Math.hypot(tx - this.pb.x, ty - (this.pb.y - 1.2)) / spd;
+			tx += m.b.vx * t;
+			if (it === "bow") ty -= 0.5 * grav * t * t;
+		}
+		return [tx, ty];
+	},
+	stickAim(it, dx, dy, power) {
+		const ox = this.shoulderX, oy = this.shoulderY, reach = Math.min(this.reachDistance(), 5.5) - 0.3;
+		if (!it) return this.stickDigPoint(dx, dy, reach);
+		const k = itemKind(it);
+		if (MELEE_KINDS.has(k)) { const d = Math.max(1, meleeOf(it).reach); return [ox + dx * d, oy + dy * d]; }
+		if (k === "bow" || k === "gun") return [ox + dx * 14, oy + dy * 14];
+		if (k === "sling") { const d = 4 + 9 * power; return [ox + dx * d, oy + dy * d]; }
+		if (it === "gadget:bomb") { const d = 3 + 9 * power; return [ox + dx * d, oy + dy * d]; }
+		if (k === "tool" || k === "gadget") return this.stickDigPoint(dx, dy, reach);
+		if (k === "block" || k === "wall" || k === "part") return this.stickPlacePoint(dx, dy, reach);
+		return [ox + dx * 1.5, oy + dy * 1.5];
+	},
+	stickDigPoint(dx, dy, r) {
+		const ox = this.shoulderX, oy = this.shoulderY, near = this.mobsNear(ox - r - 1, ox + r + 1);
+		for (let d = 0.7; d <= r; d += 0.25) {
+			const x = ox + dx * d, y = oy + dy * d;
+			for (const m of near) if (m.hp > 0 && !m.removed && !m.tame && !m.downed && x >= bodyLeft(m.b) - 0.2 && x <= bodyRight(m.b) + 0.2 && y >= bodyTop(m.b) - 0.2 && y <= m.b.y + 0.2) return [m.b.x, mobCY(m)];
+			const tx = Math.floor(x), ty = Math.floor(y), t = this.world.tile(tx, ty);
+			if (t !== T.air && !LIQUID[t]) return [tx + 0.5, ty + 0.5];
+		}
+		return [ox + dx * r, oy + dy * r];
+	},
+	stickPlacePoint(dx, dy, r) {
+		const ox = this.shoulderX, oy = this.shoulderY;
+		let last = null;
+		for (let d = 0.7; d <= r; d += 0.25) {
+			const tx = Math.floor(ox + dx * d), ty = Math.floor(oy + dy * d);
+			if (this.world.solid(tx, ty)) break;
+			last = [tx, ty];
+		}
+		return last ? [last[0] + 0.5, last[1] + 0.5] : [ox + dx * 1.2, oy + dy * 1.2];
+	},
+	/** once a frame before the tick: while the attack stick is held the game aims and acts */
+	applyActButton() {
+		const S = ActStick, held = S.held;
+		const was = S.was;
+		S.was = held;
+		if (!held) {
+			if (was && !this.touchActive) { this.useHeld = false; this.useWasHeld = false; this.useReleasedFlag = true; }
+			return;
+		}
+		if (this.dead) return;
+		if (this.touchActive) { this.useHeld = true; return; }
+		const it = this.heldItem;
+		if (S.manual) {
+			const a = this.stickAim(it, S.dirX, S.dirY, S.power);
+			this.aimX = a[0]; this.aimY = a[1]; this.aimValid = true; this.lockTarget = null;
+			if (Math.abs(S.dirX) > 0.25) this.facing = S.dirX >= 0 ? 1 : -1;
+			this.holdAction(was);
+			return;
+		}
+		const pb = this.pb;
+		let tx = pb.x + this.facing * 1.1, ty = pb.y - 1.3, aimed = false;
+		const k = it ? itemKind(it) : "";
+		const wantsMob = !(k === "block" || k === "part" || k === "mat" || k === "food" || k === "wall");
+		if (wantsMob) {
+			const m = this.autoTarget(it);
+			if (m) { const a = this.aimPointFor(m, it); tx = a[0]; ty = a[1]; aimed = true; this.lockTarget = m; this.lockT = Math.max(this.lockT || 0, 0.5); }
+		}
+		if (!aimed) {
+			const w = this.world, fx = Math.floor(pb.x + this.facing * (pb.w * 0.5 + 0.55));
+			const chest = Math.floor(pb.y - 1.3), feet = Math.floor(pb.y - 0.4), below = Math.floor(pb.y + 0.5);
+			if (k === "block" || k === "wall") {
+				if (!w.solid(fx, feet)) { tx = fx + 0.5; ty = feet + 0.5; }
+				else if (!w.solid(fx, chest)) { tx = fx + 0.5; ty = chest + 0.5; }
+				else { tx = fx + 0.5; ty = chest - 1 + 0.5; }
+			} else if (w.tile(fx, chest) !== T.air) { tx = fx + 0.5; ty = chest + 0.5; }
+			else if (w.tile(fx, feet) !== T.air) { tx = fx + 0.5; ty = feet + 0.5; }
+			else if (this.stickY > 0.5) { tx = Math.floor(pb.x) + 0.5; ty = below + 0.5; }
+			else { tx = fx + 0.5; ty = chest + 0.5; }
+		}
+		this.aimX = tx; this.aimY = ty; this.aimValid = true;
+		this.holdAction(was);
+	},
+	holdAction(was) {
+		if (!was) { this.useWasHeld = false; this.usePressedFlag = false; }
+		this.useHeld = true;
+	},
+	/** the hotbar's next weapon: the one used last, else the next along */
+	nextWeaponSlot() {
+		const holding = this.heldItem && isWeaponItem(this.heldItem);
+		const lw = this.lastWeaponSel;
+		if (!holding && lw >= 0 && lw < HOTBAR_N && lw !== this.sel) { const s = this.inv.slots[lw]; if (s && isWeaponItem(s.id)) return lw; }
+		for (let k = 1; k <= HOTBAR_N; k++) { const i = (this.sel + k) % HOTBAR_N, s = this.inv.slots[i]; if (s && isWeaponItem(s.id)) return i; }
+		return -1;
+	},
+	cycleWeapon() {
+		const i = this.nextWeaponSlot();
+		if (i < 0) { this.say("No weapon on the hotbar.", 1.2); return; }
+		this.setSel(i); sfx("swap", 0.4);
+	},
+	/** a wolf takes a bone, a cat a fish: tamed now and then */
+	tryTame(m) {
+		if (m.tame) return false;
+		const it = this.heldItem;
+		if (!it) return false;
+		const ok = (m.kind === "wolf" && it === "mat:bone") || (m.kind === "cat" && (it === "food:rawFish" || it === "food:cookedFish"));
+		if (!ok) return false;
+		if (!this.isCreative) this.inv.removeAt(this.sel, 1);
+		if (Math.random() < 0.6) {
+			m.tame = true; m.persistent = true; m.angry = false; m.hp = m.maxHP;
+			this.say("You tamed the " + m.def.name.toLowerCase() + "!", 3);
+			this.spawnParticles(m.b.x, m.b.y - 1, 0xFF6080, 10, 3, 0.8, -4);
+		} else this.say("The " + m.def.name.toLowerCase() + " isn't convinced yet...", 2);
+		this.useCD = 0.5;
+		this.bumpHUD();
+		return true;
+	},
+	/** once a frame: wind-ups land, the trail fades, the reload ticks, the lock wears off */
+	updateCombatFX(dt) {
+		if (this.strikeT > 0) {
+			this.strikeT -= dt;
+			if (this.strikeT <= 0) { this.strikeT = 0; if (this.strikeSel === this.sel && !this.dead) this.resolveMelee(this.strikeItem); }
+		}
+		if (this.slashes && this.slashes.length) { for (const s of this.slashes) s.life -= dt; this.slashes = this.slashes.filter((s) => s.life > 0); }
+		if (this.dangerZones && this.dangerZones.length) { for (const z of this.dangerZones) z.t -= dt; this.dangerZones = this.dangerZones.filter((z) => z.t > 0); }
+		if (this.lockT > 0) { this.lockT -= dt; if (this.lockT <= 0) this.lockTarget = null; }
+		if (this.muzzleT > 0) this.muzzleT -= dt;
+		if (this.flashes.length) { for (const f of this.flashes) f.age += dt; this.flashes = this.flashes.filter((f) => f.age < f.dur); }
+		this.updateReload(dt);
+	},
+});
+// where the player's blows start from
+Object.defineProperty(Game.prototype, "shoulderX", { get() { return this.pb.x; } });
+Object.defineProperty(Game.prototype, "shoulderY", { get() { return this.pb.y - this.pb.h * 0.55; } });
+/** the attack stick's state (see the HUD): held, how far out the thumb is and which way */
+const ActStick = { held: false, was: false, dirX: 0, dirY: 0, power: 0, manual: false, deadIn: 0.26, deadOut: 0.17,
+	at(x, y) {
+		const len = Math.hypot(x, y);
+		this.power = Math.min(1, len);
+		this.manual = this.power > (this.manual ? this.deadOut : this.deadIn);
+		if (this.manual && len > 0.0001) { this.dirX = x / len; this.dirY = y / len; }
+		this.held = true;
+	},
+	release() { this.held = false; this.manual = false; this.power = 0; this.dirX = 0; this.dirY = 0; },
+};
+/** creature deaths with consequences (bosses, lairs) are added by later code */
+const killHooks = [];
+/** blocks broken by blasts: a simple version until block physics (phase 4) */
+function blastHook(g, x, y, radius, power) {
+	const w = g.world, r = Math.ceil(radius);
+	for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+		const tx = Math.floor(x) + dx, ty = Math.floor(y) + dy, d = Math.hypot(tx + 0.5 - x, ty + 0.5 - y);
+		if (d > radius) continue;
+		const t = w.tile(tx, ty);
+		if (t === T.air || LIQUID[t] || HARD[t] >= 9999 || HARD[t] > power * 0.12) continue;
+		if (Math.random() < 0.8 - d / radius * 0.4) {
+			if (Math.random() < 0.3 && !g.isCreative) for (const s of tileDropStacks(t, tx, ty, g)) g.spawnDrop(s, tx + 0.5, ty + 0.5, rand(-3, 3), rand(-6, -2));
+			w.set(tx, ty, T.air);
+		}
+	}
+}
+// light from flashes (explosions)
+lightHooks.push((g, out) => {
+	for (const f of g.flashes) {
+		const t = clampD(f.age / Math.max(0.01, f.dur), 0, 1), u = 1 - t;
+		const lv = Math.round(f.peak * u * u * (3 - 2 * u));
+		if (lv > 0) out.push(Math.floor(f.x), Math.floor(f.y), lv);
+	}
+});
+
+// ===== p15_mobai.js =====
+// What creatures do (the Swift game's p15a_mobai, p15b_spawn and the animal life and newer creatures
+// from u01_art): moving, wandering, fleeing, chasing; every monster's senses and plan (`think`); each
+// kind's attacks; animals that graze, drink, herd and hunt; pets; and where and when creatures appear.
+
+const SPAWN_GLOW_MAX = 4;
+const NATURAL_GROUND = new Set([T.grass, T.dirt, T.stone, T.sand, T.snow, T.ice, T.sandstone, T.mud, T.dryGrass, T.jungleGrass, T.mossGrass, T.slate, T.deepRock, T.obsidian, T.ashStone, T.farmland, T.coal, T.copper, T.iron, T.tin, T.saltpeter].filter((t) => t !== undefined));
+
+Object.assign(Game.prototype, {
+	accelX(m, target, a, dt) {
+		const d = target - m.b.vx, s = a * dt;
+		if (d > s) m.b.vx += s; else if (d < -s) m.b.vx -= s; else m.b.vx = target;
+	},
+	stepMob(m, dt, stepUp = 1) {
+		const d = m.def, b = m.b;
+		if (d.flying) { /* their AI sets vy */ }
+		else if (b.inWater) {
+			b.vy = clampD(b.vy + 12 * dt, -5, 5);
+			if (m.hp > 0 && d.behavior !== "swimmer") b.vy -= 26 * dt;
+		} else b.vy = Math.min(b.vy + gravityG() * dt, terminalV);
+		if (m.knock > 0) m.knock -= dt;
+		if (m.leapReq) {
+			m.leapReq = false;
+			if (b.onGround && !d.flying) { b.vy = -d.jump * 1.22; b.vx = (m.aimX >= b.x ? 1 : -1) * Math.max(2.5, d.speed); m.leapT = 1.6; }
+		}
+		const sm = mobSpeedMul(m);
+		if (sm < 0.999) { b.vx *= sm; if (d.flying) b.vy *= sm; }
+		this.world.moveBody(b, dt, d.flying ? 0 : stepUp, false, null);
+		if (sm < 0.999) { b.vx /= sm; if (d.flying) b.vy /= sm; }
+		m.anim += b.onGround ? Math.abs(b.vx) * dt * 0.8 : dt * 0.5;
+	},
+	cliffAhead(m, dir) {
+		const fx = Math.floor(m.b.x + dir * (m.b.w * 0.5 + 0.6)), fy = Math.floor(m.b.y + 0.2);
+		for (let d = 0; d < 5; d++) { const t = this.world.tile(fx, fy + d); if (SOLID[t] || t === T.platform || LIQUID[t]) return false; }
+		return true;
+	},
+	wander(m, dt, k) {
+		m.t1 -= dt;
+		if (m.t1 <= 0) {
+			if (m.st === 0) {
+				m.st = 1; m.dir = Math.random() < 0.5 ? 1 : -1;
+				if (Math.abs(m.b.x - m.homeX) > 24) m.dir = m.b.x > m.homeX ? -1 : 1;
+				m.t1 = rand(1.5, 4.5);
+			} else { m.st = 0; m.t1 = rand(1, 4); }
+		}
+		if (m.st === 1) {
+			if (this.cliffAhead(m, m.dir) || (m.b.hitWall && !m.b.onGround)) m.dir = -m.dir;
+			if (m.b.hitWall && m.b.onGround) m.dir = -m.dir;
+			this.accelX(m, m.dir * m.def.speed * k, 14, dt);
+		} else this.accelX(m, 0, 18, dt);
+	},
+	flee(m, fromX, dt, k) {
+		const dx = m.b.x >= fromX ? 1 : -1;
+		m.dir = dx;
+		this.accelX(m, dx * m.def.speed * k, 30, dt);
+		if (m.b.hitWall && m.b.onGround) m.b.vy = -m.def.jump;
+	},
+	chase(m, tx, k, dt) {
+		const dx = tx >= m.b.x ? 1 : -1;
+		if (Math.abs(tx - m.b.x) > 0.35) { m.dir = dx; this.accelX(m, dx * m.def.speed * k, 26, dt); }
+		else this.accelX(m, 0, 30, dt);
+		if (m.b.hitWall && m.b.onGround) m.b.vy = -m.def.jump;
+		if (m.b.inWater) m.b.vy -= 18 * dt;
+	},
+	/** touching: across, and anything from overlapping to standing on the player's head */
+	contactHurt(m, dmg) {
+		if (m.cd > 0 || this.dead) return;
+		const pb = this.pb;
+		if (bodyRight(pb) > bodyLeft(m.b) + 0.05 && bodyLeft(pb) < bodyRight(m.b) - 0.05 && pb.y > bodyTop(m.b) - 0.2 && bodyTop(pb) < m.b.y + 0.2) {
+			const info = dinfo(dmg, "contact", srcMob(this, m));
+			info.knock = 6.5; info.originX = m.b.x;
+			if (this.hurtPlayer(info)) { m.cd = 0.9; m.atkT = MOB_ATK; }
+		}
+	},
+	/** a creature's swing: hits the player and creatures of other sides in the reach box */
+	mobStrike(m, reach, height, dmg, knock) {
+		m.atkT = MOB_ATK;
+		const k = Math.max(1, m.mutSize);
+		reach *= k; height *= k;
+		const x0 = m.dir > 0 ? m.b.x - 0.3 : m.b.x - reach - 0.3, x1 = m.dir > 0 ? m.b.x + reach + 0.3 : m.b.x + 0.3;
+		const info = dinfo(dmg, "melee", srcMob(this, m));
+		info.dirX = m.dir; info.knock = knock; info.originX = m.b.x; info.key = newAttackKey();
+		this.damageBox(x0, m.b.y - height, x1, m.b.y + 0.1, info);
+	},
+	updateMobs(dt) {
+		const t0 = performance.now(), px = this.pb.x, py = this.pb.y;
+		const offScreen = this.viewTilesW * 0.5 + 6;
+		this.frameNo = (this.frameNo || 0) + 1;
+		this.rebuildMobGrid();
+		for (let i = 0; i < this.mobs.length; i++) {
+			const m = this.mobs[i];
+			if (m.hp <= 0 || m.removed) continue;
+			const dx = Math.abs(m.b.x - px), dy = Math.abs(m.b.y - py);
+			const boss = isBossMob(m);
+			if (!m.persistent && !m.tame && !boss && (dx > 115 || dy > 85)) { m.removed = true; continue; }
+			if (m.def.hostile && !m.persistent && !m.tame && !boss && m.lair === 0) {
+				if ((dx > offScreen || dy > 40) && m.ai !== "chase") {
+					m.farT += dt;
+					if (m.farT > ((m.hunter && !this.isNight) ? 4 : 40)) { m.removed = true; continue; }
+				} else m.farT = 0;
+			}
+			if (m.hurtT > 0) m.hurtT -= dt;
+			if (m.cd > 0) m.cd -= dt;
+			if (m.flash > 0) m.flash -= dt;
+			if (m.lean !== 0) { m.lean *= 1 - Math.min(1, dt * 7); if (Math.abs(m.lean) < 0.01) m.lean = 0; }
+			if (m.atkT > 0) m.atkT -= dt;
+			if (m.turnT > 0) { m.turnT -= dt; if (m.turnT <= 0) { m.turnT = 0; m.face = m.dir; } }
+			else if (m.face !== m.dir) { if (m.face === 0) m.face = m.dir; else m.turnT = MOB_TURN; }
+			if (m.regrow > 0) { m.regrow -= dt; if (m.regrow <= 0) m.sheared = false; }
+			if (!this.world.isLoaded(Math.floor(m.b.x))) continue;
+			if (m.dazeGuard > 0) m.dazeGuard -= dt;
+			if (m.daze > 0) {
+				m.daze -= dt;
+				if (m.daze <= 0) { m.daze = 0; m.dazeGuard = 1.2; }
+				m.b.vx *= Math.max(0, 1 - dt * 9);
+				if (m.def.flying) m.b.vy *= Math.max(0, 1 - dt * 9);
+				this.stepMob(m, dt);
+				this.mobHazards(m, dt);
+				continue;
+			}
+			if (!boss && !m.tame && (dx > 72 || dy > 56)) continue;
+			// mid-distance creatures think at a third of the rate, staggered, with the time folded in
+			let step = dt;
+			if (!boss && !m.tame && (dx > 40 || dy > 30)) {
+				m.aiAccum += dt;
+				if ((this.frameNo + m.id) % 3 !== 0) continue;
+				step = Math.min(0.1, m.aiAccum);
+			}
+			m.aiAccum = 0;
+			this.updateMob(m, step);
+			if (m.hp > 0) this.mobHazards(m, step);
+		}
+		this.updateDying(dt);
+		if (this.mobs.some((m) => m.removed)) this.mobs = this.mobs.filter((m) => !m.removed);
+		PERF.aiMs = (PERF.aiMs || 0) * 0.9 + (performance.now() - t0) * 0.1;
+	},
+	nearestHostileTo(x, y, r) {
+		let best = null, bd = r * r;
+		for (const o of this.mobsNear(x - r, x + r)) {
+			if (o.hp <= 0 || o.tame || !o.def.hostile) continue;
+			const d = (o.b.x - x) ** 2 + (mobCY(o) - y) ** 2;
+			if (d < bd) { bd = d; best = o; }
+		}
+		return best;
+	},
+	updateMob(m, dt) {
+		if (mobKindHook(this, m, dt)) return;
+		const d = m.def, pb = this.pb;
+		const dist = Math.abs(pb.x - m.b.x), dyP = (pb.y - pb.h * 0.5) - mobCY(m);
+		const peaceful = this.settings.peaceful;
+		if (m.tame) { this.updatePet(m, dt); return; }
+		let engaged = dist < d.aggro && Math.abs(dyP) < 14 && !this.dead && !peaceful;
+		if (thinks(m.kind)) engaged = this.think(m, dt, dist, dyP);
+		switch (m.kind) {
+			case "pig": case "cow": case "sheep": case "villager":
+				if (m.t2 > 0) { m.t2 -= dt; this.flee(m, m.tx, dt, 1.9); }
+				else if (!this.animalLife(m, dt)) this.wander(m, dt, 0.55);
+				this.stepMob(m, dt);
+				break;
+			case "giraffe": case "chicken": case "frog": case "cat": {
+				const scared = dist < 6 && !this.dead && m.kind !== "cat";
+				if (m.t2 > 0) { m.t2 -= dt; this.flee(m, m.tx, dt, 1.7); }
+				else if (!scared && m.kind !== "cat" && this.animalLife(m, dt)) { /* resting, drinking, herding */ }
+				else if (scared) this.flee(m, pb.x, dt, 1.4);
+				else this.wander(m, dt, 0.5);
+				if (m.kind === "frog" && m.b.onGround && m.st === 1 && Math.random() < 0.04) { m.b.vy = -9; m.b.vx = m.dir * 3.5; }
+				this.stepMob(m, dt);
+				break;
+			}
+			case "elephant": case "bear": case "wolf":
+				if (m.drinkT > 0 && m.kind === "wolf") m.drinkT -= dt;
+				if (m.angry) m.preyID = 0;
+				if (!m.angry && m.kind === "wolf" && this.hunt(m, dt, this.isNight && m.drinkT <= 0)) { /* a pack running down prey */ }
+				else if (m.angry && !this.dead) {
+					m.t3 -= dt;
+					if (m.t3 <= 0 || dist > 30) m.angry = false;
+					else {
+						this.chase(m, pb.x, 1, dt);
+						if (m.kind === "wolf" && m.b.onGround && dist < 4 && Math.random() < 0.03) { m.b.vy = -12; m.b.vx = m.dir * 7; }
+						if (peaceful) m.angry = false; else this.contactHurt(m, d.dmg);
+					}
+				} else this.wander(m, dt, 0.5);
+				this.stepMob(m, dt);
+				break;
+			case "grizzly": case "polarBear": case "tiger": case "scorpion": {
+				if (m.drinkT > 0) m.drinkT -= dt;
+				const provoked = this.wildProvoked(m) && !peaceful;
+				if (!provoked && m.kind !== "scorpion" && this.hunt(m, dt, m.drinkT <= 0)) { /* hunting */ }
+				else if (!provoked) this.wander(m, dt, 0.4);
+				else if (!this.dead) {
+					this.chase(m, pb.x, 1, dt);
+					if (m.kind === "tiger" && m.b.onGround && dist < 6.5 && dist > 2 && m.cd <= 0.4 && Math.random() < 0.04) { m.b.vy = -11.5; m.b.vx = m.dir * 10; m.t3 = 0.6; }
+					this.contactHurt(m, d.dmg);
+				} else this.wander(m, dt, 0.5);
+				this.stepMob(m, dt);
+				break;
+			}
+			case "zombie": this.updateZombie(m, dt, engaged, dyP); break;
+			case "skeleton": case "pirate": case "pirateCaptain": this.updateSwordsman(m, dt, engaged, dist, dyP); break;
+			case "pirateGunner": case "imp": this.updateShooter(m, dt, engaged, dist, dyP); break;
+			case "slime": case "emberSlime": this.updateSlime(m, dt, engaged); break;
+			case "crow": case "bat": case "cinderBat": case "wraith": this.updateFlyer(m, dt, engaged, dist); break;
+			case "fish": this.updateFish(m, dt); break;
+			case "crawler": this.updateCrawler(m, dt, engaged, dist, dyP); break;
+			case "golem": this.updateGolem(m, dt, engaged, dist, dyP); break;
+			case "archer": this.updateArcher(m, dt, engaged, dist, dyP); break;
+			case "mimic": this.updateMimic(m, dt, !peaceful && !this.dead && dist < 20, dist, dyP); break;
+			default: this.stepMob(m, dt);
+		}
+	},
+
+	// ---- hostile minds
+	attackReach(m) {
+		let r;
+		switch (m.kind) {
+			case "zombie": r = [1.5, 1.7, false]; break;
+			case "skeleton": case "pirate": case "pirateCaptain": r = [2, 1.6, false]; break;
+			case "pirateGunner": case "imp": r = [17, 9, true]; break;
+			case "archer": r = [18, 10, true]; break;
+			case "crawler": r = [4.6, 2, false]; break;
+			case "golem": r = [3.3, 2.4, false]; break;
+			default: r = [m.b.w * 0.5 + 0.5, 1.4, false];
+		}
+		if (m.mutSize > 1.001 && !r[2]) { r[0] *= m.mutSize; r[1] *= m.mutSize; }
+		return r;
+	},
+	/** A monster's senses and plan, the same for every kind: it notices the player by sight, by sound up
+	 *  close or by being hit; gives chase after a beat; searches where they were last seen when they slip
+	 *  away, then goes home. Stuck at a wall it leaps once, then backs off and comes again. Night hunters
+	 *  roam toward the player before seeing them. Returns whether it is after the player. */
+	think(m, dt, dist, dyP) {
+		const d = m.def, pb = this.pb;
+		m.aiT += dt;
+		if (m.leapT > 0) m.leapT -= dt;
+		if (m.hunter && (m.kind === "skeleton" || m.kind === "archer") && this.inSunlight(m)) m.burn = 2;
+		if (this.dead || this.settings.peaceful) {
+			m.why = this.dead ? "player dead" : "peaceful";
+			if (m.ai !== "idle" && m.ai !== "back") { m.ai = "back"; m.aiT = 0; }
+			if (m.ai === "back" && (Math.abs(m.b.x - m.homeX) < 2 || m.aiT > 8)) { m.ai = "idle"; m.aiT = 0; }
+			m.aimX = m.homeX;
+			return false;
+		}
+		m.losT -= dt;
+		if (m.losT <= 0) {
+			m.losT = 0.18 + (m.id % 7) * 0.02;
+			const ey = m.kind === "golem" ? bodyTop(m.b) - 0.5 : this.shotY(m);
+			m.sees = m.kind === "wraith" || this.world.lineClear(m.b.x, ey, pb.x, pb.y - pb.h * 0.6) || this.world.lineClear(m.b.x, ey, pb.x, bodyTop(pb) + 0.2);
+		}
+		const base = Math.max(d.aggro, 16);
+		const sight = base * (m.hunter ? 1.25 : 1) * (m.ai === "chase" ? 1.5 : 1), sense = base * 0.7;
+		const hurt = this.clock - m.lastHitByPlayer < 0.6;
+		const heard = dist < 3.5 && Math.abs(dyP) < 3;
+		const detect = hurt || heard || (dist < sight && Math.abs(dyP) < 12 && m.sees);
+		const sensed = dist < sense && Math.abs(dyP) < 10;
+		if (detect || sensed) { m.seenX = pb.x; m.seenY = pb.y; m.lostT = 0; } else m.lostT += dt;
+		const hunting = m.hunter && this.isNight && this.world.dim === Dimension.overworld && dist < 80;
+		switch (m.ai) {
+			case "idle": case "back":
+				if (detect) { m.ai = hurt ? "chase" : "alert"; m.aiT = 0; }
+				else if (sensed) { m.ai = "search"; m.aiT = 0; }
+				else if (hunting) { m.ai = "search"; m.aiT = 0; m.seenX = pb.x + rand(-6, 6); m.seenY = pb.y; }
+				break;
+			case "alert": if (m.aiT > 0.35) { m.ai = "chase"; m.aiT = 0; } break;
+			case "chase": if (m.lostT > 2.5) { m.ai = "search"; m.aiT = 0; } break;
+			case "search":
+				if (detect) { m.ai = "chase"; m.aiT = 0; }
+				else if (sensed) m.aiT = 0;
+				else if ((Math.abs(m.b.x - m.seenX) < 1.2 && m.aiT > 2) || m.aiT > (hunting ? 14 : 8)) {
+					if (hunting) { m.seenX = pb.x + rand(-8, 8); m.seenY = pb.y; m.aiT = 0; }
+					else { m.ai = "back"; m.aiT = 0; }
+				}
+				break;
+			case "retreat": if (m.aiT > 2.5) { m.ai = detect ? "chase" : "search"; m.aiT = 0; } break;
+		}
+		switch (m.ai) {
+			case "alert": case "chase": m.aimX = pb.x; break;
+			case "search": m.aimX = m.seenX; break;
+			case "retreat": m.aimX = m.b.x + (m.b.x >= m.seenX ? 6 : -6); break;
+			case "back": m.aimX = m.homeX; break;
+			default: m.aimX = m.b.x;
+		}
+		if (m.ai === "back" && Math.abs(m.b.x - m.homeX) < 2) { m.ai = "idle"; m.aiT = 0; }
+		const reach = this.attackReach(m);
+		const inReach = dist <= reach[0] && Math.abs(dyP) <= reach[1] && (!reach[2] || m.sees);
+		const pushing = (m.ai === "chase" || m.ai === "search") && Math.abs(m.aimX - m.b.x) > 1 && m.st <= 1 && !(m.ai === "chase" && inReach);
+		if (pushing) {
+			if (Math.abs(m.b.x - m.progX) > 0.6) { m.progX = m.b.x; m.blockedT = Math.max(0, m.blockedT - 0.5); }
+			else {
+				const ax = Math.floor(m.b.x + m.dir * (m.b.w * 0.5 + 0.3));
+				m.blockedT += HURTS[this.world.tile(ax, Math.floor(m.b.y - 0.5))] ? dt * 3 : dt;
+			}
+			if (!d.flying && m.blockedT > 0.9 && m.leapT <= 0) m.leapReq = true;
+			if (m.blockedT > 3.2) { m.ai = "retreat"; m.aiT = 0; m.blockedT = 0; }
+		} else if (m.st <= 1) { m.progX = m.b.x; m.blockedT = Math.max(0, m.blockedT - dt * 0.5); }
+		if (m.ai === "retreat" || m.blockedT > 0.9) m.why = "path blocked";
+		else if (m.ai !== "chase" && m.ai !== "alert") m.why = "hasn't seen you";
+		else if (dist > reach[0]) m.why = "out of range";
+		else if (Math.abs(dyP) > reach[1]) m.why = "can't reach that height";
+		else if (reach[2] && !m.sees) m.why = "no line of sight";
+		else if (m.cd > 0) m.why = "cooling down";
+		else m.why = "";
+		return m.ai !== "idle" && m.ai !== "back";
+	},
+	/** out in full daylight under the open sky (the undead burn) */
+	inSunlight(m) {
+		return this.world.dim === Dimension.overworld && this.dayFactor > 0.7 && this.world.isSkyExposed(Math.floor(m.b.x), Math.floor(m.b.y - 1)) && !m.b.inWater && !(this.cloudCover && this.cloudCover() > 0.9);
+	},
+	updateZombie(m, dt, aggro, dyP) {
+		const d = m.def, dist = Math.abs(this.pb.x - m.b.x);
+		if (this.inSunlight(m)) m.burn = 2;
+		if (m.st === 3) {
+			m.t3 -= dt; this.accelX(m, 0, 40, dt);
+			if (m.t3 <= 0) { m.st = 4; m.t3 = 0.25; this.mobStrike(m, 1.2, 1.8, d.dmg, 6.5); }
+		} else if (m.st === 4) {
+			m.t3 -= dt; this.accelX(m, 0, 40, dt);
+			if (m.t3 <= 0) { m.st = 0; m.cd = 0.9; }
+		} else if (aggro) {
+			this.chase(m, m.aimX, 1, dt);
+			if (m.ai === "chase" && (m.sees || dist < 1) && m.cd <= 0 && dist < 1.5 && Math.abs(dyP) < 1.7) { m.st = 3; m.t3 = 0.32; m.dir = this.pb.x >= m.b.x ? 1 : -1; }
+		} else this.wander(m, dt, 0.45);
+		this.stepMob(m, dt);
+	},
+	/** the skeleton knight (with a shield), the pirate and the captain (cutlasses) */
+	updateSwordsman(m, dt, aggro, dist, dyP) {
+		const d = m.def, isSkel = m.kind === "skeleton", pb = this.pb;
+		if (m.st === 3) {
+			m.t3 -= dt; this.accelX(m, 0, 40, dt);
+			if (m.t3 <= 0) { m.st = 4; m.t3 = 0.22; this.mobStrike(m, 2.2, 1.9, d.dmg, 7); }
+		} else if (m.st === 4) {
+			m.t3 -= dt; this.accelX(m, 0, 40, dt);
+			if (m.t3 <= 0) { m.st = 0; m.cd = m.kind === "pirateCaptain" ? 0.9 : 1.2; }
+		} else if (aggro) {
+			const sp = dist > 8 ? 1.15 : 0.95;
+			const ready = m.ai === "chase" && m.sees && dist < 2 && m.cd <= 0 && Math.abs(dyP) < 1.6;
+			if (isSkel) {
+				m.blocking = dist > 2.4 && dist < 11 && m.ai === "chase";
+				if (ready) { m.st = 3; m.t3 = 0.38; m.blocking = false; m.dir = pb.x >= m.b.x ? 1 : -1; }
+				this.chase(m, m.aimX, m.blocking ? 0.7 : sp, dt);
+			} else {
+				if (ready) { m.st = 3; m.t3 = 0.3; m.dir = pb.x >= m.b.x ? 1 : -1; }
+				this.chase(m, m.aimX, sp, dt);
+			}
+		} else { m.blocking = false; this.wander(m, dt, 0.4); }
+		if (m.st === 0 && !aggro) m.blocking = false;
+		this.stepMob(m, dt);
+	},
+	/** the pirate gunner and the imp: keep their range and shoot */
+	updateShooter(m, dt, aggro, dist, dyP) {
+		const isImp = m.kind === "imp", pb = this.pb;
+		if (m.st === 3) {
+			m.t3 -= dt; this.accelX(m, 0, 40, dt);
+			m.dir = pb.x >= m.b.x ? 1 : -1;
+			if (m.t3 <= 0) {
+				if (this.clearShot(m)) { m.st = 6; m.t3 = 0.18; this.shootAtPlayer(m, isImp); }
+				else if (m.t3 < -0.8) { m.st = 0; m.cd = 0.4; m.blockedT += 0.6; }
+			}
+		} else if (m.st === 6) {
+			m.t3 -= dt; this.accelX(m, 0, 40, dt);
+			if (m.t3 <= 0) { m.st = 0; m.cd = isImp ? 1.9 : 2.2; }
+		} else if (aggro) {
+			const want = isImp ? 8 : 9;
+			if ((m.ai !== "chase" && m.ai !== "alert") || !m.sees || m.blockedT > 0.5 || !m.b.onGround) this.chase(m, m.aimX, 0.9, dt);
+			else if (dist < want - 3) this.flee(m, pb.x, dt, 0.8);
+			else if (dist > want + 3) this.chase(m, pb.x, 0.9, dt);
+			else { this.accelX(m, 0, 20, dt); m.dir = pb.x >= m.b.x ? 1 : -1; }
+			if (m.ai === "chase" && m.sees && m.b.onGround && m.cd <= 0 && dist < 17 && Math.abs(dyP) < 9) { m.st = 3; m.t3 = 0.5; }
+		} else this.wander(m, dt, 0.4);
+		this.stepMob(m, dt);
+	},
+	shootAtPlayer(m, fire) {
+		const ox = m.b.x + m.dir * 0.6, oy = this.shotY(m);
+		let dx = this.pb.x - ox, dy = this.shotAimY(m) - oy;
+		const len = Math.max(0.001, Math.hypot(dx, dy)); dx /= len; dy /= len;
+		const sp = fire ? 11 : 20;
+		this.shoot({ kind: fire ? "fireball" : "bullet", x: ox, y: oy, vx: dx * sp, vy: dy * sp, dmg: m.def.dmg, life: 3, owner: m.id, source: srcMob(this, m) });
+		this.spawnParticles(ox, oy, fire ? 0xFF7020 : 0xFFE080, 4, 2.5, 0.18, 0);
+	},
+	updateSlime(m, dt, aggro) {
+		const d = m.def;
+		m.t1 -= dt;
+		if (m.b.onGround) {
+			m.b.vx *= 0.8;
+			if (m.t1 <= 0) {
+				if (aggro) { const dx = m.aimX >= m.b.x ? 1 : -1; m.dir = dx; m.b.vy = -d.jump; m.b.vx = dx * d.speed * 1.6; m.t1 = rand(0.7, 1.3); }
+				else { m.dir = Math.random() < 0.5 ? 1 : -1; m.b.vy = -8.5; m.b.vx = m.dir * 2; m.t1 = rand(1.5, 3.5); }
+			}
+		}
+		if (aggro && !m.b.onGround) this.accelX(m, (m.aimX >= m.b.x ? 1 : -1) * d.speed * 1.6, 5, dt);
+		if (m.kind === "emberSlime" && Math.random() < 0.1) this.spawnParticles(m.b.x, m.b.y - 0.4, 0xFF8A20, 1, 1.2, 0.4, -3);
+		if (aggro && m.ai === "chase") this.contactHurt(m, d.dmg);
+		this.stepMob(m, dt);
+	},
+	updateFlyer(m, dt, aggro, dist) {
+		const d = m.def, pb = this.pb;
+		m.anim += dt * 8;
+		let tx = m.homeX, ty = m.homeY, spd = d.speed * 0.6;
+		if (m.kind === "crow") {
+			m.t1 -= dt;
+			if (m.t1 <= 0) { m.t1 = rand(2, 5); m.tx = m.homeX + rand(-12, 12); m.ty = this.world.surfaceY(Math.floor(m.tx)) - rand(3, 8); }
+			tx = m.tx; ty = m.ty;
+			if (dist < 5 && !this.dead) { tx = m.b.x + (m.b.x - pb.x) * 3; ty = m.b.y - 6; spd = d.speed * 1.4; }
+		} else if (aggro) {
+			tx = m.aimX; ty = (m.ai === "chase" ? pb.y : m.seenY) - 1.3 + Math.sin(this.clock * 3 + m.id) * 1.2; spd = d.speed;
+		} else {
+			m.t1 -= dt;
+			if (m.t1 <= 0) { m.t1 = rand(1.5, 4); m.tx = m.b.x + rand(-8, 8); m.ty = m.b.y + rand(-4, 4); }
+			tx = m.tx; ty = m.ty;
+		}
+		let ax = tx - m.b.x, ay = ty - m.b.y;
+		const len = Math.max(0.001, Math.hypot(ax, ay)); ax /= len; ay /= len;
+		const k = Math.min(1, dt * 4);
+		m.b.vx += (ax * spd - m.b.vx) * k; m.b.vy += (ay * spd - m.b.vy) * k;
+		if (Math.abs(m.b.vx) > 0.3) m.dir = m.b.vx > 0 ? 1 : -1;
+		if (m.kind === "wraith") {
+			const f = this.world.solid(Math.floor(m.b.x), Math.floor(m.b.y - 0.7)) ? 0.5 : 1;
+			m.b.x += m.b.vx * dt * f; m.b.y += m.b.vy * dt * f;
+		} else {
+			this.world.moveBody(m.b, dt, 0, false, null);
+			if (m.b.hitWall || m.b.hitCeil || m.b.onGround) { m.b.vy = -1; m.t1 = 0; }
+		}
+		if (aggro && m.kind !== "crow" && m.ai === "chase") this.contactHurt(m, d.dmg);
+	},
+	updateFish(m, dt) {
+		const pb = this.pb, w = this.world;
+		m.anim += dt * 6;
+		if (!m.b.inWater) {
+			m.b.vy = Math.min(m.b.vy + gravityG() * dt, terminalV);
+			w.moveBody(m.b, dt, 0, false, null);
+			m.t2 += dt;
+			if (m.t2 > 1) { m.t2 = 0; this.hurtMob(m, 1, 0, 0, false); }
+			return;
+		}
+		m.t1 -= dt;
+		if (m.t1 <= 0) { m.t1 = rand(1.5, 4); m.tx = m.b.x + rand(-8, 8); m.ty = m.b.y + rand(-3, 3); }
+		if (Math.abs(pb.x - m.b.x) < 4 && Math.abs(pb.y - m.b.y) < 3 && pb.inWater) { m.tx = m.b.x + (m.b.x - pb.x) * 3; m.ty = m.b.y + (m.b.y - pb.y) * 2; }
+		let ax = m.tx - m.b.x, ay = m.ty - m.b.y;
+		const len = Math.max(0.001, Math.hypot(ax, ay)); ax /= len; ay /= len;
+		const sp = m.def.speed, k = Math.min(1, dt * 3);
+		m.b.vx += (ax * sp - m.b.vx) * k; m.b.vy += (ay * sp * 0.6 - m.b.vy) * k;
+		if (Math.abs(m.b.vx) > 0.2) m.dir = m.b.vx > 0 ? 1 : -1;
+		const nx = m.b.x + m.b.vx * dt, ny = m.b.y + m.b.vy * dt;
+		if (w.tile(Math.floor(nx), Math.floor(ny - 0.2)) === T.water && w.tile(Math.floor(nx), Math.floor(ny)) !== T.air) { m.b.x = nx; m.b.y = ny; }
+		else { m.t1 = 0; m.b.vx = -m.b.vx; m.b.vy = -m.b.vy; }
+		const f = w.liquidFractions(m.b.x - m.b.w * 0.5, m.b.y - m.b.h, m.b.x + m.b.w * 0.5, m.b.y);
+		m.b.inWater = f[0] > 0.3;
+	},
+	updateCrawler(m, dt, aggro, dist, dyP) {
+		const d = m.def, pb = this.pb;
+		if (m.st === 3) {
+			m.t3 -= dt; this.accelX(m, 0, 50, dt);
+			m.dir = pb.x >= m.b.x ? 1 : -1;
+			if (m.t3 <= 0) { m.st = 4; m.t3 = 0.7; m.cd = 0; m.b.vy = -8.5; m.b.vx = m.dir * 10.5; m.atkT = MOB_ATK; }
+		} else if (m.st === 4) {
+			m.t3 -= dt;
+			this.contactHurt(m, d.dmg * 1.3);
+			if ((m.b.onGround && m.t3 < 0.55) || m.t3 <= 0) { m.st = 0; m.cd = 1.3; }
+		} else if (aggro) {
+			this.chase(m, m.aimX, 1, dt);
+			if (m.b.hitWall && m.b.onGround) m.b.vy = -11.5;
+			if (m.ai === "chase" && m.b.onGround && m.cd <= 0 && dist > 1.8 && dist < 4.6 && Math.abs(dyP) < 2) { m.st = 3; m.t3 = 0.28; }
+			if (m.ai === "chase") this.contactHurt(m, d.dmg);
+		} else this.wander(m, dt, 0.6);
+		this.stepMob(m, dt);
+	},
+	/** the stone golem: slow and armoured, slams the ground and throws rocks */
+	updateGolem(m, dt, aggro, dist, dyP) {
+		const d = m.def, pb = this.pb;
+		const box = () => [m.dir > 0 ? m.b.x - 0.6 : m.b.x - 3.9, m.dir > 0 ? m.b.x + 3.9 : m.b.x + 0.6];
+		if (m.st === 3) {
+			m.t3 -= dt; this.accelX(m, 0, 40, dt);
+			if (m.t3 <= 0) {
+				m.st = 4; m.t3 = 0.35;
+				const [x0, x1] = box();
+				this.mobAttackBox(m, x0, m.b.y - 2.4, x1, m.b.y + 0.1, d.dmg, 10);
+				m.atkT = MOB_ATK;
+				this.addShake(dist < 10 ? 0.2 : 0.06);
+				this.spawnParticles(m.b.x + m.dir * 2.2, m.b.y - 0.1, 0x8A8680, 10, 4, 0.5, 14);
+			}
+		} else if (m.st === 4) {
+			m.t3 -= dt; this.accelX(m, 0, 40, dt);
+			if (m.t3 <= 0) { m.st = 0; m.cd = 1.6; }
+		} else if (m.st === 5) {
+			m.t3 -= dt; this.accelX(m, 0, 40, dt);
+			m.dir = pb.x >= m.b.x ? 1 : -1;
+			if (m.t3 <= 0) { this.throwRock(m); m.st = 4; m.t3 = 0.3; m.cd = 2.8; }
+		} else if (aggro) {
+			this.chase(m, m.aimX, 1, dt);
+			if (m.ai === "chase" && m.cd <= 0 && m.b.onGround) {
+				if (dist < 3.3 && Math.abs(dyP) < 2.4) {
+					m.st = 3; m.t3 = 0.75; m.dir = pb.x >= m.b.x ? 1 : -1;
+					const [x0, x1] = box();
+					this.warn(x0, m.b.y - 2.4, x1, m.b.y, 0.75, 0xFF8A2A);
+				} else if (dist > 4.5 && dist < 11 && Math.random() * (m.blockedT > 0 ? 0.3 : 1) < 0.02 && this.world.lineClear(m.b.x, bodyTop(m.b) - 1.5, pb.x, pb.y - pb.h * 0.6)) { m.st = 5; m.t3 = 0.6; }
+			}
+			if (m.ai === "chase") this.contactHurt(m, d.dmg * 0.5);
+		} else this.wander(m, dt, 0.35);
+		this.stepMob(m, dt, 1);
+	},
+	throwRock(m) {
+		const pb = this.pb, ox = m.b.x + m.dir * 0.6, oy = bodyTop(m.b) + 0.2, dx = pb.x - ox;
+		const t = clampD(Math.abs(dx) / 9, 0.5, 1.3), grav = 22;
+		this.shoot({ kind: "rock", x: ox, y: oy, vx: dx / t, vy: ((pb.y - 0.8) - oy - 0.5 * grav * t * t) / t, dmg: m.def.dmg * 0.8, gravity: grav, w: 0.6, life: 3, owner: m.id, source: srcMob(this, m) });
+		m.atkT = MOB_ATK;
+	},
+	/** the bow zombie: keeps its distance and shoots arcing arrows */
+	updateArcher(m, dt, aggro, dist, dyP) {
+		const pb = this.pb;
+		if (m.st === 3) {
+			m.t3 -= dt; this.accelX(m, 0, 40, dt);
+			m.dir = pb.x >= m.b.x ? 1 : -1;
+			if (m.t3 <= 0) {
+				if (this.clearShot(m)) { this.shootArrowAtPlayer(m); m.st = 6; m.t3 = 0.25; }
+				else if (m.t3 < -0.8) { m.st = 0; m.cd = 0.4; m.blockedT += 0.6; }
+			}
+		} else if (m.st === 6) {
+			m.t3 -= dt; this.accelX(m, 0, 40, dt);
+			if (m.t3 <= 0) { m.st = 0; m.cd = rand(1.4, 2.2); }
+		} else if (aggro) {
+			const sees = m.sees && (m.ai === "chase" || m.ai === "alert");
+			if (dist < 5 && sees) { this.flee(m, pb.x, dt, 1.1); if (m.b.onGround && Math.random() < 0.025) { m.b.vy = -10; m.b.vx = m.dir * 5.5; } }
+			else if (dist > 12 || !sees || m.blockedT > 0.5 || !m.b.onGround) this.chase(m, m.aimX, 0.9, dt);
+			else { this.accelX(m, 0, 20, dt); m.dir = pb.x >= m.b.x ? 1 : -1; }
+			if (m.ai === "chase" && m.cd <= 0 && sees && m.b.onGround && dist >= 3 && dist < 18 && Math.abs(dyP) < 10) { m.st = 3; m.t3 = 0.6; }
+		} else this.wander(m, dt, 0.4);
+		this.stepMob(m, dt);
+	},
+	clearShot(m) { return this.world.lineClear(m.b.x + m.dir * 0.6, this.shotY(m), this.pb.x, this.shotAimY(m)); },
+	shotY(m) { return bodyTop(m.b) + 0.45; },
+	shotAimY(m) {
+		const pb = this.pb, chest = pb.y - pb.h * 0.55;
+		return this.world.lineClear(m.b.x + m.dir * 0.6, this.shotY(m), pb.x, chest) ? chest : bodyTop(pb) + 0.25;
+	},
+	shootArrowAtPlayer(m) {
+		const pb = this.pb, ox = m.b.x + m.dir * 0.6, oy = this.shotY(m);
+		const tx = pb.x + pb.vx * 0.2, ty = this.shotAimY(m), grav = 15, dx = tx - ox, dy = ty - oy;
+		const flight = Math.max(0.15, Math.hypot(dx, dy) / 19);
+		this.shoot({ kind: "arrow", x: ox, y: oy, vx: dx / flight, vy: dy / flight - 0.5 * grav * flight, dmg: m.def.dmg, gravity: grav, life: 3, w: 0.22, owner: m.id, source: srcMob(this, m) });
+	},
+	/** the mimic: a chest that bites */
+	updateMimic(m, dt, aggro, dist, dyP) {
+		const d = m.def, pb = this.pb;
+		m.t1 -= dt;
+		m.angry = aggro;
+		if (m.st === 3) {
+			m.t3 -= dt; this.accelX(m, 0, 30, dt);
+			if (m.t3 <= 0) { m.st = 4; m.t3 = 0.6; m.cd = 0; m.b.vy = -9.5; m.b.vx = m.dir * 9; m.atkT = MOB_ATK; }
+		} else if (m.st === 4) {
+			m.t3 -= dt;
+			if (Math.abs(dyP) < 1.4) this.contactHurt(m, d.dmg * 1.2);
+			if ((m.b.onGround && m.t3 < 0.45) || m.t3 <= 0) { m.st = 0; m.cd = m.hp < m.maxHP * 0.4 ? 0.7 : 1.1; }
+		} else if (aggro) {
+			m.dir = pb.x >= m.b.x ? 1 : -1;
+			if (m.b.onGround) {
+				m.b.vx *= 0.8;
+				if (m.cd <= 0 && dist < 5 && Math.abs(dyP) < 2.2) { m.st = 3; m.t3 = 0.3; }
+				else if (m.t1 <= 0) { m.b.vy = -8; m.b.vx = m.dir * 5; m.t1 = 0.45; }
+			}
+			if (Math.abs(dyP) < 1.4) this.contactHurt(m, d.dmg * 0.6);
+		} else this.accelX(m, 0, 20, dt);
+		this.stepMob(m, dt);
+	},
+	/** some unopened chests deep underground are mimics: opening one wakes it */
+	tryMimic(x, y) {
+		const w = this.world;
+		if (w.dim !== Dimension.overworld || this.gen.genVersion < 3 || y < GEN_SEA + 20) return false;
+		if (w.chests.has(w.chestKey(x, y)) || w.isBuilt(x, y)) return false;
+		if (hash2(x, y, (this.gen.seed + 909) | 0) >= 0.08) return false;
+		const loot = w.removeChest(x, y);
+		w.set(x, y, T.air);
+		const m = this.addMob("mimic", x + 0.5, y + 1);
+		m.loot = loot; m.persistent = true; m.homeX = x + 0.5; m.homeY = y + 1;
+		m.dir = this.pb.x >= m.b.x ? 1 : -1; m.st = 3; m.t3 = 0.45; m.angry = true;
+		this.addShake(0.12);
+		this.spawnParticles(m.b.x, m.b.y - 0.5, 0xB98A4E, 8, 4, 0.4, 12);
+		this.say("The chest was a Mimic!", 2.5);
+		return true;
+	},
+
+	// ---- animal life: herds, water holes, shelter, sleep at night, running from hunters
+	animalLife(m, dt) {
+		if (m.poseT > 0) m.poseT -= dt;
+		if (m.drinkT > 0) m.drinkT -= dt;
+		m.thinkT -= dt;
+		const night = this.isNight && this.world.dim === Dimension.overworld;
+		if (m.thinkT <= 0) {
+			m.thinkT = rand(0.8, 1.4);
+			for (const o of this.mobsNear(m.b.x - 10, m.b.x + 10)) {
+				if (o.hp > 0 && o !== m && o.preyID !== 0 && !o.tame && Math.abs(o.b.x - m.b.x) < 10 && Math.abs(o.b.y - m.b.y) < 4) { m.t2 = 3; m.tx = o.b.x; m.goal = 0; return false; }
+			}
+			if (m.goal === 0 && !night) {
+				const wx = m.drinkT <= 0 && Math.random() < 0.15 ? this.waterNear(m, 12) : null;
+				if (wx !== null) { m.goal = 1; m.goalX = wx; }
+				else if (Math.random() < 0.3) {
+					let sum = 0, n = 0;
+					for (const o of this.mobsNear(m.b.x - 18, m.b.x + 18)) if (o.kind === m.kind && o !== m && o.hp > 0 && !o.tame) { sum += o.b.x; n++; }
+					if (n > 0) { const cx = sum / n; if (Math.abs(cx - m.b.x) > 7) { m.goal = 2; m.goalX = cx; } }
+				}
+			}
+		}
+		if (m.goal !== 0) {
+			const dx = m.goalX - m.b.x;
+			if ((Math.abs(dx) < 1.2 && m.goal !== 3) || Math.abs(dx) < 0.5 || (m.goal === 2 && Math.abs(dx) < 4)) {
+				if (m.goal === 3) { m.poseT = 6; m.st = 0; }
+				if (m.goal === 1) { m.drinkT = rand(25, 45); m.poseT = 3; m.st = 0; m.t1 = 3.2; }
+				m.goal = 0;
+			} else {
+				m.dir = dx > 0 ? 1 : -1;
+				const edge = m.goal === 1 && Math.abs(dx) < 2.5;
+				if ((this.cliffAhead(m, m.dir) && !edge) || (m.b.hitWall && !m.b.onGround)) m.goal = 0;
+				else {
+					this.accelX(m, m.dir * m.def.speed * 0.6, 14, dt);
+					if (m.b.hitWall && m.b.onGround) m.b.vy = -m.def.jump;
+					return true;
+				}
+			}
+		}
+		if (m.poseT > 0) { this.accelX(m, 0, 18, dt); return true; }
+		if (night && m.kind !== "frog") {
+			if (m.st === 1 && Math.random() < 0.02) { m.st = 0; m.t1 = rand(4, 9); }
+			if (m.st === 0) {
+				m.t1 -= dt;
+				if (m.t1 <= 0) { m.st = 1; m.t1 = rand(0.8, 1.6); m.dir = Math.random() < 0.5 ? 1 : -1; }
+				this.accelX(m, 0, 18, dt);
+				return true;
+			}
+		}
+		return false;
+	},
+	waterNear(m, r) {
+		const x0 = Math.floor(m.b.x), gy = Math.floor(m.b.y);
+		for (let k = 1; k <= r; k += 2) for (const side of [1, -1]) {
+			const x = x0 + side * k;
+			for (let dy = -2; dy <= 2; dy++) if (this.world.tile(x, gy + dy) === T.water) return x - side + 0.5;
+		}
+		return null;
+	},
+	/** wolves at night, big cats and bears run down prey nearby, bite it and rest after a kill */
+	hunt(m, dt, allowed) {
+		if (m.poseT > 0) { m.poseT -= dt; this.accelX(m, 0, 18, dt); return true; }
+		let prey = null;
+		if (m.preyID !== 0) {
+			const o = m.prey;
+			if (o && o.id === m.preyID && o.hp > 0 && !o.removed) prey = o;
+			if (!prey) { m.preyID = 0; m.poseT = 4; m.drinkT = 60; return true; }
+		}
+		m.thinkT -= dt;
+		if (!prey && allowed && m.thinkT <= 0) {
+			m.thinkT = rand(1.5, 3);
+			let bd = 14;
+			for (const o of this.mobsNear(m.b.x - 14, m.b.x + 14)) {
+				if (!isPrey(o.kind) || o.hp <= 0 || o.tame || Math.abs(o.b.y - m.b.y) >= 4) continue;
+				const d = Math.abs(o.b.x - m.b.x);
+				if (d < bd) { bd = d; prey = o; }
+			}
+			if (prey) { m.preyID = prey.id; m.prey = prey; }
+		}
+		if (!prey) return false;
+		if (!allowed || Math.abs(prey.b.x - m.b.x) > 26) { m.preyID = 0; return false; }
+		this.chase(m, prey.b.x, 1.05, dt);
+		if (m.kind === "wolf" && m.b.onGround && Math.abs(prey.b.x - m.b.x) < 4 && Math.random() < 0.03) { m.b.vy = -11; m.b.vx = m.dir * 7; }
+		if (m.cd <= 0 && Math.abs(prey.b.x - m.b.x) < m.b.w * 0.5 + prey.b.w * 0.5 + 0.4 && Math.abs(prey.b.y - m.b.y) < 1.4) {
+			m.cd = 0.9; m.atkT = MOB_ATK;
+			this.hurtMob(prey, m.def.dmg, m.dir, 5, false);
+			for (const o of this.mobsNear(prey.b.x - 10, prey.b.x + 10)) if (o.kind === prey.kind && o.hp > 0) { o.t2 = 3; o.tx = m.b.x; }
+		}
+		return true;
+	},
+	// ---- pets
+	updatePet(m, dt) {
+		const pb = this.pb, dist = Math.abs(pb.x - m.b.x);
+		if (dist > 45 || Math.abs(pb.y - m.b.y) > 30) { m.b.x = pb.x - this.facing * 1.5; m.b.y = pb.y; m.b.vx = 0; m.b.vy = 0; return; }
+		if (m.st === 7) { this.accelX(m, 0, 20, dt); this.stepMob(m, dt); return; }
+		const t = m.kind === "wolf" ? this.nearestHostileTo(pb.x, pb.y - 1, 9) : null;
+		if (t && t.hp > 0) {
+			this.chase(m, t.b.x, 1.2, dt);
+			if (m.cd <= 0 && Math.abs(t.b.x - m.b.x) < 1.6 && Math.abs(mobCY(t) - mobCY(m)) < 1.5) { this.hurtMob(t, 7, m.dir, 5, true); m.cd = 0.7; }
+		} else if (dist > 3.5) this.chase(m, pb.x, dist > 12 ? 1.8 : 1.15, dt);
+		else this.accelX(m, 0, 20, dt);
+		this.stepMob(m, dt);
+	},
+
+	// ---- spawning
+	lightForSpawn(x, feetY) {
+		const L = this.spawnLight || (this.spawnLight = new LightMap());
+		if (!L.covers(x - 1, feetY - 3, x + 1, feetY) || L.stamp !== this.world.version || L.skyUsed !== this.skyLevel || L.dimUsed !== this.world.dim) {
+			const r = 18;
+			L.compute(this.world, x - r, feetY - r, r * 2 + 1, r * 2 + 1, this.skyLevel, [], false);
+			L.stamp = this.world.version;
+		}
+		return [Math.max(L.levelSky(x, feetY - 1), L.levelSky(x, feetY - 2)), Math.max(L.levelBlk(x, feetY - 1), L.levelBlk(x, feetY - 2))];
+	},
+	monsterCap(place) {
+		const d = clampI(this.settings.nightDanger, 0, 2);
+		const base = (place === "surface" || place === "ocean") ? [3, 6, 10][d] : [6, 9, 12][d];
+		return Math.round(base * rule("monsters"));
+	},
+	spawnNote(s) { this.spawnLast = s; const L = this.spawnLog || (this.spawnLog = new Map()); if (L.size < 40 || L.has(s)) L.set(s, (L.get(s) || 0) + 1); },
+	updateSpawning(dt) {
+		if (this.monsterSpawnCD > 0) this.monsterSpawnCD -= dt;
+		this.spawnTimer = (this.spawnTimer || 0) - dt;
+		if (this.spawnTimer > 0) return;
+		this.spawnTimer = rand(0.45, 1);
+		if (this.dead || this.noSpawning) return;
+		const pb = this.pb, w = this.world;
+		let passive = 0, hostile = 0, predators = 0, aquatic = 0;
+		for (const m of this.mobs) {
+			if (m.hp <= 0 || m.removed || m.tame || m.persistent) continue;
+			const dx = Math.abs(m.b.x - pb.x);
+			if (dx > 100) continue;
+			if (m.kind === "fish") aquatic++;
+			else if (m.def.hostile) {
+				if (isBossMob(m) || m.lair !== 0 || dx > 72 || Math.abs(m.b.y - pb.y) > 56) continue;
+				if (isPredator(m.kind)) predators++; else hostile++;
+			} else passive++;
+		}
+		const px = Math.floor(pb.x);
+		let place = "surface";
+		if (w.dim === Dimension.umbral) place = "umbral";
+		else if (Math.floor(pb.y) - this.gen.col(px).h > 18 && !w.isSkyExposed(px, Math.floor(pb.y) - 1)) place = "cave";
+		const half = this.viewTilesW * 0.5 + 3, side = Math.random() < 0.5 ? 1 : -1;
+		const sx = pb.x + side * (half + rand(1, 16)), ix = Math.floor(sx);
+		if (!w.isLoaded(ix)) { this.spawnNote("spot not loaded"); return; }
+		if (!this.gen.infinite && (ix < 4 || ix > this.gen.width - 5)) return;
+		let sy = 0, eff = place;
+		if (place === "surface") {
+			const h = w.surfaceY(ix), ht = w.tile(ix, h);
+			if (LIQUID[ht]) {
+				eff = "ocean";
+				let wy = h + 1, dep = 0;
+				while (w.tile(ix, wy) === T.water && dep < 40) { wy++; dep++; }
+				if (dep < 5) { this.spawnNote("shallow water"); return; }
+				sy = h + 2 + randInt(0, Math.max(1, dep - 3) - 1);
+			} else if (SOLID[ht]) {
+				if (w.solid(ix, h - 1) || w.solid(ix, h - 2) || LIQUID[w.tile(ix, h - 1)]) { this.spawnNote("no headroom"); return; }
+				sy = h;
+			} else { this.spawnNote("no ground"); return; }
+		} else {
+			let y = Math.floor(pb.y) + randInt(-20, 20), found = false;
+			for (let tries = 0; tries < 22; tries++, y++) {
+				if (!w.solid(ix, y) && !w.solid(ix, y - 1) && !w.solid(ix, y - 2) && w.solid(ix, y + 1) && !LIQUID[w.tile(ix, y)]) { found = true; break; }
+			}
+			if (!found) { this.spawnNote("no floor"); return; }
+			if (place === "cave" && w.isSkyExposed(ix, y)) { this.spawnNote("open sky"); return; }
+			const lit = this.lightForSpawn(ix, y + 1);
+			if (lit[1] > SPAWN_GLOW_MAX || lit[0] > 6) { this.spawnNote("too bright"); return; }
+			sy = y + 1;
+		}
+		const biome = this.biomeAt(ix), night = this.isNight;
+		let block = "";
+		if (eff === "surface") {
+			const gy = Math.floor(sy);
+			if (this.lightForSpawn(ix, gy)[1] > SPAWN_GLOW_MAX) block = "lit by a lamp";
+			else if (!NATURAL_GROUND.has(w.tile(ix, gy))) block = "on a building";
+			else if (Math.abs(sy - pb.y) > 30) block = "out of reach";
+			else if (this.monsterSpawnCD > 0) block = "pacing";
+		}
+		const cap = this.monsterCap(eff);
+		let capped = false, total = 0;
+		const cands = [];
+		for (const r of SPAWN_RULES) {
+			if (r.place !== eff) continue;
+			if (r.when === "day" && night) continue;
+			if (r.when === "night" && !night) continue;
+			if (r.biomes.length && !r.biomes.includes(biome)) continue;
+			if ((eff === "cave" || eff === "umbral") && (sy < r.minY || sy > r.maxY)) continue;
+			const d = MOBS[r.kind];
+			if (d.hostile) {
+				if (this.settings.peaceful) continue;
+				if (isPredator(r.kind)) { if (predators >= Math.min(3, cap)) continue; }
+				else { if (hostile >= cap) { capped = true; continue; } if (block) continue; }
+			} else if (r.kind === "fish") { if (aquatic >= this.animalCap) continue; }
+			else if (passive >= this.animalCap) continue;
+			cands.push(r); total += r.weight;
+		}
+		if (!cands.length || total <= 0) {
+			this.spawnNote(capped ? "monster limit reached" : (block && night) ? block : night ? "nothing for this place" : "nothing for this place by day");
+			return;
+		}
+		let pick = Math.random() * total, chosen = cands[0];
+		for (const r of cands) { pick -= r.weight; if (pick <= 0) { chosen = r; break; } }
+		const def = MOBS[chosen.kind], monster = def.hostile && !isPredator(chosen.kind);
+		let n = 1 + randInt(0, Math.max(1, chosen.group) - 1);
+		if (monster) n = Math.min(n, cap - hostile);
+		let made = 0;
+		for (let k = 0; k < n; k++) {
+			const x = sx + k * 1.1 * side + rand(-0.4, 0.4);
+			let y = sy;
+			if (eff === "surface" && !def.flying) {
+				const gyS = w.surfaceY(Math.floor(x));
+				if (LIQUID[w.tile(Math.floor(x), gyS)] || Math.abs(gyS - Math.floor(sy)) > 3) continue;
+				y = gyS;
+			}
+			if (def.flying && eff !== "ocean") y -= rand(1, 3);
+			if (monster && eff !== "ocean" && this.lightForSpawn(Math.floor(x), Math.floor(y))[1] > SPAWN_GLOW_MAX) continue;
+			if (eff !== "ocean" && !this.spawnSpotClear(def, x, y)) continue;
+			const m = this.addMob(chosen.kind, x, y);
+			m.homeX = x; m.homeY = y;
+			if (monster && eff === "surface" && night) m.hunter = true;
+			if (chosen.kind === "sheep" && Math.random() < 0.1) m.sheared = true;
+			made++;
+		}
+		if (!made) { this.spawnNote("no room to stand"); return; }
+		this.spawnNote("spawned " + def.name);
+		if (monster && eff === "surface") this.monsterSpawnCD = [8, 4, 2][clampI(this.settings.nightDanger, 0, 2)] * rand(0.8, 1.25);
+	},
+	spawnSpotClear(d, x, y) {
+		const hw = d.w * 0.5, w = this.world;
+		if (w.boxSolid(x - hw + 0.02, y - d.h, x + hw - 0.02, y - 0.05)) return false;
+		if (d.flying) return true;
+		const gy = Math.floor(y + 0.05), l = Math.floor(x - hw + 0.05), r = Math.floor(x + hw - 0.05);
+		let footing = 0;
+		for (let tx = l; tx <= r; tx++) if (w.solid(tx, gy) || w.tile(tx, gy) === T.platform) footing++;
+		return footing * 2 >= r - l + 1;
+	},
+});
+// the "animalCap" getter must be a real property (Object.assign would copy its value once)
+Object.defineProperty(Game.prototype, "animalCap", { get() { return Math.round(9 * rule("animals")); } });
+/** bosses and other special creatures take over their own update through this; true when one did */
+function mobKindHook(g, m, dt) { return bossUpdate(g, m, dt); }
+
+// ===== p16z_glue.js =====
+// Creatures and fighting joined to the rest of the game: the order they run in each frame, tapping a
+// creature (taming), what is saved, and the bosses' place (they come with their lairs in phase 3).
+
+/** bosses run their own fights (phase 3, with their lairs); false: the creature's usual update runs */
+function bossUpdate(g, m, dt) { return false; }
+
+tickHooks.push((g, dt) => {
+	g.updateMobs(dt);
+	g.updateSpawning(dt);
+	g.updateProjectiles(dt);
+	g.updateCombatFX(dt);
+});
+
+// a tame-able creature under the finger, with what it likes in hand, is tapped rather than hit
+function tameableAt(g, wx, wy) {
+	const it = g.heldItem;
+	if (!it) return null;
+	for (const m of g.mobsNear(wx - 3, wx + 3)) {
+		if (m.hp <= 0 || m.tame) continue;
+		const ok = (m.kind === "wolf" && it === "mat:bone") || (m.kind === "cat" && (it === "food:rawFish" || it === "food:cookedFish"));
+		if (ok && wx >= bodyLeft(m.b) - 0.4 && wx <= bodyRight(m.b) + 0.4 && wy >= bodyTop(m.b) - 0.4 && wy <= m.b.y + 0.4) return m;
+	}
+	return null;
+}
+function interactiveHook(g, wx, wy, t) { return !!tameableAt(g, wx, wy); }
+function interactHook(g, tx, ty, t, wx, wy) {
+	const m = tameableAt(g, wx, wy);
+	if (m) g.tryTame(m);
+}
+function hostileAtHook(g, wx, wy) {
+	for (const m of g.mobsNear(wx - 4, wx + 4)) {
+		if (m.hp <= 0 || m.tame || !g.isThreat(m)) continue;
+		if (wx >= bodyLeft(m.b) - 0.4 && wx <= bodyRight(m.b) + 0.4 && wy >= bodyTop(m.b) - 0.4 && wy <= m.b.y + 0.4) return true;
+	}
+	return false;
+}
+/** weapons and throwables in hand; true when the item was one of them */
+function useItemHook(g, held, dt, pressed, released) {
+	if (held === "bow") { g.handleBow(dt, pressed, released); return true; }
+	if (!g.useHeld || !held) return false;
+	const k = itemKind(held);
+	if (k === "gun") { g.useGun(held, pressed); return true; }
+	if (held === "sling") { g.useSling(pressed); return true; }
+	if (held === "gadget:bomb") { if (pressed) g.throwBomb(); return true; }
+	if (MELEE_KINDS.has(k)) { g.useMeleeWeapon(held, pressed); return true; }
+	return false;
+}
+/** a tool or a fist aimed at a creature fights it */
+function meleeHook(g, id, pressed) { return g.fightWith(id, pressed); }
+
+// pets and creatures that keep their place (a mimic woken, later the bosses' kin) are saved
+saveHooks.push((g, o) => {
+	o.mobs = g.mobs.filter((m) => m.hp > 0 && !m.removed && (m.tame || m.persistent) && m.lair === 0).map((m) => ({ kind: m.def.id, x: m.b.x, y: m.b.y, hp: m.hp, maxHP: m.maxHP, tame: m.tame, variant: m.variant, loot: m.loot.length ? m.loot : undefined }));
+	o.kills = g.kills || 0;
+});
+loadHooks.push((g, o) => {
+	for (const s of o.mobs || []) {
+		const d = MOB_BY_ID[s.kind];
+		if (!d) continue;
+		const m = g.addMob(d.key, s.x, s.y);
+		m.hp = s.hp; m.maxHP = s.maxHP; m.tame = !!s.tame; m.persistent = true; m.variant = s.variant || 0;
+		if (s.loot) m.loot = s.loot.map((x) => stack(x.id, x.n, x.extra || 0, x.inf || null));
+	}
+	g.kills = o.kills || 0;
+});
 
 // ===== u02_render.js =====
 // Drawing the world (the Swift game's u02_render): the sky and clouds, the land a section at a time,
@@ -4078,6 +6038,212 @@ const Renderer = {
 // later phases draw creatures, vehicles, weather and the rest through these
 const drawHooksBack = [], drawHooksMid = [], drawHooksFront = [], overlayHooks = [], skyHooks = [];
 
+// ===== u02b_mobs.js =====
+// Drawing creatures and fighting (the Swift game's drawMobs, mobFrame, drawProjectiles and the slash
+// trails): every creature from its hand-drawn frames, turning, lunging, breathing, flashing when hit
+// and toppling when it dies; shots in flight; the player's swings; telegraphed blows; health bars.
+
+/** a creature's frames and how they are used (its variant's art) */
+function mobLook(m) {
+	const d = m.def, v = d.variants[Math.min(m.variant, d.variants.length - 1)] || d.variants[0];
+	return v;
+}
+const pose = (an, name, fallback) => (an.poses && an.poses[name] !== undefined) ? an.poses[name] : fallback;
+function walkFrame(an, t) {
+	const w = an.walk;
+	if (!w || !w.length) return 0;
+	const rate = w.length > 2 ? w.length : 2;
+	return w[Math.floor(Math.abs(t) * rate) % w.length];
+}
+function idleVariant(m, clock) { return ((clock * 0.22 + (m.id % 97) * 0.137) % 1) > 0.74; }
+/** which frame a creature shows for what it is doing */
+function mobFrame(m, an, clock) {
+	const moving = Math.abs(m.b.vx) > 0.3;
+	if (isHumanoid(m.kind)) {
+		if (m.st === 3) return (m.kind === "pirateGunner" || m.kind === "imp" || m.kind === "archer") ? pose(an, "shoot", 6) : pose(an, "windup", 3);
+		if (m.st === 4) return pose(an, "strike", 4);
+		if (m.st === 6) return pose(an, "fire", pose(an, "shoot", 6));
+		if (m.blocking) return pose(an, "block", 5);
+		if (m.atkT > 0 && (m.kind === "zombie" || m.kind === "imp")) return pose(an, "strike", 4);
+		return moving ? walkFrame(an, m.anim) : 0;
+	}
+	switch (m.kind) {
+		case "golem":
+			if (m.st === 3) return pose(an, "windup", 3);
+			if (m.st === 4) return pose(an, "strike", 4);
+			if (m.st === 5) return pose(an, "throw", 5);
+			return moving ? walkFrame(an, m.anim) : 0;
+		case "mimic":
+			if (m.st === 3 || m.st === 4) return 3;
+			if (!m.b.onGround) return 1 + Math.floor(m.anim * 6) % 2;
+			return m.angry ? 1 : 0;
+		case "sentinel": case "warden": case "bearBoss": case "rex":
+			return moving ? walkFrame(an, m.anim) : Math.floor(m.anim * 1.2) % 2;
+	}
+	if (an.attack >= 0 && m.atkT > 0) return an.attack;
+	if (an.hop) return m.b.onGround ? 0 : an.hopFrame;
+	if (an.cycle && an.cycle.length) return an.cycle[Math.floor(m.anim * 1.5) % an.cycle.length];
+	if (moving) return walkFrame(an, m.anim);
+	if (an.idleAlt >= 0 && m.b.onGround && (m.poseT > 0 || idleVariant(m, clock))) return an.idleAlt;
+	return 0;
+}
+
+const MobDraw = {
+	draw(g) {
+		const tp = View.tp, dpr = R.dpr;
+		if (g.dangerZones && g.dangerZones.length) this.dangerZones(g);
+		for (const m of g.mobs) {
+			const dying = m.hp <= 0 && !m.downed;
+			if (dying && (m.deathT < 0 || m.removed)) continue;
+			if (m.b.x < View.left - 8 - m.b.w || m.b.x > View.left + View.wT + 8 + m.b.w || m.b.y < View.top - 4 || m.b.y - m.b.h > View.top + View.hT + 4) continue;
+			const an = mobLook(m);
+			const rects = DATA.atlas.rects["mob:" + m.kind + ":" + Math.min(m.variant, m.def.variants.length - 1)];
+			if (!rects) continue;
+			let left = m.dir < 0, scaleX = 1;
+			if (m.turnT > 0 && !dying) {
+				const p = 1 - m.turnT / MOB_TURN;
+				scaleX = Math.max(0.2, Math.abs(1 - 2 * p));
+				if (p < 0.5) left = m.face < 0;
+			}
+			let drawX = m.b.x;
+			if (m.atkT > 0 && !dying && !isBossMob(m)) drawX += m.dir * 0.18 * Math.sin((1 - m.atkT / MOB_ATK) * Math.PI);
+			let alpha = m.kind === "wraith" ? 0.82 : 1;
+			if (m.downed) alpha = 0.55;
+			const shade = Renderer.openShade(g, m.b.x, mobCY(m));
+			let rot = m.lean * 0.22, squash = 1;
+			if (Math.abs(m.b.vx) < 0.3 && m.b.onGround && !dying) squash = 1 + 0.022 * Math.sin(g.clock * 2.6 + (m.id % 17));
+			if (dying) {
+				const t = m.deathT;
+				if (m.kind === "slime" || m.kind === "emberSlime" || m.def.flying || m.kind === "fish") squash = Math.max(0.2, 1 - t * 1.1);
+				else { const f = Math.min(1, t / 0.4); rot = (m.dir > 0 ? -1 : 1) * f * f * 1.45; }
+				alpha *= clampD(1 - (t - 0.3) / 0.4, 0, 1);
+			}
+			const flash = m.flash > 0 || (dying && m.deathT < 0.08);
+			const fr = Math.min(mobFrame(m, an, g.clock), rects.length - 1);
+			const r = rects[Math.max(0, fr)];
+			const scale = an.scale * (m.mutSize || 1);
+			this.sprite(r, an.centerCol, an.footRow + 1, scale, drawX, m.b.y, left, Renderer.shadeCol(shade, alpha), flash ? 1 : 0, rot, squash, scaleX);
+			if (dying) continue;
+			if (m.burn > 0) R.rect(View.sx(bodyLeft(m.b)), View.sy(bodyTop(m.b) + m.b.h * 0.3), m.b.w * tp, m.b.h * 0.7 * tp, rgba(0xFF7020, 0.25 + 0.15 * Math.sin(g.clock * 20)));
+			if (m.daze > 0) {
+				for (let k = 0; k < 3; k++) {
+					const a = g.clock * 6 + k * 2.094, sx = m.b.x + Math.cos(a) * Math.max(0.45, m.b.w * 0.45), sy = bodyTop(m.b) - 0.25 + Math.sin(a) * 0.12;
+					const sz = Math.max(3 * dpr, tp * 0.14);
+					R.rect(View.sx(sx) - sz * 0.5, View.sy(sy) - sz * 0.5, sz, sz, rgba(k === 1 ? 0xFFFFFF : 0xFFE060));
+				}
+			}
+			if (m.tame) R.oval(View.sx(m.b.x) - 4 * dpr, View.sy(bodyTop(m.b)) - 14 * dpr, 8 * dpr, 8 * dpr, rgba(0xFF5A7A));
+			if (!isBossMob(m) && m.hp < m.maxHP && m.hp > 0) {
+				const w = Math.max(0.9, m.b.w), bx = m.b.x - w * 0.5, by = bodyTop(m.b) - 0.45;
+				R.rect(View.sx(bx), View.sy(by), w * tp, Math.max(2 * dpr, 0.14 * tp), rgba(0, 0.7));
+				R.rect(View.sx(bx), View.sy(by), w * tp * (m.hp / m.maxHP), Math.max(2 * dpr, 0.14 * tp), rgba(m.tame ? 0x50E070 : 0xE04040));
+			}
+		}
+	},
+	/** one frame from the atlas standing at (x, y) by its anchor column and foot row */
+	sprite(r, cx, foot, scale, x, y, left, col, add, rot = 0, squash = 1, scaleX = 1) {
+		const px = scale * View.tp;
+		if (Math.abs(rot) < 0.01 && Math.abs(squash - 1) < 0.004 && scaleX > 0.999) {
+			const cc = left ? r[2] - cx : cx, snap = Math.max(1, px);
+			const dx = Math.round((View.sx(x) - cc * px) / snap) * snap, dy = Math.round((View.sy(y) - foot * px) / snap) * snap;
+			R.sprite(r[0], r[1], r[2], r[3], dx, dy, r[2] * px, r[3] * px, col, left, add);
+			return;
+		}
+		R.push();
+		R.translate(View.sx(x), View.sy(y));
+		if (rot) R.rotate(rot);
+		R.scale((left ? -1 : 1) * scaleX * (1 + (1 - squash) * 0.5), squash);
+		R.sprite(r[0], r[1], r[2], r[3], -cx * px, -foot * px, r[2] * px, r[3] * px, col, false, add);
+		R.pop();
+	},
+	dangerZones(g) {
+		for (const z of g.dangerZones) {
+			const p = clampD(1 - z.t / z.dur, 0, 1), pulse = 0.5 + 0.5 * Math.sin(g.clock * (10 + 14 * p));
+			const x = View.sx(z.x0), y = View.sy(z.y0), w = (z.x1 - z.x0) * View.tp, h = (z.y1 - z.y0) * View.tp;
+			R.rect(x, y, w, h, rgba(z.color, 0.08 + 0.08 * pulse));
+			R.rect(x, y + h * (1 - p), w, h * p, rgba(z.color, 0.2));
+			R.frame(x, y, w, h, 2 * R.dpr, rgba(z.color, 0.5 + 0.3 * pulse));
+		}
+	},
+	projectiles(g) {
+		const tp = View.tp, dpr = R.dpr;
+		for (const p of g.projectiles) {
+			if (p.x < View.left - 2 || p.x > View.left + View.wT + 2 || p.y < View.top - 2 || p.y > View.top + View.hT + 2) continue;
+			const x = View.sx(p.x), y = View.sy(p.y);
+			const ang = p.stuck > 0 ? p.stuckAngle : Math.atan2(p.vy, p.vx), dx = Math.cos(ang), dy = Math.sin(ang);
+			switch (p.kind) {
+				case "arrow": case "quarrel": {
+					const L = p.kind === "arrow" ? 0.42 : 0.32, hx = dx * tp * L, hy = dy * tp * L, lw = Math.max(2 * dpr, tp / (p.kind === "arrow" ? 11 : 9));
+					if (p.stuck <= 0 && (p.trail > 0 || p.kind === "quarrel")) R.line(x - hx - dx * tp * 0.8, y - hy - dy * tp * 0.8, x - hx, y - hy, lw, rgba(0xFFFFFF, 0.18));
+					R.line(x - hx, y - hy, x + hx, y + hy, lw, rgba(p.kind === "arrow" ? 0x8A5A2A : 0x6A4A26));
+					R.line(x + hx * 0.6, y + hy * 0.6, x + hx * 1.08, y + hy * 1.08, lw + dpr, rgba(p.kind === "arrow" ? 0xD0D0D8 : 0xC89040));
+					if (p.kind === "arrow") { const nx = -dy * tp * 0.12, ny = dx * tp * 0.12; R.line(x - hx, y - hy, x - hx * 0.6 + nx, y - hy * 0.6 + ny, lw, rgba(0xE8E0D0)); R.line(x - hx, y - hy, x - hx * 0.6 - nx, y - hy * 0.6 - ny, lw, rgba(0xE8E0D0)); }
+					break;
+				}
+				case "bullet": R.line(x - dx * tp * 0.6, y - dy * tp * 0.6, x, y, 2 * dpr, rgba(0xFFE8A0, 0.4)); R.rect(x - 2 * dpr, y - 2 * dpr, 4 * dpr, 4 * dpr, rgba(0xFFF2C0)); break;
+				case "pellet": R.line(x - dx * tp * 0.5, y - dy * tp * 0.5, x, y, 2 * dpr, rgba(0xFFE8A0, 0.35)); R.rect(x - 1.5 * dpr, y - 1.5 * dpr, 3 * dpr, 3 * dpr, rgba(0xFFF2C0)); break;
+				case "pebble": case "rock": {
+					const sz = Math.max(4 * dpr, p.w * tp), h = sz * 0.5;
+					R.rect(x - h, y - h, sz, sz, rgba(0x8A8A8A)); R.rect(x - h, y - h, sz * 0.5, sz * 0.45, rgba(0xB0B0B0));
+					break;
+				}
+				case "fireball": {
+					const r = tp * 0.3 * (0.9 + 0.1 * Math.sin(g.clock * 30));
+					R.oval(x - r * 1.6, y - r * 1.6, r * 3.2, r * 3.2, rgba(0xFF7020, 0.25));
+					R.oval(x - r, y - r, r * 2, r * 2, rgba(0xFF9A30));
+					R.oval(x - r * 0.5, y - r * 0.5, r, r, rgba(0xFFE8A0));
+					break;
+				}
+				case "bomb": {
+					const r = tp * 0.22;
+					R.oval(x - r, y - r, r * 2, r * 2, rgba(0x2A2A30));
+					R.oval(x - r * 0.5, y - r * 0.7, r * 0.6, r * 0.6, rgba(0x6A6A78));
+					if (Math.floor(p.life * 12) % 2 === 0) R.rect(x + r * 0.2, y - r * 1.6, 3 * dpr, 3 * dpr, rgba(0xFFD040));
+					break;
+				}
+				case "shock": R.rect(x - tp * 0.4, y - tp * 0.15, tp * 0.8, tp * 0.3, rgba(0xA08860, 0.5)); break;
+			}
+		}
+	},
+	slashes(g) {
+		if (!g.slashes) return;
+		const tp = View.tp, dpr = R.dpr;
+		for (const s of g.slashes) {
+			const a = clampD(s.life / s.maxLife, 0, 1), col = rgba(artGrade(s.color), 0.55 * a), x = View.sx(s.x), y = View.sy(s.y), r = s.reach * tp;
+			if (s.style === "thrust" || s.style === "stab") {
+				const dx = Math.cos(s.ang), dy = Math.sin(s.ang);
+				R.line(x + dx * r * 0.3, y + dy * r * 0.3, x + dx * r, y + dy * r, Math.max(3 * dpr, tp * 0.14), col);
+				continue;
+			}
+			const n = 9, a0 = s.ang - s.halfArc, a1 = s.ang + s.halfArc;
+			const sweep = 1 - a;
+			for (let i = 0; i < n; i++) {
+				const t0 = i / n, t1 = (i + 1) / n;
+				if (t1 > sweep + 0.6) break;
+				const b0 = a0 + (a1 - a0) * t0, b1 = a0 + (a1 - a0) * t1, rr = r * 0.92;
+				R.line(x + Math.cos(b0) * rr, y + Math.sin(b0) * rr, x + Math.cos(b1) * rr, y + Math.sin(b1) * rr, Math.max(2 * dpr, tp * 0.12 * (1 - Math.abs(t0 - 0.5))), col);
+			}
+		}
+	},
+	/** the dotted flight of a drawn bow (or a sling, a crossbow, a bomb) */
+	aimArc(g) {
+		const pts = g.arrowPreview();
+		if (!pts) return;
+		const s = Math.max(3, View.tp * 0.12);
+		for (let i = 0; i < pts.length; i += 2) {
+			const a = 0.75 * (1 - i / pts.length);
+			R.rect(View.sx(pts[i]) - s * 0.5, View.sy(pts[i + 1]) - s * 0.5, s, s, rgba(0xFFFFFF, a));
+		}
+	},
+	muzzle(g) {
+		if (!(g.muzzleT > 0)) return;
+		const x = View.sx(g.pb.x + g.facing * 0.9), y = View.sy(g.pb.y - 1.2), r = View.tp * 0.3;
+		R.oval(x - r, y - r, r * 2, r * 2, rgba(0xFFE080, 0.8));
+	},
+};
+drawHooksMid.push((g) => MobDraw.draw(g));
+drawHooksFront.push((g) => { MobDraw.projectiles(g); MobDraw.slashes(g); MobDraw.muzzle(g); MobDraw.aimArc(g); });
+
 // ===== u03_hud.js =====
 // The HUD and the controls (the Swift game's u03_hud and p14c_input): hearts, food and air, the hotbar,
 // the walking stick and JUMP on touch screens, the keyboard and mouse, floating text and messages.
@@ -4097,7 +6263,8 @@ function escapeHTML(s) { return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&am
 /** a bag slot's inside: the icon and the count */
 function slotInner(s, size, key = "") {
 	if (!s) return key ? '<span class="k">' + key + "</span>" : "";
-	const n = s.n > 1 ? '<span class="n">' + s.n + "</span>" : "";
+	const gd = itemDef(s.id).gun;
+	const n = gd ? '<span class="n" style="color:#ffe080">' + s.extra + "</span>" : s.n > 1 ? '<span class="n">' + s.n + "</span>" : "";
 	return (key ? '<span class="k">' + key + "</span>" : "") + iconHTML(s.id, size * 0.66) + n;
 }
 
@@ -4123,7 +6290,9 @@ const HUD = {
 		$("bZoomOut").addEventListener("click", () => { if (UI.game) setZoom(UI.game.settings.tilePx / 1.25); });
 		for (let i = 0; i < 16; i++) { const d = document.createElement("div"); d.className = "hidden"; $("floats").appendChild(d); UI.floatEls.push(d); }
 		this.initStick();
+		this.initAttack();
 		this.initJump();
+		$("bWeapon").addEventListener("click", () => { if (UI.game) UI.game.cycleWeapon(); });
 		this.initWorldPointer();
 		this.initKeys();
 	},
@@ -4149,6 +6318,29 @@ const HUD = {
 		const end = (e) => { if (e.pointerId !== id) return; id = -1; knob.style.transform = ""; if (UI.game) { UI.game.stick = 0; UI.game.stickY = 0; } };
 		st.addEventListener("pointerup", end); st.addEventListener("pointercancel", end);
 		this.stickReset = () => { id = -1; knob.style.transform = ""; };
+	},
+	/** the attack stick: held, it attacks; inside its middle the game aims, past it the thumb aims */
+	initAttack() {
+		const st = $("atk"), knob = $("atkKnob");
+		let id = -1, cx = 0, cy = 0;
+		const move = (e) => {
+			const R0 = 50;
+			let dx = e.clientX - cx, dy = e.clientY - cy;
+			const d = Math.hypot(dx, dy);
+			ActStick.at(dx / R0, dy / R0);
+			if (d > R0) { dx *= R0 / d; dy *= R0 / d; }
+			knob.style.transform = "translate(" + dx + "px," + dy + "px)";
+		};
+		st.addEventListener("pointerdown", (e) => {
+			e.preventDefault(); Sound.unlock();
+			id = e.pointerId; st.setPointerCapture(id); st.classList.add("on");
+			const r = st.getBoundingClientRect(); cx = r.left + r.width / 2; cy = r.top + r.height / 2;
+			move(e);
+		});
+		st.addEventListener("pointermove", (e) => { if (e.pointerId === id) move(e); });
+		const end = (e) => { if (e.pointerId !== id) return; id = -1; knob.style.transform = ""; st.classList.remove("on"); ActStick.release(); };
+		st.addEventListener("pointerup", end); st.addEventListener("pointercancel", end);
+		this.atkReset = () => { id = -1; knob.style.transform = ""; st.classList.remove("on"); ActStick.release(); };
 	},
 	initJump() {
 		const b = $("bJump");
@@ -4245,11 +6437,13 @@ const HUD = {
 			if (set(e, true)) { e.preventDefault(); return; }
 			if (/^Digit[0-9]$/.test(e.code)) { const d = +e.code.slice(5); g.setSel(d === 0 ? 9 : d - 1); return; }
 			if (e.code === "KeyQ") { g.dropSlot(g.sel, e.shiftKey); return; }
+			if (e.code === "KeyF" && !e.shiftKey) { ActStick.held = true; return; }
+			if (e.code === "KeyR") { g.cycleWeapon(); return; }
 			if (e.code === "KeyF" && e.shiftKey && g.isCreative) { g.flying = !g.flying; g.say(g.flying ? "Flying" : "Walking", 1); return; }
 			if (e.code === "Equal" || e.code === "NumpadAdd") setZoom(g.settings.tilePx * 1.12);
 			if (e.code === "Minus" || e.code === "NumpadSubtract") setZoom(g.settings.tilePx / 1.12);
 		});
-		window.addEventListener("keyup", (e) => { set(e, false); });
+		window.addEventListener("keyup", (e) => { set(e, false); if (e.code === "KeyF") ActStick.release(); });
 		window.addEventListener("blur", () => releaseAllInput());
 	},
 	/** every frame: the aim follows the finger as the view moves, the HUD shows what changed */
@@ -4312,6 +6506,7 @@ const HUD = {
 function releaseAllInput() {
 	const g = UI.game;
 	if (HUD.stickReset) HUD.stickReset();
+	if (HUD.atkReset) HUD.atkReset();
 	$("bJump").classList.remove("on");
 	if (!g) return;
 	g.stick = 0; g.stickY = 0; g.keyL = false; g.keyR = false; g.jumpHeld = false; g.downHeld = false;
@@ -4370,13 +6565,14 @@ function renderPanel(force = false) {
 	const scrollEl = box.querySelector(".scroll");
 	const keepScroll = scrollEl ? scrollEl.scrollTop : 0;
 	const tabs = [["bag", g.openChest ? "CHEST" : "BAG"], ["craft", "CRAFT"]];
-	if (g.isCreative) tabs.push(["items", "ITEMS"]);
-	let top = '<div class="top"><span class="title">' + (Panel.tab === "craft" ? "Crafting" : Panel.tab === "items" ? "All items" : g.openChest ? "Chest" : "Inventory") + '</span><div class="tabs">';
+	if (g.isCreative) { tabs.push(["items", "ITEMS"]); tabs.push(["mobs", "CREATURES"]); }
+	let top = '<div class="top"><span class="title">' + (Panel.tab === "craft" ? "Crafting" : Panel.tab === "items" ? "All items" : Panel.tab === "mobs" ? "Creatures" : g.openChest ? "Chest" : "Inventory") + '</span><div class="tabs">';
 	for (const [k, n] of tabs) top += '<button data-tab="' + k + '" class="' + (Panel.tab === k ? "on" : "") + '">' + n + "</button>";
 	top += '</div><button data-act="close">✕</button></div>';
 	let body = "";
 	if (Panel.tab === "craft") body = craftHTML(g);
 	else if (Panel.tab === "items") body = itemsHTML(g);
+	else if (Panel.tab === "mobs") body = mobsHTML(g);
 	else body = bagHTML(g);
 	box.innerHTML = '<div class="box">' + top + '<div class="scroll">' + body + "</div></div>";
 	const sc = box.querySelector(".scroll");
@@ -4476,6 +6672,15 @@ function craftListHTML(g) {
 	}
 	return h;
 }
+/** creative: any creature, put down a few blocks in front of the player */
+function mobsHTML(g) {
+	let h = '<div class="label">Tap to bring one out in front of you</div><div style="display:flex;flex-wrap:wrap;gap:6px">';
+	for (const d of DATA.mobs) {
+		if (d.key === "villager" || d.key === "custom" || BOSS_KINDS.has(d.key)) continue;
+		h += '<button data-spawn="' + d.key + '">' + escapeHTML(d.name) + "</button>";
+	}
+	return h + '</div><div class="note">Bosses come with their lairs in a later step.</div>';
+}
 function itemsListHTML(g) {
 	const size = slotSizePx(), q = Panel.search.trim().toLowerCase();
 	let h = '<div class="grid">';
@@ -4551,7 +6756,7 @@ function initPanels() {
 	box.addEventListener("click", (e) => {
 		const g = UI.game;
 		if (!g) return;
-		const t = e.target.closest("[data-tab],[data-act],[data-s],[data-a],[data-c],[data-cat],[data-craft],[data-craft5],[data-give]");
+		const t = e.target.closest("[data-tab],[data-act],[data-s],[data-a],[data-c],[data-cat],[data-craft],[data-craft5],[data-give],[data-spawn]");
 		if (!t) { if (e.target === box) closePanels(); return; }
 		const ds = t.dataset;
 		if (ds.tab) { Panel.tab = ds.tab; Panel.pick = -1; Panel.pickArmor = -1; Panel.search = ""; }
@@ -4562,6 +6767,13 @@ function initPanels() {
 		else if (ds.cat) Panel.cat = ds.cat;
 		else if (ds.craft !== undefined) g.craft(RECIPES[+ds.craft]);
 		else if (ds.craft5 !== undefined) { for (let k = 0; k < 5; k++) if (!g.craft(RECIPES[+ds.craft5])) break; }
+		else if (ds.spawn) {
+			const x = g.pb.x + g.facing * 4, d = MOBS[ds.spawn];
+			const y = d.flying ? g.pb.y - 3 : g.world.groundBelow(Math.floor(x), Math.floor(g.pb.y) - 3);
+			g.addMob(ds.spawn, x, y);
+			closePanels();
+			return;
+		}
 		else if (ds.give) { const left = g.inv.add(ds.give, maxStack(ds.give)); if (left > 0) g.say("Your bag is full.", 1.2); else sfx("pickup", 0.4); g.bumpHUD(); }
 		renderPanel(true);
 	});
@@ -4591,9 +6803,10 @@ const SETTING_ROWS = [
 	["camFollow", "Camera follow", "How quickly the view catches up", 0, 1, 0.05],
 	["camDeadZone", "Camera slack", "How far you can move before the view does", 0, 4, 0.1],
 	["shakeScale", "Screen shake", "", 0, 1.5, 0.05],
+	["nightDanger", "Night monsters", "0 few, 1 normal, 2 many", 0, 2, 1],
 ];
 const SETTING_SWITCHES = [
-	["sound", "Sound"], ["smoothLight", "Smooth light"], ["camSmoothOn", "Smooth camera"], ["camDirect", "Direct camera", "The view stays on you"],
+	["peaceful", "Peaceful", "No monsters come out"], ["sound", "Sound"], ["smoothLight", "Smooth light"], ["camSmoothOn", "Smooth camera"], ["camDirect", "Direct camera", "The view stays on you"],
 	["camLookAhead", "Look ahead"], ["showFPS", "Show speed (FPS)"], ["autosave", "Save every minute"], ["leftHanded", "Left-handed controls"],
 ];
 let pausePage = "main";
@@ -4639,7 +6852,8 @@ function onPauseInput(e) {
 	const s = UI.game.settings;
 	s[k] = +e.target.value;
 	const lab = document.getElementById("sv_" + k);
-	if (lab) lab.textContent = (+s[k]).toFixed(k === "tilePx" ? 0 : 2);
+	const row = SETTING_ROWS.find((r) => r[0] === k);
+	if (lab) lab.textContent = (+s[k]).toFixed(row && row[5] >= 1 ? 0 : 2);
 	SettingsStore.save(s); applySettings(s);
 }
 async function onPauseClick(e) {
@@ -4678,8 +6892,6 @@ function showDeath(g) {
 
 const SAVE_VERSION = 1;
 const PART = 200000;          // characters a stored document holds (well under the 256 KB limit)
-/** later phases save and load their own parts of a world through these */
-const saveHooks = [], loadHooks = [];
 
 const SettingsStore = {
 	key: "pixelrealm.settings",
@@ -4985,7 +7197,7 @@ const Menu = {
 				'<button data-act="new" class="primary">NEW WORLD</button>' +
 				'<button data-act="load"' + (this.worlds.length ? "" : " disabled") + '>PLAY A SAVED WORLD' + (this.worlds.length ? " (" + this.worlds.length + ")" : "") + "</button>" +
 				'<button data-act="import">OPEN A WORLD FILE</button><button data-act="settings">SETTINGS</button><button data-act="stress">STRESS TEST</button></div>' +
-				'<div class="note">Worlds are saved to ' + Store.where + ".<br>Version 2 · phase 1 of the web edition</div></div></div>";
+				'<div class="note">Worlds are saved to ' + Store.where + ".<br>Version 2 · phase 2 of the web edition</div></div></div>";
 		} else if (this.page === "new") {
 			const f = this.form || (this.form = this.newForm());
 			const pick = (k, opts) => '<div class="choice">' + opts.map(([v, n]) => '<button data-pick="' + k + '" data-v="' + v + '" class="' + (String(f[k]) === String(v) ? "on" : "") + '">' + n + "</button>").join("") + "</div>";
@@ -5068,7 +7280,8 @@ const Menu = {
 			const s = Menu.settings, key = e.target.dataset.set;
 			s[key] = +e.target.value;
 			const lab = document.getElementById("sv_" + key);
-			if (lab) lab.textContent = (+s[key]).toFixed(key === "tilePx" ? 0 : 2);
+			const row = SETTING_ROWS.find((r) => r[0] === key);
+			if (lab) lab.textContent = (+s[key]).toFixed(row && row[5] >= 1 ? 0 : 2);
 			SettingsStore.save(s); applySettings(s);
 		}
 	},
@@ -5152,6 +7365,17 @@ const STRESS_STEPS = [
 		for (let i = 0; i < 120; i++) w.set(px - 30 + (i % 30) * 2, py + 4 + Math.floor(i / 30) * 6, T.torch);
 	}, run(g, dt) {} },
 	{ name: "Widest view (12 pixels a block)", secs: 4, start(g) { g.tilePx = 12; }, run(g, dt) { g.pb.x += 10 * dt; } },
+	{ name: "300 monsters after you", secs: 6, start(g) {
+		g.tilePx = g.settings.tilePx; g.noclip = false; g.mobs = []; g.noSpawning = true;
+		g.pb.y = g.world.surfaceY(Math.floor(g.pb.x));
+		const kinds = ["zombie", "skeleton", "crawler", "slime", "archer", "bat"];
+		for (let i = 0; i < 300; i++) { const x = g.pb.x + rand(-45, 45); const m = g.addMob(kinds[i % kinds.length], x, g.world.surfaceY(Math.floor(x)) - (kinds[i % kinds.length] === "bat" ? 3 : 0)); m.persistent = true; }
+	}, run(g, dt) {} },
+	{ name: "2,000 animals", secs: 6, start(g) {
+		g.mobs = [];
+		const kinds = ["pig", "cow", "sheep", "chicken", "wolf", "crow"];
+		for (let i = 0; i < 2000; i++) { const x = g.pb.x + rand(-60, 60); const m = g.addMob(kinds[i % kinds.length], x, g.world.surfaceY(Math.floor(x)) - (kinds[i % kinds.length] === "crow" ? 4 : 0)); m.persistent = true; }
+	}, run(g, dt) {} },
 ];
 
 const Stress = {
@@ -5188,7 +7412,7 @@ const Stress = {
 		const gl = R.gl;
 		let gpu = "";
 		try { const ext = gl.getExtension("WEBGL_debug_renderer_info"); gpu = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER); } catch (e) {}
-		const lines = ["PixelRealm web, phase 1 stress test"];
+		const lines = ["PixelRealm web, phase 2 stress test"];
 		for (const r of this.results) lines.push(r.name + ": " + Math.round(r.fps) + " fps (slowest frame " + Math.round(r.worst) + " ms)" + (r.chunks ? ", " + r.chunks + " chunks made at " + r.gen.toFixed(1) + " ms each" : "") + ", light " + r.light.toFixed(1) + " ms, game " + r.tick.toFixed(1) + " ms");
 		lines.push("Screen " + window.innerWidth + "x" + window.innerHeight + " at " + R.dpr + "x, GPU " + gpu + ", largest texture " + gl.getParameter(gl.MAX_TEXTURE_SIZE));
 		Stress.report = lines.join("\n");
@@ -5212,6 +7436,7 @@ const Loop = {
 		g.viewW = window.innerWidth; g.viewH = window.innerHeight;
 		try {
 			if (Stress.running) Stress.update(dt);
+			if (!UI.panelOpen && !g.paused) g.applyActButton();
 			g.tick(dt);
 			HUD.update(g);
 			if (UI.panelOpen === "inventory") renderPanel();

@@ -30,7 +30,7 @@ const Menu = {
 				'<button data-act="new" class="primary">NEW WORLD</button>' +
 				'<button data-act="load"' + (this.worlds.length ? "" : " disabled") + '>PLAY A SAVED WORLD' + (this.worlds.length ? " (" + this.worlds.length + ")" : "") + "</button>" +
 				'<button data-act="import">OPEN A WORLD FILE</button><button data-act="settings">SETTINGS</button><button data-act="stress">STRESS TEST</button></div>' +
-				'<div class="note">Worlds are saved to ' + Store.where + ".<br>Version 2 · phase 1 of the web edition</div></div></div>";
+				'<div class="note">Worlds are saved to ' + Store.where + ".<br>Version 2 · phase 2 of the web edition</div></div></div>";
 		} else if (this.page === "new") {
 			const f = this.form || (this.form = this.newForm());
 			const pick = (k, opts) => '<div class="choice">' + opts.map(([v, n]) => '<button data-pick="' + k + '" data-v="' + v + '" class="' + (String(f[k]) === String(v) ? "on" : "") + '">' + n + "</button>").join("") + "</div>";
@@ -113,7 +113,8 @@ const Menu = {
 			const s = Menu.settings, key = e.target.dataset.set;
 			s[key] = +e.target.value;
 			const lab = document.getElementById("sv_" + key);
-			if (lab) lab.textContent = (+s[key]).toFixed(key === "tilePx" ? 0 : 2);
+			const row = SETTING_ROWS.find((r) => r[0] === key);
+			if (lab) lab.textContent = (+s[key]).toFixed(row && row[5] >= 1 ? 0 : 2);
 			SettingsStore.save(s); applySettings(s);
 		}
 	},

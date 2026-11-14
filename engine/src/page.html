@@ -42,9 +42,15 @@ input, select { font-family: var(--font); font-size: 16px; color: var(--text); b
 .slot .k { position: absolute; left: 3px; top: 0; font-size: 10px; color: var(--faint); }
 #stick { position: absolute; left: max(18px, env(safe-area-inset-left)); bottom: calc(var(--slot) + 30px); width: 140px; height: 140px; border-radius: 50%; background: rgba(20,26,40,0.38); border: 2px solid rgba(160,170,200,0.35); touch-action: none; }
 #knob { position: absolute; left: 50%; top: 50%; width: 58px; height: 58px; margin: -29px 0 0 -29px; border-radius: 50%; background: rgba(220,225,240,0.5); border: 2px solid rgba(255,255,255,0.6); pointer-events: none; }
-#bJump { position: absolute; right: max(18px, env(safe-area-inset-right)); bottom: calc(var(--slot) + 36px); width: 96px; height: 96px; border-radius: 50%; background: rgba(20,26,40,0.45); border: 2px solid rgba(160,170,200,0.45); font-size: 17px; font-weight: 700; touch-action: none; }
+#bJump { position: absolute; right: calc(max(18px, env(safe-area-inset-right)) + 150px); bottom: calc(var(--slot) + 36px); width: 88px; height: 88px; border-radius: 50%; background: rgba(20,26,40,0.45); border: 2px solid rgba(160,170,200,0.45); font-size: 16px; font-weight: 700; touch-action: none; }
+#atk { position: absolute; right: max(18px, env(safe-area-inset-right)); bottom: calc(var(--slot) + 30px); width: 140px; height: 140px; border-radius: 50%; background: rgba(48,20,20,0.34); border: 2px solid rgba(220,150,140,0.4); touch-action: none; }
+#atkKnob { position: absolute; left: 50%; top: 50%; width: 58px; height: 58px; margin: -29px 0 0 -29px; border-radius: 50%; background: rgba(240,190,180,0.5); border: 2px solid rgba(255,230,220,0.6); pointer-events: none; }
+#atk.on { background: rgba(90,30,30,0.45); }
+#bWeapon { position: absolute; right: max(18px, env(safe-area-inset-right)); bottom: calc(var(--slot) + 182px); width: 52px; height: 52px; padding: 0; font-size: 22px; background: rgba(26,32,48,0.7); }
 body.lefty #stick { left: auto; right: max(18px, env(safe-area-inset-right)); }
-body.lefty #bJump { right: auto; left: max(18px, env(safe-area-inset-left)); }
+body.lefty #atk { right: auto; left: max(18px, env(safe-area-inset-left)); }
+body.lefty #bWeapon { right: auto; left: max(18px, env(safe-area-inset-left)); }
+body.lefty #bJump { right: auto; left: calc(max(18px, env(safe-area-inset-left)) + 150px); }
 /* panels */
 .screen { position: absolute; inset: 0; background: rgba(6,8,14,0.72); display: flex; align-items: center; justify-content: center; padding: max(10px, env(safe-area-inset-top)) 10px 10px; }
 .box { background: var(--panel); border: 2px solid var(--edge); border-radius: 10px; width: min(860px, 100%); max-height: 100%; display: flex; flex-direction: column; overflow: hidden; }
@@ -97,6 +103,8 @@ body.lefty #bJump { right: auto; left: max(18px, env(safe-area-inset-left)); }
 		<div id="floats"></div>
 		<div id="stick"><div id="knob"></div></div>
 		<button id="bJump">JUMP</button>
+		<div id="atk"><div id="atkKnob"></div></div>
+		<button id="bWeapon" aria-label="Next weapon">⚔</button>
 		<div id="hotbar"></div>
 	</div>
 	<div id="panel" class="screen hidden"></div>

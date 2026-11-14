@@ -16,7 +16,8 @@ function escapeHTML(s) { return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&am
 /** a bag slot's inside: the icon and the count */
 function slotInner(s, size, key = "") {
 	if (!s) return key ? '<span class="k">' + key + "</span>" : "";
-	const n = s.n > 1 ? '<span class="n">' + s.n + "</span>" : "";
+	const gd = itemDef(s.id).gun;
+	const n = gd ? '<span class="n" style="color:#ffe080">' + s.extra + "</span>" : s.n > 1 ? '<span class="n">' + s.n + "</span>" : "";
 	return (key ? '<span class="k">' + key + "</span>" : "") + iconHTML(s.id, size * 0.66) + n;
 }
 
@@ -42,7 +43,9 @@ const HUD = {
 		$("bZoomOut").addEventListener("click", () => { if (UI.game) setZoom(UI.game.settings.tilePx / 1.25); });
 		for (let i = 0; i < 16; i++) { const d = document.createElement("div"); d.className = "hidden"; $("floats").appendChild(d); UI.floatEls.push(d); }
 		this.initStick();
+		this.initAttack();
 		this.initJump();
+		$("bWeapon").addEventListener("click", () => { if (UI.game) UI.game.cycleWeapon(); });
 		this.initWorldPointer();
 		this.initKeys();
 	},
@@ -68,6 +71,29 @@ const HUD = {
 		const end = (e) => { if (e.pointerId !== id) return; id = -1; knob.style.transform = ""; if (UI.game) { UI.game.stick = 0; UI.game.stickY = 0; } };
 		st.addEventListener("pointerup", end); st.addEventListener("pointercancel", end);
 		this.stickReset = () => { id = -1; knob.style.transform = ""; };
+	},
+	/** the attack stick: held, it attacks; inside its middle the game aims, past it the thumb aims */
+	initAttack() {
+		const st = $("atk"), knob = $("atkKnob");
+		let id = -1, cx = 0, cy = 0;
+		const move = (e) => {
+			const R0 = 50;
+			let dx = e.clientX - cx, dy = e.clientY - cy;
+			const d = Math.hypot(dx, dy);
+			ActStick.at(dx / R0, dy / R0);
+			if (d > R0) { dx *= R0 / d; dy *= R0 / d; }
+			knob.style.transform = "translate(" + dx + "px," + dy + "px)";
+		};
+		st.addEventListener("pointerdown", (e) => {
+			e.preventDefault(); Sound.unlock();
+			id = e.pointerId; st.setPointerCapture(id); st.classList.add("on");
+			const r = st.getBoundingClientRect(); cx = r.left + r.width / 2; cy = r.top + r.height / 2;
+			move(e);
+		});
+		st.addEventListener("pointermove", (e) => { if (e.pointerId === id) move(e); });
+		const end = (e) => { if (e.pointerId !== id) return; id = -1; knob.style.transform = ""; st.classList.remove("on"); ActStick.release(); };
+		st.addEventListener("pointerup", end); st.addEventListener("pointercancel", end);
+		this.atkReset = () => { id = -1; knob.style.transform = ""; st.classList.remove("on"); ActStick.release(); };
 	},
 	initJump() {
 		const b = $("bJump");
@@ -164,11 +190,13 @@ const HUD = {
 			if (set(e, true)) { e.preventDefault(); return; }
 			if (/^Digit[0-9]$/.test(e.code)) { const d = +e.code.slice(5); g.setSel(d === 0 ? 9 : d - 1); return; }
 			if (e.code === "KeyQ") { g.dropSlot(g.sel, e.shiftKey); return; }
+			if (e.code === "KeyF" && !e.shiftKey) { ActStick.held = true; return; }
+			if (e.code === "KeyR") { g.cycleWeapon(); return; }
 			if (e.code === "KeyF" && e.shiftKey && g.isCreative) { g.flying = !g.flying; g.say(g.flying ? "Flying" : "Walking", 1); return; }
 			if (e.code === "Equal" || e.code === "NumpadAdd") setZoom(g.settings.tilePx * 1.12);
 			if (e.code === "Minus" || e.code === "NumpadSubtract") setZoom(g.settings.tilePx / 1.12);
 		});
-		window.addEventListener("keyup", (e) => { set(e, false); });
+		window.addEventListener("keyup", (e) => { set(e, false); if (e.code === "KeyF") ActStick.release(); });
 		window.addEventListener("blur", () => releaseAllInput());
 	},
 	/** every frame: the aim follows the finger as the view moves, the HUD shows what changed */
@@ -231,6 +259,7 @@ const HUD = {
 function releaseAllInput() {
 	const g = UI.game;
 	if (HUD.stickReset) HUD.stickReset();
+	if (HUD.atkReset) HUD.atkReset();
 	$("bJump").classList.remove("on");
 	if (!g) return;
 	g.stick = 0; g.stickY = 0; g.keyL = false; g.keyR = false; g.jumpHeld = false; g.downHeld = false;

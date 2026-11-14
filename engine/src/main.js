@@ -13,6 +13,7 @@ const Loop = {
 		g.viewW = window.innerWidth; g.viewH = window.innerHeight;
 		try {
 			if (Stress.running) Stress.update(dt);
+			if (!UI.panelOpen && !g.paused) g.applyActButton();
 			g.tick(dt);
 			HUD.update(g);
 			if (UI.panelOpen === "inventory") renderPanel();

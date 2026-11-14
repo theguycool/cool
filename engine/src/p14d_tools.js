@@ -50,6 +50,7 @@ Object.assign(Game.prototype, {
 		const tx = Math.floor(wx), ty = Math.floor(wy);
 		if (!this.inReach(wx, wy)) { this.say("Too far away.", 1.2); return; }
 		const t = this.world.tile(tx, ty);
+		if (t === T.chest && this.tryMimic(tx, ty)) return;
 		if (t === T.chest || t === T.cabinet || t === T.wardrobe) {
 			sfx("chestOpen", 0.7);
 			this.spawnParticles(tx + 0.5, ty + 0.3, 0xC8A878, 5, 2, 0.4, 6);
@@ -103,11 +104,6 @@ Object.assign(Game.prototype, {
 	},
 	useBareHand(dt, pressed) {
 		if (meleeHook(this, null, pressed)) return;
-		this.mineStep(Math.floor(this.aimX), Math.floor(this.aimY), null, 0, dt, 1);
-	},
-	useMeleeWeapon(id, pressed, dt) {
-		if (meleeHook(this, id, pressed)) return;
-		// (fighting comes with the creatures; until then a weapon digs like a bare hand)
 		this.mineStep(Math.floor(this.aimX), Math.floor(this.aimY), null, 0, dt, 1);
 	},
 	useToolItem(kind, tier, speed, dt, pressed) {
@@ -383,9 +379,4 @@ const INTERACTIVE = new Set([T.chest, T.workbench, T.furnace, T.campfire, T.anvi
 const STATION_OF_TILE = new Map([[T.workbench, "bench"], [T.furnace, "furnace"], [T.campfire, "campfire"], [T.anvil, "anvil"], [T.tinkerBench, "tinker"], [T.riftForge, "forge"], [T.alchemyStill, "still"]]);
 const breakHooks = [];
 // later phases fill these in (creatures, special blocks, weapons)
-function hostileAtHook(g, wx, wy) { return false; }
-function interactiveHook(g, wx, wy, t) { return false; }
-function interactHook(g, tx, ty, t, wx, wy) {}
-function useItemHook(g, held, dt, pressed, released) { return false; }
-function meleeHook(g, id, pressed) { return false; }
 function placeHook(g, t, tx, ty) { return false; }

@@ -39,13 +39,14 @@ function renderPanel(force = false) {
 	const scrollEl = box.querySelector(".scroll");
 	const keepScroll = scrollEl ? scrollEl.scrollTop : 0;
 	const tabs = [["bag", g.openChest ? "CHEST" : "BAG"], ["craft", "CRAFT"]];
-	if (g.isCreative) tabs.push(["items", "ITEMS"]);
-	let top = '<div class="top"><span class="title">' + (Panel.tab === "craft" ? "Crafting" : Panel.tab === "items" ? "All items" : g.openChest ? "Chest" : "Inventory") + '</span><div class="tabs">';
+	if (g.isCreative) { tabs.push(["items", "ITEMS"]); tabs.push(["mobs", "CREATURES"]); }
+	let top = '<div class="top"><span class="title">' + (Panel.tab === "craft" ? "Crafting" : Panel.tab === "items" ? "All items" : Panel.tab === "mobs" ? "Creatures" : g.openChest ? "Chest" : "Inventory") + '</span><div class="tabs">';
 	for (const [k, n] of tabs) top += '<button data-tab="' + k + '" class="' + (Panel.tab === k ? "on" : "") + '">' + n + "</button>";
 	top += '</div><button data-act="close">✕</button></div>';
 	let body = "";
 	if (Panel.tab === "craft") body = craftHTML(g);
 	else if (Panel.tab === "items") body = itemsHTML(g);
+	else if (Panel.tab === "mobs") body = mobsHTML(g);
 	else body = bagHTML(g);
 	box.innerHTML = '<div class="box">' + top + '<div class="scroll">' + body + "</div></div>";
 	const sc = box.querySelector(".scroll");
@@ -145,6 +146,15 @@ function craftListHTML(g) {
 	}
 	return h;
 }
+/** creative: any creature, put down a few blocks in front of the player */
+function mobsHTML(g) {
+	let h = '<div class="label">Tap to bring one out in front of you</div><div style="display:flex;flex-wrap:wrap;gap:6px">';
+	for (const d of DATA.mobs) {
+		if (d.key === "villager" || d.key === "custom" || BOSS_KINDS.has(d.key)) continue;
+		h += '<button data-spawn="' + d.key + '">' + escapeHTML(d.name) + "</button>";
+	}
+	return h + '</div><div class="note">Bosses come with their lairs in a later step.</div>';
+}
 function itemsListHTML(g) {
 	const size = slotSizePx(), q = Panel.search.trim().toLowerCase();
 	let h = '<div class="grid">';
@@ -220,7 +230,7 @@ function initPanels() {
 	box.addEventListener("click", (e) => {
 		const g = UI.game;
 		if (!g) return;
-		const t = e.target.closest("[data-tab],[data-act],[data-s],[data-a],[data-c],[data-cat],[data-craft],[data-craft5],[data-give]");
+		const t = e.target.closest("[data-tab],[data-act],[data-s],[data-a],[data-c],[data-cat],[data-craft],[data-craft5],[data-give],[data-spawn]");
 		if (!t) { if (e.target === box) closePanels(); return; }
 		const ds = t.dataset;
 		if (ds.tab) { Panel.tab = ds.tab; Panel.pick = -1; Panel.pickArmor = -1; Panel.search = ""; }
@@ -231,6 +241,13 @@ function initPanels() {
 		else if (ds.cat) Panel.cat = ds.cat;
 		else if (ds.craft !== undefined) g.craft(RECIPES[+ds.craft]);
 		else if (ds.craft5 !== undefined) { for (let k = 0; k < 5; k++) if (!g.craft(RECIPES[+ds.craft5])) break; }
+		else if (ds.spawn) {
+			const x = g.pb.x + g.facing * 4, d = MOBS[ds.spawn];
+			const y = d.flying ? g.pb.y - 3 : g.world.groundBelow(Math.floor(x), Math.floor(g.pb.y) - 3);
+			g.addMob(ds.spawn, x, y);
+			closePanels();
+			return;
+		}
 		else if (ds.give) { const left = g.inv.add(ds.give, maxStack(ds.give)); if (left > 0) g.say("Your bag is full.", 1.2); else sfx("pickup", 0.4); g.bumpHUD(); }
 		renderPanel(true);
 	});
@@ -260,9 +277,10 @@ const SETTING_ROWS = [
 	["camFollow", "Camera follow", "How quickly the view catches up", 0, 1, 0.05],
 	["camDeadZone", "Camera slack", "How far you can move before the view does", 0, 4, 0.1],
 	["shakeScale", "Screen shake", "", 0, 1.5, 0.05],
+	["nightDanger", "Night monsters", "0 few, 1 normal, 2 many", 0, 2, 1],
 ];
 const SETTING_SWITCHES = [
-	["sound", "Sound"], ["smoothLight", "Smooth light"], ["camSmoothOn", "Smooth camera"], ["camDirect", "Direct camera", "The view stays on you"],
+	["peaceful", "Peaceful", "No monsters come out"], ["sound", "Sound"], ["smoothLight", "Smooth light"], ["camSmoothOn", "Smooth camera"], ["camDirect", "Direct camera", "The view stays on you"],
 	["camLookAhead", "Look ahead"], ["showFPS", "Show speed (FPS)"], ["autosave", "Save every minute"], ["leftHanded", "Left-handed controls"],
 ];
 let pausePage = "main";
@@ -308,7 +326,8 @@ function onPauseInput(e) {
 	const s = UI.game.settings;
 	s[k] = +e.target.value;
 	const lab = document.getElementById("sv_" + k);
-	if (lab) lab.textContent = (+s[k]).toFixed(k === "tilePx" ? 0 : 2);
+	const row = SETTING_ROWS.find((r) => r[0] === k);
+	if (lab) lab.textContent = (+s[k]).toFixed(row && row[5] >= 1 ? 0 : 2);
 	SettingsStore.save(s); applySettings(s);
 }
 async function onPauseClick(e) {

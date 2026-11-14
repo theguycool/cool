@@ -14,6 +14,17 @@ const STRESS_STEPS = [
 		for (let i = 0; i < 120; i++) w.set(px - 30 + (i % 30) * 2, py + 4 + Math.floor(i / 30) * 6, T.torch);
 	}, run(g, dt) {} },
 	{ name: "Widest view (12 pixels a block)", secs: 4, start(g) { g.tilePx = 12; }, run(g, dt) { g.pb.x += 10 * dt; } },
+	{ name: "300 monsters after you", secs: 6, start(g) {
+		g.tilePx = g.settings.tilePx; g.noclip = false; g.mobs = []; g.noSpawning = true;
+		g.pb.y = g.world.surfaceY(Math.floor(g.pb.x));
+		const kinds = ["zombie", "skeleton", "crawler", "slime", "archer", "bat"];
+		for (let i = 0; i < 300; i++) { const x = g.pb.x + rand(-45, 45); const m = g.addMob(kinds[i % kinds.length], x, g.world.surfaceY(Math.floor(x)) - (kinds[i % kinds.length] === "bat" ? 3 : 0)); m.persistent = true; }
+	}, run(g, dt) {} },
+	{ name: "2,000 animals", secs: 6, start(g) {
+		g.mobs = [];
+		const kinds = ["pig", "cow", "sheep", "chicken", "wolf", "crow"];
+		for (let i = 0; i < 2000; i++) { const x = g.pb.x + rand(-60, 60); const m = g.addMob(kinds[i % kinds.length], x, g.world.surfaceY(Math.floor(x)) - (kinds[i % kinds.length] === "crow" ? 4 : 0)); m.persistent = true; }
+	}, run(g, dt) {} },
 ];
 
 const Stress = {
@@ -50,7 +61,7 @@ const Stress = {
 		const gl = R.gl;
 		let gpu = "";
 		try { const ext = gl.getExtension("WEBGL_debug_renderer_info"); gpu = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER); } catch (e) {}
-		const lines = ["PixelRealm web, phase 1 stress test"];
+		const lines = ["PixelRealm web, phase 2 stress test"];
 		for (const r of this.results) lines.push(r.name + ": " + Math.round(r.fps) + " fps (slowest frame " + Math.round(r.worst) + " ms)" + (r.chunks ? ", " + r.chunks + " chunks made at " + r.gen.toFixed(1) + " ms each" : "") + ", light " + r.light.toFixed(1) + " ms, game " + r.tick.toFixed(1) + " ms");
 		lines.push("Screen " + window.innerWidth + "x" + window.innerHeight + " at " + R.dpr + "x, GPU " + gpu + ", largest texture " + gl.getParameter(gl.MAX_TEXTURE_SIZE));
 		Stress.report = lines.join("\n");

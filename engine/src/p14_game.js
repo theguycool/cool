@@ -12,6 +12,7 @@ function defaultSettings() {
 		showFPS: false, smoothLight: true, sound: true, volume: 0.8, music: false,
 		hair: 0, hairStyle: 0, shirtColor: 0, shirtStyle: 0, pantsColor: 0, pantsStyle: 0, scarf: 0,
 		weatherOn: true, rareChance: 0.35, autosave: true, leftHanded: false,
+		peaceful: false, nightDanger: 1,
 	};
 }
 
@@ -51,6 +52,10 @@ class Game {
 		// things in the world
 		this.drops = []; this.particles = []; this.floats = []; this.leafFlakes = []; this.decayZones = []; this.walkDoors = [];
 		this.mobs = []; this.projectiles = []; this.vehicles = []; this.flashes = [];
+		// fighting
+		this.strikeT = 0; this.strikeItem = null; this.strikeSel = -1; this.strikeTarget = null; this.hitStopT = 0;
+		this.lockTarget = null; this.lockT = 0; this.reloadT = 0; this.reloadSlot = -1; this.muzzleT = 0;
+		this.slashes = []; this.dangerZones = []; this.monsterSpawnCD = 0; this.spawnTimer = 0; this.kills = 0; this.frameNo = 0;
 		// panels
 		this.paused = false; this.showInventory = false; this.openChest = null; this.craftStation = "hand";
 		// debug and creative
@@ -143,6 +148,8 @@ class Game {
 	// ---- the master tick
 	tick(rawDt) {
 		if (this.paused) return;
+		// a blow that lands holds the world still for a few hundredths of a second
+		if (this.hitStopT > 0) { this.hitStopT -= rawDt; return; }
 		const t0 = performance.now();
 		const dt = Math.min(Math.max(rawDt, 0.001), 0.05);
 		this.clock += dt;
@@ -724,6 +731,8 @@ class Game {
 
 // Later phases add to the tick, the lights and what streaming keeps loaded through these lists.
 const tickHooks = [];
+/** each part of the game saves and loads its own share of a world through these (see p19_save) */
+const saveHooks = [], loadHooks = [];
 const lightHooks = [];
 function streamKeep(g) { return null; }
 /** vehicles, mounts and seats take the controls in later phases; true when one did */

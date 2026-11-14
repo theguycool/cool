@@ -10,7 +10,7 @@ const { chromium } = require('playwright');
 	await page.click('text=STRESS TEST');
 	await page.waitForTimeout(9000);
 	await page.screenshot({ path: 'stress_mid.png' });
-	await page.waitForTimeout(13000);
+	await page.waitForTimeout(26000);
 	await page.screenshot({ path: 'stress_done.png' });
 	console.log(await page.evaluate(() => Stress.report));
 	console.log(errs.join('\n'));

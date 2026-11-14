@@ -5,8 +5,6 @@
 
 const SAVE_VERSION = 1;
 const PART = 200000;          // characters a stored document holds (well under the 256 KB limit)
-/** later phases save and load their own parts of a world through these */
-const saveHooks = [], loadHooks = [];
 
 const SettingsStore = {
 	key: "pixelrealm.settings",

@@ -764,7 +764,7 @@ Object.assign(Game.prototype, {
 			if ((eff === "cave" || eff === "umbral") && (sy < r.minY || sy > r.maxY)) continue;
 			const d = MOBS[r.kind];
 			if (d.hostile) {
-				if (this.settings.peaceful) continue;
+				if (this.settings.peaceful || this.monstersOff) continue;
 				if (isPredator(r.kind)) { if (predators >= Math.min(3, cap)) continue; }
 				else { if (hostile >= cap) { capped = true; continue; } if (block) continue; }
 			} else if (r.kind === "fish") { if (aquatic >= this.animalCap) continue; }

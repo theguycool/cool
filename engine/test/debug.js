@@ -1,0 +1,37 @@
+const { chromium } = require('playwright');
+(async () => {
+	const browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
+	const page = await browser.newPage({ viewport: { width: 1180, height: 820 }, deviceScaleFactor: 1 });
+	const errs = [];
+	page.on('pageerror', (e) => errs.push('pageerror: ' + e.message + '\n' + e.stack));
+	page.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
+	await page.goto('file://' + require('path').join('/home/user/cool/engine/dist/test.html'));
+	await page.waitForTimeout(1500);
+	await page.click('text=NEW WORLD');
+	await page.fill('input[data-f="seed"]', '99');
+	await page.click('text=CREATE');
+	await page.waitForTimeout(1500);
+	await page.click('#bDebug'); await page.waitForTimeout(300);
+	await page.click('input[data-dt="showHitboxes"]');
+	await page.click('input[data-dt="showAI"]');
+	await page.click('button[data-da="night"]');
+	await page.click('button[data-dm="zombie"]'); await page.waitForTimeout(200);
+	await page.click('button[data-dm="skeleton"]'); await page.waitForTimeout(800);
+	await page.fill('#dbGiveSearch', 'diamond sw'); await page.waitForTimeout(200);
+	await page.click('#dbGiveList .slot >> nth=0');
+	await page.click('button[data-dn="10"]');
+	await page.click('button[data-da="give"]');
+	await page.click('button[data-da="select"]');
+	await page.waitForTimeout(800);
+	await page.screenshot({ path: 'debug.png' });
+	const r = await page.evaluate(() => ({ sword: UI.game.inv.total('sword:diamond'), mobs: UI.game.mobs.length, ai: [...document.querySelectorAll('.aiTag:not(.hidden)')].map((e) => e.textContent), sel: document.getElementById('dbSel').textContent.slice(0, 60) }));
+	console.log(JSON.stringify(r));
+	// speed x4 makes time pass four times as fast
+	await page.evaluate(() => { const g = UI.game; g.speedMult = 4; window.__t0 = g.clock; });
+	await page.waitForTimeout(1000);
+	console.log('clock in 1 s at x4', await page.evaluate(() => (UI.game.clock - window.__t0).toFixed(2)));
+	await page.click('button[data-da="close"]');
+	console.log('closed', await page.evaluate(() => document.getElementById('debug').classList.contains('hidden')));
+	console.log(errs.join('\n'));
+	await browser.close();
+})();

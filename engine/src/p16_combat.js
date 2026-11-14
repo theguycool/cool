@@ -133,6 +133,7 @@ Object.assign(Game.prototype, {
 		let amount = info.amount * damageResist(m.kind, info.type) * (info.source.kind === "mob" ? info.source.mult : 1);
 		if (info.heavy && m.kind === "golem") amount *= 1.9;
 		if (info.source.kind === "player") {
+			amount *= this.dmgOutMult;
 			if (this.inv.wearing("wardenSigil")) amount *= 1.2;
 			if (isUndead(m.kind) && this.inv.wearing("silverCharm")) amount *= 1.25;
 		}
@@ -156,7 +157,7 @@ Object.assign(Game.prototype, {
 			if (stamps.size > 24) for (const [k, t] of stamps) if (this.clock - t >= 4) stamps.delete(k);
 		}
 		const before = this.hp;
-		let ward = this.inv.wearing("wardenSigil") ? 0.85 : 1;
+		let ward = (this.inv.wearing("wardenSigil") ? 0.85 : 1) * this.dmgInMult;
 		if (info.source.kind === "mob" && this.inv.wearing("silverCharm")) { const s = this.mobs.find((o) => o.id === info.source.id); if (s && isUndead(s.kind)) ward *= 0.75; }
 		const amount = info.amount * (info.source.kind === "mob" ? info.source.mult : 1);
 		if (amount <= 0.001) return false;
@@ -260,6 +261,7 @@ Object.assign(Game.prototype, {
 	},
 	addMob(kind, x, y) {
 		const m = makeMob(kind, x, y);
+		if (this.mobHealthMult !== 1) { m.maxHP *= this.mobHealthMult; m.hp = m.maxHP; }
 		if (kind === "zombie") m.variant = randInt(0, 2);
 		else if (MOBS[kind].variants.length > 1) m.variant = randInt(0, MOBS[kind].variants.length - 1);
 		this.mobs.push(m);

@@ -5,9 +5,9 @@
 function bossUpdate(g, m, dt) { return false; }
 
 tickHooks.push((g, dt) => {
-	g.updateMobs(dt);
-	g.updateSpawning(dt);
-	g.updateProjectiles(dt);
+	if (!g.pauseMobs) g.updateMobs(dt); else g.rebuildMobGrid();
+	if (!g.pauseSpawning) g.updateSpawning(dt);
+	if (!g.pauseProjectiles) g.updateProjectiles(dt);
 	g.updateCombatFX(dt);
 });
 

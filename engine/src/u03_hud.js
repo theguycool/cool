@@ -39,6 +39,7 @@ const HUD = {
 		});
 		$("bInv").addEventListener("click", () => { if (UI.game) openPanel("inventory", UI.game.isCreative ? "items" : "bag"); });
 		$("bPause").addEventListener("click", () => openPause());
+		$("bDebug").addEventListener("click", () => Debug.toggle());
 		$("bZoomIn").addEventListener("click", () => { if (UI.game) setZoom(UI.game.settings.tilePx * 1.25); });
 		$("bZoomOut").addEventListener("click", () => { if (UI.game) setZoom(UI.game.settings.tilePx / 1.25); });
 		for (let i = 0; i < 16; i++) { const d = document.createElement("div"); d.className = "hidden"; $("floats").appendChild(d); UI.floatEls.push(d); }
@@ -184,6 +185,7 @@ const HUD = {
 			const g = UI.game;
 			if (!g) return;
 			if (e.target && (e.target.tagName === "INPUT" || e.target.tagName === "SELECT")) return;
+			if (e.code === "Backquote") { e.preventDefault(); Debug.toggle(); return; }
 			if (e.code === "Escape") { e.preventDefault(); if (UI.panelOpen) closePanels(); else openPause(); return; }
 			if (e.code === "KeyE" || e.code === "Tab" || e.code === "KeyI") { e.preventDefault(); if (UI.panelOpen === "inventory") closePanels(); else if (!UI.panelOpen) openPanel("inventory", g.isCreative ? "items" : "bag"); return; }
 			if (UI.panelOpen) return;
@@ -208,6 +210,8 @@ const HUD = {
 		const key = g.hudRev + "|" + Math.ceil(g.hp * 2) + "|" + Math.ceil(g.hunger * 2) + "|" + Math.ceil(g.air) + "|" + g.sel + "|" + g.mode + "|" + g.maxHP;
 		if (key !== UI.hudKey) { UI.hudKey = key; this.redraw(g); }
 		this.drawFloats(g);
+		Debug.update();
+		Debug.drawAI(g);
 		const perf = $("perf");
 		if (g.settings.showFPS) {
 			perf.classList.remove("hidden");

@@ -176,6 +176,8 @@ async function quitToMenu(save) {
 	if (g && g.mode === GameMode.hardcore && g.hardcoreOver && g.slot) { try { await Store.remove({ id: g.slot }); } catch (e) {} }
 	UI.game = null;
 	UI.panelOpen = null;
+	if (Debug.open) Debug.toggle();
+	Debug.selected = null;
 	clearSectionCache();
 	$("pause").classList.add("hidden"); $("panel").classList.add("hidden"); $("death").classList.add("hidden");
 	Menu.show("main");

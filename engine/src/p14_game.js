@@ -56,6 +56,10 @@ class Game {
 		this.strikeT = 0; this.strikeItem = null; this.strikeSel = -1; this.strikeTarget = null; this.hitStopT = 0;
 		this.lockTarget = null; this.lockT = 0; this.reloadT = 0; this.reloadSlot = -1; this.muzzleT = 0;
 		this.slashes = []; this.dangerZones = []; this.monsterSpawnCD = 0; this.spawnTimer = 0; this.kills = 0; this.frameNo = 0;
+		// debug panel: speed, multipliers, overlays and systems that can be paused
+		this.speedMult = 1; this.dmgOutMult = 1; this.dmgInMult = 1; this.mobHealthMult = 1; this.monstersOff = false;
+		this.showHitboxes = false; this.showChunks = false; this.showAI = false;
+		this.pauseMobs = false; this.pauseSpawning = false; this.pauseProjectiles = false; this.pauseWorldTicks = false; this.pauseParticles = false;
 		// panels
 		this.paused = false; this.showInventory = false; this.openChest = null; this.craftStation = "hand";
 		// debug and creative
@@ -162,8 +166,8 @@ class Game {
 		this.updateUse(dt);
 		tickHooks.forEach((f) => f(this, dt));
 		this.updateDrops(dt);
-		this.updateWorldTicks(dt);
-		this.updateParticles(dt);
+		if (!this.pauseWorldTicks) this.updateWorldTicks(dt);
+		if (!this.pauseParticles) this.updateParticles(dt);
 		this.updateLeafFall(dt);
 		this.updateAutosave(dt);
 		this.updateStreaming();

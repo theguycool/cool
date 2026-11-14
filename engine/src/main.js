@@ -14,7 +14,9 @@ const Loop = {
 		try {
 			if (Stress.running) Stress.update(dt);
 			if (!UI.panelOpen && !g.paused) g.applyActButton();
-			g.tick(dt);
+			// the debug panel's speed runs the world faster or slower
+			if (g.speedMult !== 1) { const n = Math.max(1, Math.ceil(g.speedMult)); for (let i = 0; i < n; i++) g.tick(dt * g.speedMult / n); }
+			else g.tick(dt);
 			HUD.update(g);
 			if (UI.panelOpen === "inventory") renderPanel();
 			if (g.dead && !UI.panelOpen) showDeath(g);
@@ -48,6 +50,7 @@ async function boot() {
 	HUD.init();
 	initPanels();
 	Menu.init();
+	Debug.init();
 	Store.init().then(() => { if (!UI.game && Menu.page === "main") Menu.refreshWorlds(); });
 	$("loading").classList.add("hidden");
 	Menu.show("main");

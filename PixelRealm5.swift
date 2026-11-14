@@ -4085,6 +4085,8 @@ enum LEvent: Int, Codable, CaseIterable {
 	case itemUsed, blockPlaced, blockBroken, blockTapped
 	/// not an event: a group of blocks other scripts run ("run group")
 	case group
+	/// appended: a signal channel turns on
+	case channelOn
 
 	var name: String {
 		switch self {
@@ -4105,6 +4107,7 @@ enum LEvent: Int, Codable, CaseIterable {
 		case .blockBroken: return "When my block is broken"
 		case .blockTapped: return "When my block is tapped"
 		case .group: return "A group of blocks (run by other scripts)"
+		case .channelOn: return "When a signal channel turns on"
 		}
 	}
 	/// what the script is about: 0 the world, 1 a creature, 2 an item, 3 a block
@@ -4126,6 +4129,8 @@ enum LOp: Int, Codable, CaseIterable {
 	case jump, dash, stepToPlayer, teleportNear, facePlayer
 	case hurtPlayer, healPlayer, hurtSelf, healSelf, hurtNearby, explode, fireShot, summon
 	case giveEffect, placeBlock, breakBlock, setTime, giveItem, takeItem, enterPhase
+	/// appended: turn a signal channel on or off
+	case setChannel
 }
 
 /// A reporter (a value a block reads)
@@ -4133,6 +4138,8 @@ enum LEOp: Int, Codable, CaseIterable {
 	case num, variable, param, random, add, sub, mul, div, mod, lt, gt, eq, and, or, not
 	case playerHP, playerMaxHP, selfHP, selfHPPct, distance, timeOfDay, isNight, itemCount
 	case playerX, playerY, selfX, selfY, nearby, inDim, inBiome, raining
+	/// appended: whether a signal channel is on
+	case channel
 }
 
 /// A value: a number, a variable, or a reporter with its inputs
@@ -4337,6 +4344,8 @@ struct LSpec {
 		LSpec(op: .giveItem, cat: .items, title: "give the player items", fields: [LField(kind: .item, slot: 0, label: "item"), LField(kind: .number, slot: 0, label: "how many", lo: 1, hi: 64, def: 1)]),
 		LSpec(op: .takeItem, cat: .items, title: "take items from the player", fields: [LField(kind: .item, slot: 0, label: "item"), LField(kind: .number, slot: 0, label: "how many", lo: 1, hi: 64, def: 1)]),
 		LSpec(op: .enterPhase, cat: .combat, title: "move my creature to a phase", fields: [LField(kind: .number, slot: 0, label: "phase", lo: 1, hi: 6, def: 1)], creature: true),
+		LSpec(op: .setChannel, cat: .world, title: "set a signal channel", fields: [LField(kind: .number, slot: 0, label: "channel", lo: 1, hi: 8, def: 1),
+																					LField(kind: .number, slot: 1, label: "on (1) or off (0)", lo: 0, hi: 1, def: 1)]),
 	]
 
 	static func of(_ op: LOp) -> LSpec {
@@ -4379,6 +4388,7 @@ enum LReporters {
 		case .inDim: return "the player is in dimension"
 		case .inBiome: return "the player is in biome"
 		case .raining: return "it is raining or snowing"
+		case .channel: return "signal channel is on"
 		}
 	}
 	static func arity(_ op: LEOp) -> Int {
@@ -4608,6 +4618,7 @@ extension Game {
 			if e == .custom && d.evText != text { continue }
 			if e == .enterDim && !d.evText.isEmpty && d.evText != text { continue }
 			if e == .phase && Int(d.ev.rounded()) != Int(number.rounded()) { continue }
+			if e == .channelOn && Int(d.ev.rounded()) != Int(number.rounded()) { continue }
 			startThread(p, mob: mob, x: x, y: y, block: block)
 		}
 	}
@@ -4859,6 +4870,7 @@ extension Game {
 			else { v = customDim?.key == e.s ? 1 : 0 }
 		case .inBiome: v = biomeAt(pb.x).rawValue == Int(e.v.rounded()) ? 1 : 0
 		case .raining: v = wxHere.precip > 0.2 ? 1 : 0
+		case .channel: v = channelIsOn(Int(e.v.rounded())) ? 1 : 0
 		}
 		return v.isFinite ? v : 0
 	}
@@ -5021,6 +5033,8 @@ extension Game {
 				let k: Int = clampI(Int(n.a), 1, max(1, r.def.phases.count)) - 1
 				if k < r.def.phases.count && k + 1 > m.mphase { enterPhase(m, r, k, quiet: false) }
 			}
+		case .setChannel:
+			setLogicChannel(Int(n.a.rounded()), n.b >= 0.5)
 		case .ifThen, .ifElse, .repeatN, .whileDo, .forever, .wait, .stop, .runGroup:
 			break
 		}
@@ -6536,7 +6550,7 @@ struct HUDView: View {
 				if game.suit.worn { SuitBar(game: game, tick: hud.tick) }
 			}
 			if !game.activeEffects().isEmpty { EffectStrip(game: game, tick: hud.tick) }
-			if let v = game.inVehicle { vehicleReadout(v) }
+			if let v = game.drivenVehicle { vehicleReadout(v) }
 			if game.mode == .hardcore { OutlinedText(text: "HARDCORE", size: 11, color: Color(ui: 0xFF6060)) }
 			if !game.testMod.isEmpty { OutlinedText(text: "MOD TEST · NOT SAVED", size: 11, color: Color(ui: 0x60E0FF)) }
 		}
@@ -6670,13 +6684,16 @@ struct HUDView: View {
 			if game.canBuildOnVehicle {
 				SmallButton(title: game.vehicleBuild ? "ON VEHICLE" : "IN WORLD", color: game.vehicleBuild ? Color(ui: 0x2E7A8A) : Color(ui: 0x4E6A3E)) { game.toggleVehicleBuild() }
 			}
-			if game.inVehicle != nil { vehicleButtons }
+			if game.drivenVehicle != nil { vehicleButtons }
 			if game.vehicleNearby != nil {
 				SmallButton(title: "DRIVE", color: Color(ui: 0x4E8A3E)) { game.driveNearby() }
 				SmallButton(title: "PACK UP", color: Color(ui: 0x6A5A2A)) { game.packUpVehicle() }
 			}
 			if game.mounted != nil || game.inVehicle != nil {
 				SmallButton(title: "DISMOUNT", color: Color(ui: 0xA03030)) { game.dismount() }
+			}
+			if game.remoteID != 0 {
+				SmallButton(title: "LET GO", color: Color(ui: 0xA03030)) { game.endRemote("Remote off.") }
 			}
 			if let s = game.heldStack, case .gun(let gt) = s.item {
 				if game.reloadT > 0 {
@@ -6697,8 +6714,8 @@ struct HUDView: View {
 	@ViewBuilder
 	var vehicleButtons: some View {
 		SmallButton(title: "TURN", color: Color(ui: 0x3A6AA8)) { game.turnVehicle() }
-		if let v = game.inVehicle, !v.joints.isEmpty { jointButtonRow }
-		if let v = game.inVehicle, v.autopilots > 0 {
+		if let v = game.drivenVehicle, !v.joints.isEmpty { jointButtonRow }
+		if let v = game.drivenVehicle, v.autopilots > 0 {
 			SmallButton(title: "AUTO", color: v.auto == 0 ? Color(ui: 0x5A5A64) : Color(ui: 0x2E8A5A)) { game.cycleAutopilot() }
 			SmallButton(title: "MARK", color: Color(ui: 0x6A5A2A)) { game.markWaypoint() }
 			if !v.route.isEmpty {

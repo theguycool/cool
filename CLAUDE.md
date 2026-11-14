@@ -51,7 +51,9 @@ confirmed). `tools/buildcost.sh` measures both ways:
 - Eight parts (phase 5, 2.68 MB, 68,526 lines): the user asked for eight files. Laid out by
   `tools/parts.py` with the screens spread over four files (a part's memory is a fixed share plus its
   size, and screen code costs more than game logic): 319, 356, 323, 374, 363, 340, 359 and 339 MB,
-  132 s in all; as one job 106 s and 1,277 MB. Not yet confirmed on the iPad.
+  132 s in all; as one job 106 s and 1,277 MB. Not yet confirmed on the iPad. Phase 6 (2.71 MB, 69,157
+  lines, `p35_automation` at the end of part 1, the RECEIVER panel in part 6): 330, 359, 326, 376, 364,
+  341, 361 and 340 MB, 134 s in all; as one job 102 s and 1,272 MB.
 - A job's peak can jump by 30 MB or more after a small edit (taking the recipe lines out of one
   function once raised part 2 from 473 to 509 MB), so a few MB either way is noise; measure again
   after moving code.
@@ -77,7 +79,8 @@ house that flies under a balloon, riders on a flatbed truck's deck, a plane and 
 wheeled deck, a house on wheels with back walls, a door, a ladder, a bed and furniture, water poured
 off a ledge filling a basin, a submarine under the sea with a dry cabin, a train of an engine and two
 ore carts on stepped rails, a truck on big wheels at a step, a two-legged mech mid-stride, a crane truck
-and a piston lift).
+and a piston lift, a turret firing at zombies, a lever and signal post sending a receiver car past a
+vehicle sensor).
 - `tools/art.sh preview|pack|check|game|compare`: the hand-drawn art (see **Art** below and `tools/art/README.md`): PNG sheets of the drawings, writing them into the game, and before/after sheets.
 - `tools/bench.sh`: chunk generation, painting, lighting and tick timings (debug build; compare
   with `GAME_SRC=<old file> tools/bench.sh`).
@@ -143,6 +146,11 @@ steps or all at once; a hinge swinging to its limit; a servo on button A and B a
 stone, swung hard and fast, through its own base; a machine resting as one and woken by a button; a
 piston lifting a platform with a crate; a crane mast on a truck driven along; the joint taken away;
 saved joints; a two-legged mech set up by AUTO MECH walking both ways, stopping and standing),
+`phys6` (phase 6: a turret firing by itself, sparing animals and what it cannot see; ways of firing round
+and saved; button A; a gun on a machine's arm, a machine's shots passing its own sections; the remote
+control paired, driving from afar, its buttons, the view, letting go, saved; a route a thousand blocks
+from the player; signal posts driving, routing, holding a button and firing; the vehicle sensor;
+receivers saved; Logic Studio channels; a mod's gun block firing its own shot; the receiver panel),
 and `det` and `det2` (world generation fingerprints for generator versions 1 to 4).
 
 What the stand-ins can't tell you:
@@ -176,7 +184,7 @@ What the stand-ins can't tell you:
   `SuitShape`, `SuitKind`, `ModPowerRole`, `ThemeRole`, `ModBlockFunction` (seat, bed appended), `GameRule`
   (its lines in `GameRule.specText` follow the cases), `Dimension` (custom0-2 were appended),
   `PartType` (vehicle parts: `block`, the aircraft parts, then flap, airBrake, stabilizer, ballast,
-  railWheel, coupler, bigWheel, hinge, servo, piston were appended), `ModCollision` (liquid appended), `ProjKind`
+  railWheel, coupler, bigWheel, hinge, servo, piston, receiver were appended), `GunMode`, `RadioAct`, `ModCollision` (liquid appended), `ProjKind`
   and the like) only get new cases appended at the end. Never reorder or remove cases. `hairChoices`,
   `scarfChoices`, `shirtChoices`, `pantsChoices` and the style lists (`hairStyleNames`,
   `shirtStyleNames`, `pantsStyleNames`, each style with its drawing `player_hair_<n>` and so on) are
@@ -199,7 +207,7 @@ What the stand-ins can't tell you:
   `TileArt.text` read by `customTileRows`, still works and is drawn doubled), and,
   as relevant, `needsSupport`, `toolClass`, `isInteractive`/`interact`, and the exclusions in
   `creativeItems` for on/off variants, and a line in `blockPhysOf` (its weight, carry and reach).
-  New tiles go after `liftCar` (the last one; all after the 64 mod tiles); `Tile.isMod` is a range
+  New tiles go after `vehicleSensor` (the last one; all after the 64 mod tiles); `Tile.isMod` is a range
   check, so they are not mistaken for mod blocks. Tile numbers must stay at or under 247 (a wall made
   from a block is stored as 8 + its number in one byte).
 - **A new panel** needs its `@Published` show flag added to `updateInputGate` and to the condition
@@ -219,7 +227,7 @@ What the stand-ins can't tell you:
 - **Mod data.** New fields of mod content (`ModBlock`, `ModItem`, `ModMob` and the rest) get a default
   and are decoded with `c.val(.key, default)`, and get a clamp in `ModValidator.check`. Mod enums only
   get cases appended (also `ModInfuseTrigger`, `ModPhaseWhen`, `ModSummonHow`, and the Logic Studio's
-  `LEvent`, `LOp`, `LEOp`). References inside a mod are content keys: renamed in `ModStore.rekey` and
+  `LEvent`, `LOp`, `LEOp`; `channelOn`, `setChannel` and `channel` were appended). References inside a mod are content keys: renamed in `ModStore.rekey` and
   counted in `ModStore.dependencies` (game tiles are `"tile:<n>"`, never renamed). A mod block can work as a
   vehicle part (`ModBlock.vehRole`, `vehMass`, `vehPower`; `ModVehicleRole` is append-only). `ModCollision`
   is append-only too (`climbable`, `sticky`, `decor` were appended). Tests never touch the real mod folder or saves: set `ModStore.overrideDir` and
@@ -262,13 +270,13 @@ What the stand-ins can't tell you:
 ## Map of the parts
 
 Sections start with `// ===== <name> =====` (grep for them). `tools/parts.py` (its `LAYOUT`) puts
-them in the parts: part 1 `p01_util` to `p08b_ruins`; part 2 `p09_umbral` to `p12_phys`, `p12b_frames`
+them in the parts: part 1 `p01_util` to `p08b_ruins`, `p35_automation`; part 2 `p09_umbral` to `p12_phys`, `p12b_frames`
 (bodies on and inside vehicles), `p12c_fluids` (with the air inside hulls), `p24_painter`, `a01_artsheet`
 (the hand-drawn pictures as text, and their readers), then `p13a_mobdefs` to `p14d_tools`; part 3
 `p15a_mobai` to `p26_vehicle_ux` (without `p24`), `p33_vehicles`, `p27_power`; part 4 `p28_mods` to
 `p31c_blockphys`, `p31d_rails`; part 5 `p32_modplus`, `u03_hud`, `u04_panels`; part 6 `u01_art` (the art
 store, the player's look, sound, the weather simulation, ambient and animal life, the journal, telegraphed
-attacks), `u05_menu`, `u08_alchemy`; part 7 `u02_render`, `u07_mods`, `p34_joints`, `u06_root`; part 8
+attacks), `u05_menu`, `u10_automation` (the RECEIVER panel), `u08_alchemy`; part 7 `u02_render`, `u07_mods`, `p34_joints`, `u06_root`; part 8
 `u09_modplus`. New code goes into the section it belongs to; a new section goes into `LAYOUT` (then run
 `python3 tools/parts.py`, `tools/typecheck.sh` and `tools/buildcost.sh`). A `private` or `fileprivate`
 name can only be used in its own part, so anything used across parts is internal (no modifier).
@@ -284,7 +292,8 @@ the bucket), `p13a_mobdefs` (MobKind, MobDef, spawn rules, Mob),
 `think`, the per-kind AIs), `p15b_spawn` (`updateSpawning`), `p16*` (combat, damage, bosses), `p17`
 (vehicles, ships), `p18` (portal, map), `p19_save` (`SaveData`, `makeSave`, `Game.load`), `p20`–`p26`
 (helpers, walls, doors, HUD logic), `p34_joints` (hinges, servos, pistons: sections, joints, controls,
-mechs, the JOINT panel), `p27_power` (Sparkworks), `p28_mods` (Mod Creator: data,
+mechs, the JOINT panel), `p35_automation` (gun modes and turrets, the remote control, land kept round
+vehicles at work, signal channels and receivers, the vehicle sensor's sight, mod gun blocks), `p27_power` (Sparkworks), `p28_mods` (Mod Creator: data,
 store, checks, runtime, custom creature AI, structures and capture, test tools), `p32_modplus` (Mod Creator+: changes
 to game content, ore controls, sprite tools, custom infusions, boss phases and summoning, custom dimensions with
 their suns, moons and tree designs, the Logic Studio), `p29_alchemy` (rarity, potions, effects on creatures, smoke,
@@ -431,6 +440,15 @@ the Mod Test LOGIC tab, the sun and moon editor, the tree design editor), `u06_r
   `machineRoot`, `machineSections`. The JOINT panel (`JointPanel`, `showJoint`, `jointEdit`) opens on a
   tap of a joint part; A, B and C show while driving a machine (`jointButtonRow`). Tests that move a
   machine by hand call `updateVehicles`, never step one section alone.
+- **Automation (p35_automation).** See docs/physics-plan.md, phase 6. Guns: `Vehicle.gunMode` (`GunMode`,
+  a tap cycles it: `cycleGunMode`), `runVehicleWeapons` (turrets: `turretTarget`; buttons:
+  `machineButtonsHeld`; signals: `machineSignalOn`), `playerDrives`, `machineGuns`, mod guns (`modGun`,
+  `ModRuntime.blockShot`). The remote: `remotePair`, `remoteID`, `drivenVehicle` (the HUD's vehicle
+  controls and the attack use it), `useRemote`, `startRemote`, `driveRemote`, `endRemote`. Far vehicles:
+  `vehicleWorking`, `keepWorkingLand` (from `updateStreaming`). Signals: `channels` (posts'
+  `postChannels` from `machineTick`, the Logic Studio's `logicChannels`, saved), `radioControls` (first in
+  `updateVehicles`; `Vehicle.channel`, `radioAct`, `signalOn`, `signalDrive`), the RECEIVER panel
+  (`ReceiverPanel`, `showRadio`, `radioEdit`, `setRadio`), the vehicle sensor (`vehicleNearSensor`).
 - **Speed and contact (p17, p33).** No clamps. `stepVehicle`: sub-steps by speed, the open-sky path.
   `vehicleSubstep` gathers `VContact`s and gives their blows together over four rounds (normal push
   held at zero or more, friction within `mu` times it, bounce and grip from the block touched:

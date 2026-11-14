@@ -362,6 +362,12 @@ struct ModBlock: Codable, Identifiable, Equatable {
 	var vehRole: ModVehicleRole = .none
 	var vehMass: Double = 0
 	var vehPower: Double = 1.0
+	/// working as a cannon or machine gun: the mod's own shot it fires (its id; "": the game's), how
+	/// fast and how hard (0: the game part's own), and how many a second (0: the part's own)
+	var shot: String = ""
+	var shotSpeed: Double = 0
+	var shotDamage: Double = 0
+	var fireRate: Double = 0
 	/// as building material: its weight and what it holds up (0: worked out from its hardness), and
 	/// whether it falls like sand with nothing under it
 	var weight: Double = 0
@@ -416,6 +422,10 @@ struct ModBlock: Codable, Identifiable, Equatable {
 		vehRole = c.val(.vehRole, .none)
 		vehMass = c.val(.vehMass, 0)
 		vehPower = c.val(.vehPower, 1.0)
+		shot = c.val(.shot, "")
+		shotSpeed = c.val(.shotSpeed, 0)
+		shotDamage = c.val(.shotDamage, 0)
+		fireRate = c.val(.fireRate, 0)
 		weight = c.val(.weight, 0)
 		carry = c.val(.carry, 0)
 		falls = c.val(.falls, false)
@@ -1972,6 +1982,13 @@ enum ModValidator {
 			b.power = clampD(b.power.isFinite ? b.power : 0, 0, sb ? 400 : 40)
 			b.vehMass = clampD(b.vehMass.isFinite ? b.vehMass : 0, 0, sb ? 60 : 20)
 			b.vehPower = clampD(b.vehPower.isFinite ? b.vehPower : 1, 0.25, sb ? 10 : 4)
+			b.shotSpeed = clampD(b.shotSpeed.isFinite ? b.shotSpeed : 0, 0, sb ? 200 : 80)
+			b.shotDamage = clampD(b.shotDamage.isFinite ? b.shotDamage : 0, 0, sb ? 500 : 120)
+			b.fireRate = clampD(b.fireRate.isFinite ? b.fireRate : 0, 0, sb ? 60 : 30)
+			if !b.shot.isEmpty && !p.projectiles.contains(where: { $0.id == b.shot }) {
+				r.add(1, mn, place, "Its gun's shot is not one of this mod's shots: it fires the game's own.")
+				b.shot = ""
+			}
 			b.weight = clampD(b.weight.isFinite ? b.weight : 0, 0, sb ? 40 : 12)
 			b.carry = clampD(b.carry.isFinite ? b.carry : 0, 0, sb ? 4000 : 400)
 			b.grip = clampD(b.grip.isFinite ? b.grip : 1, 0.02, sb ? 4 : 2)
@@ -3672,6 +3689,13 @@ final class ModRuntime {
 	func blockDef(_ t: Tile) -> ModBlock? {
 		guard let i = slot(t) else { return nil }
 		return slotDef[i]
+	}
+
+	/// The mod shot a mod's gun block fires (its number among the shots; -1: the game's own)
+	func blockShot(_ t: Tile) -> Int {
+		guard let i = slot(t), let k = slotKey[i], let d = slotDef[i], !d.shot.isEmpty else { return -1 }
+		let modID: String = String(k.split(separator: ":").first ?? "")
+		return shotIndex[joinText(modID, ":", d.shot)] ?? -1
 	}
 
 	func isAlt(_ t: Tile) -> Bool {
@@ -9365,6 +9389,7 @@ func blockWeights(_ t: Tile) -> BlockPhys {
 	case .platform: return BlockPhys(weight: 0.3, carry: 8, span: 4)
 	case .ladder: return BlockPhys(weight: 0.3, carry: 8, span: 1)
 	case .liftRail: return BlockPhys(weight: 1.2, carry: 40, span: 1)
+	case .signalPost, .vehicleSensor: return BlockPhys(weight: 0.8, carry: 6, span: 1)
 	case .doorClosed, .doorOpen, .shutterClosed, .shutterOpen: return BlockPhys(weight: 0.7, carry: 10, span: 1)
 	case .gateClosed, .gateOpen: return BlockPhys(weight: 3.0, carry: 60, span: 2)
 	case .stairWoodR, .stairWoodL: return BlockPhys(weight: 0.5, carry: 20, span: 3)

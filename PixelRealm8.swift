@@ -4917,6 +4917,8 @@ struct ScriptEditorView: View {
 			return AnyView(StatSlider(label: "Seconds between", value: b(\.ev, 5), range: 0.25...120.0, step: 0.25, format: "%.2f", unit: " s"))
 		case .phase:
 			return AnyView(StatSlider(label: "Phase", value: b(\.ev, 1), range: 1.0...6.0, step: 1, format: "%.0f"))
+		case .channelOn:
+			return AnyView(StatSlider(label: "Channel", value: b(\.ev, 1), range: 1.0...8.0, step: 1, format: "%.0f"))
 		case .custom:
 			return AnyView(ModTextField(label: "Message name", text: b(\.evText, ""), placeholder: "open the gate"))
 		case .enterDim:
@@ -5316,6 +5318,8 @@ struct ScriptEditorView: View {
 				LNumBox(label: "", value: exprNum(e.v, path, arg, sub), lo: 1, hi: 30, compact: true)
 				Text("blocks").font(.pixel(10)).foregroundColor(Color.white)
 			})
+		case .channel:
+			return AnyView(LNumBox(label: "", value: exprNum(e.v, path, arg, sub), lo: 1, hi: 8, compact: true))
 		case .itemCount:
 			let name: String = e.item.map { ModPreview.name($0, s.catalog) } ?? "CHOOSE ITEM"
 			return AnyView(SmallButton(title: name, color: Color.black.opacity(0.35)) { self.exprItemPick = (path, arg, sub) })
@@ -5401,7 +5405,7 @@ struct ReporterPicker: View {
 		("TESTS", [.lt, .gt, .eq, .and, .or, .not]),
 		("THE PLAYER", [.playerHP, .playerMaxHP, .playerX, .playerY, .itemCount, .distance]),
 		("MY CREATURE OR BLOCK", [.selfHP, .selfHPPct, .selfX, .selfY, .nearby]),
-		("THE WORLD", [.timeOfDay, .isNight, .raining, .inDim, .inBiome]),
+		("THE WORLD", [.timeOfDay, .isNight, .raining, .inDim, .inBiome, .channel]),
 	]
 
 	var body: some View {
@@ -5453,6 +5457,7 @@ struct ReporterPicker: View {
 		for _ in 0..<LReporters.arity(op) { e.args.append(LExpr(0)) }
 		if op == .param { e.v = 1 }
 		if op == .nearby { e.v = 6 }
+		if op == .channel { e.v = 1 }
 		if op == .random {
 			e.args = [LExpr(1), LExpr(10)]
 		}

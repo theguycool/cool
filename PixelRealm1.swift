@@ -1,5 +1,5 @@
 // PIXEL REALM v2, part 1 of 8: utilities, tiles, items, recipes, the older creature pictures made in code, world generation, chunks,
-// villages and ruins.
+// villages and ruins, and automation (turrets, the remote control, signals).
 // The game is eight files that go together in one Swift Playgrounds app: PixelRealm1.swift to
 // PixelRealm8.swift. Each goes in its own file in the app (delete ContentView.swift; MyApp.swift can
 // hold part 1). The hand-drawn pictures are kept as text in part 2 (a01_artsheet).
@@ -426,6 +426,9 @@ enum Tile: UInt8, CaseIterable, Codable {
 	/// elevators (appended): the rail a lift car runs on, the button that calls it to a floor, and the
 	/// car itself (an item: placed on a rail it becomes a moving Lift)
 	case liftRail, liftButton, liftCar
+	/// automation (appended): a signal post that turns its channel on while it has power (and its pulse
+	/// wire, if it has one, is on), and a sensor that sends a pulse while a vehicle is near it
+	case signalPost, vehicleSensor
 
 	// the tables are built once; the reserved mod tiles are rewritten when a world's mods are switched
 	// on (see `patch`), the game's own tiles never change
@@ -731,6 +734,8 @@ enum Tile: UInt8, CaseIterable, Codable {
 		liftRail|Lift Rail|hard=0.5|solid=0|opaque=0|style=custom|colors=9AA4B0
 		liftButton|Lift Button|hard=0.3|solid=0|opaque=0|light=4|style=custom|colors=5A6270
 		liftCar|Lift Car|hard=0.5|solid=0|opaque=0|style=custom|colors=7A8490
+		signalPost|Signal Post|hard=0.8|solid=0|opaque=0|style=custom|colors=C84A3A
+		vehicleSensor|Vehicle Sensor|hard=0.7|solid=0|opaque=0|style=custom|colors=E8C040
 		"""
 }
 
@@ -824,6 +829,8 @@ enum TileArt {
 		liftRail Mm....mM,Mm....mM,Mm....mM,MmxxxxmM,Mm....mM,Mm....mM,Mm....mM,MmxxxxmM M=5A6270 m=9AA4B0 x=7A5230
 		liftButton ........,..pppp..,..pUUp..,..pppp..,..pDDp..,..pppp..,........,........ p=4A5260 U=5AD05A D=E05050
 		liftCar kkkkkkkk,k.k..k.k,k.k..k.k,k.k..k.k,k.k..k.k,k......k,ffffffff,FFFFFFFF k=5A6270 f=9AA4B0 F=4A5260
+		signalPost ...rr...,.k.rr.k.,..k..k..,...kk...,...mk...,...mk...,.kkkkkk.,.kmmmmk. k=2E323A m=6A7280 r=E04A3A
+		vehicleSensor ...yy...,........,..kkkk..,.k.mm.k.,.km..mk.,.k.mm.k.,..kkkk..,kkkkkkkk k=2E323A m=8A94A4 y=E8C040
 		sapling ........,...gg...,..gGgg..,.gg.bgg.,..g.b.g.,....b...,...bb...,....b... g=4B9A30 G=7AC84A b=7A5230 // a thin stem with a few young leaves
 		exoStation kkkkkkkk,k.mmmm.k,k.mccm.k,kmmmmmmk,k.mmmm.k,k.m..m.k,ssssssss,sysyysys k=4A5260 m=9AA4B0 c=60E0FF s=3A3E48 y=E8C020 // a gantry with a suit hanging in its clamps
 		crystalOre sSsdsSss,sdsscCss,ssscWCds,sSccWCcs,dscWCcss,ssCcsdSs,sSsssscs,dsSdsssS s=5E6678 S=6D7688 d=4F5666 c=3AA8B0 C=8AF0E8 W=E8FFFF // slate with a cluster of pale cyan shards breaking through it
@@ -1413,8 +1420,11 @@ enum PartType: Int, Codable, CaseIterable {
 	/// appended (joints and mechs): a free hinge, a servo that turns what is built beyond it, and a piston
 	/// that pushes it out and pulls it back
 	case hinge, servo, piston
+	/// appended (automation): lets a remote control drive the vehicle, and picks up a signal channel
+	case receiver
 	var name: String {
 		switch self {
+		case .receiver: return "Receiver"
 		case .hinge: return "Hinge"
 		case .servo: return "Servo"
 		case .piston: return "Piston"
@@ -1499,6 +1509,7 @@ enum PartType: Int, Codable, CaseIterable {
 		case .hinge: return 0.6
 		case .servo: return 1.2
 		case .piston: return 1.4
+		case .receiver: return 0.3
 		}
 	}
 
@@ -1534,6 +1545,7 @@ enum PartType: Int, Codable, CaseIterable {
 		case .hinge: return "What is built on beyond it swings freely about it: a section of its own (a flap, a door, a loose arm)."
 		case .servo: return "Turns what is built beyond it, as the stick, a button or a walk tells it. Tap it to set it up."
 		case .piston: return "Pushes what is built beyond it out and pulls it back (up to four blocks). Tap it to set it up."
+		case .receiver: return "Lets a remote control drive the vehicle from afar, and picks up a signal channel. Tap it to set it up."
 		case .block: return "A block built onto a vehicle."
 		default: return "Vehicle part"
 		}
@@ -1594,6 +1606,8 @@ enum Gadget: Int, Codable, CaseIterable {
 	/// appended (flowing liquids): an iron bucket that carries a block of water, lava or a mod's liquid
 	/// (what it holds is in the stack's `extra`: 0 empty, else the liquid's tile number + 1)
 	case bucket
+	/// appended (automation): a remote control, paired with a vehicle that has a receiver
+	case remote
 
 	/// a wiring tool: taps lay or cut wire instead of using what is under them
 	var wiring: Bool { return self == .powerCable || self == .pulseWire || self == .pulseWireB || self == .wireSnips }
@@ -1625,6 +1639,7 @@ enum Gadget: Int, Codable, CaseIterable {
 		case .truckKit: return "Truck Kit"
 		case .assembler: return "Vehicle Assembler"
 		case .bucket: return "Bucket"
+		case .remote: return "Remote Control"
 		}
 	}
 }
@@ -2438,6 +2453,10 @@ func iconMisc(_ it: Item) -> PixelBuf {
 			// an iron pail with a handle
 			b.rect(2, 4, 8, 7, 0x8A8E96); b.rect(2, 4, 8, 1, 0xB8BCC4); b.rect(3, 10, 6, 1, 0x5A5E66); b.rect(2, 5, 1, 5, 0xA8ACB4)
 			b.line(2, 4, 5, 1, 0x4A4E56); b.line(9, 4, 6, 1, 0x4A4E56); b.set(5, 1, 0x4A4E56); b.set(6, 1, 0x4A4E56)
+		case .remote:
+			// a hand set with its aerial, a little screen and two buttons
+			b.rect(3, 4, 6, 8, 0x3A3F4A); b.rect(3, 4, 6, 1, 0x5A606C); b.rect(4, 5, 4, 3, 0x1A2A2A); b.set(5, 6, 0x50F070)
+			b.set(4, 9, 0xE04A3A); b.set(7, 9, 0xE8C040); b.line(8, 4, 10, 0, 0x9AA0AC); b.set(10, 0, 0xE04A3A)
 		case .powerCable, .pulseWire, .pulseWireB:
 			// a spool of wire with a loose end
 			let c: UInt32 = g == .powerCable ? 0xD2793A : (g == .pulseWire ? 0xFFC020 : 0x30E0D0)
@@ -2900,6 +2919,10 @@ extension RecipeBook {
 		add(.part(.hinge), 1, [(.mat(.ironBar), 2)], .anvil, .vehicle)
 		add(.part(.servo), 1, [(.mat(.ironBar), 3), (.mat(.copperBar), 3), (.mat(.goldBar), 1)], .tinker, .vehicle)
 		add(.part(.piston), 1, [(.mat(.ironBar), 4), (.mat(.copperBar), 2)], .tinker, .vehicle)
+		add(.part(.receiver), 1, [(.mat(.copperBar), 3), (.mat(.ironBar), 1), (.mat(.goldBar), 1)], .tinker, .vehicle)
+		add(.gadget(.remote), 1, [(.mat(.copperBar), 2), (.mat(.goldBar), 1), (.block(.glass), 1)], .tinker, .tools)
+		add(.block(.signalPost), 1, [(.mat(.copperBar), 3), (.mat(.ironBar), 2)], .tinker, .power)
+		add(.block(.vehicleSensor), 1, [(.mat(.copperBar), 2), (.mat(.ironBar), 2), (.mat(.amethyst), 1)], .tinker, .power)
 	}
 }
 
@@ -5511,6 +5534,10 @@ func partBuf(_ p: PartType) -> PixelBuf {
 		// a cylinder with its rod sticking out to the right
 		b.rect(0, 2, 5, 4, 0x5A6470); b.rect(0, 2, 5, 1, 0x7A8490); b.rect(5, 3, 3, 2, 0xC8CCD4); b.rect(7, 2, 1, 4, 0x8A8E96)
 		b.set(1, 4, 0x3A3E46)
+	case .receiver:
+		// a box with a whip aerial and a green lamp
+		b.rect(0, 4, 8, 4, 0x4A5060); b.rect(0, 4, 8, 1, 0x6A7080); b.rect(1, 5, 3, 2, 0x1A2A2A); b.set(2, 6, 0x50F070)
+		b.line(6, 4, 6, 0, 0x9AA0AC); b.set(5, 1, 0x9AA0AC); b.set(7, 1, 0x9AA0AC); b.set(6, 0, 0xE04A3A)
 	case .bigWheel:
 		// drawn three cells across: a tyre with heavy tread and a spoked hub
 		b.ellipse(4, 4, 4, 4, 0x1E1E22); b.ellipse(4, 4, 3.2, 3.2, 0x2E2E34); b.ellipse(4, 4, 2.2, 2.2, 0x9A9AA4)
@@ -8706,5 +8733,350 @@ func placeLandmarks(_ g: WorldGen, _ ch: Chunk, _ colAt: (Int) -> Col, _ blocked
 		case .reeds:
 			for d in -4...4 where rnd(20 + d) < 0.7 { plant(d, .reed) }
 		}
+	}
+}
+
+// ===== p35_automation =====
+
+// MARK: - Automation: guns that fire by themselves, remote control, signals
+
+/// How a vehicle's gun fires (saved by number: only add at the end)
+enum GunMode: Int, CaseIterable {
+	case driver, auto, buttonA, buttonB, buttonC, signal
+	var name: String {
+		switch self {
+		case .driver: return "fires with its driver's attack"
+		case .auto: return "a turret: fires by itself at monsters it can see"
+		case .buttonA: return "fires while button A is held"
+		case .buttonB: return "fires while button B is held"
+		case .buttonC: return "fires while button C is held"
+		case .signal: return "fires while its receiver's channel is on"
+		}
+	}
+}
+
+/// What a vehicle's receivers do while their channel is on (saved by number: only add at the end)
+enum RadioAct: Int, CaseIterable {
+	case forward, back, route, buttonA, buttonB, buttonC
+	var name: String {
+		switch self {
+		case .forward: return "Drive forward"
+		case .back: return "Drive back"
+		case .route: return "Run its route"
+		case .buttonA: return "Hold button A"
+		case .buttonB: return "Hold button B"
+		case .buttonC: return "Hold button C"
+		}
+	}
+}
+
+/// A mod gun block's own shot (its number among the mod shots, -1: the game's), speed, damage and
+/// shots a second (0: the game part's own)
+struct ModGunRT {
+	var shot: Int = -1
+	var speed: Double = 0
+	var damage: Double = 0
+	var rate: Double = 0
+}
+
+/// The numbers of automation
+enum Radio {
+	/// how far a turret looks for something to shoot (blocks)
+	static let turretRange: Double = 16.0
+	/// how far either side of its own way a gun can turn (radians)
+	static let gunArc: Double = 1.4
+	/// how far a remote control reaches its vehicle (blocks)
+	static let remoteRange: Double = 200.0
+	/// how many signal channels there are
+	static let channels: Int = 8
+	/// how many vehicles at work far from the player keep their land loaded, and how many chunks of
+	/// land may be loaded for them in a frame
+	static let farVehicles: Int = 8
+	static let farLoads: Int = 2
+}
+
+extension Game {
+	/// The vehicle the player has their hands on: the one they sit in, or the one their remote drives
+	var drivenVehicle: Vehicle? { return inVehicle ?? remoteVehicle }
+
+	/// Whether the player drives this vehicle (from its seat or by remote), or the machine it is a section of
+	func playerDrives(_ v: Vehicle) -> Bool {
+		guard let d = drivenVehicle else { return false }
+		if d === v { return true }
+		if v.parentID == 0 && v.joints.isEmpty { return false }
+		return machineRoot(v) === machineRoot(d)
+	}
+
+	/// The guns on a vehicle and every section of the machine it belongs to
+	func machineGuns(_ v: Vehicle) -> Int {
+		if v.parentID == 0 && v.joints.isEmpty { return v.cannons + v.guns }
+		var n: Int = 0
+		for p in machineSections(machineRoot(v)) { n += p.cannons + p.guns }
+		return n
+	}
+
+	// MARK: signals
+
+	/// Once a frame, before the vehicles move: the channels as the posts and the Logic Studio set them,
+	/// and every vehicle with receivers doing what its channel says
+	func radioControls(_ dt: Double) {
+		for i in 0..<Radio.channels {
+			let on: Bool = postChannels[i] || logicChannels[i]
+			if on && !channels[i] { fireLogic(.channelOn, number: Double(i + 1)) }
+			channels[i] = on
+		}
+		for v in vehicles where v.receivers > 0 || v.signalOn || v.signalDrive {
+			let listening: Bool = v.receivers > 0 && v.channel > 0
+			let on: Bool = listening && channels[clampI(v.channel - 1, 0, Radio.channels - 1)]
+			let was: Bool = v.signalOn
+			v.signalOn = on
+			let act: RadioAct = RadioAct(rawValue: v.radioAct) ?? .forward
+			// (a driver at the controls has the say over a signal)
+			let free: Bool = !v.rider
+			var drive: Bool = false
+			if on && free && (act == .forward || act == .back) {
+				drive = true
+				v.throttle = act == .forward ? 1.0 : -1.0
+				v.asleep = false
+			}
+			if v.signalDrive && !drive && free && v.auto == 0 { v.throttle = 0 }
+			v.signalDrive = drive
+			if act == .route && listening {
+				if on && !was && v.autopilots > 0 && v.route.count >= 2 {
+					v.auto = 2
+					v.routeAt = nearestWaypoint(v)
+					v.asleep = false
+				}
+				if !on && was && v.auto == 2 {
+					v.auto = 0
+					if free {
+						v.throttle = 0
+						v.pitch = 0
+					}
+				}
+			}
+			if on != was { v.asleep = false }
+		}
+	}
+
+	/// The receiver panel sets the vehicle's channel and what its receivers do
+	func setRadio(channel: Int, act: RadioAct) {
+		guard let v = vehicleByID(radioEdit) else { return }
+		v.channel = clampI(channel, 0, Radio.channels)
+		v.radioAct = act.rawValue
+		v.asleep = false
+		bumpHUD()
+	}
+
+	/// DONE on the receiver panel
+	func closeRadio() {
+		showRadio = false
+		radioEdit = 0
+		bumpHUD()
+	}
+
+	/// Whether a signal channel (1 to 8) is on
+	func channelIsOn(_ n: Int) -> Bool {
+		if n < 1 || n > Radio.channels { return false }
+		return channels[n - 1] || postChannels[n - 1] || logicChannels[n - 1]
+	}
+
+	/// The Logic Studio turns a channel (1 to 8) on or off
+	func setLogicChannel(_ n: Int, _ on: Bool) {
+		if n < 1 || n > Radio.channels { return }
+		logicChannels[n - 1] = on
+	}
+
+	/// The buttons A, B and C held for a vehicle or its machine: the driver's own, and any a receiver's
+	/// signal holds
+	func machineButtonsHeld(_ v: Vehicle, _ driving: Bool) -> [Bool] {
+		var out: [Bool] = driving ? jointButtons : [false, false, false]
+		let parts: [Vehicle] = v.parentID == 0 && v.joints.isEmpty ? [v] : machineSections(machineRoot(v))
+		for p in parts where p.signalOn {
+			let i: Int = p.radioAct - RadioAct.buttonA.rawValue
+			if i >= 0 && i < 3 { out[i] = true }
+		}
+		return out
+	}
+
+	/// Whether a receiver on a vehicle or its machine has its channel on
+	func machineSignalOn(_ v: Vehicle) -> Bool {
+		if v.parentID == 0 && v.joints.isEmpty { return v.signalOn }
+		return machineSections(machineRoot(v)).contains { (p: Vehicle) in p.signalOn }
+	}
+
+	/// What a vehicle sensor sees: a vehicle with a cell within its range (any, one being driven, or one
+	/// with nobody at its controls)
+	func vehicleNearSensor(_ cx: Double, _ cy: Double, _ r: Double, _ mode: Int) -> Bool {
+		for v in vehicles {
+			if v.b.right < cx - r - 1 || v.b.left > cx + r + 1 || v.b.y < cy - r - 1 || v.b.top > cy + r + 1 { continue }
+			let driven: Bool = machineRoot(v).rider || v.rider
+			if mode == 1 && !driven { continue }
+			if mode == 2 && driven { continue }
+			for (c, _) in v.parts {
+				let p: (Double, Double) = v.cellCenter(c)
+				if hypot(p.0 - cx, p.1 - cy) <= r + 0.5 { return true }
+			}
+		}
+		return false
+	}
+
+	// MARK: vehicles at work far away
+
+	/// A vehicle at work on its own: an autopilot with nobody at the controls, or a remote driving it
+	func vehicleWorking(_ v: Vehicle) -> Bool {
+		let root: Vehicle = machineRoot(v)
+		if root.id == remoteID || root.signalDrive || v.signalDrive { return true }
+		return root.auto != 0 && !root.rider
+	}
+
+	/// The land round each vehicle at work stays loaded however far it goes from the player, and the land
+	/// ahead of it is loaded as it goes (a little each frame), so an autopilot runs its route anywhere
+	func keepWorkingLand(_ keep: inout Set<Int>) {
+		var budget: Int = Radio.farLoads
+		var n: Int = 0
+		for v in vehicles where vehicleWorking(v) {
+			n += 1
+			if n > Radio.farVehicles { break }
+			let reach: Double = 8.0 + abs(v.vx) * 1.5
+			let c0: Int = floorDiv(Int(floor(v.b.left - reach)), chunkW)
+			let c1: Int = floorDiv(Int(floor(v.b.right + reach)), chunkW)
+			var c: Int = c0
+			while c <= c1 {
+				keep.insert(c)
+				if budget > 0 && world.chunks[c] == nil && world.inRange(c) {
+					world.loadChunk(c)
+					budget -= 1
+				}
+				c += 1
+			}
+		}
+	}
+
+	// MARK: the remote control
+
+	/// The vehicle the remote drives now
+	var remoteVehicle: Vehicle? { return remoteID == 0 ? nil : vehicleByID(remoteID) }
+
+	/// Receivers on a vehicle and every section of its machine
+	func machineReceivers(_ v: Vehicle) -> Int {
+		if v.parentID == 0 && v.joints.isEmpty { return v.receivers }
+		var n: Int = 0
+		for p in machineSections(machineRoot(v)) { n += p.receivers }
+		return n
+	}
+
+	/// Whether the remote still reaches a vehicle: it is here, it has a receiver, and it is near enough
+	func remoteCanReach(_ v: Vehicle) -> Bool {
+		if v.parts.isEmpty || machineReceivers(v) == 0 { return false }
+		return hypot(v.px - pb.x, v.py - pb.y) <= Radio.remoteRange
+	}
+
+	/// The remote in use: on a vehicle within reach it pairs with it (if it has a receiver); anywhere else
+	/// it takes the paired vehicle's controls
+	func useRemote() {
+		if useCD > 0 { return }
+		useCD = 0.3
+		if let (v, _) = vehicleAtPoint(aimX, aimY), inReach(aimX, aimY) {
+			let root: Vehicle = machineRoot(v)
+			if machineReceivers(root) == 0 {
+				say("It needs a receiver to answer a remote: build one onto it.", 2.5)
+				return
+			}
+			remotePair = root.id
+			sfx(.tap, 0.6)
+			say("Paired. Use the remote away from it to drive it from afar; JUMP lets go.", 3.0)
+			return
+		}
+		startRemote()
+	}
+
+	/// Takes the paired vehicle's controls from where the player stands
+	func startRemote() {
+		guard let v = vehicleByID(remotePair) else {
+			say(remotePair == 0 ? "Pair the remote first: use it on a vehicle with a receiver." : "The paired vehicle is not here.", 2.5)
+			return
+		}
+		if inVehicle != nil || mounted != nil {
+			say("Get out first: the remote drives from outside.", 2.0)
+			return
+		}
+		if !remoteCanReach(v) {
+			say(machineReceivers(v) == 0 ? "Its receiver is gone." : "Too far away for the remote.", 2.0)
+			return
+		}
+		remoteID = v.id
+		v.rider = true
+		v.asleep = false
+		v.holdY = v.py
+		say("Driving by remote. JUMP lets go.", 2.5)
+		bumpHUD()
+	}
+
+	/// The stick drives the vehicle the remote holds, as if from its seat; JUMP lets go
+	func driveRemote(_ v: Vehicle, _ ix: Double, _ jump: Bool, _ dt: Double) {
+		if jump {
+			endRemote("Remote off.")
+			return
+		}
+		v.throttle = ix
+		var up: Double = -stickY
+		if abs(up) < 0.15 { up = 0 }
+		v.pitch = clampD(up, -1, 1)
+		if v.auto != 0 { autopilotSteer(v, ix, up, dt) }
+		if abs(v.throttle) > 0.05 || abs(v.pitch) > 0.05 { v.asleep = false }
+	}
+
+	/// Lets go of the remote (the vehicle keeps its autopilot, if it is on)
+	func endRemote(_ why: String? = nil) {
+		if let v = vehicleByID(remoteID), inVehicle !== v {
+			v.rider = false
+			if v.auto == 0 {
+				v.throttle = 0
+				v.pitch = 0
+			}
+		}
+		remoteID = 0
+		if let w = why { say(w, 2.0) }
+		bumpHUD()
+	}
+
+	/// A gun cell's own shot, speed, damage and rate when it is a mod's gun block (none: the game part's own)
+	func modGun(_ v: Vehicle, _ c: PartCell) -> ModGunRT {
+		guard let b = v.blocks[c], b.isMod, let d = ModRuntime.shared.blockDef(b) else { return ModGunRT() }
+		return ModGunRT(shot: ModRuntime.shared.blockShot(b), speed: d.shotSpeed, damage: d.shotDamage, rate: d.fireRate)
+	}
+
+	/// A tap on a gun (not while driving): the next way of firing, round and back to the driver's
+	func cycleGunMode(_ v: Vehicle, _ c: PartCell) {
+		let n: Int = GunMode.allCases.count
+		let next: Int = ((v.gunMode[c] ?? 0) + 1) % n
+		if next == 0 { v.gunMode[c] = nil } else { v.gunMode[c] = next }
+		let m: GunMode = GunMode(rawValue: next) ?? .driver
+		say(joinText(v.parts[c] == .cannon ? "Cannon: " : "Machine gun: ", m.name, "."), 2.5)
+		sfx(.tap, 0.5)
+		v.asleep = false
+		bumpHUD()
+	}
+
+	/// What a turret shoots at: the nearest threat it can see within its reach and its arc, where it
+	/// will be when the shot gets there
+	func turretTarget(_ v: Vehicle, _ c: PartCell, _ o: (Double, Double), _ base: Double) -> (Double, Double)? {
+		let r: Double = Radio.turretRange
+		var best: Mob? = nil
+		var bd: Double = r * r
+		for m in mobsNear(o.0 - r, o.0 + r) where m.hp > 0 && !m.removed && !m.downed && !m.tame && isThreat(m) {
+			let dx: Double = m.b.x - o.0
+			let dy: Double = m.b.cy - o.1
+			let d: Double = dx * dx + dy * dy
+			if d >= bd { continue }
+			if abs(remainder(atan2(dy, dx) - base, 2.0 * Double.pi)) > Radio.gunArc + 0.05 { continue }
+			if !world.lineClear(o.0, o.1, m.b.x, m.b.cy) { continue }
+			bd = d
+			best = m
+		}
+		guard let m = best else { return nil }
+		let lead: Double = sqrt(bd) / 40.0
+		return (m.b.x + m.b.vx * lead, m.b.cy + m.b.vy * lead)
 	}
 }

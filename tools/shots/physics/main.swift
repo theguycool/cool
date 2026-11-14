@@ -368,3 +368,58 @@ do {
     look(g, Double(cx) - 2.0, 92.0)
     render(g, "10_crane_and_lift")
 }
+
+// 11 (phase 6): a machine-gun turret on a stone tower firing by itself at zombies coming over the meadow
+do {
+    let g = world()
+    let cx = Int(g.pb.x)
+    let w = g.world
+    for y in 96..<100 { for x in (cx - 3)...(cx - 1) { w.set(x, y, .stone) } }
+    let post = vehicle(g, [(0, 0, .frame, nil), (1, 0, .frame, nil), (2, 0, .autoGun, nil), (0, -1, .receiver, nil)], left: Double(cx) - 3.0, bottom: 96)
+    post.gunMode[PartCell(dx: 2, dy: 0)] = GunMode.auto.rawValue
+    g.monstersEnabled = true
+    for k in 0..<3 {
+        let z = g.addMob(.zombie, Double(cx + 9 + k * 4) + 0.5, 100)
+        z.persistent = true
+    }
+    g.pb.x = Double(cx) - 8.5; g.pb.y = 100
+    var t = 0.0
+    while t < 0.9 { g.tick(dt60); g.hunger = 20; t += dt60 }
+    g.pauseVehicles = true
+    look(g, Double(cx) + 3.0, 94.0)
+    render(g, "11_turret")
+}
+
+// 12 (phase 6): a lever and a signal post on channel 1 send a car with a receiver off along the road; a
+// vehicle sensor by the road lights its lamp as the car comes by
+do {
+    let g = world()
+    let cx = Int(g.pb.x)
+    let w = g.world
+    let bat = { () -> PowerDev? in w.set(cx - 14, 99, .battery); return w.powerDev(cx - 14, 99) }()
+    bat?.charge = 600
+    w.set(cx - 11, 99, .signalPost)
+    w.powerDev(cx - 11, 99)?.mode = 0
+    for x in (cx - 14)...(cx - 11) { w.setWire(x, 99, w.wireAt(x, 99) | Wire.bit(0)) }
+    w.set(cx - 11, 96, .lever)
+    for y in 96...99 { w.setWire(cx - 11, y, w.wireAt(cx - 11, y) | Wire.bit(1)) }
+    // the sensor and its lamp, on the same battery
+    w.set(cx + 4, 97, .vehicleSensor)
+    w.powerDev(cx + 4, 97)?.param = 3
+    w.set(cx + 6, 97, .lampOff)
+    for x in (cx - 14)...(cx + 6) { w.setWire(x, 98, w.wireAt(x, 98) | Wire.bit(0)) }
+    w.setWire(cx - 14, 98, w.wireAt(cx - 14, 98) | Wire.bit(0))
+    for y in 97...98 { w.setWire(cx + 4, y, w.wireAt(cx + 4, y) | Wire.bit(0)); w.setWire(cx + 6, y, w.wireAt(cx + 6, y) | Wire.bit(0)) }
+    for x in (cx + 4)...(cx + 6) { w.setWire(x, 97, w.wireAt(x, 97) | Wire.bit(1)) }
+    let car = vehicle(g, [(0, 0, .frame, nil), (1, 0, .frame, nil), (2, 0, .frame, nil), (3, 0, .frame, nil), (0, 1, .wheel, nil), (3, 1, .wheel, nil),
+                          (0, -1, .seat, nil), (1, -1, .steering, nil), (2, -1, .engine, nil), (3, -1, .receiver, nil)], left: Double(cx) - 6.0, bottom: 100)
+    car.channel = 1
+    car.radioAct = RadioAct.forward.rawValue
+    g.usePowerDevice(cx - 11, 96, .lever)
+    g.pb.x = Double(cx) - 16.5; g.pb.y = 100
+    var t = 0.0
+    while t < 1.6 { g.tick(dt60); g.hunger = 20; t += dt60 }
+    g.pauseVehicles = true
+    look(g, Double(cx) - 3.0, 94.0)
+    render(g, "12_signals")
+}

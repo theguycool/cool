@@ -1,5 +1,5 @@
 // PIXEL REALM v2, part 6 of 8: the art store and the player's look, sound, weather, ambient and animal life, the journal and
-// telegraphed attacks, the menus, and the potion and exosuit screens.
+// telegraphed attacks, the menus, the receiver panel, and the potion and exosuit screens.
 // The game is eight files that go together in one Swift Playgrounds app: PixelRealm1.swift to
 // PixelRealm8.swift. Each goes in its own file in the app (delete ContentView.swift; MyApp.swift can
 // hold part 1). The hand-drawn pictures are kept as text in part 2 (a01_artsheet).
@@ -6607,6 +6607,68 @@ struct HelpView: View {
 		.foregroundColor(Color.white)
 		.padding(18)
 		.background(PixelBox(color: Color(ui: 0x2C2C30)).opacity(0.95))
+	}
+}
+
+// ===== u10_automation =====
+
+// MARK: - The receiver panel
+
+/// Setting up a vehicle's receivers (tap one): the channel they pick up from signal posts and the Logic
+/// Studio, and what the vehicle does while it is on. A remote control pairs with any vehicle that has one.
+struct ReceiverPanel: View {
+	@ObservedObject var game: Game
+	@ObservedObject var hud: HUDSignal
+
+	var body: some View {
+		VStack(spacing: 8) {
+			topBar
+			ScrollView { content }
+		}
+		.foregroundColor(Color(ui: 0xFFFFFF))
+		.padding(14)
+		.background(PixelBox(color: Color(ui: 0x2C2834)).opacity(0.97))
+		.frame(maxWidth: 620)
+		.padding(10)
+	}
+
+	var vehicle: Vehicle? { return game.vehicleByID(game.radioEdit) }
+
+	var topBar: some View {
+		HStack {
+			Text("RECEIVER").font(.pixel(20)).foregroundColor(Color(ui: 0xE8C040))
+			Spacer()
+			SmallButton(title: "DONE", color: Color(ui: 0x3A6A3A)) { game.closeRadio() }
+		}
+	}
+
+	@ViewBuilder
+	var content: some View {
+		if let v = vehicle {
+			VStack(alignment: .leading, spacing: 8) {
+				Text(verbatim: ReceiverPanel.help).font(.pixel(11, .semibold)).foregroundColor(Color(ui: 0xB8B0C8))
+				Text("Channel").font(.pixel(13, .bold))
+				ChoiceRows(options: ReceiverPanel.channelNames, selected: channelBind(v), columns: 5)
+				Text("While its channel is on").font(.pixel(13, .bold))
+				ChoiceRows(options: ReceiverPanel.actNames, selected: actBind(v), columns: 3)
+			}
+		} else {
+			Text("This vehicle is gone.").font(.pixel(13)).foregroundColor(Color(ui: 0xFFE070))
+		}
+	}
+
+	static let help: String = "Signal posts on the same channel (and the Logic Studio) turn it on. A remote control pairs with any vehicle that has a receiver."
+	static let channelNames: [String] = ["NONE"] + (1...Radio.channels).map { (n: Int) in String(n) }
+	static let actNames: [String] = RadioAct.allCases.map { (a: RadioAct) in a.name }
+
+	func channelBind(_ v: Vehicle) -> Binding<Int> {
+		let me: ReceiverPanel = self
+		return Binding<Int>(get: { v.channel }, set: { (n: Int) in me.game.setRadio(channel: n, act: RadioAct(rawValue: v.radioAct) ?? .forward) })
+	}
+
+	func actBind(_ v: Vehicle) -> Binding<Int> {
+		let me: ReceiverPanel = self
+		return Binding<Int>(get: { v.radioAct }, set: { (n: Int) in me.game.setRadio(channel: v.channel, act: RadioAct(rawValue: n) ?? .forward) })
 	}
 }
 

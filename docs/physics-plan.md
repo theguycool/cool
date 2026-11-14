@@ -188,10 +188,36 @@ The user's parts 1 to 16 are all covered. The order is theirs with three changes
   the player adds; a section's own engines and wheels drive only when the driver's seat is in it (a
   trailer section is pulled); a machine cannot TURN round.
 
-### Phase 6: automation and attachments
-- Autopilot for every kind of vehicle, working far from the player; remote controls paired to a
-  vehicle; vehicles on Sparkworks (sensors, switches) and in the Logic Studio.
-- Weapons as parts on anything; custom mounted weapons and projectiles from the Mod Creator.
+### Phase 6: automation and attachments (done)
+- Built test first (the `phys6` suite, 55 checks, each seen failing before the code that passes it).
+- Guns on anything: a tap on a gun (not while driving) chooses how it fires (`GunMode`): with its
+  driver's attack (as before), as a turret (by itself, at the nearest threat it can see within its reach
+  and its arc: `turretTarget`, `Radio.turretRange`), while button A, B or C is held, or while its
+  receiver's channel is on. Saved per gun (`VehicleSave.gunModes`). A gun on any section of a machine
+  answers whoever drives the machine (`playerDrives`, `machineGuns`), and a machine's shots pass all
+  its own sections (the owner is the machine's top section).
+- The receiver (new part) and the remote control (new item). Used on a vehicle with a receiver, the
+  remote pairs with it (`remotePair`, saved); used anywhere else, it takes that vehicle's controls from
+  where the player stands (`startRemote`, `driveRemote`; `remoteID`): the stick drives it, the attack
+  fires its guns, AUTO, MARK, TURN and A/B/C work, the view follows it. JUMP, LET GO, getting hurt,
+  dying, its receiver gone or going out of reach (`Radio.remoteRange`, 200 blocks) let go.
+- Far from the player: a vehicle at work on its own (an autopilot with nobody at the controls, a remote,
+  a signal driving it) keeps the land round it loaded and has the land ahead loaded as it goes
+  (`keepWorkingLand`, at most two chunks a frame, eight vehicles), so a route runs anywhere.
+- Signals: eight channels. A signal post (new block, a Sparkworks machine) turns its channel on while
+  it has power (and its pulse wire, if it has one, is on): `postChannels`, worked out with the machines.
+  The Logic Studio sets channels (`setChannel`), waits for one to come on (`channelOn`) and reads them
+  (the `channel` reporter); what it set is saved. A vehicle's receivers listen to one channel and, while
+  it is on, drive forward or back, run its route, hold button A, B or C (joints and guns), and fire its
+  signal guns (`radioControls`, `RadioAct`; set on the RECEIVER panel, saved). The vehicle sensor (new
+  block, a Sparkworks sensor) sends a pulse while any vehicle, a driven one or an empty one is within its
+  range.
+- A mod's gun block (a mod block working as a cannon or machine gun) fires the mod's own shot, with its
+  own speed, damage and rate (`ModBlock.shot`, `shotSpeed`, `shotDamage`, `fireRate`, clamped, chosen in
+  the block editor's ON A VEHICLE section).
+- Not done: remote controls for several vehicles at once (one pairing); signals carried over wires to a
+  vehicle (only by channel); turrets that pick targets other than threats; a turret's own ammunition
+  store (guns still take bullets and gunpowder from the player's bag, which a far turret also uses).
 
 ### Phase 7: structures and settings
 - Reach from 5 blocks (weakest) to 40 (strongest); steel beams, columns, reinforced blocks.

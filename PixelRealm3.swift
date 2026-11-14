@@ -2888,6 +2888,7 @@ struct VSample {
 func partDisplacement(_ p: PartType) -> Double {
 	switch p {
 	case .hinge, .servo, .piston: return 0.5
+	case .receiver: return 0.2
 	case .railWheel: return 0.5
 	case .coupler: return 0.3
 	case .bigWheel: return 3.0
@@ -3028,6 +3029,7 @@ final class VRun {
 extension Game {
 	func updateVehicles(_ dt: Double) {
 		let t0: Double = perfNow()
+		radioControls(dt)
 		jointControls(dt)
 		stepVehicles(vehicles, dt)
 		formCouplings(dt)
@@ -3242,7 +3244,7 @@ extension Game {
 	/// until something wakes it), and how many fixed steps it takes
 	func startVehicleFrame(_ v: Vehicle, _ dt: Double) -> VRun? {
 		if !vehicleAreaLoaded(v) { return nil }
-		let throttle: Double = v.rider || v.auto != 0 ? v.throttle : 0
+		let throttle: Double = v.rider || v.auto != 0 || v.signalDrive ? v.throttle : 0
 		let airBusy: Bool = v.aero && (abs(v.pitch) > 0.05 || v.heat > 0.02 || v.collective > 0.02 || v.turnT > 0)
 		if v.asleep && abs(throttle) < 0.05 && !v.drilling && !airBusy {
 			// resting vehicles cost nothing until something wakes them (one resting on another vehicle
@@ -4074,6 +4076,16 @@ extension Game {
 			bumpHUD()
 			return
 		}
+		if let t = v.parts[c], t == .cannon || t == .autoGun, inVehicle == nil {
+			cycleGunMode(v, c)
+			return
+		}
+		if v.parts[c] == .receiver && inVehicle == nil {
+			radioEdit = v.id
+			showRadio = true
+			bumpHUD()
+			return
+		}
 		if v.parts[c] == .coupler && v.links.contains(where: { $0.cell == c }) {
 			uncouple(v, c)
 			say("Uncoupled.", 1.2)
@@ -4771,6 +4783,10 @@ struct SaveData: Codable {
 	var logicVars: [String: Double]? = nil
 	/// lift cars in every dimension (nil: none)
 	var lifts: [LiftSave]? = nil
+	/// the vehicle the remote control is paired with (nil: none)
+	var remotePair: Int? = nil
+	/// the signal channels the Logic Studio left on (nil: none)
+	var logicChannels: [Bool]? = nil
 }
 
 func mobToSave(_ m: Mob) -> MobSave {
@@ -4896,7 +4912,7 @@ extension Game {
 		var mi: ModWorldInfo? = modInfo
 		if ModRuntime.shared.active { mi = ModRuntime.shared.worldInfo() }
 		let ls: [LiftSave] = liftSaves()
-		return SaveData(meta: meta, settings: settings, px: px, py: py, hp: max(1, hp), maxHP: maxHP, hunger: hunger, timeOfDay: timeOfDay, kills: kills, spawnX: spawnX, spawnY: spawnY, inv: inv, sel: sel, defeated: Array(defeated), gotMap: gotMap, portalOpened: portalOpened, chests: chestList, chunks: cs, vehicles: vs, pets: pets, rex: rs, nextID: nextID, journal: journal, weather: weather, bodyCold: bodyCold, power: powerSave(), mods: mi, effects: effectsSave(), mutants: mutantSaves(), suit: suit.isEmpty ? nil : suit, bosses: bossSaves(), dimReturn: dimReturn, logicVars: logicVars.isEmpty ? nil : logicVars, lifts: ls.isEmpty ? nil : ls)
+		return SaveData(meta: meta, settings: settings, px: px, py: py, hp: max(1, hp), maxHP: maxHP, hunger: hunger, timeOfDay: timeOfDay, kills: kills, spawnX: spawnX, spawnY: spawnY, inv: inv, sel: sel, defeated: Array(defeated), gotMap: gotMap, portalOpened: portalOpened, chests: chestList, chunks: cs, vehicles: vs, pets: pets, rex: rs, nextID: nextID, journal: journal, weather: weather, bodyCold: bodyCold, power: powerSave(), mods: mi, effects: effectsSave(), mutants: mutantSaves(), suit: suit.isEmpty ? nil : suit, bosses: bossSaves(), dimReturn: dimReturn, logicVars: logicVars.isEmpty ? nil : logicVars, lifts: ls.isEmpty ? nil : ls, remotePair: remotePair != 0 ? remotePair : nil, logicChannels: logicChannels.contains(true) ? logicChannels : nil)
 	}
 
 	@discardableResult
@@ -5049,6 +5065,8 @@ extension Game {
 		if let ms = s.mutants { g.restoreMutants(ms) }
 		if let bs = s.bosses { g.restoreBosses(bs) }
 		g.logicVars = (s.logicVars ?? [:]).filter { $0.value.isFinite }
+		g.remotePair = s.remotePair ?? 0
+		for (i, on) in (s.logicChannels ?? []).enumerated() where i < Radio.channels { g.logicChannels[i] = on }
 		g.invuln = 2.0
 		return g
 	}
@@ -5130,8 +5148,8 @@ extension Game {
 			useHeld = true
 			return
 		}
-		// in an armed vehicle the attack stick aims and fires its guns
-		if let v = inVehicle, v.cannons + v.guns > 0 {
+		// in an armed vehicle (or one driven by remote) the attack stick aims and fires its guns
+		if let v = drivenVehicle, machineGuns(v) > 0 {
 			if actState.manual {
 				aimX = v.px + actState.dirX * 18.0
 				aimY = v.py + actState.dirY * 18.0
@@ -6768,6 +6786,7 @@ func cellDisplacement(_ v: Vehicle, _ c: PartCell, _ t: PartType) -> Double {
 func partHP(_ t: PartType) -> Double {
 	switch t {
 	case .hinge, .servo, .piston: return 35
+	case .receiver: return 20
 	case .bigWheel: return 70
 	case .railWheel, .coupler: return 30
 	case .ballast: return 40
@@ -7389,7 +7408,7 @@ extension Game {
 		let y0: Double = min(p.y, ny)
 		let y1: Double = max(p.y, ny)
 		for v in vehicles {
-			if fromVehicle && p.owner == 2_000_000 + v.id { continue }
+			if fromVehicle && p.owner == 2_000_000 + machineRoot(v).id { continue }
 			if x1 < v.b.left || x0 > v.b.right || y1 < v.b.top || y0 > v.b.y { continue }
 			let a: (Double, Double) = v.toLocal(p.x, p.y)
 			let b: (Double, Double) = v.toLocal(nx, ny)
@@ -7444,22 +7463,41 @@ extension Game {
 	/// fire a stream of bullets.
 	func runVehicleWeapons(_ v: Vehicle, _ dt: Double) {
 		for (c, cd) in v.gunCD where cd > 0 { v.gunCD[c] = cd - dt }
-		let driving: Bool = v.rider && inVehicle === v
+		// (a gun on any section of a machine answers whoever drives the machine)
+		let driving: Bool = playerDrives(v)
 		let firing: Bool = driving && useHeld && aimValid
+		let buttons: [Bool] = machineButtonsHeld(v, driving)
 		for (c, t) in v.parts where t == .cannon || t == .autoGun {
 			let f: (Int, Int) = v.face[c] ?? (1, 0)
 			let base: Double = v.angle + atan2(Double(f.1), Double(f.0))
 			let o: (Double, Double) = v.cellCenter(c)
 			var want: Double = base
 			if driving && aimValid { want = atan2(aimY - o.1, aimX - o.0) }
-			let rel: Double = clampD(remainder(want - base, 2.0 * Double.pi), -1.4, 1.4)
+			var shoot: Bool = firing
+			let mode: GunMode = GunMode(rawValue: v.gunMode[c] ?? 0) ?? .driver
+			switch mode {
+			case .driver:
+				break
+			case .auto:
+				// a turret picks its own target and fires by itself
+				shoot = false
+				if let tg = turretTarget(v, c, o, base) {
+					want = atan2(tg.1 - o.1, tg.0 - o.0)
+					shoot = true
+				}
+			case .buttonA, .buttonB, .buttonC:
+				shoot = buttons[mode.rawValue - GunMode.buttonA.rawValue]
+			case .signal:
+				shoot = machineSignalOn(v)
+			}
+			let rel: Double = clampD(remainder(want - base, 2.0 * Double.pi), -Radio.gunArc, Radio.gunArc)
 			let a: Double = base + rel
 			let cur: Double = v.aimAng[c] ?? base
 			let turn: Double = remainder(a - cur, 2.0 * Double.pi)
 			let rate: Double = (t == .cannon ? 3.0 : 6.0) * dt
 			let na: Double = cur + clampD(turn, -rate, rate)
 			v.aimAng[c] = na
-			if firing && (v.gunCD[c] ?? 0) <= 0 && abs(remainder(want - na, 2.0 * Double.pi)) < 0.35 && !v.boxed.contains(c) {
+			if shoot && (v.gunCD[c] ?? 0) <= 0 && abs(remainder(want - na, 2.0 * Double.pi)) < 0.35 && !v.boxed.contains(c) {
 				fireVehicleGun(v, c, t, na, o)
 			}
 		}
@@ -7481,16 +7519,32 @@ extension Game {
 		let k: Double = v.boost[c] ?? 1.0
 		let mx: Double = o.0 + cos(a) * 0.9
 		let my: Double = o.1 + sin(a) * 0.9
-		let speed: Double = cannon ? 34.0 : 44.0
-		var p = Projectile(kind: cannon ? .shell : .bullet, x: mx, y: my, vx: cos(a) * speed + v.vx, vy: sin(a) * speed + v.vy, dmg: cannon ? 24 * k : 4.5 * k, fromPlayer: true, gravity: cannon ? 14 : 3)
-		p.life = cannon ? 4.0 : 1.3
-		p.w = cannon ? 0.35 : 0.15
+		// a mod's gun block can fire its own shot, as fast, as hard and as often as its maker set
+		let gun: ModGunRT = modGun(v, c)
+		let speed: Double = gun.speed > 0 ? gun.speed : (cannon ? 34.0 : 44.0)
+		let dmg: Double = (gun.damage > 0 ? gun.damage : (cannon ? 24 : 4.5)) * k
+		var grav: Double = cannon ? 14 : 3
+		var life: Double = cannon ? 4.0 : 1.3
+		var kind: ProjKind = cannon ? .shell : .bullet
+		var w: Double = cannon ? 0.35 : 0.15
+		if gun.shot >= 0 && gun.shot < ModRuntime.shared.shots.count {
+			let ms: ModProjectile = ModRuntime.shared.shots[gun.shot]
+			grav = ms.gravity
+			life = ms.life
+			kind = .spit
+			w = ms.size
+		}
+		var p = Projectile(kind: kind, x: mx, y: my, vx: cos(a) * speed + v.vx, vy: sin(a) * speed + v.vy, dmg: dmg, fromPlayer: true, gravity: grav)
+		p.life = life
+		p.w = w
+		p.mod = gun.shot
 		p.source = .player
-		p.owner = 2_000_000 + v.id
+		// (the shot passes every section of the machine it came from)
+		p.owner = 2_000_000 + machineRoot(v).id
 		p.uid = newID()
 		p.knock = cannon ? 9 : 3
 		projectiles.append(p)
-		v.gunCD[c] = cannon ? 2.0 : 0.13
+		v.gunCD[c] = gun.rate > 0 ? 1.0 / gun.rate : (cannon ? 2.0 : 0.13)
 		if cannon {
 			// the recoil kicks the vehicle back, around the cannon
 			let j: Double = 10.0
@@ -7587,7 +7641,7 @@ extension Game {
 	}
 
 	func turnVehicle() {
-		guard let v = inVehicle, v.turnT == 0 else { return }
+		guard let v = drivenVehicle, v.turnT == 0 else { return }
 		if !v.joints.isEmpty || v.parentID != 0 {
 			say("A machine with joints can't turn round: drive it the other way.", 2.0)
 			return
@@ -7959,7 +8013,7 @@ extension Game {
 	/// AUTO cycles the autopilot: off, cruise (it holds the speed and the height you had), route (it
 	/// drives the points you marked, round and round, even with nobody aboard)
 	func cycleAutopilot() {
-		guard let v = inVehicle, v.autopilots > 0 else { return }
+		guard let v = drivenVehicle, v.autopilots > 0 else { return }
 		var next: Int = (v.auto + 1) % 3
 		if next == 2 && v.route.count < 2 { next = 0 }
 		v.auto = next
@@ -7974,7 +8028,7 @@ extension Game {
 
 	/// MARK adds where the vehicle is now to its route (up to 16 points)
 	func markWaypoint() {
-		guard let v = inVehicle, v.autopilots > 0 else { return }
+		guard let v = drivenVehicle, v.autopilots > 0 else { return }
 		if v.route.count >= 16 { v.route.removeFirst() }
 		v.route.append(VWaypoint(x: v.px, y: v.py))
 		let n: Int = v.route.count
@@ -7983,7 +8037,7 @@ extension Game {
 	}
 
 	func clearRoute() {
-		guard let v = inVehicle else { return }
+		guard let v = drivenVehicle else { return }
 		v.route.removeAll()
 		if v.auto == 2 { v.auto = 0 }
 		say("Route cleared.", 1.5)
@@ -8240,8 +8294,8 @@ func powerRole(_ t: Tile) -> PowerRole {
 	case .powerMeter: return .meter
 	case .lever, .pushButton, .pressurePlate: return .source
 	case .pulseTimer, .repeater, .inverter, .logicGate: return .logic
-	case .motionSensor, .daySensor, .weatherSensor, .itemSensor, .proximitySensor: return .sensor
-	case .gateClosed, .gateOpen, .lampOff, .lampOn, .arcTrap, .autoDrill, .conveyor, .collector, .autoCrafter, .sumpPump, .exoStation: return .machine
+	case .motionSensor, .daySensor, .weatherSensor, .itemSensor, .proximitySensor, .vehicleSensor: return .sensor
+	case .gateClosed, .gateOpen, .lampOff, .lampOn, .arcTrap, .autoDrill, .conveyor, .collector, .autoCrafter, .sumpPump, .exoStation, .signalPost: return .machine
 	case .signalLight: return .indicator
 	default: return t.isMod ? ModRuntime.shared.powerRoleOf(t).role : .none
 	}
@@ -8324,6 +8378,7 @@ final class PowerDev {
 		case .pulseTimer: param = 1.0
 		case .repeater: param = 1
 		case .motionSensor, .proximitySensor: param = 5
+		case .vehicleSensor: param = 3
 		case .breaker: mode = 1; on = true
 		case .powerSwitch: on = true
 		case .autoCrafter: item = -1
@@ -8456,7 +8511,8 @@ enum PowerSpec {
 		case .autoCrafter: return 5
 		case .sumpPump: return 4
 		case .exoStation: return 10
-		case .motionSensor, .daySensor, .weatherSensor, .itemSensor, .proximitySensor: return 0.5
+		case .motionSensor, .daySensor, .weatherSensor, .itemSensor, .proximitySensor, .vehicleSensor: return 0.5
+		case .signalPost: return 0.5
 		default:
 			if t.isMod && ModRuntime.shared.powerRoleOf(t) == .lamp { return ModRuntime.shared.blockDef(t)?.powerAmt ?? 0 }
 			return 0
@@ -9106,6 +9162,8 @@ extension Game {
 			case 2: return abs(L.wind) > 10
 			default: return sirenWorthy() || L.tornado > 0.05 || L.hurricane > 0.05
 			}
+		case .vehicleSensor:
+			return vehicleNearSensor(cx, cy, clampD(d.param, 1, 8), d.mode)
 		case .motionSensor, .proximitySensor:
 			// motion: 0 anything moving, 1 creatures only, 2 the player only
 			// proximity: 0 the player, 1 hostile creatures, 2 any creature, 3 anyone
@@ -9239,7 +9297,14 @@ extension Game {
 	/// Machines at work (ten times a second): traps, drills, collectors, crafters and pumps
 	func machineTick(_ dt: Double) {
 		let sim: PowerSim = power
+		var posts: [Bool] = [Bool](repeating: false, count: Radio.channels)
 		for d in sim.machines {
+			// a signal post sends its channel while it runs
+			if d.tile == .signalPost {
+				applyMachine(d)
+				if d.enabled && d.powered { posts[clampI(d.mode, 0, Radio.channels - 1)] = true }
+				continue
+			}
 			// a lamp or gate that was held back by the limit on tile changes catches up
 			if d.tile == .lampOff || d.tile == .lampOn || d.tile == .gateClosed || d.tile == .gateOpen || d.tile.isMod { applyMachine(d) }
 			let running: Bool = d.enabled && d.powered
@@ -9257,6 +9322,7 @@ extension Game {
 			default: break
 			}
 		}
+		postChannels = posts
 	}
 
 	/// An arc trap zaps whatever stands on it, once a second (the player only if set to)
@@ -9458,7 +9524,8 @@ extension Game {
 	func debugPowerKit() {
 		let parts: [Tile] = [.crankGen, .solarPanel, .fuelGen, .waterWheel, .emberDynamo, .battery, .accumulator, .powerSwitch, .breaker, .powerMeter,
 							 .lever, .pushButton, .pressurePlate, .pulseTimer, .repeater, .inverter, .logicGate, .motionSensor, .daySensor, .weatherSensor,
-							 .itemSensor, .proximitySensor, .gateClosed, .lampOff, .arcTrap, .autoDrill, .conveyor, .collector, .autoCrafter, .sumpPump, .signalLight]
+							 .itemSensor, .proximitySensor, .gateClosed, .lampOff, .arcTrap, .autoDrill, .conveyor, .collector, .autoCrafter, .sumpPump, .signalLight,
+							 .signalPost, .vehicleSensor]
 		for g in [Gadget.powerCable, .pulseWire, .pulseWireB] { giveItem(.gadget(g), 250) }
 		giveItem(.gadget(.wireSnips), 1)
 		giveItem(.gadget(.probe), 1)
@@ -9807,6 +9874,8 @@ extension Game {
 		case .pressurePlate: return ["ANYONE", "PLAYER", "CREATURES"]
 		case .motionSensor: return ["ANYTHING", "CREATURES", "PLAYER"]
 		case .proximitySensor: return ["PLAYER", "HOSTILE", "ANY CREATURE", "ANYONE"]
+		case .vehicleSensor: return ["ANY VEHICLE", "DRIVEN", "NOBODY ABOARD"]
+		case .signalPost: return (1...Radio.channels).map { (n: Int) in joinText("CH ", String(n)) }
 		case .daySensor: return ["ON BY DAY", "ON AT NIGHT"]
 		case .weatherSensor: return ["RAIN/SNOW", "STORM", "STRONG WIND", "SEVERE"]
 		case .itemSensor: return ["ANY ITEM", "16+", "64+", "FULL"]
@@ -9821,6 +9890,7 @@ extension Game {
 		case .pulseTimer: return "Mode"
 		case .breaker: return "Trips above (sparks per second asked)"
 		case .itemSensor: return "On when the chest beside it holds"
+		case .signalPost: return "The channel it sends to receivers"
 		default: return "Responds to"
 		}
 	}
@@ -9832,6 +9902,7 @@ extension Game {
 		case .pulseTimer: return (d.mode == 0 ? "Period (s)" : "Delay (s)", 0.1, 10, 0.1)
 		case .repeater: return ("Delay (steps of 0.05 s)", 1, 4, 1)
 		case .motionSensor, .proximitySensor: return ("Range (blocks)", 2, 12, 1)
+		case .vehicleSensor: return ("Range (blocks)", 1, 8, 1)
 		default: return nil
 		}
 	}
@@ -9950,6 +10021,7 @@ extension Game {
 	func machineHelp(_ t: Tile) -> String {
 		switch t {
 		case .lampOff, .lampOn: return "Lights up while powered (and while its pulse wire is on, if it has one)."
+		case .signalPost: return "Sends its channel to every receiver on it while powered (and while its pulse wire is on, if it has one)."
 		case .gateClosed, .gateOpen: return "Opens while its pulse wire is on; with none, tap it. Needs power to move."
 		case .arcTrap: return "Zaps whatever stands on it, once a second."
 		case .autoDrill: return "Bores out the block it faces (what an iron pickaxe could). Drops land as if mined."
@@ -10130,8 +10202,10 @@ extension WorldRenderer {
 						white.addRect(mkRect(L + fx * tp, T + tp * 0.02, max(1.5, tp * 0.06), tp * 0.1))
 					}
 				}
-			case .motionSensor, .daySensor, .weatherSensor, .itemSensor, .proximitySensor:
+			case .motionSensor, .daySensor, .weatherSensor, .itemSensor, .proximitySensor, .vehicleSensor:
 				led(d.out, L + tp * 0.85, T + tp * 0.15, &teal)
+			case .signalPost:
+				led(d.enabled && d.powered, L + tp * 0.5, T + tp * 0.1, &amber)
 			case .signalLight:
 				if g.pulseHere(d) ?? false {
 					let glow: Double = tp * 0.32

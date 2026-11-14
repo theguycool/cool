@@ -3838,7 +3838,24 @@ struct BlockEditorView: View {
 				StatSlider(label: "Mass on the vehicle (0: from its hardness)", value: b(\.vehMass, 0), range: 0.0...(s.mod.sandbox ? 60.0 : 20.0), step: 0.05, format: "%.2f")
 				StatSlider(label: "Strength at its work (1 = the game's part)", value: b(\.vehPower, 1), range: 0.25...(s.mod.sandbox ? 10.0 : 4.0), step: 0.05, format: "%.2f")
 			}
+			if role == .cannon || role == .machineGun { gunFields }
 		}
+	}
+
+	/// A gun block: the mod's own shot it fires (or the game's), and how fast, how hard and how often
+	@ViewBuilder
+	var gunFields: some View {
+		Text("Its shot").font(.pixel(12, .bold)).foregroundColor(ModUI.dim)
+		ChoiceRows(options: ["GAME'S OWN"] + s.mod.projectiles.map { (p: ModProjectile) in p.name }, selected: shotBind, columns: 3)
+		StatSlider(label: "Shot speed (0: the part's own)", value: b(\.shotSpeed, 0), range: 0.0...(s.mod.sandbox ? 200.0 : 80.0), step: 1, format: "%.0f")
+		StatSlider(label: "Damage (0: the part's own)", value: b(\.shotDamage, 0), range: 0.0...(s.mod.sandbox ? 500.0 : 120.0), step: 0.5, format: "%.1f")
+		StatSlider(label: "Shots a second (0: the part's own)", value: b(\.fireRate, 0), range: 0.0...(s.mod.sandbox ? 60.0 : 30.0), step: 0.5, format: "%.1f")
+	}
+
+	var shotBind: Binding<Int> {
+		let base: Binding<String> = b(\.shot, "")
+		let ids: [String] = s.mod.projectiles.map { (p: ModProjectile) in p.id }
+		return Binding<Int>(get: { (ids.firstIndex(of: base.wrappedValue) ?? -1) + 1 }, set: { (k: Int) in base.wrappedValue = k <= 0 || k > ids.count ? "" : ids[k - 1] })
 	}
 
 	var roleBind: Binding<Int> {
@@ -5819,7 +5836,8 @@ extension Game {
 		if !all.allSatisfy({ (p: Vehicle) in p.sleepT >= 0.45 }) {
 			for p in all where p.sleepT > 0.45 { p.sleepT = 0.45 }
 		}
-		let drv: Vehicle? = all.first { (p: Vehicle) in p.rider || p.auto != 0 }
+		let drv: Vehicle? = all.first { (p: Vehicle) in p.rider || p.auto != 0 || p.signalDrive }
+		let buttons: [Bool] = machineButtonsHeld(root, playerDrives(root))
 		let sx: Double = drv?.throttle ?? 0
 		let sy: Double = drv?.pitch ?? 0
 		var walking: Bool = false
@@ -5838,7 +5856,7 @@ extension Game {
 				case .stickLeftRight:
 					j.target += sx * dir * stickSense(j, false) * j.speed * dt
 				case .buttonA, .buttonB, .buttonC:
-					let held: Bool = drv != nil && jointButtons[j.input - JointInput.buttonA.rawValue]
+					let held: Bool = buttons[j.input - JointInput.buttonA.rawValue]
 					let want: Double = held != j.invert ? j.hi : j.lo
 					j.target += clampD(want - j.target, -j.speed * dt, j.speed * dt)
 				case .walk:
@@ -6471,7 +6489,7 @@ struct GameView: View {
 	var body: some View {
 		ZStack {
 			worldLayer
-			if !game.showInventory && !game.showMap && !game.showJournal && !game.showWeather && !game.showPower && !game.showCapture && !game.showModTest && !game.showInfuse && !game.showExo && !game.showJoint && !game.dead {
+			if !game.showInventory && !game.showMap && !game.showJournal && !game.showWeather && !game.showPower && !game.showCapture && !game.showModTest && !game.showInfuse && !game.showExo && !game.showJoint && !game.showRadio && !game.dead {
 				HUDView(game: game, hud: game.hud)
 			}
 			if game.showInfuse {
@@ -6498,6 +6516,10 @@ struct GameView: View {
 			if game.showJoint {
 				Color.black.opacity(0.45).ignoresSafeArea()
 				JointPanel(game: game, hud: game.hud)
+			}
+			if game.showRadio {
+				Color.black.opacity(0.45).ignoresSafeArea()
+				ReceiverPanel(game: game, hud: game.hud)
 			}
 			if game.capturing && !game.showCapture && !game.paused { CaptureBar(game: game, hud: game.hud) }
 			if game.showCapture {

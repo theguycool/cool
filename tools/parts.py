@@ -20,9 +20,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Which sections go in which part, and what each part is said to hold.
 LAYOUT = [
-    ("utilities, tiles, items, recipes, the older creature pictures made in code, world generation, chunks,\n// villages and ruins.",
+    ("utilities, tiles, items, recipes, the older creature pictures made in code, world generation, chunks,\n// villages and ruins, and automation (turrets, the remote control, signals).",
      ["p01_util", "p02_tiles", "p03_items", "p04_recipes", "p05a_humanoid", "p05e_newcreatures", "p05b_animals",
-      "p05c_bosses", "p06_worldgen", "p07_chunk", "p08a_villages", "p08b_ruins"]),
+      "p05c_bosses", "p06_worldgen", "p07_chunk", "p08a_villages", "p08b_ruins", "p35_automation"]),
     ("the Umbral Realm, the world, light and physics, bodies on vehicles, flowing liquids, the land painter,\n// the hand-drawn pictures kept as text, creatures and their kinds, vehicles, the game state, the player,\n// input and tools.",
      ["p09_umbral", "p10_world", "p11_light", "p12_phys", "p12b_frames", "p12c_fluids", "p24_painter", "a01_artsheet",
       "p13a_mobdefs", "p13b_vehicles", "p14a_game", "p14b_player", "p14c_input", "p14d_tools"]),
@@ -34,8 +34,8 @@ LAYOUT = [
      ["p28_mods", "p29_alchemy", "p30_infusion", "p31_exosuit", "p31b_building", "p31c_blockphys", "p31d_rails"]),
     ("Mod Creator+ (game content changes, ore controls, sprite tools, custom infusions, boss phases and\n// summoning, custom dimensions with their suns, moons and trees, the Logic Studio, rules, weather, machines,\n// vehicles and themes in mods), the HUD and the panels.",
      ["p32_modplus", "u03_hud", "u04_panels"]),
-    ("the art store and the player's look, sound, weather, ambient and animal life, the journal and\n// telegraphed attacks, the menus, and the potion and exosuit screens.",
-     ["u01_art", "u05_menu", "u08_alchemy"]),
+    ("the art store and the player's look, sound, weather, ambient and animal life, the journal and\n// telegraphed attacks, the menus, the receiver panel, and the potion and exosuit screens.",
+     ["u01_art", "u05_menu", "u10_automation", "u08_alchemy"]),
     ("drawing the world, the Mod Creator screens, joints and mechs (with their panel), and the app itself.",
      ["u02_render", "u07_mods", "p34_joints", "u06_root"]),
     ("the Mod Creator+ screens (with the sprite editor, the sun and moon editor and the tree designer).",

@@ -5640,6 +5640,11 @@ struct VehicleSave: Codable {
 	var joints: [VJoint]? = nil
 	var parent: Int? = nil
 	var gait: Double? = nil
+	/// how its guns fire (dx, dy, mode)
+	var gunModes: [[Int]]? = nil
+	/// its receivers' channel, and what they do while it is on
+	var channel: Int? = nil
+	var radioAct: Int? = nil
 }
 
 /// Displaced volume per part (how much it floats)
@@ -5754,6 +5759,7 @@ final class Vehicle {
 	var cannons: Int = 0
 	var guns: Int = 0
 	var autopilots: Int = 0
+	var receivers: Int = 0
 	var hasCockpit: Bool = false
 	/// something that works in the air (wings, thrusters, rotors, balloons): the flight model runs
 	var aero: Bool = false
@@ -5863,6 +5869,15 @@ final class Vehicle {
 	/// a machine section's places on the land from its last step, worked out again with its joints
 	/// (not saved)
 	var heldContacts: [VContact] = []
+	/// how each gun fires (GunMode's number; none: with the driver's attack)
+	var gunMode: [PartCell: Int] = [:]
+	/// the signal channel its receivers pick up (1 to 8; 0: none) and what it does while that channel is
+	/// on (RadioAct's number)
+	var channel: Int = 0
+	var radioAct: Int = 0
+	/// its channel is on now, and that signal is driving it (not saved)
+	var signalOn: Bool = false
+	var signalDrive: Bool = false
 	/// how far into its stride a mech's legs swing (rises as it walks, falls back as it stops) and the
 	/// way it last walked (not saved)
 	var gaitAmp: Double = 0
@@ -5962,7 +5977,7 @@ final class Vehicle {
 		buoyancy = 0
 		engines = 0; wheels = 0; propellers = 0; paddles = 0; tanks = 0; drills = 0; offroadWheels = 0; headlights = 0
 		wings = 0; elevators = 0; airProps = 0; jets = 0; rotors = 0; tailRotors = 0; envelopes = 0; burners = 0
-		tracks = 0; armors = 0; cannons = 0; guns = 0; autopilots = 0
+		tracks = 0; armors = 0; cannons = 0; guns = 0; autopilots = 0; receivers = 0
 		flaps = 0; airBrakes = 0; stabilizers = 0; ballasts = 0; couplers = 0; railWheels = 0
 		spanOf = spanOf.filter { parts[$0.key] != nil }
 		hasSeat = false
@@ -6079,6 +6094,7 @@ final class Vehicle {
 		case .cannon: cannons += 1
 		case .autoGun: guns += 1
 		case .autopilot: autopilots += 1
+		case .receiver: receivers += 1
 		case .flap: wings += 1; flaps += 1
 		case .airBrake: airBrakes += 1
 		case .stabilizer: stabilizers += 1
@@ -6286,6 +6302,9 @@ final class Vehicle {
 		if !joints.isEmpty { s.joints = joints }
 		if parentID != 0 { s.parent = parentID }
 		if gait != 0 { s.gait = gait }
+		if !gunMode.isEmpty { s.gunModes = gunMode.map { [$0.key.dx, $0.key.dy, $0.value] } }
+		if channel != 0 { s.channel = channel }
+		if radioAct != 0 { s.radioAct = radioAct }
 		if !walls.isEmpty { s.walls = walls.map { [$0.key.dx, $0.key.dy, Int($0.value)] } }
 		return s
 	}
@@ -6327,6 +6346,12 @@ final class Vehicle {
 		v.dir = s.dir
 		v.kit = s.kit ?? -1
 		v.joints = (s.joints ?? []).filter { v.parts[$0.cell] != nil }
+		for g in s.gunModes ?? [] where g.count == 3 && g[2] > 0 {
+			let c: PartCell = PartCell(dx: g[0], dy: g[1])
+			if v.parts[c] != nil { v.gunMode[c] = clampI(g[2], 0, GunMode.allCases.count - 1) }
+		}
+		v.channel = clampI(s.channel ?? 0, 0, Radio.channels)
+		v.radioAct = clampI(s.radioAct ?? 0, 0, RadioAct.allCases.count - 1)
 		return v
 	}
 }
@@ -6746,6 +6771,17 @@ final class Game: ObservableObject, @unchecked Sendable {
 	var jointButtons: [Bool] = [false, false, false]
 	var jointEdit: JointRef? = nil
 	@Published var showJoint: Bool = false
+	/// the vehicle the remote control is paired with, and the one it drives now (0: none)
+	var remotePair: Int = 0
+	var remoteID: Int = 0
+	/// the signal channels (1 to 8 as the player sees them): on from powered signal posts (worked out
+	/// with the machines), or as the Logic Studio set them
+	var channels: [Bool] = [Bool](repeating: false, count: Radio.channels)
+	var postChannels: [Bool] = [Bool](repeating: false, count: Radio.channels)
+	var logicChannels: [Bool] = [Bool](repeating: false, count: Radio.channels)
+	/// the vehicle whose receiver is being set up (its panel is open)
+	var radioEdit: Int = 0
+	@Published var showRadio: Bool = false
 	/// doors on vehicles the player opened by walking into them
 	var vehicleDoors: [VehicleDoor] = []
 	/// the lift cars of this dimension, and those left in the others
@@ -7233,8 +7269,18 @@ extension Game {
 		if keyR { ix += 1.0 }
 		ix = clampD(ix, -1.0, 1.0)
 		if abs(ix) < 0.08 { ix = 0 }
-		let jumpPressed: Bool = jumpHeld && !jumpPrev
+		var jumpPressed: Bool = jumpHeld && !jumpPrev
 		jumpPrev = jumpHeld
+		if remoteID != 0 {
+			if let rv = remoteVehicle, remoteCanReach(rv) {
+				driveRemote(rv, ix, jumpPressed, dt)
+			} else {
+				endRemote("The remote lost the vehicle.")
+			}
+			// (the player's hands are on the remote: they stand where they are)
+			ix = 0
+			jumpPressed = false
+		}
 		if let v = inVehicle {
 			driveVehicle(v, ix, jumpPressed, dt)
 			return
@@ -7553,6 +7599,7 @@ extension Game {
 		if !ignoreArmor { d *= 1.0 - armorShare(totalDefense) }
 		d = max(1.0, d.rounded())
 		hp -= d
+		if remoteID != 0 { endRemote("Hurt: you let go of the remote.") }
 		sfx(.hurt, 0.8)
 		invuln = 0.55
 		hurtT = 0.35
@@ -7586,6 +7633,7 @@ extension Game {
 		mounted = nil
 		if let v = inVehicle { v.rider = false }
 		inVehicle = nil
+		if remoteID != 0 { endRemote() }
 		spawnParticles(pb.x, pb.y - 1, 0xC03030, 24, 6.0, 0.9, 16)
 		say(mode == .hardcore ? "You died. Your hardcore world is lost." : "You died!", 5.0)
 		if mode == .hardcore { hardcoreOver = true }
@@ -7625,10 +7673,12 @@ extension Game {
 		// Carried by a vehicle (driving it, or standing on it), the view is carried along with it, so
 		// the smoothing below only ever has the player's own movement to follow. Without this the view
 		// fell further behind the faster a vehicle went, and at a few hundred blocks a second lost it.
-		var carrier: Vehicle? = inVehicle
+		// (driving by remote, the view goes with the vehicle, not the player)
+		let rv: Vehicle? = remoteVehicle
+		var carrier: Vehicle? = inVehicle ?? rv
 		if carrier == nil && pb.ride != 0 { carrier = vehicleByID(pb.ride) }
 		if let cv = carrier {
-			let pv: (Double, Double) = cv.pointVel(pb.x, pb.y)
+			let pv: (Double, Double) = rv != nil ? (cv.vx, cv.vy) : cv.pointVel(pb.x, pb.y)
 			camX += pv.0 * dt
 			camTX += pv.0 * dt
 			camY += pv.1 * dt
@@ -7644,8 +7694,8 @@ extension Game {
 			}
 		}
 		camLead += (leadTarget - camLead) * min(1.0, dt * 2.5)
-		let fx: Double = pb.x + camLead
-		let fy: Double = pb.y - 1.6
+		let fx: Double = (rv?.px ?? pb.x) + camLead
+		let fy: Double = rv != nil ? (rv?.py ?? pb.y) : pb.y - 1.6
 		// the target only moves once the player leaves the dead zone around it
 		let dz: Double = st.camDirect ? 0 : clampD(st.camDeadZone, 0, 4)
 		if fx > camTX + dz { camTX = fx - dz } else if fx < camTX - dz { camTX = fx + dz }
@@ -7678,6 +7728,7 @@ extension Game {
 			keep.insert(floorDiv(Int(floor(m.b.x)), chunkW))
 		}
 		for v in vehicles { keep.insert(floorDiv(Int(floor(v.b.x)), chunkW)) }
+		keepWorkingLand(&keep)
 		let cx: Int = Int(floor(camX))
 		let n: Int = world.stream(centerX: cx, radius: loadRadius, hysteresis: 3, budget: 1, keep: keep)
 		chunksLoadedLast = n
@@ -8840,7 +8891,8 @@ extension Game {
 		if placeCD > 0 { placeCD -= dt }
 		if lockT > 0 { lockT -= dt }
 		if let t = lockTarget, t.hp <= 0 || t.removed { lockTarget = nil }
-		if dead || inVehicle != nil {
+		// (driving, or with the hands on a remote, nothing in hand is used)
+		if dead || inVehicle != nil || remoteID != 0 {
 			mining = false
 			usePressedFlag = false
 			useReleasedFlag = false
@@ -9594,6 +9646,8 @@ extension Game {
 		switch g {
 		case .bucket:
 			if pressed { useBucket() }
+		case .remote:
+			if pressed { useRemote() }
 		case .treasureMap:
 			if pressed {
 				showMap = true
@@ -10135,7 +10189,7 @@ extension Game {
 
 	/// What the action button does with the item in hand
 	var useLabel: String {
-		if let v = inVehicle, v.cannons + v.guns > 0 { return "FIRE" }
+		if let v = drivenVehicle, machineGuns(v) > 0 { return "FIRE" }
 		guard let it = heldItem else { return "PUNCH" }
 		if it.isWeapon { return "ATTACK" }
 		switch it {
@@ -10174,7 +10228,7 @@ extension Game {
 
 	/// Once a frame: releases the controls when something covers them
 	func updateInputGate() {
-		let blocked: Bool = paused || showInventory || showMap || showJournal || showWeather || showPower || showCapture || showModTest || showInfuse || showExo || showJoint || dead
+		let blocked: Bool = paused || showInventory || showMap || showJournal || showWeather || showPower || showCapture || showModTest || showInfuse || showExo || showJoint || showRadio || dead
 		if blocked && !inputBlocked { releaseAllInput() }
 		inputBlocked = blocked
 	}

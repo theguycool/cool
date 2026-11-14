@@ -12,11 +12,12 @@ section; take its data and art from the Swift game itself with the exporter, nev
 - `engine/src/*.js`: the engine and game, concatenated in the order of `engine/build.py`'s list into
   one script (one shared scope, "use strict"). Files are named after the Swift sections they port.
 - `engine/src/page.html`: the page's CSS and markup with a `/*SCRIPT*/` marker.
-- `engine/tools/export.swift` + `engine/tools/export.sh`: dumps tiles, items, recipes, creatures,
+- `engine/tools/export/main.swift` + `engine/tools/export.sh`: dumps tiles, items, recipes, creatures,
   art and sounds from the Swift game; `engine/tools/pack.py` turns them into `engine/src/data_*.js`.
 - `engine/build.py`: writes `engine/dist/pixel-engine.html` (what is published) and
   `engine/dist/test.html` (the same with a doctype, for headless tests).
-- `engine/test/*.js`: Playwright tests in headless Chromium (`node engine/test/run.js`).
+- `engine/test/*.js`: Playwright tests in headless Chromium (`node engine/test/run.js`). Use
+  `--use-angle=swiftshader`; a stand-in `window.claude` (db, user, downloads) tests account saves.
 
 ## Page rules (claude.ai artifact)
 No doctype/html/head/body tags; `<title>` first; colours as `:root` tokens; no `confirm()`/`alert()`;
@@ -41,3 +42,13 @@ viewer's private `data/users/<id>/` documents (256 KiB each, written to a spare 
 ## Status
 - Before phase 1: a small demo engine is published (own tiles, pigs, sprite maker, stress test).
   The iPad ran its stress test at 60 fps with 8,000 creatures.
+- Phase 1 done (not yet checked on the iPad): the real tiles, items, recipes and art from the Swift
+  game; generator 6 (seeds give different worlds from the Swift game: its hashes are 64-bit, these
+  are 32-bit); light with smooth shading; the player in their chosen look; walking, jumping,
+  swimming, ladders, doors; mining with tool tiers, felling trees, placing blocks and walls, farming,
+  eating; drops; crafting with stations and live counts; chests with loot; armour; health, hunger,
+  air, falling, lava, death and respawn; survival, creative (item browser, flying with Shift+F) and
+  hardcore; the HUD with touch stick and JUMP, keyboard and mouse; the title screen, saved worlds
+  (changes only, squeezed: 3 KB for 12,000 dug blocks), export and import; settings; a stress test.
+  One change from the Swift game: a block picked up into an empty hand while digging is not placed
+  by the same hold.

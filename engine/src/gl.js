@@ -2,7 +2,7 @@
 // left is 0,0), colours are 32-bit RGBA made by rgba(). The texture sheet (the atlas) holds every
 // picture; land sections and the light have textures of their own.
 
-const Atlas = { w: DATA.atlas.w, h: DATA.atlas.h, px: null, px32: null, tex: null, orig: null };
+const Atlas = { w: DATA.atlas.w, h: DATA.atlas.h, px: null, px32: null, tex: null, orig: null, gen: 0 };
 const rgba = (hex, a = 1) => (((Math.max(0, Math.min(1, a)) * 255) << 24) | ((hex & 255) << 16) | (hex & 0xFF00) | ((hex >> 16) & 255)) >>> 0;
 const WHITE = 0xFFFFFFFF;
 const grey = (v, a = 1) => { const c = Math.floor(clampD(v, 0, 1) * 255); return (((a * 255) << 24) | (c << 16) | (c << 8) | c) >>> 0; };
@@ -58,6 +58,7 @@ void main() { vec4 t = texture(u_tex, v_uv); t.rgb = mix(t.rgb, vec3(1.0), v_add
 		return true;
 	},
 	makeTex(w, h, pixels, linear) {
+		this.flush();
 		const gl = this.gl, t = gl.createTexture();
 		gl.bindTexture(gl.TEXTURE_2D, t);
 		const f = linear ? gl.LINEAR : gl.NEAREST;
@@ -83,7 +84,7 @@ void main() { vec4 t = texture(u_tex, v_uv); t.rgb = mix(t.rgb, vec3(1.0), v_add
 		gl.texSubImage2D(gl.TEXTURE_2D, 0, x, y, w, h, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
 		this.tex = null;
 	},
-	freeTex(tex) { this.gl.deleteTexture(tex.t); },
+	freeTex(tex) { this.flush(); this.gl.deleteTexture(tex.t); },
 	resize() {
 		const dpr = Math.min(window.devicePixelRatio || 1, 3);
 		const cw = window.innerWidth, chh = window.innerHeight;

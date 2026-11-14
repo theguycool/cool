@@ -6,9 +6,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 # One shared scope: a file can use anything from the files before it, and functions from any file.
 ORDER = [
     "data_gen.js",
-    "p01_util.js", "p02_tiles.js", "p03_items.js",
-    "p06_worldgen.js", "p07_chunk.js", "p10_world.js", "p11_light.js", "p12_phys.js", "p24_painter.js",
-    "gl.js", "p14_game.js", "p14d_tools.js", "u02_render.js", "u03_hud.js", "u04_panels.js", "p19_save.js", "u05_menu.js", "main.js",
+    "p01_util.js", "p02_tiles.js",
+    "p06_worldgen.js", "p07_chunk.js", "p10_world.js", "p11_light.js", "p12_phys.js", "p03_items.js", "p24_painter.js",
+    "gl.js", "s01_sound.js", "p14_game.js", "p14d_tools.js", "u02_render.js", "u03_hud.js", "u04_panels.js", "p19_save.js", "u05_menu.js", "u11_stress.js", "main.js",
 ]
 def main():
     page = open(os.path.join(HERE, "src", "page.html")).read()

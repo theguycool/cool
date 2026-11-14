@@ -38,6 +38,8 @@ const HUD = {
 		});
 		$("bInv").addEventListener("click", () => { if (UI.game) openPanel("inventory", UI.game.isCreative ? "items" : "bag"); });
 		$("bPause").addEventListener("click", () => openPause());
+		$("bZoomIn").addEventListener("click", () => { if (UI.game) setZoom(UI.game.settings.tilePx * 1.25); });
+		$("bZoomOut").addEventListener("click", () => { if (UI.game) setZoom(UI.game.settings.tilePx / 1.25); });
 		for (let i = 0; i < 16; i++) { const d = document.createElement("div"); d.className = "hidden"; $("floats").appendChild(d); UI.floatEls.push(d); }
 		this.initStick();
 		this.initJump();
@@ -77,11 +79,24 @@ const HUD = {
 	toWorld(sx, sy) { const k = R.dpr / View.tp; return [View.left + sx * k, View.top + sy * k]; },
 	initWorldPointer() {
 		const cv = $("world");
+		const touches = new Map();
+		let pinch = null;
+		const spread = () => { const p = Array.from(touches.values()); return Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y); };
 		cv.addEventListener("pointerdown", (e) => {
 			e.preventDefault(); Sound.unlock();
 			const g = UI.game;
-			if (!g || UI.panelOpen || g.paused || g.dead) return;
-			if (UI.aimPointer !== -1) return;
+			if (!g || UI.panelOpen || g.paused) return;
+			if (e.pointerType === "touch") {
+				touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+				cv.setPointerCapture(e.pointerId);
+				if (touches.size >= 2) {
+					// a second finger: the first one's dig or build stops, and the two pinch the view
+					if (UI.aimPointer !== -1) { UI.aimPointer = -1; g.useHeld = false; g.pendingInteract = false; g.mining = false; g.aimValid = false; }
+					if (touches.size === 2) pinch = { d0: Math.max(20, spread()), px0: g.settings.tilePx };
+					return;
+				}
+			}
+			if (g.dead || UI.aimPointer !== -1) return;
 			if (e.pointerType === "mouse" && e.button !== 0) return;
 			UI.aimPointer = e.pointerId; UI.mouse = e.pointerType === "mouse";
 			cv.setPointerCapture(e.pointerId);
@@ -92,6 +107,8 @@ const HUD = {
 		cv.addEventListener("pointermove", (e) => {
 			const g = UI.game;
 			if (!g) return;
+			if (touches.has(e.pointerId)) touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+			if (pinch && touches.size >= 2) { setZoom(pinch.px0 * spread() / pinch.d0, false); return; }
 			if (e.pointerId === UI.aimPointer) {
 				UI.aimSX = e.clientX; UI.aimSY = e.clientY;
 				const [wx, wy] = this.toWorld(e.clientX, e.clientY);
@@ -104,9 +121,12 @@ const HUD = {
 			}
 		});
 		const end = (e) => {
+			touches.delete(e.pointerId);
+			if (pinch && touches.size < 2) { pinch = null; if (UI.game) setZoom(UI.game.settings.tilePx, true); }
 			if (e.pointerId !== UI.aimPointer) return;
 			UI.aimPointer = -1;
-			if (UI.game) { UI.game.pointerUp(); if (!UI.mouse) UI.game.aimValid = false; }
+			// the aim stays for one more step, so what happens on letting go (a bow's shot) still knows where
+			if (UI.game) { UI.game.pointerUp(); if (!UI.mouse) UI.dropAim = true; }
 		};
 		cv.addEventListener("pointerup", end); cv.addEventListener("pointercancel", end);
 		cv.addEventListener("contextmenu", (e) => e.preventDefault());
@@ -117,6 +137,8 @@ const HUD = {
 			if (e.ctrlKey) { setZoom(g.settings.tilePx * (e.deltaY < 0 ? 1.1 : 0.9)); return; }
 			g.setSel((g.sel + (e.deltaY > 0 ? 1 : -1) + HOTBAR_N) % HOTBAR_N);
 		}, { passive: false });
+		// Safari's own pinch gestures would zoom the whole page
+		for (const ev of ["gesturestart", "gesturechange", "gestureend"]) document.addEventListener(ev, (e) => e.preventDefault());
 	},
 	initKeys() {
 		const set = (e, on) => {
@@ -151,6 +173,7 @@ const HUD = {
 	},
 	/** every frame: the aim follows the finger as the view moves, the HUD shows what changed */
 	update(g) {
+		if (UI.dropAim && UI.aimPointer === -1) { UI.dropAim = false; if (!UI.mouse) g.aimValid = false; }
 		if (UI.aimPointer !== -1 || UI.mouse) {
 			if (UI.aimPointer !== -1 || g.aimValid) { const [wx, wy] = this.toWorld(UI.aimSX, UI.aimSY); g.aimX = wx; g.aimY = wy; }
 		}
@@ -214,10 +237,12 @@ function releaseAllInput() {
 	if (UI.aimPointer !== -1) { UI.aimPointer = -1; g.pointerUp(); }
 	g.useHeld = false; g.pendingInteract = false; g.mining = false;
 }
-function setZoom(px) {
+/** how big the blocks are on screen: pinching, the + and - buttons, the settings slider, Ctrl+wheel */
+const ZOOM_MIN = 12, ZOOM_MAX = 72;
+function setZoom(px, save = true) {
 	const g = UI.game;
 	if (!g) return;
-	g.settings.tilePx = clampD(Math.round(px), 12, 64);
+	g.settings.tilePx = clampD(Math.round(px), ZOOM_MIN, ZOOM_MAX);
 	g.tilePx = g.settings.tilePx;
-	SettingsStore.save(g.settings);
+	if (save) SettingsStore.save(g.settings);
 }

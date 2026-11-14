@@ -255,7 +255,7 @@ function initPanels() {
 
 // ---- pause and settings
 const SETTING_ROWS = [
-	["tilePx", "Zoom", "How big the blocks are", 12, 64, 1],
+	["tilePx", "Zoom", "How big the blocks are (or pinch the world)", 12, 72, 1],
 	["volume", "Volume", "", 0, 1, 0.05],
 	["camFollow", "Camera follow", "How quickly the view catches up", 0, 1, 0.05],
 	["camDeadZone", "Camera slack", "How far you can move before the view does", 0, 4, 0.1],

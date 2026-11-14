@@ -73,9 +73,10 @@ Object.assign(Game.prototype, {
 		if (this.dead) { this.mining = false; this.usePressedFlag = false; this.useReleasedFlag = false; return; }
 		const pressed = this.usePressedFlag; this.usePressedFlag = false;
 		const released = this.useReleasedFlag; this.useReleasedFlag = false;
-		if (!this.aimValid) return;
 		const held = this.heldItem;
+		// letting go always ends the hold, even when the finger is gone and nothing is aimed at any more
 		if (!this.useHeld) { this.mining = false; this.mineP = Math.max(0, this.mineP - dt * 2); }
+		if (!this.aimValid) { if (!this.useHeld) { this.handEmptied = false; this.lastUsedItem = null; } return; }
 		if (useItemHook(this, held, dt, pressed, released)) return;
 		if (!this.useHeld) { this.handEmptied = false; this.lastUsedItem = null; return; }
 		if (pressed) this.holdItem = held;

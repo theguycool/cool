@@ -29,7 +29,7 @@ input, select { font-family: var(--font); font-size: 16px; color: var(--text); b
 #stats { position: absolute; left: max(10px, env(safe-area-inset-left)); top: max(8px, env(safe-area-inset-top)); pointer-events: none !important; }
 .row { display: flex; gap: 1px; margin-bottom: 3px; }
 #topRight { position: absolute; right: max(10px, env(safe-area-inset-right)); top: max(8px, env(safe-area-inset-top)); display: flex; gap: 6px; }
-#topRight button { min-width: 48px; height: 44px; padding: 0 10px; background: rgba(26,32,48,0.82); }
+#topRight button { min-width: 44px; font-size: 18px; height: 44px; padding: 0 10px; background: rgba(26,32,48,0.82); }
 #msg { position: absolute; left: 50%; top: 64px; transform: translateX(-50%); padding: 6px 14px; background: rgba(10,14,24,0.78); border: 2px solid var(--edge); border-radius: 6px; font-size: 16px; pointer-events: none !important; white-space: nowrap; }
 #perf { position: absolute; left: 10px; top: 72px; font-size: 12px; color: var(--dim); text-shadow: 1px 1px 0 #000; pointer-events: none !important; white-space: pre; }
 #floats { position: absolute; inset: 0; pointer-events: none !important; overflow: hidden; }
@@ -91,7 +91,7 @@ body.lefty #bJump { right: auto; left: max(18px, env(safe-area-inset-left)); }
 	<canvas id="world"></canvas>
 	<div id="hud" class="hidden">
 		<div id="stats"><div class="row" id="hearts"></div><div class="row" id="food"></div><div class="row" id="air"></div></div>
-		<div id="topRight"><button id="bInv">BAG</button><button id="bPause">❚❚</button></div>
+		<div id="topRight"><button id="bZoomOut" aria-label="Zoom out">−</button><button id="bZoomIn" aria-label="Zoom in">+</button><button id="bInv">BAG</button><button id="bPause">❚❚</button></div>
 		<div id="msg" class="hidden"></div>
 		<div id="perf" class="hidden"></div>
 		<div id="floats"></div>

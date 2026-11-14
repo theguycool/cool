@@ -1,9 +1,9 @@
 # PixelRealm
 
-A 2D sandbox survival game for iPad, written in SwiftUI and run in Swift Playgrounds. The game is eight
-files, `PixelRealm1.swift` to `PixelRealm8.swift` (about 68,500 lines in all, indented with tabs). The
-user pastes each into its own file of one Swift Playgrounds app. It was one file until the user asked
-for four, then six, then eight; deliver all eight, and treat them as one program (Swift doesn't care
+A 2D sandbox survival game for iPad, written in SwiftUI and run in Swift Playgrounds. The game is five
+files, `PixelRealm1.swift` to `PixelRealm5.swift` (about 69,100 lines in all, indented with tabs). The
+user pastes each into its own file of one Swift Playgrounds app. It was one file, then four, six, eight
+and ten; five is what builds on the iPad (see below); deliver all five, and treat them as one program (Swift doesn't care
 which file holds what). `tools/parts.py` lays the sections out over the files from its `LAYOUT`
 table and writes each file's header (what it holds, the paragraph about the parts, the imports).
 
@@ -54,6 +54,19 @@ confirmed). `tools/buildcost.sh` measures both ways:
   132 s in all; as one job 106 s and 1,277 MB. Not yet confirmed on the iPad. Phase 6 (2.71 MB, 69,157
   lines, `p35_automation` at the end of part 1, the RECEIVER panel in part 6): 330, 359, 326, 376, 364,
   341, 361 and 340 MB, 134 s in all; as one job 102 s and 1,272 MB.
+- Ten parts (phase 6, 9bbc9e7): 262 to 369 MB per job, 3,164 MB in all. From physics phase 1 on, the
+  iPad said only "build failed" after a long wait, with no error, in six, eight and ten parts; the art
+  redraw (7043e48, six parts) was the last to build. The reading that fits every result: the iPad runs
+  the jobs side by side, so what counts is both each job's peak and the sum of all of them, and each
+  part costs a fixed share of about 190 MB (every job reads every file) on top of its own code (screen
+  code about three times game logic). One file: one job of 1,059 MB, failed. Four parts: up to 482 MB a
+  job, 1,921 MB in all, built. Six parts at the art redraw: 2,304 MB in all, built; phase 1 added to it,
+  failed. More parts only add fixed shares. Not confirmed.
+- Five parts (phase 6, 2.71 MB, 69,118 lines), spread by that cost so the two big screen sections
+  (`u07_mods`, `u09_modplus`) and the heavy logic are in different parts: 478, 474, 466, 465 and
+  409 MB, 2,292 MB in all, 139 s; as one job 110 s and 1,331 MB. As four parts the same code needed up
+  to 530 MB a job. Keep every job under about 480 MB and the sum under about 2,300 MB; add parts only
+  when no part can be levelled any more. Not yet confirmed on the iPad.
 - A job's peak can jump by 30 MB or more after a small edit (taking the recipe lines out of one
   function once raised part 2 from 473 to 509 MB), so a few MB either way is noise; measure again
   after moving code.
@@ -69,7 +82,7 @@ compiles and runs headless on Linux. If `/opt/pixelrealm` is missing, run `tools
 - `tools/typecheck.sh`: about 39 s. Run it after every batch of edits.
 - The swift-lsp plugin (if loaded) checks a file as it is edited: `compile_flags.txt` points
   sourcekit-lsp at the stand-ins, and setup.sh installs it. It sees one part at a time, so names
-  from the other parts show as missing; `tools/typecheck.sh` (all eight parts together) is the check
+  from the other parts show as missing; `tools/typecheck.sh` (all five parts together) is the check
   of record.
 - `tools/run-tests.sh [suite ...]`: builds and runs suites from `tools/tests`, four at a time (all
   of them take several minutes). Pass only the suites you touched while iterating, and run them all
@@ -270,14 +283,15 @@ What the stand-ins can't tell you:
 ## Map of the parts
 
 Sections start with `// ===== <name> =====` (grep for them). `tools/parts.py` (its `LAYOUT`) puts
-them in the parts: part 1 `p01_util` to `p08b_ruins`, `p35_automation`; part 2 `p09_umbral` to `p12_phys`, `p12b_frames`
-(bodies on and inside vehicles), `p12c_fluids` (with the air inside hulls), `p24_painter`, `a01_artsheet`
-(the hand-drawn pictures as text, and their readers), then `p13a_mobdefs` to `p14d_tools`; part 3
-`p15a_mobai` to `p26_vehicle_ux` (without `p24`), `p33_vehicles`, `p27_power`; part 4 `p28_mods` to
-`p31c_blockphys`, `p31d_rails`; part 5 `p32_modplus`, `u03_hud`, `u04_panels`; part 6 `u01_art` (the art
-store, the player's look, sound, the weather simulation, ambient and animal life, the journal, telegraphed
-attacks), `u05_menu`, `u10_automation` (the RECEIVER panel), `u08_alchemy`; part 7 `u02_render`, `u07_mods`, `p34_joints`, `u06_root`; part 8
-`u09_modplus`. New code goes into the section it belongs to; a new section goes into `LAYOUT` (then run
+them in the parts: part 1 `p01_util` to `p07_chunk`, `p14d_tools`, `p17_vehicles_ships`, `p26_vehicle_ux`,
+`u01_art` (the art store, the player's look, sound, the weather simulation, ambient and animal life, the
+journal, telegraphed attacks), `u05_menu`, `u10_automation` (the RECEIVER panel); part 2 `p08a_villages`,
+`p08b_ruins`, `p35_automation`, `p09_umbral` to `p12_phys`, `p12b_frames` (bodies on and inside vehicles),
+`p12c_fluids` (with the air inside hulls), `p24_painter`, `p20_assist` to `p25_hud`, `p33_vehicles`,
+`p27_power`, `p28_mods`; part 3 `a01_artsheet` (the hand-drawn pictures as text, and their readers),
+`p13a_mobdefs` to `p14c_input`, `u06_root`, `u09_modplus`; part 4 `p16b_bosses`, `p18_portal_map`,
+`p19_save`, `p29_alchemy` to `p31d_rails`, `p32_modplus`, `u03_hud`, `u04_panels`; part 5 `p15a_mobai`,
+`p15b_spawn`, `p16a_combat`, `p16c_damage`, `u08_alchemy`, `u02_render`, `u07_mods`, `p34_joints`. New code goes into the section it belongs to; a new section goes into `LAYOUT` (then run
 `python3 tools/parts.py`, `tools/typecheck.sh` and `tools/buildcost.sh`). A `private` or `fileprivate`
 name can only be used in its own part, so anything used across parts is internal (no modifier).
 
@@ -622,5 +636,5 @@ proposing a new step, and update it when a step lands.
 ## Working with the user
 
 The user works on an iPad and reads results in the Claude app. Keep reports plain and short. Send
-files with SendUserFile. When delivering the game, attach all eight parts, `PixelRealm1.swift` to
-`PixelRealm8.swift`, and say which changed.
+files with SendUserFile. When delivering the game, attach all five parts, `PixelRealm1.swift` to
+`PixelRealm5.swift`, and say which changed.

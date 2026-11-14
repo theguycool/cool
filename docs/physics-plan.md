@@ -221,7 +221,7 @@ The user's parts 1 to 16 are all covered. The order is theirs with three changes
   sleeping of phases 2 and 4.
 
 ## Risks
-- **Build memory on the iPad**: six parts at 360 to 400 MB each, with about 480 known to work.
+- **Build memory on the iPad**: eight parts at 320 to 375 MB each, with about 480 known to work.
   New code is spread so no part grows alone; `tools/buildcost.sh` after every phase.
 - **Old saves**: new fields are optional; vehicles saved before keep working.
 - **World generation**: untouched. Flowing water starts from the same still water.

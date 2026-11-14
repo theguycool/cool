@@ -1,10 +1,11 @@
 # PixelRealm
 
-A 2D sandbox survival game for iPad, written in SwiftUI and run in Swift Playgrounds. The game is six
-files, `PixelRealm1.swift` to `PixelRealm6.swift` (about 64,300 lines in all, indented with tabs). The
+A 2D sandbox survival game for iPad, written in SwiftUI and run in Swift Playgrounds. The game is eight
+files, `PixelRealm1.swift` to `PixelRealm8.swift` (about 68,500 lines in all, indented with tabs). The
 user pastes each into its own file of one Swift Playgrounds app. It was one file until the user asked
-for four, then six; deliver all six, and treat them as one program (Swift doesn't care which file holds
-what).
+for four, then six, then eight; deliver all eight, and treat them as one program (Swift doesn't care
+which file holds what). `tools/parts.py` lays the sections out over the files from its `LAYOUT`
+table and writes each file's header (what it holds, the paragraph about the parts, the imports).
 
 **The iPad has to be able to build it.** As one file, the Mod Creator+ version built here but would not
 start on the iPad, with no error shown, even with lighter screens and tab indents (1.93 MB). The last
@@ -47,6 +48,10 @@ confirmed). `tools/buildcost.sh` measures both ways:
   402, 395, 403 and 384 MB, 134 s in all; as one job 110 s and 1,285 MB. Phase 5 (2.68 MB, 68,505
   lines, most of it `p34_joints` at the start of part 6): 389, 416, 402, 395, 405 and 397 MB, 135 s in
   all; as one job 107 s and 1,280 MB.
+- Eight parts (phase 5, 2.68 MB, 68,526 lines): the user asked for eight files. Laid out by
+  `tools/parts.py` with the screens spread over four files (a part's memory is a fixed share plus its
+  size, and screen code costs more than game logic): 319, 356, 323, 374, 363, 340, 359 and 339 MB,
+  132 s in all; as one job 106 s and 1,277 MB. Not yet confirmed on the iPad.
 - A job's peak can jump by 30 MB or more after a small edit (taking the recipe lines out of one
   function once raised part 2 from 473 to 509 MB), so a few MB either way is noise; measure again
   after moving code.
@@ -62,7 +67,7 @@ compiles and runs headless on Linux. If `/opt/pixelrealm` is missing, run `tools
 - `tools/typecheck.sh`: about 39 s. Run it after every batch of edits.
 - The swift-lsp plugin (if loaded) checks a file as it is edited: `compile_flags.txt` points
   sourcekit-lsp at the stand-ins, and setup.sh installs it. It sees one part at a time, so names
-  from the other parts show as missing; `tools/typecheck.sh` (all six parts together) is the check
+  from the other parts show as missing; `tools/typecheck.sh` (all eight parts together) is the check
   of record.
 - `tools/run-tests.sh [suite ...]`: builds and runs suites from `tools/tests`, four at a time (all
   of them take several minutes). Pass only the suites you touched while iterating, and run them all
@@ -78,7 +83,7 @@ and a piston lift).
   with `GAME_SRC=<old file> tools/bench.sh`).
 - `tools/buildcost.sh`: the game's size, and the time and peak memory of a debug build like the
   iPad's, as one job and as one job per file (a few minutes). Run it after adding a lot of code.
-- The tools read the six parts (`pr_game_files` in `tools/env.sh`). `GAME_SRC` can name another
+- The tools read the parts there are (`pr_game_files` in `tools/env.sh`: every `PixelRealm<n>.swift`). `GAME_SRC` can name another
   version: an older one-file game, or a folder holding its parts. Test programs build the parts as
   one job (`-wmo`) with `@main` removed.
 
@@ -223,7 +228,7 @@ What the stand-ins can't tell you:
   user's reference sheets (dark outlines, three or four tones a material, light from the upper left,
   a face that reads). The drawings are Python files in `tools/art` (parts as rows of letters, laid
   over each other into frames); `tools/art.sh pack` writes them as text into `ArtSheet`
-  (`a01_artsheet`, at the end of part 1), between the `<art:creatures>` and `<art:tiles>` markers.
+  (`a01_artsheet`, in part 2), between the `<art:creatures>` and `<art:tiles>` markers.
   Never edit that text by hand, and run `tools/art.sh check` before committing. Every creature is
   hand-drawn; the older pictures made in code (`p05*`, 8 pixels a block) stay for mods that repainted
   over them (`ModOverride.fine` false): `creatureLook(kind, variant)` gives either, with its own pixel
@@ -251,20 +256,22 @@ What the stand-ins can't tell you:
   code that moves one by hand (tests) must call `syncRiders` itself. Vehicle parts are iterated in
   dictionary order, which differs from run to run: a physics test must hold for any order.
 - **Comments** are plain-language doc comments explaining what something does in the game. Match the
-  surrounding style. Each part starts with the same header and imports; keep them alike.
+  surrounding style. Each part starts with the same header and imports (`tools/parts.py` writes them).
 - Commit and push to the branch the session names. Never put model names in commits.
 
 ## Map of the parts
 
-Sections start with `// ===== <name> =====` (grep for them). They are spread over the parts in order:
-part 1 `p01_util` to `p12_phys`, `p12b_frames` (bodies on and inside vehicles), `p12c_fluids` (with the air
-inside hulls), `p24_painter`, then `a01_artsheet`
-(the hand-drawn pictures as text, and their readers); part 2 `p13a_mobdefs` to `p26_vehicle_ux` (without `p24`), then `p33_vehicles`; part 3 `p27_power` to
-`p31c_blockphys`, `p31d_rails`; part 4 `p32_modplus` and `u01_art` (the art store, the player's look, sound, the
-weather simulation, ambient and animal life, the journal, telegraphed attacks); part 5 `u02_render` to
-`u05_menu`, then `u07_mods`; part 6 `p34_joints`, `u08_alchemy`, `u09_modplus`, `u06_root`. New code goes into
-the section it belongs to. A `private` or `fileprivate` name can only be used in its own part, so
-anything used across parts is internal (no modifier).
+Sections start with `// ===== <name> =====` (grep for them). `tools/parts.py` (its `LAYOUT`) puts
+them in the parts: part 1 `p01_util` to `p08b_ruins`; part 2 `p09_umbral` to `p12_phys`, `p12b_frames`
+(bodies on and inside vehicles), `p12c_fluids` (with the air inside hulls), `p24_painter`, `a01_artsheet`
+(the hand-drawn pictures as text, and their readers), then `p13a_mobdefs` to `p14d_tools`; part 3
+`p15a_mobai` to `p26_vehicle_ux` (without `p24`), `p33_vehicles`, `p27_power`; part 4 `p28_mods` to
+`p31c_blockphys`, `p31d_rails`; part 5 `p32_modplus`, `u03_hud`, `u04_panels`; part 6 `u01_art` (the art
+store, the player's look, sound, the weather simulation, ambient and animal life, the journal, telegraphed
+attacks), `u05_menu`, `u08_alchemy`; part 7 `u02_render`, `u07_mods`, `p34_joints`, `u06_root`; part 8
+`u09_modplus`. New code goes into the section it belongs to; a new section goes into `LAYOUT` (then run
+`python3 tools/parts.py`, `tools/typecheck.sh` and `tools/buildcost.sh`). A `private` or `fileprivate`
+name can only be used in its own part, so anything used across parts is internal (no modifier).
 
 The sections:
 `p01_util`, `p02_tiles` (Tile, defs, art), `p03_items`, `p04_recipes` (RecipeBook), `p05*` (creature
@@ -597,5 +604,5 @@ proposing a new step, and update it when a step lands.
 ## Working with the user
 
 The user works on an iPad and reads results in the Claude app. Keep reports plain and short. Send
-files with SendUserFile. When delivering the game, attach all six parts, `PixelRealm1.swift` to
-`PixelRealm6.swift`, and say which changed.
+files with SendUserFile. When delivering the game, attach all eight parts, `PixelRealm1.swift` to
+`PixelRealm8.swift`, and say which changed.

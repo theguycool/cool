@@ -1,7 +1,7 @@
 # PixelRealm's hand-drawn art
 
 Creatures, the player and blocks are drawn here at **16 pixels to a block** and packed into the game
-as text (`ArtSheet`, the `a01_artsheet` section at the end of `PixelRealm1.swift`). The game only reads that text; these tools
+as text (`ArtSheet`, the `a01_artsheet` section in `PixelRealm2.swift`). The game only reads that text; these tools
 make it.
 
 ```

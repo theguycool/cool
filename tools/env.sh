@@ -10,7 +10,7 @@ PR_BIN="$PR_SWIFT/usr/libexec/swift/bin"
 # the toolchain's own libraries, set only for the commands that need them (never session-wide)
 PR_LIBS="$PR_SWIFT/usr/lib/x86_64-linux-gnu:$PR_SWIFT/usr/libexec/swift/lib:$PR_SWIFT/usr/libexec/swift/lib/swift/linux"
 
-# The game's source files, one per line: the six parts PixelRealm1.swift to PixelRealm6.swift.
+# The game's source files, one per line: its parts PixelRealm1.swift onwards (eight now).
 # GAME_SRC can name another version instead: one file (an older single-file game), or a folder of parts.
 pr_game_files() {
     local src="${GAME_SRC:-$PR_REPO}"

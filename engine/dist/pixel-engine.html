@@ -1,0 +1,1608 @@
+<title>Pixel Engine</title>
+<style>
+	/* One committed look: a dark game screen. Layout: the world fills the view, controls float over it. */
+	:root { --bg: #0b0d12; --panel: rgba(20, 22, 28, 0.9); --line: #3a3f4c; --text: #ece9e0; --dim: #9ea1aa; --accent: #4f7cc4; --accent-hi: #7fa3de; --gold: #e6c15a; color-scheme: dark; }
+	* { box-sizing: border-box; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+	html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(--text); font: 600 14px/1.3 -apple-system, system-ui, sans-serif; }
+	#gl { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+	.hud { position: fixed; z-index: 2; }
+	button { font: inherit; color: var(--text); background: var(--panel); border: 2px solid var(--line); border-radius: 8px; padding: 8px 11px; touch-action: manipulation; }
+	button:active, button.on { background: var(--accent); border-color: var(--accent-hi); }
+	button:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+	#top { top: calc(env(safe-area-inset-top, 0px) + 8px); right: max(8px, env(safe-area-inset-right, 0px)); display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; max-width: 72%; }
+	#stats { top: calc(env(safe-area-inset-top, 0px) + 8px); left: max(8px, env(safe-area-inset-left, 0px)); background: var(--panel); border-radius: 8px; padding: 6px 9px; font: 12px/1.35 ui-monospace, monospace; white-space: pre; pointer-events: none; }
+	#hotbar { bottom: calc(env(safe-area-inset-bottom, 0px) + 10px); left: 50%; transform: translateX(-50%); display: flex; gap: 4px; background: var(--panel); padding: 5px; border-radius: 10px; }
+	.slot { position: relative; width: 48px; height: 48px; padding: 0; border-radius: 6px; }
+	.slot canvas { width: 32px; height: 32px; image-rendering: pixelated; display: block; margin: auto; }
+	.slot span { position: absolute; right: 3px; bottom: 1px; font-size: 11px; text-shadow: 0 1px 0 #000; }
+	.slot.sel { border-color: var(--gold); }
+	#stick { left: max(24px, env(safe-area-inset-left, 0px)); bottom: calc(env(safe-area-inset-bottom, 0px) + 80px); width: 130px; height: 130px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.25); background: rgba(0,0,0,0.18); pointer-events: none; }
+	#knob { position: absolute; left: 40px; top: 40px; width: 46px; height: 46px; border-radius: 50%; background: rgba(255,255,255,0.35); }
+	#right { right: max(20px, env(safe-area-inset-right, 0px)); bottom: calc(env(safe-area-inset-bottom, 0px) + 80px); display: flex; flex-direction: column; gap: 10px; align-items: flex-end; }
+	#right button { width: 92px; height: 64px; font-size: 16px; }
+	#toast { top: 50%; left: 50%; transform: translate(-50%, -50%); background: var(--panel); padding: 10px 16px; border-radius: 10px; display: none; pointer-events: none; max-width: 80%; text-align: center; }
+	.modal { inset: 0; background: rgba(8, 9, 12, 0.94); display: none; overflow: auto; padding: calc(env(safe-area-inset-top, 0px) + 12px) max(16px, env(safe-area-inset-right, 0px)) 24px max(16px, env(safe-area-inset-left, 0px)); z-index: 5; }
+	.modal h2 { margin: 4px 0 10px; font-size: 18px; }
+	.modal p { margin: 0 0 8px; color: var(--dim); }
+	.row { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+	#edRow { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
+	#edSlots { display: flex; flex-wrap: wrap; gap: 4px; max-width: 260px; }
+	#edCanvas { background: repeating-conic-gradient(#2a2d35 0% 25%, #1f2128 0% 50%) 0 0 / 24px 24px; touch-action: none; image-rendering: pixelated; border: 2px solid var(--line); border-radius: 6px; max-width: 100%; }
+	#edSide { display: flex; flex-direction: column; gap: 8px; max-width: 300px; min-width: 0; }
+	#edPal { display: grid; grid-template-columns: repeat(8, 30px); gap: 4px; }
+	#edPal div { width: 30px; height: 30px; border-radius: 5px; border: 2px solid #0008; }
+	#edPal div.sel { border-color: #fff; }
+	#edPreview { image-rendering: pixelated; border: 1px solid var(--line); background: #6a9ad8; }
+	#ioText { width: 100%; max-width: 640px; height: 150px; background: #0d0f13; color: var(--text); border: 1px solid var(--line); border-radius: 8px; font: 11px ui-monospace, monospace; padding: 8px; -webkit-user-select: text; user-select: text; }
+	#fileIn { display: none; }
+</style>
+
+<canvas id="gl"></canvas>
+<div id="stats" class="hud"></div>
+<div id="top" class="hud">
+	<button id="bSave">Save</button>
+	<button id="bLoad">Load</button>
+	<button id="bExport">Export</button>
+	<button id="bImport">Import</button>
+	<button id="bNew">New world</button>
+	<button id="bArt">Sprite maker</button>
+	<button id="bStress">+500 pigs</button>
+	<button id="bStress2">Stress test</button>
+	<button id="bZoomOut" aria-label="Zoom out">−</button>
+	<button id="bZoomIn" aria-label="Zoom in">+</button>
+</div>
+<div id="stick" class="hud"><div id="knob"></div></div>
+<div id="right" class="hud">
+	<button id="bMode">MINE</button>
+	<button id="bJump">JUMP</button>
+</div>
+<div id="hotbar" class="hud"></div>
+<div id="toast" class="hud" role="status"></div>
+<input id="fileIn" type="file" accept=".txt,.json,text/plain">
+
+<div id="io" class="modal hud">
+	<h2 id="ioTitle">World file</h2>
+	<p id="ioHelp"></p>
+	<textarea id="ioText" spellcheck="false" autocapitalize="off" autocomplete="off"></textarea>
+	<div class="row" style="margin-top:8px">
+		<button id="ioFile">Choose a file</button>
+		<button id="ioUse">Load this text</button>
+		<button id="ioCopy">Copy</button>
+		<button id="ioClose">Close</button>
+	</div>
+</div>
+
+<div id="editor" class="modal hud">
+	<h2>Sprite maker</h2>
+	<div id="edRow">
+		<div>
+			<p>Pick a picture to edit</p>
+			<div id="edSlots"></div>
+		</div>
+		<canvas id="edCanvas"></canvas>
+		<div id="edSide">
+			<div class="row">
+				<button data-tool="pen" class="on">Pencil</button>
+				<button data-tool="erase">Eraser</button>
+				<button data-tool="fill">Fill</button>
+				<button data-tool="pick">Picker</button>
+			</div>
+			<div id="edPal"></div>
+			<div class="row"><input id="edColor" type="color" value="#ffffff" aria-label="Custom colour"> <span style="color:var(--dim)">custom colour</span></div>
+			<div class="row">
+				<button id="edUndo">Undo</button>
+				<button id="edRevert">Original</button>
+			</div>
+			<div class="row">
+				<button id="edApply">Apply to game</button>
+				<button id="edClose">Close</button>
+			</div>
+			<p>Preview at game size</p>
+			<canvas id="edPreview"></canvas>
+		</div>
+	</div>
+</div>
+
+<script>
+"use strict";
+/*
+ * Pixel Engine: a game engine made for one game, a 2D side-on survival world.
+ * Everything is in this one page.
+ *
+ *   util       numbers, noise and hashing
+ *   tiles      what each block is, and its picture made in code
+ *   sprites    the player's and the pig's pictures
+ *   atlas      every picture packed in one texture
+ *   world      chunks of 32 columns, made from the seed when first needed
+ *   light      sky light and torch light, flooded per chunk
+ *   gl         the WebGL 2 renderer: one shader, instanced quads
+ *   physics    bodies against the tiles, never more than 0.4 of a tile a step
+ *   entities   creatures kept as plain arrays (fast with thousands)
+ *   player     walking, jumping, swimming, mining and placing
+ *   audio      sounds made by Web Audio
+ *   save       one compressed world: in your account (db), else this browser; export as text
+ *   input      touch stick, buttons, keyboard and mouse
+ *   editor     the sprite maker
+ *   loop       fixed steps of 1/60 s, then one draw
+ */
+
+// ===== util =====
+const STEP = 1 / 60;
+const CW = 32;           // chunk width in tiles
+const WH = 256;          // world height in tiles
+const SEC = 32;          // rows in a drawn section
+const NSEC = WH / SEC;
+const SEA = 112;         // rows at and below this fill with water where the land is lower
+const ATLAS = 256;       // atlas size in pixels: 16x16 slots of 16 pixels
+const WHITE = 255;       // a plain white slot for coloured quads
+
+function hash32(a) {
+	a |= 0;
+	a = Math.imul(a ^ (a >>> 16), 0x7feb352d);
+	a = Math.imul(a ^ (a >>> 15), 0x846ca68b);
+	return (a ^ (a >>> 16)) >>> 0;
+}
+function rnd2(seed, x, y) { return hash32(seed ^ Math.imul(x | 0, 0x9E3779B1) ^ Math.imul(y | 0, 0x85EBCA77)) / 4294967296; }
+function smooth(t) { return t * t * (3 - 2 * t); }
+function noise1(seed, x) {
+	const i = Math.floor(x), f = x - i;
+	const a = rnd2(seed, i, 0), b = rnd2(seed, i + 1, 0);
+	return a + (b - a) * smooth(f);
+}
+function noise2(seed, x, y) {
+	const ix = Math.floor(x), iy = Math.floor(y), fx = x - ix, fy = y - iy;
+	const a = rnd2(seed, ix, iy), b = rnd2(seed, ix + 1, iy), c = rnd2(seed, ix, iy + 1), d = rnd2(seed, ix + 1, iy + 1);
+	const sx = smooth(fx), sy = smooth(fy);
+	return (a + (b - a) * sx) * (1 - sy) + (c + (d - c) * sx) * sy;
+}
+function fbm1(seed, x, oct) { let s = 0, a = 1, f = 1, n = 0; for (let i = 0; i < oct; i++) { s += noise1(seed + i * 101, x * f) * a; n += a; a *= 0.5; f *= 2; } return s / n; }
+function fbm2(seed, x, y, oct) { let s = 0, a = 1, f = 1, n = 0; for (let i = 0; i < oct; i++) { s += noise2(seed + i * 131, x * f, y * f) * a; n += a; a *= 0.5; f *= 2; } return s / n; }
+function floorDiv(a, b) { return Math.floor(a / b); }
+function posMod(a, b) { return ((a % b) + b) % b; }
+function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
+function rgbOf(h) { return [(h >> 16) & 255, (h >> 8) & 255, h & 255]; }
+function hexOf(c) { return "#" + c.slice(0, 3).map((v) => v.toString(16).padStart(2, "0")).join(""); }
+
+// ===== tiles =====
+const T = { AIR: 0, GRASS: 1, DIRT: 2, STONE: 3, COAL: 4, IRON: 5, LOG: 6, LEAVES: 7, SAND: 8, WATER: 9, PLANKS: 10, TORCH: 11, BEDROCK: 12 };
+// name, solid, seconds to mine, light cost, light given, what mining gives
+const TILE_DEFS = [
+	["Air", 0, 0, 1, 0, 0],
+	["Grass", 1, 0.4, 3, 0, T.DIRT],
+	["Dirt", 1, 0.35, 3, 0, T.DIRT],
+	["Stone", 1, 1.0, 3, 0, T.STONE],
+	["Coal ore", 1, 1.2, 3, 0, T.COAL],
+	["Iron ore", 1, 1.6, 3, 0, T.IRON],
+	["Log", 0, 0.8, 1, 0, T.LOG],
+	["Leaves", 0, 0.15, 2, 0, T.LEAVES],
+	["Sand", 1, 0.3, 3, 0, T.SAND],
+	["Water", 0, Infinity, 2, 0, 0],
+	["Planks", 1, 0.6, 3, 0, T.PLANKS],
+	["Torch", 0, 0.05, 1, 14, T.TORCH],
+	["Bedrock", 1, Infinity, 3, 0, 0],
+];
+const NT = TILE_DEFS.length;
+const SOLID = new Uint8Array(256), HARD = new Float32Array(256), COST = new Uint8Array(256).fill(3), EMIT = new Uint8Array(256), DROP = new Uint8Array(256);
+TILE_DEFS.forEach((d, i) => { SOLID[i] = d[1]; HARD[i] = d[2]; COST[i] = d[3]; EMIT[i] = d[4]; DROP[i] = d[5]; });
+
+// ===== atlas =====
+const atlasPx = new Uint8ClampedArray(ATLAS * ATLAS * 4);
+let atlasOrig = null;
+function slotXY(slot) { return [(slot % 16) * 16, Math.floor(slot / 16) * 16]; }
+function putPx(ax, ay, c, a = 255) { const i = (ay * ATLAS + ax) * 4; atlasPx[i] = c[0]; atlasPx[i + 1] = c[1]; atlasPx[i + 2] = c[2]; atlasPx[i + 3] = a; }
+
+/** fills a tile from a ramp of colours (dark to light), in clumps, lighter toward the upper left */
+function material(id, ramp, opts = {}) {
+	const [ox, oy] = slotXY(id);
+	const s = 7000 + id * 97;
+	const cols = ramp.map(rgbOf);
+	for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) {
+		let n = noise2(s, x / (opts.clump || 3), y / (opts.clump || 3)) * 0.7 + rnd2(s, x, y) * 0.3;
+		n += (1 - (x + y) / 30) * 0.18 - 0.09;
+		const k = clamp(Math.floor(n * cols.length), 0, cols.length - 1);
+		let a = opts.alpha || 255;
+		if (opts.gaps && rnd2(s + 1, x, y) < opts.gaps) a = 0;
+		putPx(ox + x, oy + y, cols[k], a);
+	}
+}
+function oreSpots(id, ramp) {
+	const [ox, oy] = slotXY(id);
+	const cols = ramp.map(rgbOf);
+	const spots = [[3, 3], [10, 2], [6, 8], [12, 10], [3, 12], [9, 13]];
+	for (const [sx, sy] of spots) for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 3; dx++) {
+		if (dy === 1 && dx === 2) continue;
+		putPx(ox + sx + dx, oy + sy + dy, cols[dy === 0 ? (dx === 0 ? 2 : 1) : 0]);
+	}
+}
+function paintTiles() {
+	material(T.DIRT, [0x5a3b22, 0x6e4a2c, 0x82593a, 0x96694a]);
+	material(T.GRASS, [0x5a3b22, 0x6e4a2c, 0x82593a, 0x96694a]);
+	{	// grass on top, with a ragged edge
+		const [ox, oy] = slotXY(T.GRASS);
+		const g = [0x3c6b2c, 0x4c8237, 0x5c9642, 0x6ea84f].map(rgbOf);
+		for (let x = 0; x < 16; x++) {
+			const depth = 3 + (rnd2(91, x, 0) < 0.5 ? 1 : 0) + (rnd2(92, x, 0) < 0.25 ? 1 : 0);
+			for (let y = 0; y < depth; y++) putPx(ox + x, oy + y, g[clamp(3 - y - (x > 10 ? 1 : 0), 0, 3)]);
+		}
+	}
+	material(T.STONE, [0x5c5d63, 0x6f7077, 0x82838a, 0x94959c], { clump: 4 });
+	material(T.COAL, [0x5c5d63, 0x6f7077, 0x82838a, 0x94959c], { clump: 4 });
+	oreSpots(T.COAL, [0x18181c, 0x2a2a30, 0x44444c]);
+	material(T.IRON, [0x5c5d63, 0x6f7077, 0x82838a, 0x94959c], { clump: 4 });
+	oreSpots(T.IRON, [0x8c654a, 0xb58a6a, 0xdcb391]);
+	material(T.SAND, [0xc2a66b, 0xd1b67a, 0xdcc38a, 0xe6cf98], { clump: 2 });
+	material(T.BEDROCK, [0x18181c, 0x26262c, 0x34343c, 0x46464f], { clump: 2 });
+	material(T.LEAVES, [0x2f5a25, 0x3b6e2d, 0x4a8236, 0x5a9640], { clump: 2, gaps: 0.14 });
+	material(T.WATER, [0x2c5f9e, 0x3168a8, 0x3670b0], { clump: 5, alpha: 170 });
+	{	// log: bark in stripes
+		const [ox, oy] = slotXY(T.LOG);
+		const c = [0x3f2a1a, 0x4e3420, 0x5f4029, 0x6e4c31].map(rgbOf);
+		for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) {
+			if (x < 2 || x > 13) { putPx(ox + x, oy + y, c[0], x === 0 || x === 15 ? 0 : 255); continue; }
+			const stripe = (x + Math.floor(noise1(33, y / 3) * 3)) % 4;
+			putPx(ox + x, oy + y, c[stripe === 0 ? 1 : x < 7 ? 3 : 2]);
+		}
+	}
+	{	// planks: boards with seams
+		const [ox, oy] = slotXY(T.PLANKS);
+		const c = [0x6a4a2a, 0x8a6239, 0x9c7244, 0xae8352].map(rgbOf);
+		for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) {
+			const row = y >> 2, joint = (row % 2 ? 4 : 11);
+			let k = y % 4 === 3 || x === joint ? 0 : (y % 4 === 0 ? 3 : 1 + (rnd2(55, x >> 1, y) < 0.3 ? 1 : 0));
+			putPx(ox + x, oy + y, c[k]);
+		}
+	}
+	{	// torch: a stick and a flame on nothing
+		const [ox, oy] = slotXY(T.TORCH);
+		for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) putPx(ox + x, oy + y, [0, 0, 0], 0);
+		for (let y = 6; y < 16; y++) { putPx(ox + 7, oy + y, rgbOf(0x7a5534)); putPx(ox + 8, oy + y, rgbOf(0x5a3c24)); }
+		const flame = [[7, 2, 0xfff1a8], [8, 2, 0xffd25a], [6, 3, 0xffb33a], [7, 3, 0xfff1a8], [8, 3, 0xffd25a], [9, 3, 0xff8a2a], [6, 4, 0xff8a2a], [7, 4, 0xffd25a], [8, 4, 0xffb33a], [9, 4, 0xff8a2a], [7, 5, 0xff8a2a], [8, 5, 0xff8a2a]];
+		for (const [x, y, c] of flame) putPx(ox + x, oy + y, rgbOf(c));
+	}
+	{	// white
+		const [ox, oy] = slotXY(WHITE);
+		for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) putPx(ox + x, oy + y, [255, 255, 255]);
+	}
+}
+
+// ===== sprites =====
+// The player's frames take two slots each (16x32) in rows 2-3: idle, four walking, jumping.
+// The pig's frames are in row 4: standing, stepping.
+const PLAYER_SLOT = 32, PLAYER_FRAMES = 6, PIG_SLOT = 64, PIG_FRAMES = 2;
+const OUTLINE = rgbOf(0x1c1418);
+
+function sprite(w, h) { return { w, h, px: new Array(w * h).fill(null) }; }
+function sset(sp, x, y, c) { if (x >= 0 && y >= 0 && x < sp.w && y < sp.h) sp.px[y * sp.w + x] = typeof c === "number" ? rgbOf(c) : c; }
+function srect(sp, x0, y0, x1, y1, c) { for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) sset(sp, x, y, c); }
+function outlined(sp) {
+	const out = sprite(sp.w, sp.h);
+	out.px = sp.px.slice();
+	for (let y = 0; y < sp.h; y++) for (let x = 0; x < sp.w; x++) {
+		if (sp.px[y * sp.w + x]) continue;
+		const near = [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dy]) => {
+			const nx = x + dx, ny = y + dy;
+			return nx >= 0 && ny >= 0 && nx < sp.w && ny < sp.h && sp.px[ny * sp.w + nx];
+		});
+		if (near) out.px[y * sp.w + x] = OUTLINE;
+	}
+	return out;
+}
+function blit(sp, slot) {
+	const [ox, oy] = slotXY(slot);
+	for (let y = 0; y < sp.h; y++) for (let x = 0; x < sp.w; x++) {
+		const c = sp.px[y * sp.w + x];
+		putPx(ox + x, oy + y, c || [0, 0, 0], c ? 255 : 0);
+	}
+}
+function paintPlayer(f) {
+	const sp = sprite(16, 32);
+	const skin = 0xe0b08a, skinD = 0xc48f6c, hair = 0x4a2f1d, shirt = 0x3f6fb0, shirtD = 0x2f5590, shirtL = 0x5584c4;
+	const pants = 0x3a3a48, pantsD = 0x2c2c38, shoe = 0x2a1f18;
+	// legs: [back x, front x, back lift, front lift] per frame
+	const legs = [[0, 0, 0, 0], [-1, 1, 0, 1], [0, 0, 1, 0], [1, -1, 1, 0], [0, 0, 0, 1], [-1, 1, 2, 1]][f];
+	const bob = f === 2 || f === 4 ? 1 : 0;
+	const arm = [0, 1, 0, -1, 0, -1][f];
+	const t = bob;
+	srect(sp, 5 + legs[0], 22 + t, 7 + legs[0], 29 - legs[2], pantsD);
+	srect(sp, 5 + legs[0], 30 - legs[2], 7 + legs[0] + 1, 31 - legs[2], shoe);
+	srect(sp, 8 + legs[1], 22 + t, 10 + legs[1], 29 - legs[3], pants);
+	srect(sp, 8 + legs[1], 30 - legs[3], 10 + legs[1] + 1, 31 - legs[3], shoe);
+	srect(sp, 5, 12 + t, 10, 21 + t, shirt);
+	srect(sp, 5, 12 + t, 6, 21 + t, shirtL);
+	srect(sp, 10, 12 + t, 10, 21 + t, shirtD);
+	srect(sp, 5, 21 + t, 10, 21 + t, pantsD);
+	srect(sp, 7, 11 + t, 8, 11 + t, skinD);
+	srect(sp, 5, 4 + t, 10, 10 + t, skin);
+	srect(sp, 5, 9 + t, 10, 10 + t, skinD);
+	srect(sp, 5, 3 + t, 10, 4 + t, hair);
+	srect(sp, 5, 5 + t, 5, 8 + t, hair);
+	sset(sp, 9, 7 + t, 0x1a1a1a);
+	srect(sp, 7 + arm, 13 + t, 8 + arm, 19 + t, shirtD);
+	srect(sp, 7 + arm, 20 + t, 8 + arm, 20 + t, skin);
+	return outlined(sp);
+}
+function paintPig(f) {
+	const sp = sprite(16, 16);
+	const body = 0xe8a0a8, light = 0xf4b8bf, dark = 0xc9808a, snout = 0xd98b95;
+	const legUp = f === 1 ? 1 : 0;
+	for (const [x, up] of [[3, legUp], [6, 0], [9, legUp], [11, 0]]) srect(sp, x, 13, x + 1, 15 - up, dark);
+	srect(sp, 2, 6, 12, 12, body);
+	srect(sp, 2, 6, 12, 6, light);
+	srect(sp, 2, 12, 12, 12, dark);
+	srect(sp, 11, 5, 14, 11, body);
+	srect(sp, 11, 5, 14, 5, light);
+	srect(sp, 15, 8, 15, 10, snout);
+	sset(sp, 15, 9, 0x5a2e34);
+	sset(sp, 13, 7, 0x1a1a1a);
+	sset(sp, 12, 4, dark); sset(sp, 13, 4, dark);
+	sset(sp, 1, 7, dark);
+	return outlined(sp);
+}
+function paintSprites() {
+	for (let f = 0; f < PLAYER_FRAMES; f++) blit(paintPlayer(f), PLAYER_SLOT + f);
+	for (let f = 0; f < PIG_FRAMES; f++) blit(paintPig(f), PIG_SLOT + f);
+}
+paintTiles();
+paintSprites();
+atlasOrig = atlasPx.slice();
+
+/** texture coordinates of a picture: slot, its width and height in pixels, mirrored or not */
+function uvOf(slot, w = 16, h = 16, flip = false) {
+	const [x, y] = slotXY(slot);
+	const e = 0.02;
+	const u0 = (x + e) / ATLAS, u1 = (x + w - e) / ATLAS, v0 = (y + e) / ATLAS, v1 = (y + h - e) / ATLAS;
+	return flip ? [u1, v0, u0, v1] : [u0, v0, u1, v1];
+}
+const TILE_UV = [];
+for (let i = 0; i < NT; i++) TILE_UV.push(uvOf(i));
+const WHITE_UV = uvOf(WHITE, 8, 8);
+
+// ===== world =====
+let SEED = 12345;
+let dirty = false;      // the world has changed since it was last saved
+const chunks = new Map();       // loaded chunks by column number
+const editedStore = new Map();  // tiles of changed chunks that are not loaded, by column number
+
+function surfaceAt(x) {
+	return Math.floor(100 + (fbm1(SEED, x / 90, 4) - 0.5) * 56 + (noise1(SEED + 5, x / 18) - 0.5) * 6);
+}
+function genChunk(cx) {
+	const t = new Uint8Array(CW * WH), surf = new Int16Array(CW);
+	for (let x = 0; x < CW; x++) {
+		const wx = cx * CW + x;
+		const h = surfaceAt(wx);
+		surf[x] = h;
+		const beach = h >= SEA - 2;
+		for (let y = 0; y < WH; y++) {
+			let v;
+			if (y >= WH - 1 || (y >= WH - 4 && rnd2(SEED + 3, wx, y) < 0.5)) v = T.BEDROCK;
+			else if (y < h) v = y >= SEA ? T.WATER : T.AIR;
+			else if (y === h) v = beach ? T.SAND : T.GRASS;
+			else if (y < h + 4) v = beach ? T.SAND : T.DIRT;
+			else {
+				v = T.STONE;
+				if (y > h + 6) {
+					const worm = Math.abs(fbm2(SEED + 11, wx / 40, y / 26, 3) - 0.5) < 0.028;
+					const blob = y > h + 16 && noise2(SEED + 13, wx / 14, y / 9) > 0.84;
+					if (worm || blob) v = T.AIR;
+				}
+				if (v === T.STONE) {
+					if (noise2(SEED + 22, wx / 3, y / 3) > 0.8) v = T.COAL;
+					else if (y > h + 30 && noise2(SEED + 23, wx / 3, y / 3) > 0.84) v = T.IRON;
+				}
+			}
+			t[y * CW + x] = v;
+		}
+	}
+	// trees: roots can be just outside the chunk, so their leaves still reach in
+	for (let rx = cx * CW - 3; rx <= cx * CW + CW + 2; rx++) {
+		if (posMod(rx, 5) !== 0 || rnd2(SEED + 7, rx, 1) >= 0.6) continue;
+		const h = surfaceAt(rx);
+		if (h >= SEA - 2) continue;
+		const height = 4 + Math.floor(rnd2(SEED + 8, rx, 2) * 4);
+		const top = h - height;
+		const put = (wx, y, v, onlyAir) => {
+			const lx = wx - cx * CW;
+			if (lx < 0 || lx >= CW || y < 0 || y >= WH) return;
+			if (onlyAir && t[y * CW + lx] !== T.AIR) return;
+			t[y * CW + lx] = v;
+		};
+		for (let dy = -2; dy <= 1; dy++) for (let dx = -2; dx <= 2; dx++) {
+			if (Math.abs(dx) === 2 && (dy === -2 || dy === 1)) continue;
+			put(rx + dx, top + dy, T.LEAVES, true);
+		}
+		for (let y = h - 1; y >= top; y--) put(rx, y, T.LOG, false);
+	}
+	return { t, surf };
+}
+function getChunk(cx) {
+	let ch = chunks.get(cx);
+	if (ch) return ch;
+	const tg = performance.now();
+	const g = genChunk(cx);
+	stats.genMs += performance.now() - tg; stats.chunksGen++;
+	const saved = editedStore.get(cx);
+	ch = {
+		cx, t: saved ? saved.slice() : g.t, surf: g.surf, modified: !!saved,
+		sky: new Uint8Array(CW * WH), blk: new Uint8Array(CW * WH), lightDirty: true,
+		sec: new Array(NSEC).fill(null), secDirty: new Uint8Array(NSEC).fill(1),
+	};
+	if (saved) editedStore.delete(cx);
+	chunks.set(cx, ch);
+	return ch;
+}
+function getTile(x, y) {
+	if (y < 0) return T.AIR;
+	if (y >= WH) return T.BEDROCK;
+	const cx = floorDiv(x, CW);
+	return getChunk(cx).t[y * CW + (x - cx * CW)];
+}
+function markChanged(cx) {
+	for (const c of [cx - 1, cx, cx + 1]) {
+		const ch = chunks.get(c);
+		if (!ch) continue;
+		ch.lightDirty = true;
+		ch.secDirty.fill(1);
+	}
+}
+function setTile(x, y, v) {
+	if (y < 0 || y >= WH) return;
+	const cx = floorDiv(x, CW);
+	const ch = getChunk(cx);
+	ch.t[y * CW + (x - cx * CW)] = v;
+	ch.modified = true;
+	dirty = true;
+	markChanged(cx);
+}
+function unloadFar(centerCx, keep) {
+	for (const [cx, ch] of chunks) {
+		if (Math.abs(cx - centerCx) <= keep) continue;
+		if (ch.modified) editedStore.set(cx, ch.t);
+		for (const s of ch.sec) if (s) freeBatch(s);
+		chunks.delete(cx);
+	}
+}
+
+// ===== light =====
+const LW = CW * 3, LN = LW * WH;
+const Ls = new Uint8Array(LN), Lb = new Uint8Array(LN), Lc = new Uint8Array(LN);
+const QM = (1 << 18) - 1, Q = new Int32Array(QM + 1);
+let qh = 0, qt = 0;
+function qpush(i) { Q[qt] = i; qt = (qt + 1) & QM; }
+function flood(L) {
+	while (qh !== qt) {
+		const i = Q[qh]; qh = (qh + 1) & QM;
+		const v = L[i];
+		if (v <= 1) continue;
+		const x = i % LW;
+		if (x > 0) { const n = i - 1, nv = v - Lc[n]; if (nv > L[n]) { L[n] = nv; qpush(n); } }
+		if (x < LW - 1) { const n = i + 1, nv = v - Lc[n]; if (nv > L[n]) { L[n] = nv; qpush(n); } }
+		if (i >= LW) { const n = i - LW, nv = v - Lc[n]; if (nv > L[n]) { L[n] = nv; qpush(n); } }
+		if (i < LN - LW) { const n = i + LW, nv = v - Lc[n]; if (nv > L[n]) { L[n] = nv; qpush(n); } }
+	}
+}
+/** works out a chunk's light from it and its two neighbours, so light crosses chunk edges */
+function computeLight(ch) {
+	const parts = [getChunk(ch.cx - 1), ch, getChunk(ch.cx + 1)];
+	const tl = performance.now();
+	for (let k = 0; k < 3; k++) {
+		const t = parts[k].t;
+		for (let y = 0; y < WH; y++) for (let x = 0; x < CW; x++) {
+			const wi = y * LW + k * CW + x, tile = t[y * CW + x];
+			Lc[wi] = COST[tile]; Lb[wi] = EMIT[tile]; Ls[wi] = 0;
+		}
+	}
+	qh = qt = 0;
+	// sky light falls straight down without fading through open air, loses a little in leaves and
+	// water, and stops at the first solid block; from there it spreads sideways
+	for (let x = 0; x < LW; x++) {
+		let v = 15;
+		for (let y = 0; y < WH; y++) {
+			const wi = y * LW + x, c = Lc[wi];
+			if (c >= 3) break;
+			v -= c - 1;
+			if (v <= 1) break;
+			Ls[wi] = v; qpush(wi);
+		}
+	}
+	flood(Ls);
+	qh = qt = 0;
+	for (let i = 0; i < LN; i++) if (Lb[i]) qpush(i);
+	flood(Lb);
+	for (let y = 0; y < WH; y++) {
+		const src = y * LW + CW, dst = y * CW;
+		ch.sky.set(Ls.subarray(src, src + CW), dst);
+		ch.blk.set(Lb.subarray(src, src + CW), dst);
+	}
+	ch.lightDirty = false;
+	stats.lightRuns++;
+	stats.lightMs += performance.now() - tl;
+}
+/** light of a cell for things drawn on it: 0...1 */
+let dayLight = 1;
+function lightAt(x, y) {
+	if (y < 0) return dayLight;
+	if (y >= WH) return 0;
+	const cx = floorDiv(x, CW), ch = chunks.get(cx);
+	if (!ch || ch.lightDirty) return dayLight;
+	const i = y * CW + (x - cx * CW);
+	return Math.max(ch.sky[i] / 15 * dayLight, ch.blk[i] / 15);
+}
+
+// ===== gl =====
+const canvas = document.getElementById("gl");
+const gl = canvas.getContext("webgl2", { antialias: false, alpha: false, premultipliedAlpha: false, powerPreference: "high-performance" });
+if (!gl) document.body.innerHTML = "<p style='padding:20px'>This browser has no WebGL 2, which the engine needs.</p>";
+const VS = `#version 300 es
+layout(location=0) in vec2 a_c;
+layout(location=1) in vec4 i_rect;
+layout(location=2) in vec4 i_uv;
+layout(location=3) in vec4 i_tint;
+uniform vec2 u_cam;
+uniform vec2 u_scale;
+out vec2 v_uv;
+out vec4 v_tint;
+void main() {
+	vec2 p = i_rect.xy + a_c * i_rect.zw;
+	vec2 c = (p - u_cam) * u_scale;
+	gl_Position = vec4(c.x, -c.y, 0.0, 1.0);
+	v_uv = mix(i_uv.xy, i_uv.zw, a_c);
+	v_tint = i_tint;
+}`;
+const FS = `#version 300 es
+precision mediump float;
+in vec2 v_uv;
+in vec4 v_tint;
+uniform sampler2D u_tex;
+uniform float u_lit;
+uniform float u_day;
+out vec4 o;
+void main() {
+	vec4 t = texture(u_tex, v_uv);
+	if (t.a < 0.02) discard;
+	vec3 col;
+	float a = t.a;
+	if (u_lit > 0.5) {
+		// tiles: r is sky light, g torch light, b set on back walls
+		float sky = v_tint.r * u_day;
+		float b = max(sky, v_tint.g);
+		b = 0.035 + 0.965 * b * b;
+		vec3 warm = mix(vec3(1.0), vec3(1.0, 0.86, 0.68), step(sky + 0.001, v_tint.g) * 0.6);
+		col = t.rgb * b * warm * (1.0 - 0.5 * v_tint.b);
+	} else {
+		col = t.rgb * v_tint.rgb;
+		a *= v_tint.a;
+	}
+	o = vec4(col, a);
+}`;
+function compile(type, src) {
+	const s = gl.createShader(type);
+	gl.shaderSource(s, src); gl.compileShader(s);
+	if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+	return s;
+}
+const prog = gl.createProgram();
+gl.attachShader(prog, compile(gl.VERTEX_SHADER, VS));
+gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, FS));
+gl.linkProgram(prog);
+if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+gl.useProgram(prog);
+const U = { cam: gl.getUniformLocation(prog, "u_cam"), scale: gl.getUniformLocation(prog, "u_scale"), lit: gl.getUniformLocation(prog, "u_lit"), day: gl.getUniformLocation(prog, "u_day"), tex: gl.getUniformLocation(prog, "u_tex") };
+const cornerBuf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, cornerBuf);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]), gl.STATIC_DRAW);
+const tex = gl.createTexture();
+gl.bindTexture(gl.TEXTURE_2D, tex);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+function uploadAtlas() { gl.bindTexture(gl.TEXTURE_2D, tex); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, ATLAS, ATLAS, 0, gl.RGBA, gl.UNSIGNED_BYTE, atlasPx); }
+uploadAtlas();
+gl.uniform1i(U.tex, 0);
+gl.enable(gl.BLEND);
+gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+
+const FLOATS = 12; // per instance: rect (4), uv (4), tint (4)
+function makeBatch(maxInst, dynamic) {
+	const vao = gl.createVertexArray();
+	gl.bindVertexArray(vao);
+	gl.bindBuffer(gl.ARRAY_BUFFER, cornerBuf);
+	gl.enableVertexAttribArray(0);
+	gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+	const buf = gl.createBuffer();
+	gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+	gl.bufferData(gl.ARRAY_BUFFER, maxInst * FLOATS * 4, dynamic ? gl.DYNAMIC_DRAW : gl.STATIC_DRAW);
+	for (let a = 1; a <= 3; a++) {
+		gl.enableVertexAttribArray(a);
+		gl.vertexAttribPointer(a, 4, gl.FLOAT, false, FLOATS * 4, (a - 1) * 16);
+		gl.vertexAttribDivisor(a, 1);
+	}
+	gl.bindVertexArray(null);
+	stats.batches++;
+	return { vao, buf, count: 0, max: maxInst };
+}
+function freeBatch(b) { gl.deleteBuffer(b.buf); gl.deleteVertexArray(b.vao); stats.batches--; }
+function fillBatch(b, data, n) {
+	gl.bindBuffer(gl.ARRAY_BUFFER, b.buf);
+	gl.bufferSubData(gl.ARRAY_BUFFER, 0, data, 0, n * FLOATS);
+	b.count = n;
+}
+function drawBatch(b) {
+	if (!b.count) return;
+	gl.bindVertexArray(b.vao);
+	gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, b.count);
+	stats.draws++; stats.quads += b.count;
+}
+function put(d, n, x, y, w, h, uv, r, g, b, a) {
+	const o = n * FLOATS;
+	d[o] = x; d[o + 1] = y; d[o + 2] = w; d[o + 3] = h;
+	d[o + 4] = uv[0]; d[o + 5] = uv[1]; d[o + 6] = uv[2]; d[o + 7] = uv[3];
+	d[o + 8] = r; d[o + 9] = g; d[o + 10] = b; d[o + 11] = a;
+	return n + 1;
+}
+
+const SEC_MAX = CW * SEC * 2;
+const secScratch = new Float32Array(SEC_MAX * FLOATS);
+/** a section's picture: back walls where the land is open underground, then the tiles, each with its light */
+function buildSection(ch, s) {
+	if (ch.lightDirty) computeLight(ch);
+	const tb = performance.now();
+	let n = 0;
+	const d = secScratch, baseX = ch.cx * CW;
+	for (let y = s * SEC; y < (s + 1) * SEC; y++) for (let x = 0; x < CW; x++) {
+		const i = y * CW + x, t = ch.t[i];
+		const sk = ch.sky[i] / 15, bl = ch.blk[i] / 15;
+		if (!SOLID[t] && y > ch.surf[x] + 1) n = put(d, n, baseX + x, y, 1, 1, TILE_UV[y < ch.surf[x] + 5 ? T.DIRT : T.STONE], sk, bl, 1, 1);
+		if (t !== T.AIR) n = put(d, n, baseX + x, y, 1, 1, TILE_UV[t], sk, bl, 0, 1);
+	}
+	if (!ch.sec[s]) ch.sec[s] = makeBatch(SEC_MAX, false);
+	fillBatch(ch.sec[s], d, n);
+	ch.secDirty[s] = 0;
+	stats.sectionBuilds++;
+	stats.buildMs += performance.now() - tb;
+}
+
+const SPRITE_MAX = 16384;
+const spriteData = new Float32Array(SPRITE_MAX * FLOATS);
+let spriteBatch = null;
+
+// ===== physics =====
+/** is any tile in this box solid? x is the box's middle, y its bottom */
+function boxSolid(x, y, w, h) {
+	const x0 = Math.floor(x - w / 2), x1 = Math.floor(x + w / 2 - 1e-4);
+	const y0 = Math.floor(y - h), y1 = Math.floor(y - 1e-4);
+	for (let ty = y0; ty <= y1; ty++) for (let tx = x0; tx <= x1; tx++) if (SOLID[getTile(tx, ty)]) return true;
+	return false;
+}
+const MAX_STEP = 0.4;
+/** moves a body by its speed, never more than MAX_STEP between checks, so nothing passes through a wall */
+function moveBody(b, dt) {
+	const dx = b.vx * dt;
+	let dy = b.vy * dt;
+	const steps = Math.max(1, Math.ceil(Math.max(Math.abs(dx), Math.abs(dy)) / MAX_STEP));
+	const sx = dx / steps;
+	let sy = dy / steps;
+	const wasGround = b.ground;
+	b.ground = false; b.hitWall = false;
+	for (let s = 0; s < steps; s++) {
+		if (sx !== 0) {
+			const nx = b.x + sx;
+			if (!boxSolid(nx, b.y, b.w, b.h)) b.x = nx;
+			else if (wasGround && !boxSolid(nx, b.y - 1.01, b.w, b.h) && !boxSolid(b.x, b.y - 1.01, b.w, b.h)) { b.x = nx; b.y -= 1.0; b.stepped = 1; }
+			else {
+				b.x = sx > 0 ? Math.floor(nx + b.w / 2) - b.w / 2 - 0.001 : Math.floor(nx - b.w / 2) + 1 + b.w / 2 + 0.001;
+				b.vx = 0; b.hitWall = true;
+			}
+		}
+		if (sy !== 0) {
+			const ny = b.y + sy;
+			if (!boxSolid(b.x, ny, b.w, b.h)) b.y = ny;
+			else {
+				if (sy > 0) { b.y = Math.floor(ny) - 0.0001; b.ground = true; }
+				else b.y = Math.floor(ny - b.h) + 1 + b.h + 0.0001;
+				b.vy = 0; sy = 0;
+			}
+		}
+	}
+}
+function inWater(b) { return getTile(Math.floor(b.x), Math.floor(b.y - b.h * 0.5)) === T.WATER; }
+const GRAVITY = 42;
+
+// ===== entities =====
+// Creatures are plain arrays, one slot per creature, so thousands stay cheap.
+const MAXE = 8192;
+const E = {
+	n: 0, x: new Float32Array(MAXE), y: new Float32Array(MAXE), vx: new Float32Array(MAXE), vy: new Float32Array(MAXE),
+	kind: new Uint8Array(MAXE), dir: new Int8Array(MAXE), face: new Int8Array(MAXE), timer: new Float32Array(MAXE),
+	ground: new Uint8Array(MAXE), anim: new Float32Array(MAXE),
+};
+const KIND = { PIG: 1 };
+const KIND_SIZE = { 1: [0.85, 0.85] };
+function spawn(kind, x, y) {
+	if (E.n >= MAXE) return -1;
+	const i = E.n++;
+	E.x[i] = x; E.y[i] = y; E.vx[i] = 0; E.vy[i] = 0; E.kind[i] = kind; E.dir[i] = 0; E.face[i] = 1;
+	E.timer[i] = Math.random() * 2; E.ground[i] = 0; E.anim[i] = 0;
+	return i;
+}
+function groundAt(x) { for (let y = 0; y < WH; y++) if (SOLID[getTile(x, y)] || getTile(x, y) === T.WATER) return y; return WH - 1; }
+function spawnPigs(count, around) {
+	let made = 0;
+	for (let k = 0; k < count; k++) {
+		const x = Math.floor(around + (Math.random() - 0.5) * 60);
+		const y = groundAt(x);
+		if (getTile(x, y) === T.WATER) continue;
+		if (spawn(KIND.PIG, x + 0.5, y - 0.01) >= 0) made++;
+	}
+	return made;
+}
+const tmpBody = { x: 0, y: 0, vx: 0, vy: 0, w: 0, h: 0, ground: false, hitWall: false };
+function updateEntities(dt) {
+	for (let i = 0; i < E.n; i++) {
+		// far from the player, creatures wait (their chunks may not be loaded)
+		if (Math.abs(E.x[i] - player.x) > CW * 3) continue;
+		E.timer[i] -= dt;
+		if (E.timer[i] <= 0) { E.dir[i] = [-1, 0, 0, 1][Math.floor(Math.random() * 4)]; E.timer[i] = 1 + Math.random() * 3; }
+		const sz = KIND_SIZE[E.kind[i]];
+		const b = tmpBody;
+		b.x = E.x[i]; b.y = E.y[i]; b.vx = E.dir[i] * 1.6; b.vy = E.vy[i]; b.w = sz[0]; b.h = sz[1]; b.ground = !!E.ground[i];
+		b.vy += GRAVITY * dt;
+		if (inWater(b)) { b.vy = Math.min(b.vy, 2) - 30 * dt; }
+		moveBody(b, dt);
+		if (b.hitWall && b.ground) b.vy = -11;
+		E.x[i] = b.x; E.y[i] = b.y; E.vy[i] = b.vy; E.ground[i] = b.ground ? 1 : 0;
+		if (E.dir[i]) { E.face[i] = E.dir[i]; E.anim[i] += dt; } else E.anim[i] = 0;
+	}
+}
+
+// ===== player =====
+const player = { x: 0.5, y: 0, vx: 0, vy: 0, w: 0.7, h: 1.8, ground: false, hitWall: false, face: 1, anim: 0, stepped: 0 };
+const inv = new Int32Array(256);
+const HOTBAR = [T.DIRT, T.STONE, T.PLANKS, T.TORCH, T.SAND, T.LOG, T.LEAVES, T.COAL, T.IRON];
+let hotSel = 2;
+let mode = "mine";
+const REACH = 5.5;
+const mine = { x: 0, y: 0, t: 0, active: false };
+function startKit() { inv.fill(0); inv[T.PLANKS] = 60; inv[T.TORCH] = 30; inv[T.DIRT] = 20; }
+function placeAtSpawn() {
+	player.x = 0.5;
+	player.y = groundAt(0) - 0.01;
+	player.vx = player.vy = 0;
+}
+function updatePlayer(dt) {
+	const ax = input.axis;
+	const water = inWater(player);
+	const target = ax * 6.2;
+	const k = player.ground ? 14 : 5;
+	player.vx += (target - player.vx) * Math.min(1, dt * k);
+	if (water) {
+		player.vy += GRAVITY * 0.25 * dt;
+		player.vy *= Math.pow(0.08, dt);
+		if (input.jump) player.vy = Math.max(player.vy - 50 * dt, -5);
+	} else {
+		player.vy += GRAVITY * dt;
+		if (input.jump && player.ground) { player.vy = -15.5; sfx("jump"); }
+	}
+	player.stepped = 0;
+	moveBody(player, dt);
+	if (ax !== 0) player.face = ax > 0 ? 1 : -1;
+	if (Math.abs(player.vx) > 0.5 && player.ground) {
+		const before = Math.floor(player.anim * 8);
+		player.anim += dt * Math.abs(player.vx) / 4;
+		if (Math.floor(player.anim * 8) !== before && Math.floor(player.anim * 8) % 2 === 0) sfx("step");
+	} else player.anim = 0;
+	if (player.y > WH + 10) placeAtSpawn();
+}
+function aimTile() {
+	if (!input.aim) return null;
+	const tx = Math.floor(input.aimX), ty = Math.floor(input.aimY);
+	const dx = tx + 0.5 - player.x, dy = ty + 0.5 - (player.y - player.h * 0.6);
+	if (dx * dx + dy * dy > REACH * REACH) return null;
+	return [tx, ty];
+}
+function bodyOverlapsTile(tx, ty) {
+	const boxes = [[player.x, player.y, player.w, player.h]];
+	for (const [x, y, w, h] of boxes) if (tx + 1 > x - w / 2 && tx < x + w / 2 && ty + 1 > y - h && ty < y) return true;
+	return false;
+}
+function updateTools(dt) {
+	const at = aimTile();
+	const wantMine = input.aim && ((mode === "mine" && !input.placeHeld) || input.mineHeld);
+	const wantPlace = input.aim && ((mode === "place" && !input.mineHeld) || input.placeHeld);
+	if (!at) { mine.active = false; return; }
+	const [tx, ty] = at;
+	if (wantMine) {
+		const t = getTile(tx, ty);
+		if (t === T.AIR || HARD[t] === Infinity) { mine.active = false; return; }
+		if (!mine.active || mine.x !== tx || mine.y !== ty) { mine.active = true; mine.x = tx; mine.y = ty; mine.t = 0; }
+		mine.t += dt;
+		if (Math.floor((mine.t - dt) * 5) !== Math.floor(mine.t * 5)) sfx("tick");
+		if (mine.t >= HARD[t]) {
+			setTile(tx, ty, T.AIR);
+			if (DROP[t]) inv[DROP[t]]++;
+			mine.active = false;
+			sfx("break");
+			refreshHotbar();
+		}
+	} else mine.active = false;
+	if (wantPlace && input.placeTap) {
+		input.placeTap = false;
+		const sel = HOTBAR[hotSel];
+		if (inv[sel] <= 0) return;
+		const t = getTile(tx, ty);
+		if (t !== T.AIR && t !== T.WATER) return;
+		if (SOLID[sel] && bodyOverlapsTile(tx, ty)) return;
+		setTile(tx, ty, sel);
+		inv[sel]--;
+		sfx("place");
+		refreshHotbar();
+	}
+}
+
+// ===== audio =====
+let actx = null;
+function unlockAudio() {
+	if (!actx) { try { actx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { actx = null; } }
+	if (actx && actx.state !== "running") actx.resume();
+}
+let noiseBuf = null;
+function sfx(kind) {
+	if (!actx || actx.state !== "running") return;
+	const t0 = actx.currentTime;
+	const g = actx.createGain();
+	g.connect(actx.destination);
+	if (kind === "break" || kind === "tick" || kind === "step") {
+		if (!noiseBuf) { noiseBuf = actx.createBuffer(1, actx.sampleRate * 0.2, actx.sampleRate); const d = noiseBuf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1; }
+		const s = actx.createBufferSource(); s.buffer = noiseBuf;
+		const f = actx.createBiquadFilter(); f.type = "lowpass"; f.frequency.value = kind === "break" ? 1400 : kind === "tick" ? 2600 : 700;
+		const len = kind === "break" ? 0.16 : 0.05;
+		const vol = kind === "break" ? 0.35 : kind === "tick" ? 0.08 : 0.06;
+		g.gain.setValueAtTime(vol, t0); g.gain.exponentialRampToValueAtTime(0.001, t0 + len);
+		s.connect(f); f.connect(g); s.start(t0); s.stop(t0 + len);
+	} else {
+		const o = actx.createOscillator();
+		o.type = "square";
+		const [a, b, len] = kind === "jump" ? [320, 520, 0.1] : [220, 140, 0.06];
+		o.frequency.setValueAtTime(a, t0); o.frequency.exponentialRampToValueAtTime(b, t0 + len);
+		g.gain.setValueAtTime(0.06, t0); g.gain.exponentialRampToValueAtTime(0.001, t0 + len);
+		o.connect(g); o.start(t0); o.stop(t0 + len);
+	}
+}
+
+// ===== save =====
+// A save is one blob: "PXE1", a flag (1 when gzipped), then (maybe compressed) the header as JSON and the
+// changed chunks' tiles. It is kept in the viewer's own space in the page's database when there is one
+// (private to them), otherwise in this browser, and can be exported as text and brought back.
+let worldTime = 0.08;  // 0 is sunrise, 0.25 noon, 0.5 sunset, 0.75 midnight
+const DAY_SECONDS = 600;
+const artEdits = new Map(); // slot -> its RGBA pixels, for pictures changed in the sprite maker
+const SAVE_KEY = "pixel-engine.save";
+const PART = 200000;        // characters per stored document (the limit is 256 KiB)
+let userDb = null, userId = null, dl = null;
+let loadDone = false;       // the first look for a saved world has finished
+let stressing = false, stressAbort = false;   // the stress test is running
+let holdAuto = false;       // do not autosave over a world that has not been looked at
+
+function b64(bytes) { let s = ""; for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000)); return btoa(s); }
+function unb64(s) { const bin = atob(s.replace(/\s+/g, "")); const out = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i); return out; }
+async function gzip(bytes, on) {
+	if (!window.CompressionStream) return null;
+	const s = new Blob([bytes]).stream().pipeThrough(on ? new CompressionStream("gzip") : new DecompressionStream("gzip"));
+	return new Uint8Array(await new Response(s).arrayBuffer());
+}
+async function serialize() {
+	const all = new Map(editedStore);
+	for (const [cx, ch] of chunks) if (ch.modified) all.set(cx, ch.t);
+	const art = {};
+	for (const [slot, px] of artEdits) art[slot] = b64(px);
+	const ents = [];
+	for (let i = 0; i < Math.min(E.n, 2000); i++) ents.push([E.kind[i], +E.x[i].toFixed(2), +E.y[i].toFixed(2)]);
+	const header = new TextEncoder().encode(JSON.stringify({ v: 1, seed: SEED, time: worldTime, player: [player.x, player.y], inv: Array.from(inv.subarray(0, NT)), hot: hotSel, art, ents, saved: new Date().toISOString() }));
+	const body = new Uint8Array(4 + header.length + 4 + all.size * (4 + CW * WH));
+	const dv = new DataView(body.buffer);
+	let o = 0;
+	dv.setUint32(o, header.length); o += 4;
+	body.set(header, o); o += header.length;
+	dv.setUint32(o, all.size); o += 4;
+	for (const [cx, t] of all) { dv.setInt32(o, cx); o += 4; body.set(t, o); o += t.length; }
+	const packed = await gzip(body, true);
+	const out = new Uint8Array(5 + (packed || body).length);
+	out.set([80, 88, 69, 49, packed ? 1 : 0]);
+	out.set(packed || body, 5);
+	return out;
+}
+async function deserialize(bytes) {
+	if (bytes.length < 6 || bytes[0] !== 80 || bytes[1] !== 88 || bytes[2] !== 69 || bytes[3] !== 49) throw new Error("this is not a Pixel Engine world");
+	let body = bytes.subarray(5);
+	if (bytes[4] === 1) { body = await gzip(body, false); if (!body) throw new Error("this browser cannot unpack the save"); }
+	const dv = new DataView(body.buffer, body.byteOffset, body.byteLength);
+	let o = 0;
+	const hl = dv.getUint32(o); o += 4;
+	const h = JSON.parse(new TextDecoder().decode(body.subarray(o, o + hl))); o += hl;
+	const n = dv.getUint32(o); o += 4;
+	const edited = new Map();
+	for (let k = 0; k < n; k++) { const cx = dv.getInt32(o); o += 4; edited.set(cx, body.slice(o, o + CW * WH)); o += CW * WH; }
+	resetWorld(h.seed);
+	for (const [cx, t] of edited) editedStore.set(cx, t);
+	worldTime = h.time;
+	player.x = h.player[0]; player.y = h.player[1]; player.vx = player.vy = 0;
+	inv.fill(0); h.inv.forEach((v, i) => { inv[i] = v; });
+	hotSel = h.hot || 0;
+	for (const [slot, s] of Object.entries(h.art || {})) setArt(+slot, unb64(s));
+	E.n = 0;
+	for (const [k, x, y] of h.ents || []) spawn(k, x, y);
+	view.x = player.x; view.y = player.y - 1;
+	dirty = false;
+	refreshHotbar();
+	return h;
+}
+
+/** looks for what the page can offer: the viewer's own database space, and the downloads helper */
+async function initCaps() {
+	try {
+		const c = window.claude;
+		if (!c || !c.use) return;
+		const got = await Promise.all([c.use("db"), c.use("user"), c.use("downloads")]);
+		dl = got[2] || null;
+		if (got[0] && got[1]) {
+			const id = await got[1].id();
+			if (id) { userDb = got[0]; userId = id; }
+		}
+	} catch (e) { userDb = null; }
+}
+function userCol() { return userDb.collection("data/users/" + userId); }
+/** writes the text into the slot that is not in use, then points "meta" at it, so a break half way keeps the old save whole */
+async function dbSave(text) {
+	const col = userCol();
+	const m = await col.doc("meta").get();
+	const old = m.exists ? m.data() : null;
+	const slot = old && old.slot === 0 ? 1 : 0;
+	const n = Math.ceil(text.length / PART);
+	for (let i = 0; i < n; i++) await col.doc("s" + slot + "_" + i).set({ s: text.slice(i * PART, (i + 1) * PART) });
+	await col.doc("meta").set({ slot, parts: n, len: text.length, saved: new Date().toISOString() });
+	if (old) for (let i = 0; i < old.parts; i++) { try { await col.doc("s" + old.slot + "_" + i).delete(); } catch (e) { break; } }
+}
+async function dbLoad() {
+	const col = userCol();
+	const m = await col.doc("meta").get();
+	if (!m.exists) return null;
+	const d = m.data();
+	const docs = await Promise.all(Array.from({ length: d.parts }, (_, i) => col.doc("s" + d.slot + "_" + i).get()));
+	let text = "";
+	for (const p of docs) { if (!p.exists) throw new Error("the saved world is incomplete"); text += p.data().s; }
+	return text;
+}
+/** the saved text, from the viewer's space first, else from this browser; null when there is none */
+async function loadText() {
+	if (userDb) { try { const t = await dbLoad(); if (t) return { text: t, where: "your account" }; } catch (e) {} }
+	try { const t = localStorage.getItem(SAVE_KEY); if (t) return { text: t, where: "this browser" }; } catch (e) {}
+	return null;
+}
+async function saveAll() {
+	const bytes = await serialize();
+	const text = b64(bytes);
+	let where = "";
+	if (userDb) { try { await dbSave(text); where = "your account"; } catch (e) { where = ""; } }
+	if (!where) { try { localStorage.setItem(SAVE_KEY, text); where = "this browser"; } catch (e) {} }
+	if (!where) throw new Error("there is nowhere to save here: use Export");
+	dirty = false; holdAuto = false;
+	return { where, size: bytes.length };
+}
+async function loadAny() {
+	const found = await loadText();
+	if (!found) return null;
+	await deserialize(unb64(found.text));
+	holdAuto = false;
+	return found.where;
+}
+function resetWorld(seed) {
+	for (const ch of chunks.values()) for (const s of ch.sec) if (s) freeBatch(s);
+	chunks.clear(); editedStore.clear();
+	SEED = seed;
+	E.n = 0;
+	artEdits.clear();
+	atlasPx.set(atlasOrig); uploadAtlas();
+}
+function newWorld(seed) {
+	resetWorld(seed);
+	worldTime = 0.08;
+	startKit();
+	placeAtSpawn();
+	spawnPigs(8, 0);
+	view.x = player.x; view.y = player.y - 1;
+	refreshHotbar();
+}
+
+// ===== input =====
+const input = { axis: 0, jump: false, aim: false, aimX: 0, aimY: 0, mineHeld: false, placeHeld: false, placeTap: false, keys: new Set(), stickAxis: 0 };
+const stickEl = document.getElementById("stick"), knob = document.getElementById("knob");
+let stickId = null, stickX = 0, aimId = null;
+const view = { x: 0, y: 0, tile: 32, cssW: 0, cssH: 0, zoom: 2, dpr: 1 };
+const ZOOMS = [1, 1.5, 2, 3, 4];
+function toWorld(cx, cy) { return [view.x + (cx - view.cssW / 2) / view.tile, view.y + (cy - view.cssH / 2) / view.tile]; }
+function inStickZone(x, y) { return x < view.cssW * 0.32 && y > view.cssH * 0.45; }
+canvas.addEventListener("pointerdown", (e) => {
+	unlockAudio();
+	e.preventDefault();
+	if (e.pointerType !== "mouse" && stickId === null && inStickZone(e.clientX, e.clientY)) {
+		stickId = e.pointerId;
+		const r = stickEl.getBoundingClientRect();
+		stickX = r.left + r.width / 2;
+		updateStick(e.clientX);
+		return;
+	}
+	aimId = e.pointerId;
+	const w = toWorld(e.clientX, e.clientY);
+	input.aim = true; input.aimX = w[0]; input.aimY = w[1];
+	if (e.pointerType === "mouse") { input.mineHeld = e.button === 0; input.placeHeld = e.button === 2; }
+	input.placeTap = true;
+	canvas.setPointerCapture(e.pointerId);
+});
+canvas.addEventListener("pointermove", (e) => {
+	if (e.pointerId === stickId) { updateStick(e.clientX); return; }
+	if (e.pointerId === aimId || e.pointerType === "mouse") {
+		const w = toWorld(e.clientX, e.clientY);
+		input.aimX = w[0]; input.aimY = w[1];
+		if (e.pointerType === "mouse") input.aim = e.pointerId === aimId || input.aim;
+	}
+});
+function endPointer(e) {
+	if (e.pointerId === stickId) { stickId = null; input.stickAxis = 0; knob.style.transform = ""; return; }
+	if (e.pointerId === aimId) { aimId = null; input.aim = false; input.mineHeld = false; input.placeHeld = false; }
+}
+canvas.addEventListener("pointerup", endPointer);
+canvas.addEventListener("pointercancel", endPointer);
+canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+function updateStick(x) {
+	const d = clamp(x - stickX, -50, 50);
+	input.stickAxis = Math.abs(d) < 8 ? 0 : d / 50;
+	knob.style.transform = "translateX(" + d + "px)";
+}
+const bJump = document.getElementById("bJump");
+bJump.addEventListener("pointerdown", (e) => { unlockAudio(); e.preventDefault(); input.jumpBtn = true; });
+for (const ev of ["pointerup", "pointercancel", "pointerleave"]) bJump.addEventListener(ev, () => { input.jumpBtn = false; });
+window.addEventListener("keydown", (e) => { if (e.target && e.target.tagName === "TEXTAREA") return; input.keys.add(e.code); if (e.code.startsWith("Digit")) { const n = +e.code.slice(5) - 1; if (n >= 0 && n < HOTBAR.length) { hotSel = n; refreshHotbar(); } } });
+window.addEventListener("keyup", (e) => input.keys.delete(e.code));
+function readInput() {
+	if (stressing) { input.axis = 0; input.jump = false; return; }
+	const k = input.keys;
+	let ax = input.stickAxis;
+	if (k.has("KeyA") || k.has("ArrowLeft")) ax = -1;
+	if (k.has("KeyD") || k.has("ArrowRight")) ax = 1;
+	input.axis = ax;
+	input.jump = !!input.jumpBtn || k.has("Space") || k.has("KeyW") || k.has("ArrowUp");
+}
+document.addEventListener("gesturestart", (e) => e.preventDefault());
+
+// ===== hud =====
+const hotbarEl = document.getElementById("hotbar");
+const iconCanvas = document.createElement("canvas");
+iconCanvas.width = ATLAS; iconCanvas.height = ATLAS;
+const iconCtx = iconCanvas.getContext("2d");
+function refreshIcons() { iconCtx.putImageData(new ImageData(atlasPx.slice(), ATLAS, ATLAS), 0, 0); }
+function drawIcon(cv, slot, w = 16, h = 16) {
+	cv.width = w; cv.height = h;
+	const g = cv.getContext("2d");
+	g.imageSmoothingEnabled = false;
+	g.clearRect(0, 0, w, h);
+	const [x, y] = slotXY(slot);
+	g.drawImage(iconCanvas, x, y, w, h, 0, 0, w, h);
+}
+function refreshHotbar() {
+	refreshIcons();
+	hotbarEl.innerHTML = "";
+	HOTBAR.forEach((t, i) => {
+		const b = document.createElement("button");
+		b.className = "slot" + (i === hotSel ? " sel" : "");
+		b.setAttribute("aria-label", TILE_DEFS[t][0]);
+		const cv = document.createElement("canvas");
+		drawIcon(cv, t);
+		const sp = document.createElement("span");
+		sp.textContent = inv[t];
+		b.append(cv, sp);
+		b.onclick = () => { hotSel = i; mode = "place"; bMode.textContent = "PLACE"; bMode.classList.add("on"); refreshHotbar(); };
+		hotbarEl.appendChild(b);
+	});
+}
+const bMode = document.getElementById("bMode");
+bMode.onclick = () => { mode = mode === "mine" ? "place" : "mine"; bMode.textContent = mode.toUpperCase(); bMode.classList.toggle("on", mode === "place"); };
+const toastEl = document.getElementById("toast");
+let toastTimer = 0;
+function toast(s, ms = 2200) { toastEl.textContent = s; toastEl.style.display = "block"; clearTimeout(toastTimer); toastTimer = setTimeout(() => { toastEl.style.display = "none"; }, ms); }
+
+document.getElementById("bSave").onclick = async () => { try { const r = await saveAll(); toast("Saved to " + r.where + " (" + (r.size / 1024).toFixed(1) + " KB)"); } catch (e) { toast("Save failed: " + e.message, 4000); } };
+document.getElementById("bLoad").onclick = async () => {
+	try { const w = await loadAny(); toast(w ? "Loaded from " + w : "There is no saved world yet"); } catch (e) { toast("Could not load: " + e.message, 4000); }
+};
+// the export and import box
+const ioEl = document.getElementById("io"), ioText = document.getElementById("ioText"), ioHelp = document.getElementById("ioHelp");
+function openIO(title, help, text, canLoad) {
+	document.getElementById("ioTitle").textContent = title;
+	ioHelp.textContent = help;
+	ioText.value = text;
+	document.getElementById("ioUse").style.display = canLoad ? "" : "none";
+	document.getElementById("ioFile").style.display = canLoad ? "" : "none";
+	document.getElementById("ioCopy").style.display = canLoad ? "none" : "";
+	ioEl.style.display = "block";
+	input.keys.clear();
+}
+document.getElementById("ioClose").onclick = () => { ioEl.style.display = "none"; ioText.value = ""; };
+document.getElementById("ioCopy").onclick = async () => {
+	try { await navigator.clipboard.writeText(ioText.value); toast("Copied"); } catch (e) { ioText.focus(); ioText.select(); toast("Select the text and copy it by hand"); }
+};
+const fileIn = document.getElementById("fileIn");
+document.getElementById("ioFile").onclick = () => fileIn.click();
+fileIn.onchange = async () => {
+	const f = fileIn.files[0];
+	fileIn.value = "";
+	if (!f) return;
+	try { ioText.value = (await f.text()).trim(); toast("Read " + f.name + ": tap Load this text"); } catch (e) { toast("Could not read that file", 3000); }
+};
+document.getElementById("ioUse").onclick = async () => {
+	try {
+		let bytes;
+		try { bytes = unb64(ioText.value.trim()); } catch (e) { throw new Error("that text is not an exported world"); }
+		await deserialize(bytes);
+		dirty = true; holdAuto = false;
+		ioEl.style.display = "none"; ioText.value = "";
+		toast("World loaded: tap Save to keep it");
+	} catch (e) { toast("Could not load: " + e.message, 4000); }
+};
+document.getElementById("bExport").onclick = async () => {
+	try {
+		const text = b64(await serialize());
+		if (dl) {
+			try { await dl.save({ filename: "pixel-engine-world.txt", data: text }); toast("Exported"); return; }
+			catch (e) { if (e && e.code === "declined") return; }
+		}
+		openIO("Export your world", "Copy this text and keep it somewhere safe. Import brings it back.", text, false);
+	} catch (e) { toast("Export failed: " + e.message, 4000); }
+};
+document.getElementById("bImport").onclick = () => openIO("Import a world", "Paste an exported world here, or choose the file you exported.", "", true);
+
+// New world asks twice, because the page cannot show a browser dialog
+const bNew = document.getElementById("bNew");
+let newTimer = 0;
+bNew.onclick = () => {
+	if (bNew.dataset.sure !== "1") {
+		bNew.dataset.sure = "1"; bNew.textContent = "Tap again";
+		newTimer = setTimeout(() => { bNew.dataset.sure = ""; bNew.textContent = "New world"; }, 3000);
+		return;
+	}
+	clearTimeout(newTimer);
+	bNew.dataset.sure = ""; bNew.textContent = "New world";
+	newWorld((Math.random() * 1e9) | 0);
+	dirty = true; holdAuto = false;
+	toast("New world");
+};
+document.getElementById("bStress").onclick = () => { const n = spawnPigs(500, player.x); toast("+" + n + " pigs (" + E.n + " in all)"); };
+function setZoom(dz) { const i = clamp(ZOOMS.indexOf(view.zoom) + dz, 0, ZOOMS.length - 1); view.zoom = ZOOMS[i]; }
+document.getElementById("bZoomIn").onclick = () => setZoom(1);
+document.getElementById("bZoomOut").onclick = () => setZoom(-1);
+const statsEl = document.getElementById("stats");
+const stats = { fps: 0, frameMs: 0, updMs: 0, drawMs: 0, draws: 0, quads: 0, batches: 0, sectionBuilds: 0, lightRuns: 0, chunksGen: 0, genMs: 0, lightMs: 0, buildMs: 0 };
+
+// ===== editor =====
+// The sprite maker edits any picture in the atlas and puts it straight into the game.
+const ED_SLOTS = [T.GRASS, T.DIRT, T.STONE, T.COAL, T.IRON, T.LOG, T.LEAVES, T.SAND, T.WATER, T.PLANKS, T.TORCH, T.BEDROCK, PLAYER_SLOT, PIG_SLOT];
+const PALETTE = [0x000000, 0x1c1418, 0x3a3a48, 0x6f7077, 0x94959c, 0xffffff, 0x5a3b22, 0x82593a, 0xc2a66b, 0x3c6b2c, 0x5c9642, 0x2c5f9e, 0x5584c4, 0xe0b08a, 0xe8a0a8, 0xffd25a];
+const ed = { slot: T.GRASS, w: 16, h: 16, px: null, tool: "pen", color: [255, 255, 255, 255], undo: [], scale: 20, down: false };
+const edEl = document.getElementById("editor"), edCanvas = document.getElementById("edCanvas"), edCtx = edCanvas.getContext("2d");
+const edPreview = document.getElementById("edPreview");
+function slotSize(slot) { return slot >= PLAYER_SLOT && slot < PLAYER_SLOT + 16 ? [16, 32] : [16, 16]; }
+function readArt(slot) {
+	const [w, h] = slotSize(slot), [ox, oy] = slotXY(slot);
+	const out = new Uint8ClampedArray(w * h * 4);
+	for (let y = 0; y < h; y++) out.set(atlasPx.subarray(((oy + y) * ATLAS + ox) * 4, ((oy + y) * ATLAS + ox + w) * 4), y * w * 4);
+	return out;
+}
+function setArt(slot, px) {
+	const [w, h] = slotSize(slot), [ox, oy] = slotXY(slot);
+	for (let y = 0; y < h; y++) atlasPx.set(px.subarray(y * w * 4, (y + 1) * w * 4), ((oy + y) * ATLAS + ox) * 4);
+	gl.bindTexture(gl.TEXTURE_2D, tex);
+	gl.texSubImage2D(gl.TEXTURE_2D, 0, ox, oy, w, h, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(px.buffer, px.byteOffset, px.byteLength));
+	artEdits.set(slot, new Uint8Array(px));
+	dirty = true;
+}
+function edOpen() {
+	edEl.style.display = "block";
+	input.aim = false; input.keys.clear();
+	refreshIcons();
+	const box = document.getElementById("edSlots");
+	box.innerHTML = "";
+	for (const s of ED_SLOTS) {
+		const b = document.createElement("button");
+		b.className = "slot" + (s === ed.slot ? " sel" : "");
+		const cv = document.createElement("canvas");
+		const [w, h] = slotSize(s);
+		drawIcon(cv, s, w, h);
+		if (h > 16) cv.style.width = "16px";
+		b.appendChild(cv);
+		b.onclick = () => { ed.slot = s; edLoad(); edOpen(); };
+		box.appendChild(b);
+	}
+	const pal = document.getElementById("edPal");
+	pal.innerHTML = "";
+	for (const c of PALETTE) {
+		const d = document.createElement("div");
+		d.style.background = hexOf(rgbOf(c));
+		d.onclick = () => { ed.color = [...rgbOf(c), 255]; document.getElementById("edColor").value = hexOf(ed.color); edPalSel(d); if (ed.tool === "erase" || ed.tool === "pick") edTool("pen"); };
+		pal.appendChild(d);
+	}
+	if (!ed.px) edLoad();
+	edDraw();
+}
+function edPalSel(el) { for (const d of document.getElementById("edPal").children) d.classList.toggle("sel", d === el); }
+function edLoad() {
+	ed.px = readArt(ed.slot);
+	[ed.w, ed.h] = slotSize(ed.slot);
+	ed.scale = Math.max(8, Math.floor(Math.min(384 / ed.w, 520 / ed.h)));
+	edCanvas.width = ed.w * ed.scale; edCanvas.height = ed.h * ed.scale;
+	edPreview.width = ed.w; edPreview.height = ed.h;
+	edPreview.style.width = (ed.w * 4) + "px";
+	ed.undo = [];
+}
+function edDraw() {
+	edCtx.clearRect(0, 0, edCanvas.width, edCanvas.height);
+	const s = ed.scale;
+	for (let y = 0; y < ed.h; y++) for (let x = 0; x < ed.w; x++) {
+		const i = (y * ed.w + x) * 4;
+		if (ed.px[i + 3] === 0) continue;
+		edCtx.fillStyle = "rgba(" + ed.px[i] + "," + ed.px[i + 1] + "," + ed.px[i + 2] + "," + (ed.px[i + 3] / 255) + ")";
+		edCtx.fillRect(x * s, y * s, s, s);
+	}
+	edCtx.strokeStyle = "rgba(255,255,255,0.08)";
+	edCtx.beginPath();
+	for (let x = 0; x <= ed.w; x++) { edCtx.moveTo(x * s + 0.5, 0); edCtx.lineTo(x * s + 0.5, ed.h * s); }
+	for (let y = 0; y <= ed.h; y++) { edCtx.moveTo(0, y * s + 0.5); edCtx.lineTo(ed.w * s, y * s + 0.5); }
+	edCtx.stroke();
+	edPreview.getContext("2d").putImageData(new ImageData(ed.px.slice(), ed.w, ed.h), 0, 0);
+}
+function edCell(e) {
+	const r = edCanvas.getBoundingClientRect();
+	const x = Math.floor((e.clientX - r.left) / r.width * ed.w), y = Math.floor((e.clientY - r.top) / r.height * ed.h);
+	return x >= 0 && y >= 0 && x < ed.w && y < ed.h ? [x, y] : null;
+}
+function edSetPx(x, y, c) { const i = (y * ed.w + x) * 4; ed.px[i] = c[0]; ed.px[i + 1] = c[1]; ed.px[i + 2] = c[2]; ed.px[i + 3] = c[3]; }
+function edFill(x, y) {
+	const i0 = (y * ed.w + x) * 4, from = Array.from(ed.px.subarray(i0, i0 + 4)), to = ed.color;
+	if (from.every((v, k) => v === to[k])) return;
+	const stack = [[x, y]];
+	while (stack.length) {
+		const [cx, cy] = stack.pop();
+		if (cx < 0 || cy < 0 || cx >= ed.w || cy >= ed.h) continue;
+		const i = (cy * ed.w + cx) * 4;
+		if (ed.px[i] !== from[0] || ed.px[i + 1] !== from[1] || ed.px[i + 2] !== from[2] || ed.px[i + 3] !== from[3]) continue;
+		edSetPx(cx, cy, to);
+		stack.push([cx + 1, cy], [cx - 1, cy], [cx, cy + 1], [cx, cy - 1]);
+	}
+}
+function edApplyTool(cell, first) {
+	if (!cell) return;
+	const [x, y] = cell;
+	if (ed.tool === "pick") {
+		const i = (y * ed.w + x) * 4;
+		ed.color = [ed.px[i], ed.px[i + 1], ed.px[i + 2], 255];
+		document.getElementById("edColor").value = hexOf(ed.color);
+		edTool("pen");
+		return;
+	}
+	if (first) { ed.undo.push(ed.px.slice()); if (ed.undo.length > 50) ed.undo.shift(); }
+	if (ed.tool === "fill") { if (first) edFill(x, y); }
+	else edSetPx(x, y, ed.tool === "erase" ? [0, 0, 0, 0] : ed.color);
+	edDraw();
+}
+edCanvas.addEventListener("pointerdown", (e) => { e.preventDefault(); ed.down = true; edCanvas.setPointerCapture(e.pointerId); edApplyTool(edCell(e), true); });
+edCanvas.addEventListener("pointermove", (e) => { if (ed.down && ed.tool !== "fill" && ed.tool !== "pick") edApplyTool(edCell(e), false); });
+edCanvas.addEventListener("pointerup", () => { ed.down = false; });
+edCanvas.addEventListener("pointercancel", () => { ed.down = false; });
+function edTool(t) { ed.tool = t; for (const b of document.querySelectorAll("[data-tool]")) b.classList.toggle("on", b.dataset.tool === t); }
+for (const b of document.querySelectorAll("[data-tool]")) b.onclick = () => edTool(b.dataset.tool);
+document.getElementById("edColor").oninput = (e) => { const v = parseInt(e.target.value.slice(1), 16); ed.color = [...rgbOf(v), 255]; edPalSel(null); };
+document.getElementById("edUndo").onclick = () => { if (ed.undo.length) { ed.px = ed.undo.pop(); edDraw(); } };
+document.getElementById("edRevert").onclick = () => {
+	ed.undo.push(ed.px.slice());
+	const [w, h] = slotSize(ed.slot), [ox, oy] = slotXY(ed.slot);
+	for (let y = 0; y < h; y++) ed.px.set(atlasOrig.subarray(((oy + y) * ATLAS + ox) * 4, ((oy + y) * ATLAS + ox + w) * 4), y * w * 4);
+	edDraw();
+};
+function edApply() {
+	setArt(ed.slot, ed.px);
+	refreshHotbar();
+	toast("The picture is in the game (saved with the world)");
+}
+document.getElementById("edApply").onclick = edApply;
+document.getElementById("edClose").onclick = () => { edEl.style.display = "none"; };
+document.getElementById("bArt").onclick = edOpen;
+
+// ===== loop =====
+function resize() {
+	const dpr = Math.min(window.devicePixelRatio || 1, 3);
+	view.cssW = window.innerWidth; view.cssH = window.innerHeight;
+	canvas.width = Math.max(1, Math.round(view.cssW * dpr)); canvas.height = Math.max(1, Math.round(view.cssH * dpr));
+	view.dpr = dpr;
+	gl.viewport(0, 0, canvas.width, canvas.height);
+}
+window.addEventListener("resize", resize);
+resize();
+
+function update(dt) {
+	readInput();
+	worldTime = (worldTime + dt / DAY_SECONDS) % 1;
+	const sun = Math.sin(worldTime * Math.PI * 2);
+	dayLight = clamp(0.25 + sun * 1.3, 0.14, 1);
+	updatePlayer(dt);
+	updateEntities(dt);
+	updateTools(dt);
+}
+function skyColour() {
+	const d = (dayLight - 0.14) / 0.86;
+	return [0.03 + 0.42 * d, 0.04 + 0.64 * d, 0.1 + 0.85 * d];
+}
+function render(dt) {
+	const t0 = performance.now();
+	stats.draws = 0; stats.quads = 0;
+	view.tile = 16 * view.zoom;
+	const devTile = view.tile * view.dpr;
+	// the view follows the player, kept on whole screen pixels so tiles never shimmer
+	const k = Math.min(1, dt * 9);
+	view.x += (player.x - view.x) * k;
+	view.y += (player.y - 1 - view.y) * k;
+	const camX = Math.round(view.x * devTile) / devTile, camY = Math.round(view.y * devTile) / devTile;
+	const sky = skyColour();
+	gl.clearColor(sky[0], sky[1], sky[2], 1);
+	gl.clear(gl.COLOR_BUFFER_BIT);
+	gl.useProgram(prog);
+	gl.uniform2f(U.cam, camX, camY);
+	gl.uniform2f(U.scale, 2 * devTile / canvas.width, 2 * devTile / canvas.height);
+	gl.uniform1f(U.day, dayLight);
+	gl.activeTexture(gl.TEXTURE0);
+	gl.bindTexture(gl.TEXTURE_2D, tex);
+	const halfW = view.cssW / 2 / view.tile + 1, halfH = view.cssH / 2 / view.tile + 1;
+	const cx0 = floorDiv(Math.floor(camX - halfW), CW), cx1 = floorDiv(Math.floor(camX + halfW), CW);
+	const s0 = clamp(Math.floor((camY - halfH) / SEC), 0, NSEC - 1), s1 = clamp(Math.floor((camY + halfH) / SEC), 0, NSEC - 1);
+	// land
+	gl.uniform1f(U.lit, 1);
+	let builds = 0;
+	for (let cx = cx0; cx <= cx1; cx++) {
+		const ch = getChunk(cx);
+		for (let s = s0; s <= s1; s++) {
+			if (ch.secDirty[s] && (builds < 6 || !ch.sec[s])) { buildSection(ch, s); builds++; }
+			if (ch.sec[s]) drawBatch(ch.sec[s]);
+		}
+	}
+	unloadFar(floorDiv(Math.floor(camX), CW), Math.max(4, cx1 - cx0 + 3));
+	// creatures, the player and the aim
+	let n = 0;
+	const d = spriteData;
+	const vx0 = camX - halfW - 1, vx1 = camX + halfW + 1, vy0 = camY - halfH - 1, vy1 = camY + halfH + 2;
+	for (let i = 0; i < E.n && n < SPRITE_MAX - 8; i++) {
+		const x = E.x[i], y = E.y[i];
+		if (x < vx0 || x > vx1 || y < vy0 || y > vy1) continue;
+		const f = E.anim[i] > 0 ? Math.floor(E.anim[i] * 6) % PIG_FRAMES : 0;
+		const l = lightAt(Math.floor(x), Math.floor(y - 0.4));
+		const b = 0.035 + 0.965 * l * l;
+		n = put(d, n, x - 0.5, y - 1, 1, 1, uvOf(PIG_SLOT + f, 16, 16, E.face[i] < 0), b, b, b, 1);
+	}
+	{
+		const f = !player.ground ? 5 : player.anim > 0 ? 1 + Math.floor(player.anim * 8) % 4 : 0;
+		const l = lightAt(Math.floor(player.x), Math.floor(player.y - 1));
+		const b = 0.25 + 0.75 * l * l;
+		n = put(d, n, player.x - 0.5, player.y - 2, 1, 2, uvOf(PLAYER_SLOT + f, 16, 32, player.face < 0), b, b, b, 1);
+	}
+	const at = aimTile();
+	if (at) {
+		const [tx, ty] = at, e = 1 / 16;
+		const c = mode === "mine" ? [1, 1, 1] : [0.55, 0.85, 1];
+		n = put(d, n, tx, ty, 1, e, WHITE_UV, c[0], c[1], c[2], 0.8);
+		n = put(d, n, tx, ty + 1 - e, 1, e, WHITE_UV, c[0], c[1], c[2], 0.8);
+		n = put(d, n, tx, ty, e, 1, WHITE_UV, c[0], c[1], c[2], 0.8);
+		n = put(d, n, tx + 1 - e, ty, e, 1, WHITE_UV, c[0], c[1], c[2], 0.8);
+		if (mine.active) {
+			const p = clamp(mine.t / HARD[getTile(tx, ty)], 0, 1);
+			n = put(d, n, tx, ty, 1, 1, WHITE_UV, 0, 0, 0, 0.15 + p * 0.55);
+		}
+	}
+	if (!spriteBatch) spriteBatch = makeBatch(SPRITE_MAX, true);
+	fillBatch(spriteBatch, d, n);
+	gl.uniform1f(U.lit, 0);
+	drawBatch(spriteBatch);
+	stats.drawMs = performance.now() - t0;
+}
+
+let last = performance.now(), acc = 0, fpsFrames = 0, fpsT = 0;
+function frame(now) {
+	requestAnimationFrame(frame);
+	let dt = (now - last) / 1000;
+	last = now;
+	if (dt > 0.25) dt = 0.25;
+	if (edEl.style.display === "block" || ioEl.style.display === "block") return;
+	acc += dt;
+	const t0 = performance.now();
+	let steps = 0;
+	while (acc >= STEP && steps < 5) { update(STEP); acc -= STEP; steps++; }
+	if (steps === 5) acc = 0;
+	stats.updMs = performance.now() - t0;
+	render(dt);
+	fa.n++; fa.upd += stats.updMs; fa.draw += stats.drawMs; if (stats.updMs > fa.updMax) fa.updMax = stats.updMs;
+	fpsFrames++; fpsT += dt;
+	if (fpsT >= 0.5) {
+		stats.fps = fpsFrames / fpsT; fpsFrames = 0; fpsT = 0;
+		const hours = Math.floor(((worldTime + 0.25) % 1) * 24);
+		statsEl.textContent = stats.fps.toFixed(0) + " fps  update " + stats.updMs.toFixed(1) + " ms  draw " + stats.drawMs.toFixed(1) + " ms\n" +
+			stats.draws + " draws  " + stats.quads + " quads  " + chunks.size + " chunks\n" +
+			E.n + " creatures  time " + String(hours).padStart(2, "0") + ":00  seed " + SEED + "\n" +
+			"x " + player.x.toFixed(1) + "  y " + player.y.toFixed(1) + (dirty ? "  *" : "");
+	}
+}
+
+// ===== stress =====
+// Builds throwaway worlds, measures how the engine copes, then puts your own world back exactly as it was.
+const fa = { n: 0, upd: 0, draw: 0, updMax: 0 };
+function waitFrames(ms) {
+	return new Promise((res) => {
+		const times = [];
+		let start = null, prev = null;
+		fa.n = 0; fa.upd = 0; fa.draw = 0; fa.updMax = 0;
+		function f(now) {
+			if (start === null) start = now;
+			if (prev !== null) times.push(now - prev);
+			prev = now;
+			if (stressAbort || now - start >= ms) res(times); else requestAnimationFrame(f);
+		}
+		requestAnimationFrame(f);
+	});
+}
+/** a run of frame times in milliseconds, as frames a second and the slowest frames */
+function summarize(times) {
+	if (!times.length) return { fps: 0, avg: 0, p95: 0, max: 0, upd: 0, draw: 0, updMax: 0 };
+	const s = times.slice().sort((a, b) => a - b);
+	const avg = times.reduce((a, b) => a + b, 0) / times.length;
+	return { fps: 1000 / avg, avg, p95: s[Math.floor(s.length * 0.95)], max: s[s.length - 1], upd: fa.n ? fa.upd / fa.n : 0, draw: fa.n ? fa.draw / fa.n : 0, updMax: fa.updMax };
+}
+/** a frame by frame run that calls `each` before every frame, for `count` frames */
+function runFrames(count, each) {
+	return new Promise((res) => {
+		const times = [];
+		let n = 0, prev = null;
+		function f(now) {
+			if (prev !== null) times.push(now - prev);
+			prev = now;
+			each(n);
+			if (stressAbort || ++n >= count) res(times); else requestAnimationFrame(f);
+		}
+		requestAnimationFrame(f);
+	});
+}
+/** what the engine holds in memory, worked out from the sizes of its arrays and drawing buffers */
+function estMemMB() {
+	let b = 0;
+	for (const ch of chunks.values()) { b += ch.t.length * 3; for (const s of ch.sec) if (s) b += SEC_MAX * FLOATS * 4; }
+	for (const t of editedStore.values()) b += t.length;
+	b += secScratch.byteLength + spriteData.byteLength + atlasPx.byteLength * 3 + E.x.byteLength * 4 + MAXE * 6;
+	return b / 1048576;
+}
+document.addEventListener("visibilitychange", () => { if (document.hidden && stressing) stressAbort = true; });
+async function runStress() {
+	if (stressing) return;
+	if (dirty && !holdAuto) { try { await saveAll(); } catch (e) { toast("Save first, then run the stress test", 4000); return; } }
+	let backup;
+	try { backup = await serialize(); } catch (e) { toast("Could not start: " + e.message, 4000); return; }
+	const prevDirty = dirty, prevHold = holdAuto, prevSel = hotSel;
+	stressing = true; stressAbort = false; holdAuto = true;
+	const lines = [];
+	const say = (s) => lines.push(s);
+	const step = (s) => toast("Stress test: " + s + " (keep this page open)", 60000);
+	const fmt = (n, d = 0) => Number(n).toFixed(d);
+	try {
+		say("PIXEL ENGINE STRESS TEST");
+		say(new Date().toISOString());
+		say("device: " + navigator.userAgent);
+		say("screen " + screen.width + "x" + screen.height + " at " + (window.devicePixelRatio || 1) + "x, view " + view.cssW + "x" + view.cssH + ", " + (navigator.hardwareConcurrency || "?") + " cores");
+		try { const ext = gl.getExtension("WEBGL_debug_renderer_info"); say("gpu: " + (ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : "hidden") + ", largest texture " + gl.getParameter(gl.MAX_TEXTURE_SIZE)); } catch (e) {}
+		say("");
+		// 1. creatures
+		say("(fps is what you feel and includes the screen's own drawing time; update and draw ms are the engine's own work)");
+		say("1. CREATURES (all moving, colliding with the land, drawn)");
+		newWorld(777);
+		let smooth = 0;
+		for (const target of [0, 1000, 3000, 6000, 8000]) {
+			if (stressAbort) break;
+			step("creatures " + target);
+			let guard = 0;
+			while (E.n < target && guard++ < 80) spawnPigs(Math.min(500, target - E.n), player.x);
+			const r = summarize(await waitFrames(2500));
+			if (r.fps >= 55) smooth = E.n;
+			say("   " + String(E.n).padStart(4) + " creatures: " + fmt(r.fps) + " fps, slowest frame " + fmt(r.max) + " ms, update " + fmt(r.upd, 1) + " ms, draw " + fmt(r.draw, 1) + " ms");
+		}
+		say("   smooth (55 fps or more) up to " + smooth + " creatures");
+		say("");
+		// 2. travelling: new land made, lit and drawn all the time
+		if (!stressAbort) {
+			say("2. TRAVEL (750 blocks at 300 blocks a second, new land made as you go)");
+			E.n = 0;
+			newWorld(778);
+			step("travelling across the world");
+			const g0 = stats.chunksGen, gm0 = stats.genMs, l0 = stats.lightRuns, lm0 = stats.lightMs, b0 = stats.sectionBuilds, bm0 = stats.buildMs;
+			let peak = 0;
+			const tv = summarize(await runFrames(150, () => {
+				player.x += 5; player.y = surfaceAt(Math.floor(player.x)) - 0.01; player.vy = 0;
+				peak = Math.max(peak, chunks.size);
+			}));
+			const gn = stats.chunksGen - g0, ln = stats.lightRuns - l0, bn = stats.sectionBuilds - b0;
+			say("   " + fmt(tv.fps) + " fps while travelling, slowest frame " + fmt(tv.max) + " ms");
+			say("   making a chunk of land: " + (gn ? fmt((stats.genMs - gm0) / gn, 1) : "0") + " ms each (" + gn + " made)");
+			say("   working out a chunk's light: " + (ln ? fmt((stats.lightMs - lm0) / ln, 1) : "0") + " ms each (" + ln + " times)");
+			say("   building a drawn section: " + (bn ? fmt((stats.buildMs - bm0) / bn, 2) : "0") + " ms each (" + bn + " built)");
+			say("   most chunks held at once: " + peak);
+			say("");
+			// 3. changing blocks every frame
+			say("3. CHANGING BLOCKS EVERY FRAME (the worst case for light: mining and torches)");
+			step("changing blocks every frame");
+			const sx = Math.floor(player.x), sy = Math.floor(player.y);
+			const es = summarize(await runFrames(120, (n) => {
+				for (let k = 0; k < 3; k++) setTile(sx + 4 + k * 2, sy - 3 - (n % 3), n % 2 ? T.STONE : T.AIR);
+			}));
+			say("   " + fmt(es.fps) + " fps with 3 blocks changed every frame, slowest frame " + fmt(es.max) + " ms");
+			say("");
+		}
+		// 4. saving a big edited world
+		if (!stressAbort) {
+			say("4. SAVING A BIG BUILT WORLD");
+			step("saving a big world");
+			newWorld(779);
+			for (let cx = -6; cx <= 6; cx++) for (let x = 0; x < CW; x += 2) for (let y = 70; y < 140; y += 2) setTile(cx * CW + x, y, 3 + ((x + y) % 4));
+			await waitFrames(300);
+			let editedCount = editedStore.size;
+			for (const ch of chunks.values()) if (ch.modified) editedCount++;
+			const t0 = performance.now();
+			const bytes = await serialize();
+			const tPack = performance.now() - t0;
+			const text = b64(bytes);
+			const t2 = performance.now();
+			await deserialize(bytes);
+			const tOpen = performance.now() - t2;
+			say("   " + editedCount + " edited chunks save as " + fmt(bytes.length / 1024) + " KB (" + text.length.toLocaleString("en-US") + " characters as text)");
+			say("   packing takes " + fmt(tPack) + " ms, opening takes " + fmt(tOpen) + " ms");
+			say("   in your account: " + Math.ceil(text.length / PART) + " document(s) (25,000 allowed); in this browser: " + (text.length < 4500000 ? "fits" : "TOO BIG, use Export"));
+			say("");
+		}
+		say("5. MEMORY");
+		say("   about " + fmt(estMemMB()) + " MB held by the engine (worked out from its arrays and buffers)" + (performance.memory ? "; JS heap " + fmt(performance.memory.usedJSHeapSize / 1048576) + " MB" : ""));
+	} catch (e) { say("stopped early: " + e.message); }
+	const aborted = stressAbort;
+	stressing = false; stressAbort = false;
+	try { await deserialize(backup); } catch (e) { say("COULD NOT PUT YOUR WORLD BACK: " + e.message); }
+	dirty = prevDirty; holdAuto = prevHold; hotSel = prevSel; refreshHotbar();
+	toastEl.style.display = "none";
+	if (aborted) say("(stopped early because the page was hidden)");
+	openIO("Stress test results", "Copy this and paste it to Claude. Your own world is back as it was.", lines.join("\n"), false);
+}
+document.getElementById("bStress2").onclick = () => { runStress(); };
+
+// autosave when something changed, and when the page is hidden
+async function autosave() { if (dirty && loadDone && !holdAuto && !stressing) { try { await saveAll(); } catch (e) {} } }
+setInterval(() => { if (!document.hidden) autosave(); }, 45000);
+document.addEventListener("visibilitychange", () => { if (document.hidden) autosave(); });
+
+(async () => {
+	newWorld(12345);
+	dirty = false;
+	requestAnimationFrame(frame);
+	window.engineReady = true;
+	await initCaps();
+	try {
+		const found = await loadText();
+		if (found) {
+			if (!dirty) { await deserialize(unb64(found.text)); toast("Loaded your saved world from " + found.where); }
+			else { holdAuto = true; toast("A saved world exists: tap Load to open it, or Save to replace it", 4500); }
+		}
+	} catch (e) { toast("Could not open the saved world: " + e.message, 4000); }
+	loadDone = true;
+	window.engineLoaded = true;
+})();
+
+// for tests
+window.PX = { runStress, dbSave, dbLoad, breakDb: () => { userDb = { collection: () => ({ doc: () => ({ get: async () => ({ exists: false }), set: async () => { throw { code: 'invalid_argument' }; }, delete: async () => {} }) }) }; }, player, E, inv, getTile, setTile, spawnPigs, serialize, deserialize, saveAll, loadAny, newWorld, stats, chunks, input, update, render, view, edOpen, ed, edApply, setMode: (m) => { mode = m; }, setHot: (i) => { hotSel = i; }, atlasPx, get seed() { return SEED; }, get dirty() { return dirty; } };
+</script>
